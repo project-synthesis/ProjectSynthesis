@@ -156,6 +156,10 @@ start_backend() {
         set +a
     fi
 
+    # Clear CLAUDECODE so the backend can launch its own Claude CLI sessions
+    # (the backend runs independently and must not inherit nested-session protection)
+    unset CLAUDECODE 2>/dev/null || true
+
     nohup python -m uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT --reload > ../data/backend.log 2>&1 &
     echo $! > "../$PID_DIR/backend.pid"
     cd ..
@@ -183,6 +187,7 @@ start_mcp() {
     log "Starting MCP server on port $MCP_PORT..."
     cd backend
     source .venv/bin/activate
+    unset CLAUDECODE 2>/dev/null || true
     nohup python -m app.mcp_server > ../data/mcp.log 2>&1 &
     echo $! > "../$PID_DIR/mcp.pid"
     cd ..

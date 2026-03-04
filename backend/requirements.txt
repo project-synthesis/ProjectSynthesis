@@ -15,3 +15,4 @@ itsdangerous
 mcp
 websockets
 anthropic
+claude-agent-sdk

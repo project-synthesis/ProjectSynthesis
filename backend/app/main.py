@@ -15,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
 from app.database import create_tables
-from app.providers.detector import detect_provider
+from app.providers.detector import detect_provider, ProviderNotAvailableError
 
 # Import routers
 from app.routers import health, optimize, history, github_auth, github_repos
@@ -49,8 +49,12 @@ async def lifespan(app: FastAPI):
     await create_tables()
     logger.info("Database tables ready")
 
-    # Detect LLM provider
-    provider = await detect_provider()
+    # Detect LLM provider (raises ProviderNotAvailableError if none found)
+    try:
+        provider = await detect_provider()
+    except ProviderNotAvailableError as e:
+        logger.error("LLM Provider detection failed:\n%s", e)
+        raise
     logger.info("LLM Provider: %s", provider.name)
 
     # Wire up provider to routers that need it

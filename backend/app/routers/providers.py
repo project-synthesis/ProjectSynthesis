@@ -1,7 +1,7 @@
 """Provider detection and health check endpoints.
 
 Returns information about which LLM providers are available
-(claude_cli, anthropic_api, mock) and their current status.
+(claude_cli, anthropic_api) and their current status.
 """
 
 import asyncio
