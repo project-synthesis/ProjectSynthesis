@@ -38,3 +38,6 @@ gen_t*.py
 
 # Claude progress
 claude-progress.txt
+*.bak.*
+.pids/
+backend/data/

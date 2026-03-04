@@ -30,7 +30,11 @@ def create_mcp_server() -> "FastMCP":
     if not HAS_MCP:
         raise ImportError("mcp package is required for the MCP server")
 
-    mcp = FastMCP("promptforge")
+    mcp = FastMCP(
+        "promptforge",
+        host=settings.MCP_HOST,
+        port=settings.MCP_PORT,
+    )
 
     # Per-session in-memory GitHub tokens (keyed by connection context)
     _session_tokens: dict[str, str] = {}
@@ -467,5 +471,5 @@ if __name__ == "__main__":
     asyncio.run(create_tables())
 
     mcp_server = create_mcp_server()
-    logger.info(f"Starting MCP server on ws://{settings.MCP_HOST}:{settings.MCP_PORT}/ws")
-    mcp_server.run(transport="websocket", host=settings.MCP_HOST, port=settings.MCP_PORT)
+    logger.info(f"Starting MCP server on http://{settings.MCP_HOST}:{settings.MCP_PORT}/sse")
+    mcp_server.run(transport="sse")
