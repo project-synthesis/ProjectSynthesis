@@ -28,7 +28,7 @@ from app.services.optimization_service import (
     delete_optimization,
     update_optimization,
 )
-from app.services.pipeline import run_pipeline, get_last_pipeline_result
+from app.services.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["optimizations"])
@@ -194,21 +194,38 @@ async def run_optimization_pipeline(
         """Async generator producing SSE events from the pipeline."""
         start_time = time.monotonic()
 
+        # Accumulate pipeline results for DB persistence
+        analysis_data = {}
+        strategy_data = {}
+        optimization_data = {}
+        validation_data = {}
+
         try:
-            async for sse_event in run_pipeline(
+            async for event_type, event_data in run_pipeline(
                 provider=_provider,
                 raw_prompt=optimization.raw_prompt,
                 optimization_id=optimization_id,
                 strategy_override=None,
                 repo_full_name=optimization.linked_repo_full_name,
                 repo_branch=optimization.linked_repo_branch,
-                github_token=github_token,
+                session_id=req.cookies.get("session_id"),
             ):
-                yield sse_event
+                # Collect results from each stage
+                if event_type == "analysis":
+                    analysis_data = event_data
+                elif event_type == "strategy":
+                    strategy_data = event_data
+                elif event_type == "optimization":
+                    optimization_data = event_data
+                elif event_type == "validation":
+                    validation_data = event_data
+
+                # Forward as SSE
+                yield _sse_event(event_type, event_data if isinstance(event_data, dict) else {"data": event_data})
 
             # Persist pipeline results to the database
-            pipeline_result = get_last_pipeline_result()
-            if pipeline_result and pipeline_result.optimization_id == optimization_id:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            try:
                 async with async_session() as persist_session:
                     from sqlalchemy import select as sel
 
@@ -219,66 +236,41 @@ async def run_optimization_pipeline(
                     )
                     opt = res.scalar_one_or_none()
                     if opt:
-                        opt.status = pipeline_result.status
-                        opt.task_type = pipeline_result.task_type
-                        opt.complexity = pipeline_result.complexity
-                        opt.weaknesses = json.dumps(
-                            pipeline_result.weaknesses
-                        )
-                        opt.strengths = json.dumps(pipeline_result.strengths)
-                        opt.primary_framework = (
-                            pipeline_result.primary_framework
-                        )
-                        opt.strategy_rationale = (
-                            pipeline_result.strategy_rationale
-                        )
-                        opt.optimized_prompt = (
-                            pipeline_result.optimized_prompt
-                        )
-                        opt.changes_made = json.dumps(
-                            pipeline_result.changes_made
-                        )
-                        opt.framework_applied = (
-                            pipeline_result.framework_applied
-                        )
-                        opt.optimization_notes = (
-                            pipeline_result.optimization_notes
-                        )
-                        opt.clarity_score = pipeline_result.clarity_score
-                        opt.specificity_score = (
-                            pipeline_result.specificity_score
-                        )
-                        opt.structure_score = pipeline_result.structure_score
-                        opt.faithfulness_score = (
-                            pipeline_result.faithfulness_score
-                        )
-                        opt.conciseness_score = (
-                            pipeline_result.conciseness_score
-                        )
-                        opt.overall_score = pipeline_result.overall_score
-                        opt.is_improvement = pipeline_result.is_improvement
-                        opt.verdict = pipeline_result.verdict
-                        opt.issues = json.dumps(pipeline_result.issues)
-                        opt.provider_used = pipeline_result.provider_used
-                        opt.duration_ms = pipeline_result.duration_ms
-                        opt.error_message = pipeline_result.error_message
+                        opt.status = "completed"
+                        opt.task_type = analysis_data.get("task_type")
+                        opt.complexity = analysis_data.get("complexity")
+                        opt.weaknesses = json.dumps(analysis_data.get("weaknesses", []))
+                        opt.strengths = json.dumps(analysis_data.get("strengths", []))
+                        opt.primary_framework = strategy_data.get("primary_framework")
+                        opt.strategy_rationale = strategy_data.get("rationale")
+                        opt.optimized_prompt = optimization_data.get("optimized_prompt", "")
+                        opt.changes_made = json.dumps(optimization_data.get("changes_made", []))
+                        opt.framework_applied = optimization_data.get("framework_applied")
+                        opt.optimization_notes = optimization_data.get("optimization_notes")
+                        opt.clarity_score = validation_data.get("clarity_score")
+                        opt.specificity_score = validation_data.get("specificity_score")
+                        opt.structure_score = validation_data.get("structure_score")
+                        opt.faithfulness_score = validation_data.get("faithfulness_score")
+                        opt.conciseness_score = validation_data.get("conciseness_score")
+                        opt.overall_score = validation_data.get("overall_score")
+                        opt.is_improvement = validation_data.get("is_improvement")
+                        opt.verdict = validation_data.get("verdict")
+                        opt.issues = json.dumps(validation_data.get("issues", []))
+                        opt.provider_used = _provider.name
+                        opt.duration_ms = duration_ms
+                        opt.model_analyze = analysis_data.get("model")
+                        opt.model_strategy = strategy_data.get("model")
+                        opt.model_optimize = optimization_data.get("model")
+                        opt.model_validate = validation_data.get("model")
                         opt.updated_at = datetime.now(timezone.utc)
-
-                        # Model tracking
-                        models = pipeline_result.models_used
-                        opt.model_explore = models.get("explore")
-                        opt.model_analyze = models.get("analyze")
-                        opt.model_strategy = models.get("strategy")
-                        opt.model_optimize = models.get("optimize")
-                        opt.model_validate = models.get("validate")
-
-                        # Codebase context snapshot
-                        if pipeline_result.codebase_context:
-                            opt.codebase_context_snapshot = json.dumps(
-                                pipeline_result.codebase_context.to_dict()
-                            )
-
                         await persist_session.commit()
+            except Exception:
+                logger.exception("Failed to persist pipeline results")
+
+            yield _sse_event("complete", {
+                "optimization_id": optimization_id,
+                "duration_ms": duration_ms,
+            })
 
         except Exception as e:
             logger.exception(
