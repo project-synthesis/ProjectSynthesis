@@ -1619,7 +1619,7 @@
       "SCREENSHOT to verify the complete pipeline result"
     ],
     "expected_outcome": "Pipeline handles coding prompt end-to-end",
-    "passes": false,
+    "passes": true,
     "id": 73
   },
   {
@@ -1726,7 +1726,7 @@
       "VERIFY the optimization record includes changes_made as a non-empty list"
     ],
     "expected_outcome": "Changes_made list is non-empty after optimization",
-    "passes": false,
+    "passes": true,
     "id": 77
   },
   {
@@ -1879,7 +1879,7 @@
       "VERIFY overall_score is an integer between 1 and 10"
     ],
     "expected_outcome": "All score dimensions are integers 1-10",
-    "passes": false,
+    "passes": true,
     "id": 83
   },
   {
@@ -1899,7 +1899,7 @@
       "VERIFY each task type maps to at least one framework from the 10 available"
     ],
     "expected_outcome": "Strategy selector heuristic fallback works",
-    "passes": false,
+    "passes": true,
     "id": 84
   },
   {
@@ -1928,7 +1928,7 @@
       "SCREENSHOT to verify model badges on each stage"
     ],
     "expected_outcome": "Pipeline stages use correct models per MODEL_ROUTING",
-    "passes": false,
+    "passes": true,
     "id": 85
   },
   {
