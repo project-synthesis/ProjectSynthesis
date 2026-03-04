@@ -764,7 +764,7 @@
       "VERIFY all returned records have task_type 'coding' or the response is empty"
     ],
     "expected_outcome": "History filterable by task_type parameter",
-    "passes": false,
+    "passes": true,
     "id": 36
   },
   {
