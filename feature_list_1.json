@@ -1002,7 +1002,7 @@
       "VERIFY the endpoint returns 200 with empty list, or 401/403 requiring auth"
     ],
     "expected_outcome": "GET /api/github/repos endpoint exists",
-    "passes": false,
+    "passes": true,
     "id": 47
   },
   {
