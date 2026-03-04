@@ -41,6 +41,7 @@ async def optimize_prompt(
     request: OptimizeRequest,
     req: Request,
     session: AsyncSession = Depends(get_session),
+    retry_of: str | None = None,
 ):
     """Run the optimization pipeline with SSE streaming."""
     if not _provider:
@@ -59,6 +60,7 @@ async def optimize_prompt(
         title=request.title,
         linked_repo_full_name=request.repo_full_name,
         linked_repo_branch=request.repo_branch,
+        retry_of=retry_of,
     )
     session.add(optimization)
     await session.commit()
@@ -234,5 +236,5 @@ async def retry_optimization(
         repo_branch=original.linked_repo_branch,
     )
 
-    # Reuse the optimize endpoint logic
-    return await optimize_prompt(retry_request, req, session)
+    # Reuse the optimize endpoint logic, linking retry to original
+    return await optimize_prompt(retry_request, req, session, retry_of=optimization_id)

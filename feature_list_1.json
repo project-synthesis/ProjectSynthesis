@@ -567,7 +567,7 @@
       "RUN 'curl -s http://localhost:8000/api/history' and verify the optimization appears in the list"
     ],
     "expected_outcome": "Optimization record saved to database after pipeline",
-    "passes": false,
+    "passes": true,
     "id": 27
   },
   {
@@ -806,7 +806,7 @@
       "VERIFY overall_score is an integer between 1 and 10"
     ],
     "expected_outcome": "Overall score computed as weighted average server-side",
-    "passes": false,
+    "passes": true,
     "id": 38
   },
   {
@@ -897,7 +897,7 @@
       "RUN 'curl -s http://localhost:8000/api/optimize/{id}' and verify raw_prompt matches exactly"
     ],
     "expected_outcome": "Raw prompt text preserved exactly in database",
-    "passes": false,
+    "passes": true,
     "id": 42
   },
   {
@@ -919,7 +919,7 @@
       "VERIFY optimized_prompt differs from raw_prompt"
     ],
     "expected_outcome": "Optimized prompt stored after pipeline completion",
-    "passes": false,
+    "passes": true,
     "id": 43
   },
   {
@@ -940,7 +940,7 @@
       "VERIFY duration_ms is a positive integer"
     ],
     "expected_outcome": "Duration tracked in milliseconds",
-    "passes": false,
+    "passes": true,
     "id": 44
   },
   {
@@ -961,7 +961,7 @@
       "RUN 'curl -s http://localhost:8000/api/optimize/{id}' and verify tags contains 'coding' and 'python'"
     ],
     "expected_outcome": "Optimization with tags persists as JSON array",
-    "passes": false,
+    "passes": true,
     "id": 45
   },
   {
@@ -982,7 +982,7 @@
       "RUN 'curl -s http://localhost:8000/api/optimize/{id}' and verify project is 'my-project'"
     ],
     "expected_outcome": "Optimization with project field persists correctly",
-    "passes": false,
+    "passes": true,
     "id": 46
   },
   {
@@ -1209,7 +1209,7 @@
       "VERIFY the retry record has retry_of set to the original ID"
     ],
     "expected_outcome": "Retry creates new optimization linked via retry_of",
-    "passes": false,
+    "passes": true,
     "id": 57
   },
   {
@@ -1272,7 +1272,7 @@
       "VERIFY the title field is 'My Named Optimization'"
     ],
     "expected_outcome": "Optimization title field can be set on creation",
-    "passes": false,
+    "passes": true,
     "id": 60
   },
   {
@@ -1293,7 +1293,7 @@
       "VERIFY the optimization used 'chain-of-thought' as the primary_framework"
     ],
     "expected_outcome": "Strategy override accepted in optimize request",
-    "passes": false,
+    "passes": true,
     "id": 61
   },
   {
@@ -1336,7 +1336,7 @@
       "VERIFY strategy_rationale is a non-empty string"
     ],
     "expected_outcome": "Strategy rationale stored in optimization record",
-    "passes": false,
+    "passes": true,
     "id": 63
   },
   {

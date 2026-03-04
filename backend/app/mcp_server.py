@@ -471,5 +471,5 @@ if __name__ == "__main__":
     asyncio.run(create_tables())
 
     mcp_server = create_mcp_server()
-    logger.info(f"Starting MCP server on http://{settings.MCP_HOST}:{settings.MCP_PORT}/sse")
-    mcp_server.run(transport="sse")
+    logger.info(f"Starting MCP server on ws://{settings.MCP_HOST}:{settings.MCP_PORT}/ws")
+    mcp_server.run(transport="websocket")
