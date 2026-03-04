@@ -36,6 +36,10 @@ class ForgeStore {
     return ['explore', 'analyze', 'strategy', 'optimize', 'validate'];
   }
 
+  get visibleStages(): string[] {
+    return this.stages.filter(s => !(s === 'explore' && this.stageStatuses[s] === 'idle'));
+  }
+
   get completedStages(): number {
     return Object.values(this.stageStatuses).filter(s => s === 'done').length;
   }

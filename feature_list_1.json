@@ -1366,7 +1366,7 @@
       "VERIFY an overall score is displayed"
     ],
     "expected_outcome": "Pipeline runs 4-stage flow without repo linked",
-    "passes": false,
+    "passes": true,
     "id": 64
   },
   {

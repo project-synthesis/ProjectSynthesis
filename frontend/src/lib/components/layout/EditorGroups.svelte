@@ -16,7 +16,7 @@
   }
 </script>
 
-<main class="flex flex-col overflow-hidden bg-bg-primary" aria-label="Editor">
+<main class="flex flex-col h-full overflow-hidden bg-bg-primary" aria-label="Editor">
   <!-- Tab bar -->
   <div class="h-9 flex items-center border-b border-border-subtle bg-bg-secondary shrink-0 overflow-x-auto">
     {#each editor.openTabs as tab (tab.id)}
@@ -57,7 +57,7 @@
   </div>
 
   <!-- Document area -->
-  <div class="flex-1 overflow-y-auto">
+  <div class="flex-1 min-h-0 overflow-y-auto">
     {#if editor.activeTab}
       {#if editor.activeTab.type === 'prompt'}
         <PromptDocument tab={editor.activeTab} />

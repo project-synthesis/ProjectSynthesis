@@ -1,0 +1,25 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "allow": [
+      "Read(./**)",
+      "Read(/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/generations/PromptForge_v2/**)",
+      "Write(./**)",
+      "Write(/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/generations/PromptForge_v2/**)",
+      "Edit(./**)",
+      "Edit(/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/generations/PromptForge_v2/**)",
+      "Glob(./**)",
+      "Glob(/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/generations/PromptForge_v2/**)",
+      "Grep(./**)",
+      "Grep(/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/generations/PromptForge_v2/**)",
+      "Bash(*)",
+      "mcp__*",
+      "WebSearch(*)",
+      "WebFetch(*)",
+      "Task(*)"
+    ]
+  }
+}

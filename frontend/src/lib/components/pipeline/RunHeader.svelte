@@ -23,7 +23,7 @@
           {/if}
         </h3>
         <p class="text-xs text-text-dim mt-0.5">
-          {forge.completedStages} of {forge.stages.length} stages completed
+          {forge.completedStages} of {forge.visibleStages.length} stages completed
           {#if forge.totalDuration != null}
             <span class="ml-1">· {(forge.totalDuration / 1000).toFixed(1)}s</span>
           {/if}
