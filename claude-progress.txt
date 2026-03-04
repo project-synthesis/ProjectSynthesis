@@ -1,37 +1,5 @@
 [Trimmed by orchestrator: kept last 200 of 202 lines. Earlier notes are in git history.]
 
-- frontend/src/app.css — Tailwind CSS 4 + cyberpunk theme variables
-- frontend/src/routes/+layout.svelte — 5-zone workbench grid layout
-- frontend/src/lib/stores/workbench.svelte.ts — Activity bar, panel state
-- frontend/src/lib/stores/editor.svelte.ts — Tab management, subtabs
-- frontend/src/lib/stores/forge.svelte.ts — Pipeline state, stage tracking
-- frontend/src/lib/api/client.ts — API client with SSE parser
-- frontend/src/lib/components/layout/ — ActivityBar, Navigator, EditorGroups, Inspector, StatusBar
-- frontend/src/lib/components/pipeline/ — StageTrack, StageCard, per-stage components
-- frontend/src/lib/components/editor/ — PromptDocument, ForgeArtifact, ChainComposer
-
-### Configuration
-- init.sh — Dev environment setup and service management
-- .env.example — Environment variable template
-- .mcp.json — MCP server config for Claude Code
-- docker-compose.yml — Docker composition
-- feature_list_1.json, feature_list_2.json — 335 test cases
-
-## Validation Report — Session 1 (2026-03-04)
-
-**Code integrity audit:**
-- Files scanned: All Python, TypeScript, Svelte source files (excluding .venv, node_modules)
-- Mocks/stubs found: 0 (MockProvider was already removed by SDK integration session)
-- Mocks/stubs fixed: 0 (none needed)
-- Mocks/stubs remaining: 0
-- TODOs found: 0 in project source (all TODOs were in third-party packages)
-- TODOs resolved: N/A
-- Build error found: 1 (NavigatorGitHub.svelte importing non-existent `connectGitHub`/`disconnectGitHub`)
-- Build error fixed: 1 (added wrapper functions to client.ts)
-
-**Scope:** Quick validation — 0 passing tests (nothing to regress), 5 T0 tests spot-checked
-**Infrastructure:** Healthy
-- Backend: http://localhost:8000 (FastAPI, provider=claude_cli, db_connected=true)
 - Frontend: http://localhost:5199 (SvelteKit dev server, build passes)
 - MCP: Not running (ws://localhost:8001 not responding — expected in dev)
 - Database: 3 tables (optimizations: 4 rows, github_tokens: 0, linked_repos: 0)
@@ -231,4 +199,78 @@ Fixed by adding `retry_of` parameter to `optimize_prompt()` and passing
 - Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
 - MCP: ws://127.0.0.1:8001/ws
 - DB: backend/data/promptforge.db (3 tables, proper indexes)
+- Start: ./init.sh start
+
+## Validation Report — Session 8 (2026-03-04)
+
+**Code integrity audit:**
+- Files scanned: All backend/*.py and frontend/src/**/*.{ts,svelte} (excluding .venv, node_modules, .svelte-kit)
+- Mocks/stubs found: 0
+- Mocks/stubs fixed: 0
+- Mocks/stubs remaining: 0
+- TODOs found: 0 (only SvelteKit framework TODOs in .svelte-kit/output, not project code)
+- TODOs resolved: 0
+- NotImplementedError: 0
+- Hardcoded return values: 0
+- All providers (ClaudeCLI, AnthropicAPI) make real API calls
+- All frontend API client functions make real fetch calls to backend
+- All stores start with empty state and populate via API
+- Session access: consistent (all use request.session.get("session_id") after session 7 fix)
+- Duplicate routes: 0
+- Spec compliance: PARTIAL — MCP transport mismatch (spec says WebSocket, code uses invalid FastMCP transport="websocket")
+
+**Scope:** Expanded — 62 tests verified (all T0 + all T1, tier boundary validation)
+**Infrastructure:** Backend + Frontend healthy, MCP server NOT running (WebSocket transport bug)
+
+**Regressions found:** 1
+- #12 "MCP server starts on port 8001": MCP server crashes on startup with ValueError: Unknown transport: websocket. Port 8001 not listening, no MCP process running. Marked as passes:false. — UNFIXED (blocked by WebSocket transport implementation bug, already tracked as a8_1)
+
+**Regressions fixed:** 0 of 1
+
+**Tests still passing after validation:** 62/63
+- Test #12 regressed from passing to failing (was incorrectly marked passing; MCP server never actually ran)
+
+**Tier breakdown:**
+- T0: 17/18 passing (test #12 regressed — MCP server)
+- T1: 45/45 passing ✓ (all verified)
+- T2: 0/106 passing
+- T3: 0/66 passing
+- T4: 0/70 passing
+- T5: 0/30 passing
+
+**Detailed T1 verification (session 6's 11 pipeline tests):**
+- #27: ✓ 11 completed optimizations in DB
+- #38: ✓ Weighted average score in range 1-10 (clarity=9, spec=9, struct=8, faith=5, conc=6, overall=7)
+- #42: ✓ Raw prompt preserved exactly ("Test")
+- #43: ✓ Optimized prompt stored, differs from raw (len=2881)
+- #44: ✓ Duration tracked (88804ms)
+- #45: ✓ Tags persisted as JSON array (['coding', 'python'])
+- #46: ✓ Project field persisted ('my-project')
+- #57: ✓ Retry linked via retry_of (original found in DB)
+- #60: ✓ Title field set ('Validation Test Title')
+- #61: ✓ Strategy override (chain-of-thought found)
+- #63: ✓ Strategy rationale stored (non-empty string)
+
+**Cross-feature integration check:**
+- Frontend build: ✓ Clean (vite build succeeds in 3.38s)
+- Console errors: 0 (checked across Edit, Pipeline, History tabs)
+- Navigator panels: ✓ History, GitHub, Settings all working
+- Status bar: Shows "Connected" + "CLI" badges
+- Visual coherence: ✓ Consistent cyberpunk dark theme
+- API → DB → Frontend data flow: ✓ (history records, scores, strategy badges all render)
+
+**Guidance for next coding session:**
+- PRIORITY: Fix MCP WebSocket transport (a8_1) — this will restore test #12 and unblock all MCP-dependent T2+ tests
+- T2 tests are next (106 tests covering pipeline stages, SSE events, and UI interactions)
+- Toast.svelte wiring is low priority (i7_1)
+- RepoPickerModal wiring is low priority (i7_2)
+- 18 records in DB with 11 completed pipeline runs — good test data for T2 verification
+- Some records have status='running' from partial SSE tests — consider cleanup
+
+**Progress:** 62/335 tests passing (18.5%)
+**Server info:**
+- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
+- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
+- MCP: ws://127.0.0.1:8001/ws (NOT RUNNING — see a8_1)
+- DB: backend/data/promptforge.db (3 tables, proper indexes, 18 records)
 - Start: ./init.sh start
