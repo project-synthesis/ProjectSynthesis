@@ -635,7 +635,7 @@
       "VERIFY the response includes pagination metadata or the result set is correctly sized"
     ],
     "expected_outcome": "GET /api/history with pagination parameters",
-    "passes": false,
+    "passes": true,
     "id": 30
   },
   {
