@@ -1230,7 +1230,7 @@
       "VERIFY the response contains validation error details"
     ],
     "expected_outcome": "Pydantic validation rejects invalid optimize request",
-    "passes": false,
+    "passes": true,
     "id": 58
   },
   {
