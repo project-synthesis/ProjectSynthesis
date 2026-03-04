@@ -833,7 +833,7 @@
       "VERIFY overall_score is an integer 1-10"
     ],
     "expected_outcome": "Optimization record includes all score fields",
-    "passes": false,
+    "passes": true,
     "id": 39
   },
   {
