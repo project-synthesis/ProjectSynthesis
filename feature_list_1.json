@@ -523,7 +523,7 @@
       "VERIFY connected is false after logout"
     ],
     "expected_outcome": "GitHub logout endpoint clears session",
-    "passes": false,
+    "passes": true,
     "id": 25
   },
   {
