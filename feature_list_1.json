@@ -394,7 +394,7 @@
       "VERIFY the health endpoint responds within 5 seconds"
     ],
     "expected_outcome": "Provider auto-detection selects available provider",
-    "passes": false,
+    "passes": true,
     "id": 19
   },
   {
