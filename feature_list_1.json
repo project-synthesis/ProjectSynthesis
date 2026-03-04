@@ -1082,7 +1082,7 @@
       "VERIFY a GITHUB_TOKEN_ENCRYPTION_KEY is either in .env or auto-generated in data/"
     ],
     "expected_outcome": "Token encryption uses Fernet",
-    "passes": false,
+    "passes": true,
     "id": 51
   },
   {
