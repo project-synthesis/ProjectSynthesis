@@ -19,18 +19,21 @@ class ForgeStore {
   stageStatuses = $state<Record<string, StageStatus>>({
     explore: 'idle',
     analyze: 'idle',
-    strategize: 'idle',
+    strategy: 'idle',
     optimize: 'idle',
     validate: 'idle'
   });
   stageResults = $state<Record<string, StageResult>>({});
   streamingText = $state('');
+  rawPrompt = $state('');
+  optimizationId = $state<string | null>(null);
   overallScore = $state<number | null>(null);
   pipelineEvents = $state<PipelineEvent[]>([]);
+  totalDuration = $state<number | null>(null);
   error = $state<string | null>(null);
 
   get stages() {
-    return ['explore', 'analyze', 'strategize', 'optimize', 'validate'];
+    return ['explore', 'analyze', 'strategy', 'optimize', 'validate'];
   }
 
   get completedStages(): number {
@@ -43,19 +46,23 @@ class ForgeStore {
     this.stageStatuses = {
       explore: 'idle',
       analyze: 'idle',
-      strategize: 'idle',
+      strategy: 'idle',
       optimize: 'idle',
       validate: 'idle'
     };
     this.stageResults = {};
     this.streamingText = '';
+    this.rawPrompt = '';
+    this.optimizationId = null;
     this.overallScore = null;
     this.pipelineEvents = [];
+    this.totalDuration = null;
     this.error = null;
   }
 
-  startForge() {
+  startForge(rawPrompt?: string) {
     this.resetPipeline();
+    if (rawPrompt) this.rawPrompt = rawPrompt;
     this.isForging = true;
   }
 
@@ -83,11 +90,14 @@ class ForgeStore {
     this.streamingText += chunk;
   }
 
-  finishForge(score?: number) {
+  finishForge(score?: number, duration?: number) {
     this.isForging = false;
     this.currentStage = null;
     if (score != null) {
       this.overallScore = score;
+    }
+    if (duration != null) {
+      this.totalDuration = duration;
     }
     this.addEvent({ type: 'forge_complete', timestamp: Date.now() });
   }

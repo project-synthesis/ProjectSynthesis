@@ -78,7 +78,7 @@ async def optimize_prompt(
                 strategy_override=request.strategy,
                 repo_full_name=request.repo_full_name,
                 repo_branch=request.repo_branch,
-                session_id=req.cookies.get("session_id"),
+                session_id=req.session.get("session_id"),
             ):
                 yield _sse_event(event_type, event_data)
 

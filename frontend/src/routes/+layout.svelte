@@ -20,7 +20,7 @@
       .then((data) => {
         workbench.isConnected = true;
         workbench.provider = (data.provider as 'anthropic' | 'openai') || 'unknown';
-        workbench.providerModel = data.model || '';
+        workbench.providerModel = data.model_routing?.optimize || '';
       })
       .catch(() => {
         workbench.isConnected = false;

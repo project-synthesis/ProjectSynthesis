@@ -2,6 +2,7 @@
   import { workbench } from '$lib/stores/workbench.svelte';
   import { editor } from '$lib/stores/editor.svelte';
   import { forge } from '$lib/stores/forge.svelte';
+  import { github } from '$lib/stores/github.svelte';
   import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
 </script>
 
@@ -21,6 +22,16 @@
       <ProviderBadge provider={workbench.provider} />
     {/if}
 
+    <!-- Linked repo -->
+    {#if github.selectedRepo}
+      <div class="flex items-center gap-1 text-text-dim" title="Linked repository">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+        </svg>
+        <span class="text-neon-purple">{github.selectedRepo}</span>
+      </div>
+    {/if}
+
     <!-- Forge status -->
     {#if forge.isForging}
       <div class="flex items-center gap-1 text-neon-cyan">
@@ -31,6 +42,15 @@
   </div>
 
   <div class="flex items-center gap-3">
+    <!-- Ctrl+K shortcut hint -->
+    <button
+      class="flex items-center gap-1 text-text-dim hover:text-text-secondary transition-colors cursor-pointer"
+      onclick={() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })); }}
+      title="Open Command Palette"
+    >
+      <kbd class="px-1 py-0.5 bg-bg-card rounded border border-border-subtle text-[9px] text-text-secondary">Ctrl+K</kbd>
+    </button>
+
     <!-- Active tab info -->
     {#if editor.activeTab}
       <span class="text-text-dim">{editor.activeTab.label}</span>

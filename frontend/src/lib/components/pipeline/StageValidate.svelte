@@ -37,11 +37,18 @@
       </div>
     {/each}
 
-    <!-- Feedback -->
-    {#if data.feedback}
+    <!-- Verdict -->
+    {#if data.verdict}
       <div class="mt-2 p-2 bg-bg-primary rounded border border-border-subtle">
-        <span class="text-[10px] text-text-dim uppercase tracking-wider font-semibold block mb-1">Feedback</span>
-        <p class="text-text-secondary">{data.feedback}</p>
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-[10px] text-text-dim uppercase tracking-wider font-semibold">Verdict</span>
+          {#if data.is_improvement === true}
+            <span class="text-[10px] text-neon-green">✓ Improved</span>
+          {:else if data.is_improvement === false}
+            <span class="text-[10px] text-neon-red">✗ Not Improved</span>
+          {/if}
+        </div>
+        <p class="text-text-secondary">{data.verdict}</p>
       </div>
     {/if}
   {:else}

@@ -2,14 +2,14 @@
   let { provider }: { provider: string } = $props();
 
   let label = $derived(
-    provider === 'anthropic' ? 'CLI' :
-    provider === 'openai' ? 'API' :
+    provider === 'anthropic' || provider === 'claude_cli' ? 'CLI' :
+    provider === 'openai' || provider === 'anthropic_api' ? 'API' :
     'Unknown'
   );
 
   let color = $derived(
-    provider === 'anthropic' ? 'bg-neon-orange/10 text-neon-orange border-neon-orange/20' :
-    provider === 'openai' ? 'bg-neon-green/10 text-neon-green border-neon-green/20' :
+    provider === 'anthropic' || provider === 'claude_cli' ? 'bg-neon-orange/10 text-neon-orange border-neon-orange/20' :
+    provider === 'openai' || provider === 'anthropic_api' ? 'bg-neon-green/10 text-neon-green border-neon-green/20' :
     'bg-bg-card text-text-dim border-border-subtle'
   );
 </script>

@@ -29,12 +29,12 @@
               <ScoreCircle score={forge.overallScore} size={40} />
               <div>
                 <div class="text-sm font-medium text-text-primary">Overall Score</div>
-                <div class="text-xs text-text-dim">{forge.completedStages}/5 stages completed</div>
+                <div class="text-xs text-text-dim">{forge.completedStages}/{forge.stages.filter(s => forge.stageStatuses[s] !== 'idle' || s !== 'explore').length} stages completed</div>
               </div>
             </div>
           {/if}
 
-          {#each forge.stages as stage}
+          {#each forge.stages.filter(s => !(s === 'explore' && forge.stageStatuses[s] === 'idle')) as stage}
             {@const status = forge.stageStatuses[stage]}
             <div class="flex items-center gap-2 text-xs">
               <span class="w-2 h-2 rounded-full {

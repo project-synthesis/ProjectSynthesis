@@ -1,6 +1,5 @@
 <script lang="ts">
   import { forge } from '$lib/stores/forge.svelte';
-  import ScoreBar from '$lib/components/shared/ScoreBar.svelte';
 
   let result = $derived(forge.stageResults['analyze']);
   let data = $derived((result?.data || {}) as Record<string, unknown>);
@@ -15,25 +14,23 @@
       <span>Analyzing prompt quality...</span>
     </div>
   {:else if result}
-    <!-- Scores -->
-    {#if data.clarity != null}
-      <div class="space-y-1">
-        <div class="flex justify-between">
-          <span class="text-text-dim">Clarity</span>
-          <span class="text-text-secondary">{data.clarity}/10</span>
-        </div>
-        <ScoreBar score={data.clarity as number} max={10} />
-      </div>
-    {/if}
-    {#if data.specificity != null}
-      <div class="space-y-1">
-        <div class="flex justify-between">
-          <span class="text-text-dim">Specificity</span>
-          <span class="text-text-secondary">{data.specificity}/10</span>
-        </div>
-        <ScoreBar score={data.specificity as number} max={10} />
-      </div>
-    {/if}
+    <!-- Task type and complexity -->
+    <div class="flex flex-wrap items-center gap-2">
+      {#if data.task_type}
+        <span class="px-2 py-0.5 rounded bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20 text-[10px] font-semibold uppercase">
+          {data.task_type}
+        </span>
+      {/if}
+      {#if data.complexity}
+        <span class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase {
+          data.complexity === 'complex' ? 'bg-neon-red/10 text-neon-red border border-neon-red/20' :
+          data.complexity === 'moderate' ? 'bg-neon-amber/10 text-neon-amber border border-neon-amber/20' :
+          'bg-neon-green/10 text-neon-green border border-neon-green/20'
+        }">
+          {data.complexity}
+        </span>
+      {/if}
+    </div>
 
     <!-- Strengths -->
     {#if strengths.length > 0}

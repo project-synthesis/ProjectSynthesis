@@ -24,6 +24,9 @@
         </h3>
         <p class="text-xs text-text-dim mt-0.5">
           {forge.completedStages} of {forge.stages.length} stages completed
+          {#if forge.totalDuration != null}
+            <span class="ml-1">· {(forge.totalDuration / 1000).toFixed(1)}s</span>
+          {/if}
           {#if forge.error}
             <span class="text-neon-red ml-1">{forge.error}</span>
           {/if}
@@ -33,7 +36,7 @@
 
     <!-- Progress dots -->
     <div class="flex items-center gap-1">
-      {#each forge.stages as stage}
+      {#each forge.stages.filter(s => !(s === 'explore' && forge.stageStatuses[s] === 'idle')) as stage}
         {@const st = forge.stageStatuses[stage]}
         <div class="w-2 h-2 rounded-full transition-colors {
           st === 'done' ? 'bg-neon-green' :

@@ -181,7 +181,7 @@ async def run_optimization_pipeline(
     # Look up GitHub token if a repo is linked
     github_token = None
     if optimization.linked_repo_full_name:
-        session_id = req.cookies.get("session_id")
+        session_id = req.session.get("session_id")
         if session_id:
             from app.services.github_service import get_token_for_session
 
@@ -208,7 +208,7 @@ async def run_optimization_pipeline(
                 strategy_override=None,
                 repo_full_name=optimization.linked_repo_full_name,
                 repo_branch=optimization.linked_repo_branch,
-                session_id=req.cookies.get("session_id"),
+                session_id=req.session.get("session_id"),
             ):
                 # Collect results from each stage
                 if event_type == "analysis":

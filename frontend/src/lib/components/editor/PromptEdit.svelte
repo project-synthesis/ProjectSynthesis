@@ -12,7 +12,12 @@
   let strategy = $state('auto');
   let abortController = $state<AbortController | null>(null);
 
-  const strategies = ['auto', 'enhance', 'chain-of-thought', 'few-shot', 'structured', 'role-based'];
+  const strategies = [
+    'auto',
+    'CO-STAR', 'RISEN', 'chain-of-thought', 'few-shot-scaffolding',
+    'role-task-format', 'structured-output', 'step-by-step',
+    'constraint-injection', 'context-enrichment', 'persona-assignment'
+  ];
 
   function handleInput(e: Event) {
     const target = e.target as HTMLTextAreaElement;
@@ -23,33 +28,55 @@
     if (!tab.promptText?.trim()) return;
     if (forge.isForging) return;
 
-    forge.startForge();
+    forge.startForge(tab.promptText);
     editor.setSubTab('pipeline');
 
     const controller = await startOptimization(
-      tab.promptText,
-      { strategy: strategy === 'auto' ? undefined : strategy },
+      { prompt: tab.promptText, strategy: strategy === 'auto' ? undefined : strategy },
       (event: SSEEvent) => {
         const data = event.data as Record<string, unknown>;
         switch (event.event) {
-          case 'stage_start':
-            forge.setStageRunning(data.stage as string);
+          case 'stage':
+            if (data.status === 'started') {
+              forge.setStageRunning(data.stage as string);
+            } else if (data.status === 'complete') {
+              // Only mark complete if a result event hasn't already done so
+              if (forge.stageStatuses[data.stage as string] !== 'done') {
+                forge.setStageComplete(data.stage as string);
+              }
+            }
             break;
-          case 'stage_complete':
-            forge.setStageComplete(data.stage as string, {
-              stage: data.stage as string,
-              data: (data.result || data) as Record<string, unknown>,
-              duration: data.duration_ms as number | undefined
-            });
+          case 'analysis':
+            forge.setStageComplete('analyze', { stage: 'analyze', data, duration: data.duration_ms as number | undefined });
             break;
-          case 'stage_error':
-            forge.setStageFailed(data.stage as string, data.error as string);
+          case 'strategy':
+            forge.setStageComplete('strategy', { stage: 'strategy', data, duration: data.duration_ms as number | undefined });
             break;
-          case 'stream_chunk':
-            forge.appendStreamingText(data.chunk as string || data.text as string || '');
+          case 'step_progress':
+            forge.appendStreamingText(data.content as string || '');
+            break;
+          case 'optimization':
+            forge.setStageComplete('optimize', { stage: 'optimize', data, duration: data.duration_ms as number | undefined });
+            break;
+          case 'validation':
+            forge.setStageComplete('validate', { stage: 'validate', data, duration: data.duration_ms as number | undefined });
+            if (data.overall_score != null) {
+              forge.overallScore = data.overall_score as number;
+            } else {
+              const scores = data.scores as Record<string, number> | undefined;
+              if (scores?.overall_score != null) {
+                forge.overallScore = scores.overall_score;
+              }
+            }
             break;
           case 'complete':
-            forge.finishForge(data.overall_score as number | undefined);
+            if (data.optimization_id) {
+              forge.optimizationId = data.optimization_id as string;
+            }
+            forge.finishForge(forge.overallScore ?? undefined, data.total_duration_ms as number | undefined);
+            break;
+          case 'error':
+            forge.setStageFailed(data.stage as string || 'pipeline', data.error as string);
             break;
           default:
             break;
@@ -91,6 +118,13 @@
       oninput={handleInput}
       spellcheck="false"
     ></textarea>
+  </div>
+
+  <!-- Word count -->
+  <div class="flex items-center justify-end px-4 py-0.5 text-[10px] text-text-dim shrink-0">
+    <span data-testid="word-count">{(tab.promptText || '').split(/\s+/).filter(Boolean).length} words</span>
+    <span class="mx-1.5">·</span>
+    <span>{(tab.promptText || '').length} chars</span>
   </div>
 
   <!-- Action row -->

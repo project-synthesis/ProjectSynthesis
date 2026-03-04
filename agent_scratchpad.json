@@ -2,16 +2,6 @@
   "$schema_version": 1,
   "session_log": [
     {
-      "session_id": 1,
-      "session_type": "validator",
-      "tests_completed": [],
-      "tests_regressed": [],
-      "tests_fixed": [],
-      "mocks_found": 0,
-      "mocks_fixed": 0,
-      "summary": "Code integrity audit: no mocks/stubs found (MockProvider already removed). Fixed critical frontend build error (missing connectGitHub/disconnectGitHub exports in client.ts). All infrastructure verified healthy. 0 passing tests to regress."
-    },
-    {
       "session_id": 2,
       "session_type": "coding",
       "tests_completed": [
@@ -108,25 +98,47 @@
     {
       "session_id": 6,
       "session_type": "coding",
-      "tests_completed": [27, 38, 42, 43, 44, 45, 46, 57, 60, 61, 63],
+      "tests_completed": [
+        27,
+        38,
+        42,
+        43,
+        44,
+        45,
+        46,
+        57,
+        60,
+        61,
+        63
+      ],
       "tests_regressed": [],
       "tests_fixed": [],
       "mocks_found": 0,
       "mocks_fixed": 0,
       "summary": "Completed all 11 remaining T1 tests via real pipeline runs. Fixed retry_of bug in optimize.py (retry endpoint wasn't linking new records to originals). T1 tier complete: 45/45. Tier boundary reached, exiting for validator."
-    }
-  ],
-  "active_warnings": [],
-  "outstanding_mocks": [
+    },
     {
-      "file": "backend/data/promptforge.db",
-      "line": 0,
-      "pattern": "Seed optimization records had provider_used='mock'. Deleted 4 old records and re-seeded 3 clean records with provider_used='claude_cli'.",
-      "status": "fixed",
-      "found_session": 3,
-      "last_checked_session": 4
+      "session_id": 7,
+      "session_type": "integrator",
+      "tests_completed": [],
+      "tests_regressed": [],
+      "tests_fixed": [],
+      "gaps_found": 5,
+      "gaps_wired": 1,
+      "summary": "Fixed session access inconsistency in optimize.py and optimizations.py (req.cookies.get -> req.session.get). 2 field mismatches already handled by NavigatorHistory mapping. 2 orphan components (Toast, RepoPickerModal) need coding agent to create state infrastructure. All navigator panels verified working via Puppeteer."
     }
   ],
+  "active_warnings": [
+    {
+      "id": "w7_1",
+      "source_session": 7,
+      "severity": "info",
+      "area": "backend/app/routers/optimize.py, backend/app/routers/optimizations.py",
+      "message": "Fixed session access from req.cookies.get('session_id') to req.session.get('session_id'). Previous code always got None for session_id, so GitHub codebase context was never passed to pipeline. Tests involving codebase context (#111-113) may now behave differently.",
+      "ttl_sessions": 5
+    }
+  ],
+  "outstanding_mocks": [],
   "blocked_tests": [],
   "validation_coverage": {
     "tests_verified": {
@@ -161,24 +173,6 @@
     }
   },
   "next_actions": [
-    {
-      "id": "i3_1",
-      "from_agent": "integrator",
-      "to_agent": "coding",
-      "from_session": 3,
-      "action": "Wire NavigatorFiles to GitHub repo tree/file API when a repo is selected. fetchRepoTree/fetchFileContent functions now exist in client.ts. The github store has files state and setFiles() method \u2014 connect them to show repo files in the file explorer.",
-      "test_ids": [],
-      "priority": "medium"
-    },
-    {
-      "id": "i3_2",
-      "from_agent": "integrator",
-      "to_agent": "coding",
-      "from_session": 3,
-      "action": "Add provider status display to the UI. fetchProviderDetect/fetchProviderStatus functions now exist in client.ts. Consider showing provider health in the status bar or settings panel.",
-      "test_ids": [],
-      "priority": "low"
-    },
     {
       "id": "a5_1",
       "from_agent": "coding",
@@ -229,15 +223,36 @@
       "to_agent": "validator",
       "from_session": 6,
       "action": "Validate 11 newly passing T1 tests (completing T1 tier). Bug fix in optimize.py for retry_of. Verify: #38 weighted average formula matches, #57 retry_of links correctly, all pipeline data fields populated. TIER BOUNDARY: expanded validation recommended across all T0+T1 tests.",
-      "test_ids": [27, 38, 42, 43, 44, 45, 46, 57, 60, 61, 63],
+      "test_ids": [
+        27,
+        38,
+        42,
+        43,
+        44,
+        45,
+        46,
+        57,
+        60,
+        61,
+        63
+      ],
       "priority": "high"
     },
     {
-      "id": "a4_2",
-      "from_agent": "validator",
+      "id": "i7_1",
+      "from_agent": "integrator",
       "to_agent": "coding",
-      "from_session": 4,
-      "action": "The HistoryEntry interface in history.svelte.ts uses 'original_prompt' but backend returns 'raw_prompt'. NavigatorHistory uses fallback (item.raw_prompt || item.original_prompt). Consider renaming the interface field to 'raw_prompt' for consistency.",
+      "from_session": 7,
+      "action": "Toast.svelte exists as orphan component (frontend/src/lib/components/shared/Toast.svelte) but is never imported. Needs: (1) a toast store to manage global toast state (message, type, visible, auto-dismiss), (2) import Toast into +layout.svelte as a global overlay, (3) wire toast.show() calls from key user actions (forge completion, errors, copy-to-clipboard). The component itself is complete.",
+      "test_ids": [],
+      "priority": "low"
+    },
+    {
+      "id": "i7_2",
+      "from_agent": "integrator",
+      "to_agent": "coding",
+      "from_session": 7,
+      "action": "RepoPickerModal.svelte + RepoBadge.svelte exist as orphan components (frontend/src/lib/components/github/) but are never imported. NavigatorGitHub already has inline repo selection. The modal could be used from ContextBar when adding @repo context chips (currently just adds a chip without selection UI). Needs: state management for showing the modal and connecting selection to the context chip system.",
       "test_ids": [],
       "priority": "low"
     }
@@ -248,7 +263,7 @@
     "mcp_url": "ws://127.0.0.1:8001/ws",
     "health_endpoint": "http://localhost:8000/api/health",
     "start_command": "./init.sh start",
-    "last_verified_session": 6,
+    "last_verified_session": 7,
     "notes": "Backend using claude_cli provider. Frontend dev server on 5199. MCP running on 8001. DB at backend/data/promptforge.db with 3 tables (optimizations, github_tokens, linked_repos) and proper indexes. Multiple real pipeline-generated records now in DB. T1 tier complete."
   }
 }

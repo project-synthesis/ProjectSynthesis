@@ -1,14 +1,17 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import type { StageStatus } from '$lib/stores/forge.svelte';
+  import ModelBadge from '$lib/components/shared/ModelBadge.svelte';
 
-  let { name, icon, status, index, isActive, children }: {
+  let { name, icon, status, index, isActive, children, duration, model }: {
     name: string;
     icon: string;
     status: StageStatus;
     index: number;
     isActive: boolean;
     children: Snippet;
+    duration?: number;
+    model?: string;
   } = $props();
 
   let expanded = $state(false);
@@ -60,6 +63,14 @@
     }">
       {name}
     </span>
+
+    {#if duration}
+      <span class="text-[10px] text-text-dim">{(duration / 1000).toFixed(1)}s</span>
+    {/if}
+
+    {#if model}
+      <ModelBadge {model} />
+    {/if}
 
     <span class="text-[10px] text-text-dim capitalize">{status}</span>
 
