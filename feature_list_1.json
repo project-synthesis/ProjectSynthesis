@@ -481,7 +481,7 @@
       "VERIFY the response contains 'connected' field with value false"
     ],
     "expected_outcome": "GitHub auth/me returns disconnected when no token",
-    "passes": false,
+    "passes": true,
     "id": 23
   },
   {
