@@ -2008,7 +2008,7 @@
       "SCREENSHOT to verify the Analyze stage is shown as active (spinner)"
     ],
     "expected_outcome": "SSE stream starts with stage event for analyze",
-    "passes": false,
+    "passes": true,
     "id": 88
   },
   {
@@ -2035,7 +2035,7 @@
       "SCREENSHOT to verify analysis data is shown"
     ],
     "expected_outcome": "SSE stream includes analysis event with classification",
-    "passes": false,
+    "passes": true,
     "id": 89
   },
   {
@@ -2062,7 +2062,7 @@
       "SCREENSHOT to verify strategy data is shown"
     ],
     "expected_outcome": "SSE stream includes strategy event with framework",
-    "passes": false,
+    "passes": true,
     "id": 90
   },
   {
@@ -2089,7 +2089,7 @@
       "SCREENSHOT during streaming to capture partial text display"
     ],
     "expected_outcome": "SSE step_progress events stream optimize text chunks",
-    "passes": false,
+    "passes": true,
     "id": 91
   },
   {
@@ -2116,7 +2116,7 @@
       "SCREENSHOT to verify scores are displayed"
     ],
     "expected_outcome": "SSE stream includes validation event with scores",
-    "passes": false,
+    "passes": true,
     "id": 92
   },
   {
@@ -2143,7 +2143,7 @@
       "SCREENSHOT to verify pipeline completion state"
     ],
     "expected_outcome": "SSE stream ends with complete event",
-    "passes": false,
+    "passes": true,
     "id": 93
   },
   {
@@ -2170,7 +2170,7 @@
       "SCREENSHOT to verify all stages completed in order"
     ],
     "expected_outcome": "SSE events arrive in correct stage order",
-    "passes": false,
+    "passes": true,
     "id": 94
   },
   {

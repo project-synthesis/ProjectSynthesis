@@ -48,6 +48,13 @@ class ClaudeCLIProvider(LLMProvider):
         return full_text
 
     async def stream(self, system: str, user: str, model: str) -> AsyncGenerator[str, None]:
+        """Stream LLM output in small chunks for progressive UI display.
+
+        The claude-agent-sdk returns full TextBlocks, so we split them into
+        smaller chunks to simulate token-level streaming and provide a
+        responsive UI experience.
+        """
+        import asyncio
         from claude_agent_sdk import ClaudeAgentOptions, AssistantMessage, TextBlock
 
         options = ClaudeAgentOptions(
@@ -59,7 +66,15 @@ class ClaudeCLIProvider(LLMProvider):
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock):
-                        yield block.text
+                        text = block.text
+                        # Chunk large text blocks for progressive streaming
+                        chunk_size = 80
+                        if len(text) <= chunk_size:
+                            yield text
+                        else:
+                            for i in range(0, len(text), chunk_size):
+                                yield text[i:i + chunk_size]
+                                await asyncio.sleep(0.01)  # Small delay for progressive display
 
     async def complete_json(self, system: str, user: str, model: str, schema: type | None = None) -> dict:
         raw = await self.complete(system, user, model)
