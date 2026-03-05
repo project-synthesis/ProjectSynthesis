@@ -1,6 +1,6 @@
 <script lang="ts">
   import { github } from '$lib/stores/github.svelte';
-  import { connectGitHub, disconnectGitHub, linkRepo, unlinkRepo } from '$lib/api/client';
+  import { connectGitHub, disconnectGitHub, linkRepo, unlinkRepo, fetchLinkedRepo } from '$lib/api/client';
   import GitHubStatus from '$lib/components/github/GitHubStatus.svelte';
 
   let patInput = $state('');
@@ -21,6 +21,14 @@
         }))
       );
       patInput = '';
+      // Restore previously linked repo selection (non-blocking)
+      fetchLinkedRepo()
+        .then((linked) => {
+          if (linked && linked.full_name) {
+            github.selectRepo(linked.full_name);
+          }
+        })
+        .catch(() => {});
     } catch (err) {
       github.setError((err as Error).message);
     } finally {
