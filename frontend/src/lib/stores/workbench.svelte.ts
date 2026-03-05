@@ -1,4 +1,4 @@
-export type Activity = 'files' | 'history' | 'chains' | 'github' | 'settings' | 'search';
+export type Activity = 'files' | 'history' | 'chains' | 'templates' | 'github' | 'settings' | 'search';
 
 class WorkbenchStore {
   activeActivity = $state<Activity>('files');

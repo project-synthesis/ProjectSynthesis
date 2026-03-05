@@ -1208,7 +1208,7 @@
       "SCREENSHOT to verify templates view"
     ],
     "expected_outcome": "Navigator Templates view renders or shows empty state",
-    "passes": false,
+    "passes": true,
     "id": 216
   },
   {
@@ -1231,7 +1231,7 @@
       "SCREENSHOT to verify chains view"
     ],
     "expected_outcome": "Navigator Chains view renders or shows empty state",
-    "passes": false,
+    "passes": true,
     "id": 217
   },
   {

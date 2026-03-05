@@ -3,6 +3,7 @@
   import NavigatorFiles from './NavigatorFiles.svelte';
   import NavigatorHistory from './NavigatorHistory.svelte';
   import NavigatorChains from './NavigatorChains.svelte';
+  import NavigatorTemplates from './NavigatorTemplates.svelte';
   import NavigatorGitHub from './NavigatorGitHub.svelte';
   import NavigatorSettings from './NavigatorSettings.svelte';
 
@@ -10,6 +11,7 @@
     files: 'Files',
     history: 'History',
     chains: 'Chains',
+    templates: 'Templates',
     github: 'GitHub',
     search: 'Search',
     settings: 'Settings'
@@ -37,6 +39,8 @@
         <NavigatorHistory />
       {:else if workbench.activeActivity === 'chains'}
         <NavigatorChains />
+      {:else if workbench.activeActivity === 'templates'}
+        <NavigatorTemplates />
       {:else if workbench.activeActivity === 'github'}
         <NavigatorGitHub />
       {:else if workbench.activeActivity === 'search'}
