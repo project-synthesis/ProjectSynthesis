@@ -2,16 +2,6 @@
   "$schema_version": 1,
   "session_log": [
     {
-      "session_id": 12,
-      "session_type": "integrator",
-      "tests_completed": [],
-      "tests_regressed": [],
-      "tests_fixed": [],
-      "gaps_found": 0,
-      "gaps_wired": 0,
-      "summary": "No new integration gaps found from latest coding session (token counts, run header, streaming, auto-switch). All recently-built components properly wired: token count flow (backend\u2192SSE\u2192forge\u2192StageCard/RunHeader), streaming text (chunks\u2192forge\u2192StageOptimize/ForgeArtifact), auto-switch (PromptEdit\u2192editor.setSubTab), total duration/tokens (complete event\u2192finishForge\u2192RunHeader). 3 previously-known gaps (Toast, RepoPickerModal, /api/optimizations) remain flagged for coding agent."
-    },
-    {
       "session_id": 14,
       "session_type": "validator",
       "tests_completed": [],
@@ -236,7 +226,8 @@
       "from_session": 16,
       "action": "RepoPickerModal.svelte is orphaned \u2014 needs import into a parent component (e.g. Navigator or PromptEdit) with modal open/close state and a trigger button. Should let user pick from github.repos and call linkRepo() from client.ts to persist selection.",
       "test_ids": [],
-      "priority": "medium"
+      "priority": "medium",
+      "status": "expired"
     },
     {
       "id": "i16_2",
@@ -245,15 +236,18 @@
       "from_session": 16,
       "action": "retryOptimization() in client.ts is defined but never called \u2014 needs a Retry button in the UI (e.g. RunHeader or a post-forge results view) that calls retryOptimization(id) when user wants to re-run a low-scoring optimization.",
       "test_ids": [],
-      "priority": "medium"
+      "priority": "medium",
+      "status": "expired"
     },
     {
       "id": "i18_1",
       "from_agent": "integrator",
       "to_agent": "coding",
       "from_session": 18,
-      "action": "NavigatorFiles.svelte uses hardcoded sampleFiles array — needs to be rewritten to use fetchRepoTree() and fetchFileContent() from client.ts to show actual repo file tree when a GitHub repo is linked.",
-      "test_ids": [143],
+      "action": "NavigatorFiles.svelte uses hardcoded sampleFiles array \u2014 needs to be rewritten to use fetchRepoTree() and fetchFileContent() from client.ts to show actual repo file tree when a GitHub repo is linked.",
+      "test_ids": [
+        143
+      ],
       "priority": "medium"
     },
     {
@@ -261,7 +255,7 @@
       "from_agent": "integrator",
       "to_agent": "coding",
       "from_session": 18,
-      "action": "fetchHistoryStats() in client.ts is defined but has no UI consumer — needs a stats display section (e.g., in NavigatorHistory header or Inspector) showing total_optimizations, average_score, framework_distribution from GET /api/history/stats.",
+      "action": "fetchHistoryStats() in client.ts is defined but has no UI consumer \u2014 needs a stats display section (e.g., in NavigatorHistory header or Inspector) showing total_optimizations, average_score, framework_distribution from GET /api/history/stats.",
       "test_ids": [],
       "priority": "low"
     },
@@ -270,7 +264,7 @@
       "from_agent": "integrator",
       "to_agent": "coding",
       "from_session": 18,
-      "action": "deleteOptimization() in client.ts is defined but has no UI trigger — needs a delete button/icon in NavigatorHistory list items that calls deleteOptimization(id) and refreshes the history list.",
+      "action": "deleteOptimization() in client.ts is defined but has no UI trigger \u2014 needs a delete button/icon in NavigatorHistory list items that calls deleteOptimization(id) and refreshes the history list.",
       "test_ids": [],
       "priority": "low"
     }
@@ -285,13 +279,13 @@
     "notes": "All services healthy (verified session 18). Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING. DB at backend/data/promptforge.db (3 tables, 51 optimization records). T0: 18/18, T1: 45/45, T2: 54/106. 117/335 tests passing (34.9%). GitHub state hydration wired into +layout.svelte. Frontend restarted by init.sh."
   },
   "session_checkpoint": {
-    "session_type": "",
-    "session_id": 0,
-    "audit_done": false,
-    "tests_verified_this_run": [],
+    "session_type": "validator",
+    "session_id": 19,
+    "audit_done": true,
+    "tests_verified_this_run": [1,2,3,8,12,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,81,82,83,84,85,86,87,95,98,103,105,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,151,152,153,154,155,156,157,158,159,168],
     "tests_completed_this_run": [],
     "gaps_wired_this_run": [],
-    "last_step": "",
-    "session_start_sha": ""
+    "last_step": "5",
+    "session_start_sha": "1e0c13004da08b7db9c74553c29e45aa11e37ccc"
   }
 }
