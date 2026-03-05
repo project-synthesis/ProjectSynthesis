@@ -9,7 +9,7 @@
       {#if forge.overallScore != null}
         <ScoreCircle score={forge.overallScore} size={36} />
       {:else if forge.isForging}
-        <div class="w-9 h-9 rounded-full border-2 border-neon-cyan/30 border-t-neon-cyan animate-spin"></div>
+        <div class="w-9 h-9 rounded-full animate-spin" style="border: 2px solid rgba(0, 229, 255, 0.3); border-top-color: #00e5ff;"></div>
       {/if}
 
       <div>
@@ -22,7 +22,7 @@
             Forge Error
           {/if}
         </h3>
-        <p class="text-xs text-text-dim mt-0.5 font-mono">
+        <p class="text-[10px] text-text-secondary mt-0.5 font-mono">
           {forge.completedStages} of {forge.visibleStages.length} stages completed
           {#if forge.totalDuration != null}
             <span class="ml-1">· {(forge.totalDuration / 1000).toFixed(1)}s</span>

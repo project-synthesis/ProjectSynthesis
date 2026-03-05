@@ -1992,7 +1992,7 @@
       "SCREENSHOT to verify Activity Bar background"
     ],
     "expected_outcome": "Activity Bar background is bg-secondary",
-    "passes": false,
+    "passes": true,
     "id": 246
   },
   {
@@ -2015,7 +2015,7 @@
       "SCREENSHOT to verify Status Bar styling"
     ],
     "expected_outcome": "Status Bar background is bg-secondary",
-    "passes": false,
+    "passes": true,
     "id": 247
   },
   {
@@ -2042,7 +2042,7 @@
       "SCREENSHOT to verify stage-specific border colors"
     ],
     "expected_outcome": "Stage card left border uses stage-specific color",
-    "passes": false,
+    "passes": true,
     "id": 248
   },
   {
@@ -2068,7 +2068,7 @@
       "SCREENSHOT to verify complexity badge color"
     ],
     "expected_outcome": "Complexity badge uses chromatic color encoding",
-    "passes": false,
+    "passes": true,
     "id": 249
   },
   {
@@ -2094,7 +2094,7 @@
       "SCREENSHOT to verify task type chip coloring"
     ],
     "expected_outcome": "Task type chip uses chromatic color encoding",
-    "passes": false,
+    "passes": true,
     "id": 250
   },
   {
@@ -2139,7 +2139,7 @@
       "SCREENSHOT to verify Navigator border"
     ],
     "expected_outcome": "Navigator border-right uses border-subtle",
-    "passes": false,
+    "passes": true,
     "id": 252
   },
   {
@@ -2161,7 +2161,7 @@
       "SCREENSHOT to verify Inspector border"
     ],
     "expected_outcome": "Inspector border-left uses border-subtle",
-    "passes": false,
+    "passes": true,
     "id": 253
   },
   {
@@ -2184,7 +2184,7 @@
       "SCREENSHOT to verify Forge button styling"
     ],
     "expected_outcome": "Forge button styling matches spec (neon-cyan accent)",
-    "passes": false,
+    "passes": true,
     "id": 254
   },
   {
@@ -2207,7 +2207,7 @@
       "SCREENSHOT to verify button hover state"
     ],
     "expected_outcome": "Button hover states follow 5-state interaction machine",
-    "passes": false,
+    "passes": true,
     "id": 255
   },
   {
@@ -2231,7 +2231,7 @@
       "VERIFY the button shows animation before transitioning to disabled/forging state"
     ],
     "expected_outcome": "Forge spark animation on Forge button click",
-    "passes": false,
+    "passes": true,
     "id": 256
   },
   {
@@ -2256,7 +2256,7 @@
       "VERIFY the active stage circle shows a spinning animation"
     ],
     "expected_outcome": "Stage status spinner animation during execution",
-    "passes": false,
+    "passes": true,
     "id": 257
   },
   {
@@ -2282,7 +2282,7 @@
       "SCREENSHOT immediately to capture the green flash effect"
     ],
     "expected_outcome": "Copy flash animation on copy button click",
-    "passes": false,
+    "passes": true,
     "id": 258
   },
   {
@@ -2311,7 +2311,7 @@
       "SCREENSHOT to verify expand/collapse behavior"
     ],
     "expected_outcome": "Stage body collapse/expand uses grid-template-rows",
-    "passes": false,
+    "passes": true,
     "id": 259
   },
   {
@@ -2332,7 +2332,7 @@
       "VERIFY the animation uses 350ms duration with 50ms stagger delay"
     ],
     "expected_outcome": "Stagger fade-in for tool call rows in Stage 00",
-    "passes": false,
+    "passes": true,
     "id": 260
   },
   {
@@ -2356,7 +2356,7 @@
       "SCREENSHOT to verify the Pipeline sub-tab slides in from the right"
     ],
     "expected_outcome": "Pipeline sub-tab slide-in-right on forge trigger",
-    "passes": false,
+    "passes": true,
     "id": 261
   },
   {
@@ -2381,7 +2381,7 @@
       "SCREENSHOT to verify toast enters with animation"
     ],
     "expected_outcome": "Toast slide-in-right entrance animation",
-    "passes": false,
+    "passes": true,
     "id": 262
   },
   {
@@ -2403,7 +2403,7 @@
       "SCREENSHOT to verify the palette appears with centered dialog animation"
     ],
     "expected_outcome": "Command Palette dialog-in animation",
-    "passes": false,
+    "passes": true,
     "id": 263
   },
   {
@@ -2429,7 +2429,7 @@
       "SCREENSHOT to verify score bar fill"
     ],
     "expected_outcome": "Score bar fill animation (500ms ease)",
-    "passes": false,
+    "passes": true,
     "id": 264
   },
   {
@@ -2451,7 +2451,7 @@
       "VERIFY spatial animations (slides, scales) are replaced with opacity-only transitions"
     ],
     "expected_outcome": "All animations respect prefers-reduced-motion",
-    "passes": false,
+    "passes": true,
     "id": 265
   },
   {

@@ -223,7 +223,7 @@
   <div class="flex-1 overflow-y-auto p-1">
     {#if loading}
       <div class="flex items-center justify-center py-8">
-        <div class="w-4 h-4 border-2 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin"></div>
+        <div class="w-4 h-4 rounded-full animate-spin" style="border: 2px solid rgba(0, 229, 255, 0.3); border-top-color: #00e5ff;"></div>
       </div>
     {:else if history.entries.length === 0}
       <p class="text-xs text-text-dim px-2 py-8 text-center">No history entries yet. Forge a prompt to get started.</p>

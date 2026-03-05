@@ -7,7 +7,7 @@
 </script>
 
 <footer
-  class="h-[24px] flex items-center justify-between px-2 bg-bg-secondary border-t border-border-subtle text-[10px] select-none shrink-0"
+  class="h-[24px] flex items-center justify-between px-2 bg-bg-secondary border-t border-border-subtle text-[10px] font-mono select-none shrink-0"
   aria-label="Status Bar"
 >
   <div class="flex items-center gap-3">

@@ -330,9 +330,9 @@
     "session_id": 36,
     "audit_done": false,
     "tests_verified_this_run": [],
-    "tests_completed_this_run": [],
+    "tests_completed_this_run": [236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 251],
     "gaps_wired_this_run": [],
-    "last_step": "orient",
+    "last_step": "implementing T4 batch 2",
     "session_start_sha": "42471d6e42aa9e2c31bf70d0dddd06eca753e15e"
   }
 }

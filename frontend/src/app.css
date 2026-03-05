@@ -202,6 +202,9 @@ body {
   40%  { transform: scale(1.01) rotate(-5deg); background-color: rgba(251, 191, 36, 0.08); }
   100% { transform: scale(1) rotate(0deg); background-color: rgba(0, 229, 255, 0.08); }
 }
+.forge-sparking {
+  animation: forge-spark-anim 0.5s ease 3 !important;
+}
 
 /* ─── Score Circle (contour, not glow) ─── */
 .score-circle {

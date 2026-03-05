@@ -93,11 +93,18 @@
     </svg>
   </button>
 
-  <!-- Content -->
-  {#if expanded && status !== 'idle'}
-    <div class="px-3 pb-3 border-t border-border-subtle animate-section-expand">
-      <div class="pt-2">
-        {@render children()}
+  <!-- Content (grid-template-rows collapse/expand per spec) -->
+  {#if status !== 'idle'}
+    <div
+      class="grid transition-all duration-300 ease-out"
+      style="grid-template-rows: {expanded ? '1fr' : '0fr'};"
+    >
+      <div class="overflow-hidden">
+        <div class="px-3 pb-3 border-t border-border-subtle">
+          <div class="pt-2">
+            {@render children()}
+          </div>
+        </div>
       </div>
     </div>
   {/if}

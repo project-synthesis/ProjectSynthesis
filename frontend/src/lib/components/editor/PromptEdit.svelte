@@ -13,6 +13,7 @@
 
   let strategy = $state('auto');
   let abortController = $state<AbortController | null>(null);
+  let forgeSparking = $state(false);
 
   // @ context popup state
   let showAtPopup = $state(false);
@@ -121,6 +122,10 @@
   async function handleForge() {
     if (!tab.promptText?.trim()) return;
     if (forge.isForging) return;
+
+    // Trigger forge-spark animation before disable
+    forgeSparking = true;
+    setTimeout(() => { forgeSparking = false; }, 600);
 
     forge.startForge(tab.promptText);
     editor.setSubTab('pipeline');
@@ -325,7 +330,8 @@
         class="btn-forge px-4 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200
           {forge.isForging
             ? 'opacity-40 cursor-not-allowed'
-            : 'hover:-translate-y-px active:translate-y-0'}"
+            : 'hover:-translate-y-px active:translate-y-0'}
+          {forgeSparking ? 'forge-sparking' : ''}"
         onclick={handleForge}
         disabled={forge.isForging || !tab.promptText?.trim()}
         data-testid="forge-button"
