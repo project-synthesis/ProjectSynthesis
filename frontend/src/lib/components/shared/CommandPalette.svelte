@@ -176,7 +176,7 @@
     <div class="max-h-[300px] overflow-y-auto py-1">
       {#each commandPalette.filteredCommands as cmd, i (cmd.id)}
         <button
-          class="w-full flex items-center justify-between px-4 py-2 text-sm transition-colors
+          class="w-full flex items-center justify-between px-4 h-[40px] text-[13px] transition-colors
             {i === commandPalette.selectedIndex
               ? 'bg-bg-hover text-text-primary'
               : 'text-text-secondary hover:bg-bg-hover/50'}"
@@ -187,7 +187,7 @@
             <span>{cmd.label}</span>
           </div>
           {#if cmd.shortcut}
-            <kbd class="text-[10px] px-1.5 py-0.5 bg-bg-secondary rounded border border-border-subtle text-text-dim">{cmd.shortcut}</kbd>
+            <kbd class="text-[10px] font-mono px-1.5 py-0.5 bg-bg-secondary rounded border border-border-subtle text-text-dim">{cmd.shortcut}</kbd>
           {/if}
         </button>
       {/each}

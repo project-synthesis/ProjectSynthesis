@@ -77,7 +77,7 @@
     {/if}
 
     {#if tokenCount}
-      <span class="text-[10px] text-text-dim font-mono">{tokenCount.toLocaleString()} tok</span>
+      <span class="text-[10px] text-text-dim font-mono">{tokenCount.toLocaleString()}tok</span>
     {/if}
 
     {#if model}

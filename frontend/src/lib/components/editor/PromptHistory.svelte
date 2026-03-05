@@ -98,9 +98,12 @@
       <p class="text-sm text-text-dim animate-status-pulse">Loading history...</p>
     </div>
   {:else if promptRuns.length === 0}
-    <div class="text-center py-12">
-      <p class="text-sm text-text-dim">No optimization history for this prompt.</p>
-      <p class="text-[10px] text-text-dim/50 mt-1">Run Forge to create optimization history.</p>
+    <div class="flex flex-col items-center justify-center text-center py-12">
+      <svg class="w-10 h-10 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+      </svg>
+      <p class="text-sm text-text-dim">This prompt has never been forged</p>
+      <p class="text-[10px] text-text-dim/50 mt-1">Press <kbd class="px-1 py-0.5 bg-bg-card rounded border border-border-subtle text-text-secondary">Ctrl+Enter</kbd> to run the optimization pipeline</p>
     </div>
   {:else}
     <!-- Table layout -->

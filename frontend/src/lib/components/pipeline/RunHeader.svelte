@@ -31,7 +31,7 @@
             <span class="ml-1">· {forge.overallScore}/10</span>
           {/if}
           {#if forge.totalTokens != null}
-            <span class="ml-1">· {forge.totalTokens.toLocaleString()} tok</span>
+            <span class="ml-1">· {forge.totalTokens.toLocaleString()}tok</span>
           {/if}
           {#if forge.error}
             <span class="text-neon-red ml-1">{forge.error}</span>

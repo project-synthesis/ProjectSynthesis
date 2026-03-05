@@ -212,6 +212,21 @@ body {
   background: color-mix(in srgb, currentColor 8%, transparent);
 }
 
+/* ─── Streaming Cursor (2px neon-cyan, blink) ─── */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background-color: #00e5ff;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  animation: cursor-blink 1s step-end infinite;
+}
+
 /* ─── Font utility: display (Syne) ─── */
 .font-display {
   font-family: 'Syne', Geist, ui-sans-serif, system-ui, sans-serif;

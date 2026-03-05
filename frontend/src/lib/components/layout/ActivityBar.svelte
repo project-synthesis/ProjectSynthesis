@@ -18,14 +18,18 @@
 >
   {#each activities as act}
     <button
-      class="w-8 h-8 flex items-center justify-center rounded-md transition-colors
+      class="w-8 h-8 flex items-center justify-center rounded-md transition-colors relative
         {workbench.activeActivity === act.id && !workbench.navigatorCollapsed
-          ? 'text-neon-cyan bg-bg-hover'
+          ? 'text-neon-cyan'
           : 'text-text-dim hover:text-text-secondary hover:bg-bg-hover'}"
       title={act.label}
       aria-label={act.label}
       onclick={() => workbench.setActivity(act.id)}
     >
+      <!-- Active left border indicator (1px neon-cyan) -->
+      {#if workbench.activeActivity === act.id && !workbench.navigatorCollapsed}
+        <span class="absolute left-0 top-1 bottom-1 w-[1px] bg-neon-cyan rounded-full"></span>
+      {/if}
       <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
         <path stroke-linecap="round" stroke-linejoin="round" d={act.icon}></path>
       </svg>

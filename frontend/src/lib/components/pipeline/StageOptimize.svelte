@@ -13,7 +13,7 @@
 
       {#if forge.streamingText}
         <div class="bg-bg-primary border border-border-accent rounded-lg p-3 relative">
-          <pre class="text-text-primary text-[13px] font-sans whitespace-pre-wrap leading-relaxed">{forge.streamingText}<span class="inline-block w-1.5 h-3.5 bg-neon-cyan animate-status-pulse ml-0.5"></span></pre>
+          <pre class="text-text-primary text-[13px] font-sans whitespace-pre-wrap leading-relaxed">{forge.streamingText}<span class="streaming-cursor"></span></pre>
         </div>
       {/if}
     </div>
