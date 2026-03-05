@@ -2,16 +2,6 @@
   "$schema_version": 1,
   "session_log": [
     {
-      "session_id": 14,
-      "session_type": "validator",
-      "tests_completed": [],
-      "tests_regressed": [],
-      "tests_fixed": [],
-      "mocks_found": 0,
-      "mocks_fixed": 0,
-      "summary": "Standard validation (retry of session 13): all 83 passing tests verified across T0-T2. 0 regressions. Audit completed in session 13. Cross-feature integration check clean: build OK, no console errors, history/settings/stats all showing real data. Frontend restarted (was down from session timeout)."
-    },
-    {
       "session_id": 15,
       "session_type": "coding",
       "tests_completed": [
@@ -272,13 +262,13 @@
     "notes": "All services healthy (verified session 19). Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING. DB at backend/data/promptforge.db (3 tables, 61 optimization records). T0: 18/18, T1: 45/45, T2: 54/106. 117/335 tests passing (34.9%). GitHub state hydration wired into +layout.svelte. Frontend restarted by init.sh."
   },
   "session_checkpoint": {
-    "session_type": "",
-    "session_id": 0,
+    "session_type": "coding",
+    "session_id": 20,
     "audit_done": false,
     "tests_verified_this_run": [],
     "tests_completed_this_run": [],
     "gaps_wired_this_run": [],
-    "last_step": "",
-    "session_start_sha": ""
+    "last_step": "orient",
+    "session_start_sha": "07da0131c939faecdc729a696618d8ecb7093a12"
   }
 }

@@ -3335,7 +3335,7 @@
       "SCREENSHOT to verify file tree rendering"
     ],
     "expected_outcome": "Navigator Files view shows file tree",
-    "passes": false,
+    "passes": true,
     "id": 143
   },
   {
