@@ -3834,7 +3834,7 @@
       "SCREENSHOT to verify per-prompt history with expanded run"
     ],
     "expected_outcome": "Forge followed by per-prompt History sub-tab review",
-    "passes": false,
+    "passes": true,
     "id": 163
   },
   {
@@ -3866,7 +3866,7 @@
       "SCREENSHOT to verify two runs in history"
     ],
     "expected_outcome": "Double forge creates two runs in history",
-    "passes": false,
+    "passes": true,
     "id": 164
   },
   {

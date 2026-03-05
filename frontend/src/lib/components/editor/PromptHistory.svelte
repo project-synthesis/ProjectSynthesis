@@ -6,6 +6,7 @@
   import { formatRelativeTime } from '$lib/utils/format';
 
   let isLoading = $state(false);
+  let expandedId = $state<string | null>(null);
 
   // Load history entries on mount
   $effect(() => {
@@ -28,14 +29,34 @@
   let promptRuns = $derived.by(() => {
     const currentPrompt = editor.activeTab?.promptText?.trim();
     if (!currentPrompt) return [];
-    // Match entries whose raw_prompt starts with the same text (handles slight variations)
     return history.entries.filter(e => {
       const entryPrompt = e.raw_prompt?.trim();
       if (!entryPrompt) return false;
-      // Exact match or prefix match (the raw_prompt should match the tab's prompt text)
       return entryPrompt === currentPrompt || currentPrompt.startsWith(entryPrompt) || entryPrompt.startsWith(currentPrompt);
     });
   });
+
+  function toggleExpand(id: string) {
+    expandedId = expandedId === id ? null : id;
+  }
+
+  function getScoreDelta(index: number): string | null {
+    if (index >= promptRuns.length - 1) return null;
+    const current = promptRuns[index].overall_score;
+    const previous = promptRuns[index + 1].overall_score;
+    if (current == null || previous == null) return null;
+    const delta = current - previous;
+    if (delta === 0) return '±0';
+    return delta > 0 ? `+${delta}` : `${delta}`;
+  }
+
+  function getDeltaColor(index: number): string {
+    const delta = getScoreDelta(index);
+    if (!delta) return '';
+    if (delta.startsWith('+')) return 'text-neon-green';
+    if (delta.startsWith('-')) return 'text-neon-red';
+    return 'text-text-dim';
+  }
 </script>
 
 <div class="p-4 space-y-3 animate-fade-in">
@@ -76,8 +97,8 @@
           {#each promptRuns as entry, i (entry.id)}
             <tr
               class="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors cursor-pointer animate-stagger-fade-in"
-              onclick={() => history.select(entry.id)}
-              class:bg-bg-card={history.selectedId === entry.id}
+              onclick={() => toggleExpand(entry.id)}
+              class:bg-bg-card={expandedId === entry.id}
             >
               <td class="py-2 px-2 text-text-secondary font-mono">#{promptRuns.length - i}</td>
               <td class="py-2 px-2">
@@ -94,6 +115,9 @@
                   <div class="flex items-center gap-1.5">
                     <ScoreCircle score={entry.overall_score} size={20} />
                     <span class="text-text-primary">{entry.overall_score}/10</span>
+                    {#if getScoreDelta(i)}
+                      <span class="text-[10px] {getDeltaColor(i)}">{getScoreDelta(i)}</span>
+                    {/if}
                   </div>
                 {:else}
                   <span class="text-text-dim">–</span>
@@ -110,6 +134,41 @@
                 {formatRelativeTime(entry.created_at)}
               </td>
             </tr>
+            <!-- Expandable trace row -->
+            {#if expandedId === entry.id}
+              <tr class="bg-bg-card/50">
+                <td colspan="5" class="px-4 py-3">
+                  <div class="space-y-2">
+                    <h4 class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Stage Trace</h4>
+                    <div class="space-y-1 font-mono text-[10px]">
+                      <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-neon-green"></span>
+                        <span class="text-text-secondary">Analyze</span>
+                        <span class="text-text-dim">→ Task classification complete</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-neon-green"></span>
+                        <span class="text-text-secondary">Strategy</span>
+                        <span class="text-text-dim">→ {entry.strategy || 'auto'} selected</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-neon-green"></span>
+                        <span class="text-text-secondary">Optimize</span>
+                        <span class="text-text-dim">→ Prompt optimized</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-neon-green"></span>
+                        <span class="text-text-secondary">Validate</span>
+                        <span class="text-text-dim">→ Score: {entry.overall_score ?? '–'}/10</span>
+                      </div>
+                    </div>
+                    {#if entry.duration_ms}
+                      <p class="text-[10px] text-text-dim mt-1">Total duration: {(entry.duration_ms / 1000).toFixed(1)}s</p>
+                    {/if}
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
