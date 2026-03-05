@@ -3739,7 +3739,7 @@
       "SCREENSHOT to verify the complete pipeline result"
     ],
     "expected_outcome": "User sees complete forge result with all stages, scores, and optimized prompt",
-    "passes": false,
+    "passes": true,
     "id": 160
   },
   {
@@ -3773,7 +3773,7 @@
       "SCREENSHOT to verify the complete pipeline with all stage data"
     ],
     "expected_outcome": "Full forge flow for complex reasoning prompt with all stages visible",
-    "passes": false,
+    "passes": true,
     "id": 161
   },
   {
@@ -3896,7 +3896,7 @@
       "SCREENSHOT to verify strategy-specific optimization"
     ],
     "expected_outcome": "Forge with strategy selection end-to-end",
-    "passes": false,
+    "passes": true,
     "id": 165
   },
   {
@@ -3927,7 +3927,7 @@
       "VERIFY all subsequent stages also completed successfully"
     ],
     "expected_outcome": "Complete pipeline with Analyze stage showing detailed classification",
-    "passes": false,
+    "passes": true,
     "id": 166
   },
   {
@@ -3958,7 +3958,7 @@
       "SCREENSHOT to verify Inspector content post-forge"
     ],
     "expected_outcome": "Inspector panel updates through forge lifecycle",
-    "passes": false,
+    "passes": true,
     "id": 167
   }
 ]

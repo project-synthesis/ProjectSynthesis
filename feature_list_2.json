@@ -57,7 +57,7 @@
       "SCREENSHOT to verify UI matches API data"
     ],
     "expected_outcome": "Complete end-to-end flow with API verification",
-    "passes": false,
+    "passes": true,
     "id": 169
   },
   {
