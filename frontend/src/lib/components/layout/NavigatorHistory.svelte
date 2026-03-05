@@ -47,6 +47,7 @@
 
   async function loadHistory() {
     loading = true;
+    const startTime = Date.now();
     try {
       const res = await fetchHistory({
         page: history.filters.page,
@@ -73,6 +74,11 @@
     } catch {
       // API not available yet
     } finally {
+      // Minimum 200ms skeleton display per spec
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 200) {
+        await new Promise(r => setTimeout(r, 200 - elapsed));
+      }
       loading = false;
     }
   }
@@ -222,8 +228,17 @@
   <!-- List -->
   <div class="flex-1 overflow-y-auto p-1">
     {#if loading}
-      <div class="flex items-center justify-center py-8">
-        <div class="w-4 h-4 rounded-full animate-spin" style="border: 2px solid rgba(0, 229, 255, 0.3); border-top-color: #00e5ff;"></div>
+      <!-- Skeleton loading rows with shimmer animation -->
+      <div class="space-y-1 p-1" data-testid="history-skeleton">
+        {#each Array(5) as _, i}
+          <div class="h-[32px] flex items-center gap-2 px-2 rounded" style="animation-delay: {i * 50}ms;">
+            <div class="w-5 h-5 rounded-full bg-bg-hover animate-shimmer" style="background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
+            <div class="flex-1 space-y-1">
+              <div class="h-2.5 rounded bg-bg-hover animate-shimmer" style="width: {70 + i * 5}%; background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
+              <div class="h-2 rounded bg-bg-hover animate-shimmer" style="width: {40 + i * 8}%; background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
+            </div>
+          </div>
+        {/each}
       </div>
     {:else if history.entries.length === 0}
       <p class="text-xs text-text-dim px-2 py-8 text-center">No history entries yet. Forge a prompt to get started.</p>
@@ -232,7 +247,7 @@
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
-          class="w-full text-left px-2 py-2 rounded text-xs transition-colors mb-0.5 cursor-pointer group/entry
+          class="w-full text-left px-2 rounded text-xs transition-colors duration-200 mb-0.5 cursor-pointer group/entry h-[32px] flex items-center
             {selectedIds.has(entry.id)
               ? 'bg-neon-cyan/5 border border-neon-cyan/20'
               : history.selectedId === entry.id

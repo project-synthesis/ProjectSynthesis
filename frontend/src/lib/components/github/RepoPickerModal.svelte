@@ -20,9 +20,9 @@
 </script>
 
 {#if open}
-  <div class="fixed inset-0 bg-black/50 z-50" onclick={() => onclose?.()} role="presentation"></div>
+  <div class="fixed inset-0 bg-black/50 z-[700]" onclick={() => onclose?.()} role="presentation"></div>
 
-  <div class="fixed top-[20%] left-1/2 -translate-x-1/2 w-[400px] max-w-[90vw] bg-bg-card border border-border-subtle rounded-xl z-50 overflow-hidden animate-dialog-in">
+  <div class="fixed top-[20%] left-1/2 -translate-x-1/2 w-[400px] max-w-[90vw] bg-bg-card border border-border-subtle rounded-xl z-[700] overflow-hidden animate-dialog-in">
     <div class="px-4 py-3 border-b border-border-subtle">
       <h2 class="text-sm font-semibold text-text-primary mb-2">Select Repository</h2>
       <input

@@ -2478,7 +2478,7 @@
       "SCREENSHOT to verify full 5-zone layout"
     ],
     "expected_outcome": "Full layout at >=1280px width with all 5 zones",
-    "passes": false,
+    "passes": true,
     "id": 266
   },
   {
@@ -2501,7 +2501,7 @@
       "SCREENSHOT to verify compact layout without Inspector"
     ],
     "expected_outcome": "Inspector auto-collapses at 768-1279px width",
-    "passes": false,
+    "passes": true,
     "id": 267
   },
   {
@@ -2525,7 +2525,7 @@
       "SCREENSHOT to verify narrow layout"
     ],
     "expected_outcome": "Navigator auto-collapses at <768px width",
-    "passes": false,
+    "passes": true,
     "id": 268
   },
   {
@@ -2551,7 +2551,7 @@
       "SCREENSHOT to verify stage label format"
     ],
     "expected_outcome": "Stage labels format: '00 // EXPLORE', '01 // ANALYZE'",
-    "passes": false,
+    "passes": true,
     "id": 269
   },
   {
@@ -2578,7 +2578,7 @@
       "SCREENSHOT to verify score circle styling"
     ],
     "expected_outcome": "Score circles are 20px with Geist Mono 10px 700",
-    "passes": false,
+    "passes": true,
     "id": 270
   },
   {
@@ -2600,7 +2600,7 @@
       "SCREENSHOT to verify gradient wordmark"
     ],
     "expected_outcome": "Gradient forge applied to logo wordmark",
-    "passes": false,
+    "passes": true,
     "id": 271
   },
   {
@@ -2622,7 +2622,7 @@
       "SCREENSHOT to verify text selection styling"
     ],
     "expected_outcome": "Selection highlight uses neon-cyan/30 background",
-    "passes": false,
+    "passes": true,
     "id": 272
   },
   {
@@ -2645,7 +2645,7 @@
       "SCREENSHOT to verify scrollbar styling"
     ],
     "expected_outcome": "Custom scrollbar styling (4px width, bg-secondary)",
-    "passes": false,
+    "passes": true,
     "id": 273
   },
   {
@@ -2668,7 +2668,7 @@
       "SCREENSHOT to verify consistent border radius usage"
     ],
     "expected_outcome": "Border radius tiers followed consistently",
-    "passes": false,
+    "passes": true,
     "id": 274
   },
   {
@@ -2690,7 +2690,7 @@
       "VERIFY the \u00d7 dismiss icon changes to neon-red on hover"
     ],
     "expected_outcome": "Context chips styled with neon-teal accent",
-    "passes": false,
+    "passes": true,
     "id": 275
   },
   {
@@ -2716,7 +2716,7 @@
       "SCREENSHOT to verify card background color"
     ],
     "expected_outcome": "Pipeline cards use bg-card background",
-    "passes": false,
+    "passes": true,
     "id": 276
   },
   {
@@ -2742,7 +2742,7 @@
       "SCREENSHOT to verify weakness styling"
     ],
     "expected_outcome": "Weaknesses displayed in neon-red/60 bullets",
-    "passes": false,
+    "passes": true,
     "id": 277
   },
   {
@@ -2768,7 +2768,7 @@
       "SCREENSHOT to verify strength styling"
     ],
     "expected_outcome": "Strengths displayed in neon-green/60 bullets",
-    "passes": false,
+    "passes": true,
     "id": 278
   },
   {
@@ -2791,7 +2791,7 @@
       "SCREENSHOT to verify compact table density"
     ],
     "expected_outcome": "History table row height is compact 32px",
-    "passes": false,
+    "passes": true,
     "id": 279
   },
   {
@@ -2814,7 +2814,7 @@
       "SCREENSHOT to verify conditional score cell tinting"
     ],
     "expected_outcome": "Score cells use conditional tinting backgrounds",
-    "passes": false,
+    "passes": true,
     "id": 280
   },
   {
@@ -2836,7 +2836,7 @@
       "VERIFY toast notifications use z-index 500"
     ],
     "expected_outcome": "Z-index layering follows 9-tier system",
-    "passes": false,
+    "passes": true,
     "id": 281
   },
   {
@@ -2858,7 +2858,7 @@
       "VERIFY no inline styles contain shadow effects"
     ],
     "expected_outcome": "No text-shadow or filter drop-shadow in codebase",
-    "passes": false,
+    "passes": true,
     "id": 282
   },
   {
@@ -2882,7 +2882,7 @@
       "SCREENSHOT to verify skeleton loading state"
     ],
     "expected_outcome": "Skeleton loading state for history table",
-    "passes": false,
+    "passes": true,
     "id": 283
   },
   {
@@ -2904,7 +2904,7 @@
       "VERIFY animation duration is 1.5s"
     ],
     "expected_outcome": "Skeleton shimmer animation uses correct timing",
-    "passes": false,
+    "passes": true,
     "id": 284
   },
   {
@@ -2925,7 +2925,7 @@
       "VERIFY the minimum is approximately 200ms"
     ],
     "expected_outcome": "Skeleton minimum display duration 200ms",
-    "passes": false,
+    "passes": true,
     "id": 285
   },
   {

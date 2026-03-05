@@ -148,13 +148,13 @@
 {#if commandPalette.isOpen}
   <!-- Backdrop -->
   <div
-    class="fixed inset-0 bg-black/50 z-50"
+    class="fixed inset-0 bg-black/50 z-[800]"
     onclick={() => commandPalette.close()}
     role="presentation"
   ></div>
 
   <!-- Palette -->
-  <div class="fixed top-[20%] left-1/2 -translate-x-1/2 w-[480px] max-w-[90vw] bg-bg-card border border-border-subtle rounded-xl z-50 overflow-hidden animate-dialog-in">
+  <div class="fixed top-[20%] left-1/2 -translate-x-1/2 w-[480px] max-w-[90vw] bg-bg-card border border-border-subtle rounded-xl z-[800] overflow-hidden animate-dialog-in">
     <!-- Input -->
     <div class="flex items-center gap-2 px-4 py-3 border-b border-border-subtle">
       <svg class="w-4 h-4 text-text-dim shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">

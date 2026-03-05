@@ -249,7 +249,7 @@
     {#if showAtPopup}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="absolute left-4 top-10 w-64 bg-bg-card border border-border-subtle rounded-lg z-50 animate-dropdown-enter"
+        class="absolute left-4 top-10 w-64 bg-bg-card border border-border-subtle rounded-lg z-[300] animate-dropdown-enter"
         data-testid="at-context-popup"
         onmousedown={(e) => e.preventDefault()}
       >

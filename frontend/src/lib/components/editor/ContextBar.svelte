@@ -43,10 +43,10 @@
   {/if}
 
   {#each chips as chip (chip.id)}
-    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-bg-card border border-border-subtle text-text-secondary animate-scale-in">
-      <span class="text-neon-cyan">@</span>{chip.label}
+    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-mono text-[10px] bg-neon-teal/8 border border-neon-teal/40 text-neon-teal animate-scale-in" data-testid="context-chip">
+      <span>@</span>{chip.label}
       <button
-        class="ml-0.5 text-text-dim hover:text-neon-red transition-colors"
+        class="ml-0.5 text-text-dim hover:text-neon-red transition-colors duration-150"
         onclick={() => removeChip(chip.id)}
         aria-label="Remove context"
       >
@@ -67,7 +67,7 @@
     </button>
 
     {#if showMenu}
-      <div class="absolute top-full left-0 mt-1 w-36 bg-bg-card border border-border-subtle rounded-lg z-10 py-1 animate-dropdown-enter">
+      <div class="absolute top-full left-0 mt-1 w-36 bg-bg-card border border-border-subtle rounded-lg z-[300] py-1 animate-dropdown-enter">
         {#each contextOptions as opt}
           <button
             class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"

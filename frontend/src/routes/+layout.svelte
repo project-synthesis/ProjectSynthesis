@@ -52,7 +52,29 @@
     resizing = null;
   }
 
+  // Responsive auto-collapse per spec:
+  // >=1280px: all panels visible
+  // 768-1279px: Inspector auto-collapses
+  // <768px: Both Navigator and Inspector auto-collapse
+  function handleResize() {
+    const w = window.innerWidth;
+    if (w < 768) {
+      workbench.navigatorCollapsed = true;
+      workbench.inspectorCollapsed = true;
+    } else if (w < 1280) {
+      workbench.inspectorCollapsed = true;
+      // Navigator stays open
+    } else {
+      // >=1280px: restore both if they were auto-collapsed
+      // Don't force-open if user manually collapsed
+    }
+  }
+
   onMount(() => {
+    // Initial responsive check
+    handleResize();
+    window.addEventListener('resize', handleResize);
+
     // Detect provider on mount
     fetchHealth()
       .then((data) => {
@@ -123,7 +145,7 @@
     {#if !workbench.navigatorCollapsed}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-neon-cyan/30 transition-colors z-20
+        class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-neon-cyan/30 transition-colors z-[100]
           {resizing === 'nav' ? 'bg-neon-cyan/40' : ''}"
         data-testid="nav-resize-handle"
         onmousedown={startNavResize}
@@ -146,7 +168,7 @@
     {#if !workbench.inspectorCollapsed}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-neon-cyan/30 transition-colors z-20
+        class="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-neon-cyan/30 transition-colors z-[100]
           {resizing === 'inspector' ? 'bg-neon-cyan/40' : ''}"
         data-testid="inspector-resize-handle"
         onmousedown={startInspectorResize}

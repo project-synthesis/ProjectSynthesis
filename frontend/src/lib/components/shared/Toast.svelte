@@ -21,7 +21,7 @@
 </script>
 
 {#if visible}
-  <div class="fixed bottom-12 right-4 z-50 animate-slide-up-in">
+  <div class="fixed bottom-12 right-4 z-[500] animate-slide-up-in">
     <div class="flex items-center gap-2 px-4 py-2.5 bg-bg-card border rounded-lg {typeStyles[type]}">
       <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
         <path stroke-linecap="round" stroke-linejoin="round" d={typeIcons[type]}></path>
