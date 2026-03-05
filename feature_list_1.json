@@ -1647,7 +1647,7 @@
       "SCREENSHOT to verify the complete pipeline result"
     ],
     "expected_outcome": "Pipeline handles writing prompt end-to-end",
-    "passes": false,
+    "passes": true,
     "id": 74
   },
   {
@@ -1674,7 +1674,7 @@
       "SCREENSHOT to verify the complete pipeline result"
     ],
     "expected_outcome": "Pipeline handles analysis prompt end-to-end",
-    "passes": false,
+    "passes": true,
     "id": 75
   },
   {

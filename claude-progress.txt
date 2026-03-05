@@ -1,4 +1,4 @@
-[Trimmed by orchestrator: kept last 200 of 255 lines. Earlier notes are in git history.]
+[Trimmed by orchestrator: kept last 200 of 202 lines. Earlier notes are in git history.]
 
 
 ## Integration Report — Session 7 (2026-03-04)
@@ -199,4 +199,43 @@
 - Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
 - MCP: ws://127.0.0.1:8001/ws (RUNNING)
 - DB: backend/data/promptforge.db (3 tables, proper indexes)
+- Start: ./init.sh start
+
+## Integration Report — Session 12 (2026-03-04)
+
+**Gaps discovered:** 0 new (3 previously known remain)
+- [ENDPOINT] /api/optimizations (5 routes) — no frontend consumer — ALREADY FLAGGED (coding agent)
+- [ORPHAN] Toast.svelte — not imported anywhere — ALREADY FLAGGED (coding agent)
+- [ORPHAN] RepoPickerModal.svelte — not imported anywhere — ALREADY FLAGGED (coding agent)
+
+**No new gaps from latest coding session.** The coding agent (session after 11) properly wired:
+- Token count flow: backend pipeline.py → SSE events → forge store → StageCard/RunHeader
+- Streaming text: SSE chunks → forge.appendChunk → StageOptimize/ForgeArtifact
+- Auto-switch: PromptEdit → editor.setSubTab('pipeline') on forge start
+- Total duration/tokens: complete event → finishForge → RunHeader display
+
+**Discovery scan results:**
+- All backend endpoints have frontend consumers (except /api/optimizations — known dead code)
+- All stores imported by at least 1 component
+- All components imported by parent (except Toast, RepoPickerModal — known orphans)
+- No duplicate routes
+- CORS configured correctly
+- No hardcoded localhost in frontend source
+- Session access pattern consistent (all use request.session.get)
+- No TypeScript interface/backend schema mismatches in recently changed files
+
+**Gaps wired:** 0 (none needed)
+**Tests now passing (via wiring):** none
+
+**Remaining gaps for future sessions:**
+- Toast.svelte needs coding agent (toast store + layout import + call sites)
+- RepoPickerModal.svelte needs coding agent (modal state + trigger)
+- /api/optimizations endpoints may be intentional dead code (frontend uses /api/optimize + /api/history)
+
+**Progress:** 83/335 tests passing (24.8%)
+**Server info:**
+- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
+- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
+- MCP: ws://127.0.0.1:8001/ws (RUNNING)
+- DB: backend/data/promptforge.db (3 tables)
 - Start: ./init.sh start

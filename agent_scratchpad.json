@@ -71,6 +71,16 @@
       "mocks_found": 0,
       "mocks_fixed": 0,
       "summary": "Expanded validation: all 77 passing tests verified across T0-T2. 0 regressions. Code integrity audit clean. Full pipeline e2e confirmed (4/4 stages, score 9/10, RISEN). StatusBar lifecycle (#168) verified. Build clean."
+    },
+    {
+      "session_id": 12,
+      "session_type": "integrator",
+      "tests_completed": [],
+      "tests_regressed": [],
+      "tests_fixed": [],
+      "gaps_found": 0,
+      "gaps_wired": 0,
+      "summary": "No new integration gaps found from latest coding session (token counts, run header, streaming, auto-switch). All recently-built components properly wired: token count flow (backend→SSE→forge→StageCard/RunHeader), streaming text (chunks→forge→StageOptimize/ForgeArtifact), auto-switch (PromptEdit→editor.setSubTab), total duration/tokens (complete event→finishForge→RunHeader). 3 previously-known gaps (Toast, RepoPickerModal, /api/optimizations) remain flagged for coding agent."
     }
   ],
   "active_warnings": [],
@@ -169,19 +179,6 @@
   },
   "next_actions": [
     {
-      "id": "a9_2",
-      "from_agent": "coding",
-      "to_agent": "coding",
-      "from_session": 9,
-      "action": "Add token count tracking to pipeline. Currently not tracked in SSE events or forge store. Needed for tests #86 (RunHeader token count) and #87 (per-stage token count). Backend needs to include token_count in stage events. Frontend needs to accumulate and display.",
-      "test_ids": [
-        86,
-        87
-      ],
-      "priority": "medium",
-      "status": "expired"
-    },
-    {
       "id": "i10_2",
       "from_agent": "integrator",
       "to_agent": "coding",
@@ -220,8 +217,8 @@
     "mcp_url": "ws://127.0.0.1:8001/ws",
     "health_endpoint": "http://localhost:8000/api/health",
     "start_command": "./init.sh start",
-    "last_verified_session": 11,
-    "notes": "Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING (WebSocket transport fixed in session 9). DB at backend/data/promptforge.db with 3 tables. All services verified healthy. T0: 18/18 complete, T1: 45/45 complete, T2: 14/106 in progress. 77/335 tests passing (23.0%). Full pipeline e2e confirmed working."
+    "last_verified_session": 12,
+    "notes": "Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING (WebSocket transport fixed in session 9). DB at backend/data/promptforge.db with 3 tables. All services verified healthy. T0: 18/18 complete, T1: 45/45 complete, T2: 20/106 in progress. 83/335 tests passing (24.8%). Full pipeline e2e confirmed working."
   },
   "session_checkpoint": {
     "session_type": "",
