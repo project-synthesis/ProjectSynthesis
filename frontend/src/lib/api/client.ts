@@ -27,6 +27,7 @@ export interface HistoryParams {
   order?: string;
   project?: string;
   task_type?: string;
+  framework?: string;
   has_repo?: boolean;
   min_score?: number;
   max_score?: number;
@@ -256,6 +257,7 @@ export async function fetchHistory(params: HistoryParams = {}): Promise<HistoryR
   if (params.order) searchParams.set('order', params.order);
   if (params.project) searchParams.set('project', params.project);
   if (params.task_type) searchParams.set('task_type', params.task_type);
+  if (params.framework) searchParams.set('framework', params.framework);
   if (params.has_repo !== undefined) searchParams.set('has_repo', String(params.has_repo));
   if (params.min_score) searchParams.set('min_score', String(params.min_score));
   if (params.max_score) searchParams.set('max_score', String(params.max_score));

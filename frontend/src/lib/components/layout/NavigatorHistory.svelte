@@ -8,6 +8,13 @@
 
   let loading = $state(false);
   let stats = $state<HistoryStats | null>(null);
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function debouncedSearch(value: string) {
+    history.filters.search = value;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { loadHistory(); }, 200);
+  }
 
   async function loadHistory() {
     loading = true;
@@ -16,7 +23,7 @@
         page: history.filters.page,
         per_page: history.filters.pageSize,
         search: history.filters.search || undefined,
-        task_type: history.filters.strategy || undefined,
+        framework: history.filters.strategy || undefined,
         sort: history.filters.sortBy,
         order: history.filters.sortDir
       });
@@ -101,23 +108,63 @@
       {#if Object.keys(stats.framework_breakdown || {}).length > 0}
         <div class="flex flex-wrap gap-1 mt-1">
           {#each Object.entries(stats.framework_breakdown).slice(0, 4) as [fw, count]}
-            <span class="text-[9px] px-1 py-0.5 rounded bg-bg-card border border-border-subtle text-neon-purple">
+            <button
+              class="text-[9px] px-1 py-0.5 rounded border transition-colors cursor-pointer
+                {history.filters.strategy === fw
+                  ? 'bg-neon-purple/20 border-neon-purple/40 text-neon-purple'
+                  : 'bg-bg-card border-border-subtle text-neon-purple hover:border-neon-purple/30'}"
+              onclick={() => { history.filters.strategy = history.filters.strategy === fw ? null : fw; loadHistory(); }}
+            >
               {fw} <span class="text-text-dim">({count})</span>
-            </span>
+            </button>
           {/each}
+          {#if history.filters.strategy}
+            <button
+              class="text-[9px] px-1 py-0.5 rounded bg-neon-red/10 border border-neon-red/20 text-neon-red hover:bg-neon-red/20 transition-colors"
+              onclick={() => { history.filters.strategy = null; loadHistory(); }}
+            >
+              ✕ Clear
+            </button>
+          {/if}
         </div>
       {/if}
     </div>
   {/if}
 
-  <!-- Search -->
-  <div class="p-2 border-b border-border-subtle">
+  <!-- Search + Sort -->
+  <div class="p-2 border-b border-border-subtle space-y-1.5">
     <input
       type="text"
       placeholder="Search history..."
       class="w-full bg-bg-input border border-border-subtle rounded px-2 py-1 text-xs text-text-primary placeholder:text-text-dim focus:outline-none focus:border-neon-cyan/30"
-      oninput={(e) => { history.filters.search = (e.target as HTMLInputElement).value; }}
+      oninput={(e) => debouncedSearch((e.target as HTMLInputElement).value)}
     />
+    <div class="flex items-center gap-1">
+      <span class="text-[10px] text-text-dim mr-1">Sort:</span>
+      <button
+        class="text-[10px] px-1.5 py-0.5 rounded border transition-colors
+          {history.filters.sortBy === 'created_at'
+            ? 'text-neon-cyan border-neon-cyan/30 bg-neon-cyan/10'
+            : 'text-text-dim border-border-subtle hover:border-neon-cyan/20 hover:text-text-secondary'}"
+        onclick={() => { if (history.filters.sortBy === 'created_at') { history.filters.sortDir = history.filters.sortDir === 'desc' ? 'asc' : 'desc'; } else { history.filters.sortBy = 'created_at'; history.filters.sortDir = 'desc'; } loadHistory(); }}
+      >
+        Date {history.filters.sortBy === 'created_at' ? (history.filters.sortDir === 'desc' ? '↓' : '↑') : ''}
+      </button>
+      <button
+        class="text-[10px] px-1.5 py-0.5 rounded border transition-colors
+          {history.filters.sortBy === 'overall_score'
+            ? 'text-neon-cyan border-neon-cyan/30 bg-neon-cyan/10'
+            : 'text-text-dim border-border-subtle hover:border-neon-cyan/20 hover:text-text-secondary'}"
+        onclick={() => { if (history.filters.sortBy === 'overall_score') { history.filters.sortDir = history.filters.sortDir === 'desc' ? 'asc' : 'desc'; } else { history.filters.sortBy = 'overall_score'; history.filters.sortDir = 'desc'; } loadHistory(); }}
+      >
+        Score {history.filters.sortBy === 'overall_score' ? (history.filters.sortDir === 'desc' ? '↓' : '↑') : ''}
+      </button>
+    </div>
+    {#if history.filters.search || history.filters.strategy}
+      <div class="text-[10px] text-text-dim">
+        {history.entries.length} of {history.totalCount} runs
+      </div>
+    {/if}
   </div>
 
   <!-- List -->

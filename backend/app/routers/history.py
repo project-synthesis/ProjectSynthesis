@@ -23,6 +23,7 @@ async def list_history(
     order: str = Query("desc"),
     project: Optional[str] = Query(None),
     task_type: Optional[str] = Query(None),
+    framework: Optional[str] = Query(None),
     has_repo: Optional[bool] = Query(None),
     min_score: Optional[int] = Query(None, ge=1, le=10),
     max_score: Optional[int] = Query(None, ge=1, le=10),
@@ -45,6 +46,8 @@ async def list_history(
         query = query.where(Optimization.project == project)
     if task_type:
         query = query.where(Optimization.task_type == task_type)
+    if framework:
+        query = query.where(Optimization.primary_framework == framework)
     if has_repo is True:
         query = query.where(Optimization.linked_repo_full_name.isnot(None))
     elif has_repo is False:
