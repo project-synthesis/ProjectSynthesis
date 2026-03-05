@@ -182,7 +182,7 @@
       "SCREENSHOT to verify multi-select comparison toolbar"
     ],
     "expected_outcome": "History multi-select with Compare toolbar",
-    "passes": false,
+    "passes": true,
     "id": 174
   },
   {

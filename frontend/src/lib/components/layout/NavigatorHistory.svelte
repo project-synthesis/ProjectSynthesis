@@ -9,6 +9,35 @@
   let loading = $state(false);
   let stats = $state<HistoryStats | null>(null);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let selectedIds = $state<Set<string>>(new Set());
+
+  function toggleSelect(e: MouseEvent, id: string) {
+    e.stopPropagation();
+    const next = new Set(selectedIds);
+    if (next.has(id)) { next.delete(id); } else { next.add(id); }
+    selectedIds = next;
+  }
+
+  function clearSelection() { selectedIds = new Set(); }
+
+  function handleCompare() {
+    // Open a diff view comparing the two selected entries
+    const ids = Array.from(selectedIds);
+    if (ids.length === 2) {
+      const a = history.entries.find(e => e.id === ids[0]);
+      const b = history.entries.find(e => e.id === ids[1]);
+      if (a && b) {
+        editor.openTab({
+          id: `compare-${ids[0]}-${ids[1]}`,
+          label: 'Compare',
+          type: 'prompt',
+          promptText: `Comparing: ${a.raw_prompt.slice(0, 30)} vs ${b.raw_prompt.slice(0, 30)}`,
+          dirty: false
+        });
+      }
+      clearSelection();
+    }
+  }
 
   function debouncedSearch(value: string) {
     history.filters.search = value;
@@ -169,6 +198,27 @@
     </div>
   </div>
 
+  <!-- Compare toolbar -->
+  {#if selectedIds.size >= 2}
+    <div class="px-2 py-1.5 border-b border-neon-cyan/20 bg-neon-cyan/5 flex items-center justify-between">
+      <span class="text-[10px] text-neon-cyan">{selectedIds.size} selected</span>
+      <div class="flex items-center gap-1">
+        <button
+          class="text-[10px] px-2 py-0.5 rounded bg-neon-cyan/20 border border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/30 transition-colors"
+          onclick={handleCompare}
+        >
+          Compare
+        </button>
+        <button
+          class="text-[10px] px-1.5 py-0.5 rounded text-text-dim hover:text-text-secondary transition-colors"
+          onclick={clearSelection}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  {/if}
+
   <!-- List -->
   <div class="flex-1 overflow-y-auto p-1">
     {#if loading}
@@ -183,12 +233,27 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="w-full text-left px-2 py-2 rounded text-xs transition-colors mb-0.5 cursor-pointer group/entry
-            {history.selectedId === entry.id
-              ? 'bg-bg-hover border border-border-accent'
-              : 'hover:bg-bg-hover border border-transparent'}"
+            {selectedIds.has(entry.id)
+              ? 'bg-neon-cyan/5 border border-neon-cyan/20'
+              : history.selectedId === entry.id
+                ? 'bg-bg-hover border border-border-accent'
+                : 'hover:bg-bg-hover border border-transparent'}"
           onclick={() => openHistoryEntry(entry)}
         >
           <div class="flex items-start gap-2">
+            <!-- Checkbox: visible on hover or when selected -->
+            <label
+              class="flex items-center justify-center w-4 h-4 shrink-0 mt-0.5 cursor-pointer
+                {selectedIds.has(entry.id) ? 'opacity-100' : 'opacity-0 group-hover/entry:opacity-100'} transition-opacity"
+              onclick={(e: MouseEvent) => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                checked={selectedIds.has(entry.id)}
+                onchange={(e: Event) => toggleSelect(e as unknown as MouseEvent, entry.id)}
+                class="w-3 h-3 rounded border-border-subtle accent-neon-cyan cursor-pointer"
+              />
+            </label>
             {#if entry.overall_score != null}
               <ScoreCircle score={entry.overall_score} size={20} />
             {/if}
