@@ -1808,7 +1808,7 @@
       "SCREENSHOT to verify completion"
     ],
     "expected_outcome": "Pipeline handles long prompts (500+ words)",
-    "passes": false,
+    "passes": true,
     "id": 80
   },
   {
