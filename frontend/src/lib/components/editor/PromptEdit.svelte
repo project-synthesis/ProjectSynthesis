@@ -1,6 +1,7 @@
 <script lang="ts">
   import { editor, type EditorTab } from '$lib/stores/editor.svelte';
   import { forge } from '$lib/stores/forge.svelte';
+  import { github } from '$lib/stores/github.svelte';
   import { startOptimization, type SSEEvent } from '$lib/api/client';
   import ContextBar from './ContextBar.svelte';
   import CopyButton from '$lib/components/shared/CopyButton.svelte';
@@ -45,7 +46,12 @@
     editor.setSubTab('pipeline');
 
     const controller = await startOptimization(
-      { prompt: tab.promptText, strategy: strategy === 'auto' ? undefined : strategy },
+      {
+        prompt: tab.promptText,
+        strategy: strategy === 'auto' ? undefined : strategy,
+        repo_full_name: github.selectedRepo ?? undefined,
+        repo_branch: github.currentRepo?.default_branch ?? undefined
+      },
       (event: SSEEvent) => {
         const data = event.data as Record<string, unknown>;
         switch (event.event) {
