@@ -1,46 +1,5 @@
 [Trimmed by orchestrator: kept last 200 of 202 lines. Earlier notes are in git history.]
 
-- Key concern: Seed data overall_score=9 does not match weighted average formula (8.35 rounds to 8). Test #38 needs real pipeline validation.
-
-**Known issues:**
-- Seed optimized_prompt is placeholder text. Real pipeline outputs will differ.
-- Stuck running records from partial SSE tests were cleaned up.
-
-## Session 6 Summary (coding, 2026-03-04)
-
-**Completed:** 11 T1 tests (completing all 45 T1 tests — tier boundary reached):
-- #27: Optimization record saved to database after pipeline
-- #38: Overall score computed as weighted average server-side
-- #42: Raw prompt text preserved exactly in database
-- #43: Optimized prompt stored after pipeline completion
-- #44: Duration tracked in milliseconds
-- #45: Optimization with tags persists as JSON array
-- #46: Optimization with project field persists correctly
-- #57: Retry creates new optimization linked via retry_of (BUG FIX)
-- #60: Optimization title field can be set on creation
-- #61: Strategy override accepted in optimize request
-- #63: Strategy rationale stored in optimization record
-
-**Bug fix:** #57 — retry endpoint was not setting `retry_of` on new records.
-Fixed by adding `retry_of` parameter to `optimize_prompt()` and passing
-`optimization_id` from the retry endpoint.
-
-**Regressions fixed:** None
-**In progress:** None
-**Next up:** T2 tests starting at #64 (pipeline stage tests)
-
-**Progress:** 63/335 tests passing (18.8%)
-**Server info:**
-- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
-- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
-- MCP: ws://127.0.0.1:8001/ws
-- DB: backend/data/promptforge.db (3 tables, proper indexes, multiple test records)
-- Start: ./init.sh start
-
-**Tier status:**
-- T0: 18/18 ✓ (complete)
-- T1: 45/45 ✓ (complete) — TIER BOUNDARY, exiting for validator
-- T2: 0/106 (next)
 - T3: 0/66
 - T4: 0/70
 - T5: 0/30
@@ -240,4 +199,57 @@ Fixed by adding `retry_of` parameter to `optimize_prompt()` and passing
 - Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
 - MCP: ws://127.0.0.1:8001/ws (NOT RUNNING — see a8_1)
 - DB: backend/data/promptforge.db (3 tables, proper indexes, 18 records)
+- Start: ./init.sh start
+
+## Validation Report — Session 11 (2026-03-05)
+
+**Code integrity audit:** DONE (completed in previous run of session 11, checkpoint preserved)
+- Files scanned: All backend/*.py and frontend/src/**/*.{ts,svelte}
+- Mocks/stubs found: 0
+- Mocks/stubs fixed: 0
+- Mocks/stubs remaining: 0
+- TODOs found: 0 (only SvelteKit framework TODOs in generated output)
+- Spec compliance: PASS — MCP WebSocket transport now correctly implemented (fixed in session 9)
+
+**Scope:** Expanded (T1 tier boundary) — 77 tests verified across all tiers
+**Infrastructure:** All services healthy (backend 8000, frontend 5199, MCP 8001)
+
+**Regressions found:** 0
+- All 77 passing tests verified: T0 (18/18), T1 (45/45), T2 (14/14 passing)
+
+**Regressions fixed:** 0 (none needed)
+
+**Tests still passing after validation:** 77/335
+
+**Cross-feature integration check:**
+- Frontend build: ✓ Clean (vite build succeeds in 3.52s)
+- Backend compile: ✓ All Python files compile cleanly
+- Console errors: 0
+- Pipeline end-to-end: ✓ Full forge run completed (4/4 stages, score 9/10, RISEN framework, 116.4s)
+- History data flow: ✓ Forge result appears in both History navigator sidebar and API
+- Status bar lifecycle: ✓ Shows "Forging Analyze" → "Forging Strategy" → "Forging Validate" → "Score: 9/10 · RISEN"
+- Inspector panel: ✓ Shows scores with progress bars after completion
+- Visual coherence: ✓ Consistent cyberpunk dark theme, all 5 zones rendering
+
+**Tier breakdown:**
+- T0: 18/18 ✓ (complete)
+- T1: 45/45 ✓ (complete)
+- T2: 14/106 (in progress)
+- T3: 0/66
+- T4: 0/70
+- T5: 0/30
+
+**Guidance for next coding session:**
+- Continue T2 tests: #70 (streaming), #74-76 (end-to-end variants), #78-82 (edge cases), #86-92 (SSE events, duration/token display)
+- Token count tracking needed for tests #86-#87 (see a9_2)
+- NavigatorHistory sort/filter needs reactive refetch for T3 tests #170-#173 (see i10_4)
+- Toast.svelte + RepoPickerModal.svelte still orphaned (low priority)
+- /api/optimizations endpoints unused by frontend (may be dead code)
+
+**Progress:** 77/335 tests passing (23.0%)
+**Server info:**
+- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
+- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
+- MCP: ws://127.0.0.1:8001/ws (RUNNING)
+- DB: backend/data/promptforge.db (3 tables, proper indexes)
 - Start: ./init.sh start
