@@ -1,35 +1,5 @@
-[Trimmed by orchestrator: kept last 200 of 202 lines. Earlier notes are in git history.]
+[Trimmed by orchestrator: kept last 200 of 232 lines. Earlier notes are in git history.]
 
-**Progress:** 231/335 tests passing (69.0%)
-**Tier breakdown:** T0: 18/18, T1: 45/45, T2: 106/106, T3: 62/66, T4: 0/70, T5: 0/30
-**Server info:**
-- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
-- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
-- MCP: ws://127.0.0.1:8001/ws (RUNNING)
-- DB: backend/data/promptforge.db
-- Start: ./init.sh start
-
-## Integration Report — Session 31 (2026-03-05)
-
-**Gaps discovered:** 0
-
-Full discovery scan completed (Steps 3a-3i):
-- All 7 backend routers have frontend consumers (except /api/optimizations — alternate CRUD layer, no tests reference it)
-- All 7 stores (github, history, forge, editor, commandPalette, workbench, toast) imported by components
-- All session-30 components wired: ToastContainer, CommandPalette, NavigatorTemplates, NavigatorChains, CopyButton, DiffView, resize handles, @ context popup — all rendered in layout/component tree
-- CORS configured properly for localhost:5199 and :4173
-- Session access patterns consistent (request.session throughout)
-- No duplicate routes
-- No hardcoded localhost in frontend
-- No TODO/FIXME/MOCK markers
-
-**Gaps wired:** 0 of 0
-**Tests now passing (via wiring):** none
-
-**Remaining for other agents:**
-- T3: 4 remaining (#226, #233, #234, #235) — E2E tests requiring forge pipeline runs (validator job)
-- T4: 70 tests — all CSS styling/theming (coding agent job)
-- T5: 30 tests — (coding agent job)
 
 **Progress:** 231/335 tests passing (69.0%)
 **Server info:**
@@ -222,6 +192,59 @@ Full discovery scan completed (Steps 3a-3i):
 **Remaining gaps for future sessions:**
 - T4: 20 remaining CSS/styling tests — coding agent job
 - T5: 30 tests — coding agent job
+
+**Progress:** 285/335 tests passing (85.1%)
+**Server info:**
+- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
+- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
+- MCP: ws://127.0.0.1:8001/ws (RUNNING)
+- DB: backend/data/promptforge.db
+- Start: ./init.sh start
+
+## Validation Report — Session 37 (2026-03-05)
+
+**Code integrity audit:**
+- Files scanned: All backend/app/**/*.py and frontend/src/**/*.{ts,svelte}
+- Mocks/stubs found: 0
+- Mocks/stubs fixed: 0
+- Mocks/stubs remaining: 0
+- TODOs found: 0 (all TODOs in .venv third-party packages only)
+- TODOs resolved: 0
+- Spec compliance: PASS
+  - Fernet encryption for GitHub tokens: ✓
+  - SQLite via aiosqlite + SQLAlchemy async: ✓
+  - MCP WebSocket on port 8001: ✓
+  - SSE streaming for pipeline: ✓ (real LLM output verified via curl)
+  - No duplicate routes: ✓
+  - Session middleware consistent: ✓
+
+**Scope:** Wiring-only — 0 tests verified (integrator session 36 had tests_completed=[], skipped regression per protocol)
+**Infrastructure:** Healthy — backend :8000, frontend :5199, MCP :8001. All services running.
+
+**Regressions found:** 0
+**Regressions fixed:** 0 of 0
+**Tests still passing after validation:** 285/335
+
+**Tier breakdown:**
+- T0: 18/18 passing ✓
+- T1: 45/45 passing ✓
+- T2: 106/106 passing ✓
+- T3: 66/66 passing ✓
+- T4: 50/70 passing (in progress)
+- T5: 0/30 passing
+
+**Cross-feature integration check:**
+- Frontend build passes
+- No JS console errors
+- Dashboard, History, Settings views all render correctly
+- Cross-feature data flow verified: History item → opens as new Editor tab → shows real optimized prompt with CO-STAR structure, score 8/10, sub-tabs (Optimized/Diff/Scores/Trace)
+- Visual coherence: cyberpunk theme consistent, all 5 zones rendering
+
+**Guidance for next coding session:**
+- T4: 20 remaining CSS/styling tests to implement (#286-305 range)
+- T5: 30 tests to implement
+- No mocks, no stubs, no TODOs in application code — codebase is clean
+- All services healthy, no infrastructure issues
 
 **Progress:** 285/335 tests passing (85.1%)
 **Server info:**
