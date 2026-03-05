@@ -20,7 +20,7 @@
     fetchHealth()
       .then((data) => {
         workbench.isConnected = true;
-        workbench.provider = (data.provider as 'anthropic' | 'openai') || 'unknown';
+        workbench.provider = (data.provider as 'anthropic' | 'openai' | 'claude_cli' | 'anthropic_api') || 'unknown';
         workbench.providerModel = data.model_routing?.optimize || '';
       })
       .catch(() => {

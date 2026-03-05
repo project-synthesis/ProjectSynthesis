@@ -34,6 +34,20 @@
       {/if}
     </div>
 
+    <!-- Strategy chip (always visible, clickable to open strategy picker in Edit tab) -->
+    <button
+      class="flex items-center gap-1 text-neon-purple hover:text-neon-purple/80 transition-colors cursor-pointer capitalize"
+      onclick={() => { workbench.inspectorCollapsed = false; editor.activeSubTab = 'edit'; }}
+      title="Strategy — click to open picker"
+      data-testid="statusbar-strategy"
+    >
+      {#if forge.stageResults?.strategy?.data?.primary_framework}
+        {forge.stageResults.strategy.data.primary_framework}
+      {:else}
+        auto
+      {/if}
+    </button>
+
     <!-- Forge status -->
     {#if forge.isForging}
       <div class="flex items-center gap-1 text-neon-cyan">
@@ -41,13 +55,14 @@
         <span class="capitalize">{forge.currentStage || '...'}</span>
       </div>
     {:else if forge.overallScore != null}
-      <div class="flex items-center gap-1 text-neon-green">
+      <button
+        class="flex items-center gap-1 text-neon-green hover:text-neon-green/80 transition-colors cursor-pointer"
+        onclick={() => { workbench.inspectorCollapsed = false; }}
+        title="Score — click to show breakdown in Inspector"
+        data-testid="statusbar-score"
+      >
         <span>Score: {forge.overallScore}/10</span>
-        {#if forge.stageResults?.strategy?.data?.primary_framework}
-          <span class="text-text-dim">·</span>
-          <span class="text-neon-purple capitalize">{forge.stageResults.strategy.data.primary_framework}</span>
-        {/if}
-      </div>
+      </button>
     {/if}
   </div>
 

@@ -6,7 +6,7 @@ class WorkbenchStore {
   inspectorCollapsed = $state(false);
   navigatorWidth = $state(240);
   inspectorWidth = $state(280);
-  provider = $state<'anthropic' | 'openai' | 'unknown'>('unknown');
+  provider = $state<'anthropic' | 'openai' | 'claude_cli' | 'anthropic_api' | 'unknown'>('unknown');
   providerModel = $state('');
   isConnected = $state(false);
 

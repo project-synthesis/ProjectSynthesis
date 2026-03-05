@@ -87,6 +87,16 @@
             {/each}
           </div>
         {/if}
+
+        <!-- Original Prompt -->
+        {#if forge.rawPrompt}
+          <div class="space-y-2">
+            <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Original Prompt</h3>
+            <div class="text-xs text-text-secondary bg-bg-card rounded-lg border border-border-subtle p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+              {forge.rawPrompt}
+            </div>
+          </div>
+        {/if}
       {:else if editor.activeTab}
         <!-- Strategy Recommendations (when Edit sub-tab is active) -->
         {#if editor.activeSubTab === 'edit'}
