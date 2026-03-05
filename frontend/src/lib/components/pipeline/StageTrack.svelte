@@ -23,6 +23,54 @@
     validate: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'
   };
 
+  // Stage-specific left accent colors per spec
+  const stageBaseColors: Record<string, string> = {
+    explore: '#a855f7',   // neon-purple
+    analyze: '#4d8eff',   // neon-blue
+    strategy: '#00e5ff',  // default neon-cyan; replaced by strategy chromatic color at runtime
+    optimize: '#00e5ff',  // neon-cyan (primary brand = transformation)
+    validate: '#00e5ff'   // will be overridden by score-mapped color
+  };
+
+  // Strategy → chromatic color mapping
+  const strategyColors: Record<string, string> = {
+    'auto':                '#00e5ff',
+    'chain-of-thought':    '#00e5ff',
+    'co-star':             '#a855f7',
+    'CO-STAR':             '#a855f7',
+    'risen':               '#22ff88',
+    'RISEN':               '#22ff88',
+    'role-task-format':    '#ff3366',
+    'few-shot-scaffolding':'#fbbf24',
+    'step-by-step':        '#ff8c00',
+    'structured-output':   '#4d8eff',
+    'constraint-injection':'#ff6eb4',
+    'context-enrichment':  '#00d4aa',
+    'persona-assignment':  '#7b61ff',
+  };
+
+  // Score → color mapping
+  function getScoreColor(s: number): string {
+    if (s >= 9) return '#22ff88';
+    if (s >= 7) return '#00e5ff';
+    if (s >= 4) return '#fbbf24';
+    return '#ff3366';
+  }
+
+  function getStageColor(stage: string): string {
+    if (stage === 'strategy') {
+      const fw = forge.stageResults?.strategy?.data?.primary_framework as string;
+      if (fw) return strategyColors[fw] || strategyColors[fw?.toLowerCase()] || '#00e5ff';
+      return '#00e5ff';
+    }
+    if (stage === 'validate') {
+      const score = forge.overallScore;
+      if (score != null) return getScoreColor(score);
+      return '#00e5ff';
+    }
+    return stageBaseColors[stage] || '#00e5ff';
+  }
+
   // Filter out explore stage when it was never activated (no repo linked)
   let visibleStages = $derived(
     forge.stages.filter(s => !(s === 'explore' && forge.stageStatuses[s] === 'idle'))
@@ -42,6 +90,7 @@
       duration={result?.duration}
       model={result?.data?.model as string | undefined}
       tokenCount={result?.tokenCount}
+      stageColor={getStageColor(stage)}
     >
       {#if stage === 'explore'}
         <StageExplore />

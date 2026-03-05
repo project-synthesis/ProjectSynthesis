@@ -177,6 +177,44 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ─── Forge CTA Button ─── */
+.btn-forge {
+  background-color: rgba(0, 229, 255, 0.08);
+  border: 1px solid rgba(0, 229, 255, 0.6);
+  color: #00e5ff;
+}
+.btn-forge:hover:not(:disabled) {
+  background-color: rgba(0, 229, 255, 0.15);
+  border-color: #00e5ff;
+}
+.btn-forge:active:not(:disabled) {
+  border-color: rgba(0, 229, 255, 0.5);
+}
+.btn-forge:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Forge spark animation — fires on click */
+@keyframes forge-spark-anim {
+  0%   { transform: scale(1) rotate(0deg); background-color: rgba(0, 229, 255, 0.08); }
+  15%  { transform: scale(1.02) rotate(10deg); background-color: rgba(251, 191, 36, 0.15); }
+  40%  { transform: scale(1.01) rotate(-5deg); background-color: rgba(251, 191, 36, 0.08); }
+  100% { transform: scale(1) rotate(0deg); background-color: rgba(0, 229, 255, 0.08); }
+}
+
+/* ─── Score Circle (contour, not glow) ─── */
+.score-circle {
+  box-shadow: inset 0 0 0 1.5px currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+/* ─── Font utility: display (Syne) ─── */
+.font-display {
+  font-family: 'Syne', Geist, ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.1em;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

@@ -1745,7 +1745,7 @@
       "SCREENSHOT to verify dark cyberpunk theme"
     ],
     "expected_outcome": "Cyberpunk dark theme applied globally",
-    "passes": false,
+    "passes": true,
     "id": 236
   },
   {
@@ -1769,7 +1769,7 @@
       "SCREENSHOT to verify neon-cyan accent usage"
     ],
     "expected_outcome": "Neon-cyan used for primary actions and focus states",
-    "passes": false,
+    "passes": true,
     "id": 237
   },
   {
@@ -1795,7 +1795,7 @@
       "SCREENSHOT to verify chromatic strategy badge"
     ],
     "expected_outcome": "Strategy badges use chromatic color encoding",
-    "passes": false,
+    "passes": true,
     "id": 238
   },
   {
@@ -1821,7 +1821,7 @@
       "SCREENSHOT to verify score-mapped color on score circle"
     ],
     "expected_outcome": "Score circles use score-mapped colors",
-    "passes": false,
+    "passes": true,
     "id": 239
   },
   {
@@ -1848,7 +1848,7 @@
       "SCREENSHOT to verify model badge colors"
     ],
     "expected_outcome": "Model badges show correct colors per model",
-    "passes": false,
+    "passes": true,
     "id": 240
   },
   {
@@ -1872,7 +1872,7 @@
       "SCREENSHOT to verify clean, flat visual style"
     ],
     "expected_outcome": "Zero glow effects enforced - no box-shadow blur/spread",
-    "passes": false,
+    "passes": true,
     "id": 241
   },
   {
@@ -1894,7 +1894,7 @@
       "SCREENSHOT to verify 1px border consistency"
     ],
     "expected_outcome": "All borders are 1px solid (never 2px)",
-    "passes": false,
+    "passes": true,
     "id": 242
   },
   {
@@ -1917,7 +1917,7 @@
       "SCREENSHOT to verify Geist font usage"
     ],
     "expected_outcome": "Geist font used for body text",
-    "passes": false,
+    "passes": true,
     "id": 243
   },
   {
@@ -1944,7 +1944,7 @@
       "SCREENSHOT to verify monospace font on data values"
     ],
     "expected_outcome": "Geist Mono used for scores badges and data values",
-    "passes": false,
+    "passes": true,
     "id": 244
   },
   {
@@ -1970,7 +1970,7 @@
       "SCREENSHOT to verify Syne font on headings"
     ],
     "expected_outcome": "Syne font used for section headings and stage labels",
-    "passes": false,
+    "passes": true,
     "id": 245
   },
   {
@@ -2117,7 +2117,7 @@
       "SCREENSHOT to verify provider badge color"
     ],
     "expected_outcome": "Provider badge colors (CLI=green, API=yellow)",
-    "passes": false,
+    "passes": true,
     "id": 251
   },
   {

@@ -20,7 +20,7 @@
   <div class="fixed bottom-10 right-4 z-[500] flex flex-col gap-2" data-testid="toast-container">
     {#each toast.toasts as item (item.id)}
       <div
-        class="flex items-center gap-2 px-4 py-2.5 bg-bg-card border rounded-lg shadow-xl cursor-pointer {typeStyles[item.type]}"
+        class="flex items-center gap-2 px-4 py-2.5 bg-bg-card border rounded-lg cursor-pointer {typeStyles[item.type]}"
         style="animation: {item.dismissing ? 'slide-out-right 0.3s ease-in forwards' : 'slide-in-right 0.3s cubic-bezier(0.16, 1, 0.3, 1) both'}"
         role="alert"
         onclick={() => toast.dismiss(item.id)}

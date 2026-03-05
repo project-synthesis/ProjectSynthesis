@@ -98,8 +98,7 @@
   </div>
 
   <button
-    class="w-full py-2 rounded-lg text-xs font-semibold text-white transition-all hover:shadow-lg hover:shadow-neon-cyan/20 active:scale-[0.98]"
-    style="background-image: var(--gradient-forge)"
+    class="btn-forge w-full py-2 rounded-lg text-xs font-semibold transition-all duration-200 hover:-translate-y-px active:translate-y-0"
   >
     Forge Chain
   </button>

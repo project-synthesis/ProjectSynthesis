@@ -3,7 +3,7 @@
   import type { StageStatus } from '$lib/stores/forge.svelte';
   import ModelBadge from '$lib/components/shared/ModelBadge.svelte';
 
-  let { name, icon, status, index, isActive, children, duration, model, tokenCount }: {
+  let { name, icon, status, index, isActive, children, duration, model, tokenCount, stageColor }: {
     name: string;
     icon: string;
     status: StageStatus;
@@ -13,25 +13,17 @@
     duration?: number;
     model?: string;
     tokenCount?: number;
+    stageColor?: string;
   } = $props();
 
   let expanded = $state(false);
 
-  const statusColors: Record<StageStatus, string> = {
-    idle: 'border-border-subtle',
-    running: 'border-neon-cyan/40',
-    done: 'border-neon-green/30',
-    error: 'border-neon-red/30',
-    skipped: 'border-text-dim/20'
-  };
+  // Left border opacity: 30% at rest, 100% when active/running
+  let leftBorderOpacity = $derived(
+    (isActive || status === 'running') ? 1.0 : 0.3
+  );
 
-  const statusDots: Record<StageStatus, string> = {
-    idle: 'bg-text-dim/30',
-    running: 'bg-neon-cyan animate-status-pulse',
-    done: 'bg-neon-green',
-    error: 'bg-neon-red',
-    skipped: 'bg-text-dim/20'
-  };
+  let stageLabel = $derived(`0${index} // ${name.toUpperCase()}`);
 
   $effect(() => {
     if (isActive || status === 'running') {
@@ -41,28 +33,43 @@
 </script>
 
 <div
-  class="bg-bg-card border rounded-lg overflow-hidden transition-all duration-300 {statusColors[status]}"
-  class:animate-forge-spark={status === 'running'}
-  style="animation-delay: {index * 100}ms"
+  class="bg-bg-card border border-border-subtle rounded-lg overflow-hidden transition-all duration-300"
+  style="border-left: 2px solid {stageColor ? `color-mix(in srgb, ${stageColor} ${leftBorderOpacity * 100}%, transparent)` : 'transparent'};"
+  data-testid="stage-card-{name.toLowerCase()}"
 >
-  <!-- Header -->
+  <!-- Header (32px per spec) -->
   <button
-    class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-bg-hover/50 transition-colors"
+    class="w-full flex items-center gap-2.5 px-3 h-[32px] text-left hover:bg-bg-hover/50 transition-colors duration-200"
     onclick={() => { expanded = !expanded; }}
   >
-    <span class="w-2 h-2 rounded-full shrink-0 {statusDots[status]}"></span>
+    <!-- Status indicator (12px circle) -->
+    {#if status === 'running'}
+      <span
+        class="w-3 h-3 rounded-full shrink-0 border-t-2 animate-spin"
+        style="border-color: transparent; border-top-color: {stageColor || '#00e5ff'};"
+      ></span>
+    {:else if status === 'done'}
+      <span class="w-3 h-3 rounded-full shrink-0 flex items-center justify-center" style="background: color-mix(in srgb, {stageColor || '#22ff88'} 20%, transparent);">
+        <svg class="w-2 h-2" fill="none" stroke="{stageColor || '#22ff88'}" viewBox="0 0 24 24" stroke-width="3">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+        </svg>
+      </span>
+    {:else if status === 'error'}
+      <span class="w-3 h-3 rounded-full shrink-0 flex items-center justify-center bg-neon-red/20">
+        <svg class="w-2 h-2 text-neon-red" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+        </svg>
+      </span>
+    {:else}
+      <span class="w-3 h-3 rounded-full shrink-0 border border-text-dim/40"></span>
+    {/if}
 
-    <svg class="w-4 h-4 shrink-0 {status === 'running' ? 'text-neon-cyan' : 'text-text-dim'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-      <path stroke-linecap="round" stroke-linejoin="round" d={icon}></path>
-    </svg>
-
-    <span class="text-xs font-medium flex-1 {
-      status === 'running' ? 'text-neon-cyan' :
-      status === 'done' ? 'text-neon-green' :
-      status === 'error' ? 'text-neon-red' :
-      'text-text-secondary'
-    }">
-      {name}
+    <!-- Stage label: Syne 11px 700 uppercase -->
+    <span
+      class="font-display text-[11px] font-bold uppercase flex-1"
+      style="letter-spacing: 0.08em; color: {status === 'running' ? (stageColor || '#00e5ff') : status === 'done' ? (stageColor || '#22ff88') : status === 'error' ? '#ff3366' : '#7a7a9e'};"
+    >
+      {stageLabel}
     </span>
 
     {#if duration}
@@ -76,8 +83,6 @@
     {#if model}
       <ModelBadge {model} />
     {/if}
-
-    <span class="text-[10px] text-text-dim capitalize">{status}</span>
 
     <svg
       class="w-3 h-3 text-text-dim transition-transform duration-200"

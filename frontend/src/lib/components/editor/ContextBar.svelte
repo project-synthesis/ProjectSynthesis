@@ -67,7 +67,7 @@
     </button>
 
     {#if showMenu}
-      <div class="absolute top-full left-0 mt-1 w-36 bg-bg-card border border-border-subtle rounded-lg shadow-xl z-10 py-1 animate-dropdown-enter">
+      <div class="absolute top-full left-0 mt-1 w-36 bg-bg-card border border-border-subtle rounded-lg z-10 py-1 animate-dropdown-enter">
         {#each contextOptions as opt}
           <button
             class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"

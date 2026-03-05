@@ -37,14 +37,14 @@
 >
   {#if !workbench.inspectorCollapsed}
     <div class="h-9 flex items-center px-3 border-b border-border-subtle shrink-0">
-      <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">Inspector</span>
+      <span class="font-display text-[12px] font-bold uppercase text-text-dim" style="letter-spacing: 0.1em;">Inspector</span>
     </div>
 
     <div class="flex-1 overflow-y-auto p-3 space-y-4">
       {#if forge.isForging || forge.overallScore != null}
         <!-- Pipeline status -->
         <div class="space-y-2">
-          <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Pipeline</h3>
+          <h3 class="font-display text-[12px] font-bold text-text-dim uppercase">Pipeline</h3>
 
           {#if forge.overallScore != null}
             <div class="flex items-center gap-3 p-2 bg-bg-card rounded-lg border border-border-subtle">
@@ -75,7 +75,7 @@
           {@const validation = forge.stageResults['validate']?.data as Record<string, unknown> || {}}
           {@const scores = (validation.scores || {}) as Record<string, number>}
           <div class="space-y-2">
-            <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Scores</h3>
+            <h3 class="font-display text-[12px] font-bold text-text-dim uppercase">Scores</h3>
             {#each Object.entries(scores) as [key, val]}
               <div class="space-y-1">
                 <div class="flex justify-between text-xs">
@@ -91,7 +91,7 @@
         <!-- Original Prompt -->
         {#if forge.rawPrompt}
           <div class="space-y-2">
-            <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Original Prompt</h3>
+            <h3 class="font-display text-[12px] font-bold text-text-dim uppercase">Original Prompt</h3>
             <div class="text-xs text-text-secondary bg-bg-card rounded-lg border border-border-subtle p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
               {forge.rawPrompt}
             </div>
@@ -101,7 +101,7 @@
         <!-- Strategy Recommendations (when Edit sub-tab is active) -->
         {#if editor.activeSubTab === 'edit'}
           <div class="space-y-2">
-            <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Strategy Recommendations</h3>
+            <h3 class="font-display text-[12px] font-bold text-text-dim uppercase">Strategy Recommendations</h3>
             <div class="space-y-2">
               {#each strategyRecommendations as rec}
                 <div class="space-y-1">
@@ -112,7 +112,7 @@
                   <div class="h-1.5 bg-bg-card rounded-full overflow-hidden">
                     <div
                       class="h-full rounded-full transition-all duration-500"
-                      style="width: {rec.confidence * 100}%; background: linear-gradient(90deg, var(--neon-cyan), var(--neon-purple))"
+                      style="width: {rec.confidence * 100}%; background: linear-gradient(90deg, var(--color-neon-cyan), var(--color-neon-purple))"
                     ></div>
                   </div>
                   <p class="text-[10px] text-text-dim">{rec.desc}</p>
@@ -124,7 +124,7 @@
 
         <!-- Document Info -->
         <div class="space-y-2">
-          <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Document Info</h3>
+          <h3 class="font-display text-[12px] font-bold text-text-dim uppercase">Document Info</h3>
           <div class="text-xs text-text-dim space-y-1">
             <div class="flex justify-between">
               <span>Type</span>

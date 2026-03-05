@@ -27,7 +27,7 @@
 >
   {#if !workbench.navigatorCollapsed}
     <div class="h-9 flex items-center px-3 border-b border-border-subtle shrink-0">
-      <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+      <span class="font-display text-[12px] font-bold uppercase text-text-dim" style="letter-spacing: 0.1em;">
         {titles[workbench.activeActivity] || workbench.activeActivity}
       </span>
     </div>

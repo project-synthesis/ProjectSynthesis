@@ -232,7 +232,7 @@
   <div class="flex-1 p-4 relative">
     <textarea
       bind:this={textareaRef}
-      class="w-full h-full bg-transparent text-text-primary text-sm font-mono leading-relaxed resize-none focus:outline-none placeholder:text-text-dim/50"
+      class="w-full h-full bg-bg-input text-text-primary text-sm font-sans leading-relaxed resize-none border border-border-subtle rounded-lg p-3 focus:outline-none focus:border-neon-cyan placeholder:text-text-dim/50 transition-colors duration-300"
       placeholder="Enter your prompt here... Describe what you want the AI to do, and PromptForge will optimize it for better results."
       value={tab.promptText || ''}
       oninput={handleInput}
@@ -244,7 +244,7 @@
     {#if showAtPopup}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="absolute left-4 top-10 w-64 bg-bg-card border border-border-subtle rounded-lg shadow-xl z-50 animate-dropdown-enter"
+        class="absolute left-4 top-10 w-64 bg-bg-card border border-border-subtle rounded-lg z-50 animate-dropdown-enter"
         data-testid="at-context-popup"
         onmousedown={(e) => e.preventDefault()}
       >
@@ -322,16 +322,25 @@
       {/if}
 
       <button
-        class="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all
+        class="btn-forge px-4 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200
           {forge.isForging
-            ? 'bg-bg-card text-text-dim cursor-not-allowed'
-            : 'text-white hover:shadow-lg hover:shadow-neon-cyan/20 active:scale-[0.98]'}"
-        style={!forge.isForging ? 'background-image: var(--gradient-forge)' : ''}
-        class:animate-forge-spark={forge.isForging}
+            ? 'opacity-40 cursor-not-allowed'
+            : 'hover:-translate-y-px active:translate-y-0'}"
         onclick={handleForge}
         disabled={forge.isForging || !tab.promptText?.trim()}
+        data-testid="forge-button"
       >
-        {forge.isForging ? 'Forging...' : 'Forge'}
+        {#if forge.isForging}
+          <span class="inline-flex items-center gap-1.5">
+            <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            Forging...
+          </span>
+        {:else}
+          Forge
+        {/if}
       </button>
     </div>
   </div>
