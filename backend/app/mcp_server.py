@@ -228,6 +228,41 @@ def create_mcp_server() -> "FastMCP":
             return json.dumps([o.to_dict() for o in opts], indent=2)
 
     @mcp.tool()
+    async def get_by_project(
+        project: str,
+        include_prompts: bool = True,
+        limit: int = 50,
+    ) -> str:
+        """Get optimizations filtered by project name.
+
+        Args:
+            project: Project name to filter by
+            include_prompts: Whether to include full prompt texts (default True)
+            limit: Max results to return (default 50)
+        """
+        from sqlalchemy import select
+        from app.models.optimization import Optimization
+
+        stmt = (
+            select(Optimization)
+            .where(Optimization.project == project)
+            .order_by(Optimization.created_at.desc())
+            .limit(limit)
+        )
+
+        async with async_session() as session:
+            result = await session.execute(stmt)
+            opts = result.scalars().all()
+            items = []
+            for o in opts:
+                d = o.to_dict()
+                if not include_prompts:
+                    d.pop("raw_prompt", None)
+                    d.pop("optimized_prompt", None)
+                items.append(d)
+            return json.dumps(items, indent=2)
+
+    @mcp.tool()
     async def tag(
         optimization_id: str,
         add_tags: Optional[list[str]] = None,

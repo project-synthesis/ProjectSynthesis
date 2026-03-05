@@ -548,7 +548,7 @@
       "VERIFY the retry tool accepts optimization_id and optional strategy parameters"
     ],
     "expected_outcome": "MCP retry tool creates new run from existing",
-    "passes": false,
+    "passes": true,
     "id": 188
   },
   {
@@ -568,7 +568,7 @@
       "VERIFY the tag tool accepts optimization_id, add_tags, remove_tags, project, and title parameters"
     ],
     "expected_outcome": "MCP tag tool updates optimization metadata",
-    "passes": false,
+    "passes": true,
     "id": 189
   },
   {
@@ -588,7 +588,7 @@
       "VERIFY the tool accepts project name and optional include_prompts and limit parameters"
     ],
     "expected_outcome": "MCP get_by_project tool filters by project",
-    "passes": false,
+    "passes": true,
     "id": 190
   },
   {
@@ -608,7 +608,7 @@
       "VERIFY the tool requires github_set_token to have been called first"
     ],
     "expected_outcome": "MCP github_list_repos tool returns repos",
-    "passes": false,
+    "passes": true,
     "id": 191
   },
   {
@@ -628,7 +628,7 @@
       "VERIFY the tool accepts full_name and optional branch parameters"
     ],
     "expected_outcome": "MCP github_link_repo tool links repository",
-    "passes": false,
+    "passes": true,
     "id": 192
   },
   {
@@ -648,7 +648,7 @@
       "VERIFY the tool accepts full_name, path, and optional branch parameters"
     ],
     "expected_outcome": "MCP github_read_file tool reads file from repo",
-    "passes": false,
+    "passes": true,
     "id": 193
   },
   {
@@ -668,7 +668,7 @@
       "VERIFY the tool accepts full_name, pattern, optional extension and branch parameters"
     ],
     "expected_outcome": "MCP github_search_code tool searches files",
-    "passes": false,
+    "passes": true,
     "id": 194
   },
   {
