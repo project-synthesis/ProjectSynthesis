@@ -34,7 +34,7 @@
       {
         id: 'toggle-inspector',
         label: 'Toggle Inspector',
-        shortcut: 'Ctrl+Shift+B',
+        shortcut: 'Ctrl+I',
         category: 'View',
         action: () => workbench.toggleInspector()
       },
@@ -51,6 +51,22 @@
         action: () => workbench.setActivity('github')
       },
       {
+        id: 'save-prompt',
+        label: 'Save Prompt',
+        shortcut: 'Ctrl+S',
+        category: 'File',
+        action: () => editor.saveActiveTab()
+      },
+      {
+        id: 'close-tab',
+        label: 'Close Tab',
+        shortcut: 'Ctrl+W',
+        category: 'File',
+        action: () => {
+          if (editor.activeTabId) editor.closeTab(editor.activeTabId);
+        }
+      },
+      {
         id: 'forge-prompt',
         label: 'Forge Current Prompt',
         shortcut: 'Ctrl+Enter',
@@ -62,19 +78,51 @@
       }
     ]);
 
+    // Parse shortcut string (e.g. "Ctrl+Shift+B") into a matcher
+    function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
+      const parts = shortcut.split('+');
+      const key = parts[parts.length - 1];
+      const needsCtrl = parts.includes('Ctrl');
+      const needsShift = parts.includes('Shift');
+      const needsAlt = parts.includes('Alt');
+      const hasCtrl = e.ctrlKey || e.metaKey;
+      if (needsCtrl !== hasCtrl) return false;
+      if (needsShift !== e.shiftKey) return false;
+      if (needsAlt !== e.altKey) return false;
+      // Match the key (case-insensitive, handle special keys)
+      const eventKey = e.key === ' ' ? 'Space' : e.key;
+      return eventKey.toLowerCase() === key.toLowerCase() ||
+        (key === 'Enter' && e.key === 'Enter') ||
+        (key === 'Escape' && e.key === 'Escape');
+    }
+
     // Global keyboard shortcut
-    const handleKeydown = (e: KeyboardEvent) => {
+    const handleGlobalKeydown = (e: KeyboardEvent) => {
+      // Ctrl+K → toggle palette
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         commandPalette.toggle();
+        return;
       }
+      // Escape → close palette
       if (e.key === 'Escape' && commandPalette.isOpen) {
         commandPalette.close();
+        return;
+      }
+      // Don't dispatch shortcuts while palette is open (use palette UI instead)
+      if (commandPalette.isOpen) return;
+      // Match registered command shortcuts
+      for (const cmd of commandPalette.commands) {
+        if (cmd.shortcut && matchesShortcut(e, cmd.shortcut)) {
+          e.preventDefault();
+          cmd.action();
+          return;
+        }
       }
     };
 
-    document.addEventListener('keydown', handleKeydown);
-    return () => document.removeEventListener('keydown', handleKeydown);
+    document.addEventListener('keydown', handleGlobalKeydown);
+    return () => document.removeEventListener('keydown', handleGlobalKeydown);
   });
 
   $effect(() => {

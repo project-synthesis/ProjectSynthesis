@@ -59,6 +59,13 @@ class EditorStore {
     }
   }
 
+  saveActiveTab() {
+    const tab = this.activeTab;
+    if (tab) {
+      tab.dirty = false;
+    }
+  }
+
   ensureWelcomeTab() {
     if (this.openTabs.length === 0) {
       this.openTab({
