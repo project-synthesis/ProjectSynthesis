@@ -1,30 +1,5 @@
-[Trimmed by orchestrator: kept last 200 of 202 lines. Earlier notes are in git history.]
+[Trimmed by orchestrator: kept last 200 of 227 lines. Earlier notes are in git history.]
 
-- Mocks/stubs fixed: 0
-- Mocks/stubs remaining: 0
-- TODOs found: 0 (only third-party package TODOs in .venv)
-- Spec compliance: PASS
-  - MCP transport: WebSocket at ws://127.0.0.1:8001/ws ✓
-  - Token encryption: Fernet ✓
-  - Database: SQLite via aiosqlite at data/promptforge.db ✓
-  - SSE streaming: StreamingResponse with text/event-stream ✓
-  - No duplicate routes ✓
-  - Health endpoint fields match TypeScript interface ✓
-- Outstanding mocks: 0
-- Bare pass statements: All in legitimate exception handlers (JSON decode) — not stubs
-
-**Scope:** Expanded — 114 tests verified across all tiers (T1 complete boundary trigger)
-**Infrastructure:** All services healthy (backend 8000, frontend 5199, MCP 8001)
-
-**Regressions found:** 0
-**Regressions fixed:** 0 (none needed)
-**Tests still passing after validation:** 114/335
-
-**Full pipeline e2e test (via Puppeteer):**
-- Prompt: "Design a caching strategy for a high-traffic web application"
-- 4/4 stages completed: Analyze (18.0s, 475 tok) → Strategy (34.4s, 783 tok) → Optimize (46.3s, 2528 tok) → Validate (26.0s, 1709 tok)
-- Total: 124.8s, 5,495 tok, Score 8/10, RISEN framework
-- Auto-switch to Pipeline tab: ✓
 - Status bar lifecycle: "Forging Analyze" → "Forging Strategy" → "Forging Optimize" → "Forging Validate" → "Score: 8/10 · RISEN" ✓
 - Run header: duration, score, tokens all displayed ✓
 - Streaming text in Optimize stage: ✓
@@ -217,6 +192,53 @@
 
 ### Tests #127-#142 note:
 All workbench UI tests (#127-#142) are already fully implemented in the codebase. Only 5 were marked this session to stay within the 3-5 test budget. The remaining should be marked by the next coding session — they require no code changes.
+
+**Progress:** 130/335 tests passing (38.8%)
+**Server info:**
+- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
+- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
+- MCP: ws://127.0.0.1:8001/ws (RUNNING — 13 tools registered)
+- DB: backend/data/promptforge.db (3 tables, 61+ optimization records)
+- Start: ./init.sh start
+
+## Integration Report — Session 21 (2026-03-05)
+
+**Gaps discovered:** 11
+- [WIRING] github.selectRepo() only sets local state, doesn't call linkRepo() to persist — WIRED
+- [WIRING] handleConnect doesn't restore previously-linked repo after PAT auth — WIRED
+- [COMPONENT] RepoPickerModal.svelte orphan — not rendered by any parent — SKIP (known, needs coding agent trigger UI)
+- [COMPONENT] RepoBadge.svelte — only used inside orphan RepoPickerModal — SKIP (depends on RepoPickerModal wiring)
+- [API-FN] fetchOptimization — no component imports — SKIP (needs detail view UI)
+- [API-FN] patchOptimization — no component imports — SKIP (needs edit UI)
+- [API-FN] retryOptimization — no component imports — SKIP (known, needs retry button UI)
+- [API-FN] getGitHubLoginUrl — no component uses — SKIP (OAuth flow not prioritized)
+- [API-FN] linkRepo/unlinkRepo — no direct consumer — WIRED (into selectRepo + disconnect)
+- [API-FN] fetchProviderDetect/fetchProviderStatus — no consumer — SKIP (provider works via health endpoint)
+- [ENDPOINT] /api/optimizations/* — 5 endpoints, backend-only for MCP — SKIP (by design)
+
+**Gaps wired:** 2 of 11
+**Tests now passing (via wiring):** none (GitHub PAT required for end-to-end verification)
+
+**Verification results:**
+- NavigatorGitHub: renders correctly, no console errors (screenshot verified)
+- Frontend build: ✓ Clean
+- App loads: ✓ No regressions
+
+**No issues found:**
+- All stores imported and used by components ✓
+- All navigator sub-components wired into Navigator.svelte ✓
+- All editor sub-tabs wired into PromptDocument.svelte ✓
+- HistoryStats TS interface matches backend HistoryStatsResponse ✓
+- RepoTree TS interface matches backend response ✓
+- CORS configured ✓
+- No duplicate routes ✓
+- Session access patterns consistent ✓
+
+**Remaining gaps for coding agent:**
+- RepoPickerModal needs parent component + trigger (known from session 16)
+- retryOptimization needs retry button UI (known from session 16)
+- fetchOptimization/patchOptimization need detail/edit views
+- fetchProviderDetect/fetchProviderStatus need settings UI section (low priority)
 
 **Progress:** 130/335 tests passing (38.8%)
 **Server info:**
