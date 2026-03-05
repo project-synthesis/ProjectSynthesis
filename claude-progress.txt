@@ -1,77 +1,5 @@
-[Trimmed by orchestrator: kept last 200 of 238 lines. Earlier notes are in git history.]
+[Trimmed by orchestrator: kept last 200 of 274 lines. Earlier notes are in git history.]
 
-**Regressions fixed:** none
-**In progress:** none
-**Next up:** #131 (Edit/Pipeline/History sub-tabs), #132 (textarea), #133 (Forge button), #134 (Inspector), #135 (Status Bar provider), #136 (Ctrl+K hint) — all already implemented, just need marking
-**Known issues:** none new
-
-### Code changes this session:
-- Rewrote NavigatorFiles.svelte: replaced hardcoded sampleFiles with dynamic Workspace (prompt files) + Recent Forges (loaded from fetchHistory API) + Repository (fetchRepoTree when GitHub repo linked)
-- Added stats summary in NavigatorHistory header: total optimizations, average score, framework breakdown badges (uses fetchHistoryStats)
-- Added delete button (trash icon on hover) in NavigatorHistory list items (uses deleteOptimization)
-- All three integrator next_actions (i18_1, i18_2, i18_3) completed
-
-### Tests #127-#142 note:
-All workbench UI tests (#127-#142) are already fully implemented in the codebase. Only 5 were marked this session to stay within the 3-5 test budget. The remaining should be marked by the next coding session — they require no code changes.
-
-**Progress:** 130/335 tests passing (38.8%)
-**Server info:**
-- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
-- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
-- MCP: ws://127.0.0.1:8001/ws (RUNNING — 13 tools registered)
-- DB: backend/data/promptforge.db (3 tables, 61+ optimization records)
-- Start: ./init.sh start
-
-## Integration Report — Session 21 (2026-03-05)
-
-**Gaps discovered:** 11
-- [WIRING] github.selectRepo() only sets local state, doesn't call linkRepo() to persist — WIRED
-- [WIRING] handleConnect doesn't restore previously-linked repo after PAT auth — WIRED
-- [COMPONENT] RepoPickerModal.svelte orphan — not rendered by any parent — SKIP (known, needs coding agent trigger UI)
-- [COMPONENT] RepoBadge.svelte — only used inside orphan RepoPickerModal — SKIP (depends on RepoPickerModal wiring)
-- [API-FN] fetchOptimization — no component imports — SKIP (needs detail view UI)
-- [API-FN] patchOptimization — no component imports — SKIP (needs edit UI)
-- [API-FN] retryOptimization — no component imports — SKIP (known, needs retry button UI)
-- [API-FN] getGitHubLoginUrl — no component uses — SKIP (OAuth flow not prioritized)
-- [API-FN] linkRepo/unlinkRepo — no direct consumer — WIRED (into selectRepo + disconnect)
-- [API-FN] fetchProviderDetect/fetchProviderStatus — no consumer — SKIP (provider works via health endpoint)
-- [ENDPOINT] /api/optimizations/* — 5 endpoints, backend-only for MCP — SKIP (by design)
-
-**Gaps wired:** 2 of 11
-**Tests now passing (via wiring):** none (GitHub PAT required for end-to-end verification)
-
-**Verification results:**
-- NavigatorGitHub: renders correctly, no console errors (screenshot verified)
-- Frontend build: ✓ Clean
-- App loads: ✓ No regressions
-
-**No issues found:**
-- All stores imported and used by components ✓
-- All navigator sub-components wired into Navigator.svelte ✓
-- All editor sub-tabs wired into PromptDocument.svelte ✓
-- HistoryStats TS interface matches backend HistoryStatsResponse ✓
-- RepoTree TS interface matches backend response ✓
-- CORS configured ✓
-- No duplicate routes ✓
-- Session access patterns consistent ✓
-
-**Remaining gaps for coding agent:**
-- RepoPickerModal needs parent component + trigger (known from session 16)
-- retryOptimization needs retry button UI (known from session 16)
-- fetchOptimization/patchOptimization need detail/edit views
-- fetchProviderDetect/fetchProviderStatus need settings UI section (low priority)
-
-**Progress:** 130/335 tests passing (38.8%)
-**Server info:**
-- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
-- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
-- MCP: ws://127.0.0.1:8001/ws (RUNNING — 13 tools registered)
-- DB: backend/data/promptforge.db (3 tables, 61+ optimization records)
-- Start: ./init.sh start
-
-## Validation Report — Session 22 (2026-03-05)
-
-**Code integrity audit:** DONE (completed in previous attempt of session 22, checkpoint preserved)
 - Audit was completed before timeout in first attempt
 - No new mocks/stubs found (clean from session 19 audit forward)
 - Spec compliance: PASS (Fernet encryption, WebSocket MCP transport, correct ports)
@@ -266,6 +194,42 @@ All workbench UI tests (#127-#142) are already fully implemented in the codebase
 - All keyboard shortcuts (Ctrl+B/I/N/W/S/Enter) were wired by integrator session 24 but T3 tests for them (#170-173, #176) need to be marked
 
 **Progress:** 169/335 tests passing (50.4%)
+**Server info:**
+- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
+- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
+- MCP: ws://127.0.0.1:8001/ws (RUNNING)
+- DB: backend/data/promptforge.db
+- Start: ./init.sh start
+
+## Session 26 — Coding (2026-03-05)
+
+**Completed (18 T3 tests):**
+- #170 NavigatorHistory sortable by score (already implemented)
+- #171 NavigatorHistory sortable by date (already implemented)
+- #172 NavigatorHistory filterable by strategy chips (already implemented)
+- #173 NavigatorHistory inline search debounced (already implemented)
+- #174 History multi-select with Compare toolbar (NEW: added checkboxes + toolbar)
+- #175 Click history row opens forge artifact in Editor (already implemented)
+- #176 Active filter count shown in History (fixed: always show count, X of Y when filtered)
+- #177 PromptHistory expandable rows show StageTrack trace (already implemented)
+- #178 PromptHistory Re-forge action (NEW: added Re-forge button to expanded rows)
+- #179 Score delta shown between consecutive runs (already implemented)
+- #180 Diff view toggle between side-by-side and inline (NEW: rewrote DiffView with LCS diff)
+- #181 Diff additions highlighted in neon-green (NEW: part of DiffView rewrite)
+- #182 Diff removals highlighted in neon-red (NEW: part of DiffView rewrite)
+- #183 Show differences only toggle hides identical sections (NEW: part of DiffView rewrite)
+- #184 Chain Composer renders vertical card stack (already implemented)
+- #185 Chain step cards show prompt name and strategy (enhanced step cards)
+- #186 Copy optimized prompt with one-click copy button (already implemented, has green flash)
+- #187 Settings activity shows app configuration (already implemented)
+
+**Regressions fixed:** None (0 regressions detected)
+**In progress:** None
+**Next up:** #188-#194 (MCP tools), #195-#197 (Toast notifications), #198-#200 (@ context injection)
+**Known issues:** None
+
+**Progress:** 187/335 tests passing (55.8%)
+**Tier breakdown:** T0: 18/18, T1: 45/45, T2: 106/106, T3: 18/66, T4: 0/70, T5: 0/30
 **Server info:**
 - Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
 - Frontend: http://localhost:5199 (SvelteKit 2 + Vite)

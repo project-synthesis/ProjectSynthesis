@@ -2,22 +2,6 @@
   "$schema_version": 1,
   "session_log": [
     {
-      "session_id": 20,
-      "session_type": "coding",
-      "tests_completed": [
-        143,
-        127,
-        128,
-        129,
-        130
-      ],
-      "tests_regressed": [],
-      "tests_fixed": [],
-      "mocks_found": 0,
-      "mocks_fixed": 0,
-      "summary": "5 T2 tests: Rewrote NavigatorFiles with dynamic prompts + forges (#143). Marked 4 already-implemented workbench UI tests (#127 5-zone grid, #128 6 activity icons, #129 activity switching, #130 tab bar)."
-    },
-    {
       "session_id": 21,
       "session_type": "integrator",
       "tests_completed": [],
@@ -106,6 +90,16 @@
       "mocks_found": 0,
       "mocks_fixed": 0,
       "summary": "Expanded validation (tier boundary T2): 25 T2 tests verified via live UI + forge run. 0 regressions, 0 mocks found. Code audit clean. Build clean. All 25 previously-unverified session-23 tests confirmed working end-to-end."
+    },
+    {
+      "session_id": 26,
+      "session_type": "coding",
+      "tests_completed": [170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187],
+      "tests_regressed": [],
+      "tests_fixed": [],
+      "mocks_found": 0,
+      "mocks_fixed": 0,
+      "summary": "18 T3 tests completed (T3: 18/66). Marked 10 already-implemented tests. New implementations: multi-select Compare toolbar (#174), DiffView rewrite with LCS diff + side-by-side/inline toggle + diff highlighting + differences-only mode (#180-183), Re-forge button on PromptHistory (#178), enhanced ChainComposer step cards with strategy/score (#185), fixed filter count display (#176). 187/335 passing (55.8%)."
     }
   ],
   "active_warnings": [],
@@ -285,10 +279,7 @@
       "to_agent": "coding",
       "from_session": 24,
       "action": "Add panel resize drag handles for Navigator and Inspector panels. Workbench store already has navigatorWidth/inspectorWidth state, but no drag handle UI exists to resize them.",
-      "test_ids": [
-        201,
-        203
-      ],
+      "test_ids": [201, 203],
       "priority": "medium"
     },
     {
@@ -297,11 +288,7 @@
       "to_agent": "coding",
       "from_session": 24,
       "action": "Add localStorage/sessionStorage persistence: panel widths (workbench.navigatorWidth/inspectorWidth) in localStorage, active activity (workbench.activeActivity) in sessionStorage, and history sort/filter preferences (history.filters) in localStorage.",
-      "test_ids": [
-        223,
-        224,
-        225
-      ],
+      "test_ids": [223, 224, 225],
       "priority": "medium"
     },
     {
@@ -310,34 +297,7 @@
       "to_agent": "coding",
       "from_session": 24,
       "action": "Add @ context injection popup: when user types '@' in PromptEdit textarea, show a fuzzy-search popup with context options. On selection, add a context chip to the existing ContextBar component. ContextBar already exists and has dismiss support.",
-      "test_ids": [
-        198,
-        199,
-        200
-      ],
-      "priority": "medium"
-    },
-    {
-      "id": "i24_4",
-      "from_agent": "integrator",
-      "to_agent": "coding",
-      "from_session": 24,
-      "action": "Enhance DiffView.svelte with a toggle between side-by-side and inline modes, and a 'show differences only' toggle that hides identical sections. Currently DiffView shows a simple two-column original/modified layout with no toggling.",
-      "test_ids": [
-        180,
-        183
-      ],
-      "priority": "medium"
-    },
-    {
-      "id": "i24_5",
-      "from_agent": "integrator",
-      "to_agent": "coding",
-      "from_session": 24,
-      "action": "Add a 'Re-forge' button to PromptHistory expandable rows that calls the existing retryOptimization() API client function (already in client.ts, calls /api/optimize/{id}/retry). The button should trigger a new optimization run from an existing history entry.",
-      "test_ids": [
-        178
-      ],
+      "test_ids": [198, 199, 200],
       "priority": "medium"
     },
     {
@@ -350,12 +310,12 @@
       "priority": "low"
     },
     {
-      "id": "a25_1",
-      "from_agent": "validator",
-      "to_agent": "coding",
-      "from_session": 25,
-      "action": "Start T3 implementation. 19 T2 tests still unverified by validator (#80,#89-93,#100-102,#104,#106,#108,#161-167,#169) but code looks correct from audit. Prioritize T3 tests starting from lowest ID. Integrator wiring actions i24_1 through i24_6 remain open for coding agent.",
-      "test_ids": [],
+      "id": "a26_1",
+      "from_agent": "coding",
+      "to_agent": "validator",
+      "from_session": 26,
+      "action": "Verify 18 new T3 tests (#170-187). Key implementations to check: NavigatorHistory multi-select with Compare toolbar (#174), DiffView rewrite with LCS diff algorithm + side-by-side/inline toggle + diff highlighting (#180-183), Re-forge button in PromptHistory (#178), ChainComposer step card enhancements (#185), filter count always-visible display (#176).",
+      "test_ids": [170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187],
       "priority": "high"
     }
   ],
@@ -365,8 +325,8 @@
     "mcp_url": "ws://127.0.0.1:8001/ws",
     "health_endpoint": "http://localhost:8000/api/health",
     "start_command": "./init.sh start",
-    "last_verified_session": 25,
-    "notes": "All services healthy (session 25). Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING. DB at backend/data/promptforge.db. T0: 18/18, T1: 45/45, T2: 106/106. 169/335 tests passing (50.4%). Validator verified 25 T2 tests via live UI + forge run. 0 regressions. Build clean."
+    "last_verified_session": 26,
+    "notes": "All services healthy (session 26). Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING. DB at backend/data/promptforge.db. T0: 18/18, T1: 45/45, T2: 106/106, T3: 18/66. 187/335 tests passing (55.8%). Build clean."
   },
   "session_checkpoint": {
     "session_type": "",
