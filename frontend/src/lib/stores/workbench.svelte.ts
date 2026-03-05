@@ -28,6 +28,7 @@ class WorkbenchStore {
   provider = $state<'anthropic' | 'openai' | 'claude_cli' | 'anthropic_api' | 'unknown'>('unknown');
   providerModel = $state('');
   isConnected = $state(false);
+  githubOAuthEnabled = $state(false);
 
   get navCssWidth() {
     return this.navigatorCollapsed ? '0px' : `${this.navigatorWidth}px`;

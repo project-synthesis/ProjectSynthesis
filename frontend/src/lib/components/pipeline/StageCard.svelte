@@ -47,21 +47,23 @@
       <span
         class="w-3 h-3 rounded-full shrink-0 border-t-2 animate-spin"
         style="border-color: transparent; border-top-color: {stageColor || '#00e5ff'};"
+        aria-label="Status: running"
+        role="img"
       ></span>
     {:else if status === 'done'}
-      <span class="w-3 h-3 rounded-full shrink-0 flex items-center justify-center" style="background: color-mix(in srgb, {stageColor || '#22ff88'} 20%, transparent);">
-        <svg class="w-2 h-2" fill="none" stroke="{stageColor || '#22ff88'}" viewBox="0 0 24 24" stroke-width="3">
+      <span class="w-3 h-3 rounded-full shrink-0 flex items-center justify-center" style="background: color-mix(in srgb, {stageColor || '#22ff88'} 20%, transparent);" aria-label="Status: complete" role="img">
+        <svg class="w-2 h-2" fill="none" stroke="{stageColor || '#22ff88'}" viewBox="0 0 24 24" stroke-width="3" aria-hidden="true">
           <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
         </svg>
       </span>
     {:else if status === 'error'}
-      <span class="w-3 h-3 rounded-full shrink-0 flex items-center justify-center bg-neon-red/20">
-        <svg class="w-2 h-2 text-neon-red" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3">
+      <span class="w-3 h-3 rounded-full shrink-0 flex items-center justify-center bg-neon-red/20" aria-label="Status: failed" role="img">
+        <svg class="w-2 h-2 text-neon-red" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3" aria-hidden="true">
           <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
         </svg>
       </span>
     {:else}
-      <span class="w-3 h-3 rounded-full shrink-0 border border-text-dim/40"></span>
+      <span class="w-3 h-3 rounded-full shrink-0 border border-text-dim/40" aria-label="Status: idle" role="img"></span>
     {/if}
 
     <!-- Stage label: Syne 11px 700 uppercase -->

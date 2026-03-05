@@ -1,10 +1,13 @@
 <script lang="ts">
   import { github } from '$lib/stores/github.svelte';
-  import { connectGitHub, disconnectGitHub, linkRepo, unlinkRepo, fetchLinkedRepo } from '$lib/api/client';
+  import { workbench } from '$lib/stores/workbench.svelte';
+  import { connectGitHub, disconnectGitHub, linkRepo, unlinkRepo, fetchLinkedRepo, getGitHubLoginUrl } from '$lib/api/client';
   import GitHubStatus from '$lib/components/github/GitHubStatus.svelte';
+  import RepoPickerModal from '$lib/components/github/RepoPickerModal.svelte';
 
   let patInput = $state('');
   let connecting = $state(false);
+  let showRepoPicker = $state(false);
 
   async function handleConnect() {
     if (!patInput.trim()) return;
@@ -82,17 +85,40 @@
       >
         {connecting ? 'Connecting...' : 'Connect'}
       </button>
+      {#if workbench.githubOAuthEnabled}
+        <div class="flex items-center gap-2 my-1">
+          <div class="h-px flex-1 bg-border-subtle"></div>
+          <span class="text-[10px] text-text-dim">or</span>
+          <div class="h-px flex-1 bg-border-subtle"></div>
+        </div>
+        <button
+          class="w-full py-1.5 rounded text-xs font-medium transition-all
+            bg-bg-card border border-border-subtle text-text-primary
+            hover:bg-bg-hover hover:border-neon-cyan/20"
+          onclick={() => { window.location.href = getGitHubLoginUrl(); }}
+        >
+          Connect via GitHub OAuth
+        </button>
+      {/if}
     </div>
   {:else}
     <div class="space-y-2">
       <div class="flex items-center justify-between">
         <span class="text-xs text-text-secondary">Repositories</span>
-        <button
-          class="text-[10px] text-neon-red hover:text-neon-red/80"
-          onclick={handleDisconnect}
-        >
-          Disconnect
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            class="text-[10px] text-neon-cyan hover:text-neon-cyan/80"
+            onclick={() => { showRepoPicker = true; }}
+          >
+            Browse…
+          </button>
+          <button
+            class="text-[10px] text-neon-red hover:text-neon-red/80"
+            onclick={handleDisconnect}
+          >
+            Disconnect
+          </button>
+        </div>
       </div>
 
       {#each github.repos as repo}
@@ -133,3 +159,5 @@
     </div>
   {/if}
 </div>
+
+<RepoPickerModal open={showRepoPicker} onclose={() => { showRepoPicker = false; }} onselectrepo={handleSelectRepo} />

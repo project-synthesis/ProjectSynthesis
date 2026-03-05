@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fetchSettings, updateSettings, type AppSettings } from '$lib/api/client';
+  import { fetchSettings, updateSettings, fetchProviderStatus, type AppSettings } from '$lib/api/client';
   import { workbench } from '$lib/stores/workbench.svelte';
 
   let settings = $state<AppSettings | null>(null);
@@ -11,7 +11,12 @@
     loading = true;
     error = null;
     try {
-      settings = await fetchSettings();
+      const [s, status] = await Promise.all([
+        fetchSettings(),
+        fetchProviderStatus().catch(() => null)
+      ]);
+      settings = s;
+      if (status) workbench.isConnected = status.healthy;
     } catch (err) {
       error = (err as Error).message;
     } finally {

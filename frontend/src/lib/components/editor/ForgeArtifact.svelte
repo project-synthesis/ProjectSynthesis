@@ -1,5 +1,6 @@
 <script lang="ts">
   import { forge } from '$lib/stores/forge.svelte';
+  import { patchOptimization } from '$lib/api/client';
   import CopyButton from '$lib/components/shared/CopyButton.svelte';
   import ScoreCircle from '$lib/components/shared/ScoreCircle.svelte';
   import ScoreBar from '$lib/components/shared/ScoreBar.svelte';
@@ -15,6 +16,27 @@
     { id: 'trace', label: 'Trace' }
   ];
 
+  let editingTitle = $state(false);
+  let titleInput = $state('');
+  let displayTitle = $state('Forge Artifact');
+
+  $effect(() => {
+    if (forge.optimizationId) displayTitle = 'Forge Artifact';
+  });
+
+  async function saveTitle() {
+    // Guard against blur firing after Escape already cancelled the edit
+    if (!editingTitle || !forge.optimizationId || !titleInput.trim()) {
+      editingTitle = false;
+      return;
+    }
+    try {
+      await patchOptimization(forge.optimizationId, { title: titleInput.trim() });
+      displayTitle = titleInput.trim();
+    } catch { /* non-fatal */ }
+    editingTitle = false;
+  }
+
   let validationData = $derived(
     forge.stageResults['validate']?.data as Record<string, unknown> || {}
   );
@@ -26,7 +48,28 @@
 <div class="flex flex-col h-full animate-fade-in">
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2 border-b border-border-subtle shrink-0">
-    <h2 class="text-sm font-semibold text-text-primary">Forge Artifact</h2>
+    {#if editingTitle && forge.optimizationId}
+      <input
+        class="text-sm font-semibold text-text-primary bg-transparent border-b
+               border-neon-cyan/50 focus:outline-none max-w-[200px]"
+        bind:value={titleInput}
+        onblur={saveTitle}
+        onkeydown={(e) => {
+          if (e.key === 'Enter') saveTitle();
+          if (e.key === 'Escape') { editingTitle = false; titleInput = displayTitle; }
+        }}
+        autofocus
+      />
+    {:else}
+      <h2
+        class="text-sm font-semibold text-text-primary
+               {forge.optimizationId ? 'cursor-pointer hover:text-neon-cyan/80 transition-colors' : ''}"
+        ondblclick={() => {
+          if (forge.optimizationId) { titleInput = displayTitle; editingTitle = true; }
+        }}
+        title={forge.optimizationId ? 'Double-click to rename' : ''}
+      >{displayTitle}</h2>
+    {/if}
     {#if forge.overallScore != null}
       <ScoreCircle score={forge.overallScore} size={32} />
     {/if}

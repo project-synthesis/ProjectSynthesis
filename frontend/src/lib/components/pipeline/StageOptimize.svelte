@@ -3,7 +3,7 @@
   import CopyButton from '$lib/components/shared/CopyButton.svelte';
 </script>
 
-<div class="space-y-2 text-xs">
+<div class="space-y-2 text-xs" aria-live="polite">
   {#if forge.stageStatuses['optimize'] === 'running'}
     <div class="space-y-2">
       <div class="flex items-center gap-2 text-neon-cyan">

@@ -8,7 +8,6 @@ from app.routers.optimize import router as optimize_router
 from app.routers.history import router as history_router
 from app.routers.github_auth import router as github_auth_router
 from app.routers.github_repos import router as github_repos_router
-from app.routers.optimizations import router as optimizations_router
 from app.routers.providers import router as providers_router
 from app.routers.github import router as github_router
 from app.routers.settings import router as settings_router
@@ -19,7 +18,6 @@ __all__ = [
     "history_router",
     "github_auth_router",
     "github_repos_router",
-    "optimizations_router",
     "providers_router",
     "github_router",
     "settings_router",

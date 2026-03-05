@@ -77,7 +77,7 @@
   );
 </script>
 
-<div class="space-y-3">
+<div class="space-y-3" aria-live="polite" aria-label="Pipeline stages">
   {#each visibleStages as stage, i (stage)}
     {@const status = forge.stageStatuses[stage]}
     {@const result = forge.stageResults[stage]}

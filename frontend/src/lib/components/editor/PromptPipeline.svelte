@@ -8,7 +8,7 @@
   let showArtifact = $derived(!forge.isForging && forge.completedStages > 0 && forge.streamingText);
 </script>
 
-<div class="flex flex-col h-full animate-slide-in-right">
+<div class="flex flex-col h-full animate-slide-in-right" aria-live="polite">
   {#if !forge.isForging && forge.completedStages === 0}
     <div class="flex flex-col items-center justify-center py-16 text-center">
       <svg class="w-12 h-12 text-text-dim/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">

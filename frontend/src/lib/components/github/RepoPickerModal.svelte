@@ -2,7 +2,15 @@
   import { github } from '$lib/stores/github.svelte';
   import RepoBadge from './RepoBadge.svelte';
 
-  let { open = false, onclose }: { open?: boolean; onclose?: () => void } = $props();
+  let {
+    open = false,
+    onclose,
+    onselectrepo
+  }: {
+    open?: boolean;
+    onclose?: () => void;
+    onselectrepo?: (name: string) => void;
+  } = $props();
 
   let search = $state('');
 
@@ -14,7 +22,11 @@
   );
 
   function selectRepo(name: string) {
-    github.selectRepo(name);
+    if (onselectrepo) {
+      onselectrepo(name);
+    } else {
+      github.selectRepo(name);
+    }
     onclose?.();
   }
 </script>

@@ -26,6 +26,6 @@
   );
 </script>
 
-<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-mono font-medium border {classes}" data-testid="strategy-badge">
+<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-mono font-medium border {classes}" data-testid="strategy-badge" aria-label="Strategy: {strategy}">
   {strategy}
 </span>

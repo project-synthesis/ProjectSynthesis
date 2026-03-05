@@ -7,8 +7,6 @@ from app.schemas.optimization import (
     OptimizeRequest,
     PatchOptimizationRequest,
     RetryRequest,
-    ValidationScores,
-    OptimizationResponse,
     HistoryStatsResponse,
 )
 from app.schemas.github import (
@@ -24,8 +22,6 @@ __all__ = [
     "OptimizeRequest",
     "PatchOptimizationRequest",
     "RetryRequest",
-    "ValidationScores",
-    "OptimizationResponse",
     "HistoryStatsResponse",
     # GitHub schemas
     "PATRequest",

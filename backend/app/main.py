@@ -19,7 +19,6 @@ from app.providers.detector import detect_provider, ProviderNotAvailableError
 
 # Import routers
 from app.routers import health, optimize, history, github_auth, github_repos
-from app.routers.optimizations import router as optimizations_router, set_provider as optimizations_set_provider
 from app.routers.providers import router as providers_router, set_provider as providers_set_provider
 from app.routers.github import router as github_router
 from app.routers.settings import router as settings_router
@@ -60,7 +59,6 @@ async def lifespan(app: FastAPI):
     # Wire up provider to routers that need it
     health.set_provider(provider)
     optimize.set_provider(provider)
-    optimizations_set_provider(provider)
     providers_set_provider(provider)
 
     # Store provider on app state for access elsewhere
@@ -117,7 +115,6 @@ app.include_router(github_auth.router)
 app.include_router(github_repos.router)
 
 # New routers
-app.include_router(optimizations_router)
 app.include_router(providers_router)
 app.include_router(github_router)
 app.include_router(settings_router)

@@ -3501,7 +3501,7 @@
       "SCREENSHOT to verify page structure"
     ],
     "expected_outcome": "ARIA landmark structure with unique labels",
-    "passes": false,
+    "passes": true,
     "id": 306
   },
   {
@@ -3546,7 +3546,7 @@
       "VERIFY arrow keys move focus between tabs"
     ],
     "expected_outcome": "Roving tabindex for EditorGroups tab bar",
-    "passes": false,
+    "passes": true,
     "id": 308
   },
   {
@@ -3572,7 +3572,7 @@
       "SCREENSHOT to verify palette focus trap"
     ],
     "expected_outcome": "Command Palette focus trap when open",
-    "passes": false,
+    "passes": true,
     "id": 309
   },
   {
@@ -3598,7 +3598,7 @@
       "SCREENSHOT to verify accessibility labels"
     ],
     "expected_outcome": "Score circles have aria-label 'Score: N out of 10'",
-    "passes": false,
+    "passes": true,
     "id": 310
   },
   {
@@ -3624,7 +3624,7 @@
       "VERIFY labels use descriptive text (not just icon names)"
     ],
     "expected_outcome": "Stage status icons have descriptive aria-labels",
-    "passes": false,
+    "passes": true,
     "id": 311
   },
   {
@@ -3646,7 +3646,7 @@
       "VERIFY the attribute is NOT set to 'assertive' (would interrupt users)"
     ],
     "expected_outcome": "Streaming content uses aria-live=polite",
-    "passes": false,
+    "passes": true,
     "id": 312
   },
   {
@@ -3671,7 +3671,7 @@
       "VERIFY strategy badge elements have aria-label attributes"
     ],
     "expected_outcome": "Strategy badges have descriptive aria-labels",
-    "passes": false,
+    "passes": true,
     "id": 313
   },
   {
@@ -3692,7 +3692,7 @@
       "VERIFY labels include the full model name (not just the badge text)"
     ],
     "expected_outcome": "Model badges have descriptive aria-labels",
-    "passes": false,
+    "passes": true,
     "id": 314
   },
   {
@@ -3738,7 +3738,7 @@
       "VERIFY tab panels use role='tabpanel'"
     ],
     "expected_outcome": "EditorGroups tab bar uses role=tablist with proper ARIA",
-    "passes": false,
+    "passes": true,
     "id": 316
   },
   {

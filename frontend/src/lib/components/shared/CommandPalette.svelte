@@ -5,6 +5,8 @@
   import { onMount } from 'svelte';
 
   let inputEl: HTMLInputElement | undefined = $state();
+  let paletteEl: HTMLDivElement | undefined = $state();
+  let previouslyFocused: HTMLElement | null = $state(null);
 
   // Register default commands
   onMount(() => {
@@ -101,12 +103,20 @@
       // Ctrl+K → toggle palette
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
+        if (!commandPalette.isOpen) {
+          previouslyFocused = document.activeElement as HTMLElement;
+        }
         commandPalette.toggle();
         return;
       }
       // Escape → close palette
       if (e.key === 'Escape' && commandPalette.isOpen) {
         commandPalette.close();
+        // Restore focus to previously focused element
+        if (previouslyFocused) {
+          previouslyFocused.focus();
+          previouslyFocused = null;
+        }
         return;
       }
       // Don't dispatch shortcuts while palette is open (use palette UI instead)
@@ -143,18 +153,66 @@
       commandPalette.executeSelected();
     }
   }
+
+  // Focus trap: keep Tab/Shift+Tab cycling within the palette
+  function handlePaletteTrap(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      commandPalette.close();
+      if (previouslyFocused) {
+        previouslyFocused.focus();
+        previouslyFocused = null;
+      }
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    if (!paletteEl) return;
+
+    const focusable = paletteEl.querySelectorAll<HTMLElement>(
+      'input, button, [tabindex]:not([tabindex="-1"])'
+    );
+    if (focusable.length === 0) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+
+    if (e.shiftKey) {
+      if (document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }
 </script>
 
 {#if commandPalette.isOpen}
   <!-- Backdrop -->
   <div
     class="fixed inset-0 bg-black/50 z-[800]"
-    onclick={() => commandPalette.close()}
+    onclick={() => {
+      commandPalette.close();
+      if (previouslyFocused) {
+        previouslyFocused.focus();
+        previouslyFocused = null;
+      }
+    }}
     role="presentation"
   ></div>
 
   <!-- Palette -->
-  <div class="fixed top-[20%] left-1/2 -translate-x-1/2 w-[480px] max-w-[90vw] bg-bg-card border border-border-subtle rounded-xl z-[800] overflow-hidden animate-dialog-in">
+  <div
+    bind:this={paletteEl}
+    class="fixed top-[20%] left-1/2 -translate-x-1/2 w-[480px] max-w-[90vw] bg-bg-card border border-border-subtle rounded-xl z-[800] overflow-hidden animate-dialog-in"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Command Palette"
+    onkeydown={handlePaletteTrap}
+  >
     <!-- Input -->
     <div class="flex items-center gap-2 px-4 py-3 border-b border-border-subtle">
       <svg class="w-4 h-4 text-text-dim shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">

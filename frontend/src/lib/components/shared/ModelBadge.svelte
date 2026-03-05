@@ -24,6 +24,6 @@
   let displayName = $derived(getDisplayName(model));
 </script>
 
-<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-mono font-medium border {color}" data-testid="model-badge">
+<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-mono font-medium border {color}" data-testid="model-badge" aria-label="Model: {model.includes('haiku') ? 'Claude Haiku' : model.includes('sonnet') ? 'Claude Sonnet' : model.includes('opus') ? 'Claude Opus' : model}">
   {displayName}
 </span>
