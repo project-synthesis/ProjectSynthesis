@@ -4,6 +4,28 @@
   import { forge } from '$lib/stores/forge.svelte';
   import ScoreCircle from '$lib/components/shared/ScoreCircle.svelte';
   import ScoreBar from '$lib/components/shared/ScoreBar.svelte';
+
+  let strategyRecommendations = $derived.by(() => {
+    const promptLen = (editor.activeTab?.promptText || '').length;
+    if (promptLen > 200) {
+      return [
+        { name: 'CO-STAR', confidence: 0.85, desc: 'Best for detailed task prompts' },
+        { name: 'chain-of-thought', confidence: 0.72, desc: 'Great for reasoning tasks' },
+        { name: 'RISEN', confidence: 0.65, desc: 'Good for role-based prompts' }
+      ];
+    } else if (promptLen > 50) {
+      return [
+        { name: 'role-task-format', confidence: 0.78, desc: 'Simple and effective' },
+        { name: 'step-by-step', confidence: 0.71, desc: 'Breaks down complex tasks' },
+        { name: 'few-shot-scaffolding', confidence: 0.60, desc: 'Learn by example' }
+      ];
+    }
+    return [
+      { name: 'auto', confidence: 0.90, desc: 'Let PromptForge choose' },
+      { name: 'context-enrichment', confidence: 0.65, desc: 'Add more context' },
+      { name: 'persona-assignment', confidence: 0.55, desc: 'Assign expert role' }
+    ];
+  });
 </script>
 
 <aside
@@ -66,7 +88,31 @@
           </div>
         {/if}
       {:else if editor.activeTab}
-        <!-- Prompt info -->
+        <!-- Strategy Recommendations (when Edit sub-tab is active) -->
+        {#if editor.activeSubTab === 'edit'}
+          <div class="space-y-2">
+            <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Strategy Recommendations</h3>
+            <div class="space-y-2">
+              {#each strategyRecommendations as rec}
+                <div class="space-y-1">
+                  <div class="flex justify-between text-xs">
+                    <span class="text-text-secondary">{rec.name}</span>
+                    <span class="text-text-dim">{Math.round(rec.confidence * 100)}%</span>
+                  </div>
+                  <div class="h-1.5 bg-bg-card rounded-full overflow-hidden">
+                    <div
+                      class="h-full rounded-full transition-all duration-500"
+                      style="width: {rec.confidence * 100}%; background: linear-gradient(90deg, var(--neon-cyan), var(--neon-purple))"
+                    ></div>
+                  </div>
+                  <p class="text-[10px] text-text-dim">{rec.desc}</p>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        <!-- Document Info -->
         <div class="space-y-2">
           <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Document Info</h3>
           <div class="text-xs text-text-dim space-y-1">
