@@ -1,29 +1,5 @@
-[Trimmed by orchestrator: kept last 200 of 237 lines. Earlier notes are in git history.]
+[Trimmed by orchestrator: kept last 200 of 202 lines. Earlier notes are in git history.]
 
-
-**Gaps discovered:** 0
-- No new code since last integrator scan (session 31)
-- Session 33 only updated feature_list_2.json (marked #226, #233, #234, #235 passing)
-- All services healthy: backend :8000, frontend :5199, MCP :8001
-
-**Gaps wired:** 0 of 0
-**Tests now passing (via wiring):** none
-
-**Verification results:**
-- Backend healthy: provider=claude_cli, db_connected=true
-- Frontend healthy: dev server on :5199
-
-**Remaining gaps for future sessions:**
-- T4: 70 CSS/styling tests — coding agent job (no wiring needed)
-- T5: 30 tests — coding agent job
-
-**Progress:** 235/335 tests passing (70.1%)
-**Server info:**
-- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
-- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
-- MCP: ws://127.0.0.1:8001/ws (RUNNING)
-- DB: backend/data/promptforge.db
-- Start: ./init.sh start
 
 ## Validation Report — Session 35 (2026-03-05) [RETRY — completed]
 
@@ -218,6 +194,58 @@
 
 **Progress:** 305/335 tests passing (91.0%)
 **Tier breakdown:** T0: 18/18 ✓ | T1: 45/45 ✓ | T2: 106/106 ✓ | T3: 66/66 ✓ | T4: 70/70 ✓ | T5: 0/30
+**Server info:**
+- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
+- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
+- MCP: ws://127.0.0.1:8001/ws (RUNNING)
+- DB: backend/data/promptforge.db
+- Start: ./init.sh start
+
+## Validation Report — Session 40 (2026-03-05) [RETRY — completed]
+
+**Code integrity audit:** DONE (previous session 40 attempt, carried over via checkpoint)
+- Files scanned: All backend/*.py and frontend/src/**/*.{ts,svelte}
+- Mocks/stubs found: 0
+- Mocks/stubs fixed: 0
+- Mocks/stubs remaining: 0
+- TODOs found: 0
+- TODOs resolved: 0
+- Spec compliance: PASS (Fernet encryption, SQLite+aiosqlite, MCP WebSocket:8001, SSE streaming)
+
+**Scope:** Expanded (T4→T5 tier boundary) — 25 tests verified (from previous session 40 attempt, checkpointed)
+Tests verified: #236, #243, #246, #247, #252, #253, #266, #269, #286, #288, #289, #292, #296, #101, #166, #206, #210, #237, #238, #254, #256, #265, #270, #274, #283
+**Infrastructure:** Healthy — backend :8000, frontend :5199, MCP :8001. All services running.
+
+**Regressions found:** 0
+**Regressions fixed:** 0 of 0
+**Tests still passing after validation:** 305/335
+
+**Tier breakdown:**
+- T0: 18/18 passing ✓
+- T1: 45/45 passing ✓
+- T2: 106/106 passing ✓
+- T3: 66/66 passing ✓
+- T4: 70/70 passing ✓
+- T5: 0/30 passing
+
+**Cross-feature integration check:**
+- Frontend build passes (4.58s)
+- No JS console errors on any page
+- Dashboard renders correctly with 5-zone cyberpunk layout
+- History view shows 82 real runs with score circles and strategy filter chips
+- Cross-feature data flow: History item → opens as new tab → Forge Artifact view with Optimized/Diff/Scores/Trace sub-tabs
+- Scores sub-tab shows real score breakdown (Clarity 9, Specificity 10, Structure 9, Faithfulness 8, Conciseness 5, Overall 8)
+- Diff sub-tab shows side-by-side comparison with original vs modified
+- Settings view shows real provider config (CLI Claude, claude-opus-4-6)
+- Visual coherence: cyberpunk theme consistent, all views rendering properly
+
+**Guidance for next coding session:**
+- T5: 30 accessibility tests (#306-335) — all require new code implementation
+- No mocks, no stubs, no TODOs in application code — codebase is clean
+- All services healthy, no infrastructure issues
+- Focus on ARIA landmarks, focus traps, roving tabindex, aria-labels, aria-live
+
+**Progress:** 305/335 tests passing (91.0%)
 **Server info:**
 - Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
 - Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
