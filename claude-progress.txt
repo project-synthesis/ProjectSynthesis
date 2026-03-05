@@ -1,49 +1,5 @@
-[Trimmed by orchestrator: kept last 200 of 254 lines. Earlier notes are in git history.]
+[Trimmed by orchestrator: kept last 200 of 202 lines. Earlier notes are in git history.]
 
-
-**Tests now passing (via wiring):** none (hydration enables persistence but can't verify without real GitHub PAT)
-
-**Verification results:**
-- Frontend build: ✓ Clean (vite build 5.17s)
-- App loads: ✓ No console errors (screenshot verified)
-- GitHub navigator: ✓ Shows "Not connected" correctly when no token stored
-
-**Field name audit:** OptimizationRecord (TS) ↔ OptimizationResponse (Pydantic) — all 39 fields match. No mismatches.
-
-**Remaining gaps for coding agent:**
-- RepoPickerModal.svelte needs import + modal state + trigger (i16_1)
-- retryOptimization() needs retry button UI (i16_2)
-- NavigatorFiles needs fetchRepoTree/fetchFileContent integration (i18_1)
-- fetchHistoryStats needs stats display UI (i18_2)
-- deleteOptimization needs delete button UI (i18_3)
-
-**Progress:** 117/335 tests passing (34.9%)
-**Server info:**
-- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
-- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
-- MCP: ws://127.0.0.1:8001/ws (RUNNING — 13 tools registered)
-- DB: backend/data/promptforge.db (3 tables, 51 optimization records)
-- Start: ./init.sh start
-
-## Validation Report — Session 19 (2026-03-05, retry completion)
-
-**Code integrity audit:** Completed in first attempt of session 19 (prior to timeout)
-- Files scanned: All backend/app/**/*.py, frontend/src/**/*.{ts,svelte}
-- Mocks/stubs found: 0
-- Mocks/stubs fixed: 0
-- Mocks/stubs remaining: 0
-- TODOs found: 0 (only third-party)
-- Spec compliance: PASS (MCP WebSocket ✓, Fernet ✓, SQLite ✓, SSE ✓)
-
-**Scope:** Standard (retry completion from interrupted session) — 117 tests verified
-- 104 tests verified in first attempt (git-checkpointed)
-- 13 remaining T0 tests verified in this retry: #4,5,6,7,9,10,11,13,14,15,16,17,18
-**Infrastructure:** Frontend restarted (was down from previous timeout). All services healthy after restart.
-
-**Regressions found:** 0
-**Regressions fixed:** 0
-
-**Cross-feature integration check:**
 - Frontend build: ✓ Clean (vite build 4.93s)
 - Console errors: 0
 - History sidebar: ✓ Shows real optimization data (scores, frameworks, dates)
@@ -243,4 +199,40 @@ All workbench UI tests (#127-#142) are already fully implemented in the codebase
 - Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
 - MCP: ws://127.0.0.1:8001/ws (RUNNING)
 - DB: backend/data/promptforge.db (3 tables, 67 optimization records)
+- Start: ./init.sh start
+
+## Integration Report — Session 24 (2026-03-05)
+
+**Gaps discovered:** 8
+- [KEYBOARD] Global keyboard shortcuts not bound — WIRED (Ctrl+B/I/N/W/S/Enter)
+- [KEYBOARD] Inspector shortcut Ctrl+Shift+B changed to Ctrl+I per spec — WIRED
+- [FILTER] Strategy filter sent task_type but chips show primary_framework — WIRED (added framework param)
+- [PALETTE] CommandPalette prefix scoping (> for commands, # for history) — WIRED
+- [API] retryOptimization unused — SKIP (needs Re-forge button UI)
+- [COMPONENT] RepoPickerModal orphaned — SKIP (needs trigger UI)
+- [COMPONENT] No panel resize drag handles — SKIP (needs new code)
+- [PERSISTENCE] No localStorage/sessionStorage — SKIP (needs new code)
+
+**Gaps wired:** 4 of 8
+**Tests potentially passing (validator should verify):** #170-#173, #176, #202, #204, #211, #213, #215, #219
+
+**Verification results (screenshot-verified):**
+- Ctrl+B toggle Navigator: collapse/expand works
+- Ctrl+I toggle Inspector: collapse/expand works
+- Ctrl+N new prompt: creates tab
+- Ctrl+W close tab: closes active tab
+- Ctrl+K command palette: opens with all shortcuts displayed
+- > prefix scoping: filters to matching commands
+- Strategy filter: correctly returns filtered results (was broken, now fixed)
+- Search debounce: python search returns 20 of 28 runs
+
+**Coding agent actions (in scratchpad i24_1 through i24_6):**
+- Panel resize drag handles, persistence, context popup, DiffView toggle, Re-forge button, RepoPickerModal
+
+**Progress:** 169/335 tests passing (50.4%)
+**Server info:**
+- Backend: http://localhost:8000 (FastAPI + uvicorn, claude_cli provider)
+- Frontend: http://localhost:5199 (SvelteKit 2 + Vite)
+- MCP: ws://127.0.0.1:8001/ws (RUNNING)
+- DB: backend/data/promptforge.db
 - Start: ./init.sh start

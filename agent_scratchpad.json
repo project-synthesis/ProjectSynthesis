@@ -2,16 +2,6 @@
   "$schema_version": 1,
   "session_log": [
     {
-      "session_id": 18,
-      "session_type": "integrator",
-      "tests_completed": [],
-      "tests_regressed": [],
-      "tests_fixed": [],
-      "gaps_found": 8,
-      "gaps_wired": 1,
-      "summary": "Wired GitHub state hydration on init (+layout.svelte). 7 remaining gaps flagged for coding agent."
-    },
-    {
       "session_id": 19,
       "session_type": "validator",
       "tests_completed": [],
@@ -24,7 +14,13 @@
     {
       "session_id": 20,
       "session_type": "coding",
-      "tests_completed": [143, 127, 128, 129, 130],
+      "tests_completed": [
+        143,
+        127,
+        128,
+        129,
+        130
+      ],
       "tests_regressed": [],
       "tests_fixed": [],
       "mocks_found": 0,
@@ -54,12 +50,62 @@
     {
       "session_id": 23,
       "session_type": "coding",
-      "tests_completed": [96, 97, 99, 100, 101, 102, 104, 106, 107, 108, 109, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 144, 145, 146, 147, 148, 149, 150, 160, 161, 162, 163, 164, 165, 166, 167, 169],
+      "tests_completed": [
+        96,
+        97,
+        99,
+        100,
+        101,
+        102,
+        104,
+        106,
+        107,
+        108,
+        109,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        169
+      ],
       "tests_regressed": [],
       "tests_fixed": [],
       "mocks_found": 0,
       "mocks_fixed": 0,
-      "summary": "39 T2 tests — T2 NOW FULLY COMPLETE (106/106). Marked 19 already-implemented tests (SSE + workbench UI). Implemented: Context Bar moved below textarea (#149), repo badge placeholder (#109), PromptHistory per-prompt filtering + table + expandable rows + score delta (#148,#163,#164), Inspector strategy recommendations (#167), forge.loadFromRecord + history→artifact view (#162). Marked 6 forge-dependent tests as code-complete (#160,#161,#165,#166,#169). Build clean."
+      "summary": "39 T2 tests \u2014 T2 NOW FULLY COMPLETE (106/106). Marked 19 already-implemented tests (SSE + workbench UI). Implemented: Context Bar moved below textarea (#149), repo badge placeholder (#109), PromptHistory per-prompt filtering + table + expandable rows + score delta (#148,#163,#164), Inspector strategy recommendations (#167), forge.loadFromRecord + history\u2192artifact view (#162). Marked 6 forge-dependent tests as code-complete (#160,#161,#165,#166,#169). Build clean."
+    },
+    {
+      "session_id": 24,
+      "session_type": "integrator",
+      "tests_completed": [],
+      "tests_regressed": [],
+      "tests_fixed": [],
+      "gaps_found": 8,
+      "gaps_wired": 4,
+      "summary": "Wired 4 gaps: global keyboard shortcuts (Ctrl+B/I/N/W/S/Enter), fixed Inspector shortcut to Ctrl+I per spec, added CommandPalette prefix scoping (> and #), fixed strategy filter (was using task_type column instead of primary_framework). Flagged 6 coding tasks for remaining T3 gaps."
     }
   ],
   "active_warnings": [],
@@ -213,8 +259,84 @@
       "from_agent": "coding",
       "to_agent": "validator",
       "from_session": 23,
-      "action": "TIER BOUNDARY: T2 complete (106/106). Run expanded validation across all tiers. Priority tests to verify: #160-#167 and #169 (full forge pipeline tests — these were marked via code review, need live forge run verification). Also verify #149 (Context Bar position), #109 (repo badge placeholder), #148 (PromptHistory table), #167 (Inspector strategy recs).",
-      "test_ids": [149, 109, 148, 160, 161, 162, 163, 164, 165, 166, 167, 169],
+      "action": "TIER BOUNDARY: T2 complete (106/106). Run expanded validation across all tiers. Priority tests to verify: #160-#167 and #169 (full forge pipeline tests \u2014 these were marked via code review, need live forge run verification). Also verify #149 (Context Bar position), #109 (repo badge placeholder), #148 (PromptHistory table), #167 (Inspector strategy recs).",
+      "test_ids": [
+        149,
+        109,
+        148,
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        169
+      ],
+      "priority": "high"
+    },
+    {
+      "id": "i24_1",
+      "from_agent": "integrator",
+      "to_agent": "coding",
+      "from_session": 24,
+      "action": "Add panel resize drag handles for Navigator and Inspector panels. Workbench store already has navigatorWidth/inspectorWidth state, but no drag handle UI exists to resize them.",
+      "test_ids": [201, 203],
+      "priority": "medium"
+    },
+    {
+      "id": "i24_2",
+      "from_agent": "integrator",
+      "to_agent": "coding",
+      "from_session": 24,
+      "action": "Add localStorage/sessionStorage persistence: panel widths (workbench.navigatorWidth/inspectorWidth) in localStorage, active activity (workbench.activeActivity) in sessionStorage, and history sort/filter preferences (history.filters) in localStorage.",
+      "test_ids": [223, 224, 225],
+      "priority": "medium"
+    },
+    {
+      "id": "i24_3",
+      "from_agent": "integrator",
+      "to_agent": "coding",
+      "from_session": 24,
+      "action": "Add @ context injection popup: when user types '@' in PromptEdit textarea, show a fuzzy-search popup with context options. On selection, add a context chip to the existing ContextBar component. ContextBar already exists and has dismiss support.",
+      "test_ids": [198, 199, 200],
+      "priority": "medium"
+    },
+    {
+      "id": "i24_4",
+      "from_agent": "integrator",
+      "to_agent": "coding",
+      "from_session": 24,
+      "action": "Enhance DiffView.svelte with a toggle between side-by-side and inline modes, and a 'show differences only' toggle that hides identical sections. Currently DiffView shows a simple two-column original/modified layout with no toggling.",
+      "test_ids": [180, 183],
+      "priority": "medium"
+    },
+    {
+      "id": "i24_5",
+      "from_agent": "integrator",
+      "to_agent": "coding",
+      "from_session": 24,
+      "action": "Add a 'Re-forge' button to PromptHistory expandable rows that calls the existing retryOptimization() API client function (already in client.ts, calls /api/optimize/{id}/retry). The button should trigger a new optimization run from an existing history entry.",
+      "test_ids": [178],
+      "priority": "medium"
+    },
+    {
+      "id": "i24_6",
+      "from_agent": "integrator",
+      "to_agent": "coding",
+      "from_session": 24,
+      "action": "Wire RepoPickerModal into a parent component (e.g., NavigatorGitHub or NavigatorFiles). The modal exists at frontend/src/lib/components/github/RepoPickerModal.svelte but is not imported by any component.",
+      "test_ids": [],
+      "priority": "low"
+    },
+    {
+      "id": "i24_7",
+      "from_agent": "integrator",
+      "to_agent": "validator",
+      "from_session": 24,
+      "action": "Verify integrator wiring: (1) Ctrl+B toggles Navigator, (2) Ctrl+I toggles Inspector, (3) Ctrl+N opens new tab, (4) Ctrl+W closes tab, (5) Ctrl+S saves (clears dirty), (6) > prefix scoping in CP, (7) strategy filter chips now correctly filter history. Test IDs that may now pass: #170-#173, #176, #202, #204, #211, #213, #215, #219.",
+      "test_ids": [170, 171, 172, 173, 176, 202, 204, 211, 213, 215, 219],
       "priority": "high"
     }
   ],
@@ -224,8 +346,8 @@
     "mcp_url": "ws://127.0.0.1:8001/ws",
     "health_endpoint": "http://localhost:8000/api/health",
     "start_command": "./init.sh start",
-    "last_verified_session": 23,
-    "notes": "All services healthy (session 23). Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING. DB at backend/data/promptforge.db. T0: 18/18, T1: 45/45, T2: 106/106. 169/335 tests passing (50.4%). TIER BOUNDARY: T2 complete. Build clean."
+    "last_verified_session": 24,
+    "notes": "All services healthy (session 24). Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING. DB at backend/data/promptforge.db. T0: 18/18, T1: 45/45, T2: 106/106. 169/335 tests passing (50.4%). Integrator wired keyboard shortcuts, CP prefix scoping, strategy filter fix. Build clean."
   },
   "session_checkpoint": {
     "session_type": "",
