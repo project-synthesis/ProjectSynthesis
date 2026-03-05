@@ -2990,7 +2990,7 @@
       "VERIFY only one activity is highlighted at a time"
     ],
     "expected_outcome": "Activity Bar clicking changes Navigator content",
-    "passes": false,
+    "passes": true,
     "id": 129
   },
   {
