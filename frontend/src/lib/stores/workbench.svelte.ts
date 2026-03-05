@@ -34,6 +34,14 @@ class WorkbenchStore {
       this.navigatorCollapsed = false;
     }
   }
+
+  setNavigatorWidth(w: number) {
+    this.navigatorWidth = Math.max(160, Math.min(480, w));
+  }
+
+  setInspectorWidth(w: number) {
+    this.inspectorWidth = Math.max(180, Math.min(480, w));
+  }
 }
 
 export const workbench = new WorkbenchStore();

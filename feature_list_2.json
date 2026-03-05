@@ -842,7 +842,7 @@
       "SCREENSHOT to verify resize handle presence"
     ],
     "expected_outcome": "Navigator panel resizable via drag handle",
-    "passes": false,
+    "passes": true,
     "id": 201
   },
   {
@@ -866,7 +866,7 @@
       "SCREENSHOT to verify Navigator collapsed (Editor takes full width minus Activity Bar)"
     ],
     "expected_outcome": "Navigator collapsible with Ctrl+B",
-    "passes": false,
+    "passes": true,
     "id": 202
   },
   {
@@ -889,7 +889,7 @@
       "SCREENSHOT to verify resize handle presence"
     ],
     "expected_outcome": "Inspector panel resizable via drag handle",
-    "passes": false,
+    "passes": true,
     "id": 203
   },
   {
@@ -913,7 +913,7 @@
       "SCREENSHOT to verify Inspector collapsed"
     ],
     "expected_outcome": "Inspector collapsible with Ctrl+I",
-    "passes": false,
+    "passes": true,
     "id": 204
   },
   {
