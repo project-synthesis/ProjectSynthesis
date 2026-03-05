@@ -1089,7 +1089,7 @@
       "SCREENSHOT to verify prefix-scoped results"
     ],
     "expected_outcome": "Command Palette prefix scoping with > for commands",
-    "passes": false,
+    "passes": true,
     "id": 211
   },
   {
@@ -1113,7 +1113,7 @@
       "SCREENSHOT to verify history prefix scoping"
     ],
     "expected_outcome": "Command Palette prefix scoping with # for history",
-    "passes": false,
+    "passes": true,
     "id": 212
   },
   {
@@ -1136,7 +1136,7 @@
       "SCREENSHOT to verify shortcut display"
     ],
     "expected_outcome": "Command Palette shows keyboard shortcuts next to commands",
-    "passes": false,
+    "passes": true,
     "id": 213
   },
   {
@@ -1159,7 +1159,7 @@
       "SCREENSHOT to verify contextual command suggestions"
     ],
     "expected_outcome": "Command Palette contextual commands based on editor state",
-    "passes": false,
+    "passes": true,
     "id": 214
   },
   {
@@ -1185,7 +1185,7 @@
       "SCREENSHOT to verify palette closed"
     ],
     "expected_outcome": "Command Palette Escape closes and restores focus",
-    "passes": false,
+    "passes": true,
     "id": 215
   },
   {
