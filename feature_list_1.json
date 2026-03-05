@@ -1701,7 +1701,7 @@
       "SCREENSHOT to verify the diff between original and optimized"
     ],
     "expected_outcome": "Optimized prompt differs from original meaningfully",
-    "passes": false,
+    "passes": true,
     "id": 76
   },
   {
@@ -1754,7 +1754,7 @@
       "SCREENSHOT to verify CO-STAR strategy was applied"
     ],
     "expected_outcome": "Pipeline strategy override via strategy parameter",
-    "passes": false,
+    "passes": true,
     "id": 78
   },
   {
@@ -1781,7 +1781,7 @@
       "SCREENSHOT to verify completion"
     ],
     "expected_outcome": "Pipeline handles very short prompts gracefully",
-    "passes": false,
+    "passes": true,
     "id": 79
   },
   {
