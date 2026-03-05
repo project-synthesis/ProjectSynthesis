@@ -2,16 +2,6 @@
   "$schema_version": 1,
   "session_log": [
     {
-      "session_id": 7,
-      "session_type": "integrator",
-      "tests_completed": [],
-      "tests_regressed": [],
-      "tests_fixed": [],
-      "gaps_found": 5,
-      "gaps_wired": 1,
-      "summary": "Fixed session access inconsistency in optimize.py and optimizations.py (req.cookies.get -> req.session.get). 2 field mismatches already handled by NavigatorHistory mapping. 2 orphan components (Toast, RepoPickerModal) need coding agent to create state infrastructure. All navigator panels verified working via Puppeteer."
-    },
-    {
       "session_id": 8,
       "session_type": "validator",
       "tests_completed": [],
@@ -80,7 +70,7 @@
       "tests_fixed": [],
       "gaps_found": 0,
       "gaps_wired": 0,
-      "summary": "No new integration gaps found from latest coding session (token counts, run header, streaming, auto-switch). All recently-built components properly wired: token count flow (backend→SSE→forge→StageCard/RunHeader), streaming text (chunks→forge→StageOptimize/ForgeArtifact), auto-switch (PromptEdit→editor.setSubTab), total duration/tokens (complete event→finishForge→RunHeader). 3 previously-known gaps (Toast, RepoPickerModal, /api/optimizations) remain flagged for coding agent."
+      "summary": "No new integration gaps found from latest coding session (token counts, run header, streaming, auto-switch). All recently-built components properly wired: token count flow (backend\u2192SSE\u2192forge\u2192StageCard/RunHeader), streaming text (chunks\u2192forge\u2192StageOptimize/ForgeArtifact), auto-switch (PromptEdit\u2192editor.setSubTab), total duration/tokens (complete event\u2192finishForge\u2192RunHeader). 3 previously-known gaps (Toast, RepoPickerModal, /api/optimizations) remain flagged for coding agent."
     }
   ],
   "active_warnings": [],
@@ -164,6 +154,9 @@
       "83": 11,
       "84": 11,
       "85": 11,
+      "86": 13,
+      "87": 13,
+      "98": 13,
       "168": 11
     },
     "tests_spot_checked": {
@@ -177,40 +170,7 @@
       "14": 11
     }
   },
-  "next_actions": [
-    {
-      "id": "i10_2",
-      "from_agent": "integrator",
-      "to_agent": "coding",
-      "from_session": 10,
-      "action": "Wire Toast.svelte into the app: create a toast store, import Toast in layout, and add call sites for error/success notifications. Currently an orphan component not imported anywhere.",
-      "test_ids": [],
-      "priority": "low"
-    },
-    {
-      "id": "i10_3",
-      "from_agent": "integrator",
-      "to_agent": "coding",
-      "from_session": 10,
-      "action": "Wire RepoPickerModal.svelte: add modal open/close state, trigger from GitHub navigator or activity bar, and connect to the repo link API. Currently an orphan component not imported anywhere.",
-      "test_ids": [],
-      "priority": "low"
-    },
-    {
-      "id": "i10_4",
-      "from_agent": "integrator",
-      "to_agent": "coding",
-      "from_session": 10,
-      "action": "NavigatorHistory sort/filter: changing history.filters (sortBy, sortDir, search) does not trigger a data refetch. Add reactive $effect in NavigatorHistory to refetch when filters change (with debounce for search). Needed for T3 tests #170-#173.",
-      "test_ids": [
-        170,
-        171,
-        172,
-        173
-      ],
-      "priority": "medium"
-    }
-  ],
+  "next_actions": [],
   "server_state": {
     "backend_url": "http://localhost:8000",
     "frontend_url": "http://localhost:5199",
@@ -221,12 +181,19 @@
     "notes": "Backend using claude_cli provider. Frontend dev server on 5199. MCP server RUNNING (WebSocket transport fixed in session 9). DB at backend/data/promptforge.db with 3 tables. All services verified healthy. T0: 18/18 complete, T1: 45/45 complete, T2: 20/106 in progress. 83/335 tests passing (24.8%). Full pipeline e2e confirmed working."
   },
   "session_checkpoint": {
-    "session_type": "",
-    "session_id": 0,
-    "audit_done": false,
-    "tests_verified_this_run": [],
+    "session_type": "validator",
+    "session_id": 13,
+    "audit_done": true,
+    "tests_verified_this_run": [
+      3, 22, 23, 24, 25, 64, 65, 66, 67, 68, 69, 71, 72, 77, 83, 86, 87, 98, 168,
+      1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+      19, 20, 21, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,
+      38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52,
+      53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63
+    ],
     "tests_completed_this_run": [],
     "gaps_wired_this_run": [],
-    "last_step": ""
+    "last_step": "5",
+    "session_start_sha": "3e13da95f135b923a2b44fc2b497e573c0389ab5"
   }
 }
