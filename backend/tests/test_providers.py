@@ -88,6 +88,7 @@ async def test_cli_complete_json_with_schema_delegates_to_api():
 
     provider = ClaudeCLIProvider.__new__(ClaudeCLIProvider)
     provider._api_fallback = mock_api
+    provider._api_fallback_initialized = True  # bypass lazy init — fallback is pre-set
 
     with patch.dict("os.environ", {}, clear=True):  # no CLAUDECODE
         result = await provider.complete_json("sys", "user", "claude-haiku-4-5", schema=schema)

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shutil
+from pathlib import Path
 
 from app.config import settings
 from app.providers.base import LLMProvider
@@ -89,9 +92,6 @@ async def _probe_claude_version(path: str) -> tuple[bytes, int]:
 
 async def _detect_provider_inner() -> LLMProvider:
     """Run provider probes sequentially. Called inside the 10-second outer timeout."""
-    import os
-    import shutil
-
     # ── Probe 1: Claude CLI ──────────────────────────────────────────
     # Skip if running inside an existing Claude Code session (nested sessions crash)
     in_claude_session = bool(os.environ.get("CLAUDECODE"))
@@ -114,7 +114,6 @@ async def _detect_provider_inner() -> LLMProvider:
                     # `claude --version` exits 0 even without `claude login` — the
                     # directory is only created after successful OAuth, so its existence
                     # is a reliable signal that a Max subscription session is present.
-                    from pathlib import Path
                     claude_cred_dir = Path.home() / ".claude"
                     if not claude_cred_dir.is_dir():
                         logger.warning(

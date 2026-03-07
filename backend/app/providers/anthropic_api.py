@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import AsyncGenerator, Callable
 
@@ -29,12 +30,32 @@ class AnthropicAPIProvider(LLMProvider):
     def name(self) -> str:
         return "anthropic_api"
 
-    async def complete(self, system: str, user: str, model: str) -> str:
+    def _make_extra(self, model: str, *, schema: dict | None = None) -> tuple[int, dict]:
+        """Return (max_tokens, extra_kwargs) for messages.stream() calls.
+
+        When ``schema`` is provided, thinking is suppressed — the Anthropic API
+        rejects requests that combine output_config.json_schema with thinking.
+        """
         use_thinking = model in _THINKING_MODELS
         max_tokens = _MAX_TOKENS_THINKING if use_thinking else _MAX_TOKENS_DEFAULT
-        extra: dict = {"thinking": {"type": "adaptive"}} if use_thinking else {}
-        # Stream even for single-shot calls: prevents HTTP timeouts on large thinking outputs
-        # and is required by the SDK for Opus 4.6 with high max_tokens.
+        if schema is not None:
+            # output_config.json_schema is incompatible with adaptive thinking.
+            # Requires: additionalProperties=False on all objects (Anthropic requirement).
+            extra: dict = {"output_config": {"format": {"type": "json_schema", "schema": schema}}}
+        elif use_thinking:
+            extra = {"thinking": {"type": "adaptive"}}
+        else:
+            extra = {}
+        return max_tokens, extra
+
+    async def _call_stream(
+        self, model: str, system: str, user: str, max_tokens: int, extra: dict
+    ) -> str:
+        """Single-shot stream call; returns the first text block from the final message.
+
+        Streaming even for single-shot calls prevents HTTP timeouts on large
+        thinking outputs and is required by the SDK for Opus 4.6 with high max_tokens.
+        """
         async with self._client.messages.stream(
             model=model,
             max_tokens=max_tokens,
@@ -46,10 +67,12 @@ class AnthropicAPIProvider(LLMProvider):
         # Use next() — thinking blocks may precede the text block.
         return next((b.text for b in response.content if hasattr(b, "text")), "")
 
+    async def complete(self, system: str, user: str, model: str) -> str:
+        max_tokens, extra = self._make_extra(model)
+        return await self._call_stream(model, system, user, max_tokens, extra)
+
     async def stream(self, system: str, user: str, model: str) -> AsyncGenerator[str, None]:
-        use_thinking = model in _THINKING_MODELS
-        max_tokens = _MAX_TOKENS_THINKING if use_thinking else _MAX_TOKENS_DEFAULT
-        extra: dict = {"thinking": {"type": "adaptive"}} if use_thinking else {}
+        max_tokens, extra = self._make_extra(model)
         async with self._client.messages.stream(
             model=model,
             max_tokens=max_tokens,
@@ -70,44 +93,21 @@ class AnthropicAPIProvider(LLMProvider):
     ) -> dict:
         """Structured JSON output.
 
-        When ``schema`` is provided (a JSON Schema dict), uses
-        ``output_config.format`` for guaranteed schema-compliant output —
-        the API enforces the schema server-side; no regex parsing needed.
+        When ``schema`` is provided, uses ``output_config.format`` for guaranteed
+        schema-compliant output (thinking is suppressed — the two are incompatible
+        per the Anthropic API spec). The API enforces the schema server-side.
 
-        When ``schema`` is None, calls complete() and applies the 3-strategy
-        parse_json_robust() fallback (backward-compatible for callers that
-        rely on the model's prompt-driven JSON output).
+        When ``schema`` is None, delegates to complete() and applies
+        parse_json_robust() 3-strategy fallback.
         """
-        use_thinking = model in _THINKING_MODELS
-        max_tokens = _MAX_TOKENS_THINKING if use_thinking else _MAX_TOKENS_DEFAULT
-        extra: dict = {"thinking": {"type": "adaptive"}} if use_thinking else {}
-
         if schema is not None:
-            # Native schema enforcement: output_config.format guarantees the
-            # response matches the schema — zero regex required.
-            # Requires: additionalProperties=False on all objects (Anthropic requirement).
-            extra["output_config"] = {
-                "format": {
-                    "type": "json_schema",
-                    "schema": schema,
-                }
-            }
-            async with self._client.messages.stream(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                **extra,
-            ) as stream:
-                response = await stream.get_final_message()
-            import json
-            raw_text = next((b.text for b in response.content if hasattr(b, "text")), "{}")
+            max_tokens, extra = self._make_extra(model, schema=schema)
+            raw_text = await self._call_stream(model, system, user, max_tokens, extra)
             try:
                 return json.loads(raw_text)
             except (json.JSONDecodeError, TypeError):
                 return parse_json_robust(raw_text)
 
-        # No schema: stream + 3-strategy fallback (existing behavior)
         raw = await self.complete(system, user, model)
         return parse_json_robust(raw)
 
@@ -153,9 +153,7 @@ class AnthropicAPIProvider(LLMProvider):
         # Adaptive thinking: enabled for Opus 4.6 and Sonnet 4.6 (both GA, no beta header).
         # budget_tokens is deprecated on these models — adaptive thinking replaces it.
         # Streaming (get_final_message) prevents HTTP timeouts on long thinking+tool turns.
-        use_thinking = model in _THINKING_MODELS
-        max_tokens = _MAX_TOKENS_THINKING if use_thinking else _MAX_TOKENS_DEFAULT
-        extra: dict = {"thinking": {"type": "adaptive"}} if use_thinking else {}
+        max_tokens, extra = self._make_extra(model)
 
         while turns < max_turns:
             turns += 1

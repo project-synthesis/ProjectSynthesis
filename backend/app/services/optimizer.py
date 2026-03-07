@@ -8,54 +8,14 @@ Streams token by token via SSE step_progress events.
 import asyncio
 import json
 import logging
-import re
 from typing import AsyncGenerator, Optional
 
 from app.config import settings
 from app.prompts.optimizer_prompts import get_optimizer_prompt
-from app.providers.base import MODEL_ROUTING, LLMProvider
+from app.providers.base import MODEL_ROUTING, LLMProvider, parse_json_robust
 
 logger = logging.getLogger(__name__)
 
-
-def _extract_optimized(full_text: str) -> dict | None:
-    """Try three strategies to extract a structured result from streamed text.
-
-    Strategy 1: Entire text is valid JSON.
-    Strategy 2: JSON inside ```json ... ``` code fence.
-    Strategy 3: First greedy ``{ ... }`` block.
-
-    Returns the parsed dict, or ``None`` if all strategies fail.
-    """
-    # Strategy 1: raw JSON
-    try:
-        parsed = json.loads(full_text.strip())
-        if isinstance(parsed, dict):
-            return parsed
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # Strategy 2: ```json ... ``` code fence
-    match = re.search(r"```json\s*([\s\S]*?)\s*```", full_text)
-    if match:
-        try:
-            parsed = json.loads(match.group(1))
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    # Strategy 3: first greedy { ... } block
-    match = re.search(r"\{[\s\S]*\}", full_text)
-    if match:
-        try:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    return None
 
 
 async def run_optimize(
@@ -159,11 +119,13 @@ async def run_optimize(
             logger.error(f"Stage 3 (Optimize) complete() also failed: {e2}")
             full_text = raw_prompt  # Last resort: return original unchanged
 
-    # 3-strategy JSON extraction
-    parsed = _extract_optimized(full_text)
-
-    if parsed is None:
-        # All 3 strategies failed — attempt complete_json() as a clean non-streaming retry
+    # 3-strategy JSON extraction via shared parse_json_robust utility
+    parsed = None
+    try:
+        parsed = parse_json_robust(full_text)
+    except ValueError:
+        # parse_json_robust already logged a warning with the input excerpt.
+        # Attempt complete_json() as a clean non-streaming retry.
         logger.warning(
             "Streaming output failed all JSON parse strategies; falling back to complete_json()"
         )

@@ -25,14 +25,16 @@ class ClaudeCLIProvider(LLMProvider):
 
     def __init__(self):
         try:
-            from claude_agent_sdk import ClaudeAgentOptions, query
+            from claude_agent_sdk import query
             self._query = query
-            self._options_cls = ClaudeAgentOptions
         except ImportError:
             raise ImportError(
                 "claude-agent-sdk is required for ClaudeCLIProvider. "
                 "Install it with: pip install claude-agent-sdk"
             )
+        # Lazy API fallback — initialized on first call to _get_api_fallback().
+        self._api_fallback: AnthropicAPIProvider | None = None
+        self._api_fallback_initialized: bool = False
 
     @property
     def name(self) -> str:
@@ -40,15 +42,14 @@ class ClaudeCLIProvider(LLMProvider):
 
     def _get_api_fallback(self) -> "AnthropicAPIProvider | None":
         """Lazily create an AnthropicAPIProvider fallback if ANTHROPIC_API_KEY is available."""
-        if not hasattr(self, "_api_fallback"):
+        if not self._api_fallback_initialized:
             from app.config import settings
             if settings.ANTHROPIC_API_KEY:
                 from app.providers.anthropic_api import AnthropicAPIProvider
-                self._api_fallback: object = AnthropicAPIProvider(api_key=settings.ANTHROPIC_API_KEY)
+                self._api_fallback = AnthropicAPIProvider(api_key=settings.ANTHROPIC_API_KEY)
                 logger.info("ClaudeCLIProvider: created AnthropicAPIProvider fallback for nested-session delegation")
-            else:
-                self._api_fallback = None
-        return self._api_fallback  # type: ignore[return-value]
+            self._api_fallback_initialized = True
+        return self._api_fallback
 
     def _check_nested_session(self) -> "AnthropicAPIProvider | None":
         """Return API fallback provider if running inside a Claude Code session, else None.
