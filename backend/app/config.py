@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # Per-stage LLM call timeout seconds (spec latency target + safety buffer).
     # Override via env vars to tune for slow providers.
-    EXPLORE_TIMEOUT_SECONDS: int = 60    # 30s spec target + 30s buffer
+    EXPLORE_TIMEOUT_SECONDS: int = 90    # 30s spec target + 60s buffer
     ANALYZE_TIMEOUT_SECONDS: int = 10    # 5s spec target + 5s buffer
     STRATEGY_TIMEOUT_SECONDS: int = 20   # 10s spec target + 10s buffer
     OPTIMIZE_TIMEOUT_SECONDS: int = 40   # 20s spec target + 20s buffer

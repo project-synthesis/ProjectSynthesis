@@ -7,12 +7,54 @@ Each tool fetches data from the linked GitHub repository.
 import json
 import logging
 import re
+import time
+from typing import Optional
 
 from app.providers.base import ToolDefinition
 from app.services.github_service import get_repo_tree as _svc_get_repo_tree
 from app.services.github_service import read_file_content as _svc_read_file_content
 
 logger = logging.getLogger(__name__)
+
+# ── Module-level tree cache ──────────────────────────────────────────────────
+# Keyed by (repo_full_name, branch) → (tree_entries, timestamp).
+# TTL of 5 minutes prevents stale data while avoiding duplicate GitHub fetches
+# when the same repo/branch is explored concurrently.
+#
+# Note: build_codebase_tools() is a sync function so an asyncio.Lock is not
+# used here. Two simultaneous first-fetches may race, but the result is
+# idempotent — the last writer wins and all entries are valid.
+_TREE_CACHE: dict[tuple[str, str], tuple[list[dict], float]] = {}
+_TREE_CACHE_TTL: int = 300  # 5 minutes
+
+
+def _cache_get(repo_full_name: str, branch: str) -> Optional[list[dict]]:
+    """Return cached tree entries if present and not expired, else None."""
+    key = (repo_full_name, branch)
+    entry = _TREE_CACHE.get(key)
+    if entry is None:
+        return None
+    tree_entries, ts = entry
+    if time.monotonic() - ts > _TREE_CACHE_TTL:
+        del _TREE_CACHE[key]
+        return None
+    return tree_entries
+
+
+def _cache_set(repo_full_name: str, branch: str, tree_entries: list[dict]) -> None:
+    """Store tree entries in the cache with the current timestamp."""
+    _TREE_CACHE[(repo_full_name, branch)] = (tree_entries, time.monotonic())
+
+
+def get_cached_tree_size(repo_full_name: str, branch: str) -> int:
+    """Return the number of tree entries currently cached for this repo/branch.
+
+    Returns 0 if the tree has not been fetched yet or the cache has expired.
+    Used by run_explore() to compute coverage_pct after the agentic loop.
+    """
+    cached = _cache_get(repo_full_name, branch)
+    return len(cached) if cached is not None else 0
+
 
 # Regex for get_file_outline: matches top-level function/class/interface definitions
 OUTLINE_PATTERNS = re.compile(
@@ -57,18 +99,19 @@ def build_codebase_tools(
     Each tool handler is an async function that fetches data from GitHub.
     """
 
-    # Shared tree cache to avoid re-fetching
-    _tree_cache: dict[str, list[dict]] = {}
-
     async def _get_tree() -> list[dict]:
-        if "tree" not in _tree_cache:
-            try:
-                # github_service already filters excluded files and applies size limits
-                _tree_cache["tree"] = await _svc_get_repo_tree(token, repo_full_name, repo_branch)
-            except Exception as e:
-                logger.error(f"Failed to get repo tree: {e}")
-                _tree_cache["tree"] = []
-        return _tree_cache["tree"]
+        """Return the repo file tree, using the module-level TTL cache."""
+        cached = _cache_get(repo_full_name, repo_branch)
+        if cached is not None:
+            return cached
+        try:
+            # github_service already filters excluded files and applies size limits
+            tree = await _svc_get_repo_tree(token, repo_full_name, repo_branch)
+        except Exception as e:
+            logger.error(f"Failed to get repo tree: {e}")
+            tree = []
+        _cache_set(repo_full_name, repo_branch, tree)
+        return tree
 
     # ---- Tool 1: list_repo_files ----
     async def list_repo_files_handler(args: dict) -> str:
