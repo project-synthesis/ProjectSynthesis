@@ -48,7 +48,12 @@
 
   let visibleStages = $derived(forge.visibleStages);
 
-  let expandedStages = $state<Record<string, boolean>>({});
+  // Pre-initialize all stage keys to false so bind:expanded never receives
+  // undefined on first render. The $effect below overrides these values once
+  // it runs (after first paint), but the binding must be valid from the start.
+  let expandedStages = $state<Record<string, boolean>>(
+    Object.fromEntries(forge.stages.map(s => [s, false]))
+  );
 
   $effect(() => {
     const current = forge.currentStage;
