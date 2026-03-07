@@ -123,9 +123,29 @@ class ClaudeCLIProvider(LLMProvider):
                                 yield text[i:i + chunk_size]
                                 await asyncio.sleep(0.01)  # Small delay for progressive display
 
-    async def complete_json(self, system: str, user: str, model: str, schema: type | None = None) -> dict:
+    async def complete_json(
+        self,
+        system: str,
+        user: str,
+        model: str,
+        schema: dict | None = None,
+    ) -> dict:
         if fb := self._check_nested_session():
             return await fb.complete_json(system, user, model, schema)
+
+        # When a schema dict is provided, delegate to the API provider for
+        # native output_config.format enforcement (guaranteed schema compliance).
+        # CLI has no mechanism for schema-enforced generation.
+        if schema is not None:
+            if api := self._get_api_fallback():
+                return await api.complete_json(system, user, model, schema)
+            # No API key — fall through to best-effort text parsing with a warning.
+            logger.warning(
+                "complete_json(schema=...) called on ClaudeCLIProvider with no "
+                "ANTHROPIC_API_KEY — schema will NOT be enforced at generation time. "
+                "Set ANTHROPIC_API_KEY in your .env file for guaranteed JSON schema compliance."
+            )
+
         raw = await self.complete(system, user, model)
         return parse_json_robust(raw)
 
