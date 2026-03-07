@@ -110,22 +110,36 @@ async def _detect_provider_inner() -> LLMProvider:
                     timeout=5.0,
                 )
                 if returncode == 0:
-                    logger.info(
-                        "Claude CLI detected at %s: %s",
-                        claude_path,
-                        stdout.decode().strip(),
-                    )
-                    try:
-                        from app.providers.claude_cli import ClaudeCLIProvider
-                        provider: LLMProvider = ClaudeCLIProvider()
-                        logger.info("Using ClaudeCLIProvider (Max subscription, zero cost)")
-                        return provider
-                    except ImportError as ie:
+                    # Spec step 2: verify ~/.claude/ credential directory exists.
+                    # `claude --version` exits 0 even without `claude login` — the
+                    # directory is only created after successful OAuth, so its existence
+                    # is a reliable signal that a Max subscription session is present.
+                    from pathlib import Path
+                    claude_cred_dir = Path.home() / ".claude"
+                    if not claude_cred_dir.is_dir():
                         logger.warning(
-                            "Claude CLI found but claude-agent-sdk not installed: %s. "
-                            "Install with: pip install claude-agent-sdk",
-                            ie,
+                            "Claude CLI found at %s but ~/.claude/ credential directory "
+                            "is missing — run `claude login` to authenticate. "
+                            "Falling through to next provider.",
+                            claude_path,
                         )
+                    else:
+                        logger.info(
+                            "Claude CLI detected at %s: %s",
+                            claude_path,
+                            stdout.decode().strip(),
+                        )
+                        try:
+                            from app.providers.claude_cli import ClaudeCLIProvider
+                            provider: LLMProvider = ClaudeCLIProvider()
+                            logger.info("Using ClaudeCLIProvider (Max subscription, zero cost)")
+                            return provider
+                        except ImportError as ie:
+                            logger.warning(
+                                "Claude CLI found but claude-agent-sdk not installed: %s. "
+                                "Install with: pip install claude-agent-sdk",
+                                ie,
+                            )
         except asyncio.TimeoutError:
             logger.warning("Claude CLI probe timed out after 5 seconds")
         except (FileNotFoundError, OSError) as e:
