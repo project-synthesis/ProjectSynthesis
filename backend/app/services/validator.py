@@ -5,11 +5,13 @@ Uses claude-sonnet for quality assessment.
 Server-side weighted average computation (never trust LLM arithmetic).
 """
 
+import asyncio
 import json
 import logging
 
 from app.providers.base import LLMProvider, MODEL_ROUTING
 from app.prompts.validator_prompt import get_validator_prompt
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +57,16 @@ async def run_validate(
 ) -> dict:
     """Run Stage 4 validation.
 
-    Returns:
-        dict with keys: is_improvement, clarity_score, specificity_score,
-                        structure_score, faithfulness_score, conciseness_score,
-                        overall_score, verdict, issues, scores
+    Returns a dict with the following canonical shape:
+        scores: dict  — all 5 dimension scores + overall_score (authoritative)
+        overall_score: int  — convenience copy for direct pipeline access
+        is_improvement: bool
+        verdict: str
+        issues: list[str]
+
+    Individual dimension scores (clarity_score, etc.) live only in the
+    ``scores`` sub-dict to avoid duplication. Callers that previously read
+    top-level clarity_score should switch to scores["clarity_score"].
     """
     system_prompt = get_validator_prompt()
 
@@ -71,10 +79,18 @@ async def run_validate(
     model = MODEL_ROUTING["validate"]
 
     try:
-        result = await provider.complete_json(system_prompt, user_message, model)
+        raw = await asyncio.wait_for(
+            provider.complete_json(system_prompt, user_message, model),
+            timeout=settings.VALIDATE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Validate stage timed out after %ds", settings.VALIDATE_TIMEOUT_SECONDS
+        )
+        raise  # Propagate to pipeline.py as a stage failure
     except Exception as e:
         logger.error(f"Stage 4 (Validate) failed: {e}")
-        result = {
+        raw = {
             "is_improvement": True,
             "clarity_score": 5,
             "specificity_score": 5,
@@ -85,27 +101,31 @@ async def run_validate(
             "issues": ["Validation stage encountered an error"],
         }
 
-    # Ensure all score fields exist
+    # Ensure all raw score fields exist and are numeric before computing
     for field in SCORE_WEIGHTS:
-        if field not in result or not isinstance(result.get(field), (int, float)):
-            result[field] = 5
+        if field not in raw or not isinstance(raw.get(field), (int, float)):
+            raw[field] = 5
 
     # ALWAYS compute overall_score server-side (never trust LLM arithmetic)
-    result["overall_score"] = compute_overall_score(result)
+    overall_score = compute_overall_score(raw)
 
-    # Ensure other required fields
-    result.setdefault("is_improvement", True)
-    result.setdefault("verdict", "")
-    result.setdefault("issues", [])
-
-    # Build scores sub-object for SSE event
-    result["scores"] = {
-        "clarity_score": result["clarity_score"],
-        "specificity_score": result["specificity_score"],
-        "structure_score": result["structure_score"],
-        "faithfulness_score": result["faithfulness_score"],
-        "conciseness_score": result["conciseness_score"],
-        "overall_score": result["overall_score"],
+    # Canonical scores sub-dict (single authoritative source for all scores)
+    scores = {
+        "clarity_score": raw["clarity_score"],
+        "specificity_score": raw["specificity_score"],
+        "structure_score": raw["structure_score"],
+        "faithfulness_score": raw["faithfulness_score"],
+        "conciseness_score": raw["conciseness_score"],
+        "overall_score": overall_score,
     }
 
-    return result
+    return {
+        # Scores live exclusively in the sub-dict — no duplication at top level
+        "scores": scores,
+        # overall_score is mirrored at top-level as a convenience for pipeline
+        # retry logic and direct DB writes without requiring sub-dict access
+        "overall_score": overall_score,
+        "is_improvement": raw.get("is_improvement", True),
+        "verdict": raw.get("verdict", ""),
+        "issues": raw.get("issues", []),
+    }

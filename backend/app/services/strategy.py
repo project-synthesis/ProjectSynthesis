@@ -4,6 +4,7 @@ Selects the optimal optimization framework combination.
 Uses claude-opus for deep reasoning about framework selection.
 """
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -11,6 +12,7 @@ from typing import Optional
 from app.providers.base import LLMProvider, MODEL_ROUTING
 from app.prompts.strategy_prompt import get_strategy_prompt
 from app.services.strategy_selector import heuristic_strategy_fallback
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,15 @@ async def run_strategy(
     model = MODEL_ROUTING["strategy"]
 
     try:
-        result = await provider.complete_json(system_prompt, user_message, model)
+        result = await asyncio.wait_for(
+            provider.complete_json(system_prompt, user_message, model),
+            timeout=settings.STRATEGY_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Strategy stage timed out after %ds", settings.STRATEGY_TIMEOUT_SECONDS
+        )
+        raise  # Propagate to pipeline.py as a stage failure
     except Exception as e:
         logger.error(f"Stage 2 (Strategy) failed: {e}. Using heuristic fallback.")
         result = heuristic_strategy_fallback(analysis.get("task_type", "general"))

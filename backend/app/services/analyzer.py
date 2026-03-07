@@ -4,12 +4,14 @@ Classifies the prompt and identifies optimization opportunities.
 Uses claude-haiku for fast, cheap structured JSON extraction.
 """
 
+import asyncio
 import json
 import logging
 from typing import Optional
 
 from app.providers.base import LLMProvider, MODEL_ROUTING
 from app.prompts.analyzer_prompt import get_analyzer_prompt
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +36,18 @@ async def run_analyze(
     model = MODEL_ROUTING["analyze"]
 
     try:
-        result = await provider.complete_json(system_prompt, user_message, model)
+        result = await asyncio.wait_for(
+            provider.complete_json(system_prompt, user_message, model),
+            timeout=settings.ANALYZE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Analyze stage timed out after %ds", settings.ANALYZE_TIMEOUT_SECONDS
+        )
+        raise  # Propagate to pipeline.py as a stage failure
     except Exception as e:
         logger.error(f"Stage 1 (Analyze) failed: {e}")
-        # Return sensible defaults
+        # Return sensible defaults so downstream stages can still run
         result = {
             "task_type": "general",
             "weaknesses": ["Analysis failed - using defaults"],
