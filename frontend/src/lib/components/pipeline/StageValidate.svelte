@@ -9,7 +9,7 @@
 
   // Codebase accuracy: show when explore completed with real context
   let exploreData = $derived((forge.stageResults['explore']?.data || {}) as Record<string, unknown>);
-  let exploreQuality = $derived((exploreData.quality as string) || '');
+  let exploreQuality = $derived((exploreData.explore_quality as string) || '');
   let exploreRepo = $derived((exploreData.repo as string) || '');
   let hasCodebaseContext = $derived(
     forge.stageStatuses['explore'] === 'done' &&

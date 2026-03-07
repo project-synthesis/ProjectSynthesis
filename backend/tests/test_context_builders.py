@@ -78,6 +78,41 @@ def test_search_priority_sort_order_src_before_tests():
     assert paths.index("README.md") < paths.index("tests/test_main.py")
 
 
+def test_search_priority_docs_dir_is_tier3():
+    """docs/ prefix yields tier 3 — lower priority than src/ and general files."""
+    assert _search_priority({"path": "docs/guide.md"}) == 3
+
+
+def test_search_priority_examples_dir_is_tier3():
+    """examples/ prefix yields tier 3."""
+    assert _search_priority({"path": "examples/demo.py"}) == 3
+
+
+def test_search_priority_example_dir_is_tier3():
+    """example/ (singular) prefix yields tier 3."""
+    assert _search_priority({"path": "example/usage.py"}) == 3
+
+
+def test_search_priority_doc_dir_is_tier3():
+    """doc/ (singular) prefix yields tier 3."""
+    assert _search_priority({"path": "doc/api.md"}) == 3
+
+
+def test_search_priority_src_before_docs():
+    """sorted() puts src/ before docs/ files."""
+    entries = [
+        {"path": "docs/guide.md"},
+        {"path": "examples/demo.py"},
+        {"path": "src/main.py"},
+        {"path": "README.md"},
+    ]
+    ordered = sorted(entries, key=_search_priority)
+    paths = [e["path"] for e in ordered]
+    assert paths.index("src/main.py") < paths.index("docs/guide.md")
+    assert paths.index("src/main.py") < paths.index("examples/demo.py")
+    assert paths.index("README.md") < paths.index("docs/guide.md")
+
+
 # ── read_file truncation notice format (P1.2) ─────────────────────────────────
 
 

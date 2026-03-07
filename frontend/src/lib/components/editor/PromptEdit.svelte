@@ -176,15 +176,20 @@
             }
             break;
           }
-          case 'codebase_context':
+          case 'codebase_context': {
             // Store the result for display in StageExplore — but only mark complete
             // if explore actually succeeded. Failed explores emit status:"failed" via
             // the 'stage' event that follows, which calls setStageFailed and sets red icon.
-            forge.stageResults['explore'] = { stage: 'explore', data };
+            // Merge into any existing explore result (e.g. explore_info may have arrived first)
+            // rather than replacing it wholesale, to preserve branch_fallback etc.
+            const existingExplore = forge.stageResults['explore'];
+            const mergedData = { ...(existingExplore?.data ?? {}), ...data };
+            forge.stageResults['explore'] = { stage: 'explore', data: mergedData };
             if (!data.explore_failed) {
-              forge.setStageComplete('explore', { stage: 'explore', data });
+              forge.setStageComplete('explore', { stage: 'explore', data: mergedData });
             }
             break;
+          }
           case 'explore_info':
             // Supplemental metadata about the explore stage (branch fallback, coverage).
             // Merge into the existing explore stage result data rather than replacing it.
@@ -262,6 +267,10 @@
             break;
           case 'error':
             forge.setStageFailed(data.stage as string || 'pipeline', data.error as string);
+            break;
+          case 'context_warning':
+            // Store dropped-context metadata for optional display in the UI
+            forge.contextWarning = data as unknown as import('$lib/stores/forge.svelte').ContextWarning;
             break;
           case 'rate_limit_warning':
             // Non-fatal warning — show toast but do NOT stop the pipeline

@@ -65,7 +65,10 @@ OUTLINE_PATTERNS = re.compile(
 
 # Priority tiers for search_code file ordering
 _TIER1_PREFIXES = ("src/", "lib/", "app/", "backend/", "server/", "core/", "pkg/")
-_TIER3_PREFIXES = ("test/", "tests/", "spec/", "__tests__/")
+_TIER3_PREFIXES = (
+    "test/", "tests/", "spec/", "__tests__/",
+    "docs/", "doc/", "examples/", "example/",
+)
 _TIER3_PATTERNS = re.compile(r'(^test_|_test\.|\.spec\.|\.test\.)', re.IGNORECASE)
 
 

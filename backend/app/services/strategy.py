@@ -11,6 +11,7 @@ from typing import Optional
 
 from app.prompts.strategy_prompt import get_strategy_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider
+from app.services.context_builders import build_analysis_summary
 from app.services.strategy_selector import heuristic_strategy_fallback
 from app.config import settings
 
@@ -32,7 +33,7 @@ async def run_strategy(
 
     user_message = (
         f"Raw prompt:\n---\n{raw_prompt}\n---\n\n"
-        f"Analysis result:\n{json.dumps(analysis, indent=2)}"
+        f"Analysis result:\n{build_analysis_summary(analysis)}"
     )
     if codebase_context:
         user_message += f"\n\nCodebase context:\n{json.dumps(codebase_context, indent=2)}"

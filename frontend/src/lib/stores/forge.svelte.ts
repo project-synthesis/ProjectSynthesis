@@ -34,6 +34,15 @@ export interface PipelineEvent {
   timestamp: number;
 }
 
+export interface ContextWarning {
+  dropped_files: number;
+  dropped_urls: number;
+  dropped_instructions: number;
+  total_files_sent: number;
+  total_urls_sent: number;
+  total_instructions_sent: number;
+}
+
 class ForgeStore {
   isForging = $state(false);
   currentStage = $state<string | null>(null);
@@ -55,6 +64,7 @@ class ForgeStore {
   totalDuration = $state<number | null>(null);
   totalTokens = $state<number | null>(null);
   error = $state<string | null>(null);
+  contextWarning = $state<ContextWarning | null>(null);
 
   get stages() {
     return ['explore', 'analyze', 'strategy', 'optimize', 'validate'];
@@ -103,6 +113,7 @@ class ForgeStore {
     this.totalDuration = null;
     this.totalTokens = null;
     this.error = null;
+    this.contextWarning = null;
   }
 
   startForge(rawPrompt?: string) {
