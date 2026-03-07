@@ -1,6 +1,6 @@
 <script lang="ts">
   import { editor, type EditorTab } from '$lib/stores/editor.svelte';
-  import { forge } from '$lib/stores/forge.svelte';
+  import { forge, type ForgeRecord } from '$lib/stores/forge.svelte';
   import { github } from '$lib/stores/github.svelte';
   import { startOptimization, type SSEEvent } from '$lib/api/client';
   import ContextBar from './ContextBar.svelte';
@@ -12,7 +12,6 @@
   let { tab }: { tab: EditorTab } = $props();
 
   let strategy = $state('auto');
-  let abortController = $state<AbortController | null>(null);
   let forgeSparking = $state(false);
 
   // @ context popup state
@@ -20,8 +19,6 @@
   let atQuery = $state('');
   let contextBarRef: ContextBar | undefined = $state();
   let textareaRef: HTMLTextAreaElement | undefined = $state();
-  let atPopupX = $state(0);
-  let atPopupY = $state(0);
   let atSelectedIndex = $state(0);
 
   const contextSources = [
@@ -43,7 +40,9 @@
   );
 
   function handleAtSelect(source: typeof contextSources[0]) {
-    contextBarRef?.addChip(source.type, source.label);
+    // For 'repo' type, omit label so ContextBar.addChip resolves github.selectedRepo itself
+    const chipLabel = source.type === 'repo' ? undefined : source.label;
+    contextBarRef?.addChip(source.type, chipLabel);
     closeAtPopup();
     // Remove the @query from textarea
     if (textareaRef) {
@@ -82,10 +81,6 @@
     const cursorPos = target.selectionStart;
     const charBefore = value[cursorPos - 1];
     if (charBefore === '@') {
-      // Position the popup near the textarea cursor
-      const rect = target.getBoundingClientRect();
-      atPopupX = rect.left + 20;
-      atPopupY = rect.top + 40;
       showAtPopup = true;
       atQuery = '';
       atSelectedIndex = 0;
@@ -133,12 +128,19 @@
     forge.startForge(tab.promptText);
     editor.setSubTab('pipeline');
 
+    const chips = contextBarRef?.getChips() ?? [];
+    const repoChip = chips.find(c => c.type === 'repo');
+    const repoFullName = (repoChip?.label?.includes('/') ? repoChip.label : null)
+      ?? github.selectedRepo
+      ?? undefined;
+    const repoBranch = github.selectedBranch ?? github.currentRepo?.default_branch ?? undefined;
+
     const controller = await startOptimization(
       {
         prompt: tab.promptText,
         strategy: strategy === 'auto' ? undefined : strategy,
-        repo_full_name: github.selectedRepo ?? undefined,
-        repo_branch: github.currentRepo?.default_branch ?? undefined
+        repo_full_name: repoFullName,
+        repo_branch: repoBranch
       },
       (event: SSEEvent) => {
         const data = event.data as Record<string, unknown>;
@@ -168,9 +170,21 @@
               }
             } else if (data.status === 'skipped') {
               forge.setStageSkipped(stageName);
+            } else if (data.status === 'failed') {
+              // Explore-specific graceful failure: pipeline continues, but stage is red
+              forge.setStageFailed(stageName, data.error as string || `Stage ${stageName} failed`);
             }
             break;
           }
+          case 'codebase_context':
+            // Store the result for display in StageExplore — but only mark complete
+            // if explore actually succeeded. Failed explores emit status:"failed" via
+            // the 'stage' event that follows, which calls setStageFailed and sets red icon.
+            forge.stageResults['explore'] = { stage: 'explore', data };
+            if (!data.explore_failed) {
+              forge.setStageComplete('explore', { stage: 'explore', data });
+            }
+            break;
           case 'analysis':
             forge.setStageComplete('analyze', { stage: 'analyze', data, duration: data.duration_ms as number | undefined });
             break;
@@ -182,6 +196,10 @@
             break;
           case 'optimization':
             forge.setStageComplete('optimize', { stage: 'optimize', data, duration: data.duration_ms as number | undefined });
+            // Replace accumulated raw JSON tokens with the parsed optimized prompt text
+            if (data.optimized_prompt) {
+              forge.streamingText = data.optimized_prompt as string;
+            }
             break;
           case 'validation':
             forge.setStageComplete('validate', { stage: 'validate', data, duration: data.duration_ms as number | undefined });
@@ -196,7 +214,36 @@
             break;
           case 'complete':
             if (data.optimization_id) {
-              forge.optimizationId = data.optimization_id as string;
+              const optId = data.optimization_id as string;
+              forge.optimizationId = optId;
+              // Write to the tab via the store (owns the objects) rather than
+              // mutating the prop directly — avoids Svelte 5 ownership warning.
+              // Use tab.id not editor.activeTabId: user may have switched tabs.
+              const storeTab = editor.openTabs.find(t => t.id === tab.id);
+              if (storeTab) storeTab.optimizationId = optId;
+              const validateScores = forge.stageResults?.validate?.data?.scores as Record<string, number> | undefined;
+              const record: ForgeRecord = {
+                id: optId,
+                raw_prompt: forge.rawPrompt,
+                optimized_prompt: forge.streamingText,
+                overall_score: forge.overallScore,
+                primary_framework: (forge.stageResults?.strategy?.data?.primary_framework as string) ?? null,
+                strategy_rationale: (forge.stageResults?.strategy?.data?.rationale as string) ?? null,
+                task_type: (forge.stageResults?.analyze?.data?.task_type as string) ?? null,
+                complexity: (forge.stageResults?.analyze?.data?.complexity as string) ?? null,
+                weaknesses: (forge.stageResults?.analyze?.data?.weaknesses as string[]) ?? null,
+                strengths: (forge.stageResults?.analyze?.data?.strengths as string[]) ?? null,
+                clarity_score: validateScores?.clarity ?? null,
+                specificity_score: validateScores?.specificity ?? null,
+                structure_score: validateScores?.structure ?? null,
+                faithfulness_score: validateScores?.faithfulness ?? null,
+                conciseness_score: validateScores?.conciseness ?? null,
+                // Use event data directly — forge.totalDuration/Tokens are set by
+                // finishForge() called below, so they'd be null at this point
+                duration_ms: (data.total_duration_ms as number) ?? null,
+                total_tokens: (data.total_tokens as number) ?? null,
+              };
+              forge.cacheRecord(optId, record);
             }
             forge.finishForge(forge.overallScore ?? undefined, data.total_duration_ms as number | undefined, data.total_tokens as number | undefined);
             toast.success('Forge complete — prompt optimized!');
@@ -215,6 +262,7 @@
       (err: Error) => {
         forge.error = err.message;
         forge.isForging = false;
+        forge.currentStage = null;
       },
       () => {
         if (forge.isForging) {
@@ -223,15 +271,11 @@
       }
     );
 
-    abortController = controller;
+    forge.setAbortController(controller);
   }
 
   function handleCancel() {
-    if (abortController) {
-      abortController.abort();
-      abortController = null;
-    }
-    forge.isForging = false;
+    forge.cancel();
   }
 </script>
 
@@ -239,9 +283,11 @@
   <!-- Textarea -->
   <div class="flex-1 p-4 relative">
     <textarea
+      id="prompt-textarea"
+      name="prompt-text"
       bind:this={textareaRef}
-      class="w-full h-full bg-bg-input text-text-primary text-sm font-sans leading-relaxed resize-none border border-border-subtle rounded-lg p-3 focus:outline-none focus:border-neon-cyan placeholder:text-text-dim/50 transition-colors duration-300"
-      placeholder="Enter your prompt here... Describe what you want the AI to do, and PromptForge will optimize it for better results."
+      class="w-full h-full bg-bg-input text-text-primary text-sm font-sans leading-relaxed resize-none border border-border-subtle rounded-lg p-3 focus:outline-none focus:border-neon-cyan/60 placeholder:text-text-dim/50 transition-colors duration-300"
+      placeholder="Enter your prompt…"
       value={tab.promptText || ''}
       oninput={handleInput}
       onkeydown={handleTextareaKeydown}
@@ -260,6 +306,7 @@
           <div class="flex items-center gap-1.5 text-xs text-text-dim">
             <span class="text-neon-cyan font-mono">@</span>
             <input
+              name="at-query"
               class="flex-1 bg-transparent text-text-primary text-xs focus:outline-none"
               placeholder="Search context sources..."
               value={atQuery}
@@ -285,15 +332,11 @@
             <div class="px-3 py-2 text-xs text-text-dim italic">No matching sources</div>
           {/if}
         </div>
+        <div class="px-3 py-1.5 border-t border-border-subtle flex items-center justify-between">
+          <span class="text-[9px] text-text-dim/50 font-mono">↑↓ navigate · Enter select · Esc close</span>
+        </div>
       </div>
     {/if}
-  </div>
-
-  <!-- Word count -->
-  <div class="flex items-center justify-end px-4 py-0.5 text-[10px] text-text-dim shrink-0">
-    <span data-testid="word-count">{(tab.promptText || '').split(/\s+/).filter(Boolean).length} words</span>
-    <span class="mx-1.5">·</span>
-    <span>{(tab.promptText || '').length} chars</span>
   </div>
 
   <!-- Context bar (below textarea per spec) -->
@@ -304,7 +347,10 @@
     <div class="flex items-center gap-2">
       <!-- Strategy selector -->
       <select
-        class="bg-bg-input border border-border-subtle rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-neon-cyan/30 cursor-pointer"
+        id="strategy-select"
+        name="strategy"
+        class="bg-bg-input border border-border-subtle rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-neon-cyan/30 cursor-pointer appearance-none"
+        style="background-image: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238b8ba8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E); background-repeat: no-repeat; background-position: right 8px center; padding-right: 24px;"
         bind:value={strategy}
       >
         {#each strategies as s}
