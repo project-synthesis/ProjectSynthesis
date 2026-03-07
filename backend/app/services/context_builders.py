@@ -42,7 +42,14 @@ def build_codebase_summary(codebase_context: dict) -> str:
     files_read_count = codebase_context.get("files_read_count") or 0
     coverage_pct = codebase_context.get("coverage_pct") or 0
 
-    if quality == "partial":
+    if quality == "partial" and files_read_count == 0:
+        # Timed out before reading any files — indistinguishable from a full failure
+        # for the purposes of downstream LLM context; use the failed message.
+        parts.append(
+            "Note: Repository exploration failed and no codebase context is "
+            "available. Analysis proceeds without codebase grounding."
+        )
+    elif quality == "partial":
         parts.append(
             f"Note: Exploration was partial (timed out after reading "
             f"{files_read_count} files — {coverage_pct}% of repository). "

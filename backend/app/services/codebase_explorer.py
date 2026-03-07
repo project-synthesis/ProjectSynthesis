@@ -81,6 +81,7 @@ class CodebaseContext:
     files_read_count: int = 0
     coverage_pct: int = 0
     duration_ms: int = 0
+    explore_quality: str = "complete"
 
 
 async def run_explore(
@@ -176,6 +177,7 @@ async def run_explore(
         logger.error(f"Stage 0 (Explore) setup error: {e}")
         context = CodebaseContext(repo=repo_full_name, branch=repo_branch)
         context.observations = [f"Exploration setup failed: {e}"]
+        context.explore_quality = "failed"
         yield ("explore_result", asdict(context))
         return
 
@@ -281,6 +283,7 @@ async def run_explore(
             ]
         ctx_dict = asdict(context)
         ctx_dict["explore_failed"] = True
+        ctx_dict["explore_quality"] = "partial"
         ctx_dict["explore_error"] = f"Timed out after {timeout_secs}s"
         yield ("explore_result", ctx_dict)
         return
@@ -295,6 +298,7 @@ async def run_explore(
         context.observations = [f"Exploration failed: {type(e).__name__}: {e}"]
         ctx_dict = asdict(context)
         ctx_dict["explore_failed"] = True
+        ctx_dict["explore_quality"] = "failed"
         ctx_dict["explore_error"] = f"{type(e).__name__}: {e}"
         yield ("explore_result", ctx_dict)
         return

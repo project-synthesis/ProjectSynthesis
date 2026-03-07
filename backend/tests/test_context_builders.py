@@ -166,14 +166,14 @@ def test_codebase_files_read_count_appears():
     assert "Files read: 12" in result
 
 
-def test_codebase_partial_zero_coverage():
-    """Partial quality with zero coverage_pct still shows readable warning."""
+def test_codebase_partial_zero_files_uses_failed_message():
+    """partial + files_read_count=0 uses the failed-message format (timed out before any reads)."""
     result = build_codebase_summary(
         {"explore_quality": "partial", "files_read_count": 0, "coverage_pct": 0}
     )
-    assert "Exploration was partial" in result
-    assert "0 files" in result
-    assert "0%" in result
+    assert "Repository exploration failed" in result
+    assert "without codebase grounding" in result
+    assert "Exploration was partial" not in result
 
 
 # ── build_analysis_summary ────────────────────────────────────────────────────
