@@ -22,5 +22,10 @@ class Settings(BaseSettings):
     OPTIMIZE_TIMEOUT_SECONDS: int = 40   # 20s spec target + 20s buffer
     VALIDATE_TIMEOUT_SECONDS: int = 10   # 5s spec target + 5s buffer
 
+    # Maximum number of optimize+validate retry cycles on low score (default 1).
+    # Set MAX_PIPELINE_RETRIES=2 (or higher) to enable a second retry that
+    # tightens focus_areas to only the single lowest-scoring dimension.
+    MAX_PIPELINE_RETRIES: int = 1
+
 
 settings = Settings()

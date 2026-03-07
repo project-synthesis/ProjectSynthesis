@@ -8,6 +8,7 @@ import logging
 import time
 from typing import AsyncGenerator, Optional
 
+from app.config import settings
 from app.providers.base import MODEL_ROUTING, LLMProvider
 from app.services.analyzer import run_analyze
 from app.services.codebase_explorer import run_explore
@@ -43,6 +44,9 @@ async def run_pipeline(
     repo_branch: Optional[str] = None,
     session_id: Optional[str] = None,
     github_token: Optional[str] = None,
+    file_contexts: Optional[list] = None,
+    url_fetched_contexts: Optional[list] = None,
+    instructions: Optional[list] = None,
 ) -> AsyncGenerator[tuple, None]:
     """Run the full optimization pipeline, yielding (event_type, event_data) tuples.
 
@@ -124,6 +128,22 @@ async def run_pipeline(
             })
 
     total_tokens = 0
+
+    # ---- Context truncation warning ----
+    # Injection caps: 5 files, 3 URLs, 10 instructions. Excess is silently
+    # dropped at injection time; warn the caller before Stage 1 starts.
+    _dropped_files = max(0, len(file_contexts or []) - 5)
+    _dropped_urls = max(0, len(url_fetched_contexts or []) - 3)
+    _dropped_instructions = max(0, len(instructions or []) - 10)
+    if _dropped_files or _dropped_urls or _dropped_instructions:
+        yield ("context_warning", {
+            "dropped_files": _dropped_files,
+            "dropped_urls": _dropped_urls,
+            "dropped_instructions": _dropped_instructions,
+            "total_files_sent": len(file_contexts or []),
+            "total_urls_sent": len(url_fetched_contexts or []),
+            "total_instructions_sent": len(instructions or []),
+        })
 
     # ---- Stage 1: Analyze ----
     try:
@@ -283,17 +303,50 @@ async def run_pipeline(
         return
 
     # ---- Retry on low score ----
+    # Retries up to settings.MAX_PIPELINE_RETRIES times when overall_score is
+    # below LOW_SCORE_THRESHOLD and the result is not an improvement.
+    # On the second retry (retry_count >= 1), focus_areas is narrowed to the
+    # single lowest-scoring dimension instead of all failing areas.
+    retry_count = 0
     overall_score = validation.get("scores", validation).get("overall_score", 10)
     is_improvement = validation.get("is_improvement", True)
-    if overall_score is not None and overall_score < LOW_SCORE_THRESHOLD and not is_improvement:
+    while (
+        retry_count < settings.MAX_PIPELINE_RETRIES
+        and overall_score is not None
+        and overall_score < LOW_SCORE_THRESHOLD
+        and not is_improvement
+    ):
         logger.info(
-            f"Overall score {overall_score} < {LOW_SCORE_THRESHOLD}: "
+            f"Overall score {overall_score} < {LOW_SCORE_THRESHOLD} "
+            f"(retry {retry_count + 1}/{settings.MAX_PIPELINE_RETRIES}): "
             "retrying optimize+validate with adjusted constraints"
         )
         yield ("rate_limit_warning", {
-            "message": f"Score {overall_score}/10 below threshold — retrying with stricter constraints",
+            "message": (
+                f"Score {overall_score}/10 below threshold — "
+                f"retrying with stricter constraints "
+                f"(attempt {retry_count + 1}/{settings.MAX_PIPELINE_RETRIES})"
+            ),
             "stage": "validate",
         })
+
+        # Determine focus_areas for this retry attempt.
+        # First retry: all failing areas from validation issues.
+        # Second+ retry: only the single lowest-scoring dimension.
+        if retry_count == 0:
+            focus_areas = validation.get("issues", [])
+        else:
+            scores = validation.get("scores", {})
+            score_dims = {
+                "clarity": scores.get("clarity_score", 10),
+                "specificity": scores.get("specificity_score", 10),
+                "structure": scores.get("structure_score", 10),
+                "faithfulness": scores.get("faithfulness_score", 10),
+                "conciseness": scores.get("conciseness_score", 10),
+            }
+            lowest_dim = min(score_dims, key=score_dims.get)
+            focus_areas = [lowest_dim]
+            logger.info(f"Second retry: narrowing focus to lowest dimension '{lowest_dim}'")
 
         try:
             # Re-run optimize with adjusted constraints
@@ -310,7 +363,7 @@ async def run_pipeline(
                 retry_constraints={
                     "min_score_target": LOW_SCORE_THRESHOLD + 2,
                     "previous_score": overall_score,
-                    "focus_areas": validation.get("issues", []),
+                    "focus_areas": focus_areas,
                 },
             ):
                 if event_type == "optimization":
@@ -361,5 +414,13 @@ async def run_pipeline(
                 "duration_ms": int((time.time() - start) * 1000),
                 "token_count": stage_tokens,
             })
+
+            # Update loop conditions for next iteration
+            overall_score = validation.get("scores", validation).get("overall_score", 10)
+            is_improvement = validation.get("is_improvement", True)
+
         except Exception as e:
-            logger.warning(f"Retry failed: {e}. Using original validation result.")
+            logger.warning(f"Retry {retry_count + 1} failed: {e}. Using previous validation result.")
+            break
+
+        retry_count += 1
