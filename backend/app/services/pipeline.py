@@ -256,6 +256,7 @@ async def run_pipeline(
             original_prompt=raw_prompt,
             optimized_prompt=optimized_prompt,
             changes_made=changes_made,
+            codebase_context=codebase_context,
         )
         validation["model"] = MODEL_ROUTING["validate"]
 
@@ -343,6 +344,7 @@ async def run_pipeline(
                 original_prompt=raw_prompt,
                 optimized_prompt=optimized_prompt,
                 changes_made=changes_made,
+                codebase_context=codebase_context,
             )
             validation["model"] = MODEL_ROUTING["validate"]
 

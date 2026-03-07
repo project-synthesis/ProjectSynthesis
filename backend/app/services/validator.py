@@ -12,6 +12,7 @@ import logging
 from app.config import settings
 from app.prompts.validator_prompt import get_validator_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider
+from app.services.context_builders import build_codebase_summary
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ async def run_validate(
     original_prompt: str,
     optimized_prompt: str,
     changes_made: list[str],
+    codebase_context: dict | None = None,
 ) -> dict:
     """Run Stage 4 validation.
 
@@ -67,14 +69,27 @@ async def run_validate(
     Individual dimension scores (clarity_score, etc.) live only in the
     ``scores`` sub-dict to avoid duplication. Callers that previously read
     top-level clarity_score should switch to scores["clarity_score"].
+
+    Args:
+        codebase_context: When provided, a codebase summary is injected into
+            the user message so the LLM can assess codebase accuracy when
+            scoring faithfulness_score.
     """
-    system_prompt = get_validator_prompt()
+    system_prompt = get_validator_prompt(has_codebase_context=codebase_context is not None)
 
     user_message = (
         f"Original prompt:\n---\n{original_prompt}\n---\n\n"
         f"Optimized prompt:\n---\n{optimized_prompt}\n---\n\n"
         f"Changes made:\n{json.dumps(changes_made, indent=2)}"
     )
+
+    if codebase_context is not None:
+        codebase_summary = build_codebase_summary(codebase_context)
+        if codebase_summary:
+            user_message += (
+                f"\n\nCodebase context (verify optimized prompt references real symbols/APIs):\n"
+                f"{codebase_summary[:800]}"
+            )
 
     model = MODEL_ROUTING["validate"]
 
