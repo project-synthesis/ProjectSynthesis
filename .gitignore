@@ -24,6 +24,9 @@ data/*
 *.swp
 *.swo
 
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
