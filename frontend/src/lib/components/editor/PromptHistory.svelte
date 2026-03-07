@@ -172,11 +172,11 @@
                   <div class="space-y-2">
                     <h4 class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Stage Trace</h4>
                     <div class="space-y-0.5 font-mono text-[10px] py-1">
-                      {#if entry.strategy}
+                      {#if entry.primary_framework}
                         <div class="flex items-center gap-2 py-0.5">
                           <span class="w-1.5 h-1.5 rounded-full bg-neon-purple/60 shrink-0"></span>
                           <span class="text-text-dim w-16 shrink-0">Strategy</span>
-                          <span class="text-neon-purple/70">{entry.strategy}</span>
+                          <span class="text-neon-purple/70">{entry.primary_framework}</span>
                         </div>
                       {/if}
                       {#if entry.model_optimize}

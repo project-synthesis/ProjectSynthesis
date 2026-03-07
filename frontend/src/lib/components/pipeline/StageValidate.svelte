@@ -36,8 +36,10 @@
       </div>
     {/if}
 
-    <!-- Individual scores (staggered 100ms per spec) -->
-    {#each Object.entries(scores) as [key, val], i}
+    <!-- Individual scores (staggered 100ms per spec). overall_score is shown
+         via ScoreCircle above — exclude it from the dimension bars to avoid
+         duplication (mirrors the same filter in ForgeArtifact.svelte). -->
+    {#each Object.entries(scores).filter(([k]) => k !== 'overall_score') as [key, val], i}
       <div class="space-y-1 animate-stagger-fade-in" style="animation-delay: {i * 100}ms;">
         <div class="flex justify-between">
           <span class="text-text-dim capitalize">{key.replace(/_/g, ' ')}</span>

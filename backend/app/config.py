@@ -14,13 +14,15 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/promptforge.db"
     CORS_ORIGINS: str = "http://localhost:5199,http://localhost:4173"
 
-    # Per-stage LLM call timeout seconds (spec latency target + safety buffer).
-    # Override via env vars to tune for slow providers.
-    EXPLORE_TIMEOUT_SECONDS: int = 90    # 30s spec target + 60s buffer
-    ANALYZE_TIMEOUT_SECONDS: int = 10    # 5s spec target + 5s buffer
-    STRATEGY_TIMEOUT_SECONDS: int = 20   # 10s spec target + 10s buffer
-    OPTIMIZE_TIMEOUT_SECONDS: int = 40   # 20s spec target + 20s buffer
-    VALIDATE_TIMEOUT_SECONDS: int = 10   # 5s spec target + 5s buffer
+    # Per-stage LLM call timeout seconds.
+    # Claude CLI provider spawns a new subprocess per call; cold-start alone
+    # takes ~7–15 seconds on typical hardware. Timeouts are set generously
+    # to survive startup + API latency. Override via env vars if needed.
+    EXPLORE_TIMEOUT_SECONDS: int = 120   # Agentic multi-turn repo exploration
+    ANALYZE_TIMEOUT_SECONDS: int = 90    # Simple completion; CLI startup ~7–15s
+    STRATEGY_TIMEOUT_SECONDS: int = 90   # Simple completion; same startup cost
+    OPTIMIZE_TIMEOUT_SECONDS: int = 120  # Streaming rewrite; longest content
+    VALIDATE_TIMEOUT_SECONDS: int = 90   # Simple completion; same startup cost
 
     # Maximum number of optimize+validate retry cycles on low score (default 1).
     # Set MAX_PIPELINE_RETRIES=2 (or higher) to enable a second retry that

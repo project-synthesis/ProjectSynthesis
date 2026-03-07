@@ -5,13 +5,12 @@ Uses claude-opus for deep reasoning about framework selection.
 """
 
 import asyncio
-import json
 import logging
 from typing import Optional
 
 from app.prompts.strategy_prompt import get_strategy_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider
-from app.services.context_builders import build_analysis_summary
+from app.services.context_builders import build_analysis_summary, build_codebase_summary
 from app.services.strategy_selector import heuristic_strategy_fallback
 from app.config import settings
 
@@ -36,7 +35,9 @@ async def run_strategy(
         f"Analysis result:\n{build_analysis_summary(analysis)}"
     )
     if codebase_context:
-        user_message += f"\n\nCodebase context:\n{json.dumps(codebase_context, indent=2)}"
+        codebase_summary = build_codebase_summary(codebase_context)
+        if codebase_summary:
+            user_message += f"\n\nCodebase context:\n{codebase_summary}"
 
     model = MODEL_ROUTING["strategy"]
 

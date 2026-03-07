@@ -272,7 +272,7 @@
                   : null}
               {@const strategyCounts = history.entries.reduce(
                 (acc: Record<string, number>, e) => {
-                  if (e.strategy) acc[e.strategy] = (acc[e.strategy] || 0) + 1;
+                  if (e.primary_framework) acc[e.primary_framework] = (acc[e.primary_framework] || 0) + 1;
                   return acc;
                 },
                 {},

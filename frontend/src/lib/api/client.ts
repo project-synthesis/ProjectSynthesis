@@ -200,6 +200,7 @@ export async function startOptimization(
               } catch {
                 onEvent({ event: typeMatch[1], data: dataMatch[1] });
               }
+              await Promise.resolve(); // yield so Svelte flushes between events
             }
           }
         }

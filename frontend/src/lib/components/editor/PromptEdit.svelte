@@ -278,12 +278,13 @@
                 strengths: (forge.stageResults?.analyze?.data?.strengths as string[]) ?? null,
                 // Live-session only — no DB column (N19)
                 recommended_frameworks: (forge.stageResults?.analyze?.data?.recommended_frameworks as string[]) ?? [],
-                // Validation scores
-                clarity_score: validateScores?.clarity ?? null,
-                specificity_score: validateScores?.specificity ?? null,
-                structure_score: validateScores?.structure ?? null,
-                faithfulness_score: validateScores?.faithfulness ?? null,
-                conciseness_score: validateScores?.conciseness ?? null,
+                // Validation scores — keys must match the _score-suffix shape
+                // that the validator emits (clarity_score, not clarity, etc.)
+                clarity_score: validateScores?.clarity_score ?? null,
+                specificity_score: validateScores?.specificity_score ?? null,
+                structure_score: validateScores?.structure_score ?? null,
+                faithfulness_score: validateScores?.faithfulness_score ?? null,
+                conciseness_score: validateScores?.conciseness_score ?? null,
                 // Use event data directly — forge.totalDuration/Tokens are set by
                 // finishForge() called below, so they'd be null at this point
                 duration_ms: (data.total_duration_ms as number) ?? null,

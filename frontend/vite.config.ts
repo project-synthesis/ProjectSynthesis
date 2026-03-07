@@ -10,8 +10,8 @@ export default defineConfig({
   server: {
     port: 5199,
     proxy: {
-      '/api': 'http://localhost:8000',
-      '/auth': 'http://localhost:8000'
+      '/api': { target: 'http://localhost:8000', changeOrigin: true },
+      '/auth': { target: 'http://localhost:8000', changeOrigin: true }
     }
   }
 });

@@ -277,8 +277,8 @@
             <div class="flex-1 min-w-0">
               <p class="text-text-primary truncate">{entry.raw_prompt}</p>
               <div class="flex items-center gap-2 mt-0.5 min-w-0">
-                {#if entry.strategy}
-                  <span class="text-[10px] truncate" style="color: {getStrategyHex(entry.strategy)}">{entry.strategy}</span>
+                {#if entry.primary_framework}
+                  <span class="text-[10px] truncate" style="color: {getStrategyHex(entry.primary_framework)}">{entry.primary_framework}</span>
                 {/if}
                 <span class="text-[10px] text-text-dim shrink-0">{new Date(entry.created_at).toLocaleDateString()}</span>
               </div>
