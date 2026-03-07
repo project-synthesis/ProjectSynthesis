@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, asdict
 from app.providers.base import LLMProvider, MODEL_ROUTING
 from app.prompts.explore_prompt import get_explore_prompt
 from app.services.codebase_tools import build_codebase_tools
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,10 @@ async def run_explore(
         )
     )
 
-    # Set a timeout on the background task
-    timeout_handle = asyncio.get_event_loop().call_later(
-        30.0, lambda: agent_task.cancel() if not agent_task.done() else None
+    # Set a timeout on the background task (use running loop, not deprecated get_event_loop)
+    timeout_secs = settings.EXPLORE_TIMEOUT_SECONDS
+    timeout_handle = asyncio.get_running_loop().call_later(
+        timeout_secs, lambda: agent_task.cancel() if not agent_task.done() else None
     )
 
     try:
@@ -100,7 +102,7 @@ async def run_explore(
         result = await agent_task
 
     except asyncio.CancelledError:
-        logger.warning("Stage 0 (Explore) timed out after 30 seconds")
+        logger.warning("Stage 0 (Explore) timed out after %ds", timeout_secs)
         # Drain any remaining events
         while not event_queue.empty():
             yield event_queue.get_nowait()
