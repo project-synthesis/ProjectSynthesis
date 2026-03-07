@@ -3,6 +3,10 @@
 Maps task_type to a default framework when the LLM strategy call fails.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # Mapping of task_type -> (primary_framework, secondary_frameworks, rationale)
 TASK_FRAMEWORK_MAP: dict[str, tuple[str, list[str], str]] = {
@@ -89,11 +93,28 @@ TASK_FRAMEWORK_MAP: dict[str, tuple[str, list[str], str]] = {
 }
 
 
+# All task_type values recognised by the heuristic map.
+# If the analyzer ever returns a value outside this set, something new has
+# been added — log a warning so developers can decide whether to add it.
+KNOWN_TASK_TYPES: frozenset[str] = frozenset(TASK_FRAMEWORK_MAP.keys())
+
+
 def heuristic_strategy_fallback(task_type: str) -> dict:
     """Return a heuristic strategy based on task type.
 
     Used as a fallback when the LLM strategy stage fails.
+    Unknown task types fall back to 'general' with a warning so the
+    gap is visible in logs rather than silently swallowed.
     """
+    if task_type not in KNOWN_TASK_TYPES:
+        logger.warning(
+            "Unknown task_type %r from analyzer — using 'general' heuristic. "
+            "Add %r to TASK_FRAMEWORK_MAP in strategy_selector.py if this is a valid category.",
+            task_type,
+            task_type,
+        )
+        task_type = "general"
+
     primary, secondary, rationale = TASK_FRAMEWORK_MAP.get(
         task_type,
         TASK_FRAMEWORK_MAP["general"],
