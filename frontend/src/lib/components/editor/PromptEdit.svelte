@@ -165,6 +165,10 @@
         url_contexts: urlContexts.length > 0 ? urlContexts : undefined,
       },
       (event: SSEEvent) => {
+        if (typeof event.data !== 'object' || event.data === null) {
+          console.warn('[forge] Unexpected SSE event data:', event.event, typeof event.data);
+          return;
+        }
         const data = event.data as Record<string, unknown>;
         switch (event.event) {
           case 'stage': {
