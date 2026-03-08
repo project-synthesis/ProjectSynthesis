@@ -141,7 +141,12 @@ async def optimize_prompt(
                     optimization.optimization_notes = event_data.get("optimization_notes")
                     optimization.model_optimize = event_data.get("model")
                 elif event_type == "validation":
-                    scores = event_data.get("scores", event_data)
+                    if "scores" not in event_data:
+                        logger.error(
+                            "Validation event missing 'scores' sub-dict for opt %s; keys: %s",
+                            opt_id, list(event_data.keys())
+                        )
+                    scores = event_data["scores"]
                     optimization.clarity_score = scores.get("clarity_score")
                     optimization.specificity_score = scores.get("specificity_score")
                     optimization.structure_score = scores.get("structure_score")

@@ -173,6 +173,12 @@ async def run_pipeline(
                 yield (event_type, event_data)
 
         analysis = analysis or {}
+        if not analysis.get("task_type") or not isinstance(analysis.get("task_type"), str):
+            logger.warning("Stage 1 produced no task_type; defaulting to 'general'")
+            analysis["task_type"] = "general"
+        if not analysis.get("complexity") or not isinstance(analysis.get("complexity"), str):
+            logger.warning("Stage 1 produced no complexity; defaulting to 'moderate'")
+            analysis["complexity"] = "moderate"
         analysis["model"] = MODEL_ROUTING["analyze"]
 
         stage_tokens = _estimate_tokens(raw_prompt) + _estimate_tokens(json.dumps(analysis))
