@@ -7,33 +7,77 @@
 
 Project Synthesis runs your prompts through a structured pipeline — **Explore → Analyze → Strategy → Optimize → Validate** — producing a measurably improved result with per-dimension scoring, diff view, and full trace visibility.
 
+## Features
+
+- **5-stage pipeline** — each stage streams results in real time with full trace visibility
+- **GitHub integration** — link a repository so the Explore stage reads your codebase as context
+- **Branch-aware** — browse and select branches directly from the repo picker
+- **Scoring** — Validate stage returns per-dimension scores (0–10) with actionable feedback
+- **Diff view** — side-by-side comparison of original vs optimized prompt
+- **History** — all optimization runs stored locally with sort and filter
+- **MCP server** — 13 tools exposing the full API to Claude Code and other MCP clients
+- **Two LLM providers** — Claude Code CLI (Max subscription, zero cost) or Anthropic API key
+
 ## Prerequisites
 
-At least one LLM provider:
+- Python 3.12+
+- Node.js 20+
+- At least one LLM provider:
 
-- **Option A (preferred)**: Claude Code CLI with Max subscription
+  **Option A (preferred)** — Claude Code CLI with Max subscription:
   ```bash
   npm install -g @anthropic-ai/claude-code
   claude login
   ```
-- **Option B**: Anthropic API key — copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`
+
+  **Option B** — Anthropic API key (set `ANTHROPIC_API_KEY` in `.env`)
+
+## Configuration
+
+Copy the example env file and fill in the required values:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Required | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | If not using CLI | Anthropic API key |
+| `GITHUB_APP_CLIENT_ID` | For GitHub OAuth | OAuth client ID of your GitHub App |
+| `GITHUB_APP_CLIENT_SECRET` | For GitHub OAuth | OAuth client secret |
+| `GITHUB_TOKEN_ENCRYPTION_KEY` | For GitHub OAuth | Fernet key for token encryption at rest |
+| `SECRET_KEY` | Yes | Session signing key — change in production |
+
+Generate a Fernet key:
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+GitHub OAuth requires a GitHub App with callback URL set to `http://localhost:8000/auth/github/callback`. Create one at [github.com/settings/apps/new](https://github.com/settings/apps/new).
 
 ## Quick Start
 
 ```bash
 ./init.sh          # Install dependencies and start all services
 ./init.sh status   # Check service status
-./init.sh restart  # Restart all services
+./init.sh restart  # Restart all services (required after changing Python packages)
 ./init.sh stop     # Stop all services
 ```
 
+Services start at:
+- Frontend: http://localhost:5199
+- API + docs: http://localhost:8000/api/docs
+- MCP server: http://127.0.0.1:8001/mcp
+
 ## Services
 
-| Service | Port | Purpose |
+| Service | Port | Entry point |
 |---|---|---|
-| API backend | 8000 | FastAPI + pipeline orchestration |
-| Frontend | 5199 | SvelteKit UI |
-| MCP server | 8001 | 13 tools for Claude Code integration |
+| FastAPI backend | 8000 | `backend/app/main.py` |
+| SvelteKit frontend | 5199 | `frontend/src/` |
+| MCP server (standalone) | 8001 | `backend/app/mcp_server.py` |
+
+Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 
 ## Pipeline stages
 
@@ -45,9 +89,26 @@ At least one LLM provider:
 | **Optimize** | Rewrites the prompt using the chosen strategy |
 | **Validate** | Scores the result across multiple dimensions (0–10) |
 
+## Development
+
+```bash
+# Backend tests
+cd backend && source .venv/bin/activate && pytest
+
+# TypeScript check
+cd frontend && npx tsc --noEmit
+
+# Backend only (with hot reload)
+cd backend && source .venv/bin/activate && \
+  python -m uvicorn app.main:asgi_app --host 0.0.0.0 --port 8000 --reload
+
+# Frontend only
+cd frontend && npm run dev
+```
+
 ## MCP Server
 
-Project Synthesis exposes 13 tools via MCP, accessible directly from Claude Code when this directory is open. See [docs/MCP.md](docs/MCP.md) for the full tool reference.
+Project Synthesis exposes 13 tools via MCP, accessible directly from Claude Code when this directory is open (configured via `.mcp.json`). See [docs/MCP.md](docs/MCP.md) for the full tool reference and connection instructions.
 
 ## Contributing
 
