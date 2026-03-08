@@ -99,9 +99,9 @@ async def run_optimize(
     framework_applied = strategy.get("primary_framework", "")
 
     # Stream the optimization with timeout.
-    # asyncio.timeout() requires Python 3.11+; use asyncio.Queue + create_task
+    # Use asyncio.Queue + create_task (same pattern as codebase_explorer.py)
     # so we can enforce a wall-clock timeout via call_later while still yielding
-    # step_progress events in real time (same pattern as codebase_explorer.py).
+    # step_progress events in real time from a background task.
     full_text = ""
     stream_failed = False
     chunk_queue: asyncio.Queue = asyncio.Queue()

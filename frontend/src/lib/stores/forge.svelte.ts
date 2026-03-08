@@ -25,6 +25,18 @@ export interface ForgeRecord {
   codebase_context_snapshot?: string | null;
   // Live-session only — no DB column (N19)
   recommended_frameworks?: string[];
+  // Optimize stage fields
+  changes_made?: string[] | null;
+  optimization_notes?: string | null;
+  // Validate stage fields
+  issues?: string[] | null;
+  verdict?: string | null;
+  // Per-stage model names
+  model_explore?: string | null;
+  model_analyze?: string | null;
+  model_strategy?: string | null;
+  model_optimize?: string | null;
+  model_validate?: string | null;
   // Timing
   duration_ms?: number | null;
   total_tokens?: number | null;
@@ -235,7 +247,9 @@ class ForgeStore {
           task_type: record.task_type,
           complexity: record.complexity,
           weaknesses: record.weaknesses || [],
-          strengths: record.strengths || []
+          strengths: record.strengths || [],
+          recommended_frameworks: record.recommended_frameworks || [],
+          model: record.model_analyze ?? undefined,
         }
       };
     }
@@ -249,6 +263,7 @@ class ForgeStore {
           rationale: record.strategy_rationale,
           secondary_frameworks: record.secondary_frameworks ?? [],  // N13
           approach_notes: record.approach_notes ?? null,            // N13
+          model: record.model_strategy ?? undefined,
         }
       };
     }
@@ -258,7 +273,8 @@ class ForgeStore {
       // Start with bare minimum — repo name always known, quality defaults to 'complete'
       let exploreData: Record<string, unknown> = {
         repo: record.linked_repo_full_name,
-        explore_quality: 'complete'
+        explore_quality: 'complete',
+        model: record.model_explore ?? undefined,
       };
 
       if (record.codebase_context_snapshot) {
@@ -282,7 +298,12 @@ class ForgeStore {
       this.stageStatuses['optimize'] = 'done';
       this.stageResults['optimize'] = {
         stage: 'optimize',
-        data: { optimized_prompt: record.optimized_prompt }
+        data: {
+          optimized_prompt: record.optimized_prompt,
+          changes_made: record.changes_made ?? [],
+          optimization_notes: record.optimization_notes ?? null,
+          model: record.model_optimize ?? undefined,
+        }
       };
     }
 
@@ -300,7 +321,13 @@ class ForgeStore {
       this.stageStatuses['validate'] = 'done';
       this.stageResults['validate'] = {
         stage: 'validate',
-        data: { scores, overall_score: record.overall_score }
+        data: {
+          scores,
+          overall_score: record.overall_score,
+          issues: record.issues ?? [],
+          verdict: record.verdict ?? null,
+          model: record.model_validate ?? undefined,
+        }
       };
     }
   }

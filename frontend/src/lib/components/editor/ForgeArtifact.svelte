@@ -8,6 +8,7 @@
   import ScoreBar from '$lib/components/shared/ScoreBar.svelte';
   import DiffView from '$lib/components/shared/DiffView.svelte';
   import StrategyBadge from '$lib/components/shared/StrategyBadge.svelte';
+  import TraceView from '$lib/components/pipeline/TraceView.svelte';
   import { toast } from '$lib/stores/toast.svelte';
   import { getScoreColor } from '$lib/utils/colors';
 
@@ -199,24 +200,7 @@
       {/if}
 
     {:else if activeSubTab === 'trace'}
-      {#if forge.pipelineEvents.length > 0}
-        <div class="space-y-1 font-mono text-xs">
-          {#each forge.pipelineEvents as ev, i}
-            <div class="flex items-start gap-2 py-1 px-2 rounded hover:bg-bg-hover/30">
-              <span class="text-text-dim/50 w-4 text-right shrink-0">{i + 1}</span>
-              <span class="text-neon-cyan/70">{new Date(ev.timestamp).toLocaleTimeString()}</span>
-              <span class="text-text-secondary">{ev.type}</span>
-              {#if ev.stage}
-                <span class="text-neon-purple capitalize">{ev.stage}</span>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {:else}
-        <div class="text-center py-12">
-          <p class="text-sm text-text-dim">Pipeline trace will appear during forging.</p>
-        </div>
-      {/if}
+      <TraceView />
     {/if}
   </div>
 </div>

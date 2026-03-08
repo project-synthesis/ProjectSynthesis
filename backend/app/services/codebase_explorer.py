@@ -84,6 +84,39 @@ class CodebaseContext:
     explore_quality: str = "complete"
 
 
+def _describe_tool_call(name: str, args: dict) -> str:
+    """Synthesize a brief human-readable reasoning note for a tool call."""
+    if name == "get_repo_summary":
+        paths = args.get("paths", [])
+        if paths:
+            sample = ", ".join(str(p) for p in paths[:3])
+            return f"Scanning {sample}" + (" and more..." if len(paths) > 3 else "...")
+        return "Scanning repository overview..."
+    if name == "read_file":
+        path = args.get("path", "file")
+        return f"Reading {path}..."
+    if name == "read_multiple_files":
+        paths = args.get("paths", [])
+        n = len(paths)
+        if n == 1:
+            return f"Reading {paths[0]}..."
+        sample = paths[0] if paths else "files"
+        return f"Reading {n} files ({sample}, ...)..."
+    if name == "search_code":
+        pattern = args.get("pattern", "")
+        return f'Searching for "{pattern}"...' if pattern else "Searching codebase..."
+    if name == "list_repo_files":
+        path = args.get("path", "")
+        return f"Listing files in {path}..." if path else "Listing repository files..."
+    if name == "get_file_outline":
+        path = args.get("path", "file")
+        return f"Getting outline of {path}..."
+    if name == "submit_result":
+        return "Compiling final findings..."
+    # Generic fallback
+    return f"Running {name}..."
+
+
 async def run_explore(
     provider: LLMProvider,
     raw_prompt: str,
@@ -203,10 +236,16 @@ async def run_explore(
     def _on_tool_call(name: str, args: dict) -> None:
         """Sync callback; enqueues event for immediate SSE yield.
 
-        Also captures partial structured output when the agent calls
-        submit_result (ClaudeCLIProvider path) so that timeout recovery
-        can surface any data accumulated before the deadline.
+        Emits a reasoning entry before each tool call so the activity feed
+        shows intent → action rather than bare tool calls. Also captures
+        partial structured output when the agent calls submit_result
+        (ClaudeCLIProvider path) so that timeout recovery can surface any
+        data accumulated before the deadline.
         """
+        # Emit a reasoning entry before the tool call so the feed shows
+        # intent → action rather than bare tool calls.
+        reasoning = _describe_tool_call(name, args)
+        event_queue.put_nowait(("agent_text", {"content": reasoning}))
         event_queue.put_nowait(("tool_call", {
             "tool": name,
             "input": args,
@@ -227,6 +266,9 @@ async def run_explore(
             user=(
                 f"Explore the repository {repo_full_name} (branch: {used_branch}) "
                 f"to build context for optimizing this prompt:\n\n{raw_prompt}"
+                "\n\nIMPORTANT: When you have finished exploring, you MUST call "
+                "the `submit_result` tool with your complete findings. "
+                "Do not write findings as plain text — call submit_result."
             ),
             model=model,
             tools=tools,

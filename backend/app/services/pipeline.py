@@ -250,6 +250,9 @@ async def run_pipeline(
             analysis=analysis,
             strategy=strategy_result,
             codebase_context=codebase_context,
+            file_contexts=file_contexts,
+            url_fetched_contexts=url_fetched_contexts,
+            instructions=instructions,
         ):
             if event_type == "optimization":
                 optimization_result = event_data
@@ -384,6 +387,9 @@ async def run_pipeline(
                 analysis=analysis,
                 strategy=strategy_result,
                 codebase_context=codebase_context,
+                file_contexts=file_contexts,
+                url_fetched_contexts=url_fetched_contexts,
+                instructions=instructions,
                 retry_constraints={
                     "min_score_target": LOW_SCORE_THRESHOLD + 2,
                     "previous_score": overall_score,

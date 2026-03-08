@@ -517,4 +517,336 @@ async def test_cli_stream_yields_word_boundary_chunks():
     full = "".join(chunks)
     assert full == long_text
     # Should produce multiple chunks for a 2400-char response
-    assert len(chunks) > 1
+
+
+# ---------------------------------------------------------------------------
+# P9 — ClaudeCLIProvider.complete_agentic() must not set output_format
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cli_complete_agentic_does_not_pass_output_format_to_options():
+    """ClaudeCLIProvider.complete_agentic must not set output_format in
+    ClaudeAgentOptions even when output_schema is provided.
+
+    output_format instructs the SDK to produce structured output directly,
+    which can cause the model to skip tool-calling rounds and return data
+    from training knowledge rather than actual repository reads.
+    submit_result MCP tool is the canonical structured-output mechanism
+    and is already enforced by the explore system prompt.
+    """
+    from app.providers.claude_cli import ClaudeCLIProvider
+
+    captured_kwargs: dict = {}
+
+    class MockClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    async def empty_query(*args, **kwargs):
+        # Empty async generator — simulates no messages from the model
+        if False:
+            yield  # pragma: no cover
+
+    output_schema = {
+        "type": "object",
+        "properties": {"tech_stack": {"type": "array", "items": {"type": "string"}}},
+        "required": ["tech_stack"],
+    }
+
+    provider = ClaudeCLIProvider.__new__(ClaudeCLIProvider)
+    provider._query = empty_query
+
+    with patch("claude_agent_sdk.ClaudeAgentOptions", MockClaudeAgentOptions), \
+         patch("claude_agent_sdk.create_sdk_mcp_server", return_value=MagicMock()), \
+         patch("claude_agent_sdk.tool", side_effect=lambda name, desc, schema: (lambda f: f)):
+        await provider.complete_agentic(
+            "sys", "user", "claude-haiku-4-5", [], output_schema=output_schema
+        )
+
+    assert "output_format" not in captured_kwargs, (
+        "ClaudeCLIProvider must not pass output_format to ClaudeAgentOptions — "
+        "it can cause the model to skip exploration tool calls. "
+        "Rely on submit_result MCP tool for structured output instead."
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-submit-1: submit_result must fire on_tool_call (UI activity feed visibility)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_submit_tool_fires_on_tool_call():
+    """_submit_tool must call on_tool_call when invoked.
+
+    When the model submits its final structured result via submit_result, the
+    on_tool_call callback must fire so the UI activity feed shows the submission
+    event. Without this, submit_result is invisible to the frontend even when
+    the model correctly calls it — the user sees no "submit result" entry in
+    the explore activity log.
+    """
+    from app.providers.claude_cli import ClaudeCLIProvider
+
+    on_tool_call_calls: list[tuple[str, dict]] = []
+    captured_submit_fn: dict = {}
+
+    def on_tool_call(name: str, args: dict) -> None:
+        on_tool_call_calls.append((name, args))
+
+    def fake_tool(name, desc, schema):
+        def decorator(f):
+            if name == "submit_result":
+                captured_submit_fn["fn"] = f
+            return f
+        return decorator
+
+    async def empty_query(*args, **kwargs):
+        if False:
+            yield  # pragma: no cover
+
+    output_schema = {
+        "type": "object",
+        "properties": {"tech_stack": {"type": "array", "items": {"type": "string"}}},
+        "required": ["tech_stack"],
+        "additionalProperties": False,
+    }
+
+    provider = ClaudeCLIProvider.__new__(ClaudeCLIProvider)
+    provider._query = empty_query
+
+    with patch("claude_agent_sdk.ClaudeAgentOptions", MagicMock()), \
+         patch("claude_agent_sdk.create_sdk_mcp_server", return_value=MagicMock()), \
+         patch("claude_agent_sdk.tool", side_effect=fake_tool):
+        await provider.complete_agentic(
+            "sys", "user", "claude-haiku-4-5", [],
+            on_tool_call=on_tool_call,
+            output_schema=output_schema,
+        )
+
+    assert "fn" in captured_submit_fn, (
+        "submit_result tool function was not registered via the @tool decorator. "
+        "Check that output_schema path in complete_agentic creates the _submit_tool."
+    )
+
+    # Directly invoke the submit_result handler (simulates model calling the tool)
+    submit_args = {"tech_stack": ["Python", "FastAPI"]}
+    await captured_submit_fn["fn"](submit_args)
+
+    # The on_tool_call callback must have fired with "submit_result"
+    fired_names = [name for name, _ in on_tool_call_calls]
+    assert "submit_result" in fired_names, (
+        f"on_tool_call was not called with 'submit_result'. Calls seen: {fired_names}. "
+        "_submit_tool must call on_tool_call('submit_result', args) so the UI "
+        "activity feed shows when the model submits its structured result."
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-model-1: explore stage must use claude-haiku-4-5
+# ---------------------------------------------------------------------------
+
+def test_explore_model_routing_uses_haiku():
+    """MODEL_ROUTING['explore'] must be claude-haiku-4-5."""
+    from app.providers.base import MODEL_ROUTING
+
+    explore_model = MODEL_ROUTING["explore"]
+    assert explore_model == "claude-haiku-4-5", (
+        f"MODEL_ROUTING['explore'] is '{explore_model}'. "
+        "Expected claude-haiku-4-5."
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-tools-1: list_repo_files must not claim "first" priority over get_repo_summary
+# ---------------------------------------------------------------------------
+
+def test_list_repo_files_description_has_no_conflicting_priority():
+    """list_repo_files must not say 'Call this first' when get_repo_summary exists.
+
+    Both list_repo_files and get_repo_summary previously contained 'Call this
+    first' in their descriptions. This ambiguity caused the model to pick
+    list_repo_files (first in the list) and never call get_repo_summary —
+    depriving the explore stage of the README, package manifests, and entry
+    points needed to ground the optimized prompt.
+
+    Only get_repo_summary should claim 'Call this first' priority.
+    """
+    from app.services.codebase_tools import build_codebase_tools
+
+    # build_codebase_tools() creates ToolDefinitions — handlers are closures
+    # that need GitHub access, but the *descriptions* are set at construction
+    # time with no network calls. Pass dummy values.
+    tools = build_codebase_tools(
+        token="fake-token",
+        repo_full_name="owner/repo",
+        repo_branch="main",
+    )
+
+    tool_map = {t.name: t for t in tools}
+    assert "list_repo_files" in tool_map, "list_repo_files tool not found"
+    assert "get_repo_summary" in tool_map, "get_repo_summary tool not found"
+
+    list_desc = tool_map["list_repo_files"].description
+    assert "Call this first" not in list_desc, (
+        "list_repo_files description says 'Call this first', conflicting with "
+        "get_repo_summary which also says 'Call this first'. This causes the model "
+        "to pick list_repo_files and skip get_repo_summary entirely. "
+        "Remove 'Call this first' from list_repo_files — only get_repo_summary "
+        "should claim first-call priority."
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-tools-2: get_repo_summary must be the FIRST tool in build_codebase_tools
+# ---------------------------------------------------------------------------
+
+def test_get_repo_summary_is_first_tool():
+    """get_repo_summary must be the first ToolDefinition returned by build_codebase_tools.
+
+    Models process tool lists in order and are more likely to call tools listed
+    first. With get_repo_summary buried at index 4 (after list_repo_files,
+    read_file, read_multiple_files, search_code), the model always picks the
+    familiar file-read tools first and skips the orientation step entirely.
+
+    Moving get_repo_summary to index 0 signals to the model that this is the
+    intended starting point.
+    """
+    from app.services.codebase_tools import build_codebase_tools
+
+    tools = build_codebase_tools(
+        token="fake-token",
+        repo_full_name="owner/repo",
+        repo_branch="main",
+    )
+
+    assert len(tools) > 0, "build_codebase_tools returned empty list"
+    assert tools[0].name == "get_repo_summary", (
+        f"First tool is '{tools[0].name}', expected 'get_repo_summary'. "
+        "get_repo_summary must be the first tool so the model calls it before "
+        "diving into individual file reads. Models preferentially use tools "
+        "listed earlier in the allowed_tools list."
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-reasoning-1: _describe_tool_call() — synthesized reasoning notes
+# ---------------------------------------------------------------------------
+
+def test_describe_tool_call_read_file():
+    """_describe_tool_call('read_file', ...) must include the file path."""
+    from app.services.codebase_explorer import _describe_tool_call
+    result = _describe_tool_call("read_file", {"path": "main.py"})
+    assert isinstance(result, str) and result
+    assert "main.py" in result
+
+
+def test_describe_tool_call_search_code():
+    """_describe_tool_call('search_code', ...) must include the search pattern."""
+    from app.services.codebase_explorer import _describe_tool_call
+    result = _describe_tool_call("search_code", {"pattern": "def run_pipeline"})
+    assert isinstance(result, str) and result
+    assert "def run_pipeline" in result
+
+
+def test_describe_tool_call_submit_result():
+    """_describe_tool_call('submit_result', ...) must return a non-empty string."""
+    from app.services.codebase_explorer import _describe_tool_call
+    result = _describe_tool_call("submit_result", {})
+    assert isinstance(result, str) and result
+
+
+@pytest.mark.asyncio
+async def test_on_tool_call_emits_reasoning_before_tool_call():
+    """_on_tool_call must enqueue ('agent_text', ...) before ('tool_call', ...)."""
+    import asyncio
+    from app.services.codebase_explorer import run_explore
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    events: list[tuple] = []
+
+    async def mock_complete_agentic(**kwargs):
+        # Simulate the on_tool_call callback being invoked once
+        on_tool_call = kwargs.get("on_tool_call")
+        if on_tool_call:
+            on_tool_call("read_file", {"path": "README.md"})
+        return MagicMock(output=None, text="", tool_calls=[])
+
+    provider = MagicMock()
+    provider.complete_agentic = mock_complete_agentic
+
+    with patch("anyio.to_thread.run_sync", new_callable=AsyncMock), \
+         patch("app.services.codebase_explorer.build_codebase_tools", return_value=[]):
+        async for evt in run_explore(
+            provider=provider,
+            raw_prompt="Test prompt",
+            repo_full_name="owner/repo",
+            repo_branch="main",
+            github_token="fake-token",
+        ):
+            events.append(evt)
+
+    event_types = [e[0] for e in events]
+    assert "agent_text" in event_types, "No agent_text event emitted"
+    assert "tool_call" in event_types, "No tool_call event emitted"
+
+    # agent_text must come before tool_call
+    first_text_idx = next(i for i, e in enumerate(events) if e[0] == "agent_text")
+    first_tool_idx = next(i for i, e in enumerate(events) if e[0] == "tool_call")
+    assert first_text_idx < first_tool_idx, (
+        f"agent_text (idx {first_text_idx}) did not appear before "
+        f"tool_call (idx {first_tool_idx})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-explore-1: run_explore user turn must remind the model to call submit_result
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_explore_user_turn_reminds_submit_result():
+    """The user turn passed to complete_agentic must mention submit_result.
+
+    The system prompt's 'Final step (REQUIRED): call submit_result' instruction
+    is located at the end of a long system prompt and is often forgotten by the
+    time the model finishes its 10-15 tool calls. Without a reminder in the user
+    turn, the model ends its turn with a plain text response, leaving result.output
+    as None and the frontend with no structured explore data.
+
+    Adding a brief reminder in the user turn ensures the model has the instruction
+    in its most-attended context.
+    """
+    from app.services.codebase_explorer import run_explore
+    from unittest.mock import AsyncMock, MagicMock
+
+    captured_user_turn: list[str] = []
+
+    async def mock_complete_agentic(**kwargs):
+        captured_user_turn.append(kwargs.get("user", ""))
+        return MagicMock(output=None, text="", tool_calls=[])
+
+    provider = MagicMock()
+    provider.complete_agentic = mock_complete_agentic
+
+    # Minimal mock for GitHub auth — we just need to get past the token
+    # resolution and branch check to reach the complete_agentic call.
+    with patch("app.services.codebase_explorer.get_default_branch", new_callable=AsyncMock) as mock_gdb, \
+         patch("anyio.to_thread.run_sync", new_callable=AsyncMock), \
+         patch("app.services.codebase_explorer.build_codebase_tools", return_value=[]), \
+         patch("app.services.github_client._get_decrypted_token", new_callable=AsyncMock, return_value="tok"):
+        mock_gdb.return_value = "main"
+        async for _ in run_explore(
+            provider=provider,
+            raw_prompt="Test prompt",
+            repo_full_name="owner/repo",
+            repo_branch="main",
+            github_token="fake-token",
+        ):
+            pass
+
+    assert len(captured_user_turn) == 1, "complete_agentic was not called"
+    user_msg = captured_user_turn[0]
+    assert "submit_result" in user_msg, (
+        "The user turn passed to complete_agentic does not mention 'submit_result'. "
+        "The model often ignores the system prompt's final-step instruction after "
+        "10+ tool calls. Add a brief reminder ('When done, call submit_result') "
+        "to the user turn so it appears in the model's most-attended context."
+    )

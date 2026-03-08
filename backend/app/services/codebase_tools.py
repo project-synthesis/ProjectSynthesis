@@ -134,8 +134,8 @@ def build_codebase_tools(
         name="list_repo_files",
         description=(
             "List all files in the linked repository. Returns the complete file tree "
-            "with paths, sizes, and SHA hashes. Call this first to understand "
-            "the repository structure before reading specific files."
+            "with paths, sizes, and SHA hashes. Use to browse the repository structure "
+            "and find specific files to read."
         ),
         input_schema={
             "type": "object",
@@ -409,9 +409,11 @@ def build_codebase_tools(
     get_repo_summary = ToolDefinition(
         name="get_repo_summary",
         description=(
-            "Get a high-level summary of the repository: README content, "
-            "package/dependency files, and entry points. Always call this first "
-            "to get oriented before exploring specific files."
+            "Get a pre-compiled orientation package: root directory listing, README, "
+            "package manifests (package.json, pyproject.toml, go.mod, etc.), and "
+            "Dockerfile/docker-compose — all in a single turn. Equivalent to 5–8 "
+            "individual file reads but costs only 1 turn. Call this first before any "
+            "other tool to orient yourself efficiently."
         ),
         input_schema={
             "type": "object",
@@ -488,10 +490,10 @@ def build_codebase_tools(
     )
 
     return [
-        list_repo_files,
-        read_file,
-        search_code,
-        read_multiple_files,
-        get_repo_summary,
-        get_file_outline,
+        get_repo_summary,    # first: orientation (README, manifests, root dir) in 1 turn
+        read_multiple_files, # batch reads — more efficient than individual read_file calls
+        read_file,           # single file read with optional line range
+        search_code,         # pattern search across the full tree
+        list_repo_files,     # filtered file tree listing
+        get_file_outline,    # function/class signatures without full content
     ]

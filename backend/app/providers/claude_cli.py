@@ -174,8 +174,17 @@ class ClaudeCLIProvider(LLMProvider):
                 ),
                 output_schema,
             )
-            async def _submit_tool(args: dict, _cap=captured_output) -> dict:
+            async def _submit_tool(
+                args: dict,
+                _cap=captured_output,
+                _on=on_tool_call,
+            ) -> dict:
                 _cap.update(args)
+                if _on:
+                    try:
+                        _on("submit_result", args)
+                    except Exception as _cb_err:
+                        logger.warning("on_tool_call callback raised: %s", _cb_err)
                 return {"content": [{"type": "text", "text": "Result submitted. Exploration complete."}]}
 
             sdk_tools.append(_submit_tool)
@@ -187,20 +196,19 @@ class ClaudeCLIProvider(LLMProvider):
         if output_schema:
             allowed.append("mcp__pf-tools__submit_result")
 
-        # Use SDK-native output_format for schema-enforced structured output.
-        # Falls back to captured_output from the submit_result MCP tool if the
-        # SDK version doesn't support output_format.
-        options_kwargs: dict = dict(
+        # Do NOT set output_format in ClaudeAgentOptions.  When output_format is
+        # set, the SDK may surface structured output via ResultMessage.structured_output
+        # without the model having called any exploration tools — the model fills
+        # the schema from training knowledge rather than actual repository reads.
+        # submit_result MCP tool is the canonical structured-output mechanism and is
+        # enforced by the explore system prompt ("you MUST call the submit_result tool").
+        options = ClaudeAgentOptions(
             system_prompt=system,
             model=model,
             max_turns=max_turns,
             mcp_servers={"pf-tools": mcp_server},
             allowed_tools=allowed,
         )
-        if output_schema:
-            options_kwargs["output_format"] = {"type": "json_schema", "schema": output_schema}
-
-        options = ClaudeAgentOptions(**options_kwargs)
 
         full_text = ""
         sdk_structured_output: dict | None = None
