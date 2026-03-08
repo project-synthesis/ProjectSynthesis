@@ -35,6 +35,7 @@ class Optimization(Base):
     framework_applied = Column(Text, nullable=True)
     optimization_notes = Column(Text, nullable=True)
     strategy_rationale = Column(Text, nullable=True)
+    strategy_source = Column(Text, nullable=True)  # "llm" | "llm_json" | "heuristic" | "override"
 
     # Validation scores (1-10)
     clarity_score = Column(Integer, nullable=True)

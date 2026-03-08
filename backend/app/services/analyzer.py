@@ -55,7 +55,7 @@ async def run_analyze(
         blocks = []
         for uc in url_fetched_contexts[:3]:
             url = uc.get("url", "url")
-            content = str(uc.get("content", ""))  # N41: capped at source (url_fetcher.py)
+            content = str(uc.get("content", ""))[:1500]
             blocks.append(f"[{url}]\n{content}")
         user_message += "\n\nReferenced URLs:\n" + "\n\n".join(blocks)
 

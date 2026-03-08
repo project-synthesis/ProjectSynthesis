@@ -9,6 +9,7 @@ GitHub tools accept explicit token parameter — no shared mutable session state
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -224,20 +225,21 @@ def create_mcp_server(provider=None) -> FastMCP:
         prov = ctx.request_context.lifespan_context.provider
         url_fetched = await fetch_url_contexts(url_contexts)
         results = {}
-        async for event_type, event_data in run_pipeline(
-            provider=prov,
-            raw_prompt=prompt,
-            optimization_id=_new_run_id("mcp"),
-            strategy_override=strategy,
-            repo_full_name=repo_full_name,
-            repo_branch=repo_branch,
-            github_token=github_token,
-            file_contexts=file_contexts,
-            instructions=instructions,
-            url_fetched_contexts=url_fetched,
-        ):
-            if event_type in ("analysis", "strategy", "optimization", "validation", "complete"):
-                results[event_type] = event_data
+        async with asyncio.timeout(settings.PIPELINE_TIMEOUT_SECONDS):
+            async for event_type, event_data in run_pipeline(
+                provider=prov,
+                raw_prompt=prompt,
+                optimization_id=_new_run_id("mcp"),
+                strategy_override=strategy,
+                repo_full_name=repo_full_name,
+                repo_branch=repo_branch,
+                github_token=github_token,
+                file_contexts=file_contexts,
+                instructions=instructions,
+                url_fetched_contexts=url_fetched,
+            ):
+                if event_type in ("analysis", "strategy", "optimization", "validation", "complete"):
+                    results[event_type] = event_data
         return json.dumps(results, indent=2)
 
     @mcp.tool(
@@ -363,26 +365,76 @@ def create_mcp_server(provider=None) -> FastMCP:
             project: Scope stats to this project label. Omit for global stats.
 
         Returns:
-            JSON with total count, average_score, and task_type breakdown.
+            JSON with total_optimizations, average_score, task_type_breakdown,
+            framework_breakdown, provider_breakdown, model_usage,
+            codebase_aware_count, improvement_rate.
         """
         query = select(Optimization)
         if project:
             query = query.where(Optimization.project == project)
         async with async_session() as session:
             result = await session.execute(query)
-            rows = [
-                (o.overall_score, o.task_type)
-                for o in result.scalars().all()
-            ]
-        scores = [s for s, _ in rows if s is not None]
-        task_counts: dict[str, int] = {}
-        for _, t in rows:
-            if t:
-                task_counts[str(t)] = task_counts.get(str(t), 0) + 1
+            optimizations = result.scalars().all()
+
+        if not optimizations:
+            return json.dumps({
+                "total_optimizations": 0,
+                "average_score": None,
+                "task_type_breakdown": {},
+                "framework_breakdown": {},
+                "provider_breakdown": {},
+                "model_usage": {},
+                "codebase_aware_count": 0,
+                "improvement_rate": None,
+            }, indent=2)
+
+        total = len(optimizations)
+        scores = [o.overall_score for o in optimizations if o.overall_score is not None]
+        avg_score = round(sum(scores) / len(scores), 2) if scores else None
+
+        task_types: dict[str, int] = {}
+        for o in optimizations:
+            if o.task_type:
+                k = str(o.task_type)
+                task_types[k] = task_types.get(k, 0) + 1
+
+        frameworks: dict[str, int] = {}
+        for o in optimizations:
+            if o.primary_framework:
+                k = str(o.primary_framework)
+                frameworks[k] = frameworks.get(k, 0) + 1
+
+        providers_breakdown: dict[str, int] = {}
+        for o in optimizations:
+            if o.provider_used:
+                k = str(o.provider_used)
+                providers_breakdown[k] = providers_breakdown.get(k, 0) + 1
+
+        model_usage: dict[str, int] = {}
+        for o in optimizations:
+            for model_field in ("model_explore", "model_analyze", "model_strategy",
+                                "model_optimize", "model_validate"):
+                model = getattr(o, model_field)
+                if model:
+                    model_usage[str(model)] = model_usage.get(str(model), 0) + 1
+
+        codebase_aware = sum(1 for o in optimizations if o.linked_repo_full_name is not None)
+
+        validated = [o for o in optimizations if o.is_improvement is not None]
+        improvement_rate = None
+        if validated:
+            improvements = sum(1 for o in validated if o.is_improvement)
+            improvement_rate = round(improvements / len(validated), 3)
+
         return json.dumps({
-            "total": len(rows),
-            "average_score": round(sum(scores) / len(scores), 2) if scores else None,
-            "task_type_breakdown": dict(sorted(task_counts.items(), key=lambda x: -x[1])),
+            "total_optimizations": total,
+            "average_score": avg_score,
+            "task_type_breakdown": dict(sorted(task_types.items(), key=lambda x: -x[1])),
+            "framework_breakdown": dict(sorted(frameworks.items(), key=lambda x: -x[1])),
+            "provider_breakdown": dict(sorted(providers_breakdown.items(), key=lambda x: -x[1])),
+            "model_usage": model_usage,
+            "codebase_aware_count": codebase_aware,
+            "improvement_rate": improvement_rate,
         }, indent=2)
 
     @mcp.tool(

@@ -29,5 +29,7 @@ class Settings(BaseSettings):
     # tightens focus_areas to only the single lowest-scoring dimension.
     MAX_PIPELINE_RETRIES: int = 1
 
+    PIPELINE_TIMEOUT_SECONDS: int = 900  # 15-minute outer limit
+
 
 settings = Settings()

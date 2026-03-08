@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.config import settings
 from app.database import check_db_connection
@@ -10,15 +10,15 @@ from app.providers.base import MODEL_ROUTING
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
-# Will be set by main.py lifespan
+# Deprecated: use request.app.state.provider. Kept for backward compat with main.py lifespan.
 _provider = None
 
 _MCP_PROBE_TIMEOUT = 2.0  # seconds
 
 
 def set_provider(provider):
-    global _provider
-    _provider = provider
+    """Deprecated: provider is now read from app.state. Kept for main.py compat."""
+    pass  # no-op — provider injected via app.state at startup
 
 
 async def _probe_mcp() -> bool:
@@ -40,7 +40,7 @@ async def _probe_mcp() -> bool:
 
 
 @router.get("/api/health")
-async def health_check():
+async def health_check(request: Request):
     """Health check endpoint returning system status."""
     db_ok, mcp_ok = await asyncio.gather(
         check_db_connection(),
@@ -51,7 +51,8 @@ async def health_check():
         settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET
     )
 
-    provider_name = _provider.name if _provider else "none"
+    _prov = getattr(request.app.state, "provider", None)
+    provider_name = _prov.name if _prov else "none"
     overall = "ok" if db_ok else "degraded"
 
     mcp_url = f"http://{settings.MCP_HOST}:{settings.MCP_PORT}/mcp"

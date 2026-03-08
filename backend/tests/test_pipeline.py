@@ -177,3 +177,138 @@ async def test_pipeline_retry_also_forwards_file_contexts():
     for i, call_kwargs in enumerate(captured_calls):
         assert call_kwargs.get("file_contexts") == file_contexts, \
             f"Optimize call #{i + 1} must receive file_contexts"
+
+
+# ---------------------------------------------------------------------------
+# P-sentinel-1: optimizer failure sentinel causes validate skip
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_optimizer_failure_skips_validate():
+    """When optimizer emits optimization_failed=True, validate stage must be skipped."""
+    from app.services.pipeline import run_pipeline
+
+    provider = MagicMock()
+
+    async def mock_analyze(*args, **kwargs):
+        yield ("analysis", {
+            "task_type": "general",
+            "complexity": "moderate",
+            "weaknesses": [],
+            "strengths": [],
+            "recommended_frameworks": ["CO-STAR"],
+            "codebase_informed": False,
+        })
+
+    async def mock_strategy(*args, **kwargs):
+        yield ("strategy", {
+            "primary_framework": "CO-STAR",
+            "secondary_frameworks": [],
+            "rationale": "test",
+            "approach_notes": "test",
+        })
+
+    async def mock_optimize(*args, **kwargs):
+        yield ("optimization", {
+            "optimized_prompt": "",
+            "changes_made": [],
+            "framework_applied": "CO-STAR",
+            "optimization_notes": "",
+            "optimization_failed": True,
+        })
+
+    events = []
+    with patch("app.services.pipeline.run_analyze", mock_analyze), \
+         patch("app.services.pipeline.run_strategy", mock_strategy), \
+         patch("app.services.pipeline.run_optimize", mock_optimize):
+        async for event_type, event_data in run_pipeline(
+            provider=provider,
+            raw_prompt="test prompt",
+            optimization_id="test-123",
+        ):
+            events.append((event_type, event_data))
+
+    # validate stage event must be present with status="skipped"
+    stage_events = [(et, ed) for et, ed in events if et == "stage"]
+    validate_events = [(et, ed) for et, ed in stage_events if ed.get("stage") == "validate"]
+    assert len(validate_events) == 1
+    assert validate_events[0][1]["status"] == "skipped"
+
+    # error event should be emitted for the optimize stage with recoverable=False
+    error_events = [(et, ed) for et, ed in events if et == "error"]
+    assert len(error_events) >= 1
+    opt_error = next((ed for et, ed in error_events if ed.get("stage") == "optimize"), None)
+    assert opt_error is not None
+    assert opt_error["recoverable"] is False
+
+
+# ---------------------------------------------------------------------------
+# P-default-1: empty analysis gets default task_type and complexity
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_empty_analysis_defaults_to_general():
+    """When run_analyze yields {} (no task_type), pipeline defaults to 'general'."""
+    from app.services.pipeline import run_pipeline
+
+    provider = MagicMock()
+
+    async def mock_analyze_empty(*args, **kwargs):
+        yield ("analysis", {})
+
+    received_analysis: dict = {}
+
+    async def mock_strategy(provider, raw_prompt, analysis, **kwargs):
+        received_analysis.update(analysis)
+        yield ("strategy", {
+            "primary_framework": "CO-STAR",
+            "secondary_frameworks": [],
+            "rationale": "test",
+            "approach_notes": "test",
+        })
+
+    async def mock_optimize(*args, **kwargs):
+        yield ("optimization", {
+            "optimized_prompt": "optimized",
+            "changes_made": [],
+            "framework_applied": "CO-STAR",
+            "optimization_notes": "",
+            "optimization_failed": False,
+        })
+
+    async def mock_validate(*args, **kwargs):
+        yield ("validation", {
+            "scores": {
+                "clarity_score": 8,
+                "specificity_score": 8,
+                "structure_score": 8,
+                "faithfulness_score": 8,
+                "conciseness_score": 8,
+                "overall_score": 8,
+            },
+            "overall_score": 8,
+            "is_improvement": True,
+            "verdict": "Good",
+            "issues": [],
+        })
+
+    events = []
+    with patch("app.services.pipeline.run_analyze", mock_analyze_empty), \
+         patch("app.services.pipeline.run_strategy", mock_strategy), \
+         patch("app.services.pipeline.run_optimize", mock_optimize), \
+         patch("app.services.pipeline.run_validate", mock_validate):
+        async for event_type, event_data in run_pipeline(
+            provider=provider,
+            raw_prompt="test prompt",
+            optimization_id="test-456",
+        ):
+            events.append((event_type, event_data))
+
+    # The analysis event emitted by the pipeline should have the defaulted fields
+    analysis_events = [(et, ed) for et, ed in events if et == "analysis"]
+    assert len(analysis_events) == 1
+    assert analysis_events[0][1]["task_type"] == "general"
+    assert analysis_events[0][1]["complexity"] == "moderate"
+
+    # Strategy should have received the defaulted analysis
+    assert received_analysis.get("task_type") == "general"

@@ -8,7 +8,7 @@ import asyncio
 import logging
 import shutil
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.config import settings
 from app.providers.base import MODEL_ROUTING
@@ -16,18 +16,17 @@ from app.providers.base import MODEL_ROUTING
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["providers"])
 
-# Set by main.py lifespan handler
+# Deprecated: use request.app.state.provider. Kept for backward compat with main.py lifespan.
 _provider = None
 
 
 def set_provider(provider):
-    """Inject the detected LLM provider at startup."""
-    global _provider
-    _provider = provider
+    """Deprecated: provider is now read from app.state. Kept for main.py compat."""
+    pass  # no-op — provider injected via app.state at startup
 
 
 @router.get("/api/providers/detect")
-async def detect_providers():
+async def detect_providers(request: Request):
     """Detect available LLM providers.
 
     Checks for the Claude CLI on PATH and the ANTHROPIC_API_KEY
@@ -78,7 +77,8 @@ async def detect_providers():
     }
 
     # Current active provider
-    active_provider = _provider.name if _provider else "none"
+    _prov = getattr(request.app.state, "provider", None)
+    active_provider = _prov.name if _prov else "none"
 
     return {
         "providers": providers,
@@ -87,7 +87,7 @@ async def detect_providers():
 
 
 @router.get("/api/providers/status")
-async def provider_status():
+async def provider_status(request: Request):
     """Provider health check.
 
     Returns the current provider status, model routing configuration,
@@ -96,7 +96,8 @@ async def provider_status():
     Returns:
         Dict with provider health information.
     """
-    if not _provider:
+    _prov = getattr(request.app.state, "provider", None)
+    if not _prov:
         return {
             "status": "unavailable",
             "provider": None,
@@ -109,7 +110,7 @@ async def provider_status():
     message = "Provider is operational."
     try:
         # Use the cheapest model for the health check
-        response = await _provider.complete(
+        response = await _prov.complete(
             system="Respond with exactly: OK",
             user="Health check",
             model=MODEL_ROUTING["analyze"],
@@ -124,7 +125,7 @@ async def provider_status():
 
     return {
         "status": "healthy" if healthy else "degraded",
-        "provider": _provider.name,
+        "provider": _prov.name,
         "healthy": healthy,
         "message": message,
     }

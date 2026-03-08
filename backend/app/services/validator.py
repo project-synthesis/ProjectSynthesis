@@ -54,7 +54,8 @@ def compute_overall_score(scores: dict) -> int:
 def _default_validation() -> dict:
     """Default validation result used when all providers fail."""
     return {
-        "is_improvement": True,
+        "is_improvement": False,
+        "validation_quality": "failed",
         "clarity_score": 5,
         "specificity_score": 5,
         "structure_score": 5,
@@ -105,7 +106,7 @@ async def run_validate(
         if codebase_summary:
             user_message += (
                 f"\n\nCodebase context (verify optimized prompt references real symbols/APIs):\n"
-                f"{codebase_summary[:800]}"
+                f"{codebase_summary[:2500]}"
             )
 
     model = MODEL_ROUTING["validate"]
@@ -190,7 +191,9 @@ async def run_validate(
         # overall_score is mirrored at top-level as a convenience for pipeline
         # retry logic and direct DB writes without requiring sub-dict access
         "overall_score": overall_score,
-        "is_improvement": raw.get("is_improvement", True),
+        "is_improvement": raw.get("is_improvement", False),
         "verdict": raw.get("verdict", ""),
         "issues": raw.get("issues", []),
+        # Pass through validation_quality if set (e.g. "failed" from _default_validation)
+        **({"validation_quality": raw["validation_quality"]} if "validation_quality" in raw else {}),
     })

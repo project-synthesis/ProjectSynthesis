@@ -165,6 +165,10 @@
         url_contexts: urlContexts.length > 0 ? urlContexts : undefined,
       },
       (event: SSEEvent) => {
+        if (typeof event.data !== 'object' || event.data === null) {
+          console.warn('[forge] Unexpected SSE event data:', event.event, typeof event.data);
+          return;
+        }
         const data = event.data as Record<string, unknown>;
         switch (event.event) {
           case 'stage': {
@@ -319,6 +323,11 @@
             break;
           case 'error':
             forge.setStageFailed(data.stage as string || 'pipeline', data.error as string);
+            // Non-recoverable errors signal pipeline termination — stop forging immediately
+            // rather than waiting for the stream to close (avoids stale "forging" UI state)
+            if (data.recoverable === false) {
+              forge.finishForge();
+            }
             break;
           case 'context_warning':
             // Store dropped-context metadata for optional display in the UI

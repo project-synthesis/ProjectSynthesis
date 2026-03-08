@@ -179,7 +179,8 @@ class ClaudeCLIProvider(LLMProvider):
                 _cap=captured_output,
                 _on=on_tool_call,
             ) -> dict:
-                _cap.update(args)
+                if not _cap:
+                    _cap.update(args)
                 if _on:
                     try:
                         _on("submit_result", args)

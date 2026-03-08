@@ -155,6 +155,16 @@ export async function startOptimization(
 ): Promise<AbortController> {
   const controller = new AbortController();
 
+  let capturedOptId: string | null = null;
+
+  const wrappedOnEvent: SSECallback = (event) => {
+    if (event.event === 'complete') {
+      const d = event.data as Record<string, unknown>;
+      if (typeof d?.optimization_id === 'string') capturedOptId = d.optimization_id;
+    }
+    onEvent(event);
+  };
+
   try {
     const res = await fetch(`${BASE}/api/optimize`, {
       method: 'POST',
@@ -196,9 +206,9 @@ export async function startOptimization(
             if (typeMatch && dataMatch) {
               try {
                 const parsed = JSON.parse(dataMatch[1]);
-                onEvent({ event: typeMatch[1], data: parsed });
+                wrappedOnEvent({ event: typeMatch[1], data: parsed });
               } catch {
-                onEvent({ event: typeMatch[1], data: dataMatch[1] });
+                wrappedOnEvent({ event: typeMatch[1], data: dataMatch[1] });
               }
               await Promise.resolve(); // yield so Svelte flushes between events
             }
@@ -206,7 +216,10 @@ export async function startOptimization(
         }
         onComplete();
       } catch (err) {
-        if ((err as Error).name !== 'AbortError') {
+        if ((err as Error).name === 'AbortError') return;
+        if (capturedOptId) {
+          await pollOptimizationStatus(capturedOptId, onEvent, onError, onComplete, controller.signal);
+        } else {
           onError(err as Error);
         }
       }
@@ -228,6 +241,36 @@ export async function fetchOptimization(id: string): Promise<OptimizationRecord>
   const res = await fetch(`${BASE}/api/optimize/${id}`);
   if (!res.ok) throw new Error(`Fetch optimization failed: ${res.status}`);
   return res.json();
+}
+
+const POLL_INTERVAL_MS = 5000;
+const MAX_POLL_ATTEMPTS = 12;  // 60s max
+
+async function pollOptimizationStatus(
+  id: string,
+  onEvent: SSECallback,
+  onError: (e: Error) => void,
+  onComplete: () => void,
+  signal: AbortSignal
+): Promise<void> {
+  for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
+    if (signal.aborted) return;
+    // Poll immediately on first attempt; sleep between subsequent retries
+    if (i > 0) await new Promise(res => setTimeout(res, POLL_INTERVAL_MS));
+    if (signal.aborted) return;
+    try {
+      const record = await fetchOptimization(id);
+      if (record.status === 'completed') {
+        onEvent({ event: 'complete', data: { optimization_id: id, total_duration_ms: record.duration_ms, total_tokens: null }});
+        onComplete(); return;
+      }
+      if (record.status === 'failed') {
+        onError(new Error(record.error_message || 'Optimization failed')); return;
+      }
+      // status === 'running' — keep polling
+    } catch { /* network error during poll — retry */ }
+  }
+  onError(new Error('Status polling timed out after 60s'));
 }
 
 export async function patchOptimization(

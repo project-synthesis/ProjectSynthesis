@@ -58,6 +58,7 @@ async def _migrate_add_missing_columns() -> None:
         "optimizations": {
             "secondary_frameworks": "TEXT",
             "approach_notes": "TEXT",
+            "strategy_source": "TEXT",
         }
     }
 

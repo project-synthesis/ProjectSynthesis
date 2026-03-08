@@ -73,13 +73,14 @@ async def run_optimize(
         blocks = []
         for uc in url_fetched_contexts[:3]:
             url = uc.get("url", "url")
-            content = str(uc.get("content", ""))  # N41: capped at source (url_fetcher.py)
+            content = str(uc.get("content", ""))[:1500]
             blocks.append(f"[{url}]\n{content}")
         user_message += "\n\nReferenced URLs:\n" + "\n\n".join(blocks)
 
     if retry_constraints:
         user_message += (
             f"\n\n--- RETRY WITH ADJUSTED CONSTRAINTS ---\n"
+            f"This is retry attempt {retry_constraints.get('retry_attempt', 1)}.\n"
             f"Previous optimization scored {retry_constraints.get('previous_score', 'low')}/10.\n"
             f"Target minimum score: {retry_constraints.get('min_score_target', 7)}/10.\n"
             f"Focus on improving these issues: {json.dumps(retry_constraints.get('focus_areas', []))}\n"
@@ -155,7 +156,7 @@ async def run_optimize(
             )
         except Exception as e2:
             logger.error(f"Stage 3 (Optimize) complete() also failed: {e2}")
-            full_text = raw_prompt  # Last resort: return original unchanged
+            full_text = ""
 
     # 3-strategy JSON extraction via shared parse_json_robust utility
     parsed = None
@@ -176,13 +177,14 @@ async def run_optimize(
             logger.error(f"Stage 3 (Optimize) complete_json() fallback failed: {e}")
             parsed = None
 
+    optimization_failed = False
     if parsed:
         optimized_prompt = parsed.get("optimized_prompt", full_text)
         changes_made = parsed.get("changes_made", [])
         framework_applied = parsed.get("framework_applied", framework_applied)
         optimization_notes = parsed.get("optimization_notes", "")
-    else:
-        # All extraction strategies exhausted — treat full_text as the optimized prompt
+    elif full_text:
+        # Streaming succeeded, JSON extraction failed — use raw text (degraded)
         logger.warning(
             "optimize stage: all provider calls and JSON extraction strategies failed; "
             "returning %s unchanged",
@@ -191,10 +193,17 @@ async def run_optimize(
         optimized_prompt = full_text
         changes_made = []
         optimization_notes = ""
+    else:
+        # ALL paths failed — signal upstream
+        optimization_failed = True
+        optimized_prompt = ""
+        changes_made = []
+        optimization_notes = ""
 
     yield ("optimization", {
         "optimized_prompt": optimized_prompt,
         "changes_made": changes_made,
         "framework_applied": framework_applied,
         "optimization_notes": optimization_notes,
+        "optimization_failed": optimization_failed,
     })

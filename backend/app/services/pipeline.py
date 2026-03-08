@@ -129,20 +129,28 @@ async def run_pipeline(
 
     total_tokens = 0
 
-    # ---- Context truncation warning ----
-    # Injection caps: 5 files, 3 URLs, 10 instructions. Excess is silently
-    # dropped at injection time; warn the caller before Stage 1 starts.
-    _dropped_files = max(0, len(file_contexts or []) - 5)
-    _dropped_urls = max(0, len(url_fetched_contexts or []) - 3)
-    _dropped_instructions = max(0, len(instructions or []) - 10)
-    if _dropped_files or _dropped_urls or _dropped_instructions:
+    # ---- Context truncation ----
+    # Enforce injection caps BEFORE stages run. Slices happen here so every
+    # downstream stage receives already-truncated lists — no silent over-injection.
+    _orig_files = len(file_contexts or [])
+    _orig_urls  = len(url_fetched_contexts or [])
+    _orig_instr = len(instructions or [])
+
+    file_contexts        = list(file_contexts or [])[:5]
+    url_fetched_contexts = list(url_fetched_contexts or [])[:3]
+    instructions         = list(instructions or [])[:10]
+
+    _dropped_files = max(0, _orig_files - 5)
+    _dropped_urls  = max(0, _orig_urls  - 3)
+    _dropped_instr = max(0, _orig_instr - 10)
+    if _dropped_files or _dropped_urls or _dropped_instr:
         yield ("context_warning", {
             "dropped_files": _dropped_files,
             "dropped_urls": _dropped_urls,
-            "dropped_instructions": _dropped_instructions,
-            "total_files_sent": len(file_contexts or []),
-            "total_urls_sent": len(url_fetched_contexts or []),
-            "total_instructions_sent": len(instructions or []),
+            "dropped_instructions": _dropped_instr,
+            "total_files_received": _orig_files,
+            "total_urls_received": _orig_urls,
+            "total_instructions_received": _orig_instr,
         })
 
     # ---- Stage 1: Analyze ----
@@ -165,6 +173,12 @@ async def run_pipeline(
                 yield (event_type, event_data)
 
         analysis = analysis or {}
+        if not analysis.get("task_type") or not isinstance(analysis.get("task_type"), str):
+            logger.warning("Stage 1 produced no task_type; defaulting to 'general'")
+            analysis["task_type"] = "general"
+        if not analysis.get("complexity") or not isinstance(analysis.get("complexity"), str):
+            logger.warning("Stage 1 produced no complexity; defaulting to 'moderate'")
+            analysis["complexity"] = "moderate"
         analysis["model"] = MODEL_ROUTING["analyze"]
 
         stage_tokens = _estimate_tokens(raw_prompt) + _estimate_tokens(json.dumps(analysis))
@@ -199,6 +213,7 @@ async def run_pipeline(
                 "secondary_frameworks": [],
                 "rationale": f"User-specified strategy override: {strategy_override}",
                 "approach_notes": f"Apply {strategy_override} framework as requested.",
+                "strategy_source": "override",
                 "model": MODEL_ROUTING["strategy"],
             }
         else:
@@ -239,6 +254,7 @@ async def run_pipeline(
         return
 
     # ---- Stage 3: Optimize (streaming) ----
+    _opt_failed = False  # M1: initialize before try so except path never leaves it unbound
     try:
         yield ("stage", {"stage": "optimize", "status": "started"})
         start = time.time()
@@ -272,6 +288,7 @@ async def run_pipeline(
             "duration_ms": int((time.time() - start) * 1000),
             "token_count": stage_tokens,
         })
+        _opt_failed = bool((optimization_result or {}).get("optimization_failed", False))
     except Exception as e:
         logger.error(f"Stage 3 (Optimize) failed fatally: {e}")
         yield ("error", {
@@ -281,6 +298,14 @@ async def run_pipeline(
         })
         for item in _skip_remaining(["validate"]):
             yield item
+        return
+
+    if _opt_failed:
+        logger.error("Skipping Stage 4: optimizer signalled failure")
+        yield ("stage", {"stage": "validate", "status": "skipped"})
+        yield ("error", {"stage": "optimize",
+                         "error": "All optimizer provider calls failed; no prompt to validate.",
+                         "recoverable": False})
         return
 
     # ---- Stage 4: Validate ----
@@ -336,7 +361,7 @@ async def run_pipeline(
     # single lowest-scoring dimension instead of all failing areas.
     retry_count = 0
     overall_score = validation.get("scores", validation).get("overall_score", 10)
-    is_improvement = validation.get("is_improvement", True)
+    is_improvement = validation.get("is_improvement", False)
     while (
         retry_count < settings.MAX_PIPELINE_RETRIES
         and overall_score is not None
@@ -394,6 +419,7 @@ async def run_pipeline(
                     "min_score_target": LOW_SCORE_THRESHOLD + 2,
                     "previous_score": overall_score,
                     "focus_areas": focus_areas,
+                    "retry_attempt": retry_count + 1,
                 },
             ):
                 if event_type == "optimization":
@@ -401,7 +427,11 @@ async def run_pipeline(
                     retry_optimization_result["model"] = MODEL_ROUTING["optimize"]
                 yield (event_type, event_data)
 
-            if retry_optimization_result:
+            # Gate: if retry optimizer also failed totally, skip validate and stop retrying
+            _retry_opt_failed = bool(
+                (retry_optimization_result or {}).get("optimization_failed", False)
+            )
+            if not _retry_opt_failed and retry_optimization_result:
                 optimization_result = retry_optimization_result
 
             opt_text = optimization_result.get("optimized_prompt", "") if optimization_result else ""
@@ -414,6 +444,14 @@ async def run_pipeline(
                 "duration_ms": int((time.time() - start) * 1000),
                 "token_count": stage_tokens,
             })
+
+            if _retry_opt_failed:
+                logger.error("Retry optimizer signalled failure; skipping validate and aborting retry loop")
+                yield ("stage", {"stage": "validate", "status": "skipped"})
+                yield ("error", {"stage": "optimize",
+                                 "error": "Retry optimizer failed; no prompt to validate.",
+                                 "recoverable": False})
+                return
 
             # Re-run validate
             yield ("stage", {"stage": "validate", "status": "started"})
@@ -454,7 +492,7 @@ async def run_pipeline(
 
             # Update loop conditions for next iteration
             overall_score = validation.get("scores", validation).get("overall_score", 10)
-            is_improvement = validation.get("is_improvement", True)
+            is_improvement = validation.get("is_improvement", False)
 
         except Exception as e:
             logger.warning(f"Retry {retry_count + 1} failed: {e}. Using previous validation result.")

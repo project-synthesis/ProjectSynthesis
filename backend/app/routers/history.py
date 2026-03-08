@@ -175,9 +175,9 @@ async def get_stats(
     return {
         "total_optimizations": total,
         "average_score": round(avg_score, 2) if avg_score is not None else None,
-        "task_type_breakdown": task_types,
-        "framework_breakdown": frameworks,
-        "provider_breakdown": providers,
+        "task_type_breakdown": dict(sorted(task_types.items(), key=lambda x: -x[1])),
+        "framework_breakdown": dict(sorted(frameworks.items(), key=lambda x: -x[1])),
+        "provider_breakdown": dict(sorted(providers.items(), key=lambda x: -x[1])),
         "model_usage": model_usage,
         "codebase_aware_count": codebase_aware,
         "improvement_rate": round(improvement_rate, 3) if improvement_rate is not None else None,

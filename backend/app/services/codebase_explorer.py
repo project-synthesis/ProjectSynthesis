@@ -330,7 +330,7 @@ async def run_explore(
             ]
         ctx_dict = asdict(context)
         ctx_dict["explore_failed"] = True
-        ctx_dict["explore_quality"] = "partial"
+        ctx_dict["explore_quality"] = "failed" if context.files_read_count == 0 else "partial"
         ctx_dict["explore_error"] = f"Timed out after {timeout_secs}s"
         yield ("explore_result", ctx_dict)
         return
