@@ -136,6 +136,7 @@ async def optimize_prompt(
                         )
                         optimization.approach_notes = event_data.get("approach_notes")
                         optimization.strategy_rationale = event_data.get("rationale")
+                        optimization.strategy_source = event_data.get("strategy_source")
                         optimization.model_strategy = event_data.get("model")
                     elif event_type == "optimization":
                         optimization.optimized_prompt = event_data.get("optimized_prompt")

@@ -85,6 +85,7 @@ async def run_strategy(
     if not stream_failed and full_text:
         try:
             result = parse_json_robust(full_text)
+            result["strategy_source"] = "llm"
         except Exception:
             pass
 
@@ -95,9 +96,11 @@ async def run_strategy(
                 provider.complete_json(system_prompt, user_message, model),
                 timeout=settings.STRATEGY_TIMEOUT_SECONDS,
             )
+            result["strategy_source"] = "llm_json"
         except Exception as e:
             logger.error(f"Stage 2 (Strategy) failed: {e}. Using heuristic fallback.")
             result = heuristic_strategy_fallback(analysis.get("task_type", "general"))
+            result["strategy_source"] = "heuristic"
 
     # Ensure required fields
     result.setdefault("primary_framework", "CO-STAR")
