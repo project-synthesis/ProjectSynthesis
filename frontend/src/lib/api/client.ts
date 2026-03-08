@@ -1,6 +1,40 @@
 import type { HistoryEntry } from '$lib/stores/history.svelte';
+import { auth } from '$lib/stores/auth.svelte';
 
 const BASE = '';
+
+// ── JWT-aware fetch wrapper ───────────────────────────────────────────────────
+
+/**
+ * Drop-in replacement for ``fetch`` that:
+ *  1. Injects ``Authorization: Bearer <token>`` when a JWT is held in memory.
+ *  2. On a 401 response, silently refreshes the token once and retries.
+ *  3. Falls through to the original behaviour for all non-auth failures.
+ *
+ * All API helper functions in this module use ``apiFetch`` instead of the
+ * global ``fetch`` so that JWT auth is applied consistently.
+ */
+async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers ?? {});
+
+  if (auth.accessToken) {
+    headers.set('Authorization', `Bearer ${auth.accessToken}`);
+  }
+
+  // Use global fetch directly inside this wrapper to avoid recursion.
+  const attempt = await globalThis.fetch(input, { ...init, headers, credentials: 'include' });
+
+  // Attempt a single silent refresh on 401 and retry the original request.
+  if (attempt.status === 401 && auth.accessToken) {
+    const newToken = await auth.refresh();
+    if (newToken) {
+      headers.set('Authorization', `Bearer ${newToken}`);
+      return globalThis.fetch(input, { ...init, headers, credentials: 'include' });
+    }
+  }
+
+  return attempt;
+}
 
 export interface HealthResponse {
   status: string;
@@ -133,7 +167,7 @@ export interface LinkedRepo {
 // ---- Health ----
 
 export async function fetchHealth(): Promise<HealthResponse> {
-  const res = await fetch(`${BASE}/api/health`);
+  const res = await apiFetch(`${BASE}/api/health`);
   if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
   return res.json();
 }
@@ -166,7 +200,7 @@ export async function startOptimization(
   };
 
   try {
-    const res = await fetch(`${BASE}/api/optimize`, {
+    const res = await apiFetch(`${BASE}/api/optimize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -238,7 +272,7 @@ export async function startOptimization(
 // ---- Optimization CRUD ----
 
 export async function fetchOptimization(id: string): Promise<OptimizationRecord> {
-  const res = await fetch(`${BASE}/api/optimize/${id}`);
+  const res = await apiFetch(`${BASE}/api/optimize/${id}`);
   if (!res.ok) throw new Error(`Fetch optimization failed: ${res.status}`);
   return res.json();
 }
@@ -277,7 +311,7 @@ export async function patchOptimization(
   id: string,
   data: { title?: string; tags?: string[]; version?: string; project?: string }
 ): Promise<OptimizationRecord> {
-  const res = await fetch(`${BASE}/api/optimize/${id}`, {
+  const res = await apiFetch(`${BASE}/api/optimize/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
@@ -290,7 +324,7 @@ export async function retryOptimization(
   id: string,
   strategy?: string
 ): Promise<Response> {
-  const res = await fetch(`${BASE}/api/optimize/${id}/retry`, {
+  const res = await apiFetch(`${BASE}/api/optimize/${id}/retry`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ strategy })
@@ -316,19 +350,19 @@ export async function fetchHistory(params: HistoryParams = {}): Promise<HistoryR
   if (params.max_score) searchParams.set('max_score', String(params.max_score));
   if (params.status) searchParams.set('status', params.status);
 
-  const res = await fetch(`${BASE}/api/history?${searchParams.toString()}`);
+  const res = await apiFetch(`${BASE}/api/history?${searchParams.toString()}`);
   if (!res.ok) throw new Error(`Fetch history failed: ${res.status}`);
   return res.json();
 }
 
 export async function deleteOptimization(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/history/${id}`, { method: 'DELETE' });
+  const res = await apiFetch(`${BASE}/api/history/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Delete optimization failed: ${res.status}`);
 }
 
 export async function fetchHistoryStats(project?: string): Promise<HistoryStats> {
   const params = project ? `?project=${encodeURIComponent(project)}` : '';
-  const res = await fetch(`${BASE}/api/history/stats${params}`);
+  const res = await apiFetch(`${BASE}/api/history/stats${params}`);
   if (!res.ok) throw new Error(`Fetch stats failed: ${res.status}`);
   return res.json();
 }
@@ -336,24 +370,31 @@ export async function fetchHistoryStats(project?: string): Promise<HistoryStats>
 // ---- GitHub Auth ----
 
 export async function fetchGitHubAuthStatus(): Promise<GitHubAuthStatus> {
-  const res = await fetch(`${BASE}/auth/github/me`);
+  const res = await apiFetch(`${BASE}/auth/github/me`);
   if (!res.ok) throw new Error(`GitHub auth check failed: ${res.status}`);
   return res.json();
 }
 
 export async function submitGitHubPAT(token: string): Promise<GitHubAuthStatus> {
-  const res = await fetch(`${BASE}/auth/github/pat`, {
+  const res = await apiFetch(`${BASE}/auth/github/pat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token })
   });
   if (!res.ok) throw new Error(`GitHub PAT submission failed: ${res.status}`);
-  return res.json();
+  const data = await res.json();
+  // Backend augments the GitHubUserInfo response with an access_token JWT.
+  if (typeof data.access_token === 'string') {
+    auth.setToken(data.access_token);
+  }
+  return data as GitHubAuthStatus;
 }
 
 export async function logoutGitHub(): Promise<void> {
-  const res = await fetch(`${BASE}/auth/github/logout`, { method: 'DELETE' });
+  const res = await apiFetch(`${BASE}/auth/github/logout`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`GitHub logout failed: ${res.status}`);
+  // Clear in-memory JWT — refresh cookie is cleared server-side.
+  auth.clearToken();
 }
 
 export function getGitHubLoginUrl(): string {
@@ -363,13 +404,13 @@ export function getGitHubLoginUrl(): string {
 // ---- GitHub Repos ----
 
 export async function fetchGitHubRepos(): Promise<RepoInfo[]> {
-  const res = await fetch(`${BASE}/api/github/repos`);
+  const res = await apiFetch(`${BASE}/api/github/repos`);
   if (!res.ok) throw new Error(`Fetch repos failed: ${res.status}`);
   return res.json();
 }
 
 export async function linkRepo(full_name: string, branch?: string): Promise<LinkedRepo> {
-  const res = await fetch(`${BASE}/api/github/repos/link`, {
+  const res = await apiFetch(`${BASE}/api/github/repos/link`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ full_name, branch })
@@ -379,13 +420,13 @@ export async function linkRepo(full_name: string, branch?: string): Promise<Link
 }
 
 export async function fetchLinkedRepo(): Promise<LinkedRepo | null> {
-  const res = await fetch(`${BASE}/api/github/repos/linked`);
+  const res = await apiFetch(`${BASE}/api/github/repos/linked`);
   if (!res.ok) throw new Error(`Fetch linked repo failed: ${res.status}`);
   return res.json();
 }
 
 export async function unlinkRepo(): Promise<void> {
-  const res = await fetch(`${BASE}/api/github/repos/unlink`, { method: 'DELETE' });
+  const res = await apiFetch(`${BASE}/api/github/repos/unlink`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Unlink repo failed: ${res.status}`);
 }
 
@@ -401,7 +442,7 @@ export interface AppSettings {
 }
 
 export async function fetchSettings(): Promise<AppSettings> {
-  const res = await fetch(`${BASE}/api/settings`);
+  const res = await apiFetch(`${BASE}/api/settings`);
   if (!res.ok) throw new Error(`Fetch settings failed: ${res.status}`);
   return res.json();
 }
@@ -409,7 +450,7 @@ export async function fetchSettings(): Promise<AppSettings> {
 export async function updateSettings(
   data: Partial<AppSettings>
 ): Promise<AppSettings> {
-  const res = await fetch(`${BASE}/api/settings`, {
+  const res = await apiFetch(`${BASE}/api/settings`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
@@ -435,13 +476,13 @@ export interface ProviderStatusResponse {
 }
 
 export async function fetchProviderDetect(): Promise<ProviderDetectResponse> {
-  const res = await fetch(`${BASE}/api/providers/detect`);
+  const res = await apiFetch(`${BASE}/api/providers/detect`);
   if (!res.ok) throw new Error(`Provider detect failed: ${res.status}`);
   return res.json();
 }
 
 export async function fetchProviderStatus(): Promise<ProviderStatusResponse> {
-  const res = await fetch(`${BASE}/api/providers/status`);
+  const res = await apiFetch(`${BASE}/api/providers/status`);
   if (!res.ok) throw new Error(`Provider status failed: ${res.status}`);
   return res.json();
 }
@@ -474,7 +515,7 @@ export async function fetchRepoTree(
   branch = 'main'
 ): Promise<RepoTreeResponse> {
   const params = new URLSearchParams({ branch });
-  const res = await fetch(`${BASE}/api/github/repos/${owner}/${repo}/tree?${params}`);
+  const res = await apiFetch(`${BASE}/api/github/repos/${owner}/${repo}/tree?${params}`);
   if (!res.ok) throw new Error(`Fetch repo tree failed: ${res.status}`);
   return res.json();
 }
@@ -486,7 +527,7 @@ export async function fetchFileContent(
   branch = 'main'
 ): Promise<RepoFileResponse> {
   const params = new URLSearchParams({ branch });
-  const res = await fetch(`${BASE}/api/github/repos/${owner}/${repo}/files/${path}?${params}`);
+  const res = await apiFetch(`${BASE}/api/github/repos/${owner}/${repo}/files/${path}?${params}`);
   if (!res.ok) throw new Error(`Fetch file content failed: ${res.status}`);
   return res.json();
 }

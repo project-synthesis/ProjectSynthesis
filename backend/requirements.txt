@@ -11,6 +11,7 @@ cryptography
 httpx
 anyio
 itsdangerous
+python-jose[cryptography]
 mcp
 websockets
 anthropic

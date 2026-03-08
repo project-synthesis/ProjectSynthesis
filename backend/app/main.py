@@ -21,6 +21,7 @@ from app.providers.detector import ProviderNotAvailableError, detect_provider
 
 # Import routers
 from app.routers import github_auth, github_repos, health, history, optimize
+from app.routers.auth import router as jwt_auth_router
 from app.routers.github import router as github_router
 from app.routers.providers import router as providers_router
 from app.routers.providers import set_provider as providers_set_provider
@@ -197,6 +198,7 @@ app.include_router(github_repos.router)
 app.include_router(providers_router)
 app.include_router(github_router)
 app.include_router(settings_router)
+app.include_router(jwt_auth_router)
 
 
 # ── Error Handlers ────────────────────────────────────────────────────

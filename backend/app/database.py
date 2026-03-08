@@ -93,6 +93,7 @@ async def _migrate_add_missing_columns() -> None:
 async def create_tables():
     """Create all tables on startup. Acts as simple migration."""
     # Import all models so they register with Base.metadata
+    import app.models.auth  # noqa: F401
     import app.models.github  # noqa: F401
     import app.models.optimization  # noqa: F401
 

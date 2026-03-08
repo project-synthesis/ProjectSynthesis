@@ -7,11 +7,13 @@
   import { github } from '$lib/stores/github.svelte';
   import { fetchHealth, fetchGitHubAuthStatus, fetchGitHubRepos, fetchLinkedRepo, fetchOptimization } from '$lib/api/client';
   import type { RepoInfo } from '$lib/api/client';
+  import { auth } from '$lib/stores/auth.svelte';
   import ActivityBar from '$lib/components/layout/ActivityBar.svelte';
   import Navigator from '$lib/components/layout/Navigator.svelte';
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
   import Inspector from '$lib/components/layout/Inspector.svelte';
   import StatusBar from '$lib/components/layout/StatusBar.svelte';
+  import AuthGate from '$lib/components/layout/AuthGate.svelte';
   import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
   import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
 
@@ -54,6 +56,46 @@
       forge.resetPipeline();
     }
   });
+
+  // Hydrate GitHub state whenever the user becomes authenticated.
+  // Runs on first auth (PAT / OAuth) and on page reload with a valid refresh cookie.
+  // Fires reactively so a freshly submitted PAT is immediately reflected without a hard refresh.
+  $effect(() => {
+    if (!auth.isAuthenticated) return;
+    fetchGitHubAuthStatus()
+      .then(async (authStatus) => {
+        if (authStatus.connected && authStatus.login) {
+          try {
+            const repos = await fetchGitHubRepos();
+            github.setConnected(
+              authStatus.login,
+              repos.map((r: RepoInfo) => ({
+                full_name: r.full_name as string,
+                description: (r.description || '') as string,
+                default_branch: (r.default_branch || 'main') as string,
+                private: !!r.private,
+                language: r.language as string | undefined,
+                size_kb: r.size_kb as number | undefined,
+              }))
+            );
+            // Restore linked repo selection
+            const linked = await fetchLinkedRepo();
+            if (linked && linked.full_name) {
+              github.selectRepo(linked.full_name, linked.branch);
+            }
+          } catch {
+            // Repos fetch failed — mark connected but without repos
+            github.setConnected(authStatus.login, []);
+          }
+        }
+      })
+      .catch(() => {
+        // Not connected or auth check failed — leave github store in default state
+      });
+  });
+
+  // Auth gate — false until the silent refresh attempt resolves
+  let authChecked = $state(false);
 
   // Resize handle logic
   let resizing = $state<'nav' | 'inspector' | null>(null);
@@ -185,6 +227,24 @@
   }
 
   onMount(() => {
+    // ── JWT token capture ──────────────────────────────────────────────
+    // After GitHub OAuth redirect the backend sends the user to /?access_token=<JWT>.
+    // Capture the token, store it in-memory, and remove it from the URL so it
+    // never sits in browser history or server logs.
+    const url = new URL(window.location.href);
+    const oauthToken = url.searchParams.get('access_token');
+    if (oauthToken) {
+      auth.setToken(oauthToken);
+      url.searchParams.delete('access_token');
+      window.history.replaceState({}, '', url.toString());
+      authChecked = true;
+    } else {
+      // Attempt silent refresh from httponly cookie (restores returning sessions)
+      auth.refresh().finally(() => {
+        authChecked = true;
+      });
+    }
+
     // Initial responsive check
     handleResize();
     window.addEventListener('resize', handleResize);
@@ -212,37 +272,7 @@
     pollHealth();
     healthTimer = setInterval(pollHealth, 15_000);
 
-    // Hydrate GitHub connection state (persists across page refresh)
-    fetchGitHubAuthStatus()
-      .then(async (auth) => {
-        if (auth.connected && auth.login) {
-          try {
-            const repos = await fetchGitHubRepos();
-            github.setConnected(
-              auth.login,
-              repos.map((r: RepoInfo) => ({
-                full_name: r.full_name as string,
-                description: (r.description || '') as string,
-                default_branch: (r.default_branch || 'main') as string,
-                private: !!r.private,
-                language: r.language as string | undefined,
-                size_kb: r.size_kb as number | undefined,
-              }))
-            );
-            // Restore linked repo selection
-            const linked = await fetchLinkedRepo();
-            if (linked && linked.full_name) {
-              github.selectRepo(linked.full_name, linked.branch);
-            }
-          } catch {
-            // Repos fetch failed — mark connected but without repos
-            github.setConnected(auth.login, []);
-          }
-        }
-      })
-      .catch(() => {
-        // Not connected or auth check failed — leave github store in default state
-      });
+    // GitHub hydration moved to $effect below — runs reactively when auth.isAuthenticated becomes true
 
     // Ensure at least one tab is open
     editor.ensureWelcomeTab();
@@ -256,68 +286,79 @@
   });
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-  class="h-screen w-screen overflow-hidden grid"
-  style="
-    grid-template-columns: 40px {workbench.navCssWidth} 1fr {workbench.inspectorCssWidth};
-    grid-template-rows: 1fr 24px;
-    {resizing ? '' : 'transition: grid-template-columns 0.2s ease;'}
-  "
-  onmousemove={handleMouseMove}
-  onmouseup={handleMouseUp}
-  onmouseleave={handleMouseUp}
->
-  <!-- Row 1: Activity Bar -->
-  <div class="row-span-1" style="grid-row: 1; grid-column: 1;">
-    <ActivityBar />
+{#if !authChecked}
+  <!-- Loading: centered wordmark while silent refresh resolves -->
+  <div class="h-screen w-screen flex items-center justify-center bg-bg-primary">
+    <span class="font-display text-sm tracking-[0.2em] uppercase text-text-dim/50">
+      PROMPTFORGE
+    </span>
   </div>
+{:else if !auth.isAuthenticated}
+  <AuthGate />
+{:else}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="h-screen w-screen overflow-hidden grid"
+    style="
+      grid-template-columns: 40px {workbench.navCssWidth} 1fr {workbench.inspectorCssWidth};
+      grid-template-rows: 1fr 24px;
+      {resizing ? '' : 'transition: grid-template-columns 0.2s ease;'}
+    "
+    onmousemove={handleMouseMove}
+    onmouseup={handleMouseUp}
+    onmouseleave={handleMouseUp}
+  >
+    <!-- Row 1: Activity Bar -->
+    <div class="row-span-1" style="grid-row: 1; grid-column: 1;">
+      <ActivityBar />
+    </div>
 
-  <!-- Row 1: Navigator -->
-  <div class="row-span-1 overflow-hidden relative" style="grid-row: 1; grid-column: 2;">
-    <Navigator />
-    <!-- Navigator resize handle (right edge) -->
-    {#if !workbench.navigatorCollapsed}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-neon-cyan/30 transition-colors z-[100]
-          {resizing === 'nav' ? 'bg-neon-cyan/40' : ''}"
-        data-testid="nav-resize-handle"
-        onmousedown={startNavResize}
-      ></div>
-    {/if}
-  </div>
+    <!-- Row 1: Navigator -->
+    <div class="row-span-1 overflow-hidden relative" style="grid-row: 1; grid-column: 2;">
+      <Navigator />
+      <!-- Navigator resize handle (right edge) -->
+      {#if !workbench.navigatorCollapsed}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-neon-cyan/30 transition-colors z-[100]
+            {resizing === 'nav' ? 'bg-neon-cyan/40' : ''}"
+          data-testid="nav-resize-handle"
+          onmousedown={startNavResize}
+        ></div>
+      {/if}
+    </div>
 
-  <!-- Row 1: Editor (main) -->
-  <div class="row-span-1 overflow-hidden" style="grid-row: 1; grid-column: 3;">
-    <EditorGroups />
-    <!-- Page slot (empty for workbench since layout handles everything) -->
-    <div class="hidden">
-      {@render children()}
+    <!-- Row 1: Editor (main) -->
+    <div class="row-span-1 overflow-hidden" style="grid-row: 1; grid-column: 3;">
+      <EditorGroups />
+      <!-- Page slot (empty for workbench since layout handles everything) -->
+      <div class="hidden">
+        {@render children()}
+      </div>
+    </div>
+
+    <!-- Row 1: Inspector -->
+    <div class="row-span-1 overflow-hidden relative" style="grid-row: 1; grid-column: 4;">
+      <!-- Inspector resize handle (left edge) -->
+      {#if !workbench.inspectorCollapsed}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-neon-cyan/30 transition-colors z-[100]
+            {resizing === 'inspector' ? 'bg-neon-cyan/40' : ''}"
+          data-testid="inspector-resize-handle"
+          onmousedown={startInspectorResize}
+        ></div>
+      {/if}
+      <Inspector />
+    </div>
+
+    <!-- Row 2: Status Bar spans full width -->
+    <div style="grid-row: 2; grid-column: 1 / -1;">
+      <StatusBar />
     </div>
   </div>
 
-  <!-- Row 1: Inspector -->
-  <div class="row-span-1 overflow-hidden relative" style="grid-row: 1; grid-column: 4;">
-    <!-- Inspector resize handle (left edge) -->
-    {#if !workbench.inspectorCollapsed}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-neon-cyan/30 transition-colors z-[100]
-          {resizing === 'inspector' ? 'bg-neon-cyan/40' : ''}"
-        data-testid="inspector-resize-handle"
-        onmousedown={startInspectorResize}
-      ></div>
-    {/if}
-    <Inspector />
-  </div>
-
-  <!-- Row 2: Status Bar spans full width -->
-  <div style="grid-row: 2; grid-column: 1 / -1;">
-    <StatusBar />
-  </div>
-</div>
-
-<!-- Global overlays -->
-<CommandPalette />
-<ToastContainer />
+  <!-- Global overlays -->
+  <CommandPalette />
+  <ToastContainer />
+{/if}

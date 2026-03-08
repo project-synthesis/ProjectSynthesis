@@ -31,5 +31,16 @@ class Settings(BaseSettings):
 
     PIPELINE_TIMEOUT_SECONDS: int = 900  # 15-minute outer limit
 
+    # JWT authentication
+    JWT_SECRET: str = "dev-jwt-secret-change-in-prod"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_PRIVATE_KEY: str = ""
+    JWT_PUBLIC_KEY: str = ""
+    JWT_REFRESH_SECRET: str = "dev-refresh-secret-change-in-prod"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    # Set to True in production (behind HTTPS) to add Secure flag to cookies.
+    JWT_COOKIE_SECURE: bool = False
+
 
 settings = Settings()
