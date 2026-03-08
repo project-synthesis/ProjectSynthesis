@@ -1,6 +1,6 @@
 # PromptForge MCP Server
 
-PromptForge exposes 13 tools over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, and interact with linked GitHub repositories directly from a chat session.
+PromptForge exposes 14 tools over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, and interact with linked GitHub repositories directly from a chat session.
 
 ## Transports
 
@@ -86,11 +86,15 @@ Run the full 5-stage pipeline (Explore → Analyze → Strategy → Optimize →
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `prompt` | string | yes | The raw prompt to optimize |
-| `project_id` | string | no | Group this run under a project |
+| `project` | string | no | Group this run under a project |
+| `title` | string | no | Human-readable label for this run |
 | `repo_full_name` | string | no | `owner/repo` to enable codebase-aware Explore stage |
 | `repo_branch` | string | no | Branch to explore (default: `main`) |
 | `github_token` | string | no | GitHub PAT; required when `repo_full_name` is set |
 | `strategy` | string | no | Force a specific strategy instead of auto-selecting |
+| `file_contexts` | list[dict] | no | File content objects to include as context (`{name, content}`) |
+| `instructions` | list[string] | no | Additional freeform instructions for the optimizer |
+| `url_contexts` | list[string] | no | URLs to fetch and include as context |
 
 Returns: optimization record with `id`, `status`, `optimized_prompt`, `overall_score`, and stage results.
 
@@ -112,7 +116,10 @@ List optimizations with pagination.
 |---|---|---|---|
 | `limit` | int | 20 | Results per page (1–100) |
 | `offset` | int | 0 | Pagination offset |
-| `status` | string | — | Filter by status: `pending`, `running`, `completed`, `failed` |
+| `project` | string | — | Filter by project |
+| `task_type` | string | — | Filter by task type |
+| `min_score` | int | — | Minimum `overall_score` threshold |
+| `search` | string | — | Full-text filter on prompt content |
 | `sort` | string | `created_at` | Sort column: `created_at`, `overall_score`, `task_type`, `updated_at`, `duration_ms`, `primary_framework`, `status` |
 | `order` | string | `desc` | `asc` or `desc` |
 
@@ -133,30 +140,33 @@ Returns a pagination envelope:
 #### `search_optimizations`
 Full-text search across prompt content and metadata.
 
-| Parameter | Type | Default | Description |
+| Parameter | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | yes | Search terms |
-| `limit` | int | 10 | Results per page (1–100) |
-| `offset` | int | 0 | Pagination offset |
+| `limit` | int | no (default 10) | Results per page (1–100) |
+| `offset` | int | no (default 0) | Pagination offset |
 
 Returns the same pagination envelope as `list_optimizations`.
 
 ---
 
 #### `get_by_project`
-Fetch all optimizations belonging to a project ID.
+Fetch all optimizations belonging to a project.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `project_id` | string | yes | Project identifier |
+| `project` | string | yes | Project identifier |
 | `limit` | int | no | Max results (default 50) |
+| `include_prompts` | bool | no | Include prompt text in results (default: `true`) |
 
 ---
 
 #### `get_stats`
-Return aggregate statistics: total runs, average score, counts by status and task type.
+Return aggregate statistics: total runs, average score, and task type breakdown.
 
-No parameters.
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `project` | string | no | Scope statistics to a project |
 
 ---
 
@@ -168,6 +178,8 @@ Add or remove tags on an optimization. Tags are deduplicated and insertion order
 | `optimization_id` | string | yes | UUID of the optimization |
 | `add_tags` | list[string] | no | Tags to add |
 | `remove_tags` | list[string] | no | Tags to remove |
+| `project` | string | no | Update the project label |
+| `title` | string | no | Update the human-readable title |
 
 ---
 
@@ -186,6 +198,11 @@ Re-run the pipeline on an existing optimization (useful after a failure or provi
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `optimization_id` | string | yes | UUID of the optimization to retry |
+| `strategy` | string | no | Override the strategy for this run |
+| `github_token` | string | no | GitHub PAT if the original run used a linked repo |
+| `file_contexts` | list[dict] | no | File content objects to include as context (`{name, content}`) |
+| `instructions` | list[string] | no | Additional freeform instructions for the optimizer |
+| `url_contexts` | list[string] | no | URLs to fetch and include as context |
 
 ---
 
@@ -205,12 +222,12 @@ Check whether a token is valid and return the authenticated user's login and sco
 #### `github_list_repos`
 List repositories accessible to the token.
 
-| Parameter | Type | Default | Description |
+| Parameter | Type | Required | Description |
 |---|---|---|---|
 | `token` | string | yes | GitHub PAT |
-| `limit` | int | 30 | Max repos to return (1–100) |
+| `limit` | int | no (default 30) | Max repos to return (1–100) |
 
-Returns each repo with `full_name`, `description`, `default_branch`, `private`, `language`, `stargazers_count`.
+Returns each repo with `full_name`, `default_branch`, `language`, `private`.
 
 ---
 
@@ -222,7 +239,7 @@ Read a file from a GitHub repository at a specific ref.
 | `token` | string | yes | GitHub PAT |
 | `repo_full_name` | string | yes | `owner/repo` |
 | `path` | string | yes | File path within the repo |
-| `ref` | string | no | Branch, tag, or commit SHA (default: repo default branch) |
+| `branch` | string | no | Branch, tag, or commit SHA (default: repo default branch) |
 
 ---
 
@@ -234,8 +251,18 @@ Search for a pattern within a repository using the GitHub code search API.
 | `token` | string | yes | GitHub PAT |
 | `repo_full_name` | string | yes | `owner/repo` |
 | `pattern` | string | yes | Search query (GitHub code search syntax) |
+| `extension` | string | no | Restrict results to files with this extension (e.g. `py`) |
 
 Returns up to 20 matches with `path` and `name`.
+
+---
+
+#### `github_set_token`
+Validate and store a GitHub Personal Access Token for reuse. The token is encrypted at rest. Once stored, other GitHub tools can accept an empty string as `token` and will fall back to the stored value.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `token` | string | yes | GitHub PAT to validate and store |
 
 ---
 
