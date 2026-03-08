@@ -20,66 +20,34 @@ Project Synthesis runs your prompts through a structured pipeline — **Explore 
 
 ## Prerequisites
 
-- Python 3.12+
-- Node.js 20+
-- At least one LLM provider:
+- Python 3.12+ and Node.js 20+
+- At least one LLM provider — Claude Code CLI (`claude login`) or an Anthropic API key
 
-  **Option A (preferred)** — Claude Code CLI with Max subscription:
-  ```bash
-  npm install -g @anthropic-ai/claude-code
-  claude login
-  ```
-
-  **Option B** — Anthropic API key (set `ANTHROPIC_API_KEY` in `.env`)
-
-## Configuration
-
-Copy the example env file and fill in the required values:
+## Installation
 
 ```bash
-cp .env.example .env
+cp .env.example .env   # fill in API keys and secrets
+./init.sh              # install dependencies and start all services
 ```
 
-| Variable | Required | Description |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | If not using CLI | Anthropic API key |
-| `GITHUB_APP_CLIENT_ID` | For GitHub OAuth | OAuth client ID of your GitHub App |
-| `GITHUB_APP_CLIENT_SECRET` | For GitHub OAuth | OAuth client secret |
-| `GITHUB_TOKEN_ENCRYPTION_KEY` | For GitHub OAuth | Fernet key for token encryption at rest |
-| `SECRET_KEY` | Yes | Session signing key — change in production |
+See `.env.example` for all configuration options and [CLAUDE.md](CLAUDE.md) for full architecture details.
 
-Generate a Fernet key:
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-GitHub OAuth requires a GitHub App with callback URL set to `http://localhost:8000/auth/github/callback`. Create one at [github.com/settings/apps/new](https://github.com/settings/apps/new).
-
-## Quick Start
+## Usage
 
 ```bash
-./init.sh          # Install dependencies and start all services
-./init.sh status   # Check service status
-./init.sh restart  # Restart all services (required after changing Python packages)
-./init.sh stop     # Stop all services
+./init.sh          # start all services
+./init.sh status   # check service status
+./init.sh restart  # restart (required after changing Python packages)
+./init.sh stop     # stop all services
 ```
 
-Services start at:
-- Frontend: http://localhost:5199
-- API + docs: http://localhost:8000/api/docs
-- MCP server: http://127.0.0.1:8001/mcp
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:5199 |
+| API docs | http://localhost:8000/api/docs |
+| MCP server | http://127.0.0.1:8001/mcp |
 
-## Services
-
-| Service | Port | Entry point |
-|---|---|---|
-| FastAPI backend | 8000 | `backend/app/main.py` |
-| SvelteKit frontend | 5199 | `frontend/src/` |
-| MCP server (standalone) | 8001 | `backend/app/mcp_server.py` |
-
-Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
-
-## Pipeline stages
+## Pipeline
 
 | Stage | What it does |
 |---|---|
@@ -89,32 +57,13 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 | **Optimize** | Rewrites the prompt using the chosen strategy |
 | **Validate** | Scores the result across multiple dimensions (0–10) |
 
-## Development
-
-```bash
-# Backend tests
-cd backend && source .venv/bin/activate && pytest
-
-# TypeScript check
-cd frontend && npx tsc --noEmit
-
-# Backend only (with hot reload)
-cd backend && source .venv/bin/activate && \
-  python -m uvicorn app.main:asgi_app --host 0.0.0.0 --port 8000 --reload
-
-# Frontend only
-cd frontend && npm run dev
-```
-
 ## MCP Server
 
-Project Synthesis exposes 13 tools via MCP, accessible directly from Claude Code when this directory is open (configured via `.mcp.json`). See [docs/MCP.md](docs/MCP.md) for the full tool reference and connection instructions.
+13 tools accessible directly from Claude Code when this directory is open. See [docs/MCP.md](docs/MCP.md) for the full tool reference.
 
 ## Contributing
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on branching, code style, and the PR process.
-
-Found a security issue? See [SECURITY.md](SECURITY.md) for responsible disclosure instructions — do not open a public issue.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR. Found a security issue? See [SECURITY.md](SECURITY.md) — do not open a public issue.
 
 ## License
 
