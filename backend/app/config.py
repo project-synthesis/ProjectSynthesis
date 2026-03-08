@@ -5,13 +5,19 @@ from pydantic import ConfigDict
 class Settings(BaseSettings):
     model_config = ConfigDict(env_file=".env")
     ANTHROPIC_API_KEY: str = ""
-    GITHUB_CLIENT_ID: str = ""
-    GITHUB_CLIENT_SECRET: str = ""
-    SECRET_KEY: str = "promptforge-dev-secret-key"
+    # GitHub App — user auth (OAuth flow uses App's client credentials)
+    GITHUB_APP_CLIENT_ID: str = ""
+    GITHUB_APP_CLIENT_SECRET: str = ""
+    # GitHub App — bot / installation (for write operations)
+    GITHUB_APP_ID: str = ""
+    GITHUB_APP_PRIVATE_KEY: str = ""         # RSA private key PEM, \n-escaped
+    GITHUB_APP_INSTALLATION_ID: str = ""
+    SECRET_KEY: str = "synthesis-dev-secret-key"
     GITHUB_TOKEN_ENCRYPTION_KEY: str = ""
+    FRONTEND_URL: str = "http://localhost:5199"
     MCP_PORT: int = 8001
     MCP_HOST: str = "127.0.0.1"
-    DATABASE_URL: str = "sqlite+aiosqlite:///./data/promptforge.db"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./data/synthesis.db"
     CORS_ORIGINS: str = "http://localhost:5199,http://localhost:4173"
 
     # Per-stage LLM call timeout seconds.

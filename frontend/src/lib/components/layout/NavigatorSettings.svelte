@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { fetchSettings, updateSettings, fetchProviderStatus, type AppSettings } from '$lib/api/client';
+  import { fetchSettings, updateSettings, fetchProviderStatus, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, type AppSettings } from '$lib/api/client';
   import { workbench } from '$lib/stores/workbench.svelte';
+  import { github } from '$lib/stores/github.svelte';
   import { toast } from '$lib/stores/toast.svelte';
 
   let settings = $state<AppSettings | null>(null);
@@ -35,6 +36,18 @@
       error = (err as Error).message;
     } finally {
       saving = false;
+    }
+  }
+
+  async function handleDisconnectGitHub() {
+    try {
+      await disconnectGitHub();
+      await unlinkRepo().catch(() => {}); // best-effort — local selection already cleared
+      toast.success('GitHub disconnected');
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      github.disconnect(); // always clear local state, even on API failure
     }
   }
 
@@ -91,6 +104,35 @@
           <span class="w-1.5 h-1.5 rounded-full {workbench.mcpConnected ? 'bg-neon-cyan' : 'bg-neon-red/70'}"></span>
           <span class="text-[10px] text-text-dim">MCP {workbench.mcpConnected ? 'online' : 'offline'}</span>
         </div>
+      </div>
+
+      <!-- GitHub Connection -->
+      <div class="space-y-1 mb-3 p-2 rounded bg-bg-card border border-border-subtle">
+        <div class="font-display text-[11px] font-bold uppercase text-text-dim mb-1">GitHub</div>
+        {#if github.isConnected}
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="w-2 h-2 rounded-full bg-neon-green shrink-0"></span>
+              <span class="text-xs text-text-primary font-medium truncate">{github.username}</span>
+            </div>
+            <button
+              class="text-[10px] text-neon-red/80 hover:text-neon-red shrink-0"
+              onclick={handleDisconnectGitHub}
+            >Disconnect</button>
+          </div>
+          <div class="text-[10px] text-text-dim ml-4">OAuth App</div>
+        {:else if workbench.githubOAuthEnabled}
+          <div class="flex items-center gap-2 mb-1">
+            <span class="w-2 h-2 rounded-full bg-text-dim/30 shrink-0"></span>
+            <span class="text-xs text-text-dim">Not connected</span>
+          </div>
+          <button
+            class="text-[10px] text-neon-cyan hover:text-neon-cyan/80 ml-4"
+            onclick={() => { window.location.href = getGitHubLoginUrl(); }}
+          >Connect via GitHub →</button>
+        {:else}
+          <span class="text-[10px] text-text-dim">GitHub App not configured</span>
+        {/if}
       </div>
 
       <!-- Default Model -->

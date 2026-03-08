@@ -7,7 +7,6 @@ from app.schemas.github import (
     GitHubUserInfo,
     LinkedRepoResponse,
     LinkRepoRequest,
-    PATRequest,
     RepoInfo,
 )
 from app.schemas.optimization import (
@@ -24,7 +23,6 @@ __all__ = [
     "RetryRequest",
     "HistoryStatsResponse",
     # GitHub schemas
-    "PATRequest",
     "RepoInfo",
     "LinkRepoRequest",
     "LinkedRepoResponse",

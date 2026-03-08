@@ -48,7 +48,7 @@ async def health_check(request: Request):
     )
 
     github_oauth_enabled = bool(
-        settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET
+        settings.GITHUB_APP_CLIENT_ID and settings.GITHUB_APP_CLIENT_SECRET
     )
 
     _prov = getattr(request.app.state, "provider", None)

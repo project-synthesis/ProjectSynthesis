@@ -12,25 +12,20 @@ logger = logging.getLogger(__name__)
 
 
 async def _get_decrypted_token(session_id: str) -> str:
-    """Retrieve and decrypt the GitHub token for a session.
+    """Retrieve the GitHub token for a session, triggering auto-refresh if needed.
 
-    Uses github_service.decrypt_token to avoid importing from the router layer.
+    Routes through get_token_for_session so GitHub App user tokens are
+    transparently refreshed when close to expiry — preserving the refresh
+    invariant for the codebase-explorer (Stage 0) code path.
     """
-    from sqlalchemy import select
-
     from app.database import async_session
-    from app.models.github import GitHubToken
-    from app.services.github_service import decrypt_token
+    from app.services.github_service import get_token_for_session
 
     async with async_session() as session:
-        result = await session.execute(
-            select(GitHubToken).where(GitHubToken.session_id == session_id)
-        )
-        token_record = result.scalar_one_or_none()
-        if not token_record:
+        token = await get_token_for_session(session, session_id)
+        if not token:
             raise ValueError(f"No GitHub token found for session {session_id}")
-
-        return decrypt_token(bytes(token_record.token_encrypted))
+        return token
 
 
 async def validate_repo_access(

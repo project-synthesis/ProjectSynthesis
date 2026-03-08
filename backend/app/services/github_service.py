@@ -98,14 +98,21 @@ def decrypt_token(encrypted: bytes) -> str:
 
 
 # ───────────────────────────────────────────────────────────────────────
-# Token retrieval
+# Token retrieval (with automatic refresh for GitHub App tokens)
 # ───────────────────────────────────────────────────────────────────────
+
+_REFRESH_WINDOW_MINUTES = 15  # refresh if token expires within this window
+
 
 async def get_token_for_session(
     session: AsyncSession,
     session_id: str,
 ) -> Optional[str]:
     """Retrieve and decrypt the GitHub token for a session.
+
+    For GitHub App user tokens, automatically refreshes via the refresh token
+    if the access token is within 15 minutes of expiry.  The caller always
+    receives a fresh, valid plaintext token.
 
     Args:
         session: Async database session.
@@ -114,12 +121,57 @@ async def get_token_for_session(
     Returns:
         Decrypted token string, or None if no token exists.
     """
+    from datetime import datetime, timedelta, timezone
+
     result = await session.execute(
         select(GitHubToken).where(GitHubToken.session_id == session_id)
     )
     db_token = result.scalar_one_or_none()
     if db_token is None:
         return None
+
+    # Auto-refresh GitHub App user tokens when close to expiry.
+    if (
+        db_token.token_type == "github_app"
+        and db_token.expires_at is not None
+        and db_token.refresh_token_encrypted is not None
+    ):
+        now = datetime.now(timezone.utc)
+        # expires_at may be naive (no tzinfo) from SQLite — normalise to UTC.
+        expires_at = db_token.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at - now <= timedelta(minutes=_REFRESH_WINDOW_MINUTES):
+            try:
+                from app.services.github_app_service import (
+                    log_token_event,
+                    refresh_user_token,
+                )
+
+                refreshed = await refresh_user_token(
+                    bytes(db_token.refresh_token_encrypted)
+                )
+                db_token.token_encrypted = encrypt_token(refreshed["access_token"])
+                db_token.expires_at = refreshed["expires_at"]
+                db_token.refresh_token_encrypted = encrypt_token(refreshed["refresh_token"])
+                db_token.refresh_token_expires_at = refreshed["refresh_token_expires_at"]
+                # Commit the updated tokens within the caller's session.
+                await session.commit()
+                log_token_event(
+                    event="user_token_refreshed",
+                    github_login=db_token.github_login,
+                    github_user_id=db_token.github_user_id,
+                    session_id=session_id,
+                    expires_at=refreshed["expires_at"],
+                )
+                return refreshed["access_token"]
+            except Exception as e:
+                logger.warning(
+                    "Token refresh failed for session %s, falling back to existing token: %s",
+                    session_id,
+                    e,
+                )
+
     try:
         return decrypt_token(bytes(db_token.token_encrypted))
     except Exception as e:
@@ -143,32 +195,6 @@ def _is_excluded(path: str) -> bool:
     return False
 
 
-async def validate_pat(token: str) -> Optional[dict]:
-    """Validate a GitHub PAT by calling the /user endpoint.
-
-    Args:
-        token: The GitHub personal access token to validate.
-
-    Returns:
-        Dict with user info if valid, None if invalid.
-    """
-    def _sync():
-        from github import Auth, Github
-        g = Github(auth=Auth.Token(token))
-        user = g.get_user()
-        return {
-            "login": user.login,
-            "id": user.id,
-            "avatar_url": user.avatar_url,
-        }
-
-    try:
-        return await anyio.to_thread.run_sync(_sync)
-    except Exception as e:
-        logger.warning("GitHub PAT validation failed: %s", e)
-        return None
-
-
 async def get_user_repos(token: str) -> list[dict]:
     """List repositories accessible by the authenticated user.
 
@@ -184,13 +210,24 @@ async def get_user_repos(token: str) -> list[dict]:
         repos = []
         for repo in g.get_user().get_repos(sort="updated"):
             repos.append({
-                "full_name": repo.full_name,
-                "name": repo.name,
-                "private": repo.private,
+                "full_name":    repo.full_name,
+                "name":         repo.name,
+                "private":      repo.private,
                 "default_branch": repo.default_branch,
-                "description": repo.description,
-                "language": repo.language,
-                "size_kb": repo.size,
+                "description":  repo.description,
+                "language":     repo.language,
+                "size_kb":      repo.size,
+                "stars":        repo.stargazers_count,
+                "forks":        repo.forks_count,
+                "open_issues":  repo.open_issues_count,
+                "updated_at":   repo.updated_at.isoformat() if repo.updated_at else None,
+                "pushed_at":    repo.pushed_at.isoformat() if repo.pushed_at else None,
+                "license_name": (
+                    repo.license.spdx_id
+                    if repo.license and repo.license.spdx_id not in ("NOASSERTION", "NONE", "other")
+                    else None
+                ),
+                "topics":       repo.raw_data.get("topics", []),
             })
             if len(repos) >= 100:
                 break
@@ -313,14 +350,18 @@ async def read_file_by_path(
 
 
 async def get_repo_info(token: str, full_name: str) -> Optional[dict]:
-    """Get metadata about a repository.
+    """Get metadata about a single repository.
+
+    Returns only the core fields (full_name, name, private, default_branch,
+    description, language, size_kb).  Use ``get_user_repos()`` when the full
+    set of metadata fields (stars, forks, topics, etc.) is required.
 
     Args:
         token: Decrypted GitHub access token.
         full_name: Repository full name (owner/repo).
 
     Returns:
-        Dict with repo metadata or None on failure.
+        Dict with core repo metadata or None on failure.
     """
     def _sync():
         from github import Auth, Github
@@ -341,6 +382,34 @@ async def get_repo_info(token: str, full_name: str) -> Optional[dict]:
     except Exception as e:
         logger.error("Failed to get repo info for %s: %s", full_name, e)
         return None
+
+
+async def get_repo_branches(token: str, full_name: str) -> list[dict]:
+    """List branches for a repository (max 50).
+
+    Args:
+        token: Decrypted GitHub access token.
+        full_name: Repository full name (owner/repo).
+
+    Returns:
+        List of dicts with name and protected keys.
+    """
+    def _sync():
+        from github import Auth, Github
+        g = Github(auth=Auth.Token(token))
+        repo = g.get_repo(full_name)
+        result = []
+        for branch in repo.get_branches():
+            result.append({"name": branch.name, "protected": branch.protected})
+            if len(result) >= 50:
+                break
+        return result
+
+    try:
+        return await anyio.to_thread.run_sync(_sync)
+    except Exception as e:
+        logger.error("Failed to list branches for %s: %s", full_name, e)
+        return []
 
 
 async def get_default_branch(token: str, repo_full_name: str) -> str:

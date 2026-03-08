@@ -15,9 +15,9 @@
         <span class="text-gradient-forge font-display font-bold text-base">⚡</span>
       </div>
       <div class="text-center space-y-1.5">
-        <p class="section-heading text-[11px]">Ready to Forge</p>
+        <p class="section-heading text-[11px]">Ready to Synthesize</p>
         <p class="text-[11px] text-text-dim/60 leading-relaxed">
-          Press <kbd>Ctrl+Enter</kbd> or click<br>the Forge button to start
+          Press <kbd>Ctrl+Enter</kbd> or click<br>the Synthesize button to start
         </p>
       </div>
     </div>

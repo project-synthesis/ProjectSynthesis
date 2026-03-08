@@ -58,8 +58,8 @@
   });
 
   // Hydrate GitHub state whenever the user becomes authenticated.
-  // Runs on first auth (PAT / OAuth) and on page reload with a valid refresh cookie.
-  // Fires reactively so a freshly submitted PAT is immediately reflected without a hard refresh.
+  // Runs on first auth (OAuth) and on page reload with a valid refresh cookie.
+  // Fires reactively so a freshly completed OAuth flow is immediately reflected without a hard refresh.
   $effect(() => {
     if (!auth.isAuthenticated) return;
     fetchGitHubAuthStatus()
@@ -70,12 +70,19 @@
             github.setConnected(
               authStatus.login,
               repos.map((r: RepoInfo) => ({
-                full_name: r.full_name as string,
-                description: (r.description || '') as string,
-                default_branch: (r.default_branch || 'main') as string,
-                private: !!r.private,
-                language: r.language as string | undefined,
-                size_kb: r.size_kb as number | undefined,
+                full_name:      r.full_name,
+                description:    r.description ?? '',
+                default_branch: r.default_branch ?? 'main',
+                private:        !!r.private,
+                language:       r.language ?? undefined,
+                size_kb:        r.size_kb,
+                stars:          r.stars,
+                forks:          r.forks,
+                open_issues:    r.open_issues,
+                updated_at:     r.updated_at ?? undefined,
+                pushed_at:      r.pushed_at ?? undefined,
+                license_name:   r.license_name ?? undefined,
+                topics:         r.topics,
               }))
             );
             // Restore linked repo selection

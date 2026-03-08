@@ -1,1 +1,1 @@
-"""Service layer for PromptForge business logic."""
+"""Service layer for Project Synthesis business logic."""

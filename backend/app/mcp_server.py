@@ -1,4 +1,4 @@
-"""MCP server for PromptForge v2.
+"""MCP server for Project Synthesis.
 
 Supports two transports:
   - Streamable HTTP (primary, modern): mounted at /mcp on the FastAPI app
@@ -10,10 +10,8 @@ GitHub tools accept explicit token parameter — no shared mutable session state
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
-import os
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
@@ -99,8 +97,8 @@ def create_mcp_server(provider=None) -> FastMCP:
         lifespan_fn = _mcp_lifespan
 
     mcp = FastMCP(
-        "promptforge",
-        instructions="PromptForge: AI prompt optimization engine",
+        "project-synthesis",
+        instructions="Project Synthesis: Multi-agent development platform with prompt optimization",
         host=settings.MCP_HOST,
         port=settings.MCP_PORT,
         lifespan=lifespan_fn,
@@ -131,7 +129,7 @@ def create_mcp_server(provider=None) -> FastMCP:
     def _github_error(resp: httpx.Response, context: str) -> str:
         """Actionable GitHub API error with status and hint."""
         hints = {
-            401: "Check that the token is valid and not expired. Use github_validate_token to verify.",
+            401: "Check that the token is valid and not expired.",
             403: "The token lacks required permissions. Ensure it has 'Contents: Read' scope.",
             404: "Resource not found. Verify the repo name (owner/repo) and path are correct.",
             422: "GitHub rejected the request. Check parameter formatting.",
@@ -147,25 +145,20 @@ def create_mcp_server(provider=None) -> FastMCP:
         """Standard GitHub API request headers."""
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
-    def _resolve_token(token: str) -> str:
-        """Return token if provided, otherwise look up stored mcp_github_token.
+    async def _get_mcp_token(token: str) -> str:
+        """Return an explicit token if provided, otherwise generate an installation token.
 
-        The stored token is Fernet-encrypted and base64-encoded for JSON safety.
+        MCP callers can pass an empty string to let the platform bot credentials
+        flow transparently via GitHub App installation token generation.
         """
         if token:
             return token
-        from app.services.github_service import decrypt_token
-        settings_file = os.path.join("data", "app_settings.json")
         try:
-            with open(settings_file) as f:
-                data = json.load(f)
-            encoded = data.get("mcp_github_token")
-            if encoded:
-                encrypted_bytes = base64.b64decode(encoded.encode("ascii"))
-                return decrypt_token(encrypted_bytes)
-        except Exception:
-            pass
-        return ""
+            from app.services.github_app_service import get_installation_token
+            return await get_installation_token()
+        except Exception as e:
+            logger.warning("_get_mcp_token: installation token unavailable: %s", e)
+            return ""
 
     # ── Core optimization tools ───────────────────────────────────────────────
 
@@ -204,8 +197,8 @@ def create_mcp_server(provider=None) -> FastMCP:
             repo_full_name: GitHub repo (owner/repo) for codebase-aware optimization.
                             When set, the Explore stage reads the repo to ground the prompt.
             repo_branch: Branch to explore (defaults to 'main' when repo_full_name is set)
-            github_token: GitHub PAT required when repo_full_name is set. Must have
-                          'Contents: Read' permission. Omit to skip the Explore stage.
+            github_token: GitHub token for repo exploration. Omit to use platform bot
+                          credentials (installation token generated automatically).
             file_contexts: List of {"name": str, "content": str} dicts for attached files.
                            Content is injected into all pipeline stages for domain context.
             instructions: List of output constraint strings (e.g. "always use bullet points").
@@ -648,8 +641,8 @@ def create_mcp_server(provider=None) -> FastMCP:
                              Use list_optimizations to find valid IDs.
             strategy: Optional framework override for this retry run.
                       Omit to let the pipeline auto-select again.
-            github_token: GitHub PAT if the original had a linked repo and you want
-                          the Explore stage to run. Same requirements as optimize().
+            github_token: GitHub token if the original had a linked repo and you want
+                          the Explore stage to run. Omit to use platform bot credentials.
             file_contexts: List of {"name": str, "content": str} dicts for attached files.
             instructions: List of output constraint strings for this retry run.
             url_contexts: List of URLs to fetch and inject as reference material.
@@ -687,43 +680,7 @@ def create_mcp_server(provider=None) -> FastMCP:
                 results[event_type] = event_data
         return json.dumps(results, indent=2)
 
-    # ── GitHub tools — stateless: token passed explicitly per call ────────────
-    # B4: removed _session_tokens shared dict — one slot contaminated all connections
-
-    @mcp.tool(
-        name="github_validate_token",
-        annotations=ToolAnnotations(
-            title= "Validate GitHub Token",
-            readOnlyHint= True,
-            destructiveHint= False,
-            idempotentHint= True,
-            openWorldHint= True,
-        ),
-    )
-    async def github_validate_token(token: str) -> str:
-        """Validate a GitHub token and return the authenticated user info.
-
-        Call this before using other GitHub tools to confirm the token is valid
-        and has the required permissions.
-
-        Args:
-            token: GitHub PAT. Must have at minimum 'Contents: Read' permission
-                   to use with repo exploration tools.
-
-        Returns:
-            JSON with {"login": "...", "id": ..., "valid": true} on success.
-            Returns {"error": ..., "hint": ...} if the token is invalid.
-        """
-        token = _resolve_token(token)
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{_GITHUB_API}/user",
-                headers=_github_headers(token),
-            )
-        if resp.status_code != 200:
-            return _github_error(resp, "Invalid GitHub token")
-        user = resp.json()
-        return json.dumps({"login": user["login"], "id": user["id"], "valid": True})
+    # ── GitHub tools — stateless: token optional, bot credentials used by default ──
 
     @mcp.tool(
         name="github_list_repos",
@@ -735,7 +692,7 @@ def create_mcp_server(provider=None) -> FastMCP:
             openWorldHint= True,
         ),
     )
-    async def github_list_repos(token: str) -> str:
+    async def github_list_repos(token: str = "") -> str:
         """List repositories accessible with the given GitHub token.
 
         Returns the 30 most recently updated repositories. Use full_name with
@@ -743,12 +700,13 @@ def create_mcp_server(provider=None) -> FastMCP:
         prompt optimization.
 
         Args:
-            token: GitHub PAT. Pass empty string to use the stored token from github_set_token.
+            token: GitHub token. Leave empty to use platform bot credentials
+                   (installation token generated automatically).
 
         Returns:
             JSON array of repos with full_name, default_branch, language, private.
         """
-        token = _resolve_token(token)
+        token = await _get_mcp_token(token)
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{_GITHUB_API}/user/repos",
@@ -781,9 +739,9 @@ def create_mcp_server(provider=None) -> FastMCP:
         ),
     )
     async def github_read_file(
-        token: str,
         full_name: str,
         path: str,
+        token: str = "",
         branch: Optional[str] = None,
     ) -> str:
         """Read a specific file from a GitHub repository.
@@ -792,15 +750,16 @@ def create_mcp_server(provider=None) -> FastMCP:
         compiled artifacts) the GitHub API returns an error.
 
         Args:
-            token: GitHub PAT. Pass empty string to use the stored token from github_set_token.
             full_name: Repository in 'owner/repo' format (e.g. 'anthropics/anthropic-sdk-python')
             path: File path within the repository (e.g. 'src/main.py', 'README.md')
+            token: GitHub token. Leave empty to use platform bot credentials
+                   (installation token generated automatically).
             branch: Branch, tag, or commit SHA (defaults to repo's default branch)
 
         Returns:
             Raw file content as plain text, or JSON error with hint.
         """
-        token = _resolve_token(token)
+        token = await _get_mcp_token(token)
         params = {"ref": branch} if branch else {}
         async with httpx.AsyncClient() as client:
             resp = await client.get(
@@ -826,9 +785,9 @@ def create_mcp_server(provider=None) -> FastMCP:
         ),
     )
     async def github_search_code(
-        token: str,
         full_name: str,
         pattern: str,
+        token: str = "",
         extension: Optional[str] = None,
     ) -> str:
         """Search for a text pattern across files in a GitHub repository.
@@ -837,16 +796,17 @@ def create_mcp_server(provider=None) -> FastMCP:
         Note: GitHub's code search index may lag behind the latest commits.
 
         Args:
-            token: GitHub PAT. Pass empty string to use the stored token from github_set_token.
             full_name: Repository in 'owner/repo' format
             pattern: Literal text pattern or keyword to search for
+            token: GitHub token. Leave empty to use platform bot credentials
+                   (installation token generated automatically).
             extension: Restrict search to files with this extension (e.g. 'py', 'ts', 'md')
 
         Returns:
             JSON array of matches with path and filename.
             Returns {"error": ..., "hint": ...} on failure.
         """
-        token = _resolve_token(token)
+        token = await _get_mcp_token(token)
         q = f"{pattern} repo:{full_name}"
         if extension:
             q += f" extension:{extension}"
@@ -863,72 +823,6 @@ def create_mcp_server(provider=None) -> FastMCP:
             [{"path": i["path"], "name": i["name"]} for i in items],
             indent=2,
         )
-
-    @mcp.tool(
-        name="github_set_token",
-        annotations=ToolAnnotations(
-            title="Link GitHub Token",
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=True,
-        ),
-    )
-    async def github_set_token(token: str) -> str:
-        """Link a GitHub Personal Access Token for codebase-aware optimization.
-
-        Validates the token against the GitHub API, then stores it encrypted in
-        the app settings file so it can be reused across MCP tool calls without
-        passing it explicitly every time. Subsequent calls to github_list_repos,
-        github_read_file, and github_search_code will accept an empty token string
-        and fall back to this stored token.
-
-        Args:
-            token: A GitHub Personal Access Token (classic or fine-grained) with
-                   at minimum 'Contents: Read' scope for private repos, or no
-                   scope for public repos.
-
-        Returns:
-            JSON with login, id, and success flag on success.
-        """
-        # 1. Validate the token
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{_GITHUB_API}/user",
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
-                timeout=10,
-            )
-        if resp.status_code != 200:
-            return _github_error(resp, "Invalid GitHub token")
-
-        user = resp.json()
-
-        # 2. Encrypt and persist to app_settings.json.
-        # Fernet.encrypt() returns bytes; base64-encode to ASCII for JSON safety.
-        try:
-            from app.services.github_service import encrypt_token
-            encrypted_bytes = encrypt_token(token)
-            encoded = base64.b64encode(encrypted_bytes).decode("ascii")
-            settings_file = os.path.join("data", "app_settings.json")
-            os.makedirs("data", exist_ok=True)
-            current: dict = {}
-            if os.path.exists(settings_file):
-                try:
-                    with open(settings_file) as f:
-                        current = json.load(f)
-                except Exception:
-                    pass
-            current["mcp_github_token"] = encoded
-            with open(settings_file, "w") as f:
-                json.dump(current, f, indent=2)
-        except Exception as e:
-            logger.warning("github_set_token: failed to persist token: %s", e)
-            return json.dumps({"login": user["login"], "id": user["id"],
-                               "success": True, "persisted": False,
-                               "warning": "Token validated but not persisted"})
-
-        return json.dumps({"login": user["login"], "id": user["id"],
-                           "success": True, "persisted": True})
 
     return mcp
 

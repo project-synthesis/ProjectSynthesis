@@ -1,4 +1,4 @@
-# CLAUDE.md — PromptForge
+# CLAUDE.md — Project Synthesis
 
 Guidance for Claude Code when working in this repository.
 
@@ -22,9 +22,9 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 ## Backend
 
 - **Framework**: FastAPI + uvicorn with `--reload` (watches `backend/app/`)
-- **Database**: SQLite via SQLAlchemy async + aiosqlite (`data/promptforge.db`)
+- **Database**: SQLite via SQLAlchemy async + aiosqlite (`data/synthesis.db`)
 - **Config**: `backend/app/config.py` — reads from `.env` via pydantic-settings
-- **Key env vars**: `ANTHROPIC_API_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_TOKEN_ENCRYPTION_KEY`, `SECRET_KEY`
+- **Key env vars**: `ANTHROPIC_API_KEY`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_TOKEN_ENCRYPTION_KEY`, `SECRET_KEY`
 
 ### Layer rules
 - `routers/` → `services/` → `models/` only. Services must never import from routers.
@@ -74,7 +74,7 @@ Add new sortable columns here before using them.
 **Transports:**
 - `http://127.0.0.1:8001/mcp` — streamable HTTP, standalone process (primary; used by `.mcp.json`)
 - `http://localhost:8000/mcp` — streamable HTTP, FastAPI-mounted
-- `ws://localhost:8000/mcp/ws` — WebSocket, backward-compat (bypasses CORS via `_PromptForgeASGI`)
+- `ws://localhost:8000/mcp/ws` — WebSocket, backward-compat (bypasses CORS via `_SynthesisASGI`)
 
 **`.mcp.json`** points Claude Code at `http://127.0.0.1:8001/mcp` (streamable HTTP) automatically when this directory is open. The schema field is `"type"` (not `"transport"`); valid values are `stdio`, `sse`, `http`.
 

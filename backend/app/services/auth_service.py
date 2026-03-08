@@ -1,4 +1,4 @@
-"""Auth service: JWT pair issuance shared between OAuth/PAT and refresh flows."""
+"""Auth service: JWT pair issuance shared between OAuth and refresh flows."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone

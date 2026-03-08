@@ -97,7 +97,7 @@
         {forge.overallScore}/10
       </button>
     {:else}
-      <span class="px-2 text-text-dim/50" data-testid="forge-hint">Ctrl+Enter to forge</span>
+      <span class="px-2 text-text-dim/50" data-testid="forge-hint">Ctrl+Enter to synthesize</span>
     {/if}
   </div>
 

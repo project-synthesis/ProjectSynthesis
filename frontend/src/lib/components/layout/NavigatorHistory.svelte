@@ -232,8 +232,8 @@
         <svg class="w-8 h-8 mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
         </svg>
-        <p class="text-xs text-text-secondary">No forges yet</p>
-        <p class="text-[10px] text-text-dim/50 mt-0.5">Forge a prompt to get started.</p>
+        <p class="text-xs text-text-secondary">No runs yet</p>
+        <p class="text-[10px] text-text-dim/50 mt-0.5">Synthesize a prompt to get started.</p>
       </div>
     {:else}
       {#each history.entries as entry, i (entry.id)}

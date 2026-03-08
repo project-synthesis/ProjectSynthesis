@@ -59,6 +59,19 @@ async def list_repos(
     return repos
 
 
+@router.get("/api/github/repos/{owner}/{repo}/branches")
+async def list_branches(
+    owner: str,
+    repo: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """List branches for a repository (max 50)."""
+    token = await _get_github_token(request, session)
+    branches = await github_service.get_repo_branches(token, f"{owner}/{repo}")
+    return branches
+
+
 @router.post("/api/github/repos/link")
 async def link_repo(
     body: LinkRepoRequest,

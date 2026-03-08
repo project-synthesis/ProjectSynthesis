@@ -1,6 +1,6 @@
-# PromptForge MCP Server
+# Project Synthesis MCP Server
 
-PromptForge exposes 14 tools over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, and interact with linked GitHub repositories directly from a chat session.
+Project Synthesis exposes 14 tools over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, and interact with linked GitHub repositories directly from a chat session.
 
 ## Transports
 
@@ -31,7 +31,7 @@ The project ships a `.mcp.json` that Claude Code reads automatically when you op
 ```json
 {
   "mcpServers": {
-    "promptforge": {
+    "project-synthesis": {
       "type": "http",
       "url": "http://127.0.0.1:8001/mcp"
     }
@@ -45,13 +45,13 @@ Start the services, then verify the connection:
 
 ```bash
 ./init.sh          # starts backend (port 8000), frontend, and standalone MCP (port 8001)
-claude mcp list    # should show "promptforge" as connected
+claude mcp list    # should show "project-synthesis" as connected
 ```
 
 To add it manually or to a different Claude Code workspace:
 
 ```bash
-claude mcp add --transport http --scope project promptforge http://127.0.0.1:8001/mcp
+claude mcp add --transport http --scope project project-synthesis http://127.0.0.1:8001/mcp
 ```
 
 ---

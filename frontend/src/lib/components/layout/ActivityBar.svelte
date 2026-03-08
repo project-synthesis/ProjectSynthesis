@@ -62,8 +62,8 @@
 
   <div class="flex-1"></div>
 
-  <!-- Forge branding at bottom -->
-  <div class="w-8 h-8 flex items-center justify-center" title="PromptForge v2">
-    <span class="text-sm font-bold text-gradient-forge">PF</span>
+  <!-- Branding at bottom -->
+  <div class="w-8 h-8 flex items-center justify-center" title="Project Synthesis">
+    <span class="text-sm font-bold text-gradient-forge">PS</span>
   </div>
 </nav>

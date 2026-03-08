@@ -129,7 +129,7 @@ async def run_explore(
 
     Token resolution order:
       1. ``github_token`` — passed directly (MCP path, no session needed)
-      2. ``session_id``   — decrypt from DB (browser OAuth/PAT path)
+      2. ``session_id``   — decrypt from DB (browser OAuth path)
     At least one must be provided; a ValueError is raised if neither is.
 
     Yields:

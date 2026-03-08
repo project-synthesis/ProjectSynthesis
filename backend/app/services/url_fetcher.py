@@ -104,7 +104,7 @@ async def fetch_url_contexts(url_contexts: list[str] | None) -> list[dict]:
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
         for url in url_contexts[:3]:
             try:
-                resp = await client.get(url, headers={"User-Agent": "PromptForge/1.0"})
+                resp = await client.get(url, headers={"User-Agent": "ProjectSynthesis/1.0"
                 resp.raise_for_status()
                 content = strip_html(resp.text)[:1500]  # N41: stages cap at 1500 anyway
                 results.append({"url": url, "content": content})

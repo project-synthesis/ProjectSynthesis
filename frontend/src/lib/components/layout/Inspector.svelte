@@ -65,7 +65,7 @@
       ];
     }
     return [
-      { name: "auto", confidence: 0.9, desc: "Let PromptForge choose" },
+      { name: "auto", confidence: 0.9, desc: "Let Project Synthesis choose" },
       {
         name: "context-enrichment",
         confidence: 0.65,

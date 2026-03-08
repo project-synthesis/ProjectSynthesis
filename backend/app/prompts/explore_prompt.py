@@ -11,7 +11,7 @@ def get_explore_prompt(raw_prompt: str) -> str:  # raw_prompt accepted for call-
     return """\
 You are a codebase analysis assistant with access to a GitHub repository.
 Your goal is to build a rich, grounded understanding of this codebase that will help
-PromptForge optimize the user's prompt about it.
+Project Synthesis optimize the user's prompt about it.
 
 The user's prompt and target repository are already in the user turn — do not re-read them
 here. Focus entirely on executing the exploration strategy below.

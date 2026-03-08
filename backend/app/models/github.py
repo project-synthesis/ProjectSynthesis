@@ -18,10 +18,11 @@ class GitHubToken(Base):
     github_user_id = Column(Integer, nullable=False)
     github_login = Column(Text, nullable=False)
     token_encrypted = Column(LargeBinary, nullable=False)
-    token_type = Column(Text, nullable=False)  # "oauth" or "pat"
-    scopes = Column(Text, nullable=True)  # comma-separated
+    token_type = Column(Text, nullable=False)  # always "github_app"
+    refresh_token_encrypted = Column(LargeBinary, nullable=True)
+    refresh_token_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
-    expires_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)  # always set (now + 8h)
 
     __table_args__ = (
         Index("idx_github_tokens_session", "session_id"),

@@ -201,11 +201,11 @@
     {/if}
   </div>
 
-  <!-- Recent Forges section -->
+  <!-- Recent Syntheses section -->
   {#if forgeFiles.length > 0}
     <div>
       <div class="flex items-center px-1 py-1">
-        <span class="font-display text-[11px] font-bold uppercase text-text-dim">Recent Forges</span>
+        <span class="font-display text-[11px] font-bold uppercase text-text-dim">Recent Syntheses</span>
       </div>
 
       {#each forgeFiles as file, i}

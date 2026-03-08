@@ -123,9 +123,9 @@
         <button
           class="text-[10px] px-2 py-1 rounded bg-bg-card border border-border-subtle text-text-secondary hover:border-neon-cyan/30 hover:text-text-primary transition-colors"
           onclick={handleReforge}
-          title="Re-forge this prompt"
+          title="Re-synthesize this prompt"
         >
-          Re-forge
+          Re-run
         </button>
       {/if}
       {#if forge.overallScore != null}
@@ -162,7 +162,7 @@
         </div>
       {:else}
         <div class="text-center py-12">
-          <p class="text-sm text-text-dim">No artifact generated yet. Forge a prompt first.</p>
+          <p class="text-sm text-text-dim">No artifact generated yet. Synthesize a prompt first.</p>
         </div>
       {/if}
 
@@ -171,7 +171,7 @@
         <DiffView original={forge.rawPrompt} modified={forge.streamingText} />
       {:else}
         <div class="text-center py-12">
-          <p class="text-sm text-text-dim">Run a forge to see the diff comparison.</p>
+          <p class="text-sm text-text-dim">Run a synthesis to see the diff comparison.</p>
         </div>
       {/if}
 

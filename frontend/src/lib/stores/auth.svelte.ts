@@ -24,7 +24,7 @@ class AuthStore {
 
   /**
    * Store a new access token and schedule proactive rotation.
-   * Call this after OAuth redirect capture or PAT submission.
+   * Call this after OAuth redirect capture.
    */
   setToken(token: string): void {
     this.accessToken = token;

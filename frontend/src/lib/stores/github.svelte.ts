@@ -5,6 +5,13 @@ export interface GitHubRepo {
   private: boolean;
   language?: string;
   size_kb?: number;
+  stars?: number;
+  forks?: number;
+  open_issues?: number;
+  updated_at?: string;
+  pushed_at?: string;
+  license_name?: string;
+  topics?: string[];
 }
 
 export interface GitHubFile {

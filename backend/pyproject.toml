@@ -1,9 +1,9 @@
 [project]
-name = "promptforge-backend"
+name = "project-synthesis-backend"
 version = "2.0.0"
-description = "PromptForge v2 - Intelligent Prompt Optimization Engine"
+description = "Project Synthesis — Multi-Agent Development Platform"
 requires-python = ">=3.14"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 
 [build-system]
 requires = ["setuptools>=68.0"]

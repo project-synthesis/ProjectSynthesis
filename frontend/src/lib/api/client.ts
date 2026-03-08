@@ -155,6 +155,13 @@ export interface RepoInfo {
   description: string | null;
   language: string | null;
   size_kb: number;
+  stars?: number;
+  forks?: number;
+  open_issues?: number;
+  updated_at?: string | null;
+  pushed_at?: string | null;
+  license_name?: string | null;
+  topics?: string[];
 }
 
 export interface LinkedRepo {
@@ -375,21 +382,6 @@ export async function fetchGitHubAuthStatus(): Promise<GitHubAuthStatus> {
   return res.json();
 }
 
-export async function submitGitHubPAT(token: string): Promise<GitHubAuthStatus> {
-  const res = await apiFetch(`${BASE}/auth/github/pat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token })
-  });
-  if (!res.ok) throw new Error(`GitHub PAT submission failed: ${res.status}`);
-  const data = await res.json();
-  // Backend augments the GitHubUserInfo response with an access_token JWT.
-  if (typeof data.access_token === 'string') {
-    auth.setToken(data.access_token);
-  }
-  return data as GitHubAuthStatus;
-}
-
 export async function logoutGitHub(): Promise<void> {
   const res = await apiFetch(`${BASE}/auth/github/logout`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`GitHub logout failed: ${res.status}`);
@@ -532,16 +524,18 @@ export async function fetchFileContent(
   return res.json();
 }
 
-// ---- GitHub convenience wrappers (used by NavigatorGitHub) ----
-
-export async function connectGitHub(token: string): Promise<{ username: string; repos: RepoInfo[] }> {
-  const authStatus = await submitGitHubPAT(token);
-  const repos = await fetchGitHubRepos();
-  return {
-    username: authStatus.login || '',
-    repos
-  };
+export interface RepoBranch {
+  name: string;
+  protected: boolean;
 }
+
+export async function fetchRepoBranches(owner: string, repo: string): Promise<RepoBranch[]> {
+  const res = await apiFetch(`${BASE}/api/github/repos/${owner}/${repo}/branches`);
+  if (!res.ok) throw new Error(`Fetch branches failed: ${res.status}`);
+  return res.json();
+}
+
+// ---- GitHub convenience wrappers (used by NavigatorGitHub) ----
 
 export async function disconnectGitHub(): Promise<void> {
   return logoutGitHub();

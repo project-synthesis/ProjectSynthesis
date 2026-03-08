@@ -1,6 +1,6 @@
-"""FastAPI application entry point for PromptForge v2.
+"""FastAPI application entry point for Project Synthesis.
 
-Creates the FastAPI app with title="PromptForge API", version="2.0.0",
+Creates the FastAPI app with title="Project Synthesis API", version="2.0.0",
 CORS middleware allowing http://localhost:5199, includes all routers
 with /api prefix, lifespan handler that initializes database on startup,
 and mounts /api/docs for Swagger UI.
@@ -75,7 +75,7 @@ class _LazyMCPWSApp:
     NOTE: This is NOT registered via app.add_websocket_route() because that
     routes through CORSMiddleware, which rejects WebSocket upgrades from
     Claude Code's Electron origin with HTTP 403. Instead it is wired in
-    _PromptForgeASGI below, which sits outside the middleware stack entirely.
+    _SynthesisASGI below, which sits outside the middleware stack entirely.
     """
 
     async def __call__(self, scope, receive, send):
@@ -87,7 +87,7 @@ class _LazyMCPWSApp:
             await send({"type": "websocket.close", "code": 1013})  # try again later
 
 
-# Module-level instance used by _PromptForgeASGI before the FastAPI app is built.
+# Module-level instance used by _SynthesisASGI before the FastAPI app is built.
 _lazy_mcp_ws_app = _LazyMCPWSApp()
 
 
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
     """
     global _mcp_http_app, _mcp_ws_asgi
 
-    logger.info("PromptForge v2 starting up...")
+    logger.info("Project Synthesis starting up...")
 
     # Create database tables
     await create_tables()
@@ -136,20 +136,20 @@ async def lifespan(app: FastAPI):
         app.state.mcp = mcp
         logger.info("MCP server mounted at /mcp (streamable-HTTP) and /mcp/ws (WebSocket)")
         async with mcp.session_manager.run():
-            logger.info("PromptForge v2 ready")
+            logger.info("Project Synthesis ready")
             yield
     else:
-        logger.info("PromptForge v2 ready (MCP not available)")
+        logger.info("Project Synthesis ready (MCP not available)")
         yield
 
     # Shutdown
-    logger.info("PromptForge v2 shutting down...")
+    logger.info("Project Synthesis shutting down...")
 
 
 app = FastAPI(
-    title="PromptForge API",
+    title="Project Synthesis API",
     version="2.0.0",
-    description="Intelligent Prompt Optimization Engine",
+    description="Multi-Agent Development Platform",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
@@ -167,7 +167,7 @@ app.mount("/mcp", _LazyMCPHttpApp())
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.SECRET_KEY,
-    session_cookie="promptforge_session",
+    session_cookie="synthesis_session",
     max_age=86400 * 7,  # 7 days
 )
 
@@ -221,7 +221,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def root():
     """Root endpoint returning API info."""
     return {
-        "app": "PromptForge API",
+        "app": "Project Synthesis API",
         "version": "2.0.0",
         "docs": "/api/docs",
     }
@@ -233,7 +233,7 @@ async def root():
 # Routing /mcp/ws here — outside the FastAPI middleware stack — bypasses CORS
 # entirely. All other requests fall through to FastAPI as normal.
 
-class _PromptForgeASGI:
+class _SynthesisASGI:
     """Top-level ASGI app: intercepts /mcp/ws WebSocket before FastAPI middleware."""
 
     def __init__(self, fastapi_app):
@@ -247,4 +247,4 @@ class _PromptForgeASGI:
 
 
 # uvicorn is pointed at this module-level name in init.sh: app.main:asgi_app
-asgi_app = _PromptForgeASGI(app)
+asgi_app = _SynthesisASGI(app)

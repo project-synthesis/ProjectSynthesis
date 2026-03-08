@@ -82,9 +82,9 @@
       },
       {
         id: 'forge-prompt',
-        label: 'Forge Current Prompt',
+        label: 'Synthesize Current Prompt',
         shortcut: 'Ctrl+Enter',
-        category: 'Forge',
+        category: 'Synthesize',
         action: () => {
           if (!forge.isForging && editor.activeTab?.promptText?.trim()) {
             editor.setSubTab('edit');

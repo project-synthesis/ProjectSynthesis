@@ -4,7 +4,7 @@ Provides file tree traversal and file content reading for linked repositories.
 Authentication uses the Starlette session (session_id stored in the encrypted
 session cookie by github_auth.py).
 
-OAuth authentication and PAT submission are handled by github_auth.py.
+OAuth authentication is handled by github_auth.py.
 Repository list, link, and unlink are handled by github_repos.py.
 """
 

@@ -19,7 +19,7 @@
 </script>
 
 <nav
-  class="h-full bg-bg-secondary border-r border-border-subtle flex flex-col overflow-hidden transition-all duration-200"
+  class="h-full bg-bg-secondary border-r border-border-subtle flex flex-col overflow-hidden transition-[width,opacity] duration-200"
   class:w-0={workbench.navigatorCollapsed}
   class:opacity-0={workbench.navigatorCollapsed}
   style="width: {workbench.navCssWidth}"

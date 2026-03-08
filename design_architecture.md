@@ -1,6 +1,6 @@
-# PromptForge v2 — UI/UX Design Architecture
+# Project Synthesis — UI/UX Design Architecture
 
-> **Purpose:** This document is the authoritative reference for all UI/UX, layout, and interaction design decisions in PromptForge v2. It replaces the "traditional web app" and "OS window manager" approaches with a developer-workbench model purpose-built for prompt engineering, chaining, IDE integration, and organization.
+> **Purpose:** This document is the authoritative reference for all UI/UX, layout, and interaction design decisions in Project Synthesis. It replaces the "traditional web app" and "OS window manager" approaches with a developer-workbench model purpose-built for prompt engineering, chaining, IDE integration, and organization.
 >
 > Every front-end decision — component structure, layout, interaction, state, motion — should trace back to a principle or pattern defined here.
 
@@ -12,7 +12,7 @@
 
 **Not a traditional web app.** No top navigation bar with links. No hero section with a tagline and CTA button. No sidebar accordion menu. No card grid landing page. These patterns optimize for marketing and discoverability by casual users — the wrong audience.
 
-**Not a full OS.** No floating windows, no window manager, no drag-to-arrange desktop, no minimize/maximize buttons. The first PromptForge was ambitious and educational; v2 is focused. We do not need a taskbar.
+**Not a full OS.** No floating windows, no window manager, no drag-to-arrange desktop, no minimize/maximize buttons. The initial version was ambitious and educational; v2 is focused. We do not need a taskbar.
 
 ### What We Are Building
 
@@ -99,7 +99,7 @@ The Navigator is a **single-purpose panel** whose content is fully determined by
 
 #### Navigator: Project / Files
 
-A hierarchical tree using the PFFS (PromptForge FileSystem) model. Nodes:
+A hierarchical tree using the PFFS (PSFS (Project Synthesis FileSystem)) model. Nodes:
 
 ```
 ▼ MyProject/
@@ -264,7 +264,7 @@ The Status Bar uses 10px Geist Mono for all values. Borders between fields: 1px 
 
 ## 4. The Prompt Document Model
 
-Every prompt in PromptForge is a **first-class document** with the following data model. This drives both the Navigator tree and the Editor's multi-sub-tab layout.
+Every prompt in Project Synthesis is a **first-class document** with the following data model. This drives both the Navigator tree and the Editor's multi-sub-tab layout.
 
 ```
 Prompt Document {
@@ -313,7 +313,7 @@ StageTrace {
 
 ## 5. The Vertical Stage Track
 
-The Stage Track is PromptForge's primary pipeline visualization. It replaces the node-graph canvas pattern (which is architecturally dishonest for a fixed-topology pipeline) with a vertical, sequential, streaming view.
+The Stage Track is Project Synthesis's primary pipeline visualization. It replaces the node-graph canvas pattern (which is architecturally dishonest for a fixed-topology pipeline) with a vertical, sequential, streaming view.
 
 ### Why Not a Node Graph?
 
@@ -422,7 +422,7 @@ Each chip:
 
 ### Why This Over the Form Panel Approach
 
-The prior PromptForge had a "Context Profile" form panel with fields for language, framework, description, etc. This required deliberate navigation and filling in freeform text. The `@` system:
+The prior version had a "Context Profile" form panel with fields for language, framework, description, etc. This required deliberate navigation and filling in freeform text. The `@` system:
 - Requires zero additional navigation (it's triggered in-place while composing)
 - References actual file content (not a manual description of it)
 - Is visually checkable (the chip shows exactly what's included)
@@ -433,7 +433,7 @@ The prior PromptForge had a "Context Profile" form panel with fields for languag
 
 ## 7. The Chain Composer
 
-For multi-step prompt pipelines (prompt A's output becomes prompt B's input), PromptForge provides a **Chain Composer** — a sequential visual editor that is NOT a node graph canvas.
+For multi-step prompt pipelines (prompt A's output becomes prompt B's input), Project Synthesis provides a **Chain Composer** — a sequential visual editor that is NOT a node graph canvas.
 
 ### Why Not a Node Graph
 
@@ -599,9 +599,9 @@ Each breadcrumb is clickable to navigate back. The breadcrumb is the only "you a
 
 ## 12. IDE Integration Mode
 
-PromptForge can be invoked from VS Code, Cursor, or any IDE via:
+Project Synthesis can be invoked from VS Code, Cursor, or any IDE via:
 1. **Browser shortcut** → opens a new prompt in the default project, pre-filled with selected text from clipboard
-2. **VS Code Extension** (future) → right-click menu "Optimize with PromptForge" → opens in a VS Code WebView panel using the Workbench layout
+2. **VS Code Extension** (future) → right-click menu "Optimize with Project Synthesis" → opens in a VS Code WebView panel using the Workbench layout
 3. **CLI** (future) → `forge optimize --file prompt.md` → runs the pipeline headlessly, writes result to `prompt.forge.md`
 
 The key design requirement: **the Workbench layout works inside a WebView panel** without modification. The Activity Bar + Navigator + Editor + Inspector pattern compresses gracefully to a 480px minimum width because:
@@ -821,7 +821,7 @@ The sub-line is `text-dim` 10px Geist Mono. This eliminates the need to open the
 
 ## 18. Accessibility
 
-Accessibility in PromptForge is non-negotiable and must meet WCAG 2.1 AA. This section defines the exact requirements for the workbench layout.
+Accessibility in Project Synthesis is non-negotiable and must meet WCAG 2.1 AA. This section defines the exact requirements for the workbench layout.
 
 ### ARIA Landmark Structure
 
@@ -1171,7 +1171,7 @@ Based on industry research (W&B, DataGrip, TablePlus, Braintrust):
 | Default | 40px | History sub-tab expanded row details |
 | Comfortable | 48px | Stage trace expanded view with multi-line content |
 
-PromptForge uses **compact 32px rows** throughout history surfaces. This allows ~20 runs visible in a standard viewport without scrolling — matching the "maximum data density" principle.
+Project Synthesis uses **compact 32px rows** throughout history surfaces. This allows ~20 runs visible in a standard viewport without scrolling — matching the "maximum data density" principle.
 
 All numeric values in table cells use `font-variant-numeric: tabular-nums` (available in Geist Mono) so that score values align vertically across rows regardless of digit count.
 
@@ -1200,7 +1200,7 @@ History table filtering follows the instant-filter pattern:
 
 ### Multi-Select and Bulk Actions
 
-The standard for PromptForge's history tables:
+The standard for Project Synthesis's history tables:
 
 - **Checkbox column** (32px wide, leftmost): appears on row hover; always visible when checked
 - **Shift+click** selects a contiguous range from the last click to the current row
@@ -1268,7 +1268,7 @@ Double-clicking a column's resize handle auto-sizes that column to fit the wides
 
 ### Shimmer Specification
 
-Every loading state in PromptForge uses the standard shimmer skeleton — not a spinner, not a "Loading..." text.
+Every loading state in Project Synthesis uses the standard shimmer skeleton — not a spinner, not a "Loading..." text.
 
 ```css
 @keyframes shimmer {
@@ -1449,7 +1449,7 @@ This prevents the Stage Track from growing to dominate the viewport during long 
 
 ## 24. Research-Driven Patterns to Implement
 
-Concrete patterns sourced from industry tools that should be implemented in PromptForge v2, organized by component.
+Concrete patterns sourced from industry tools that should be implemented in Project Synthesis, organized by component.
 
 ### From W&B (Run-Color Anchoring)
 

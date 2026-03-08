@@ -1,47 +1,13 @@
 <script lang="ts">
   import { github } from '$lib/stores/github.svelte';
   import { workbench } from '$lib/stores/workbench.svelte';
-  import { connectGitHub, disconnectGitHub, linkRepo, unlinkRepo, fetchLinkedRepo, getGitHubLoginUrl } from '$lib/api/client';
+  import { disconnectGitHub, linkRepo, unlinkRepo, getGitHubLoginUrl } from '$lib/api/client';
+  import { toast } from '$lib/stores/toast.svelte';
   import type { RepoInfo } from '$lib/api/client';
   import GitHubStatus from '$lib/components/github/GitHubStatus.svelte';
   import RepoPickerModal from '$lib/components/github/RepoPickerModal.svelte';
 
-  let patInput = $state('');
-  let connecting = $state(false);
   let showRepoPicker = $state(false);
-  let showPat = $state(false);
-
-  async function handleConnect() {
-    if (!patInput.trim()) return;
-    connecting = true;
-    try {
-      const res = await connectGitHub(patInput);
-      github.setConnected(
-        res.username,
-        res.repos.map((r: RepoInfo) => ({
-          full_name: r.full_name as string,
-          description: (r.description || '') as string,
-          default_branch: (r.default_branch || 'main') as string,
-          private: !!r.private,
-          language: r.language as string | undefined,
-          size_kb: r.size_kb as number | undefined,
-        }))
-      );
-      patInput = '';
-      // Restore previously linked repo selection (non-blocking)
-      fetchLinkedRepo()
-        .then((linked) => {
-          if (linked && linked.full_name) {
-            github.selectRepo(linked.full_name, linked.branch);
-          }
-        })
-        .catch(() => {});
-    } catch (err) {
-      github.setError((err as Error).message);
-    } finally {
-      connecting = false;
-    }
-  }
 
   function handleSelectRepo(fullName: string, branch?: string) {
     const repo = github.repos.find(r => r.full_name === fullName);
@@ -56,11 +22,13 @@
   async function handleDisconnect() {
     try {
       await disconnectGitHub();
-      await unlinkRepo().catch(() => {});
+      await unlinkRepo().catch(() => {}); // best-effort — local selection already cleared
+      toast.success('GitHub disconnected');
     } catch {
-      // ignore
+      toast.error('Disconnect failed — connection cleared locally');
+    } finally {
+      github.disconnect(); // always clear local state, even on API failure
     }
-    github.disconnect();
   }
 </script>
 
@@ -69,61 +37,53 @@
 
   {#if !github.isConnected}
     <div class="space-y-2">
-      <label class="text-xs text-text-secondary block" for="github-pat-input">
-        Personal Access Token
-      </label>
-      <div class="relative">
-        <input
-          id="github-pat-input"
-          type={showPat ? 'text' : 'password'}
-          placeholder="ghp_..."
-          class="w-full bg-bg-input border border-border-subtle rounded px-2 py-1.5 pr-8 text-xs text-text-primary placeholder:text-text-dim focus:outline-none focus:border-neon-cyan/30 font-mono"
-          bind:value={patInput}
-          onkeydown={(e) => { if (e.key === 'Enter') handleConnect(); }}
-        />
-        <button
-          type="button"
-          class="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-dim hover:text-text-secondary transition-colors"
-          onclick={() => { showPat = !showPat; }}
-          aria-label={showPat ? 'Hide token' : 'Show token'}
-          tabindex={-1}
-        >
-          {#if showPat}
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88"></path>
-            </svg>
-          {:else}
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"></path>
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-            </svg>
-          {/if}
-        </button>
-      </div>
-      <button
-        class="w-full py-1.5 rounded text-xs font-medium transition-all
-          {connecting
-            ? 'bg-bg-card text-text-dim cursor-wait'
-            : 'bg-bg-card border border-border-subtle text-text-primary hover:bg-bg-hover hover:border-neon-cyan/20'}"
-        onclick={handleConnect}
-        disabled={connecting || !patInput.trim()}
-      >
-        {connecting ? 'Connecting...' : 'Connect'}
-      </button>
       {#if workbench.githubOAuthEnabled}
-        <div class="flex items-center gap-2 my-1">
-          <div class="h-px flex-1 bg-border-subtle"></div>
-          <span class="text-[10px] text-text-dim">or</span>
-          <div class="h-px flex-1 bg-border-subtle"></div>
-        </div>
         <button
-          class="w-full py-1.5 rounded text-xs font-medium transition-all
+          class="w-full py-1.5 text-xs font-medium transition-all
             bg-bg-card border border-border-subtle text-text-primary
-            hover:bg-bg-hover hover:border-neon-cyan/20"
+            hover:bg-bg-hover hover:border-neon-cyan/20
+            flex items-center justify-center gap-2"
           onclick={() => { window.location.href = getGitHubLoginUrl(); }}
         >
-          Connect via GitHub OAuth
+          <svg class="w-3.5 h-3.5 shrink-0 text-text-dim" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          Connect via GitHub
         </button>
+      {:else}
+        <!-- Compact setup hint -->
+        <div class="border border-border-subtle px-2.5 py-2.5 space-y-2">
+          <div class="flex items-center gap-1.5">
+            <span class="font-mono text-[7.5px] uppercase tracking-[0.12em] text-neon-red border border-neon-red/30 px-1 py-[2px] leading-none shrink-0">
+              SETUP
+            </span>
+            <span class="font-mono text-[8.5px] text-text-dim truncate">GitHub App required</span>
+          </div>
+          <div class="font-mono text-[8.5px] text-text-dim leading-relaxed space-y-0.5">
+            <div>
+              Set <span class="text-neon-green">GITHUB_APP_CLIENT_ID</span>
+            </div>
+            <div>
+              &amp; <span class="text-neon-green">GITHUB_APP_CLIENT_SECRET</span>
+            </div>
+            <div class="text-text-dim/60 pt-0.5">
+              in <span class="text-text-secondary">.env</span>
+              → <span class="text-text-secondary">./init.sh restart</span>
+            </div>
+          </div>
+          <a
+            href="https://github.com/settings/apps/new"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="font-mono text-[8px] text-neon-cyan/60 hover:text-neon-cyan
+              transition-colors duration-150 flex items-center gap-1"
+          >
+            <svg class="w-2.5 h-2.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+            </svg>
+            Create GitHub App
+          </a>
+        </div>
       {/if}
     </div>
   {:else}

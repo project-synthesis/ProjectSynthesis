@@ -67,7 +67,7 @@ else:
     check("T0-3: Health endpoint returns complete status", False, "no response")
 
 # T0-4: Database optimizations table
-conn = sqlite3.connect("backend/data/promptforge.db")
+conn = sqlite3.connect("backend/data/synthesis.db")
 c = conn.cursor()
 c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='optimizations'")
 check("T0-4: Database optimizations table created", c.fetchone() is not None)
@@ -104,7 +104,7 @@ check("T0-9: Backend returns 404 for unknown routes", status == 404, f"status={s
 
 # T0-10: Frontend SvelteKit routing
 html = fetch_text("http://localhost:5199/")
-check("T0-10: Frontend SvelteKit routing works", "PromptForge" in html)
+check("T0-10: Frontend SvelteKit routing works", "Project Synthesis" in html)
 
 # T0-11: Provider detection completes
 provider_status = fetch_json("http://localhost:8000/api/providers/status")

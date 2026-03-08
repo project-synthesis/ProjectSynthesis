@@ -3,10 +3,6 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class PATRequest(BaseModel):
-    token: str = Field(..., min_length=1, description="GitHub Personal Access Token")
-
-
 class RepoInfo(BaseModel):
     full_name: str
     name: str
@@ -15,6 +11,13 @@ class RepoInfo(BaseModel):
     description: Optional[str] = None
     language: Optional[str] = None
     size_kb: int = 0
+    stars: int = 0
+    forks: int = 0
+    open_issues: int = 0
+    updated_at: Optional[str] = None    # ISO-8601 string
+    pushed_at: Optional[str] = None     # ISO-8601 string
+    license_name: Optional[str] = None  # SPDX ID e.g. "MIT", "Apache-2.0"
+    topics: list[str] = []
 
 
 class LinkRepoRequest(BaseModel):

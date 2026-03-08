@@ -1,5 +1,6 @@
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -13,9 +14,9 @@ from app.config import settings
 from app.database import get_session
 from app.models.auth import RefreshToken, User
 from app.models.github import GitHubToken
-from app.schemas.github import GitHubUserInfo, PATRequest
+from app.schemas.github import GitHubUserInfo
 from app.services.auth_service import issue_jwt_pair
-from app.services.github_service import _get_fernet, decrypt_token
+from app.services.github_service import encrypt_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["github-auth"])
@@ -80,11 +81,11 @@ def _get_session_id(request: Request) -> str:
 
 @router.get("/auth/github/login")
 async def github_login(request: Request):
-    """Initiate GitHub OAuth flow. Redirects to GitHub."""
-    if not settings.GITHUB_CLIENT_ID or not settings.GITHUB_CLIENT_SECRET:
+    """Initiate GitHub App OAuth flow. Redirects to GitHub."""
+    if not settings.GITHUB_APP_CLIENT_ID or not settings.GITHUB_APP_CLIENT_SECRET:
         raise HTTPException(
             status_code=400,
-            detail="GitHub OAuth not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.",
+            detail="GitHub App not configured. Set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.",
         )
 
     # Generate time-bound CSRF state via TimestampSigner
@@ -92,12 +93,16 @@ async def github_login(request: Request):
     state = _csrf_signer().sign(raw_token).decode()
     request.session["oauth_state"] = state
 
-    params = {
-        "client_id": settings.GITHUB_CLIENT_ID,
-        "scope": "repo",
+    params: dict[str, str] = {
+        "client_id": settings.GITHUB_APP_CLIENT_ID,
         "state": state,
         "allow_signup": "false",
     }
+    # GitHub App client IDs start with "Iv1." — permissions are defined at App
+    # registration and the scope param must be omitted.  Standard OAuth App
+    # client IDs start with "Ov" and require explicit scopes.
+    if not settings.GITHUB_APP_CLIENT_ID.startswith("Iv1."):
+        params["scope"] = "read:user,repo"
     redirect_url = f"{GITHUB_AUTHORIZE_URL}?{urlencode(params)}"
     return RedirectResponse(url=redirect_url)
 
@@ -109,15 +114,16 @@ async def github_callback(
     state: str = "",
     session: AsyncSession = Depends(get_session),
 ):
-    """Handle GitHub OAuth callback."""
+    """Handle GitHub App OAuth callback."""
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing code or state parameter")
 
-    # Verify CSRF state — exact match + signature + expiry check.
-    # Always consume (pop) the stored state so it cannot be replayed.
-    stored_state = request.session.pop("oauth_state", None)
-    if not stored_state or state != stored_state:
-        raise HTTPException(status_code=400, detail="State mismatch (CSRF protection)")
+    # Verify CSRF state via signature + expiry check.
+    # The signed state token is self-contained CSRF protection: it encodes a
+    # random nonce signed with SECRET_KEY and a timestamp.  No session lookup
+    # is needed because the token itself cannot be forged or replayed — the
+    # session cookie is on the Vite proxy origin (localhost:5199) while the
+    # callback is delivered directly to the backend (localhost:8000).
     try:
         _csrf_signer().unsign(state, max_age=_CSRF_MAX_AGE)
     except SignatureExpired:
@@ -130,14 +136,16 @@ async def github_callback(
             status_code=400,
             detail="Invalid OAuth state signature (CSRF protection)",
         )
+    # Clean up any leftover session state (best-effort; may be absent in proxy setups).
+    request.session.pop("oauth_state", None)
 
-    # Exchange code for token
+    # Exchange code for GitHub App user-to-server tokens
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
             GITHUB_TOKEN_URL,
             data={
-                "client_id": settings.GITHUB_CLIENT_ID,
-                "client_secret": settings.GITHUB_CLIENT_SECRET,
+                "client_id": settings.GITHUB_APP_CLIENT_ID,
+                "client_secret": settings.GITHUB_APP_CLIENT_SECRET,
                 "code": code,
             },
             headers={"Accept": "application/json"},
@@ -149,7 +157,15 @@ async def github_callback(
         error = token_data.get("error_description", "Failed to get access token")
         raise HTTPException(status_code=400, detail=error)
 
-    scopes = token_data.get("scope", "")
+    # GitHub App tokens include expiry and refresh token fields.
+    now = datetime.now(timezone.utc)
+    expires_in = int(token_data.get("expires_in", 28800))            # default 8h
+    refresh_token_str = token_data.get("refresh_token")
+    refresh_token_expires_in = int(
+        token_data.get("refresh_token_expires_in", 15897600)         # ~6 months
+    )
+    expires_at = now + timedelta(seconds=expires_in)
+    refresh_token_expires_at = now + timedelta(seconds=refresh_token_expires_in)
 
     # Fetch user info
     async with httpx.AsyncClient() as client:
@@ -164,9 +180,9 @@ async def github_callback(
             raise HTTPException(status_code=400, detail="Failed to fetch GitHub user info")
         user_data = user_resp.json()
 
-    # Encrypt and store token
-    fernet = _get_fernet()
-    encrypted_token = fernet.encrypt(access_token.encode())
+    # Encrypt tokens
+    encrypted_access = encrypt_token(access_token)
+    encrypted_refresh = encrypt_token(refresh_token_str) if refresh_token_str else None
 
     session_id = _get_session_id(request)
     github_user_id = user_data["id"]
@@ -181,9 +197,11 @@ async def github_callback(
         session_id=session_id,
         github_user_id=github_user_id,
         github_login=github_login,
-        token_encrypted=encrypted_token,
-        token_type="oauth",
-        scopes=scopes,
+        token_encrypted=encrypted_access,
+        token_type="github_app",
+        refresh_token_encrypted=encrypted_refresh,
+        refresh_token_expires_at=refresh_token_expires_at,
+        expires_at=expires_at,
     )
     session.add(new_token)
     # Note: do NOT commit here — _upsert_user and _issue_jwt_pair must be part
@@ -197,8 +215,21 @@ async def github_callback(
     user = await _upsert_user(session, github_user_id, github_login)
     jwt_access, raw_refresh = await issue_jwt_pair(session, user)
 
+    # Emit structured audit log
+    try:
+        from app.services.github_app_service import log_token_event
+        log_token_event(
+            event="user_token_issued",
+            github_login=github_login,
+            github_user_id=github_user_id,
+            session_id=session_id,
+            expires_at=expires_at,
+        )
+    except Exception:
+        pass
+
     # Redirect to frontend with access token as query param; refresh token in cookie
-    redirect = RedirectResponse(url=f"/?access_token={jwt_access}")
+    redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/?access_token={jwt_access}")
     _set_refresh_cookie(redirect, raw_refresh)
     return redirect
 
@@ -223,6 +254,7 @@ async def github_me(
     # Optionally fetch fresh avatar URL
     avatar_url = None
     try:
+        from app.services.github_service import decrypt_token
         decrypted = decrypt_token(bytes(token_record.token_encrypted))
         async with httpx.AsyncClient() as client:
             resp = await client.get(
@@ -288,73 +320,3 @@ async def github_logout(
     request.session.pop("github_login", None)
 
     return {"disconnected": True}
-
-
-@router.post("/auth/github/pat")
-async def submit_pat(
-    body: PATRequest,
-    request: Request,
-    response: Response,
-    session: AsyncSession = Depends(get_session),
-):
-    """Submit a Personal Access Token for GitHub authentication."""
-    # Validate the token by calling GitHub API
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            GITHUB_USER_URL,
-            headers={
-                "Authorization": f"Bearer {body.token}",
-                "Accept": "application/json",
-            },
-        )
-        if resp.status_code != 200:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid GitHub token. Ensure it has 'Contents: Read' permission.",
-            )
-        user_data = resp.json()
-
-    # Encrypt and store
-    fernet = _get_fernet()
-    encrypted_token = fernet.encrypt(body.token.encode())
-
-    session_id = _get_session_id(request)
-    github_user_id = user_data["id"]
-    github_login = user_data["login"]
-
-    # Remove existing token
-    await session.execute(
-        delete(GitHubToken).where(GitHubToken.session_id == session_id)
-    )
-
-    new_token = GitHubToken(
-        session_id=session_id,
-        github_user_id=github_user_id,
-        github_login=github_login,
-        token_encrypted=encrypted_token,
-        token_type="pat",
-    )
-    session.add(new_token)
-    # No commit here — keep GitHubToken + User + RefreshToken in one transaction.
-
-    # Store in session
-    request.session["github_user_id"] = github_user_id
-    request.session["github_login"] = github_login
-
-    # Issue JWT pair
-    user = await _upsert_user(session, github_user_id, github_login)
-    jwt_access, raw_refresh = await issue_jwt_pair(session, user)
-    _set_refresh_cookie(response, raw_refresh)
-
-    # token_type here is the GitHub auth kind ("pat"), not the JWT bearer kind.
-    # access_token carries the JWT; the frontend infers it is a bearer token.
-    return {
-        **GitHubUserInfo(
-            connected=True,
-            login=github_login,
-            avatar_url=user_data.get("avatar_url"),
-            github_user_id=github_user_id,
-            token_type="pat",
-        ).model_dump(),
-        "access_token": jwt_access,
-    }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PromptForge v2 — Development Environment Setup & Management
+# Project Synthesis — Development Environment Setup & Management
 # Usage: ./init.sh [command]
 # Commands: setup, start (default), stop, restart, status, test, seed, mcp, help
 
@@ -22,7 +22,7 @@ MCP_PORT=8001
 PID_DIR=".pids"
 mkdir -p "$PID_DIR" data
 
-log() { echo -e "${CYAN}[PromptForge]${NC} $1"; }
+log() { echo -e "${CYAN}[Project Synthesis]${NC} $1"; }
 ok() { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err() { echo -e "${RED}[✗]${NC} $1"; }
@@ -209,7 +209,7 @@ do_start() {
 
     echo ""
     log "═══════════════════════════════════════════"
-    log "  PromptForge v2 — Services Running"
+    log "  Project Synthesis — Services Running"
     log "═══════════════════════════════════════════"
     ok "Backend:  http://localhost:$BACKEND_PORT"
     ok "Frontend: http://localhost:$FRONTEND_PORT"
@@ -276,7 +276,7 @@ do_seed() {
 
 do_help() {
     echo ""
-    echo "PromptForge v2 — Development Environment"
+    echo "Project Synthesis — Development Environment"
     echo ""
     echo "Usage: ./init.sh [command]"
     echo ""
