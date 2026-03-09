@@ -2,6 +2,7 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -22,11 +23,29 @@ if "sqlite" in db_url:
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
+def _register_sqlite_pragmas(eng) -> None:
+    """Register SQLite PRAGMA tuning on every new connection."""
+    if "sqlite" not in str(eng.url):
+        return
+
+    @event.listens_for(eng.sync_engine, "connect")
+    def _set_pragmas(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA cache_size=-64000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
+    pool_pre_ping=True,
     connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
 )
+
+_register_sqlite_pragmas(engine)
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
