@@ -1,0 +1,12 @@
+# .github/CODEOWNERS
+# Default: repo maintainers review everything
+*                   @project-synthesis/maintainers
+
+# Backend
+backend/            @project-synthesis/maintainers
+
+# Frontend
+frontend/           @project-synthesis/maintainers
+
+# CI and repo config — extra scrutiny
+.github/            @project-synthesis/maintainers
