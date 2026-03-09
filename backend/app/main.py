@@ -6,6 +6,7 @@ with /api prefix, lifespan handler that initializes database on startup,
 and mounts /api/docs for Swagger UI.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -17,6 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.config import settings
 from app.database import create_tables
 from app.mcp_server import HAS_MCP, create_mcp_server, make_websocket_asgi
+from app.services.cleanup import cleanup_loop
 from app.providers.detector import ProviderNotAvailableError, detect_provider
 
 # Import routers
@@ -128,6 +130,11 @@ async def lifespan(app: FastAPI):
     # Store provider on app state for access elsewhere
     app.state.provider = provider
 
+    # Start background cleanup task
+    cleanup_task = asyncio.create_task(cleanup_loop())
+    app.state.cleanup_task = cleanup_task
+    logger.info("Background cleanup task started")
+
     # B2: Mount MCP server — provider injected so tools never call detect_provider()
     if HAS_MCP:
         mcp = create_mcp_server(provider)
@@ -143,6 +150,14 @@ async def lifespan(app: FastAPI):
         yield
 
     # Shutdown
+    cleanup_task = getattr(app.state, "cleanup_task", None)
+    if cleanup_task and not cleanup_task.done():
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Cleanup task stopped")
     logger.info("Project Synthesis shutting down...")
 
 
