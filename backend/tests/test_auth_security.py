@@ -600,6 +600,7 @@ async def test_callback_redirect_includes_new_param_for_new_users():
 async def test_callback_redirect_excludes_new_param_for_existing_users():
     """OAuth callback omits ?new=1 in redirect URL when the user already exists."""
     from fastapi.responses import RedirectResponse
+
     from app.routers.github_auth import github_callback
 
     with patch("app.routers.github_auth._csrf_signer") as mock_signer_fn:

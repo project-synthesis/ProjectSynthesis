@@ -22,11 +22,11 @@ os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("SECRET_KEY", "integration-test-secret-key-32chars!!")
 os.environ.setdefault("GITHUB_TOKEN_ENCRYPTION_KEY", "Zm9vYmFyYmF6cXV4cXV4cXV4cXV4cXV4cXV4cXU=")
 
-from app.database import Base, get_session          # noqa: E402
-from app.main import asgi_app, app                  # noqa: E402
-from app.models.auth import User                    # noqa: E402
-from app.providers.mock import MockProvider          # noqa: E402
-from app.utils.jwt import sign_access_token         # noqa: E402
+from app.database import Base, get_session  # noqa: E402
+from app.main import app, asgi_app  # noqa: E402
+from app.models.auth import User  # noqa: E402
+from app.providers.mock import MockProvider  # noqa: E402
+from app.utils.jwt import sign_access_token  # noqa: E402
 
 # ── Test user constants ────────────────────────────────────────────────────
 

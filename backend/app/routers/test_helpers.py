@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from pydantic import BaseModel
+
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.models.auth import User

@@ -9,7 +9,6 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-
 # ── Module-level patch: redirect async_session to the test engine ──────────
 
 @pytest.fixture(scope="module", autouse=True)

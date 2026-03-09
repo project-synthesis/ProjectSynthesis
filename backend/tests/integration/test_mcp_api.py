@@ -22,7 +22,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-
 # ── Module-level session patch ────────────────────────────────────────────
 
 @pytest.fixture(scope="module", autouse=True)
@@ -133,7 +132,7 @@ async def _call_tool(
     assert resp.status_code == 200
     text = resp.text
     if text.startswith("data:"):
-        data_line = next(l for l in text.splitlines() if l.startswith("data:"))
+        data_line = next(line for line in text.splitlines() if line.startswith("data:"))
         return json.loads(data_line[5:].strip())
     return resp.json()
 

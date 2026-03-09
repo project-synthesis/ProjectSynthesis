@@ -2,7 +2,6 @@
 """Integration tests for GitHub auth status and me endpoints."""
 from __future__ import annotations
 
-import pytest
 from httpx import AsyncClient
 
 

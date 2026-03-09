@@ -87,7 +87,6 @@ async def test_restore_optimization_not_soft_deleted_returns_false():
 
 async def test_restore_endpoint_happy_path():
     """POST /api/history/{id}/restore returns 200 {"restored": True} when service succeeds."""
-    from fastapi import HTTPException
     from app.routers.history import restore_optimization as endpoint
 
     mock_user = MagicMock()
@@ -113,6 +112,7 @@ async def test_restore_endpoint_happy_path():
 async def test_restore_endpoint_not_in_trash_raises_404():
     """POST /api/history/{id}/restore returns 404 when service returns False."""
     from fastapi import HTTPException
+
     from app.routers.history import restore_optimization as endpoint
 
     mock_user = MagicMock()

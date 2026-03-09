@@ -2,7 +2,6 @@
 """Integration tests for /auth/me (GET + PATCH) and /auth/jwt/refresh."""
 from __future__ import annotations
 
-import pytest
 from httpx import AsyncClient
 
 
