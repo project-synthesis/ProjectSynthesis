@@ -6,6 +6,7 @@ and deleting optimization records via SQLAlchemy async sessions.
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import case, func, select
@@ -283,20 +284,20 @@ async def delete_optimization(
     session: AsyncSession,
     optimization_id: str,
 ) -> bool:
-    """Delete an optimization by ID.
+    """Soft-delete an optimization by setting deleted_at.
 
     Args:
         session: Async database session.
-        optimization_id: The UUID of the optimization to delete.
+        optimization_id: The UUID of the optimization to soft-delete.
 
     Returns:
-        True if deleted, False if not found.
+        True if soft-deleted, False if not found.
     """
     opt = await get_optimization_orm(session, optimization_id)
     if opt is None:
         return False
 
-    await session.delete(opt)
+    opt.deleted_at = datetime.now(timezone.utc)
     await session.flush()
-    logger.info("Deleted optimization %s", optimization_id)
+    logger.info("Soft-deleted optimization %s", optimization_id)
     return True

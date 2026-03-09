@@ -374,7 +374,7 @@ def create_mcp_server(provider=None) -> FastMCP:
         ),
     )
     async def delete_optimization(optimization_id: str) -> str:
-        """Permanently delete an optimization record by ID. This cannot be undone.
+        """Soft-delete an optimization record by ID (sets deleted_at; purged after 7 days).
 
         Args:
             optimization_id: The UUID of the optimization to delete.
@@ -384,11 +384,12 @@ def create_mcp_server(provider=None) -> FastMCP:
             JSON confirming deletion with {"deleted": true, "id": "..."}.
             Returns {"error": ...} with a hint if not found.
         """
-        async with _opt_session(optimization_id) as (session, opt):
-            if not opt:
-                return _not_found(optimization_id)
-            await session.delete(opt)
+        from app.services.optimization_service import delete_optimization as svc_delete
+        async with async_session() as session:
+            deleted = await svc_delete(session, optimization_id)
             await session.commit()
+        if not deleted:
+            return _not_found(optimization_id)
         return json.dumps({"deleted": True, "id": optimization_id})
 
     @mcp.tool(

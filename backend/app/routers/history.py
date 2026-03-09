@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -96,17 +97,37 @@ async def delete_optimization(
     optimization_id: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Delete an optimization record."""
-    result = await session.execute(
-        select(Optimization).where(Optimization.id == optimization_id)
-    )
-    optimization = result.scalar_one_or_none()
-    if not optimization:
+    """Soft-delete an optimization record."""
+    from app.services.optimization_service import delete_optimization as svc_delete
+    deleted = await svc_delete(session, optimization_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail="Optimization not found")
-
-    await session.delete(optimization)
     await session.commit()
     return {"deleted": True, "id": optimization_id}
+
+
+@router.get("/api/history/trash")
+async def list_trash(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+):
+    """List soft-deleted optimizations pending purge (deleted within the last 7 days)."""
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    query = (
+        select(Optimization)
+        .where(
+            Optimization.deleted_at.isnot(None),
+            Optimization.deleted_at >= cutoff,
+        )
+        .order_by(Optimization.deleted_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(query)
+    items = [opt.to_dict() for opt in result.scalars().all()]
+    return {"items": items, "count": len(items), "offset": offset}
 
 
 @router.get("/api/history/stats")
