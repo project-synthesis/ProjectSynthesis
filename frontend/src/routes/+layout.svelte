@@ -14,6 +14,7 @@
   import Inspector from '$lib/components/layout/Inspector.svelte';
   import StatusBar from '$lib/components/layout/StatusBar.svelte';
   import AuthGate from '$lib/components/layout/AuthGate.svelte';
+  import OnboardingModal from '$lib/components/layout/OnboardingModal.svelte';
   import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
   import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
 
@@ -103,6 +104,8 @@
 
   // Auth gate — false until the silent refresh attempt resolves
   let authChecked = $state(false);
+  // Onboarding modal — shown once for brand-new users after OAuth
+  let showOnboarding = $state(false);
 
   // Resize handle logic
   let resizing = $state<'nav' | 'inspector' | null>(null);
@@ -241,11 +244,15 @@
     const url = new URL(window.location.href);
     const isAuthCallback = url.searchParams.has('auth_complete');
     if (isAuthCallback) {
+      const isNewUser = url.searchParams.has('new');
       try {
         const res = await fetch('/auth/token', { credentials: 'include' });
         if (res.ok) {
           const data: { access_token: string } = await res.json();
           auth.setToken(data.access_token);
+          if (isNewUser) {
+            showOnboarding = true;
+          }
         }
       } catch { /* token fetch failed — fall through to silent refresh */ }
       // Clean up URL after callback
@@ -376,4 +383,7 @@
   <!-- Global overlays -->
   <CommandPalette />
   <ToastContainer />
+  {#if showOnboarding}
+    <OnboardingModal onComplete={() => { showOnboarding = false; }} />
+  {/if}
 {/if}

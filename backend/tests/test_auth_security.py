@@ -503,3 +503,89 @@ async def test_get_auth_me_returns_user_profile():
     assert result["github_login"] == "octocat"
     assert result["display_name"] == "The Octocat"
     assert result["onboarding_completed"] is False
+
+
+# ── Cycle 8: Onboarding Flow (Gap 1) ──────────────────────────────────────
+
+
+async def test_upsert_user_returns_is_new_true_for_new_user():
+    """_upsert_user must return (user, True) for a brand-new user."""
+    from app.routers.github_auth import _upsert_user
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None  # user doesn't exist
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.add = MagicMock()
+    mock_session.flush = AsyncMock()
+
+    user, is_new = await _upsert_user(mock_session, 12345, "newuser")
+
+    assert is_new is True
+
+
+async def test_upsert_user_returns_is_new_false_for_existing_user():
+    """_upsert_user must return (user, False) for a returning user."""
+    from app.routers.github_auth import _upsert_user
+
+    mock_user = MagicMock()
+    mock_user.github_login = "octocat"
+    mock_user.avatar_url = None
+    mock_user.last_login_at = None
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_user
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    user, is_new = await _upsert_user(mock_session, 999, "octocat")
+
+    assert is_new is False
+
+
+async def test_callback_redirect_includes_new_param_for_new_users():
+    """OAuth callback sets ?new=1 in redirect URL when the user is brand new."""
+    from fastapi.responses import RedirectResponse
+    from app.routers.github_auth import github_callback
+
+    with patch("app.routers.github_auth._csrf_signer") as mock_signer_fn:
+        mock_signer = MagicMock()
+        mock_signer.unsign.return_value = b"nonce"
+        mock_signer_fn.return_value = mock_signer
+
+        mock_token_resp = MagicMock()
+        mock_token_resp.json.return_value = {"access_token": "ghs_fake", "expires_in": 28800}
+        mock_user_resp = MagicMock()
+        mock_user_resp.status_code = 200
+        mock_user_resp.json.return_value = {"id": 999, "login": "newuser", "avatar_url": "https://a.com/1"}
+
+        mock_http = AsyncMock()
+        mock_http.post = AsyncMock(return_value=mock_token_resp)
+        mock_http.get = AsyncMock(return_value=mock_user_resp)
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=False)
+
+        mock_db = AsyncMock()
+
+        mock_request = MagicMock()
+        mock_request.session = {}
+
+        with patch("app.routers.github_auth.httpx.AsyncClient", return_value=mock_http):
+            with patch("app.routers.github_auth.issue_jwt_pair",
+                       AsyncMock(return_value=("access.jwt.token", "refresh.jwt.token"))):
+                with patch("app.routers.github_auth.encrypt_token", return_value=b"enc"):
+                    new_user_mock = MagicMock()
+                    new_user_mock.id = "new-user-uuid"
+                    new_user_mock.github_login = "newuser"
+                    new_user_mock.role = MagicMock(value="user")
+                    with patch("app.routers.github_auth._upsert_user",
+                               AsyncMock(return_value=(new_user_mock, True))):
+                        result = await github_callback(
+                            request=mock_request, code="code", state="state", session=mock_db
+                        )
+
+    assert isinstance(result, RedirectResponse)
+    location = result.headers.get("location", "")
+    assert "new=1" in location, f"?new=1 must be in redirect URL for new users, got: {location}"
