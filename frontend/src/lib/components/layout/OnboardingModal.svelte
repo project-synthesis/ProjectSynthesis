@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { apiFetch } from '$lib/api/client';
+  import { patchAuthMe } from '$lib/api/client';
 
   interface Props {
     onComplete: () => void;
@@ -14,13 +14,9 @@
     saving = true;
     error = '';
     try {
-      await apiFetch('/auth/me', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          display_name: displayName.trim() || null,
-          onboarding_completed_at: new Date().toISOString(),
-        }),
+      await patchAuthMe({
+        display_name: displayName.trim() || null,
+        onboarding_completed: true,
       });
       onComplete();
     } catch (err) {
@@ -29,25 +25,32 @@
       saving = false;
     }
   }
+
+  function handleSkip() {
+    // Dismiss without saving — user can complete profile later via Settings
+    onComplete();
+  }
 </script>
 
-<!-- Onboarding modal overlay -->
+<!-- Full-screen onboarding overlay -->
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-bg-primary/90">
   <div class="bg-bg-card border border-border-subtle w-full max-w-sm p-8">
     <h2 class="font-display text-sm tracking-[0.15em] uppercase text-neon-cyan mb-1">
-      Welcome
+      Welcome to Project Synthesis
     </h2>
     <p class="font-mono text-[9px] text-text-dim mb-6">
-      Set up your profile to get started.
+      Optionally set a display name to personalise your workspace.
     </p>
 
     <label class="font-mono text-[8px] text-text-dim uppercase tracking-[0.08em] block mb-1">
-      Display Name (optional)
+      Display Name <span class="text-text-dim/50">(optional)</span>
     </label>
     <input
       type="text"
+      maxlength="128"
       placeholder="Your name"
       bind:value={displayName}
+      onkeydown={(e) => { if (e.key === 'Enter') handleComplete(); }}
       class="w-full bg-bg-input border border-border-subtle px-2.5 py-1.5
              font-mono text-[11px] text-text-primary focus:outline-none
              focus:border-neon-cyan/30 placeholder:text-text-dim/40 mb-4"
@@ -63,9 +66,18 @@
       class="w-full flex items-center justify-center gap-2 px-4 py-2.5
              bg-neon-cyan text-bg-primary border border-neon-cyan
              hover:bg-[#00cce6] font-mono text-[11px] tracking-[0.07em] uppercase
-             disabled:opacity-40 disabled:cursor-not-allowed"
+             disabled:opacity-40 disabled:cursor-not-allowed mb-2"
     >
       {saving ? 'SAVING…' : 'GET STARTED'}
+    </button>
+
+    <button
+      onclick={handleSkip}
+      class="w-full px-4 py-1.5 border border-border-subtle font-mono text-[10px]
+             text-text-dim tracking-[0.05em] uppercase hover:border-neon-cyan/30
+             hover:text-text-secondary transition-colors"
+    >
+      Skip
     </button>
   </div>
 </div>
