@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fetchSettings, updateSettings, fetchProviderStatus, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, logoutAllDevices, fetchGitHubAppConfig, saveGitHubAppConfig, fetchAuthMe, patchAuthMe, refreshGitHubToken, type AppSettings, type GitHubAppConfig } from '$lib/api/client';
+  import { fetchSettings, updateSettings, fetchProviderStatus, fetchProviderDetect, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, logoutAllDevices, fetchGitHubAppConfig, saveGitHubAppConfig, fetchAuthMe, patchAuthMe, refreshGitHubToken, type AppSettings, type GitHubAppConfig, type ProviderDetectResponse, type ProviderStatusResponse } from '$lib/api/client';
   import { workbench } from '$lib/stores/workbench.svelte';
   import { github } from '$lib/stores/github.svelte';
   import { auth } from '$lib/stores/auth.svelte';
@@ -94,6 +94,35 @@
       toast.error((err as Error).message);
     } finally {
       github.disconnect(); // always clear local state, even on API failure
+    }
+  }
+
+  let testingProvider = $state(false);
+  let providerTestResult = $state<{ healthy: boolean; message: string; providers?: string } | null>(null);
+
+  async function handleTestConnection() {
+    testingProvider = true;
+    providerTestResult = null;
+    try {
+      const [status, detect] = await Promise.all([
+        fetchProviderStatus(),
+        fetchProviderDetect().catch(() => null),
+      ]);
+      const providerNames = detect
+        ? Object.entries(detect.providers)
+            .filter(([, info]) => info.available)
+            .map(([name]) => name)
+            .join(' + ')
+        : null;
+      providerTestResult = {
+        healthy: status.healthy,
+        message: status.message,
+        providers: providerNames ?? undefined,
+      };
+    } catch (e) {
+      providerTestResult = { healthy: false, message: (e as Error).message };
+    } finally {
+      testingProvider = false;
     }
   }
 
@@ -279,6 +308,25 @@
           <span class="w-1.5 h-1.5 {workbench.mcpConnected ? 'bg-neon-cyan' : 'bg-neon-red/70'}"></span>
           <span class="text-[10px] text-text-dim">MCP {workbench.mcpConnected ? 'online' : 'offline'}</span>
         </div>
+        <!-- Test Connection button -->
+        <button
+          onclick={handleTestConnection}
+          disabled={testingProvider}
+          class="font-mono text-[10px] text-neon-cyan/60 hover:text-neon-cyan uppercase mt-1 disabled:opacity-40 transition-colors"
+        >
+          {testingProvider ? '…' : 'Test connection'}
+        </button>
+        {#if providerTestResult}
+          <div class="mt-1 space-y-0.5">
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 {providerTestResult.healthy ? 'bg-neon-green' : 'bg-neon-red'}"></span>
+              <span class="font-mono text-[9px] {providerTestResult.healthy ? 'text-neon-green' : 'text-neon-red'} leading-snug">{providerTestResult.message}</span>
+            </div>
+            {#if providerTestResult.providers}
+              <div class="font-mono text-[9px] text-text-dim ml-3">detected: {providerTestResult.providers}</div>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       <!-- GitHub Connection -->
