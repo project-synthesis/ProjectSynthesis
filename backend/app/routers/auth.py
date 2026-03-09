@@ -178,7 +178,7 @@ async def jwt_refresh(
     if stored_rt is None:
         raise HTTPException(
             status_code=401,
-            detail={"code": ERR_TOKEN_INVALID, "message": "Refresh token not found"},
+            detail={"code": ERR_TOKEN_INVALID, "message": "Authentication failed"},
         )
 
     # 4. Cross-validate: stored user_id must match JWT sub claim
@@ -210,7 +210,7 @@ async def jwt_refresh(
     if user is None:
         raise HTTPException(
             status_code=401,
-            detail={"code": ERR_TOKEN_INVALID, "message": "User not found"},
+            detail={"code": ERR_TOKEN_INVALID, "message": "Authentication failed"},
         )
 
     # 8. Revoke old token, issue new pair via shared service

@@ -668,3 +668,61 @@ async def test_github_token_refresh_skips_if_not_expiring_soon():
         )
 
     assert result["refreshed"] is False
+
+
+# ── Cycle 10: Error Leakage (Gap C) ───────────────────────────────────────
+
+
+async def test_user_not_found_and_token_not_found_return_same_error_body():
+    """User-not-found and token-not-found in /auth/jwt/refresh must return indistinguishable errors.
+
+    An attacker must not be able to distinguish 'user exists' from 'user doesn't exist'
+    by probing error messages (oracle attack prevention).
+    """
+    from fastapi import HTTPException
+    from app.routers.auth import jwt_refresh
+
+    raw_refresh = sign_refresh_token("user-999")
+
+    # Scenario A: token not in DB (scalar_one_or_none returns None)
+    no_token_result = MagicMock()
+    no_token_result.scalar_one_or_none.return_value = None
+
+    mock_session_a = AsyncMock()
+    mock_session_a.execute = AsyncMock(return_value=no_token_result)
+
+    mock_request = MagicMock()
+    mock_request.cookies = {"jwt_refresh_token": raw_refresh}
+    mock_response = MagicMock()
+
+    with pytest.raises(HTTPException) as exc_a:
+        await jwt_refresh(request=mock_request, response=mock_response, session=mock_session_a)
+
+    # Scenario B: token found but user not in DB
+    mock_stored_rt = MagicMock()
+    mock_stored_rt.user_id = "user-999"
+    mock_stored_rt.revoked = False
+    mock_stored_rt.expires_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+    rt_result = MagicMock()
+    rt_result.scalar_one_or_none.return_value = mock_stored_rt
+
+    no_user_result = MagicMock()
+    no_user_result.scalar_one_or_none.return_value = None  # user not found
+
+    mock_session_b = AsyncMock()
+    mock_session_b.execute = AsyncMock(side_effect=[rt_result, no_user_result])
+
+    with pytest.raises(HTTPException) as exc_b:
+        await jwt_refresh(request=mock_request, response=mock_response, session=mock_session_b)
+
+    # Both must return 401 with ERR_TOKEN_INVALID
+    assert exc_a.value.status_code == 401
+    assert exc_b.value.status_code == 401
+    assert exc_a.value.detail["code"] == ERR_TOKEN_INVALID
+    assert exc_b.value.detail["code"] == ERR_TOKEN_INVALID
+
+    # The messages must be identical — no oracle distinguishability
+    assert exc_a.value.detail["message"] == exc_b.value.detail["message"], (
+        f"Error messages differ: '{exc_a.value.detail['message']}' vs '{exc_b.value.detail['message']}'"
+    )
