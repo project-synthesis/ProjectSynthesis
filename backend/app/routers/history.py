@@ -179,5 +179,5 @@ async def get_stats(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """Get aggregated statistics about optimization history."""
-    return await compute_stats(session, project=project)
+    """Get aggregated statistics about optimization history (user-scoped)."""
+    return await compute_stats(session, project=project, user_id=current_user.id)

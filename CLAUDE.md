@@ -69,7 +69,7 @@ Add new sortable columns here before using them.
 
 ## MCP server
 
-13 tools split into two groups — optimization CRUD and GitHub read tools. See **[docs/MCP.md](docs/MCP.md)** for the full tool reference, all parameters, and connection instructions.
+16 tools split into two groups — optimization CRUD (including trash/restore) and GitHub read tools. See **[docs/MCP.md](docs/MCP.md)** for the full tool reference, all parameters, and connection instructions.
 
 **Transports:**
 - `http://127.0.0.1:8001/mcp` — streamable HTTP, standalone process (primary; used by `.mcp.json`)

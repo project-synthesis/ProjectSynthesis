@@ -16,7 +16,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -481,6 +481,101 @@ def create_mcp_server(provider=None) -> FastMCP:
         if not deleted:
             return _not_found(optimization_id)
         return json.dumps({"deleted": True, "id": optimization_id})
+
+    @mcp.tool(
+        name="list_trash",
+        annotations=ToolAnnotations(
+            title="List Trash",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def list_trash(
+        limit: int = 20,
+        offset: int = 0,
+    ) -> str:
+        """List soft-deleted optimizations still within the 7-day recovery window.
+
+        Deleted records are permanently purged after 7 days. Use restore_optimization
+        to recover an item before it expires.
+
+        Args:
+            limit: Maximum results per page (default 20, max 100).
+            offset: Number of records to skip for pagination (default 0).
+
+        Returns:
+            JSON pagination envelope: {total, count, offset, items, has_more,
+            next_offset}. Each item includes id, raw_prompt, title, deleted_at,
+            and created_at.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        async with async_session() as session:
+            base = [
+                Optimization.deleted_at.isnot(None),
+                Optimization.deleted_at >= cutoff,
+            ]
+            count_result = await session.execute(
+                select(func.count(Optimization.id)).where(*base)
+            )
+            total = count_result.scalar() or 0
+
+            result = await session.execute(
+                select(Optimization)
+                .where(*base)
+                .order_by(Optimization.deleted_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            items = [opt.to_dict() for opt in result.scalars().all()]
+
+        fetched = len(items)
+        has_more = (offset + fetched) < total
+        return json.dumps({
+            "total": total,
+            "count": fetched,
+            "offset": offset,
+            "items": items,
+            "has_more": has_more,
+            "next_offset": offset + fetched if has_more else None,
+        }, indent=2, default=str)
+
+    @mcp.tool(
+        name="restore_optimization",
+        annotations=ToolAnnotations(
+            title="Restore Optimization",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def restore_optimization(optimization_id: str) -> str:
+        """Restore a soft-deleted optimization from the trash (clears deleted_at).
+
+        The record must still be within the 7-day recovery window. Use list_trash
+        to discover restorable IDs.
+
+        Args:
+            optimization_id: The UUID of the optimization to restore.
+
+        Returns:
+            JSON {"restored": true, "id": "..."} on success.
+            Returns {"error": ...} if not found in trash or recovery window expired.
+        """
+        from app.services.optimization_service import restore_optimization as svc_restore
+        # MCP operates without user sessions — pass None to skip user-ownership check
+        async with async_session() as session:
+            restored = await svc_restore(session, optimization_id, user_id=None)
+            if restored:
+                await session.commit()
+        if not restored:
+            return json.dumps({
+                "error": f"Optimization '{optimization_id}' not found in trash or recovery window expired.",
+                "hint": "Use list_trash to see restorable items.",
+            })
+        return json.dumps({"restored": True, "id": optimization_id})
 
     @mcp.tool(
         name="search_optimizations",

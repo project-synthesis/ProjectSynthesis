@@ -131,11 +131,20 @@ async def list_optimizations(
 async def compute_stats(
     session: AsyncSession,
     project: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
-    """Compute aggregated stats using SQL aggregates (O(1) memory)."""
+    """Compute aggregated stats using SQL aggregates (O(1) memory).
+
+    Args:
+        session: Async database session.
+        project: Optional project label to scope stats to.
+        user_id: When provided, restrict stats to this user's records only.
+    """
     base_filter = [Optimization.deleted_at.is_(None)]
     if project:
         base_filter.append(Optimization.project == project)
+    if user_id:
+        base_filter.append(Optimization.user_id == user_id)
 
     totals_result = await session.execute(
         select(
@@ -283,21 +292,28 @@ async def update_optimization(
 async def restore_optimization(
     session: AsyncSession,
     optimization_id: str,
-    user_id: str,
+    user_id: Optional[str] = None,
 ) -> bool:
     """Restore a soft-deleted optimization within the 7-day trash window.
 
-    Returns True if found and restored, False if not found or already purged.
+    Args:
+        session: Async database session.
+        optimization_id: The UUID of the optimization to restore.
+        user_id: When provided, restricts restore to records owned by this user.
+                 Pass None (e.g. from MCP callers) to skip ownership check.
+
+    Returns:
+        True if found and restored, False if not found or recovery window expired.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    result = await session.execute(
-        select(Optimization).where(
-            Optimization.id == optimization_id,
-            Optimization.user_id == user_id,
-            Optimization.deleted_at.isnot(None),
-            Optimization.deleted_at >= cutoff,
-        )
-    )
+    filters = [
+        Optimization.id == optimization_id,
+        Optimization.deleted_at.isnot(None),
+        Optimization.deleted_at >= cutoff,
+    ]
+    if user_id:
+        filters.append(Optimization.user_id == user_id)
+    result = await session.execute(select(Optimization).where(*filters))
     opt = result.scalar_one_or_none()
     if not opt:
         return False

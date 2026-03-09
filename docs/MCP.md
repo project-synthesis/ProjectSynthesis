@@ -1,6 +1,6 @@
 # Project Synthesis MCP Server
 
-Project Synthesis exposes 14 tools over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, and interact with linked GitHub repositories directly from a chat session.
+Project Synthesis exposes 16 tools over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, manage trash/restore, and interact with linked GitHub repositories directly from a chat session.
 
 ## Transports
 
@@ -184,11 +184,34 @@ Add or remove tags on an optimization. Tags are deduplicated and insertion order
 ---
 
 #### `delete_optimization`
-Permanently delete an optimization record.
+Soft-delete an optimization record (sets `deleted_at`; purged permanently after 7 days). Use `restore_optimization` to undo within the recovery window.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `optimization_id` | string | yes | UUID of the optimization to delete |
+
+---
+
+#### `list_trash`
+List soft-deleted optimizations still within the 7-day recovery window.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `limit` | int | no (default 20) | Max results per page (1–100) |
+| `offset` | int | no (default 0) | Records to skip for pagination |
+
+Returns a pagination envelope `{total, count, offset, items, has_more, next_offset}`. Each item includes `id`, `raw_prompt`, `title`, `deleted_at`, and `created_at`.
+
+---
+
+#### `restore_optimization`
+Restore a soft-deleted optimization from the trash (clears `deleted_at`). The record must still be within the 7-day recovery window.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `optimization_id` | string | yes | UUID of the optimization to restore (use `list_trash` to discover valid IDs) |
+
+Returns `{"restored": true, "id": "..."}` on success, or `{"error": "..."}` if not found or window expired.
 
 ---
 
