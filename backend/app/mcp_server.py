@@ -130,6 +130,7 @@ async def _run_and_persist(
 ) -> tuple[dict, "Optimization"]:
     """Create Optimization record, run pipeline, persist results. Returns (events, opt)."""
     import time
+
     from app.services.pipeline import run_pipeline
 
     opt = Optimization(
@@ -205,7 +206,8 @@ def create_mcp_server(provider=None) -> FastMCP:
     )
 
     # Whitelisted sort columns — prevents getattr on arbitrary user input (B5)
-    from app.services.optimization_service import VALID_SORT_COLUMNS as _SORT_COLUMNS, compute_stats
+    from app.services.optimization_service import VALID_SORT_COLUMNS as _SORT_COLUMNS
+    from app.services.optimization_service import compute_stats
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

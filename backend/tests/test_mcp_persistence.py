@@ -1,5 +1,5 @@
 """Tests for MCP tool DB persistence (Tasks 14-15)."""
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
