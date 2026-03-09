@@ -5,8 +5,9 @@
   import { editor } from '$lib/stores/editor.svelte';
   import { forge } from '$lib/stores/forge.svelte';
   import { github } from '$lib/stores/github.svelte';
-  import { fetchHealth, fetchGitHubAuthStatus, fetchGitHubRepos, fetchLinkedRepo, fetchOptimization } from '$lib/api/client';
+  import { fetchHealth, fetchGitHubAuthStatus, fetchGitHubRepos, fetchLinkedRepo, fetchOptimization, fetchAuthMe } from '$lib/api/client';
   import type { RepoInfo } from '$lib/api/client';
+  import { user } from '$lib/stores/user.svelte';
   import { auth } from '$lib/stores/auth.svelte';
   import ActivityBar from '$lib/components/layout/ActivityBar.svelte';
   import Navigator from '$lib/components/layout/Navigator.svelte';
@@ -100,6 +101,16 @@
       .catch(() => {
         // Not connected or auth check failed — leave github store in default state
       });
+  });
+
+  // Hydrate User profile (display_name, avatar_url, email) when authenticated.
+  $effect(() => {
+    if (!auth.isAuthenticated) { user.clearProfile(); return; }
+    user.loading = true;
+    fetchAuthMe()
+      .then(p => user.setProfile(p))
+      .catch(e => { user.error = (e as Error).message; })
+      .finally(() => { user.loading = false; });
   });
 
   // Auth gate — false until the silent refresh attempt resolves
@@ -236,36 +247,38 @@
     }
   }
 
-  onMount(async () => {
+  onMount(() => {
     // ── JWT token capture ──────────────────────────────────────────────
     // After GitHub OAuth redirect the backend sends the user to /?auth_complete=1.
     // We exchange the one-time server-side session token via GET /auth/token —
     // the JWT never appears in the redirect URL (ASVS §3.5.2).
-    const url = new URL(window.location.href);
-    const isAuthCallback = url.searchParams.has('auth_complete');
-    if (isAuthCallback) {
-      const isNewUser = url.searchParams.has('new');
-      try {
-        const res = await fetch('/auth/token', { credentials: 'include' });
-        if (res.ok) {
-          const data: { access_token: string } = await res.json();
-          auth.setToken(data.access_token);
-          if (isNewUser) {
-            showOnboarding = true;
+    (async () => {
+      const url = new URL(window.location.href);
+      const isAuthCallback = url.searchParams.has('auth_complete');
+      if (isAuthCallback) {
+        const isNewUser = url.searchParams.has('new');
+        try {
+          const res = await fetch('/auth/token', { credentials: 'include' });
+          if (res.ok) {
+            const data: { access_token: string } = await res.json();
+            auth.setToken(data.access_token);
+            if (isNewUser) {
+              showOnboarding = true;
+            }
           }
-        }
-      } catch { /* token fetch failed — fall through to silent refresh */ }
-      // Clean up URL after callback
-      url.searchParams.delete('auth_complete');
-      url.searchParams.delete('new');
-      window.history.replaceState({}, '', url.toString());
-      authChecked = true;
-    } else {
-      // Attempt silent refresh from httponly cookie (restores returning sessions)
-      auth.refresh().finally(() => {
+        } catch { /* token fetch failed — fall through to silent refresh */ }
+        // Clean up URL after callback
+        url.searchParams.delete('auth_complete');
+        url.searchParams.delete('new');
+        window.history.replaceState({}, '', url.toString());
         authChecked = true;
-      });
-    }
+      } else {
+        // Attempt silent refresh from httponly cookie (restores returning sessions)
+        auth.refresh().finally(() => {
+          authChecked = true;
+        });
+      }
+    })();
 
     // Initial responsive check
     handleResize();

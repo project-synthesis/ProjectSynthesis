@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { fetchSettings, updateSettings, fetchProviderStatus, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, logoutAllDevices, fetchGitHubAppConfig, saveGitHubAppConfig, type AppSettings, type GitHubAppConfig } from '$lib/api/client';
+  import { fetchSettings, updateSettings, fetchProviderStatus, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, logoutAllDevices, fetchGitHubAppConfig, saveGitHubAppConfig, fetchAuthMe, patchAuthMe, type AppSettings, type GitHubAppConfig } from '$lib/api/client';
   import { workbench } from '$lib/stores/workbench.svelte';
   import { github } from '$lib/stores/github.svelte';
   import { auth } from '$lib/stores/auth.svelte';
   import { toast } from '$lib/stores/toast.svelte';
+  import { user } from '$lib/stores/user.svelte';
 
   let settings = $state<AppSettings | null>(null);
   let loading = $state(true);
@@ -124,6 +125,22 @@
     }
   }
 
+  // ── Profile editing ───────────────────────────────────────────────────────
+  let editField = $state<'display_name' | 'email' | null>(null);
+  let editValue = $state('');
+  let savingField = $state(false);
+  let fieldError = $state('');
+
+  async function saveField(field: 'display_name' | 'email') {
+    savingField = true; fieldError = '';
+    try {
+      await patchAuthMe({ [field]: editValue.trim() || null });
+      user.setProfile(await fetchAuthMe());
+      editField = null;
+    } catch (e) { fieldError = (e as Error).message; }
+    finally { savingField = false; }
+  }
+
   $effect(() => {
     loadSettings();
   });
@@ -145,6 +162,78 @@
     </div>
   {:else if settings}
     <div class="space-y-2 px-1">
+      {#if auth.isAuthenticated}
+        <!-- Profile -->
+        <div class="space-y-1.5 mb-3 p-2 bg-bg-card border border-border-subtle">
+          <div class="font-display text-[11px] font-bold uppercase text-text-dim mb-1.5">Profile</div>
+          <div class="flex items-start gap-2">
+            <!-- Avatar: 64×64 flat square, NO rounded corners -->
+            <div class="w-16 h-16 border border-neon-cyan/30 overflow-hidden shrink-0 bg-bg-input">
+              {#if user.avatarUrl}
+                <img src={user.avatarUrl} class="w-full h-full object-cover" alt="" />
+              {:else}
+                <div class="w-full h-full flex items-center justify-center text-text-dim/30">
+                  <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1"><path stroke-linecap="square" stroke-linejoin="miter" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                </div>
+              {/if}
+            </div>
+            <div class="flex-1 min-w-0 space-y-1">
+              <!-- github_login: immutable, monospace, dimmed -->
+              {#if user.githubLogin}
+                <div class="font-mono text-[10px] text-text-dim truncate">{user.githubLogin}</div>
+              {/if}
+              <!-- display_name: click-to-edit -->
+              <div>
+                {#if editField === 'display_name'}
+                  <input
+                    type="text"
+                    bind:value={editValue}
+                    maxlength="128"
+                    placeholder="Display name"
+                    onkeydown={(e) => { if (e.key === 'Enter') saveField('display_name'); if (e.key === 'Escape') { editField = null; } }}
+                    class="w-full bg-bg-input border border-neon-cyan/30 px-1.5 py-0.5 font-mono text-[10px] text-text-primary focus:outline-none"
+                  />
+                  <div class="flex gap-1 mt-0.5">
+                    <button onclick={() => saveField('display_name')} disabled={savingField} class="font-mono text-[9px] text-neon-cyan hover:text-neon-cyan/80 disabled:opacity-40">{savingField ? '…' : 'Save'}</button>
+                    <button onclick={() => { editField = null; }} class="font-mono text-[9px] text-text-dim hover:text-text-secondary">Cancel</button>
+                  </div>
+                {:else}
+                  <button
+                    onclick={() => { editField = 'display_name'; editValue = user.displayName ?? ''; }}
+                    class="text-[10px] text-text-secondary hover:text-text-primary text-left truncate w-full"
+                  >{#if user.displayName}{user.displayName}{:else}<span class="text-text-dim/40 italic">Display name</span>{/if}</button>
+                {/if}
+              </div>
+              <!-- email: click-to-edit -->
+              <div>
+                {#if editField === 'email'}
+                  <input
+                    type="email"
+                    bind:value={editValue}
+                    maxlength="255"
+                    placeholder="email@example.com"
+                    onkeydown={(e) => { if (e.key === 'Enter') saveField('email'); if (e.key === 'Escape') { editField = null; } }}
+                    class="w-full bg-bg-input border border-neon-cyan/30 px-1.5 py-0.5 font-mono text-[10px] text-text-primary focus:outline-none"
+                  />
+                  <div class="flex gap-1 mt-0.5">
+                    <button onclick={() => saveField('email')} disabled={savingField} class="font-mono text-[9px] text-neon-cyan hover:text-neon-cyan/80 disabled:opacity-40">{savingField ? '…' : 'Save'}</button>
+                    <button onclick={() => { editField = null; }} class="font-mono text-[9px] text-text-dim hover:text-text-secondary">Cancel</button>
+                  </div>
+                {:else}
+                  <button
+                    onclick={() => { editField = 'email'; editValue = user.email ?? ''; }}
+                    class="text-[10px] text-text-dim hover:text-text-secondary text-left truncate w-full"
+                  >{#if user.email}{user.email}{:else}<span class="text-text-dim/40 italic">Email</span>{/if}</button>
+                {/if}
+              </div>
+              {#if fieldError}
+                <p class="font-mono text-[9px] text-neon-red">{fieldError}</p>
+              {/if}
+            </div>
+          </div>
+        </div>
+      {/if}
+
       <!-- Provider Info -->
       <div class="space-y-1 mb-3 p-2 bg-bg-card border border-border-subtle">
         <div class="font-display text-[11px] font-bold uppercase text-text-dim mb-1">Provider</div>

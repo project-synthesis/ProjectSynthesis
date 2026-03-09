@@ -610,6 +610,26 @@ export async function patchAuthMe(data: {
   return res.json();
 }
 
+export interface AuthMeResponse {
+  id: string;
+  github_login: string;
+  github_user_id: number;
+  role: string;
+  email: string | null;
+  avatar_url: string | null;
+  display_name: string | null;
+  onboarding_completed: boolean;
+  onboarding_completed_at: string | null;
+  last_login_at: string | null;
+  created_at: string;
+}
+
+export async function fetchAuthMe(): Promise<AuthMeResponse> {
+  const res = await apiFetch(`${BASE}/auth/me`);
+  if (!res.ok) throw new Error(`Profile fetch failed: ${res.status}`);
+  return res.json();
+}
+
 /** DELETE /auth/sessions — revoke all active refresh tokens across every device.
  *
  * Clears the in-memory JWT so the UI reflects the logged-out state immediately.

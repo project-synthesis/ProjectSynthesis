@@ -7,6 +7,7 @@
   import { getStrategyHex } from '$lib/utils/strategy';
   import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
   import { commandPalette } from '$lib/stores/commandPalette.svelte';
+  import { user } from '$lib/stores/user.svelte';
 </script>
 
 <footer
@@ -138,7 +139,7 @@
           ? 'text-neon-cyan hover:bg-bg-hover'
           : 'text-neon-red/70 hover:bg-bg-hover hover:text-neon-red'}"
       onclick={() => {
-        if (!auth.isAuthenticated) workbench.setActivity('github');
+        if (auth.isAuthenticated) workbench.setActivity('settings'); else workbench.setActivity('github');
       }}
       title={auth.isAuthenticated
         ? `Authenticated${github.username ? ' as ' + github.username : ''} · JWT active`
@@ -146,12 +147,16 @@
       data-testid="statusbar-auth"
     >
       {#if auth.isAuthenticated}
-        <!-- lock-open icon -->
-        <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M13.5 10.5V6.75a4.5 4.5 0 1 1 9 0v3.75M3.75 21.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H3.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
-        </svg>
-        <span class="truncate max-w-[80px]">{github.username || 'JWT'}</span>
+        {#if user.avatarUrl}
+          <img src={user.avatarUrl} class="w-4 h-4 border border-neon-cyan/30 object-cover" alt="" />
+        {:else}
+          <!-- lock-open icon -->
+          <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M13.5 10.5V6.75a4.5 4.5 0 1 1 9 0v3.75M3.75 21.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H3.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+          </svg>
+        {/if}
+        <span class="truncate max-w-[80px]">{user.label ?? github.username ?? 'JWT'}</span>
       {:else}
         <!-- lock-closed icon -->
         <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">

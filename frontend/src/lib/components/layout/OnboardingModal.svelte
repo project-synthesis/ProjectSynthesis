@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { patchAuthMe } from '$lib/api/client';
+  import { patchAuthMe, fetchAuthMe } from '$lib/api/client';
+  import { user } from '$lib/stores/user.svelte';
 
   interface Props {
     onComplete: () => void;
@@ -18,6 +19,7 @@
         display_name: displayName.trim() || null,
         onboarding_completed: true,
       });
+      try { user.setProfile(await fetchAuthMe()); } catch { /* non-fatal */ }
       onComplete();
     } catch (err) {
       error = (err as Error).message;
