@@ -23,6 +23,7 @@ class GitHubToken(Base):
     refresh_token_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=True)  # always set (now + 8h)
+    avatar_url = Column(Text, nullable=True)
 
     __table_args__ = (
         Index("idx_github_tokens_session", "session_id"),

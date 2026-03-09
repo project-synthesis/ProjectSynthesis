@@ -82,3 +82,26 @@ async def test_missing_indices_created(tmp_path):
     assert expected.issubset(index_names), f"Missing indices: {expected - index_names}"
 
     await eng.dispose()
+
+
+async def test_schema_additions_migrated(tmp_path):
+    """deleted_at and avatar_url columns must be present after create_all."""
+    import app.models.optimization  # noqa
+    import app.models.github        # noqa
+
+    db_path = tmp_path / "schema_test.db"
+    eng = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    from app.database import Base
+
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        # Verify columns exist (create_all adds them from model)
+        result = await conn.execute(sa.text("PRAGMA table_info(optimizations)"))
+        cols = {row[1] for row in result.fetchall()}
+        assert "deleted_at" in cols
+
+        result2 = await conn.execute(sa.text("PRAGMA table_info(github_tokens)"))
+        cols2 = {row[1] for row in result2.fetchall()}
+        assert "avatar_url" in cols2
+
+    await eng.dispose()

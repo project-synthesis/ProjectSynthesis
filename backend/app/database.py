@@ -78,7 +78,11 @@ async def _migrate_add_missing_columns() -> None:
             "secondary_frameworks": "TEXT",
             "approach_notes": "TEXT",
             "strategy_source": "TEXT",
-        }
+            "deleted_at": "DATETIME",          # soft-delete
+        },
+        "github_tokens": {
+            "avatar_url": "TEXT",              # cached avatar URL
+        },
     }
 
     async with engine.begin() as conn:

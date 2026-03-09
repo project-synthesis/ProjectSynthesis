@@ -63,6 +63,9 @@ class Optimization(Base):
     status = Column(Text, default="completed", nullable=False)
     error_message = Column(Text, nullable=True)
 
+    # Soft-delete
+    deleted_at = Column(DateTime, nullable=True)
+
     # Organization
     project = Column(Text, nullable=True)
     tags = Column(Text, default="[]")  # JSON array
