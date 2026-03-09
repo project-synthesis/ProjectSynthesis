@@ -14,6 +14,7 @@ from typing import Optional
 
 import anyio
 from cryptography.fernet import Fernet
+from github import Auth, Github
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -183,6 +184,11 @@ async def get_token_for_session(
 # GitHub API wrappers (PyGithub, async via anyio)
 # ───────────────────────────────────────────────────────────────────────
 
+def _make_github(token: str) -> Github:
+    """Create a PyGithub client authenticated with the given token."""
+    return Github(auth=Auth.Token(token))
+
+
 def _is_excluded(path: str) -> bool:
     """Check if a file path should be excluded from tree results."""
     parts = path.split("/")
@@ -205,8 +211,7 @@ async def get_user_repos(token: str) -> list[dict]:
         List of repo info dicts.
     """
     def _sync():
-        from github import Auth, Github
-        g = Github(auth=Auth.Token(token))
+        g = _make_github(token)
         repos = []
         for repo in g.get_user().get_repos(sort="updated"):
             repos.append({
@@ -256,8 +261,7 @@ async def get_repo_tree(
         List of dicts with path, sha, and size_bytes keys.
     """
     def _sync():
-        from github import Auth, Github
-        g = Github(auth=Auth.Token(token))
+        g = _make_github(token)
         repo = g.get_repo(full_name)
         b = repo.get_branch(branch)
         tree = repo.get_git_tree(b.commit.commit.tree.sha, recursive=True)
@@ -299,8 +303,7 @@ async def read_file_content(
         File content as a string, or None on failure.
     """
     def _sync():
-        from github import Auth, Github
-        g = Github(auth=Auth.Token(token))
+        g = _make_github(token)
         repo = g.get_repo(full_name)
         blob = repo.get_git_blob(file_sha)
         if blob.encoding == "base64":
@@ -332,8 +335,7 @@ async def read_file_by_path(
         File content as a string, or None on failure.
     """
     def _sync():
-        from github import Auth, Github
-        g = Github(auth=Auth.Token(token))
+        g = _make_github(token)
         repo = g.get_repo(full_name)
         content = repo.get_contents(path, ref=branch)
         if isinstance(content, list):
@@ -364,8 +366,7 @@ async def get_repo_info(token: str, full_name: str) -> Optional[dict]:
         Dict with core repo metadata or None on failure.
     """
     def _sync():
-        from github import Auth, Github
-        g = Github(auth=Auth.Token(token))
+        g = _make_github(token)
         repo = g.get_repo(full_name)
         return {
             "full_name": repo.full_name,
@@ -395,8 +396,7 @@ async def get_repo_branches(token: str, full_name: str) -> list[dict]:
         List of dicts with name and protected keys.
     """
     def _sync():
-        from github import Auth, Github
-        g = Github(auth=Auth.Token(token))
+        g = _make_github(token)
         repo = g.get_repo(full_name)
         result = []
         for branch in repo.get_branches():
@@ -426,8 +426,7 @@ async def get_default_branch(token: str, repo_full_name: str) -> str:
         Exception: If the repository cannot be reached or the token is invalid.
     """
     def _sync() -> str:
-        from github import Auth, Github
-        g = Github(auth=Auth.Token(token))
+        g = _make_github(token)
         return g.get_repo(repo_full_name).default_branch
 
     return await anyio.to_thread.run_sync(_sync)
