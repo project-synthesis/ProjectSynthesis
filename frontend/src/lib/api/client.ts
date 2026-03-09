@@ -400,6 +400,16 @@ export async function logoutGitHub(): Promise<void> {
   auth.clearToken();
 }
 
+export async function refreshGitHubToken(): Promise<{
+  refreshed: boolean;
+  reason?: string;
+  expires_at?: string;
+}> {
+  const res = await apiFetch(`${BASE}/auth/github/token/refresh`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Token refresh failed: ${res.status}`);
+  return res.json();
+}
+
 export function getGitHubLoginUrl(): string {
   return `${BASE}/auth/github/login`;
 }

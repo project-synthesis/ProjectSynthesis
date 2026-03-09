@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fetchSettings, updateSettings, fetchProviderStatus, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, logoutAllDevices, fetchGitHubAppConfig, saveGitHubAppConfig, fetchAuthMe, patchAuthMe, type AppSettings, type GitHubAppConfig } from '$lib/api/client';
+  import { fetchSettings, updateSettings, fetchProviderStatus, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, logoutAllDevices, fetchGitHubAppConfig, saveGitHubAppConfig, fetchAuthMe, patchAuthMe, refreshGitHubToken, type AppSettings, type GitHubAppConfig } from '$lib/api/client';
   import { workbench } from '$lib/stores/workbench.svelte';
   import { github } from '$lib/stores/github.svelte';
   import { auth } from '$lib/stores/auth.svelte';
@@ -98,6 +98,17 @@
   }
 
   let loggingOutAll = $state(false);
+  let reconnecting = $state(false);
+  let reconnectError = $state('');
+
+  async function handleReconnectGitHub() {
+    reconnecting = true; reconnectError = '';
+    try {
+      const result = await refreshGitHubToken();
+      if (!result.refreshed) reconnectError = result.reason ?? 'Token already fresh';
+    } catch (e) { reconnectError = (e as Error).message; }
+    finally { reconnecting = false; }
+  }
 
   async function handleLogoutAllDevices() {
     if (loggingOutAll) return;
@@ -271,6 +282,16 @@
             >Disconnect</button>
           </div>
           <div class="text-[10px] text-text-dim ml-4">OAuth App</div>
+          <button
+            onclick={handleReconnectGitHub}
+            disabled={reconnecting}
+            class="text-[10px] text-neon-cyan/60 hover:text-neon-cyan ml-4 mt-0.5 disabled:opacity-40"
+          >
+            {reconnecting ? '…' : 'Refresh token'}
+          </button>
+          {#if reconnectError}
+            <p class="font-mono text-[9px] text-neon-red ml-4">{reconnectError}</p>
+          {/if}
         {:else if workbench.githubOAuthEnabled}
           <div class="flex items-center gap-2 mb-1">
             <span class="w-2 h-2 bg-text-dim/30 shrink-0"></span>
