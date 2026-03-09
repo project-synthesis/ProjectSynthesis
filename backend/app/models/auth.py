@@ -31,6 +31,13 @@ class User(Base):
         nullable=False,
         default=UserRole.user,
     )
+    # Profile fields (nullable — populated progressively)
+    email = Column(Text, nullable=True)
+    avatar_url = Column(Text, nullable=True)
+    display_name = Column(Text, nullable=True)
+    onboarding_completed_at = Column(DateTime, nullable=True)
+    last_login_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
@@ -47,9 +54,11 @@ class RefreshToken(Base):
     token_hash = Column(Text, nullable=False, unique=True)
     expires_at = Column(DateTime, nullable=False)
     revoked = Column(Boolean, nullable=False, default=False)
+    device_id = Column(Text, nullable=True)  # per-device revocation; NULL for legacy tokens
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (
         Index("idx_refresh_tokens_user_id", "user_id"),
         Index("idx_refresh_tokens_token_hash", "token_hash"),
+        Index("idx_refresh_tokens_device_id", "device_id"),
     )

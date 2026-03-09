@@ -540,3 +540,44 @@ export async function fetchRepoBranches(owner: string, repo: string): Promise<Re
 export async function disconnectGitHub(): Promise<void> {
   return logoutGitHub();
 }
+
+// ── Auth security endpoints (Cycle A, 3, 7) ──────────────────────────────────
+
+/** GET /auth/token — exchanges one-time server-side session token for JWT after OAuth callback. */
+export async function getAuthToken(): Promise<{ access_token: string; token_type: string }> {
+  const res = await globalThis.fetch(`${BASE}/auth/token`, { credentials: 'include' });
+  if (!res.ok) throw new Error(`Token exchange failed: ${res.status}`);
+  return res.json();
+}
+
+/** PATCH /auth/me — update display name / email, or mark onboarding complete.
+ *
+ * Pass `onboarding_completed: true` to stamp completion on the server.
+ * All fields are optional; only supplied fields are changed.
+ */
+export async function patchAuthMe(data: {
+  display_name?: string | null;
+  email?: string | null;
+  onboarding_completed?: boolean;
+}): Promise<{ updated: boolean }> {
+  const res = await apiFetch(`${BASE}/auth/me`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Profile update failed: ${res.status}`);
+  return res.json();
+}
+
+/** DELETE /auth/sessions — revoke all active refresh tokens across every device.
+ *
+ * Clears the in-memory JWT so the UI reflects the logged-out state immediately.
+ */
+export async function logoutAllDevices(): Promise<{ revoked_sessions: number }> {
+  const res = await apiFetch(`${BASE}/auth/sessions`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Logout all failed: ${res.status}`);
+  const data = await res.json();
+  // Clear in-memory token — all server-side sessions are now revoked.
+  auth.clearToken();
+  return data;
+}

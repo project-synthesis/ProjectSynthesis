@@ -230,6 +230,7 @@ async def test_refresh_valid_cookie_returns_new_access_token():
     mock_stored_rt.revoked = False
     mock_stored_rt.expires_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
     mock_stored_rt.user_id = "user-123"
+    mock_stored_rt.device_id = None  # legacy token — no device_id
 
     mock_user = MagicMock()
     mock_user.id = "user-123"

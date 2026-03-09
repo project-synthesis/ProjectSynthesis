@@ -15,6 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
+from slowapi.errors import RateLimitExceeded
+
 from app.config import settings
 from app.database import create_tables
 from app.mcp_server import HAS_MCP, create_mcp_server, make_websocket_asgi
@@ -170,6 +172,15 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
 )
+
+# Rate limit exceeded handler — structured JSON matching the rest of the API
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"code": "RATE_LIMIT_EXCEEDED", "message": f"Too many requests: {exc.detail}"},
+    )
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 # Streamable HTTP MCP — mounted on FastAPI so it shares the session_manager lifespan.
 # HTTP clients (Claude SDK, curl) do not send an Origin header, so CORSMiddleware

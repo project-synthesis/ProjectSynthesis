@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { fetchSettings, updateSettings, fetchProviderStatus, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, type AppSettings } from '$lib/api/client';
+  import { fetchSettings, updateSettings, fetchProviderStatus, disconnectGitHub, unlinkRepo, getGitHubLoginUrl, logoutAllDevices, type AppSettings } from '$lib/api/client';
   import { workbench } from '$lib/stores/workbench.svelte';
   import { github } from '$lib/stores/github.svelte';
+  import { auth } from '$lib/stores/auth.svelte';
   import { toast } from '$lib/stores/toast.svelte';
 
   let settings = $state<AppSettings | null>(null);
@@ -51,6 +52,22 @@
     }
   }
 
+  let loggingOutAll = $state(false);
+
+  async function handleLogoutAllDevices() {
+    if (loggingOutAll) return;
+    loggingOutAll = true;
+    try {
+      const result = await logoutAllDevices();
+      toast.success(`Logged out of ${result.revoked_sessions} device${result.revoked_sessions !== 1 ? 's' : ''}`);
+      // auth.clearToken() is called inside logoutAllDevices() — UI will reflect logout
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      loggingOutAll = false;
+    }
+  }
+
   async function handleNumberChange(key: keyof AppSettings, value: number) {
     if (!settings) return;
     saving = true;
@@ -79,16 +96,16 @@
   {#if loading}
     <div class="text-xs text-text-secondary px-2 py-4 text-center">Loading settings...</div>
   {:else if error}
-    <div class="text-xs text-neon-red bg-neon-red/10 px-2 py-1.5 rounded border border-neon-red/20">
+    <div class="text-xs text-neon-red bg-neon-red/10 px-2 py-1.5 border border-neon-red/20">
       {error}
     </div>
   {:else if settings}
     <div class="space-y-2 px-1">
       <!-- Provider Info -->
-      <div class="space-y-1 mb-3 p-2 rounded bg-bg-card border border-border-subtle">
+      <div class="space-y-1 mb-3 p-2 bg-bg-card border border-border-subtle">
         <div class="font-display text-[11px] font-bold uppercase text-text-dim mb-1">Provider</div>
         <div class="flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full {workbench.provider === 'anthropic' || workbench.provider === 'claude_cli' ? 'bg-neon-green' : workbench.provider === 'openai' || workbench.provider === 'anthropic_api' ? 'bg-neon-yellow' : 'bg-neon-red'}"></span>
+          <span class="w-2 h-2 {workbench.provider === 'anthropic' || workbench.provider === 'claude_cli' ? 'bg-neon-green' : workbench.provider === 'openai' || workbench.provider === 'anthropic_api' ? 'bg-neon-yellow' : 'bg-neon-red'}"></span>
           <span class="text-xs text-text-primary font-medium">
             {workbench.provider === 'anthropic' || workbench.provider === 'claude_cli' ? 'CLI (Claude)' : workbench.provider === 'openai' || workbench.provider === 'anthropic_api' ? 'API (Paid)' : 'Not detected'}
           </span>
@@ -97,22 +114,22 @@
           <div class="text-[10px] text-text-dim font-mono ml-4">{workbench.providerModel}</div>
         {/if}
         <div class="flex items-center gap-1.5 mt-0.5">
-          <span class="w-1.5 h-1.5 rounded-full {workbench.isConnected ? 'bg-neon-green' : 'bg-neon-red'}"></span>
+          <span class="w-1.5 h-1.5 {workbench.isConnected ? 'bg-neon-green' : 'bg-neon-red'}"></span>
           <span class="text-[10px] text-text-dim">{workbench.isConnected ? 'Backend connected' : 'Backend disconnected'}</span>
         </div>
         <div class="flex items-center gap-1.5 mt-0.5">
-          <span class="w-1.5 h-1.5 rounded-full {workbench.mcpConnected ? 'bg-neon-cyan' : 'bg-neon-red/70'}"></span>
+          <span class="w-1.5 h-1.5 {workbench.mcpConnected ? 'bg-neon-cyan' : 'bg-neon-red/70'}"></span>
           <span class="text-[10px] text-text-dim">MCP {workbench.mcpConnected ? 'online' : 'offline'}</span>
         </div>
       </div>
 
       <!-- GitHub Connection -->
-      <div class="space-y-1 mb-3 p-2 rounded bg-bg-card border border-border-subtle">
+      <div class="space-y-1 mb-3 p-2 bg-bg-card border border-border-subtle">
         <div class="font-display text-[11px] font-bold uppercase text-text-dim mb-1">GitHub</div>
         {#if github.isConnected}
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
-              <span class="w-2 h-2 rounded-full bg-neon-green shrink-0"></span>
+              <span class="w-2 h-2 bg-neon-green shrink-0"></span>
               <span class="text-xs text-text-primary font-medium truncate">{github.username}</span>
             </div>
             <button
@@ -123,7 +140,7 @@
           <div class="text-[10px] text-text-dim ml-4">OAuth App</div>
         {:else if workbench.githubOAuthEnabled}
           <div class="flex items-center gap-2 mb-1">
-            <span class="w-2 h-2 rounded-full bg-text-dim/30 shrink-0"></span>
+            <span class="w-2 h-2 bg-text-dim/30 shrink-0"></span>
             <span class="text-xs text-text-dim">Not connected</span>
           </div>
           <button
@@ -161,7 +178,7 @@
           type="number"
           min="10"
           max="600"
-          class="w-full bg-bg-input border border-border-subtle rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-neon-cyan/30"
+          class="w-full bg-bg-input border border-border-subtle px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-neon-cyan/30"
           value={settings.pipeline_timeout}
           onchange={(e) => handleNumberChange('pipeline_timeout', parseInt((e.target as HTMLInputElement).value))}
         />
@@ -175,7 +192,7 @@
           type="number"
           min="0"
           max="5"
-          class="w-full bg-bg-input border border-border-subtle rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-neon-cyan/30"
+          class="w-full bg-bg-input border border-border-subtle px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-neon-cyan/30"
           value={settings.max_retries}
           onchange={(e) => handleNumberChange('max_retries', parseInt((e.target as HTMLInputElement).value))}
         />
@@ -218,6 +235,25 @@
         </div>
         <span class="text-xs text-text-secondary">Stream optimization</span>
       </label>
+
+      <!-- Session Security -->
+      {#if auth.isAuthenticated}
+        <div class="space-y-1 mt-3 pt-3 border-t border-border-subtle">
+          <div class="font-display text-[11px] font-bold uppercase text-text-dim mb-2">Session</div>
+          <button
+            onclick={handleLogoutAllDevices}
+            disabled={loggingOutAll}
+            class="w-full flex items-center justify-between px-2 py-1.5
+                   border border-neon-red/30 text-neon-red/70
+                   hover:border-neon-red hover:text-neon-red
+                   disabled:opacity-40 disabled:cursor-not-allowed
+                   transition-colors font-mono text-[10px] uppercase tracking-[0.05em]"
+          >
+            <span>{loggingOutAll ? 'Revoking…' : 'Logout all devices'}</span>
+            <span class="text-[9px] text-text-dim/60">revokes all sessions</span>
+          </button>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

@@ -14,6 +14,7 @@
   import Inspector from '$lib/components/layout/Inspector.svelte';
   import StatusBar from '$lib/components/layout/StatusBar.svelte';
   import AuthGate from '$lib/components/layout/AuthGate.svelte';
+  import OnboardingModal from '$lib/components/layout/OnboardingModal.svelte';
   import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
   import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
 
@@ -103,6 +104,8 @@
 
   // Auth gate — false until the silent refresh attempt resolves
   let authChecked = $state(false);
+  // Onboarding modal — shown once for brand-new users after OAuth
+  let showOnboarding = $state(false);
 
   // Resize handle logic
   let resizing = $state<'nav' | 'inspector' | null>(null);
@@ -233,16 +236,28 @@
     }
   }
 
-  onMount(() => {
+  onMount(async () => {
     // ── JWT token capture ──────────────────────────────────────────────
-    // After GitHub OAuth redirect the backend sends the user to /?access_token=<JWT>.
-    // Capture the token, store it in-memory, and remove it from the URL so it
-    // never sits in browser history or server logs.
+    // After GitHub OAuth redirect the backend sends the user to /?auth_complete=1.
+    // We exchange the one-time server-side session token via GET /auth/token —
+    // the JWT never appears in the redirect URL (ASVS §3.5.2).
     const url = new URL(window.location.href);
-    const oauthToken = url.searchParams.get('access_token');
-    if (oauthToken) {
-      auth.setToken(oauthToken);
-      url.searchParams.delete('access_token');
+    const isAuthCallback = url.searchParams.has('auth_complete');
+    if (isAuthCallback) {
+      const isNewUser = url.searchParams.has('new');
+      try {
+        const res = await fetch('/auth/token', { credentials: 'include' });
+        if (res.ok) {
+          const data: { access_token: string } = await res.json();
+          auth.setToken(data.access_token);
+          if (isNewUser) {
+            showOnboarding = true;
+          }
+        }
+      } catch { /* token fetch failed — fall through to silent refresh */ }
+      // Clean up URL after callback
+      url.searchParams.delete('auth_complete');
+      url.searchParams.delete('new');
       window.history.replaceState({}, '', url.toString());
       authChecked = true;
     } else {
@@ -368,4 +383,7 @@
   <!-- Global overlays -->
   <CommandPalette />
   <ToastContainer />
+  {#if showOnboarding}
+    <OnboardingModal onComplete={() => { showOnboarding = false; }} />
+  {/if}
 {/if}

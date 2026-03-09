@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # Set to True in production (behind HTTPS) to add Secure flag to cookies.
     JWT_COOKIE_SECURE: bool = False
 
+    # Rate limiting — auth endpoints (slowapi format: "N/period")
+    RATE_LIMIT_AUTH_LOGIN: str = "20/minute"
+    RATE_LIMIT_AUTH_CALLBACK: str = "10/minute"
+    RATE_LIMIT_JWT_REFRESH: str = "60/minute"
+
     def model_post_init(self, __context) -> None:
         _log = logging.getLogger(__name__)
         for field, weak in _WEAK_DEFAULTS.items():
@@ -65,6 +70,18 @@ class Settings(BaseSettings):
                     "set a strong random secret in .env before deploying.",
                     field,
                 )
+        # Production security check: warn when cookies are insecure outside localhost.
+        _is_localhost = (
+            self.FRONTEND_URL.startswith("http://localhost")
+            or self.FRONTEND_URL.startswith("http://127.0.0.1")
+        )
+        if not self.JWT_COOKIE_SECURE and not _is_localhost:
+            _log.critical(
+                "SECURITY: JWT_COOKIE_SECURE=False but FRONTEND_URL=%s is not localhost. "
+                "Auth cookies will be sent over plaintext HTTP in production. "
+                "Set JWT_COOKIE_SECURE=True in .env.",
+                self.FRONTEND_URL,
+            )
 
 
 settings = Settings()
