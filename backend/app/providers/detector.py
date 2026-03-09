@@ -42,15 +42,25 @@ async def detect_provider() -> LLMProvider:
     """Detect the best available LLM provider.
 
     Detection order (per spec):
-      1. Check if `claude` CLI is available on PATH with valid credentials
+      1. Check if TESTING=True -> MockProvider (no real LLM calls)
+      2. Check if `claude` CLI is available on PATH with valid credentials
          -> ClaudeCLIProvider (zero API cost via Max subscription)
-      2. Check if ANTHROPIC_API_KEY env var is set
+      3. Check if ANTHROPIC_API_KEY env var is set
          -> AnthropicAPIProvider (direct API calls)
-      3. Raise ProviderNotAvailableError with clear setup instructions
+      4. Raise ProviderNotAvailableError with clear setup instructions
 
     Each provider probe completes within 5 seconds or is skipped.
     Total auto-detection does not block startup for more than 10 seconds.
     """
+    # Short-circuit to MockProvider when running in TESTING mode.
+    # This allows integration tests and E2E tests to run without a real LLM provider.
+    if settings.TESTING:
+        logger.warning(
+            "TESTING=true: using MockProvider — no real LLM calls will be made"
+        )
+        from app.providers.mock import MockProvider
+        return MockProvider()
+
     try:
         return await asyncio.wait_for(_detect_provider_inner(), timeout=10.0)
     except asyncio.TimeoutError:

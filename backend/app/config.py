@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_AUTH_CALLBACK: str = "10/minute"
     RATE_LIMIT_JWT_REFRESH: str = "60/minute"
 
+    # Test mode — enables test-only endpoints. Never set True in production.
+    TESTING: bool = False
+
     def model_post_init(self, __context) -> None:
         _log = logging.getLogger(__name__)
         for field, weak in _WEAK_DEFAULTS.items():

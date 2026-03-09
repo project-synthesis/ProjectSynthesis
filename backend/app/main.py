@@ -231,6 +231,11 @@ app.include_router(settings_router)
 app.include_router(jwt_auth_router)
 app.include_router(github_config_router)
 
+if settings.TESTING:
+    from app.routers.test_helpers import router as test_helpers_router
+    app.include_router(test_helpers_router)
+    logger.warning("TESTING mode: test-helpers router mounted — never use in production")
+
 
 # ── Error Handlers ────────────────────────────────────────────────────
 
