@@ -49,6 +49,7 @@ class GitHubStore {
   treeLoading = $state(false);
   treeError = $state<string | null>(null);
   selectedFiles = $state<SelectedFile[]>([]);
+  fileError = $state<string | null>(null);
 
   get currentRepo(): GitHubRepo | undefined {
     return this.repos.find(r => r.full_name === this.selectedRepo);
@@ -103,6 +104,7 @@ class GitHubStore {
 
       for (const entry of response.tree) {
         if (entry.type === 'commit') continue; // skip submodules
+        if (entry.type === 'tree') continue;   // skip explicit dir entries; dirs are built from file paths
         const parts = entry.path.split('/');
         const isBlob = entry.type === 'blob' || entry.type == null;
 
@@ -166,6 +168,7 @@ class GitHubStore {
       return;
     }
     try {
+      this.fileError = null;
       const response = await fetchFileContent(owner, repo, filePath, branch);
       const fileName = filePath.split('/').pop() ?? filePath;
       this.selectedFiles = [
@@ -173,7 +176,7 @@ class GitHubStore {
         { name: fileName, path: filePath, content: response.content }
       ];
     } catch (err) {
-      // Individual file fetch failure is non-fatal; caller can show toast if desired
+      this.fileError = (err as Error).message;
       console.error('[github] toggleFileSelection failed:', err);
     }
   }

@@ -165,7 +165,10 @@
   {#if context.chips.length > 1}
     <button
       class="text-[10px] font-mono text-text-dim hover:text-neon-red transition-colors duration-150 px-1"
-      onclick={() => context.clear()}
+      onclick={() => {
+        github.clearFileSelection();
+        context.clear();
+      }}
       aria-label="Clear all context"
       title="Clear all context chips"
     >

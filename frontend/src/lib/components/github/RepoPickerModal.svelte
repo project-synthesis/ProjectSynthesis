@@ -172,6 +172,13 @@
     const branch = github.selectedBranch ?? github.currentRepo?.default_branch ?? 'main';
     github.loadFileTree(owner, repo, branch);
   }
+
+  // Auto-clear fileError after 3 seconds so the message doesn't linger.
+  $effect(() => {
+    if (!github.fileError) return;
+    const timer = setTimeout(() => { github.fileError = null; }, 3000);
+    return () => clearTimeout(timer);
+  });
 </script>
 
 {#if open}
@@ -257,6 +264,9 @@
               {github.selectedFiles.length}/5 selected
             </span>
           </div>
+          {#if github.fileError}
+            <p class="text-[10px] font-mono text-neon-red/80 mt-1">Failed to load file: {github.fileError}</p>
+          {/if}
         {/if}
       </div>
 
