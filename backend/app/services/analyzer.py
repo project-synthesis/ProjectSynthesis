@@ -54,6 +54,8 @@ async def run_analyze(
     if url_fetched_contexts:
         blocks = []
         for uc in url_fetched_contexts[:3]:
+            if uc.get("error") or not uc.get("content"):
+                continue
             url = uc.get("url", "url")
             content = str(uc.get("content", ""))[:1500]
             blocks.append(f"[{url}]\n{content}")
