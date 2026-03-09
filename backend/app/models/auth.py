@@ -47,9 +47,11 @@ class RefreshToken(Base):
     token_hash = Column(Text, nullable=False, unique=True)
     expires_at = Column(DateTime, nullable=False)
     revoked = Column(Boolean, nullable=False, default=False)
+    device_id = Column(Text, nullable=True)  # per-device revocation; NULL for legacy tokens
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (
         Index("idx_refresh_tokens_user_id", "user_id"),
         Index("idx_refresh_tokens_token_hash", "token_hash"),
+        Index("idx_refresh_tokens_device_id", "device_id"),
     )

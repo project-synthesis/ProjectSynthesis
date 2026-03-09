@@ -84,6 +84,9 @@ async def _migrate_add_missing_columns() -> None:
         "github_tokens": {
             "avatar_url": "TEXT",              # cached avatar URL
         },
+        "refresh_tokens": {
+            "device_id": "TEXT",               # per-device revocation (nullable; absent on legacy tokens)
+        },
     }
 
     async with engine.begin() as conn:

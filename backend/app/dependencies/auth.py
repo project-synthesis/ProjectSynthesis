@@ -59,18 +59,27 @@ async def get_current_user(
     github_login: str = payload.get("github_login", "")
     roles: list[str] = payload.get("roles", [])
 
-    # Check revocation: query the latest refresh token for this user.
-    # We look at the most recent RefreshToken row for the user_id, not a per-jti
-    # record. This means all outstanding access tokens for a user remain valid
-    # until the newest refresh token is revoked (e.g., on logout). Per-access-token
-    # revocation is intentionally not implemented — access tokens are short-lived
-    # (15 min) and stateless; revocation is enforced at the refresh boundary.
-    result = await session.execute(
-        select(RefreshToken)
-        .where(RefreshToken.user_id == user_id)
-        .order_by(RefreshToken.created_at.desc())
-        .limit(1)
-    )
+    # Revocation check: per-device when device_id is in the JWT; legacy most-recent otherwise.
+    # device_id was added in the auth security hardening (2026-03-09).
+    # Tokens issued before this change have no device_id claim — use the old most-recent check.
+    device_id: str | None = payload.get("device_id")
+
+    if device_id:
+        # New path: look up the exact RT for this device
+        result = await session.execute(
+            select(RefreshToken)
+            .where(RefreshToken.user_id == user_id, RefreshToken.device_id == device_id)
+            .limit(1)
+        )
+    else:
+        # Legacy path: most-recent RT for backward compat with tokens issued pre-hardening
+        result = await session.execute(
+            select(RefreshToken)
+            .where(RefreshToken.user_id == user_id)
+            .order_by(RefreshToken.created_at.desc())
+            .limit(1)
+        )
+
     rt = result.scalar_one_or_none()
     if rt is not None and rt.revoked:
         raise HTTPException(

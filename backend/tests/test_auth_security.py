@@ -118,3 +118,84 @@ async def test_get_auth_token_returns_401_when_no_pending_token():
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail["code"] == ERR_TOKEN_MISSING
+
+
+# ── Cycle 2: Access Token Revocation Gap (Gap 7) ──────────────────────────
+
+
+async def test_get_current_user_rejects_revoked_device_even_after_other_device_refreshes():
+    """After Device A logs out, Device A's access token is rejected even if Device B
+    has since refreshed (creating a new, non-revoked RT).
+
+    The critical invariant: revocation is per-device, not global-most-recent.
+    """
+    device_id_a = "device-a-uuid"
+    # sign_access_token does not yet accept device_id → will fail with TypeError (RED)
+    token_a = sign_access_token("user-123", "octocat", ["user"], device_id=device_id_a)
+
+    # Device A's RT: revoked
+    mock_rt_a = MagicMock()
+    mock_rt_a.user_id = "user-123"
+    mock_rt_a.device_id = device_id_a
+    mock_rt_a.revoked = True
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_rt_a
+
+    mock_request = MagicMock()
+    mock_request.headers = {"Authorization": f"Bearer {token_a}"}
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with pytest.raises(Exception) as exc_info:
+        await get_current_user(request=mock_request, session=mock_session)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail["code"] == ERR_TOKEN_REVOKED
+
+
+async def test_get_current_user_device_b_unaffected_by_device_a_logout():
+    """Device B's access token (its own device_id) passes even when Device A's RT is revoked."""
+    device_id_b = "device-b-uuid"
+    token_b = sign_access_token("user-123", "octocat", ["user"], device_id=device_id_b)
+
+    # Device B's RT: active
+    mock_rt_b = MagicMock()
+    mock_rt_b.user_id = "user-123"
+    mock_rt_b.device_id = device_id_b
+    mock_rt_b.revoked = False
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_rt_b
+
+    mock_request = MagicMock()
+    mock_request.headers = {"Authorization": f"Bearer {token_b}"}
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    user = await get_current_user(request=mock_request, session=mock_session)
+
+    assert user.id == "user-123"
+
+
+async def test_sign_access_token_embeds_device_id_claim():
+    """sign_access_token with device_id includes it in the JWT payload."""
+    from app.utils.jwt import decode_token
+
+    token = sign_access_token("user-123", "octocat", ["user"], device_id="dev-uuid-xyz")
+    payload = decode_token(token)
+
+    assert payload.get("device_id") == "dev-uuid-xyz"
+
+
+async def test_sign_access_token_without_device_id_still_works():
+    """sign_access_token without device_id remains backward-compatible."""
+    from app.utils.jwt import decode_token
+
+    token = sign_access_token("user-123", "octocat", ["user"])  # no device_id
+    payload = decode_token(token)
+
+    assert payload["sub"] == "user-123"
+    assert "device_id" not in payload or payload["device_id"] is None

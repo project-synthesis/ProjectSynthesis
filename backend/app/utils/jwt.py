@@ -10,14 +10,20 @@ from jose import ExpiredSignatureError, JWTError, jwt  # noqa: F401
 from app.config import settings
 
 
-def sign_access_token(user_id: str, github_login: str, roles: list[str]) -> str:
+def sign_access_token(
+    user_id: str,
+    github_login: str,
+    roles: list[str],
+    device_id: str | None = None,
+) -> str:
     """Sign an HS256 (or RS256 if configured) access token.
 
     Payload claims: sub, github_login, roles, jti, exp, iat.
+    Optional claim: device_id — used for per-device RT revocation.
     """
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {
+    payload: dict = {
         "sub": user_id,
         "github_login": github_login,
         "roles": roles,
@@ -25,6 +31,8 @@ def sign_access_token(user_id: str, github_login: str, roles: list[str]) -> str:
         "iat": now,
         "exp": expire,
     }
+    if device_id is not None:
+        payload["device_id"] = device_id
 
     if settings.JWT_ALGORITHM.startswith("RS") and settings.JWT_PRIVATE_KEY:
         key = settings.JWT_PRIVATE_KEY
