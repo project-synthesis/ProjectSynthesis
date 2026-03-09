@@ -18,10 +18,48 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            Review this pull request thoroughly. For each changed file:
-            - Check correctness and logic errors
-            - Flag security issues (auth bypasses, injection, data leaks)
-            - Note performance concerns
-            - Verify alignment with CLAUDE.md architecture rules (layer separation, DRY, no rounded corners in frontend)
-            - Check type safety and error handling completeness
-            Post your findings as inline comments on specific lines where possible, and a summary comment overall. Be direct and specific — skip praise, focus on actionable issues.
+            You are reviewing a pull request for **Project Synthesis** — a FastAPI + SvelteKit prompt-optimization platform with an industrial cyberpunk UI.
+
+            ## Architecture rules (hard violations = block merge)
+
+            **Backend layer contract:**
+            - Flow is `routers/ → services/ → models/` only. Services must NEVER import from routers.
+            - `github_client.py` must always resolve tokens via `github_service.decrypt_token()` — never import `_get_fernet` from a router.
+            - Provider is detected ONCE at startup via `detect_provider()` and injected via `app.state.provider`. Never call `detect_provider()` inside a request handler or MCP tool.
+            - All list/search endpoints must return the pagination envelope `{total, count, offset, items, has_more, next_offset}`.
+            - Any `getattr(Optimization, sort)` call must be guarded by `VALID_SORT_COLUMNS` whitelist first.
+            - GitHub tokens are Fernet-encrypted at rest. Only `github_service.encrypt_token` / `decrypt_token` are entry points — routers must not hold the Fernet key.
+            - Soft-delete: set `deleted_at` timestamp, never call `session.delete()`. Trash window is 7 days.
+            - Every authenticated endpoint must filter by `current_user.id` — never return or mutate another user's records.
+            - `session.flush()` inside service layer, `session.commit()` in the router after the service call returns.
+
+            **MCP tools:**
+            - Every `@mcp.tool()` must include all four annotations: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`.
+            - MCP tools use `async with async_session() as session` — never the FastAPI `Depends(get_session)`.
+            - New sortable columns must be added to `_VALID_SORT_COLUMNS` in `history.py`, `optimization_service.py`, AND `mcp_server.py` — all three.
+
+            **Frontend (Svelte 5 + TailwindCSS):**
+            - Zero `rounded-*` classes anywhere. The design is flat sharp edges, 1px neon borders only.
+            - No `shadow-*`, `drop-shadow`, `blur-*` utility classes.
+            - Use Svelte 5 runes: `$state`, `$effect`, `$derived`, `$props`. No `writable()`, `readable()`, or legacy `onMount` for reactive data.
+            - All API calls go through `$lib/api/client.ts` — no bare `fetch()` in components.
+            - Store classes live in `$lib/stores/*.svelte.ts` — no inline reactive state in routes.
+            - `onMount` callbacks must be synchronous; wrap async work in an IIFE inside.
+            - Interactive elements need accessible labels: `aria-label`, `aria-pressed`, `aria-expanded` where applicable.
+            - Never use the bare `autofocus` HTML attribute — use a `use:action` that calls `.focus()` on mount.
+
+            **General:**
+            - No `_v2` suffixes, no commented-out old code left in place — delete old code entirely.
+            - No hardcoded secrets, URLs, or magic strings outside `config.py` / `.env`.
+            - All new async functions need `try/except` with structured logging, not bare `print()`.
+            - New backend endpoints need at least one corresponding test.
+
+            ## What to report
+
+            Post **inline comments** on the specific lines where violations occur. For each finding include:
+            1. Which rule it breaks (quote it briefly)
+            2. The exact fix required (code snippet if helpful)
+
+            End with a **summary comment** covering: (a) any hard blockers, (b) security observations, (c) test coverage gaps, (d) overall assessment.
+
+            Be direct and precise. Skip praise. Flag potential issues even if not certain — mark those as "nit:" or "consider:".
