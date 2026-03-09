@@ -674,34 +674,26 @@ def create_mcp_server(provider=None) -> FastMCP:
             JSON with keys: analysis, strategy, optimization, validation.
             Returns {"error": ...} with a hint if not found.
         """
-        from app.services.pipeline import run_pipeline
         # B6: capture all ORM values as locals inside the session block
-        async with _opt_session(optimization_id) as (_, opt):
-            if not opt:
+        async with _opt_session(optimization_id) as (_, orig):
+            if not orig:
                 return _not_found(optimization_id)
-            raw_prompt = opt.raw_prompt
-            repo_full_name = opt.linked_repo_full_name
-            repo_branch = opt.linked_repo_branch
+            raw_prompt = orig.raw_prompt
+            repo_full_name = orig.linked_repo_full_name
+            repo_branch = orig.linked_repo_branch
 
         assert ctx is not None
         prov = ctx.request_context.lifespan_context.provider
         url_fetched = await fetch_url_contexts(url_contexts)
-        results = {}
-        async for event_type, event_data in run_pipeline(
-            provider=prov,
-            raw_prompt=raw_prompt,
-            optimization_id=_new_run_id("mcp-retry"),
-            strategy_override=strategy,
-            repo_full_name=repo_full_name,
-            repo_branch=repo_branch,
-            github_token=github_token,
-            file_contexts=file_contexts,
-            instructions=instructions,
-            url_fetched_contexts=url_fetched,
-        ):
-            if event_type in ("analysis", "strategy", "optimization", "validation", "complete"):
-                results[event_type] = event_data
-        return json.dumps(results, indent=2)
+        opt_id = _new_run_id("mcp-retry")
+        results, opt = await _run_and_persist(
+            prov, raw_prompt, opt_id=opt_id, strategy=strategy,
+            repo_full_name=repo_full_name, repo_branch=repo_branch,
+            github_token=github_token, file_contexts=file_contexts,
+            instructions=instructions, url_fetched=url_fetched,
+            retry_of=optimization_id,
+        )
+        return json.dumps({"optimization_id": opt_id, "retry_of": optimization_id, **results}, default=str, indent=2)
 
     # ── GitHub tools — stateless: token optional, bot credentials used by default ──
 
