@@ -139,7 +139,8 @@ async def github_callback(
     # Clean up any leftover session state (best-effort; may be absent in proxy setups).
     request.session.pop("oauth_state", None)
 
-    # Exchange code for GitHub App user-to-server tokens
+    # Exchange code for GitHub App user-to-server tokens, then fetch user info
+    # in the same connection — avoids a redundant TLS handshake.
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
             GITHUB_TOKEN_URL,
@@ -152,23 +153,12 @@ async def github_callback(
         )
         token_data = token_resp.json()
 
-    access_token = token_data.get("access_token")
-    if not access_token:
-        error = token_data.get("error_description", "Failed to get access token")
-        raise HTTPException(status_code=400, detail=error)
+        access_token = token_data.get("access_token")
+        if not access_token:
+            error = token_data.get("error_description", "Failed to get access token")
+            raise HTTPException(status_code=400, detail=error)
 
-    # GitHub App tokens include expiry and refresh token fields.
-    now = datetime.now(timezone.utc)
-    expires_in = int(token_data.get("expires_in", 28800))            # default 8h
-    refresh_token_str = token_data.get("refresh_token")
-    refresh_token_expires_in = int(
-        token_data.get("refresh_token_expires_in", 15897600)         # ~6 months
-    )
-    expires_at = now + timedelta(seconds=expires_in)
-    refresh_token_expires_at = now + timedelta(seconds=refresh_token_expires_in)
-
-    # Fetch user info
-    async with httpx.AsyncClient() as client:
+        # Fetch user info in the same client session
         user_resp = await client.get(
             GITHUB_USER_URL,
             headers={
@@ -179,6 +169,16 @@ async def github_callback(
         if user_resp.status_code != 200:
             raise HTTPException(status_code=400, detail="Failed to fetch GitHub user info")
         user_data = user_resp.json()
+
+    # GitHub App tokens include expiry and refresh token fields.
+    now = datetime.now(timezone.utc)
+    expires_in = int(token_data.get("expires_in", 28800))            # default 8h
+    refresh_token_str = token_data.get("refresh_token")
+    refresh_token_expires_in = int(
+        token_data.get("refresh_token_expires_in", 15897600)         # ~6 months
+    )
+    expires_at = now + timedelta(seconds=expires_in)
+    refresh_token_expires_at = now + timedelta(seconds=refresh_token_expires_in)
 
     # Encrypt tokens
     encrypted_access = encrypt_token(access_token)
@@ -202,6 +202,7 @@ async def github_callback(
         refresh_token_encrypted=encrypted_refresh,
         refresh_token_expires_at=refresh_token_expires_at,
         expires_at=expires_at,
+        avatar_url=user_data.get("avatar_url"),
     )
     session.add(new_token)
     # Note: do NOT commit here — _upsert_user and _issue_jwt_pair must be part
@@ -251,28 +252,10 @@ async def github_me(
     if not token_record:
         return GitHubUserInfo(connected=False).model_dump()
 
-    # Optionally fetch fresh avatar URL
-    avatar_url = None
-    try:
-        from app.services.github_service import decrypt_token
-        decrypted = decrypt_token(bytes(token_record.token_encrypted))
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                GITHUB_USER_URL,
-                headers={
-                    "Authorization": f"Bearer {decrypted}",
-                    "Accept": "application/json",
-                },
-            )
-            if resp.status_code == 200:
-                avatar_url = resp.json().get("avatar_url")
-    except Exception:
-        pass
-
     return {
         "connected": True,
         "login": token_record.github_login,
-        "avatar_url": avatar_url,
+        "avatar_url": token_record.avatar_url,  # cached at login; None for pre-migration tokens
         "github_user_id": token_record.github_user_id,
         "token_type": token_record.token_type,
     }
