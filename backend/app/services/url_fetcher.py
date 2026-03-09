@@ -89,25 +89,30 @@ def strip_html(html: str) -> str:
 
 
 async def fetch_url_contexts(url_contexts: list[str] | None) -> list[dict]:
-    """Fetch and convert URL content to structured markdown; silently skip failures.
+    """Fetch and convert URL content to structured markdown; returns error entry on failure.
 
     Args:
-        url_contexts: List of URLs to fetch (max 3 honoured).
+        url_contexts: List of URLs to fetch.
 
     Returns:
-        List of {"url": str, "content": str} dicts with markdown-structured text,
-        each capped at 1500 chars (N41).
+        List of {"url": str, "content": str, "error": str | None} dicts, one per
+        input URL (order preserved).  On success, ``error`` is ``None`` and
+        ``content`` contains stripped markdown text capped at 3000 chars.  On any
+        per-URL failure (network error, timeout, non-200 response) ``content`` is
+        ``""`` and ``error`` holds the error message; the batch continues for the
+        remaining URLs.
     """
     if not url_contexts:
         return []
-    results = []
+    results: list[dict] = []
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-        for url in url_contexts[:3]:
+        for url in url_contexts:
             try:
                 resp = await client.get(url, headers={"User-Agent": "ProjectSynthesis/1.0"})
                 resp.raise_for_status()
-                content = strip_html(resp.text)[:1500]  # N41: stages cap at 1500 anyway
-                results.append({"url": url, "content": content})
+                content = strip_html(resp.text)[:3000]
+                results.append({"url": url, "content": content, "error": None})
             except Exception as e:
                 logger.warning("URL fetch failed for %s: %s", url, e)
+                results.append({"url": url, "content": "", "error": str(e)})
     return results
