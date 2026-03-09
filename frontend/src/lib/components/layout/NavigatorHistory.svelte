@@ -199,8 +199,12 @@
   });
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="flex flex-col h-full" onclick={() => { if (contextMenuId) contextMenuId = null; }}>
+<div
+  class="flex flex-col h-full"
+  role="presentation"
+  onclick={() => { if (contextMenuId) contextMenuId = null; }}
+  onkeydown={(e) => { if (e.key === 'Escape' && contextMenuId) contextMenuId = null; }}
+>
   <!-- Top-level tab bar: History | Trash -->
   <div class="flex items-center h-8 border-b border-border-subtle bg-bg-secondary/50 px-2 gap-1 shrink-0">
     <button
@@ -482,7 +486,6 @@
               {/if}
               <div class="flex-1 min-w-0">
                 {#if editingId === entry.id}
-                  <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <input
                     type="text"
                     bind:this={titleInputEl}
@@ -521,10 +524,12 @@
                   ···
                 </button>
                 {#if contextMenuId === entry.id}
-                  <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div
+                    role="menu"
+                    tabindex="-1"
                     class="absolute right-0 top-full mt-0.5 w-28 bg-bg-card border border-border-subtle z-[300] font-mono"
                     onclick={(e) => e.stopPropagation()}
+                    onkeydown={(e) => e.stopPropagation()}
                   >
                     <button
                       class="w-full text-left px-3 py-1.5 text-[11px] text-neon-cyan/80 hover:bg-bg-hover hover:text-neon-cyan transition-colors"

@@ -165,8 +165,12 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="flex flex-col h-full animate-fade-in" onclick={handleDocClick}>
+<div
+  class="flex flex-col h-full animate-fade-in"
+  role="presentation"
+  onclick={handleDocClick}
+  onkeydown={(e) => { if (e.key === 'Escape') handleDocClick(); }}
+>
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2 border-b border-border-subtle shrink-0 gap-2">
     <div class="flex items-center gap-2 min-w-0">
@@ -227,10 +231,12 @@
             ↺ Retry
           </button>
           {#if showRetryMenu}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
+              role="menu"
+              tabindex="-1"
               class="absolute right-0 top-full mt-1 w-52 bg-bg-card border border-neon-cyan/30 z-[200] font-mono"
               onclick={(e) => e.stopPropagation()}
+              onkeydown={(e) => e.stopPropagation()}
             >
               <div class="px-3 py-1.5 border-b border-border-subtle text-[10px] text-neon-cyan/70 uppercase tracking-wider">
                 Retry with strategy
