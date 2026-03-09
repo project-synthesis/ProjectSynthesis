@@ -370,6 +370,7 @@
       action: () => {
         workbench.setActivity('history');
         history.showTrash = true;
+        history.loadTrash();
       }
     });
     commandPalette.registerCommand({
