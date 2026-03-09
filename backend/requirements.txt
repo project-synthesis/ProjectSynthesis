@@ -16,3 +16,7 @@ mcp
 websockets
 anthropic
 claude-agent-sdk>=0.1.46
+
+# Test dependencies
+pytest>=9.0
+pytest-asyncio>=1.0
