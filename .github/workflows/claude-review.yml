@@ -17,3 +17,11 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Review this pull request thoroughly. For each changed file:
+            - Check correctness and logic errors
+            - Flag security issues (auth bypasses, injection, data leaks)
+            - Note performance concerns
+            - Verify alignment with CLAUDE.md architecture rules (layer separation, DRY, no rounded corners in frontend)
+            - Check type safety and error handling completeness
+            Post your findings as inline comments on specific lines where possible, and a summary comment overall. Be direct and specific — skip praise, focus on actionable issues.
