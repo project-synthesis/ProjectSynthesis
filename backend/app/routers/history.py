@@ -114,23 +114,44 @@ async def list_trash(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """List soft-deleted optimizations pending purge (deleted within the last 7 days)."""
     from datetime import timedelta
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    base_filter = [
+        Optimization.deleted_at.isnot(None),
+        Optimization.deleted_at >= cutoff,
+        Optimization.user_id == current_user.id,
+    ]
+
+    # Count total matching items
+    count_query = select(func.count()).select_from(
+        select(Optimization).where(*base_filter).subquery()
+    )
+    total_result = await session.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # Paginated items
     query = (
         select(Optimization)
-        .where(
-            Optimization.deleted_at.isnot(None),
-            Optimization.deleted_at >= cutoff,
-        )
+        .where(*base_filter)
         .order_by(Optimization.deleted_at.desc())
         .offset(offset)
         .limit(limit)
     )
     result = await session.execute(query)
     items = [opt.to_dict() for opt in result.scalars().all()]
-    return {"items": items, "count": len(items), "offset": offset}
+    fetched = len(items)
+    has_more = (offset + fetched) < total
+    return {
+        "total": total,
+        "count": fetched,
+        "offset": offset,
+        "items": items,
+        "has_more": has_more,
+        "next_offset": offset + fetched if has_more else None,
+    }
 
 
 @router.post("/api/history/{optimization_id}/restore")
@@ -140,17 +161,10 @@ async def restore_optimization(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Restore a soft-deleted optimization (clears deleted_at)."""
-    result = await session.execute(
-        select(Optimization).where(
-            Optimization.id == optimization_id,
-            Optimization.user_id == current_user.id,
-            Optimization.deleted_at.isnot(None),
-        )
-    )
-    opt = result.scalar_one_or_none()
-    if not opt:
+    from app.services.optimization_service import restore_optimization as svc_restore
+    restored = await svc_restore(session, optimization_id, current_user.id)
+    if not restored:
         raise HTTPException(status_code=404, detail="Not found in trash")
-    opt.deleted_at = None
     await session.commit()
     return {"restored": True, "id": optimization_id}
 

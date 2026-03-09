@@ -2,7 +2,7 @@
   import { history } from '$lib/stores/history.svelte';
   import { editor } from '$lib/stores/editor.svelte';
   import { forge } from '$lib/stores/forge.svelte';
-  import { fetchHistory, fetchHistoryStats, fetchOptimization, deleteOptimization, fetchHistoryTrash, restoreOptimization, type HistoryStats, type TrashResponse } from '$lib/api/client';
+  import { fetchHistory, fetchHistoryStats, fetchOptimization, deleteOptimization, fetchHistoryTrash, restoreOptimization, type HistoryStats, type HistoryResponse } from '$lib/api/client';
   import { getStrategyHex } from '$lib/utils/strategy';
   import ScoreCircle from '$lib/components/shared/ScoreCircle.svelte';
   import { onMount } from 'svelte';
@@ -12,7 +12,7 @@
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedIds = $state<Set<string>>(new Set());
   let showTrash = $state(false);
-  let trashItems = $state<TrashResponse['items']>([]);
+  let trashItems = $state<HistoryResponse['items']>([]);
   let trashLoading = $state(false);
 
   function toggleSelect(e: MouseEvent, id: string) {

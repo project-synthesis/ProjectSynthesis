@@ -280,6 +280,26 @@ async def update_optimization(
     return opt.to_dict()
 
 
+async def restore_optimization(
+    session: AsyncSession,
+    optimization_id: str,
+    user_id: str,
+) -> bool:
+    """Restore a soft-deleted optimization. Returns True if found and restored, False if not found."""
+    result = await session.execute(
+        select(Optimization).where(
+            Optimization.id == optimization_id,
+            Optimization.user_id == user_id,
+            Optimization.deleted_at.isnot(None),
+        )
+    )
+    opt = result.scalar_one_or_none()
+    if not opt:
+        return False
+    opt.deleted_at = None
+    return True
+
+
 async def delete_optimization(
     session: AsyncSession,
     optimization_id: str,
