@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_session
 from app.dependencies.auth import get_current_user
 from app.models.optimization import Optimization
-from app.schemas.auth import AuthenticatedUser
+from app.schemas.auth import ERR_INSUFFICIENT_PERMISSIONS, AuthenticatedUser
 from app.services.optimization_service import VALID_SORT_COLUMNS, compute_stats
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,10 @@ async def restore_optimization(
     """Restore a soft-deleted optimization (clears deleted_at)."""
     from app.services.optimization_service import restore_optimization as svc_restore
     result = await session.execute(
-        select(Optimization).where(Optimization.id == optimization_id)
+        select(Optimization).where(
+            Optimization.id == optimization_id,
+            Optimization.deleted_at.isnot(None),
+        )
     )
     opt = result.scalar_one_or_none()
     if not opt:
@@ -175,7 +178,7 @@ async def restore_optimization(
     if opt.user_id != current_user.id:
         raise HTTPException(
             status_code=403,
-            detail={"code": "FORBIDDEN", "message": "Not authorized to restore this optimization"},
+            detail={"code": ERR_INSUFFICIENT_PERMISSIONS, "message": "Not authorized to restore this optimization"},
         )
     restored = await svc_restore(session, optimization_id, current_user.id)
     if not restored:
