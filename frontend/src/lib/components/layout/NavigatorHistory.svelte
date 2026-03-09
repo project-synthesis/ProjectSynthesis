@@ -3,7 +3,7 @@
   import { editor } from '$lib/stores/editor.svelte';
   import { forge } from '$lib/stores/forge.svelte';
   import { toast } from '$lib/stores/toast.svelte';
-  import { fetchHistory, fetchHistoryStats, fetchOptimization, deleteOptimization, fetchHistoryTrash, restoreOptimization, type HistoryStats, type HistoryResponse } from '$lib/api/client';
+  import { fetchHistory, fetchHistoryStats, fetchOptimization, deleteOptimization, type HistoryStats } from '$lib/api/client';
   import { getStrategyHex } from '$lib/utils/strategy';
   import ScoreCircle from '$lib/components/shared/ScoreCircle.svelte';
   import { onMount } from 'svelte';
@@ -12,10 +12,7 @@
   let stats = $state<HistoryStats | null>(null);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedIds = $state<Set<string>>(new Set());
-  let showTrash = $state(false);
   let showFilters = $state(false);
-  let trashItems = $state<HistoryResponse['items']>([]);
-  let trashLoading = $state(false);
 
   function toggleSelect(e: MouseEvent, id: string) {
     e.stopPropagation();
@@ -94,32 +91,21 @@
     e.stopPropagation();
     try {
       await deleteOptimization(id);
-      await loadHistory();
+      history.removeEntry(id);
       await loadStats();
+      toast.info('Deleted — Undo', 5000, {
+        label: 'Undo',
+        onClick: () => history.restoreItem(id)
+      });
     } catch {
       // Delete failed
     }
   }
 
-  async function loadTrash() {
-    trashLoading = true;
-    try {
-      const res = await fetchHistoryTrash();
-      trashItems = res.items;
-    } catch { /* silent */ }
-    finally { trashLoading = false; }
-  }
-
   async function handleRestore(e: MouseEvent, id: string) {
     e.stopPropagation();
-    try {
-      await restoreOptimization(id);
-      await loadTrash();
-      await loadHistory();
-      await loadStats();
-    } catch (err) {
-      toast.error(`Restore failed: ${(err as Error).message}`);
-    }
+    await history.restoreItem(id);
+    await loadStats();
   }
 
   async function openHistoryEntry(entry: typeof history.entries[0]) {
@@ -282,11 +268,11 @@
         Score {history.filters.sortBy === 'overall_score' ? (history.filters.sortDir === 'desc' ? '↓' : '↑') : ''}
       </button>
       <button
-        class="text-[10px] px-1.5 py-0.5 border {showTrash ? 'border-neon-red/50 text-neon-red' : 'border-border-subtle text-text-dim hover:border-neon-red/30 hover:text-neon-red/70'} transition-colors"
-        aria-pressed={showTrash}
-        onclick={() => { showTrash = !showTrash; if (showTrash) loadTrash(); }}
+        class="text-[10px] px-1.5 py-0.5 border {history.showTrash ? 'border-neon-red/50 text-neon-red' : 'border-border-subtle text-text-dim hover:border-neon-red/30 hover:text-neon-red/70'} transition-colors"
+        aria-pressed={history.showTrash}
+        onclick={() => { history.showTrash = !history.showTrash; if (history.showTrash) history.loadTrash(); }}
       >
-        TRASH
+        TRASH{#if history.trashTotal > 0} <span class="text-[9px]">({history.trashTotal})</span>{/if}
       </button>
       <button
         class="text-[10px] px-1.5 py-0.5 border {showFilters ? 'border-neon-cyan/50 text-neon-cyan' : 'border-border-subtle text-text-dim hover:border-neon-cyan/30 hover:text-neon-cyan/70'} transition-colors"
@@ -305,18 +291,18 @@
     </div>
   </div>
 
-  {#if showTrash}
+  {#if history.showTrash}
     <!-- Trash view -->
     <div class="flex-1 overflow-y-auto p-1">
       <div class="px-2 py-1 mb-1 text-[9px] text-neon-red/60 border-b border-neon-red/10 font-mono uppercase tracking-wider">
         Trash — items deleted within 7 days
       </div>
-      {#if trashLoading}
+      {#if history.trashLoading}
         <div class="text-[10px] text-text-dim px-2 py-4 text-center">Loading...</div>
-      {:else if trashItems.length === 0}
+      {:else if history.trashItems.length === 0}
         <div class="text-[10px] text-text-dim/50 px-2 py-4 text-center">Trash is empty</div>
       {:else}
-        {#each trashItems as entry (entry.id)}
+        {#each history.trashItems as entry (entry.id)}
           <div class="flex items-center justify-between px-2 py-1 mb-0.5 border border-transparent hover:border-border-subtle hover:bg-bg-hover transition-colors">
             <div class="flex-1 min-w-0">
               <p class="text-[11px] text-text-dim truncate">{entry.raw_prompt}</p>

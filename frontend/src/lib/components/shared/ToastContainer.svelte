@@ -36,6 +36,12 @@
           <path stroke-linecap="round" stroke-linejoin="round" d={typeIcons[item.type]}></path>
         </svg>
         <span class="text-sm text-text-primary">{item.message}</span>
+        {#if item.action}
+          <button
+            class="ml-2 text-xs font-mono underline underline-offset-2 opacity-80 hover:opacity-100 transition-opacity shrink-0"
+            onclick={(e) => { e.stopPropagation(); item.action!.onClick(); toast.dismiss(item.id); }}
+          >{item.action.label}</button>
+        {/if}
         <button
           class="ml-2 opacity-60 hover:opacity-100 transition-opacity"
           onclick={(e) => { e.stopPropagation(); toast.dismiss(item.id); }}
