@@ -1,13 +1,10 @@
 """Tests for soft-delete behavior (Task 11)."""
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from app.services.optimization_service import delete_optimization, get_optimization
 
 
-@pytest.mark.asyncio
 async def test_delete_optimization_sets_deleted_at():
     """delete_optimization() should set deleted_at, NOT call session.delete."""
     opt = MagicMock()
@@ -28,7 +25,6 @@ async def test_delete_optimization_sets_deleted_at():
     session.delete.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_get_optimization_excludes_soft_deleted():
     """get_optimization() returns None when deleted_at filter matches (simulates soft-deleted)."""
     session = AsyncMock()

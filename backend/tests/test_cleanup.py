@@ -3,8 +3,6 @@ import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
-import pytest
-
 from app.services.cleanup import (
     run_cleanup_cycle,
     sweep_expired_tokens,
@@ -25,7 +23,6 @@ def _make_session_mock():
     return cm, session
 
 
-@pytest.mark.asyncio
 async def test_sweep_expired_refresh_tokens():
     """sweep_expired_tokens() should call session.execute and session.commit."""
     cm, session = _make_session_mock()
@@ -35,7 +32,6 @@ async def test_sweep_expired_refresh_tokens():
     session.commit.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_sweep_expired_github_tokens():
     """sweep_expired_github_tokens() should call session.execute and session.commit."""
     cm, session = _make_session_mock()
@@ -45,7 +41,6 @@ async def test_sweep_expired_github_tokens():
     session.commit.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_sweep_old_linked_repos():
     """sweep_old_linked_repos() should call session.execute and session.commit."""
     cm, session = _make_session_mock()
@@ -55,7 +50,6 @@ async def test_sweep_old_linked_repos():
     session.commit.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_sweep_soft_deleted_optimizations():
     """sweep_soft_deleted_optimizations() should call session.execute and session.commit."""
     cm, session = _make_session_mock()
@@ -65,7 +59,6 @@ async def test_sweep_soft_deleted_optimizations():
     session.commit.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_run_cleanup_isolates_sweep_failures():
     """run_cleanup_cycle() runs all 4 sweeps even if the first one raises."""
     call_count = 0
