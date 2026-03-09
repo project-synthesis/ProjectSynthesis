@@ -19,6 +19,11 @@ export interface HistoryFilters {
   sortDir: 'asc' | 'desc';
   offset: number;
   limit: number;
+  has_repo?: boolean;
+  min_score?: number;
+  max_score?: number;
+  task_type?: string;
+  status?: string;
 }
 
 function loadFilters(): HistoryFilters {

@@ -12,6 +12,7 @@
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedIds = $state<Set<string>>(new Set());
   let showTrash = $state(false);
+  let showFilters = $state(false);
   let trashItems = $state<HistoryResponse['items']>([]);
   let trashLoading = $state(false);
 
@@ -60,7 +61,12 @@
         search: history.filters.search || undefined,
         framework: history.filters.strategy || undefined,
         sort: history.filters.sortBy,
-        order: history.filters.sortDir
+        order: history.filters.sortDir,
+        has_repo: history.filters.has_repo,
+        min_score: history.filters.min_score,
+        max_score: history.filters.max_score,
+        task_type: history.filters.task_type || undefined,
+        status: history.filters.status || undefined
       });
       history.setEntries(res.items, res.total);
     } catch {
@@ -187,6 +193,75 @@
       class="w-full bg-bg-input border border-border-subtle rounded px-2 py-1 text-xs text-text-primary placeholder:text-text-dim focus:outline-none focus:border-neon-cyan/30"
       oninput={(e) => debouncedSearch((e.target as HTMLInputElement).value)}
     />
+    {#if showFilters}
+      <div class="space-y-1.5 pt-1 border-t border-border-subtle">
+        <!-- Min/Max Score -->
+        <div class="flex items-center gap-1">
+          <span class="text-[10px] text-text-dim w-14 shrink-0">Score:</span>
+          <input
+            type="number" min="1" max="10" placeholder="min"
+            class="w-12 bg-bg-input border border-border-subtle px-1 py-0.5 text-[10px] text-text-primary focus:outline-none focus:border-neon-cyan/30"
+            value={history.filters.min_score ?? ''}
+            onchange={(e) => { const v = parseInt((e.target as HTMLInputElement).value); history.updateFilters({ min_score: isNaN(v) ? undefined : v, offset: 0 }); loadHistory(); }}
+          />
+          <span class="text-[9px] text-text-dim">–</span>
+          <input
+            type="number" min="1" max="10" placeholder="max"
+            class="w-12 bg-bg-input border border-border-subtle px-1 py-0.5 text-[10px] text-text-primary focus:outline-none focus:border-neon-cyan/30"
+            value={history.filters.max_score ?? ''}
+            onchange={(e) => { const v = parseInt((e.target as HTMLInputElement).value); history.updateFilters({ max_score: isNaN(v) ? undefined : v, offset: 0 }); loadHistory(); }}
+          />
+        </div>
+        <!-- Has Repo: three-way toggle All / With repo / Without repo -->
+        <div class="flex items-center gap-1">
+          <span class="text-[10px] text-text-dim w-14 shrink-0">Repo:</span>
+          {#each (['All', 'With', 'Without'] as const) as label}
+            {@const val = label === 'All' ? undefined : label === 'With' ? true : false}
+            <button
+              class="text-[9px] px-1.5 py-0.5 border {history.filters.has_repo === val ? 'border-neon-cyan/50 text-neon-cyan' : 'border-border-subtle text-text-dim hover:border-neon-cyan/30'} transition-colors"
+              onclick={() => { history.updateFilters({ has_repo: val, offset: 0 }); loadHistory(); }}
+            >{label}</button>
+          {/each}
+        </div>
+        <!-- Task Type dropdown -->
+        <div class="flex items-center gap-1">
+          <span class="text-[10px] text-text-dim w-14 shrink-0">Type:</span>
+          <select
+            class="flex-1 bg-bg-input border border-border-subtle px-1 py-0.5 text-[10px] text-text-primary focus:outline-none focus:border-neon-cyan/30 appearance-none"
+            value={history.filters.task_type ?? ''}
+            onchange={(e) => { const v = (e.target as HTMLSelectElement).value; history.updateFilters({ task_type: v || undefined, offset: 0 }); loadHistory(); }}
+          >
+            <option value="">All</option>
+            <option value="instruction">instruction</option>
+            <option value="conversation">conversation</option>
+            <option value="system">system</option>
+            <option value="transformation">transformation</option>
+            <option value="other">other</option>
+          </select>
+        </div>
+        <!-- Status dropdown -->
+        <div class="flex items-center gap-1">
+          <span class="text-[10px] text-text-dim w-14 shrink-0">Status:</span>
+          <select
+            class="flex-1 bg-bg-input border border-border-subtle px-1 py-0.5 text-[10px] text-text-primary focus:outline-none focus:border-neon-cyan/30 appearance-none"
+            value={history.filters.status ?? ''}
+            onchange={(e) => { const v = (e.target as HTMLSelectElement).value; history.updateFilters({ status: v || undefined, offset: 0 }); loadHistory(); }}
+          >
+            <option value="">All</option>
+            <option value="completed">completed</option>
+            <option value="failed">failed</option>
+            <option value="running">running</option>
+          </select>
+        </div>
+        <!-- Clear filters -->
+        {#if history.filters.has_repo !== undefined || history.filters.min_score !== undefined || history.filters.max_score !== undefined || history.filters.task_type || history.filters.status}
+          <button
+            class="text-[9px] text-neon-red/70 hover:text-neon-red transition-colors"
+            onclick={() => { history.updateFilters({ has_repo: undefined, min_score: undefined, max_score: undefined, task_type: undefined, status: undefined, offset: 0 }); loadHistory(); }}
+          >&#x2715; Clear filters</button>
+        {/if}
+      </div>
+    {/if}
     <div class="flex items-center gap-1">
       <span class="text-[10px] text-text-dim mr-1">Sort:</span>
       <button
@@ -208,6 +283,12 @@
         onclick={() => { showTrash = !showTrash; if (showTrash) loadTrash(); }}
       >
         TRASH
+      </button>
+      <button
+        class="text-[10px] px-1.5 py-0.5 border {showFilters ? 'border-neon-cyan/50 text-neon-cyan' : 'border-border-subtle text-text-dim hover:border-neon-cyan/30 hover:text-neon-cyan/70'} transition-colors"
+        onclick={() => { showFilters = !showFilters; }}
+      >
+        FILTER
       </button>
     </div>
     <div class="text-[10px] text-text-dim">
