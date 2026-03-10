@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     EXPLORE_TOTAL_LINE_BUDGET: int = 15_000  # total lines across all files for LLM context
     EXPLORE_MAX_LINES_PER_FILE: int = 500    # hard ceiling per file (dynamic budget may lower this)
     EXPLORE_MAX_AMBIGUOUS_MATCHES: int = 3   # skip prompt-referenced files with > N tree matches
+    EXPLORE_MAX_CONTEXT_CHARS: int = 700_000  # ~175K tokens; char ceiling for LLM context payload
     EXPLORE_RESULT_CACHE_TTL: int = 3600     # 1 hour
 
     # Redis (optional — in-memory fallback when unavailable)

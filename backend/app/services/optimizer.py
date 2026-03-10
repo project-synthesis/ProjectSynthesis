@@ -57,7 +57,15 @@ async def run_optimize(
     if codebase_context:
         codebase_summary = build_codebase_summary(codebase_context)
         if codebase_summary:
-            user_message += f"\n\nCodebase context:\n{codebase_summary}"
+            user_message += (
+                "\n\n--- Codebase reference (for YOUR understanding only) ---\n"
+                "Absorb this to write a precise prompt. Do NOT relay exploration "
+                "findings, add context sections, or delegate investigation in the output.\n"
+                "ONLY use file paths, line numbers, function names, and technical details "
+                "that appear explicitly below. Do NOT invent or extrapolate specifics.\n"
+                f"{codebase_summary}\n"
+                "--- End codebase reference ---"
+            )
 
     # N24: inject attached file content
     if file_contexts:

@@ -46,22 +46,22 @@ def build_codebase_summary(codebase_context: dict) -> str:
     coverage_pct = codebase_context.get("coverage_pct") or 0
 
     if quality == "partial" and files_read_count == 0:
-        # Timed out before reading any files — indistinguishable from a full failure
-        # for the purposes of downstream LLM context; use the failed message.
+        # Timed out before reading any files — effectively no data available.
         parts.append(
-            "Note: Repository exploration failed and no codebase context is "
-            "available. Analysis proceeds without codebase grounding."
+            "Note: No codebase data available. Write the prompt based on "
+            "the raw input alone — do not reference or delegate codebase exploration."
         )
     elif quality == "partial":
         parts.append(
-            f"Note: Exploration was partial (timed out after reading "
-            f"{files_read_count} files — {coverage_pct}% of repository). "
-            "Analysis may be incomplete."
+            f"Note: Coverage limited to {files_read_count} files "
+            f"({coverage_pct}% of repository). Be precise where you have "
+            "data; write clear general instructions where you don't — "
+            "never delegate exploration to the executor."
         )
     elif quality == "failed":
         parts.append(
-            "Note: Repository exploration failed and no codebase context is "
-            "available. Analysis proceeds without codebase grounding."
+            "Note: No codebase data available. Write the prompt based on "
+            "the raw input alone — do not reference or delegate codebase exploration."
         )
 
     repo = codebase_context.get("repo")

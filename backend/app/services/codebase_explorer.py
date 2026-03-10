@@ -271,6 +271,9 @@ _CODE_EXTENSIONS = frozenset({
     ".yaml", ".yml", ".toml", ".json", ".md", ".txt",
 })
 
+# Regex for extracting filename-like tokens from prompt text
+_FILENAME_PATTERN = re.compile(r"[\w./-]*\w+\.\w{1,10}")
+
 
 def _extract_prompt_referenced_files(
     raw_prompt: str,
@@ -306,8 +309,7 @@ def _extract_prompt_referenced_files(
             _add(tp)
 
     # Tier 2: Filename match — extract filename-like tokens from prompt
-    filename_pattern = re.compile(r"[\w./-]*\w+\.\w{1,10}")
-    candidates = filename_pattern.findall(normalized)
+    candidates = _FILENAME_PATTERN.findall(normalized)
 
     for candidate in candidates:
         filename = candidate.split("/")[-1]
@@ -349,7 +351,7 @@ def _get_anchor_paths(tree: list[dict]) -> list[str]:
 def _merge_file_lists(
     prompt_referenced: list[str],
     anchors: list[str],
-    semantic_ranked: list[str] | list,
+    semantic_ranked: list[str],
     cap: int,
 ) -> list[str]:
     """Merge three file tiers with deduplication, respecting priority order.
@@ -742,17 +744,17 @@ async def run_explore(
     system_prompt = get_explore_synthesis_prompt()
     # Runtime char guard — prevent context overflow on repos with long lines
     context_payload = _format_files_for_llm(file_contents)
-    _MAX_CONTEXT_CHARS = 700_000  # ~175K tokens
-    if len(context_payload) > _MAX_CONTEXT_CHARS:
+    max_context_chars = settings.EXPLORE_MAX_CONTEXT_CHARS
+    if len(context_payload) > max_context_chars:
         logger.warning(
             "Explore context exceeds %d chars (%d chars); trimming semantic files",
-            _MAX_CONTEXT_CHARS, len(context_payload),
+            max_context_chars, len(context_payload),
         )
         # Remove semantic-tier files (last in priority) until within budget
         # Note: this also affects key_files_read downstream (intentional —
         # trimmed files were not shown to the LLM)
         paths_by_priority = list(file_contents.keys())
-        while len(context_payload) > _MAX_CONTEXT_CHARS and paths_by_priority:
+        while len(context_payload) > max_context_chars and paths_by_priority:
             removed = paths_by_priority.pop()
             del file_contents[removed]
             context_payload = _format_files_for_llm(file_contents)

@@ -224,18 +224,16 @@ def test_codebase_quality_partial_specific_warning():
     result = build_codebase_summary(
         {"explore_quality": "partial", "files_read_count": 7, "coverage_pct": 35}
     )
-    assert "Exploration was partial" in result
-    assert "7 files" in result
+    assert "Coverage limited to 7 files" in result
     assert "35%" in result
-    assert "Analysis may be incomplete" in result
+    assert "never delegate exploration" in result
 
 
 def test_codebase_quality_failed_specific_warning():
     """P1.5: failed quality shows specific warning about no context."""
     result = build_codebase_summary({"explore_quality": "failed"})
-    assert "Repository exploration failed" in result
-    assert "no codebase context" in result
-    assert "without codebase grounding" in result
+    assert "No codebase data available" in result
+    assert "do not reference or delegate" in result
 
 
 def test_codebase_quality_not_complete_no_generic_banner():
@@ -368,9 +366,9 @@ def test_codebase_partial_zero_files_uses_failed_message():
     result = build_codebase_summary(
         {"explore_quality": "partial", "files_read_count": 0, "coverage_pct": 0}
     )
-    assert "Repository exploration failed" in result
-    assert "without codebase grounding" in result
-    assert "Exploration was partial" not in result
+    assert "No codebase data available" in result
+    assert "do not reference or delegate" in result
+    assert "Coverage limited to" not in result
 
 
 # ── build_analysis_summary ────────────────────────────────────────────────────

@@ -8,7 +8,11 @@ IMPORTANT INSTRUCTIONS:
 2. Address weaknesses in order of severity (most critical first). If a weakness cannot be addressed without violating a user-specified constraint, skip it and note the unresolved tension in `optimization_notes`.
 3. Preserve the original intent and all key requirements
 4. Make the prompt more specific, structured, and actionable
-5. If codebase context is provided, ground the prompt in actual codebase details
+5. If codebase context is provided, absorb it as background intelligence — use it
+   to make the prompt surgically precise (exact file paths, function signatures,
+   data shapes, architectural patterns) but NEVER expose the exploration process.
+   The optimized prompt should read as if written by someone with deep codebase
+   knowledge, not as a report of what was explored.
 6. If attached files are provided under "Attached files:", incorporate domain-specific
    details, data shapes, or conventions from those files into the optimized prompt
 7. If referenced URLs are provided under "Referenced URLs:", extract and apply relevant
@@ -17,6 +21,18 @@ IMPORTANT INSTRUCTIONS:
    technique into the primary structure — they complement, not compete
 9. If user-specified output constraints appear at the top, they take absolute priority
    over all other considerations — every constraint must be honored in the output
+
+CRITICAL — anti-patterns to avoid:
+- Do NOT include "Codebase Context" or "Background" sections summarizing exploration results
+- Do NOT reference that codebase exploration was performed or what it found/didn't find
+- Do NOT delegate investigation or exploration tasks to the prompt's executor
+- Do NOT list areas that "need further investigation" or "were not covered"
+- Do NOT fabricate file paths, line numbers, function signatures, or bug diagnoses that
+  are not explicitly present in the codebase reference material. If a specific detail
+  (path, line number, variable name) is not in the reference, omit it entirely rather
+  than guessing a plausible value. Wrong specifics are worse than no specifics.
+Instead: Use codebase knowledge to make every instruction precise. Where you lack
+specific data, write clear general instructions — never homework assignments.
 
 You MUST respond with ONLY a JSON object (no markdown, no explanation outside JSON):
 {{
