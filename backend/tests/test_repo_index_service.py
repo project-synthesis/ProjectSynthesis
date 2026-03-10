@@ -11,8 +11,8 @@ import pytest
 from app.services.embedding_service import EmbeddingService
 from app.services.repo_index_service import (
     IndexStatus,
-    RepoIndexService,
     RankedFile,
+    RepoIndexService,
     _classify_file,
     _extract_outline,
     get_repo_index_service,
