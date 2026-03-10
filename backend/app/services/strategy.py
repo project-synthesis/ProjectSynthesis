@@ -11,13 +11,18 @@ from typing import AsyncGenerator, Optional
 from app.config import settings
 from app.prompts.strategy_prompt import get_strategy_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider, parse_json_robust
-from app.services.cache_service import get_cache
-from app.services.context_builders import build_analysis_summary, build_codebase_summary
+from app.services.cache_service import CacheService, get_cache
+from app.services.context_builders import (
+    build_analysis_summary,
+    build_codebase_summary,
+    format_file_contexts,
+    format_url_contexts,
+)
 from app.services.strategy_selector import heuristic_strategy_fallback
 
 logger = logging.getLogger(__name__)
 
-_STRATEGY_CACHE_TTL = 604800  # 7 days
+_STRATEGY_CACHE_TTL = 86400  # 24 hours (prompt-specific; was 7 days when keyed only on task_type)
 
 
 async def run_strategy(
@@ -26,6 +31,9 @@ async def run_strategy(
     analysis: dict,
     codebase_context: Optional[dict] = None,
     strategy_override: Optional[str] = None,
+    file_contexts: list[dict] | None = None,
+    url_fetched_contexts: list[dict] | None = None,
+    instructions: list[str] | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 2 strategy selection.
 
@@ -34,11 +42,20 @@ async def run_strategy(
         ("strategy", dict) with keys: primary_framework, secondary_frameworks,
                                        rationale, approach_notes
     """
-    # Cache check: strategy is near-deterministic for task_type + complexity
+    # Cache check: keyed on prompt content + analysis signature so different
+    # prompts with the same task_type get distinct strategies.
     cache = get_cache()
     task_type = analysis.get("task_type", "general")
     complexity = analysis.get("complexity", "moderate")
-    cache_key = cache.make_key("strategy", task_type, complexity) if cache else None
+    cache_key = None
+    if cache:
+        prompt_hash = CacheService.hash_content(raw_prompt)
+        analysis_hash = CacheService.hash_content(
+            f"{task_type}:{complexity}:"
+            f"{','.join(analysis.get('weaknesses', [])[:5])}:"
+            f"{','.join(analysis.get('recommended_frameworks', []))}"
+        )
+        cache_key = CacheService.make_key("strategy", prompt_hash, analysis_hash)
 
     if cache and cache_key and not strategy_override:
         cached = await cache.get(cache_key)
@@ -57,6 +74,18 @@ async def run_strategy(
         codebase_summary = build_codebase_summary(codebase_context)
         if codebase_summary:
             user_message += f"\n\nCodebase context:\n{codebase_summary}"
+
+    # Inject attached files / URLs / user constraints so strategy selection
+    # can account for domain-specific signals (the strategy prompt already
+    # instructs the LLM to consider these).
+    user_message += format_file_contexts(file_contexts)
+    user_message += format_url_contexts(url_fetched_contexts)
+
+    if instructions:
+        constraint_block = "\n".join(f"  - {i}" for i in instructions[:10])
+        user_message += (
+            f"\n\nUser-specified output constraints:\n{constraint_block}"
+        )
 
     model = MODEL_ROUTING["strategy"]
 

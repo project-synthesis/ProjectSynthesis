@@ -223,6 +223,9 @@ async def run_pipeline(
                 raw_prompt=raw_prompt,
                 analysis=analysis,
                 codebase_context=codebase_context,
+                file_contexts=file_contexts,
+                url_fetched_contexts=url_fetched_contexts,
+                instructions=instructions,
             ):
                 if event_type == "strategy":
                     strategy_result = event_data
