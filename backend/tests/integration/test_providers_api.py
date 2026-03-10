@@ -8,7 +8,9 @@ from httpx import AsyncClient
 async def test_health_returns_ok(client: AsyncClient):
     resp = await client.get("/api/health")
     assert resp.status_code == 200
-    assert resp.json().get("status") == "ok"
+    # "ok" when Redis is running, "degraded" when Redis is unavailable (both valid)
+    assert resp.json().get("status") in ("ok", "degraded")
+    assert "redis_connected" in resp.json()
 
 
 async def test_providers_detect_requires_auth(client: AsyncClient):

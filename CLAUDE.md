@@ -9,6 +9,7 @@ Guidance for Claude Code when working in this repository.
 | FastAPI backend | 8000 | `backend/app/main.py` |
 | SvelteKit frontend | 5199 | `frontend/src/` |
 | MCP server (standalone) | 8001 | `backend/app/mcp_server.py` |
+| Redis (optional) | 6379 | External — user-managed |
 
 ```bash
 ./init.sh            # start all three services
@@ -24,7 +25,7 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 - **Framework**: FastAPI + uvicorn with `--reload` (watches `backend/app/`)
 - **Database**: SQLite via SQLAlchemy async + aiosqlite (`data/synthesis.db`)
 - **Config**: `backend/app/config.py` — reads from `.env` via pydantic-settings
-- **Key env vars**: `ANTHROPIC_API_KEY`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_TOKEN_ENCRYPTION_KEY`, `SECRET_KEY`
+- **Key env vars**: `ANTHROPIC_API_KEY`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_TOKEN_ENCRYPTION_KEY`, `SECRET_KEY`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD`
 
 ### Layer rules
 - `routers/` → `services/` → `models/` only. Services must never import from routers.
@@ -50,6 +51,8 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 - `optimization_service.py` — CRUD + sort/filter against the DB
 - `github_service.py` — token encryption/decryption (Fernet)
 - `github_client.py` — raw GitHub API calls; token always resolved here
+- `redis_service.py` — Redis connection singleton with graceful degradation
+- `cache_service.py` — Generic async cache (Redis with in-memory LRU fallback)
 
 ### Providers (`backend/app/providers/`)
 - `detector.py` — auto-selects provider in order: Claude CLI → Anthropic API
@@ -142,3 +145,6 @@ curl -s -X POST http://127.0.0.1:8001/mcp \
 - **Lazy ASGI wrappers** (`main.py`): `_LazyMCPHttpApp` and `_LazyMCPWSApp` are mounted at module level but populated during lifespan, avoiding FastAPI sub-app startup conflicts.
 - **GitHub token layer**: tokens are Fernet-encrypted at rest. `github_service.encrypt_token` / `decrypt_token` are the only entry points — routers do not hold the Fernet key.
 - **Pagination envelope**: all list/search endpoints return `{total, count, offset, items, has_more, next_offset}`.
+- **Redis graceful degradation**: Redis is optional. On connect failure, the app logs CRITICAL and falls back to in-memory rate limiting (`limits.storage.MemoryStorage`) and in-memory caching (dict with TTL). All Redis consumers check `redis_service.is_available` before use. Health endpoint reports `redis_connected: true/false`; overall status is `"degraded"` (not `"error"`) when Redis is down.
+- **Rate limiting**: Uses the `limits` library (not slowapi) via a `RateLimit` FastAPI dependency class (`backend/app/dependencies/rate_limit.py`). Endpoints use `Depends(RateLimit(lambda: settings.RATE_LIMIT_*))` instead of decorators.
+- **Pipeline caching**: Strategy (7-day TTL, keyed by task_type+complexity) and Analyze (24-hour TTL, keyed by prompt+context flags) stages are cached. Optimize and Validate are NOT cached (non-deterministic creative output).

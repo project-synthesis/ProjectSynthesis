@@ -334,35 +334,32 @@ async def test_session_id_is_rotated_after_successful_oauth_callback():
 # ── Cycle 5: Rate Limiting (Gap 5) ────────────────────────────────────────
 
 
-def test_rate_limiter_is_imported_in_github_auth_router():
-    """The rate limiter must be applied to the GitHub auth router (structural test)."""
-    import importlib
-    import sys
+def test_rate_limit_dependency_in_github_auth_login():
+    """The RateLimit dependency must be present in github_login endpoint signature."""
+    import inspect
 
-    # Verify slowapi is importable (will fail if not installed)
-    try:
-        import slowapi  # noqa: F401
-    except ImportError:
-        pytest.fail("slowapi is not installed — add it to requirements.txt")
+    from app.routers.github_auth import github_login
 
-    # Reload to get fresh module state
-    if "app.routers.github_auth" in sys.modules:
-        del sys.modules["app.routers.github_auth"]
-    mod = importlib.import_module("app.routers.github_auth")
-
-    assert hasattr(mod, "limiter"), "github_auth router must define a 'limiter' instance"
+    sig = inspect.signature(github_login)
+    param_names = list(sig.parameters.keys())
+    assert "_rl" in param_names, (
+        f"github_login must have a _rl parameter for RateLimit dependency. "
+        f"Found parameters: {param_names}"
+    )
 
 
-def test_rate_limiter_is_imported_in_jwt_auth_router():
-    """The rate limiter must be applied to the JWT auth router (structural test)."""
-    import importlib
-    import sys
+def test_rate_limit_dependency_in_jwt_refresh():
+    """The RateLimit dependency must be present in jwt_refresh endpoint signature."""
+    import inspect
 
-    if "app.routers.auth" in sys.modules:
-        del sys.modules["app.routers.auth"]
-    mod = importlib.import_module("app.routers.auth")
+    from app.routers.auth import jwt_refresh
 
-    assert hasattr(mod, "limiter"), "auth router must define a 'limiter' instance"
+    sig = inspect.signature(jwt_refresh)
+    param_names = list(sig.parameters.keys())
+    assert "_rl" in param_names, (
+        f"jwt_refresh must have a _rl parameter for RateLimit dependency. "
+        f"Found parameters: {param_names}"
+    )
 
 
 def test_rate_limit_config_vars_exist():
@@ -392,6 +389,10 @@ def test_insecure_cookie_warns_in_production_context(caplog):
         Settings(
             JWT_COOKIE_SECURE=False,
             FRONTEND_URL="https://app.projectsynthesis.io",
+            # Provide non-default secrets to pass the production guard ([18])
+            SECRET_KEY="test-strong-secret-key-1234567890ab",
+            JWT_SECRET="test-strong-jwt-secret-1234567890ab",
+            JWT_REFRESH_SECRET="test-strong-refresh-secret-12345",
         )
 
     critical_records = [r for r in caplog.records if r.levelno >= logging.CRITICAL]

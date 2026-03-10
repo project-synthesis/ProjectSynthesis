@@ -1,41 +1,74 @@
-"""Tests for bounded _repo_cache in github_repos router (Task 9)."""
-import time
-from importlib import reload
+"""Tests for repo caching in github_repos router (migrated from in-memory to CacheService)."""
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
-def _get_module():
-    import app.routers.github_repos as m
-    return reload(m)
+async def test_evict_repo_cache_calls_cache_delete():
+    """evict_repo_cache should call cache.delete with the correct key."""
+    from app.routers.github_repos import evict_repo_cache
+    from app.services.cache_service import CacheService
+
+    mock_cache = AsyncMock(spec=CacheService)
+    mock_cache.make_key = CacheService.make_key  # static method, not async
+    with patch("app.routers.github_repos.get_cache", return_value=mock_cache):
+        await evict_repo_cache("test-session-id")
+
+    mock_cache.delete.assert_called_once_with("synthesis:repos:test-session-id")
 
 
-def test_repo_cache_bounded():
-    """Filling cache beyond MAX_REPO_CACHE_SIZE and evicting keeps it within bounds."""
-    m = _get_module()
-    cap = m.MAX_REPO_CACHE_SIZE
+async def test_evict_repo_cache_noop_when_no_cache():
+    """evict_repo_cache should not raise when cache service is not initialized."""
+    from app.routers.github_repos import evict_repo_cache
 
-    # Overfill by 10
-    for i in range(cap + 10):
-        m._repo_cache[f"session-{i}"] = (time.time(), [])
-
-    m._evict_repo_cache_if_full()
-
-    assert len(m._repo_cache) <= cap, (
-        f"Cache should be <= {cap} after eviction, got {len(m._repo_cache)}"
-    )
+    with patch("app.routers.github_repos.get_cache", return_value=None):
+        # Should not raise
+        await evict_repo_cache("test-session-id")
 
 
-def test_repo_cache_evicts_oldest():
-    """Eviction removes the oldest (insertion-order first) entries."""
-    m = _get_module()
-    cap = m.MAX_REPO_CACHE_SIZE
+async def test_list_repos_uses_cache():
+    """list_repos should return cached repos when available."""
+    from app.routers.github_repos import list_repos
+    from app.services.cache_service import CacheService
 
-    # Fill exactly to cap
-    for i in range(cap):
-        m._repo_cache[f"session-{i}"] = (time.time(), [])
+    cached_repos = [{"name": "cached-repo", "full_name": "user/cached-repo"}]
+    mock_cache = AsyncMock(spec=CacheService)
+    mock_cache.make_key = CacheService.make_key  # static method, not async
+    mock_cache.get = AsyncMock(return_value=cached_repos)
 
-    # Add one more new entry — now over cap
-    m._repo_cache["session-new"] = (time.time(), [])
-    m._evict_repo_cache_if_full()
+    mock_request = MagicMock()
+    mock_request.session = {"session_id": "test-session"}
 
-    assert "session-0" not in m._repo_cache, "Oldest entry 'session-0' should have been evicted"
-    assert "session-new" in m._repo_cache, "Newest entry 'session-new' should still be present"
+    mock_gh_token = MagicMock()
+    mock_gh_token.github_user_id = 999
+    mock_gh_token.github_login = "testuser"
+
+    mock_user = MagicMock()
+    mock_user.id = "user-uuid"
+    mock_user.github_user_id = 999
+
+    mock_current_user = MagicMock()
+    mock_current_user.id = "user-uuid"
+
+    gh_result = MagicMock()
+    gh_result.scalar_one_or_none.return_value = mock_gh_token
+    user_result = MagicMock()
+    user_result.scalar_one_or_none.return_value = mock_user
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(side_effect=[gh_result, user_result])
+
+    with patch("app.routers.github_repos.get_cache", return_value=mock_cache), \
+         patch("app.routers.github_repos.github_service") as mock_svc:
+        mock_svc.get_token_for_session = AsyncMock(return_value="ghp_test_token")
+        result = await list_repos(
+            request=mock_request,
+            session=mock_session,
+            current_user=mock_current_user,
+        )
+
+    assert result == cached_repos
+    # Should not have called GitHub API since cache hit
+    mock_svc.get_user_repos.assert_not_called()

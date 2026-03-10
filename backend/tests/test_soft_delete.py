@@ -10,14 +10,14 @@ async def test_delete_optimization_sets_deleted_at():
     opt = MagicMock()
     opt.deleted_at = None
 
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none = MagicMock(return_value=opt)
+
     session = AsyncMock()
+    session.execute = AsyncMock(return_value=execute_result)
     session.flush = AsyncMock()
 
-    with patch(
-        "app.services.optimization_service.get_optimization_orm",
-        return_value=opt,
-    ):
-        result = await delete_optimization(session, "test-id")
+    result = await delete_optimization(session, "test-id")
 
     assert result is True
     assert opt.deleted_at is not None, "deleted_at should be set"
@@ -102,12 +102,16 @@ async def test_restore_endpoint_happy_path():
     mock_session.execute = AsyncMock(return_value=execute_result)
     mock_session.commit = AsyncMock()
 
+    mock_request = MagicMock()
+    mock_request.state = MagicMock()
+
     # The router does a local import of the service function, so patch at the service module.
     with patch(
         "app.services.optimization_service.restore_optimization",
         AsyncMock(return_value=True),
     ):
         result = await endpoint(
+            request=mock_request,
             optimization_id="opt-abc",
             current_user=mock_user,
             session=mock_session,
@@ -133,6 +137,9 @@ async def test_restore_endpoint_not_in_trash_raises_404():
     mock_session = AsyncMock()
     mock_session.execute = AsyncMock(return_value=execute_result)
 
+    mock_request = MagicMock()
+    mock_request.state = MagicMock()
+
     # The router does a local import of the service function, so patch at the service module.
     with patch(
         "app.services.optimization_service.restore_optimization",
@@ -140,6 +147,7 @@ async def test_restore_endpoint_not_in_trash_raises_404():
     ):
         try:
             await endpoint(
+                request=mock_request,
                 optimization_id="opt-xyz",
                 current_user=mock_user,
                 session=mock_session,
@@ -168,8 +176,12 @@ async def test_restore_endpoint_wrong_user_raises_403():
     mock_session = AsyncMock()
     mock_session.execute = AsyncMock(return_value=execute_result)
 
+    mock_request = MagicMock()
+    mock_request.state = MagicMock()
+
     try:
         await endpoint(
+            request=mock_request,
             optimization_id="opt-xyz",
             current_user=mock_user,
             session=mock_session,
