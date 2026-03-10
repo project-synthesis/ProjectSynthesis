@@ -140,13 +140,14 @@ class GitHubStore {
       }
 
       // Sort recursively: directories first, then files, both alphabetically
-      function sortNodes(nodes: TreeNode[]): TreeNode[] {
+      function sortNodes(nodes: TreeNode[], depth = 0): TreeNode[] {
+        if (depth > 50) return nodes;
         nodes.sort((a, b) => {
           if (a.type !== b.type) return a.type === 'tree' ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
         for (const node of nodes) {
-          if (node.children) sortNodes(node.children);
+          if (node.children) sortNodes(node.children, depth + 1);
         }
         return nodes;
       }

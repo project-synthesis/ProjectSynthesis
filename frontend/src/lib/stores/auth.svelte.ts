@@ -96,7 +96,8 @@ class AuthStore {
     try {
       const payload = JSON.parse(atob(token.split('.')[1]));
       return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
-    } catch {
+    } catch (e) {
+      console.warn('[auth] Failed to decode JWT expiry — proactive refresh disabled:', e);
       return null;
     }
   }

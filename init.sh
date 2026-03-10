@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Project Synthesis — Development Environment Setup & Management
 # Usage: ./init.sh [command]
-# Commands: setup, start (default), stop, restart, status, test, seed, mcp, help
+# Commands: setup, start (default), stop, restart, status, seed, mcp, help
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -13,10 +13,19 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Ports
+# Ports (defaults — REDIS_PORT can be overridden via .env)
 BACKEND_PORT=8000
 FRONTEND_PORT=5199
 MCP_PORT=8001
+REDIS_PORT=6379
+
+# Override REDIS_PORT from .env if present
+if [ -f .env ]; then
+    _env_redis_port=$(grep -E '^REDIS_PORT=' .env 2>/dev/null | cut -d= -f2 | tr -d '[:space:]"'"'" || true)
+    if [ -n "$_env_redis_port" ]; then
+        REDIS_PORT="$_env_redis_port"
+    fi
+fi
 
 # PID files
 PID_DIR=".pids"
@@ -37,6 +46,14 @@ check_port() {
         netstat -tlnp 2>/dev/null | grep -q ":$port "
     else
         curl -s -o /dev/null "http://localhost:$port" 2>/dev/null
+    fi
+}
+
+check_redis() {
+    if command -v redis-cli &>/dev/null; then
+        redis-cli -p $REDIS_PORT ping &>/dev/null 2>&1
+    else
+        check_port $REDIS_PORT
     fi
 }
 
@@ -136,6 +153,12 @@ do_setup() {
         warn "Created .env from .env.example — edit it with your API keys"
     fi
 
+    # Redis hint
+    if ! check_redis; then
+        warn "Redis not detected — install and start Redis for persistent rate limiting and caching"
+        warn "  Without Redis, the app works fine using in-memory fallbacks"
+    fi
+
     ok "Setup complete!"
 }
 
@@ -199,6 +222,13 @@ do_start() {
         do_setup
     fi
 
+    # Check Redis (optional — warn only, don't attempt to start)
+    if check_redis; then
+        ok "Redis detected on port $REDIS_PORT"
+    else
+        warn "Redis not running on port $REDIS_PORT — rate limiting and caching will use in-memory fallback"
+    fi
+
     start_backend
     start_frontend
     start_mcp
@@ -216,6 +246,11 @@ do_start() {
     ok "MCP:      http://127.0.0.1:$MCP_PORT/mcp  (streamable-HTTP)"
     ok "MCP-WS:   ws://localhost:$BACKEND_PORT/mcp/ws  (WebSocket, backward-compat)"
     ok "API Docs: http://localhost:$BACKEND_PORT/api/docs"
+    if check_redis; then
+        ok "Redis:    localhost:$REDIS_PORT (connected)"
+    else
+        warn "Redis:    offline — using in-memory fallback"
+    fi
     log "═══════════════════════════════════════════"
 }
 
@@ -262,6 +297,12 @@ do_status() {
     else
         err "MCP:      STOPPED"
     fi
+
+    if check_redis; then
+        ok "Redis:    RUNNING on port $REDIS_PORT"
+    else
+        warn "Redis:    NOT RUNNING (optional — in-memory fallback active)"
+    fi
     echo ""
 }
 
@@ -295,6 +336,7 @@ do_help() {
     echo "  Backend:  $BACKEND_PORT"
     echo "  Frontend: $FRONTEND_PORT"
     echo "  MCP:      $MCP_PORT"
+    echo "  Redis:    $REDIS_PORT (optional — in-memory fallback when unavailable)"
     echo ""
 }
 
@@ -306,7 +348,12 @@ case "${1:-}" in
     restart)  do_restart ;;
     status)   do_status ;;
     seed)     do_seed ;;
-    mcp)      start_mcp; wait_for_port $MCP_PORT "MCP" 15 ;;
+    mcp)
+        if ! check_redis; then
+            warn "Redis not running on port $REDIS_PORT — pipeline caching will use in-memory fallback"
+        fi
+        start_mcp; wait_for_port $MCP_PORT "MCP" 15
+        ;;
     help)     do_help ;;
     "")       do_start ;;
     *)        err "Unknown command: $1"; do_help; exit 1 ;;

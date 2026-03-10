@@ -36,6 +36,7 @@ class WorkbenchStore {
   providerModel = $state('');
   isConnected = $state(false);
   mcpConnected = $state(false);
+  redisConnected = $state(false);
   githubOAuthEnabled = $state(false);
   showOnboarding = $state(false);
 

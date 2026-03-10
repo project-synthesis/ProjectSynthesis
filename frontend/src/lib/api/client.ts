@@ -49,6 +49,7 @@ export interface HealthResponse {
   github_oauth_enabled: boolean;
   db_connected: boolean;
   mcp_connected: boolean;
+  redis_connected: boolean;
   mcp_url: string;
   version: string;
 }
@@ -128,6 +129,7 @@ export interface OptimizationRecord {
   tags: string[] | null;
   title: string | null;
   version: string | null;
+  row_version: number;
   retry_of: string | null;
   linked_repo_full_name: string | null;
   linked_repo_branch: string | null;
@@ -272,7 +274,9 @@ export async function startOptimization(
       }
     };
 
-    processStream();
+    processStream().catch((err) => {
+      if ((err as Error).name !== 'AbortError') onError(err as Error);
+    });
   } catch (err) {
     if ((err as Error).name !== 'AbortError') {
       onError(err as Error);
@@ -322,7 +326,7 @@ async function pollOptimizationStatus(
 
 export async function patchOptimization(
   id: string,
-  data: { title?: string; tags?: string[]; version?: string; project?: string }
+  data: { title?: string; tags?: string[]; version?: string; project?: string; expected_version?: number }
 ): Promise<OptimizationRecord> {
   const res = await apiFetch(`${BASE}/api/optimize/${id}`, {
     method: 'PATCH',
@@ -534,7 +538,9 @@ export async function fetchRepoTree(
   branch = 'main'
 ): Promise<RepoTreeResponse> {
   const params = new URLSearchParams({ branch });
-  const res = await apiFetch(`${BASE}/api/github/repos/${owner}/${repo}/tree?${params}`);
+  const res = await apiFetch(
+    `${BASE}/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/tree?${params}`
+  );
   if (!res.ok) throw new Error(`Fetch repo tree failed: ${res.status}`);
   return res.json();
 }
@@ -546,7 +552,10 @@ export async function fetchFileContent(
   branch = 'main'
 ): Promise<RepoFileResponse> {
   const params = new URLSearchParams({ branch });
-  const res = await apiFetch(`${BASE}/api/github/repos/${owner}/${repo}/files/${path}?${params}`);
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const res = await apiFetch(
+    `${BASE}/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/files/${encodedPath}?${params}`
+  );
   if (!res.ok) throw new Error(`Fetch file content failed: ${res.status}`);
   return res.json();
 }
@@ -557,7 +566,9 @@ export interface RepoBranch {
 }
 
 export async function fetchRepoBranches(owner: string, repo: string): Promise<RepoBranch[]> {
-  const res = await apiFetch(`${BASE}/api/github/repos/${owner}/${repo}/branches`);
+  const res = await apiFetch(
+    `${BASE}/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`
+  );
   if (!res.ok) throw new Error(`Fetch branches failed: ${res.status}`);
   return res.json();
 }

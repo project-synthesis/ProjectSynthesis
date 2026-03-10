@@ -55,6 +55,20 @@
 
     <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
 
+    <!-- Redis cache dot -->
+    <div
+      class="flex items-center gap-1 h-full px-2"
+      title="Redis cache — {workbench.redisConnected ? 'connected' : 'offline (in-memory fallback)'}"
+      data-testid="statusbar-redis"
+    >
+      <span class="w-1.5 h-1.5 rounded-full shrink-0 {workbench.redisConnected ? 'bg-neon-green' : 'bg-neon-yellow/50'}"></span>
+      {#if !workbench.redisConnected}
+        <span class="text-text-dim">Cache: mem</span>
+      {/if}
+    </div>
+
+    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
+
     <!-- Linked repo -->
     <button
       class="flex items-center gap-1 h-full px-2 text-text-dim hover:bg-bg-hover transition-colors cursor-pointer max-w-[220px]"

@@ -328,12 +328,14 @@
         const data = await fetchHealth();
         workbench.isConnected = true;
         workbench.mcpConnected = !!data.mcp_connected;
+        workbench.redisConnected = !!data.redis_connected;
         workbench.provider = (data.provider as 'anthropic' | 'openai' | 'claude_cli' | 'anthropic_api') || 'unknown';
         workbench.providerModel = data.model_routing?.optimize || '';
         workbench.githubOAuthEnabled = !!data.github_oauth_enabled;
       } catch {
         workbench.isConnected = false;
         workbench.mcpConnected = false;
+        workbench.redisConnected = false;
       }
     }
 

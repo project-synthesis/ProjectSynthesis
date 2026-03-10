@@ -10,15 +10,7 @@ from app.providers.base import MODEL_ROUTING
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
-# Deprecated: use request.app.state.provider. Kept for backward compat with main.py lifespan.
-_provider = None
-
 _MCP_PROBE_TIMEOUT = 2.0  # seconds
-
-
-def set_provider(provider):
-    """Deprecated: provider is now read from app.state. Kept for main.py compat."""
-    pass  # no-op — provider injected via app.state at startup
 
 
 async def _probe_mcp() -> bool:
@@ -39,12 +31,21 @@ async def _probe_mcp() -> bool:
         return False
 
 
+async def _probe_redis(request: Request) -> bool:
+    """Return True if Redis responds to PING within the socket timeout."""
+    redis_svc = getattr(request.app.state, "redis", None)
+    if not redis_svc:
+        return False
+    return await redis_svc.health_check()
+
+
 @router.get("/api/health")
 async def health_check(request: Request):
     """Health check endpoint returning system status."""
-    db_ok, mcp_ok = await asyncio.gather(
+    db_ok, mcp_ok, redis_ok = await asyncio.gather(
         check_db_connection(),
         _probe_mcp(),
+        _probe_redis(request),
     )
 
     github_oauth_enabled = bool(
@@ -53,7 +54,14 @@ async def health_check(request: Request):
 
     _prov = getattr(request.app.state, "provider", None)
     provider_name = _prov.name if _prov else "none"
-    overall = "ok" if db_ok else "degraded"
+
+    # degraded if DB is down; also degraded (not error) if Redis is down — app still works
+    if not db_ok:
+        overall = "degraded"
+    elif not redis_ok:
+        overall = "degraded"
+    else:
+        overall = "ok"
 
     mcp_url = f"http://{settings.MCP_HOST}:{settings.MCP_PORT}/mcp"
     return {
@@ -63,6 +71,7 @@ async def health_check(request: Request):
         "github_oauth_enabled": github_oauth_enabled,
         "db_connected": db_ok,
         "mcp_connected": mcp_ok,
+        "redis_connected": redis_ok,
         "mcp_url": mcp_url,
         "version": "2.0.0",
     }
