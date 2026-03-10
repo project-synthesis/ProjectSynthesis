@@ -124,7 +124,8 @@ async def optimize_prompt(
                             # rather than slicing raw JSON which can produce invalid output
                             truncated_data = {
                                 k: v for k, v in event_data.items()
-                                if k in ("model", "repo_full_name", "branch", "file_count", "tree")
+                                if k in ("model", "repo", "branch", "files_read_count",
+                                         "explore_quality", "tech_stack", "coverage_pct")
                             }
                             truncated_data["_truncated"] = True
                             _snapshot = json.dumps(truncated_data)

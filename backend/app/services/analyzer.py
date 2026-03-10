@@ -12,7 +12,11 @@ from app.config import settings
 from app.prompts.analyzer_prompt import get_analyzer_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider, parse_json_robust
 from app.services.cache_service import get_cache
-from app.services.context_builders import build_codebase_summary
+from app.services.context_builders import (
+    build_codebase_summary,
+    format_file_contexts,
+    format_url_contexts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,24 +67,10 @@ async def run_analyze(
             user_message += f"\n\nCodebase context:\n{codebase_summary}"
 
     # N24: inject attached file content
-    if file_contexts:
-        blocks = []
-        for fc in file_contexts[:5]:
-            name = fc.get("name", "file")
-            content = str(fc.get("content", ""))[:1500]
-            blocks.append(f"[{name}]\n{content}")
-        user_message += "\n\nAttached files:\n" + "\n\n".join(blocks)
+    user_message += format_file_contexts(file_contexts)
 
     # N26: inject pre-fetched URL content
-    if url_fetched_contexts:
-        blocks = []
-        for uc in url_fetched_contexts[:3]:
-            if uc.get("error") or not uc.get("content"):
-                continue
-            url = uc.get("url", "url")
-            content = str(uc.get("content", ""))[:1500]
-            blocks.append(f"[{url}]\n{content}")
-        user_message += "\n\nReferenced URLs:\n" + "\n\n".join(blocks)
+    user_message += format_url_contexts(url_fetched_contexts)
 
     # N37: inject output constraints so analyzer can flag incompatibilities
     if instructions:
@@ -156,9 +146,9 @@ async def run_analyze(
                 "strengths": [],
                 "complexity": "moderate",
                 "recommended_frameworks": ["CO-STAR"],
-                "codebase_informed": codebase_context is not None,
                 "analysis_quality": "fallback",
             }
+            # codebase_informed will be set by the setdefault block below
 
     # Ensure required fields
     result.setdefault("task_type", "general")
@@ -166,7 +156,19 @@ async def run_analyze(
     result.setdefault("strengths", [])
     result.setdefault("complexity", "moderate")
     result.setdefault("recommended_frameworks", [])
-    result.setdefault("codebase_informed", codebase_context is not None)
+
+    # Derive codebase_informed from explore quality rather than bare boolean.
+    # Maps explore_quality → codebase_informed: complete→True, partial→"partial",
+    # failed→"failed", absent→False.  This enables context_builders to emit
+    # accurate quality notes downstream.
+    if codebase_context:
+        eq = codebase_context.get("explore_quality", "complete")
+        codebase_informed: bool | str = (
+            True if eq == "complete" else eq  # "partial" or "failed"
+        )
+    else:
+        codebase_informed = False
+    result.setdefault("codebase_informed", codebase_informed)
 
     # Cache successful results
     if cache and analyze_cache_key and result.get("analysis_quality") == "full":

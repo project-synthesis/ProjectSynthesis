@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_JWT_REFRESH: str = "60/minute"
     RATE_LIMIT_HISTORY: str = "60/minute"
     RATE_LIMIT_HISTORY_WRITE: str = "20/minute"
+    RATE_LIMIT_OPTIMIZE: str = "10/minute"
+    RATE_LIMIT_GITHUB_REPOS: str = "30/minute"
+    RATE_LIMIT_GITHUB_REPOS_WRITE: str = "10/minute"
+    RATE_LIMIT_SETTINGS: str = "30/minute"
 
     # Trusted reverse-proxy IPs (comma-separated). X-Forwarded-For is only
     # honoured when the direct connection comes from one of these addresses.
@@ -77,7 +81,11 @@ class Settings(BaseSettings):
     REPO_INDEX_MAX_FILES: int = 5000
     EXPLORE_INDEX_WAIT_TIMEOUT: int = 30     # seconds to wait for building index
     EXPLORE_FILE_READ_CONCURRENCY: int = 10  # parallel GitHub reads
-    EXPLORE_MAX_FILES: int = 25              # max files to read for synthesis
+    EXPLORE_MAX_FILES: int = 40              # max files to read for synthesis (up from 25)
+    EXPLORE_TOTAL_LINE_BUDGET: int = 15_000  # total lines across all files for LLM context
+    EXPLORE_MAX_LINES_PER_FILE: int = 500    # hard ceiling per file (dynamic budget may lower this)
+    EXPLORE_MAX_AMBIGUOUS_MATCHES: int = 3   # skip prompt-referenced files with > N tree matches
+    EXPLORE_MAX_CONTEXT_CHARS: int = 700_000  # ~175K tokens; char ceiling for LLM context payload
     EXPLORE_RESULT_CACHE_TTL: int = 3600     # 1 hour
 
     # Redis (optional — in-memory fallback when unavailable)

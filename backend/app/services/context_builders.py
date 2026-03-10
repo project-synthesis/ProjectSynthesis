@@ -46,22 +46,22 @@ def build_codebase_summary(codebase_context: dict) -> str:
     coverage_pct = codebase_context.get("coverage_pct") or 0
 
     if quality == "partial" and files_read_count == 0:
-        # Timed out before reading any files — indistinguishable from a full failure
-        # for the purposes of downstream LLM context; use the failed message.
+        # Timed out before reading any files — effectively no data available.
         parts.append(
-            "Note: Repository exploration failed and no codebase context is "
-            "available. Analysis proceeds without codebase grounding."
+            "Note: No codebase data available. Write the prompt based on "
+            "the raw input alone — do not reference or delegate codebase exploration."
         )
     elif quality == "partial":
         parts.append(
-            f"Note: Exploration was partial (timed out after reading "
-            f"{files_read_count} files — {coverage_pct}% of repository). "
-            "Analysis may be incomplete."
+            f"Note: Coverage limited to {files_read_count} files "
+            f"({coverage_pct}% of repository). Be precise where you have "
+            "data; write clear general instructions where you don't — "
+            "never delegate exploration to the executor."
         )
     elif quality == "failed":
         parts.append(
-            "Note: Repository exploration failed and no codebase context is "
-            "available. Analysis proceeds without codebase grounding."
+            "Note: No codebase data available. Write the prompt based on "
+            "the raw input alone — do not reference or delegate codebase exploration."
         )
 
     repo = codebase_context.get("repo")
@@ -205,3 +205,43 @@ def build_strategy_summary(strategy: dict) -> str:
         )
 
     return "\n".join(parts)
+
+
+# ── Shared context injection helpers ──────────────────────────────────────────
+
+# Limits shared across analyzer and optimizer to keep prompts consistent.
+_MAX_FILE_CONTEXTS = 5
+_MAX_URL_CONTEXTS = 3
+_MAX_CONTENT_CHARS = 1500
+
+
+def format_file_contexts(file_contexts: list[dict] | None) -> str:
+    """Format attached file contexts into an injection block.
+
+    Returns empty string when there are no file contexts.
+    """
+    if not file_contexts:
+        return ""
+    blocks = []
+    for fc in file_contexts[:_MAX_FILE_CONTEXTS]:
+        name = fc.get("name", "file")
+        content = str(fc.get("content", ""))[:_MAX_CONTENT_CHARS]
+        blocks.append(f"[{name}]\n{content}")
+    return "\n\nAttached files:\n" + "\n\n".join(blocks)
+
+
+def format_url_contexts(url_fetched_contexts: list[dict] | None) -> str:
+    """Format pre-fetched URL contexts into an injection block.
+
+    Returns empty string when there are no URL contexts or all errored.
+    """
+    if not url_fetched_contexts:
+        return ""
+    blocks = []
+    for uc in url_fetched_contexts[:_MAX_URL_CONTEXTS]:
+        if uc.get("error") or not uc.get("content"):
+            continue
+        url = uc.get("url", "url")
+        content = str(uc.get("content", ""))[:_MAX_CONTENT_CHARS]
+        blocks.append(f"[{url}]\n{content}")
+    return ("\n\nReferenced URLs:\n" + "\n\n".join(blocks)) if blocks else ""

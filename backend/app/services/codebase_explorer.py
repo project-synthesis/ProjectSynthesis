@@ -13,6 +13,7 @@ Background indexing (see repo_index_service.py) runs when a repo is linked.
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, AsyncGenerator, Optional
@@ -95,6 +96,107 @@ def _normalize_snippets(raw: Any) -> list[dict]:
     return result
 
 
+_LINE_REF_PATTERNS = [
+    re.compile(r"lines?\s+(\d+)\s*[-\u2013]\s*(\d+)"),          # "lines 233-240" or "line 45-62"
+    re.compile(r"line\s+(\d+)(?!\s*[-\u2013])"),                 # "line 42" (single)
+    re.compile(r"\bL(\d+)\b"),                                    # "L42"
+    re.compile(r"\.(?:py|ts|js|svelte|go|rs|java):(\d+)"),       # "pipeline.py:233"
+]
+
+_BUG_CLAIM_INDICATORS = re.compile(
+    r"does NOT|is NOT set|is NOT|but doesn't|but does not|missing|"
+    r"never set|not implemented|not called|not used|not defined",
+    re.IGNORECASE,
+)
+
+
+def _validate_explore_output(
+    snippets: list[dict],
+    observations: list[str],
+    grounding_notes: list[str],
+    file_contents: dict[str, str],
+    max_lines_shown: int,
+) -> tuple[list[dict], list[str], list[str]]:
+    """Validate LLM explore output against what was actually shown.
+
+    Flags unverifiable claims with [unverified] suffixes.
+    Returns (snippets, observations, grounding_notes) with flags applied.
+    """
+    _UNVERIFIED = " [unverified \u2014 beyond visible range]"
+    _UNVERIFIED_TRUNC = " [unverified \u2014 file truncated at line {}]"
+
+    # Build a set of file stems for fuzzy matching in observations
+    file_stems = {}
+    for path in file_contents:
+        filename = path.split("/")[-1]
+        file_stems[filename] = path
+        stem = filename.rsplit(".", 1)[0]
+        file_stems[stem] = path
+
+    def _parse_line_range(lines_str: str) -> tuple[int, int] | None:
+        """Parse '45-62' or '45' into (start, end). Returns None if unparseable."""
+        lines_str = lines_str.strip()
+        m = re.match(r"(\d+)\s*[-\u2013]\s*(\d+)", lines_str)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+        m = re.match(r"(\d+)$", lines_str)
+        if m:
+            n = int(m.group(1))
+            return n, n
+        return None
+
+    def _max_line_for_file(file_path: str) -> int:
+        """Return the max visible line for a file, or 0 if unknown."""
+        content = file_contents.get(file_path)
+        if content is None:
+            return 0
+        return min(max_lines_shown, content.count("\n") + 1)
+
+    # Validate snippets
+    validated_snippets = []
+    for snip in snippets:
+        snip = dict(snip)  # copy
+        file_path = snip.get("file", "")
+        lines_str = snip.get("lines", "")
+        rng = _parse_line_range(lines_str) if lines_str else None
+
+        if file_path not in file_contents:
+            snip["context"] = snip.get("context", "") + _UNVERIFIED
+        elif rng:
+            max_line = _max_line_for_file(file_path)
+            if rng[1] > max_line:
+                snip["context"] = snip.get("context", "") + _UNVERIFIED
+        validated_snippets.append(snip)
+
+    # Validate observations and grounding notes
+    def _flag_text(text: str) -> str:
+        for pattern in _LINE_REF_PATTERNS:
+            for m in pattern.finditer(text):
+                groups = m.groups()
+                line_num = int(groups[-1])  # last group is always a line number
+                if line_num > max_lines_shown:
+                    return text + _UNVERIFIED
+        return text
+
+    def _is_truncated(file_path: str) -> bool:
+        """Check if a file was truncated by looking for the truncation marker."""
+        content = file_contents.get(file_path, "")
+        return "[TRUNCATED" in content
+
+    def _flag_bug_claim(text: str) -> str:
+        if _BUG_CLAIM_INDICATORS.search(text):
+            # Check if the claim references a truncated file
+            for filename, path in file_stems.items():
+                if filename in text and _is_truncated(path):
+                    return text + _UNVERIFIED_TRUNC.format(max_lines_shown)
+        return text
+
+    validated_obs = [_flag_text(o) for o in observations]
+    validated_notes = [_flag_bug_claim(_flag_text(n)) for n in grounding_notes]
+
+    return validated_snippets, validated_obs, validated_notes
+
+
 # JSON Schema for the explore stage output.
 # Used by complete_json for structured output enforcement.
 EXPLORE_OUTPUT_SCHEMA: dict = {
@@ -162,6 +264,80 @@ class CodebaseContext:
     explore_quality: str = "complete"
 
 
+# Code extension set for module stem matching
+_CODE_EXTENSIONS = frozenset({
+    ".py", ".ts", ".js", ".jsx", ".tsx", ".svelte", ".vue",
+    ".go", ".rs", ".java", ".rb", ".php", ".cs", ".swift",
+    ".yaml", ".yml", ".toml", ".json", ".md", ".txt",
+})
+
+# Regex for extracting filename-like tokens from prompt text
+_FILENAME_PATTERN = re.compile(r"[\w./-]*\w+\.\w{1,10}")
+
+
+def _extract_prompt_referenced_files(
+    raw_prompt: str,
+    tree: list[dict],
+    max_matches_per_ref: int | None = None,
+) -> list[str]:
+    """Extract file paths mentioned in the prompt, validated against the repo tree.
+
+    Three-tier matching (exact path > filename > module stem).
+    Ambiguous references (>max_matches_per_ref matches) are skipped.
+    """
+    if max_matches_per_ref is None:
+        max_matches_per_ref = settings.EXPLORE_MAX_AMBIGUOUS_MATCHES
+
+    # Normalize prompt: backslashes to forward slashes
+    normalized = raw_prompt.replace("\\", "/")
+
+    # Strip URL-like strings to prevent false matches
+    normalized = re.sub(r"https?://\S+", "", normalized)
+
+    tree_paths = [e["path"] for e in tree]
+    result: list[str] = []
+    seen: set[str] = set()
+
+    def _add(path: str) -> None:
+        if path not in seen:
+            seen.add(path)
+            result.append(path)
+
+    # Tier 1: Exact path match — check each tree path against the prompt
+    for tp in tree_paths:
+        if tp in normalized:
+            _add(tp)
+
+    # Tier 2: Filename match — extract filename-like tokens from prompt
+    candidates = _FILENAME_PATTERN.findall(normalized)
+
+    for candidate in candidates:
+        filename = candidate.split("/")[-1]
+        if not any(filename.endswith(ext) for ext in _CODE_EXTENSIONS):
+            continue
+        matches = [tp for tp in tree_paths if tp.endswith("/" + filename) or tp == filename]
+        if 0 < len(matches) <= max_matches_per_ref:
+            for m in matches:
+                _add(m)
+
+    # Tier 3: Module stem match — words that match a code file's stem
+    words = set(normalized.lower().split())
+    words = {w.strip(".,;:!?()[]{}\"'") for w in words}
+    words = {w for w in words if len(w) >= 3 and "/" not in w and "." not in w}
+
+    for word in words:
+        matches = [
+            tp for tp in tree_paths
+            if tp.split("/")[-1].rsplit(".", 1)[0].lower() == word
+            and any(tp.endswith(ext) for ext in _CODE_EXTENSIONS)
+        ]
+        if 0 < len(matches) <= max_matches_per_ref:
+            for m in matches:
+                _add(m)
+
+    return result
+
+
 # ── Deterministic anchor files ──────────────────────────────────────────
 # ANCHOR_FILENAMES imported from codebase_patterns.py (single source of truth)
 
@@ -172,29 +348,39 @@ def _get_anchor_paths(tree: list[dict]) -> list[str]:
     return [p for p in sorted(tree_paths) if p.split("/")[-1] in ANCHOR_FILENAMES]
 
 
-def _deduplicate_files(
-    ranked: list[RankedFile],
+def _merge_file_lists(
+    prompt_referenced: list[str],
     anchors: list[str],
+    semantic_ranked: list[RankedFile] | list[str],
     cap: int,
 ) -> list[str]:
-    """Merge ranked files and anchors, deduplicate, cap at limit.
+    """Merge three file tiers with deduplication, respecting priority order.
 
-    Anchors come first (deterministic context), then ranked by score.
+    Priority: prompt_referenced > anchors > semantic_ranked.
+    Files appearing in multiple tiers count once at their highest priority.
+    Semantic results are trimmed first when the cap is hit.
     """
     seen: set[str] = set()
     result: list[str] = []
 
-    # Anchors first
+    # Tier 1: Prompt-referenced (highest priority)
+    for path in prompt_referenced:
+        if path not in seen:
+            seen.add(path)
+            result.append(path)
+
+    # Tier 2: Anchors
     for path in anchors:
         if path not in seen:
             seen.add(path)
             result.append(path)
 
-    # Then ranked files
-    for rf in ranked:
-        if rf.path not in seen:
-            seen.add(rf.path)
-            result.append(rf.path)
+    # Tier 3: Semantic ranked (fill remaining)
+    for item in semantic_ranked:
+        path = item.path if hasattr(item, "path") else str(item)
+        if path not in seen:
+            seen.add(path)
+            result.append(path)
         if len(result) >= cap:
             break
 
@@ -255,7 +441,7 @@ async def _batch_read_files(
     repo_full_name: str,
     tree: list[dict],
     file_paths: list[str],
-    max_lines_per_file: int = 300,
+    max_lines_per_file: int = 500,
 ) -> dict[str, str]:
     """Read multiple files in parallel from GitHub.
 
@@ -279,7 +465,10 @@ async def _batch_read_files(
                     lines = content.split("\n")
                     if len(lines) > max_lines_per_file:
                         content = "\n".join(lines[:max_lines_per_file])
-                        content += f"\n\n[TRUNCATED at {max_lines_per_file} of {len(lines)} lines]"
+                        content += (
+                            f"\n\n[TRUNCATED — only lines 1–{max_lines_per_file} of {len(lines)} shown. "
+                            f"Do NOT reference or make claims about lines beyond {max_lines_per_file}.]"
+                        )
                     results[path] = content
             except Exception as e:
                 logger.debug("Failed to read %s: %s", path, e)
@@ -290,11 +479,39 @@ async def _batch_read_files(
 
 
 def _format_files_for_llm(file_contents: dict[str, str]) -> str:
-    """Format file contents into a single string for the LLM."""
+    """Format file contents with line numbers for the LLM.
+
+    Each line is prefixed with its 1-indexed number (right-aligned, 4 digits)
+    so the LLM can reference accurate line numbers in its observations.
+    """
     parts: list[str] = []
     for path, content in file_contents.items():
-        parts.append(f"=== {path} ===\n{content}\n")
+        numbered = "\n".join(
+            f"{i:>4} | {line}"
+            for i, line in enumerate(content.split("\n"), 1)
+        )
+        parts.append(f"=== {path} ===\n{numbered}\n")
     return "\n".join(parts)
+
+
+def _make_failed_result(
+    repo: str,
+    branch: str,
+    error: str,
+    observations: list[str] | None = None,
+) -> tuple[str, dict]:
+    """Build a standardised failed explore result event.
+
+    Centralises the failure-context pattern used in multiple early-return paths
+    inside ``run_explore()``.
+    """
+    ctx = CodebaseContext(repo=repo, branch=branch)
+    ctx.observations = observations or [error]
+    ctx.explore_quality = "failed"
+    ctx_dict = asdict(ctx)
+    ctx_dict["explore_failed"] = True
+    ctx_dict["explore_error"] = error
+    return ("explore_result", ctx_dict)
 
 
 # ── Main explore function ───────────────────────────────────────────────
@@ -342,13 +559,10 @@ async def run_explore(
             )
     except Exception as e:
         logger.error("Stage 0 (Explore) token resolution failed: %s", e)
-        ctx = CodebaseContext(repo=repo_full_name, branch=repo_branch)
-        ctx.observations = [f"Exploration setup failed: {e}"]
-        ctx.explore_quality = "failed"
-        ctx_dict = asdict(ctx)
-        ctx_dict["explore_failed"] = True
-        ctx_dict["explore_error"] = str(e)
-        yield ("explore_result", ctx_dict)
+        yield _make_failed_result(
+            repo_full_name, repo_branch, str(e),
+            observations=[f"Exploration setup failed: {e}"],
+        )
         return
 
     # ── Branch validation ─────────────────────────────────────────────
@@ -371,23 +585,12 @@ async def run_explore(
             branch_fallback = True
         except Exception as fb_err:
             logger.warning("Could not get default branch: %s", fb_err)
-            yield ("explore_result", {
-                "explore_quality": "failed",
-                "explore_failed": True,
-                "explore_error": (
-                    f"Branch '{repo_branch}' not found and default branch "
-                    f"lookup also failed: {fb_err}"
-                ),
-                "observations": [
-                    f"Branch '{repo_branch}' does not exist and fallback failed."
-                ],
-                "tech_stack": [],
-                "key_files_read": [],
-                "relevant_snippets": [],
-                "grounding_notes": [],
-                "coverage_pct": 0,
-                "files_read_count": 0,
-            })
+            yield _make_failed_result(
+                repo_full_name, repo_branch,
+                f"Branch '{repo_branch}' not found and default branch "
+                f"lookup also failed: {fb_err}",
+                observations=[f"Branch '{repo_branch}' does not exist and fallback failed."],
+            )
             return
 
     if branch_fallback:
@@ -421,13 +624,10 @@ async def run_explore(
     # Fetch the tree (needed for anchors and file reading)
     tree = await get_repo_tree(token, repo_full_name, used_branch)
     if not tree:
-        ctx = CodebaseContext(repo=repo_full_name, branch=used_branch)
-        ctx.observations = ["Repository tree is empty or inaccessible"]
-        ctx.explore_quality = "failed"
-        ctx_dict = asdict(ctx)
-        ctx_dict["explore_failed"] = True
-        ctx_dict["explore_error"] = "Empty tree"
-        yield ("explore_result", ctx_dict)
+        yield _make_failed_result(
+            repo_full_name, used_branch, "Empty tree",
+            observations=["Repository tree is empty or inaccessible"],
+        )
         return
 
     total_in_tree = len(tree)
@@ -481,8 +681,14 @@ async def run_explore(
     # Get anchor files (README, manifests, etc.)
     anchor_paths = _get_anchor_paths(tree)
 
-    # Merge and deduplicate
-    all_file_paths = _deduplicate_files(ranked_files, anchor_paths, cap=max_files)
+    # Merge and deduplicate (3-tier priority: prompt-referenced > anchors > semantic)
+    prompt_file_paths = _extract_prompt_referenced_files(raw_prompt, tree)
+    all_file_paths = _merge_file_lists(
+        prompt_referenced=prompt_file_paths,
+        anchors=anchor_paths,
+        semantic_ranked=ranked_files,
+        cap=max_files,
+    )
 
     yield ("tool_call", {
         "tool": "semantic_retrieval",
@@ -504,8 +710,14 @@ async def run_explore(
         "status": "running",
     })
 
+    # Dynamic line budget: divide total budget across files, capped per file
+    max_lines = min(
+        settings.EXPLORE_MAX_LINES_PER_FILE,
+        settings.EXPLORE_TOTAL_LINE_BUDGET // max(1, len(all_file_paths)),
+    )
     file_contents = await _batch_read_files(
         token, repo_full_name, tree, all_file_paths,
+        max_lines_per_file=max_lines,
     )
 
     yield ("tool_call", {
@@ -515,13 +727,10 @@ async def run_explore(
     })
 
     if not file_contents:
-        ctx = CodebaseContext(repo=repo_full_name, branch=used_branch)
-        ctx.observations = ["No files could be read from repository"]
-        ctx.explore_quality = "failed"
-        ctx_dict = asdict(ctx)
-        ctx_dict["explore_failed"] = True
-        ctx_dict["explore_error"] = "No readable files"
-        yield ("explore_result", ctx_dict)
+        yield _make_failed_result(
+            repo_full_name, used_branch, "No readable files",
+            observations=["No files could be read from repository"],
+        )
         return
 
     # ── Phase 3: Single-shot LLM synthesis ────────────────────────────
@@ -533,7 +742,22 @@ async def run_explore(
     })
 
     system_prompt = get_explore_synthesis_prompt()
+    # Runtime char guard — prevent context overflow on repos with long lines
     context_payload = _format_files_for_llm(file_contents)
+    max_context_chars = settings.EXPLORE_MAX_CONTEXT_CHARS
+    if len(context_payload) > max_context_chars:
+        logger.warning(
+            "Explore context exceeds %d chars (%d chars); trimming semantic files",
+            max_context_chars, len(context_payload),
+        )
+        # Remove semantic-tier files (last in priority) until within budget
+        # Note: this also affects key_files_read downstream (intentional —
+        # trimmed files were not shown to the LLM)
+        paths_by_priority = list(file_contents.keys())
+        while len(context_payload) > max_context_chars and paths_by_priority:
+            removed = paths_by_priority.pop()
+            del file_contents[removed]
+            context_payload = _format_files_for_llm(file_contents)
     user_message = (
         f"User's prompt to optimize:\n{raw_prompt}\n\n"
         f"Repository: {repo_full_name} (branch: {used_branch})\n"
@@ -578,14 +802,31 @@ async def run_explore(
     # ── Build CodebaseContext ─────────────────────────────────────────
     duration_ms = int((time.monotonic() - start_ms) * 1000)
 
+    # Step 1: Normalize LLM output
+    tech_stack = _normalize_string_list(parsed.get("tech_stack", []))
+    snippets = _normalize_snippets(parsed.get("relevant_code_snippets", []))
+    observations = _normalize_string_list(parsed.get("codebase_observations", []))
+    grounding_notes = _normalize_string_list(parsed.get("prompt_grounding_notes", []))
+
+    # Step 2: Validate against what was actually shown to the LLM
+    try:
+        snippets, observations, grounding_notes = _validate_explore_output(
+            snippets, observations, grounding_notes,
+            file_contents=file_contents,
+            max_lines_shown=max_lines,
+        )
+    except Exception as val_err:
+        logger.warning("Explore output validation failed, using unvalidated data: %s", val_err)
+
+    # Step 3: Construct CodebaseContext with validated data
     context = CodebaseContext(
         repo=repo_full_name,
         branch=used_branch,
-        tech_stack=_normalize_string_list(parsed.get("tech_stack", [])),
+        tech_stack=tech_stack,
         key_files_read=list(file_contents.keys()),
-        relevant_snippets=_normalize_snippets(parsed.get("relevant_code_snippets", [])),
-        observations=_normalize_string_list(parsed.get("codebase_observations", [])),
-        grounding_notes=_normalize_string_list(parsed.get("prompt_grounding_notes", [])),
+        relevant_snippets=snippets,
+        observations=observations,
+        grounding_notes=grounding_notes,
         files_read_count=len(file_contents),
         coverage_pct=min(100, round(len(file_contents) / max(1, total_in_tree) * 100)),
         duration_ms=duration_ms,

@@ -36,6 +36,7 @@ List every file path you were given. These are already the most relevant files.
 ### relevant_code_snippets (optional but valuable)
 Extract 3–8 code snippets that are directly relevant to the user's prompt:
   - Each snippet: {"file": "path/to/file.py", "lines": "45-62", "context": "brief description of what this code does and why it's relevant"}
+  - Line numbers are shown in the provided file content (format: "   N | code"). Use ONLY the line numbers visible in the numbered output. Never estimate or extrapolate line numbers beyond what is shown.
   - Prioritize: entry points, API definitions, config schemas, the exact code the prompt references
 
 ### codebase_observations (required)
@@ -51,7 +52,7 @@ Each observation must be specific and reference actual file paths.
 This is the MOST IMPORTANT field. For each claim or reference in the user's prompt:
   - Verify if it matches the actual codebase
   - Note any discrepancies: wrong function names, incorrect parameter types, outdated patterns
-  - Confirm correct references with file paths and line numbers where possible
+  - Confirm correct references with file paths and line numbers from the numbered content only. If the relevant code is in a truncated section (beyond visible lines), say "code beyond visible range in {file}" — do NOT guess line numbers.
 
 Quality standard for grounding notes:
   GOOD: "Prompt references `auth_service.login()` but the actual function is `authenticate_user()`
@@ -65,7 +66,10 @@ If the prompt is accurate, confirm it:
 
 ## Rules
 - Do NOT hallucinate file paths or function names. Only reference what you can see in the provided files.
-- If the provided files don't cover something the prompt mentions, say so explicitly in grounding_notes.
+- Do NOT fabricate line numbers, function behaviors, or bug diagnoses for code you cannot see. If a file is truncated, state that explicitly. Wrong specifics are worse than acknowledging limited visibility.
+- If the provided files don't cover something the prompt mentions, say so explicitly in grounding_notes. Do NOT guess what the missing code does.
 - Be concise but precise. Every observation must be grounded in actual file content.
-- Output valid JSON matching the schema. No markdown wrapping.
+- Your ENTIRE response must be a single valid JSON object. Do not include ANY text,
+  commentary, or explanation before or after the JSON. Do not use markdown code fences.
+  The very first character of your response must be `{` and the very last must be `}`.
 """

@@ -161,12 +161,17 @@ The explore phase uses **semantic retrieval + single-shot synthesis**, not an ag
 3. Stores per-file embeddings + outlines in `repo_file_index` table, status in `repo_index_meta` (24h TTL)
 
 **Explore flow** (`codebase_explorer.py`):
-1. Check cache → return immediately on hit (1h TTL)
-2. Vector retrieval: embed prompt → cosine search pre-built index → top-K files
-3. Merge with deterministic anchor files (README, manifests, Dockerfile, etc.)
-4. Parallel file reads: batch-read ranked files via GitHub API (semaphore=10)
-5. Single-shot synthesis: one `complete_json()` call (Haiku 4.5) → `CodebaseContext`
-6. Cache result and yield `explore_result` SSE event
+1. Token resolution + branch validation (falls back to default branch if not found)
+2. Check cache → return immediately on hit (1h TTL)
+3. Vector retrieval: embed prompt → cosine search pre-built index → top-K files
+4. Extract prompt-referenced files: 3-tier matching (exact path > filename > module stem) against repo tree
+5. 3-tier file merge: prompt-referenced > deterministic anchors > semantic-ranked (deduped, capped at `EXPLORE_MAX_FILES`)
+6. Dynamic line budget: `EXPLORE_TOTAL_LINE_BUDGET` / file count, capped at `EXPLORE_MAX_LINES_PER_FILE`
+7. Parallel file reads: batch-read via GitHub API (semaphore=10), line-numbered content with transparent truncation notices
+8. Context overflow guard: trim semantic-tier files if payload exceeds `EXPLORE_MAX_CONTEXT_CHARS`
+9. Single-shot synthesis: `complete_json()` (Haiku 4.5) with schema enforcement → normalized output
+10. Post-LLM validation: flag unverifiable line references and unsupported bug claims with `[unverified]` suffixes
+11. Cache complete results and yield `explore_result` SSE event
 
 **Fallback**: When embeddings are unavailable (model not loaded, index not ready), keyword matching on file paths provides ranked results.
 
@@ -174,9 +179,10 @@ The explore phase uses **semantic retrieval + single-shot synthesis**, not an ag
 - `embedding_service.py` — singleton model loader, `embed_texts()`, `embed_single()`, `cosine_search()`
 - `repo_index_service.py` — `build_index()`, `query_relevant_files()`, `get_index_status()`, `invalidate_index()`
 - `explore_synthesis_prompt.py` — single-shot synthesis system prompt (no tools, no multi-turn)
+- `codebase_tools.py` — MCP tool definitions for interactive exploration (legacy agentic tools, still used by MCP)
 - `explore_prompt.py` — **DEPRECATED** (old 25-turn agentic prompt, kept for reference only)
 
-**Config** (`config.py`): `EMBEDDING_MODEL`, `REPO_INDEX_TTL_HOURS`, `REPO_INDEX_MAX_FILES`, `EXPLORE_INDEX_WAIT_TIMEOUT`, `EXPLORE_FILE_READ_CONCURRENCY`, `EXPLORE_MAX_FILES`, `EXPLORE_RESULT_CACHE_TTL`
+**Config** (`config.py`): `EMBEDDING_MODEL`, `REPO_INDEX_TTL_HOURS`, `REPO_INDEX_MAX_FILES`, `EXPLORE_INDEX_WAIT_TIMEOUT`, `EXPLORE_FILE_READ_CONCURRENCY`, `EXPLORE_MAX_FILES`, `EXPLORE_TOTAL_LINE_BUDGET`, `EXPLORE_MAX_LINES_PER_FILE`, `EXPLORE_MAX_AMBIGUOUS_MATCHES`, `EXPLORE_MAX_CONTEXT_CHARS`, `EXPLORE_RESULT_CACHE_TTL`, `EXPLORE_TIMEOUT_SECONDS`
 
 ## Docker deployment
 

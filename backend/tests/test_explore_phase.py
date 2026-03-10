@@ -8,11 +8,14 @@ import pytest
 
 from app.services.codebase_explorer import (
     CodebaseContext,
-    _deduplicate_files,
+    _extract_prompt_referenced_files,
+    _format_files_for_llm,
     _get_anchor_paths,
     _keyword_fallback,
+    _merge_file_lists,
     _normalize_snippets,
     _normalize_string_list,
+    _validate_explore_output,
 )
 from app.services.repo_index_service import IndexStatus, RankedFile
 
@@ -48,7 +51,7 @@ class TestAnchorPaths:
 
 
 class TestDeduplicateFiles:
-    """Test file deduplication and capping."""
+    """Test file deduplication and capping (now via _merge_file_lists)."""
 
     def test_basic_dedup(self):
         ranked = [
@@ -56,7 +59,7 @@ class TestDeduplicateFiles:
             RankedFile(path="src/main.py", score=0.8),
         ]
         anchors = ["README.md", "package.json"]
-        result = _deduplicate_files(ranked, anchors, cap=10)
+        result = _merge_file_lists([], anchors, ranked, cap=10)
 
         # Anchors first, then ranked
         assert result[0] == "README.md"
@@ -65,23 +68,68 @@ class TestDeduplicateFiles:
         assert "src/main.py" in result
 
     def test_dedup_overlap(self):
-        """Overlapping files between ranked and anchors are deduplicated."""
         ranked = [
-            RankedFile(path="README.md", score=0.9),  # also an anchor
+            RankedFile(path="README.md", score=0.9),
             RankedFile(path="src/auth.py", score=0.8),
         ]
         anchors = ["README.md"]
-        result = _deduplicate_files(ranked, anchors, cap=10)
+        result = _merge_file_lists([], anchors, ranked, cap=10)
 
-        # README.md should only appear once
         assert result.count("README.md") == 1
         assert len(result) == 2
 
     def test_cap_enforced(self):
         ranked = [RankedFile(path=f"file_{i}.py", score=0.5) for i in range(50)]
         anchors = ["README.md"]
-        result = _deduplicate_files(ranked, anchors, cap=5)
+        result = _merge_file_lists([], anchors, ranked, cap=5)
         assert len(result) == 5
+
+
+class TestMergeFileLists:
+    """Test 3-tier priority file merge."""
+
+    def test_priority_order(self):
+        result = _merge_file_lists(
+            prompt_referenced=["pipeline.py"],
+            anchors=["README.md"],
+            semantic_ranked=["utils.py"],
+            cap=10,
+        )
+        assert result[0] == "pipeline.py"
+        assert result[1] == "README.md"
+        assert result[2] == "utils.py"
+
+    def test_dedup_across_tiers(self):
+        result = _merge_file_lists(
+            prompt_referenced=["README.md"],
+            anchors=["README.md", "Dockerfile"],
+            semantic_ranked=["README.md", "utils.py"],
+            cap=10,
+        )
+        assert result.count("README.md") == 1
+        assert len(result) == 3
+
+    def test_cap_trims_semantic_first(self):
+        result = _merge_file_lists(
+            prompt_referenced=["a.py", "b.py"],
+            anchors=["README.md"],
+            semantic_ranked=["c.py", "d.py", "e.py"],
+            cap=4,
+        )
+        assert len(result) == 4
+        assert "a.py" in result
+        assert "b.py" in result
+        assert "README.md" in result
+
+    def test_prompt_referenced_never_trimmed(self):
+        result = _merge_file_lists(
+            prompt_referenced=["a.py", "b.py", "c.py"],
+            anchors=["README.md"],
+            semantic_ranked=["d.py"],
+            cap=3,
+        )
+        assert len(result) == 3
+        assert all(f in result for f in ["a.py", "b.py", "c.py"])
 
 
 class TestKeywordFallback:
@@ -382,3 +430,215 @@ class TestNormalizeSnippets:
         assert len(result) == 2
         assert result[0]["file"] == "a.py"
         assert result[1]["file"] == "unknown"
+
+
+class TestFormatFilesForLlm:
+    """Test line-numbered file formatting."""
+
+    def test_adds_line_numbers(self):
+        contents = {"main.py": "import os\nprint('hello')"}
+        result = _format_files_for_llm(contents)
+        assert "   1 | import os" in result
+        assert "   2 | print('hello')" in result
+
+    def test_file_header_preserved(self):
+        contents = {"src/app.py": "x = 1"}
+        result = _format_files_for_llm(contents)
+        assert "=== src/app.py ===" in result
+
+    def test_empty_lines_get_numbers(self):
+        contents = {"f.py": "a\n\nb"}
+        result = _format_files_for_llm(contents)
+        assert "   1 | a" in result
+        assert "   2 | " in result
+        assert "   3 | b" in result
+
+    def test_multiple_files(self):
+        contents = {"a.py": "x = 1", "b.py": "y = 2"}
+        result = _format_files_for_llm(contents)
+        assert "=== a.py ===" in result
+        assert "=== b.py ===" in result
+        assert "   1 | x = 1" in result
+        assert "   1 | y = 2" in result
+
+
+class TestDynamicBudget:
+    """Test dynamic line budget calculation."""
+
+    def test_few_files_get_max_lines(self):
+        """With few files, each gets the max lines per file."""
+        from app.config import settings
+        file_count = 10
+        max_lines = min(
+            settings.EXPLORE_MAX_LINES_PER_FILE,
+            settings.EXPLORE_TOTAL_LINE_BUDGET // max(1, file_count),
+        )
+        assert max_lines == settings.EXPLORE_MAX_LINES_PER_FILE  # 500 < 15000/10=1500
+
+    def test_many_files_get_budget_share(self):
+        """With many files, lines per file is budget/count."""
+        from app.config import settings
+        file_count = 40
+        max_lines = min(
+            settings.EXPLORE_MAX_LINES_PER_FILE,
+            settings.EXPLORE_TOTAL_LINE_BUDGET // max(1, file_count),
+        )
+        assert max_lines == 375  # 15000/40 = 375 < 500
+
+    def test_zero_files_no_crash(self):
+        """Zero files doesn't divide by zero."""
+        from app.config import settings
+        max_lines = min(
+            settings.EXPLORE_MAX_LINES_PER_FILE,
+            settings.EXPLORE_TOTAL_LINE_BUDGET // max(1, 0),
+        )
+        assert max_lines == settings.EXPLORE_MAX_LINES_PER_FILE
+
+
+class TestBatchReadFilesTruncation:
+    """Test that truncation message warns the LLM not to reference beyond cutoff."""
+
+    @pytest.mark.asyncio
+    async def test_truncation_message_warns_against_claims(self):
+        """Truncated files warn LLM not to reference lines beyond the cutoff."""
+        long_content = "\n".join(f"line {i}" for i in range(1, 101))  # 100 lines
+
+        with patch(
+            "app.services.codebase_explorer.read_file_content",
+            new_callable=AsyncMock,
+            return_value=long_content,
+        ):
+            from app.services.codebase_explorer import _batch_read_files
+
+            tree = [{"path": "big.py", "sha": "abc"}]
+            result = await _batch_read_files("tok", "o/r", tree, ["big.py"], max_lines_per_file=10)
+
+        content = result["big.py"]
+        assert "Do NOT reference or make claims about lines beyond 10" in content
+        assert "TRUNCATED" in content
+
+    @pytest.mark.asyncio
+    async def test_no_truncation_for_short_files(self):
+        """Short files are not truncated."""
+        short_content = "line 1\nline 2\nline 3"
+
+        with patch(
+            "app.services.codebase_explorer.read_file_content",
+            new_callable=AsyncMock,
+            return_value=short_content,
+        ):
+            from app.services.codebase_explorer import _batch_read_files
+
+            tree = [{"path": "small.py", "sha": "abc"}]
+            result = await _batch_read_files("tok", "o/r", tree, ["small.py"], max_lines_per_file=10)
+
+        content = result["small.py"]
+        assert "TRUNCATED" not in content
+
+
+class TestExtractPromptReferencedFiles:
+    """Test tree-validated prompt file extraction."""
+
+    def _tree(self, paths):
+        return [{"path": p, "sha": "abc", "size_bytes": 100} for p in paths]
+
+    def test_exact_path_match(self):
+        tree = self._tree(["backend/app/services/pipeline.py", "README.md"])
+        prompt = "Audit backend/app/services/pipeline.py for handoff issues"
+        result = _extract_prompt_referenced_files(prompt, tree)
+        assert "backend/app/services/pipeline.py" in result
+
+    def test_filename_match(self):
+        tree = self._tree(["src/pipeline.py", "tests/test_pipeline.py"])
+        prompt = "Check pipeline.py for bugs"
+        result = _extract_prompt_referenced_files(prompt, tree)
+        assert "src/pipeline.py" in result
+
+    def test_ambiguous_filename_skipped(self):
+        tree = self._tree([f"pkg{i}/index.ts" for i in range(5)])
+        prompt = "Fix index.ts"
+        result = _extract_prompt_referenced_files(prompt, tree)
+        assert result == []  # >3 matches, skipped
+
+    def test_url_excluded(self):
+        tree = self._tree(["src/config.py"])
+        prompt = "See https://example.com/config.py for details"
+        result = _extract_prompt_referenced_files(prompt, tree)
+        # config.py should NOT match from a URL context
+        assert result == []
+
+    def test_backslash_normalized(self):
+        tree = self._tree(["src/app/main.py"])
+        prompt = r"Check src\app\main.py"
+        result = _extract_prompt_referenced_files(prompt, tree)
+        assert "src/app/main.py" in result
+
+    def test_module_stem_match(self):
+        tree = self._tree(["backend/app/services/optimizer.py", "README.md"])
+        prompt = "How does the optimizer handle secondary frameworks?"
+        result = _extract_prompt_referenced_files(prompt, tree)
+        assert "backend/app/services/optimizer.py" in result
+
+    def test_no_matches_returns_empty(self):
+        tree = self._tree(["src/main.py"])
+        prompt = "What is the meaning of life?"
+        result = _extract_prompt_referenced_files(prompt, tree)
+        assert result == []
+
+    def test_deduplication(self):
+        tree = self._tree(["backend/pipeline.py"])
+        prompt = "Audit backend/pipeline.py — check pipeline.py for bugs"
+        result = _extract_prompt_referenced_files(prompt, tree)
+        assert result.count("backend/pipeline.py") == 1
+
+
+class TestValidateExploreOutput:
+    """Test post-LLM output validation."""
+
+    def test_valid_snippet_passes_through(self):
+        snippets = [{"file": "main.py", "lines": "1-10", "context": "entry point"}]
+        file_contents = {"main.py": "\n".join(f"line {i}" for i in range(1, 51))}
+        s, o, g = _validate_explore_output(snippets, [], [], file_contents, max_lines_shown=50)
+        assert s[0]["context"] == "entry point"  # no flag added
+
+    def test_snippet_beyond_visible_range_flagged(self):
+        snippets = [{"file": "big.py", "lines": "400-420", "context": "some logic"}]
+        file_contents = {"big.py": "\n".join(f"line {i}" for i in range(1, 301))}
+        s, o, g = _validate_explore_output(snippets, [], [], file_contents, max_lines_shown=300)
+        assert "[unverified" in s[0]["context"]
+
+    def test_observation_with_valid_line_ref_unchanged(self):
+        obs = ["Pipeline stage at line 50 handles retries"]
+        file_contents = {"pipeline.py": "x" * 100}
+        s, o, g = _validate_explore_output([], obs, [], file_contents, max_lines_shown=300)
+        assert o[0] == obs[0]  # within range, no flag
+
+    def test_observation_with_invalid_line_ref_flagged(self):
+        obs = ["Bug at lines 600-610 in pipeline.py"]
+        file_contents = {"pipeline.py": "x"}
+        s, o, g = _validate_explore_output([], obs, [], file_contents, max_lines_shown=300)
+        assert "[unverified" in o[0]
+
+    def test_grounding_note_bug_claim_in_truncated_file_flagged(self):
+        # File content includes truncation marker — indicates the file was cut off
+        truncated_content = "\n".join(f"line {i}" for i in range(1, 301))
+        truncated_content += "\n\n[TRUNCATED — only lines 1–300 of 800 shown.]"
+        notes = ["analysis_quality is NOT set when defaults are applied in analyzer.py"]
+        file_contents = {"analyzer.py": truncated_content}
+        s, o, g = _validate_explore_output([], [], notes, file_contents, max_lines_shown=300)
+        assert "[unverified" in g[0]
+
+    def test_snippet_for_unknown_file_flagged(self):
+        snippets = [{"file": "nonexistent.py", "lines": "1-5", "context": "ghost"}]
+        s, o, g = _validate_explore_output(snippets, [], [], {}, max_lines_shown=300)
+        assert "[unverified" in s[0]["context"]
+
+    def test_empty_inputs_no_crash(self):
+        s, o, g = _validate_explore_output([], [], [], {}, max_lines_shown=300)
+        assert s == [] and o == [] and g == []
+
+    def test_unparseable_line_range_left_alone(self):
+        snippets = [{"file": "a.py", "lines": "various", "context": "ok"}]
+        file_contents = {"a.py": "x"}
+        s, o, g = _validate_explore_output(snippets, [], [], file_contents, max_lines_shown=300)
+        assert s[0]["context"] == "ok"  # can't parse "various", so left alone
