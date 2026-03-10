@@ -292,7 +292,6 @@ def _extract_prompt_referenced_files(
     normalized = re.sub(r"https?://\S+", "", normalized)
 
     tree_paths = [e["path"] for e in tree]
-    tree_path_set = set(tree_paths)
     result: list[str] = []
     seen: set[str] = set()
 
