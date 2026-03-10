@@ -9,6 +9,7 @@ import pytest
 from app.services.codebase_explorer import (
     CodebaseContext,
     _deduplicate_files,
+    _format_files_for_llm,
     _get_anchor_paths,
     _keyword_fallback,
     _normalize_snippets,
@@ -382,3 +383,74 @@ class TestNormalizeSnippets:
         assert len(result) == 2
         assert result[0]["file"] == "a.py"
         assert result[1]["file"] == "unknown"
+
+
+class TestFormatFilesForLlm:
+    """Test line-numbered file formatting."""
+
+    def test_adds_line_numbers(self):
+        contents = {"main.py": "import os\nprint('hello')"}
+        result = _format_files_for_llm(contents)
+        assert "   1 | import os" in result
+        assert "   2 | print('hello')" in result
+
+    def test_file_header_preserved(self):
+        contents = {"src/app.py": "x = 1"}
+        result = _format_files_for_llm(contents)
+        assert "=== src/app.py ===" in result
+
+    def test_empty_lines_get_numbers(self):
+        contents = {"f.py": "a\n\nb"}
+        result = _format_files_for_llm(contents)
+        assert "   1 | a" in result
+        assert "   2 | " in result
+        assert "   3 | b" in result
+
+    def test_multiple_files(self):
+        contents = {"a.py": "x = 1", "b.py": "y = 2"}
+        result = _format_files_for_llm(contents)
+        assert "=== a.py ===" in result
+        assert "=== b.py ===" in result
+        assert "   1 | x = 1" in result
+        assert "   1 | y = 2" in result
+
+
+class TestBatchReadFilesTruncation:
+    """Test that truncation message warns the LLM not to reference beyond cutoff."""
+
+    @pytest.mark.asyncio
+    async def test_truncation_message_warns_against_claims(self):
+        """Truncated files warn LLM not to reference lines beyond the cutoff."""
+        long_content = "\n".join(f"line {i}" for i in range(1, 101))  # 100 lines
+
+        with patch(
+            "app.services.codebase_explorer.read_file_content",
+            new_callable=AsyncMock,
+            return_value=long_content,
+        ):
+            from app.services.codebase_explorer import _batch_read_files
+
+            tree = [{"path": "big.py", "sha": "abc"}]
+            result = await _batch_read_files("tok", "o/r", tree, ["big.py"], max_lines_per_file=10)
+
+        content = result["big.py"]
+        assert "Do NOT reference or make claims about lines beyond 10" in content
+        assert "TRUNCATED" in content
+
+    @pytest.mark.asyncio
+    async def test_no_truncation_for_short_files(self):
+        """Short files are not truncated."""
+        short_content = "line 1\nline 2\nline 3"
+
+        with patch(
+            "app.services.codebase_explorer.read_file_content",
+            new_callable=AsyncMock,
+            return_value=short_content,
+        ):
+            from app.services.codebase_explorer import _batch_read_files
+
+            tree = [{"path": "small.py", "sha": "abc"}]
+            result = await _batch_read_files("tok", "o/r", tree, ["small.py"], max_lines_per_file=10)
+
+        content = result["small.py"]
+        assert "TRUNCATED" not in content

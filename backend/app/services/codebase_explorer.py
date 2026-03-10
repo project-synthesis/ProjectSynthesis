@@ -279,7 +279,10 @@ async def _batch_read_files(
                     lines = content.split("\n")
                     if len(lines) > max_lines_per_file:
                         content = "\n".join(lines[:max_lines_per_file])
-                        content += f"\n\n[TRUNCATED at {max_lines_per_file} of {len(lines)} lines]"
+                        content += (
+                            f"\n\n[TRUNCATED — only lines 1–{max_lines_per_file} of {len(lines)} shown. "
+                            f"Do NOT reference or make claims about lines beyond {max_lines_per_file}.]"
+                        )
                     results[path] = content
             except Exception as e:
                 logger.debug("Failed to read %s: %s", path, e)
@@ -290,10 +293,18 @@ async def _batch_read_files(
 
 
 def _format_files_for_llm(file_contents: dict[str, str]) -> str:
-    """Format file contents into a single string for the LLM."""
+    """Format file contents with line numbers for the LLM.
+
+    Each line is prefixed with its 1-indexed number (right-aligned, 4 digits)
+    so the LLM can reference accurate line numbers in its observations.
+    """
     parts: list[str] = []
     for path, content in file_contents.items():
-        parts.append(f"=== {path} ===\n{content}\n")
+        numbered = "\n".join(
+            f"{i:>4} | {line}"
+            for i, line in enumerate(content.split("\n"), 1)
+        )
+        parts.append(f"=== {path} ===\n{numbered}\n")
     return "\n".join(parts)
 
 
