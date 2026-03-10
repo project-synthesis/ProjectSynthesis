@@ -1,5 +1,6 @@
 <script lang="ts">
   import { toast } from '$lib/stores/toast.svelte';
+  import MilestoneToast from './MilestoneToast.svelte';
 
   const typeStyles: Record<string, string> = {
     info:    'border-neon-cyan/40 text-neon-cyan',
@@ -26,32 +27,40 @@
 {#if toast.toasts.length > 0}
   <div class="fixed bottom-10 right-4 z-[500] flex flex-col gap-2" data-testid="toast-container">
     {#each toast.toasts as item (item.id)}
-      <div
-        class="flex items-center gap-2 px-4 py-2.5 bg-bg-card border rounded-lg {typeStyles[item.type]}"
-        style="box-shadow: inset 0 0 0 1px {typeRings[item.type] ?? 'transparent'}; animation: {item.dismissing ? 'slide-out-right 0.3s ease-in forwards' : 'slide-in-right 0.3s cubic-bezier(0.16, 1, 0.3, 1) both'}"
-        role="alert"
-        aria-live="assertive"
-      >
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d={typeIcons[item.type]}></path>
-        </svg>
-        <span class="text-sm text-text-primary">{item.message}</span>
-        {#if item.action}
-          <button
-            class="ml-2 text-xs font-mono underline underline-offset-2 opacity-80 hover:opacity-100 transition-opacity shrink-0"
-            onclick={(e) => { e.stopPropagation(); item.action!.onClick(); toast.dismiss(item.id); }}
-          >{item.action.label}</button>
-        {/if}
-        <button
-          class="ml-2 opacity-60 hover:opacity-100 transition-opacity"
-          onclick={(e) => { e.stopPropagation(); toast.dismiss(item.id); }}
-          aria-label="Dismiss"
+      {#if item.type === 'milestone' && item.milestoneData}
+        <MilestoneToast
+          milestone={item.milestoneData}
+          onDismiss={() => toast.dismiss(item.id)}
+          dismissing={item.dismissing}
+        />
+      {:else}
+        <div
+          class="flex items-center gap-2 px-4 py-2.5 bg-bg-card border {typeStyles[item.type] ?? typeStyles.info}"
+          style="box-shadow: inset 0 0 0 1px {typeRings[item.type] ?? 'transparent'}; animation: {item.dismissing ? 'slide-out-right 0.3s ease-in forwards' : 'slide-in-right 0.3s cubic-bezier(0.16, 1, 0.3, 1) both'}"
+          role="alert"
+          aria-live="assertive"
         >
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d={typeIcons[item.type] ?? typeIcons.info}></path>
           </svg>
-        </button>
-      </div>
+          <span class="text-sm text-text-primary">{item.message}</span>
+          {#if item.action}
+            <button
+              class="ml-2 text-xs font-mono underline underline-offset-2 opacity-80 hover:opacity-100 transition-opacity shrink-0"
+              onclick={(e) => { e.stopPropagation(); item.action!.onClick(); toast.dismiss(item.id); }}
+            >{item.action.label}</button>
+          {/if}
+          <button
+            class="ml-2 opacity-60 hover:opacity-100 transition-opacity"
+            onclick={(e) => { e.stopPropagation(); toast.dismiss(item.id); }}
+            aria-label="Dismiss"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+      {/if}
     {/each}
   </div>
 {/if}

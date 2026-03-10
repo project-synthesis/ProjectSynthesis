@@ -154,6 +154,7 @@
     role="dialog"
     aria-modal="true"
     aria-label="Command Palette"
+    data-tour="command-palette"
     tabindex="-1"
     onkeydown={handlePaletteTrap}
   >
