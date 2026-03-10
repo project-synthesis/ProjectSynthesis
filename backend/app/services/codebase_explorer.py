@@ -515,8 +515,14 @@ async def run_explore(
         "status": "running",
     })
 
+    # Dynamic line budget: divide total budget across files, capped per file
+    max_lines = min(
+        settings.EXPLORE_MAX_LINES_PER_FILE,
+        settings.EXPLORE_TOTAL_LINE_BUDGET // max(1, len(all_file_paths)),
+    )
     file_contents = await _batch_read_files(
         token, repo_full_name, tree, all_file_paths,
+        max_lines_per_file=max_lines,
     )
 
     yield ("tool_call", {
@@ -544,7 +550,22 @@ async def run_explore(
     })
 
     system_prompt = get_explore_synthesis_prompt()
+    # Runtime char guard — prevent context overflow on repos with long lines
     context_payload = _format_files_for_llm(file_contents)
+    _MAX_CONTEXT_CHARS = 700_000  # ~175K tokens
+    if len(context_payload) > _MAX_CONTEXT_CHARS:
+        logger.warning(
+            "Explore context exceeds %d chars (%d chars); trimming semantic files",
+            _MAX_CONTEXT_CHARS, len(context_payload),
+        )
+        # Remove semantic-tier files (last in priority) until within budget
+        # Note: this also affects key_files_read downstream (intentional —
+        # trimmed files were not shown to the LLM)
+        paths_by_priority = list(file_contents.keys())
+        while len(context_payload) > _MAX_CONTEXT_CHARS and paths_by_priority:
+            removed = paths_by_priority.pop()
+            del file_contents[removed]
+            context_payload = _format_files_for_llm(file_contents)
     user_message = (
         f"User's prompt to optimize:\n{raw_prompt}\n\n"
         f"Repository: {repo_full_name} (branch: {used_branch})\n"

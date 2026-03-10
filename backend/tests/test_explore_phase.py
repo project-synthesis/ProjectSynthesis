@@ -415,6 +415,39 @@ class TestFormatFilesForLlm:
         assert "   1 | y = 2" in result
 
 
+class TestDynamicBudget:
+    """Test dynamic line budget calculation."""
+
+    def test_few_files_get_max_lines(self):
+        """With few files, each gets the max lines per file."""
+        from app.config import settings
+        file_count = 10
+        max_lines = min(
+            settings.EXPLORE_MAX_LINES_PER_FILE,
+            settings.EXPLORE_TOTAL_LINE_BUDGET // max(1, file_count),
+        )
+        assert max_lines == settings.EXPLORE_MAX_LINES_PER_FILE  # 500 < 15000/10=1500
+
+    def test_many_files_get_budget_share(self):
+        """With many files, lines per file is budget/count."""
+        from app.config import settings
+        file_count = 40
+        max_lines = min(
+            settings.EXPLORE_MAX_LINES_PER_FILE,
+            settings.EXPLORE_TOTAL_LINE_BUDGET // max(1, file_count),
+        )
+        assert max_lines == 375  # 15000/40 = 375 < 500
+
+    def test_zero_files_no_crash(self):
+        """Zero files doesn't divide by zero."""
+        from app.config import settings
+        max_lines = min(
+            settings.EXPLORE_MAX_LINES_PER_FILE,
+            settings.EXPLORE_TOTAL_LINE_BUDGET // max(1, 0),
+        )
+        assert max_lines == settings.EXPLORE_MAX_LINES_PER_FILE
+
+
 class TestBatchReadFilesTruncation:
     """Test that truncation message warns the LLM not to reference beyond cutoff."""
 
