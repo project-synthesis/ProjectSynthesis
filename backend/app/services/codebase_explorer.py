@@ -351,7 +351,7 @@ def _get_anchor_paths(tree: list[dict]) -> list[str]:
 def _merge_file_lists(
     prompt_referenced: list[str],
     anchors: list[str],
-    semantic_ranked: list[str],
+    semantic_ranked: list[RankedFile] | list[str],
     cap: int,
 ) -> list[str]:
     """Merge three file tiers with deduplication, respecting priority order.
@@ -441,7 +441,7 @@ async def _batch_read_files(
     repo_full_name: str,
     tree: list[dict],
     file_paths: list[str],
-    max_lines_per_file: int = 300,
+    max_lines_per_file: int = 500,
 ) -> dict[str, str]:
     """Read multiple files in parallel from GitHub.
 
@@ -494,6 +494,26 @@ def _format_files_for_llm(file_contents: dict[str, str]) -> str:
     return "\n".join(parts)
 
 
+def _make_failed_result(
+    repo: str,
+    branch: str,
+    error: str,
+    observations: list[str] | None = None,
+) -> tuple[str, dict]:
+    """Build a standardised failed explore result event.
+
+    Centralises the failure-context pattern used in multiple early-return paths
+    inside ``run_explore()``.
+    """
+    ctx = CodebaseContext(repo=repo, branch=branch)
+    ctx.observations = observations or [error]
+    ctx.explore_quality = "failed"
+    ctx_dict = asdict(ctx)
+    ctx_dict["explore_failed"] = True
+    ctx_dict["explore_error"] = error
+    return ("explore_result", ctx_dict)
+
+
 # ── Main explore function ───────────────────────────────────────────────
 
 async def run_explore(
@@ -539,13 +559,10 @@ async def run_explore(
             )
     except Exception as e:
         logger.error("Stage 0 (Explore) token resolution failed: %s", e)
-        ctx = CodebaseContext(repo=repo_full_name, branch=repo_branch)
-        ctx.observations = [f"Exploration setup failed: {e}"]
-        ctx.explore_quality = "failed"
-        ctx_dict = asdict(ctx)
-        ctx_dict["explore_failed"] = True
-        ctx_dict["explore_error"] = str(e)
-        yield ("explore_result", ctx_dict)
+        yield _make_failed_result(
+            repo_full_name, repo_branch, str(e),
+            observations=[f"Exploration setup failed: {e}"],
+        )
         return
 
     # ── Branch validation ─────────────────────────────────────────────
@@ -568,23 +585,12 @@ async def run_explore(
             branch_fallback = True
         except Exception as fb_err:
             logger.warning("Could not get default branch: %s", fb_err)
-            yield ("explore_result", {
-                "explore_quality": "failed",
-                "explore_failed": True,
-                "explore_error": (
-                    f"Branch '{repo_branch}' not found and default branch "
-                    f"lookup also failed: {fb_err}"
-                ),
-                "observations": [
-                    f"Branch '{repo_branch}' does not exist and fallback failed."
-                ],
-                "tech_stack": [],
-                "key_files_read": [],
-                "relevant_snippets": [],
-                "grounding_notes": [],
-                "coverage_pct": 0,
-                "files_read_count": 0,
-            })
+            yield _make_failed_result(
+                repo_full_name, repo_branch,
+                f"Branch '{repo_branch}' not found and default branch "
+                f"lookup also failed: {fb_err}",
+                observations=[f"Branch '{repo_branch}' does not exist and fallback failed."],
+            )
             return
 
     if branch_fallback:
@@ -618,13 +624,10 @@ async def run_explore(
     # Fetch the tree (needed for anchors and file reading)
     tree = await get_repo_tree(token, repo_full_name, used_branch)
     if not tree:
-        ctx = CodebaseContext(repo=repo_full_name, branch=used_branch)
-        ctx.observations = ["Repository tree is empty or inaccessible"]
-        ctx.explore_quality = "failed"
-        ctx_dict = asdict(ctx)
-        ctx_dict["explore_failed"] = True
-        ctx_dict["explore_error"] = "Empty tree"
-        yield ("explore_result", ctx_dict)
+        yield _make_failed_result(
+            repo_full_name, used_branch, "Empty tree",
+            observations=["Repository tree is empty or inaccessible"],
+        )
         return
 
     total_in_tree = len(tree)
@@ -724,13 +727,10 @@ async def run_explore(
     })
 
     if not file_contents:
-        ctx = CodebaseContext(repo=repo_full_name, branch=used_branch)
-        ctx.observations = ["No files could be read from repository"]
-        ctx.explore_quality = "failed"
-        ctx_dict = asdict(ctx)
-        ctx_dict["explore_failed"] = True
-        ctx_dict["explore_error"] = "No readable files"
-        yield ("explore_result", ctx_dict)
+        yield _make_failed_result(
+            repo_full_name, used_branch, "No readable files",
+            observations=["No files could be read from repository"],
+        )
         return
 
     # ── Phase 3: Single-shot LLM synthesis ────────────────────────────

@@ -12,6 +12,8 @@ from app.services.context_builders import (
     build_analysis_summary,
     build_codebase_summary,
     build_strategy_summary,
+    format_file_contexts,
+    format_url_contexts,
 )
 
 # ── _search_priority (P1.2) ───────────────────────────────────────────────────
@@ -417,6 +419,68 @@ def test_analysis_recommended_frameworks_joined_with_comma():
     assert "CO-STAR, chain-of-thought" in result
 
 
+def test_analysis_quality_fallback_shows_note():
+    """P2.2: analysis_quality='fallback' prepends a defaults warning."""
+    result = build_analysis_summary({"analysis_quality": "fallback"})
+    assert "fell back to defaults" in result
+    assert "well-established patterns" in result
+
+
+def test_analysis_quality_failed_shows_note():
+    """P2.2: analysis_quality='failed' prepends a caution warning."""
+    result = build_analysis_summary({"analysis_quality": "failed"})
+    assert "failed completely" in result
+    assert "maximum caution" in result
+
+
+def test_analysis_quality_full_no_note():
+    """No warning emitted when analysis_quality is 'full'."""
+    result = build_analysis_summary({"analysis_quality": "full", "task_type": "coding"})
+    assert "fell back" not in result
+    assert "failed completely" not in result
+
+
+def test_analysis_task_type_shown():
+    result = build_analysis_summary({"task_type": "coding"})
+    assert "Task type: coding" in result
+
+
+def test_analysis_complexity_shown():
+    result = build_analysis_summary({"complexity": "high"})
+    assert "Complexity: high" in result
+
+
+def test_analysis_both_quality_notes_coexist():
+    """Both analysis_quality and codebase_informed notes can appear together."""
+    result = build_analysis_summary({
+        "analysis_quality": "fallback",
+        "codebase_informed": "partial",
+    })
+    assert "fell back to defaults" in result
+    assert "partially informed" in result
+
+
+def test_strategy_primary_framework_shown():
+    result = build_strategy_summary({"primary_framework": "CO-STAR"})
+    assert "Primary framework: CO-STAR" in result
+
+
+def test_strategy_rationale_shown():
+    result = build_strategy_summary({"rationale": "Best for coding tasks"})
+    assert "Rationale: Best for coding tasks" in result
+
+
+def test_strategy_approach_notes_shown():
+    result = build_strategy_summary({"approach_notes": "Focus on structure"})
+    assert "Approach: Focus on structure" in result
+
+
+def test_codebase_snippets_as_dict_ignored():
+    """N20 regression guard: dict-typed relevant_snippets (old format) are silently ignored."""
+    result = build_codebase_summary({"relevant_snippets": {"file": "code"}})
+    assert "snippet" not in result.lower()
+
+
 # ── build_strategy_summary ────────────────────────────────────────────────────
 
 
@@ -443,3 +507,64 @@ def test_strategy_empty_secondary_no_directive():
     )
     assert "Secondary" not in result
     assert "Weave" not in result
+
+
+# ── format_file_contexts / format_url_contexts ────────────────────────────────
+
+
+def test_format_file_contexts_none():
+    assert format_file_contexts(None) == ""
+
+
+def test_format_file_contexts_empty_list():
+    assert format_file_contexts([]) == ""
+
+
+def test_format_file_contexts_basic():
+    result = format_file_contexts([{"name": "readme.md", "content": "hello"}])
+    assert "Attached files:" in result
+    assert "[readme.md]" in result
+    assert "hello" in result
+
+
+def test_format_file_contexts_capped_at_5():
+    contexts = [{"name": f"f{i}.txt", "content": f"c{i}"} for i in range(8)]
+    result = format_file_contexts(contexts)
+    assert "[f4.txt]" in result
+    assert "[f5.txt]" not in result
+
+
+def test_format_file_contexts_content_truncated():
+    long = "x" * 2000
+    result = format_file_contexts([{"name": "big.py", "content": long}])
+    assert "x" * 1500 in result
+    assert "x" * 1501 not in result
+
+
+def test_format_url_contexts_none():
+    assert format_url_contexts(None) == ""
+
+
+def test_format_url_contexts_empty_list():
+    assert format_url_contexts([]) == ""
+
+
+def test_format_url_contexts_basic():
+    result = format_url_contexts([{"url": "https://example.com", "content": "page"}])
+    assert "Referenced URLs:" in result
+    assert "[https://example.com]" in result
+
+
+def test_format_url_contexts_skips_errors():
+    contexts = [
+        {"url": "https://bad.com", "error": "404"},
+        {"url": "https://good.com", "content": "ok"},
+    ]
+    result = format_url_contexts(contexts)
+    assert "bad.com" not in result
+    assert "good.com" in result
+
+
+def test_format_url_contexts_all_errors_returns_empty():
+    contexts = [{"url": "https://bad.com", "error": "500"}]
+    assert format_url_contexts(contexts) == ""

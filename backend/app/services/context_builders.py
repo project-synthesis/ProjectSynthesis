@@ -205,3 +205,43 @@ def build_strategy_summary(strategy: dict) -> str:
         )
 
     return "\n".join(parts)
+
+
+# ── Shared context injection helpers ──────────────────────────────────────────
+
+# Limits shared across analyzer and optimizer to keep prompts consistent.
+_MAX_FILE_CONTEXTS = 5
+_MAX_URL_CONTEXTS = 3
+_MAX_CONTENT_CHARS = 1500
+
+
+def format_file_contexts(file_contexts: list[dict] | None) -> str:
+    """Format attached file contexts into an injection block.
+
+    Returns empty string when there are no file contexts.
+    """
+    if not file_contexts:
+        return ""
+    blocks = []
+    for fc in file_contexts[:_MAX_FILE_CONTEXTS]:
+        name = fc.get("name", "file")
+        content = str(fc.get("content", ""))[:_MAX_CONTENT_CHARS]
+        blocks.append(f"[{name}]\n{content}")
+    return "\n\nAttached files:\n" + "\n\n".join(blocks)
+
+
+def format_url_contexts(url_fetched_contexts: list[dict] | None) -> str:
+    """Format pre-fetched URL contexts into an injection block.
+
+    Returns empty string when there are no URL contexts or all errored.
+    """
+    if not url_fetched_contexts:
+        return ""
+    blocks = []
+    for uc in url_fetched_contexts[:_MAX_URL_CONTEXTS]:
+        if uc.get("error") or not uc.get("content"):
+            continue
+        url = uc.get("url", "url")
+        content = str(uc.get("content", ""))[:_MAX_CONTENT_CHARS]
+        blocks.append(f"[{url}]\n{content}")
+    return ("\n\nReferenced URLs:\n" + "\n\n".join(blocks)) if blocks else ""

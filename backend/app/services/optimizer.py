@@ -17,6 +17,8 @@ from app.services.context_builders import (
     build_analysis_summary,
     build_codebase_summary,
     build_strategy_summary,
+    format_file_contexts,
+    format_url_contexts,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,24 +70,10 @@ async def run_optimize(
             )
 
     # N24: inject attached file content
-    if file_contexts:
-        blocks = []
-        for fc in file_contexts[:5]:
-            name = fc.get("name", "file")
-            content = str(fc.get("content", ""))[:1500]
-            blocks.append(f"[{name}]\n{content}")
-        user_message += "\n\nAttached files:\n" + "\n\n".join(blocks)
+    user_message += format_file_contexts(file_contexts)
 
     # N26: inject pre-fetched URL content
-    if url_fetched_contexts:
-        blocks = []
-        for uc in url_fetched_contexts[:3]:
-            if uc.get("error") or not uc.get("content"):
-                continue
-            url = uc.get("url", "url")
-            content = str(uc.get("content", ""))[:1500]
-            blocks.append(f"[{url}]\n{content}")
-        user_message += "\n\nReferenced URLs:\n" + "\n\n".join(blocks)
+    user_message += format_url_contexts(url_fetched_contexts)
 
     if retry_constraints:
         user_message += (

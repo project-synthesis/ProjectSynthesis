@@ -54,7 +54,6 @@ def get_cached_tree_size(repo_full_name: str, branch: str) -> int:
     """Return the number of tree entries currently cached for this repo/branch.
 
     Returns 0 if the tree has not been fetched yet or the cache has expired.
-    Used by run_explore() to compute coverage_pct after the agentic loop.
     """
     cached = _cache_get(repo_full_name, branch)
     return len(cached) if cached is not None else 0

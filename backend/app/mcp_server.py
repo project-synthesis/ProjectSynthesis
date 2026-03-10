@@ -89,6 +89,18 @@ def _accumulate_event(opt: "Optimization", event_type: str, event_data: dict) ->
     """Map one pipeline event to fields on the Optimization ORM object."""
     if event_type == "codebase_context":
         opt.model_explore = event_data.get("model")
+        _snapshot = json.dumps(event_data)
+        if len(_snapshot) > 65536:
+            truncated_data = {
+                k: v for k, v in event_data.items()
+                if k in ("model", "repo", "branch", "files_read_count",
+                         "explore_quality", "tech_stack", "coverage_pct")
+            }
+            truncated_data["_truncated"] = True
+            _snapshot = json.dumps(truncated_data)
+            if len(_snapshot) > 65536:
+                _snapshot = json.dumps({"_truncated": True, "model": event_data.get("model")})
+        opt.codebase_context_snapshot = _snapshot
     elif event_type == "analysis":
         opt.task_type = event_data.get("task_type")
         opt.complexity = event_data.get("complexity")
