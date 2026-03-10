@@ -3,10 +3,11 @@ export type SubTab = 'edit' | 'pipeline' | 'history';
 export interface EditorTab {
   id: string;
   label: string;
-  type: 'prompt' | 'artifact' | 'chain';
+  type: 'prompt' | 'artifact' | 'chain' | 'strategy-ref';
   promptText?: string;
   dirty?: boolean;
   optimizationId?: string;
+  strategy?: string;
 }
 
 const MAX_TABS = 8;
@@ -87,7 +88,7 @@ class EditorStore {
     if (this.openTabs.length === 0) {
       this.openTab({
         id: 'welcome',
-        label: 'New Prompt',
+        label: 'Welcome',
         type: 'prompt',
         promptText: '',
         dirty: false

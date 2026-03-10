@@ -609,6 +609,24 @@ export async function disconnectGitHub(): Promise<void> {
   return logoutGitHub();
 }
 
+// ---- Onboarding Analytics ----
+
+/** Fire-and-forget event tracking for onboarding funnel analytics. */
+export async function trackOnboardingEvent(
+  eventType: string,
+  metadata?: Record<string, unknown>
+): Promise<void> {
+  try {
+    await apiFetch(`${BASE}/api/onboarding/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_type: eventType, metadata }),
+    });
+  } catch {
+    // Fire-and-forget — silently ignore all errors
+  }
+}
+
 // ── Auth security endpoints (Cycle A, 3, 7) ──────────────────────────────────
 
 /** GET /auth/token — exchanges one-time server-side session token for JWT after OAuth callback. */
@@ -627,6 +645,7 @@ export async function patchAuthMe(data: {
   display_name?: string | null;
   email?: string | null;
   onboarding_completed?: boolean;
+  preferences?: Record<string, unknown>;
 }): Promise<{ updated: boolean }> {
   const res = await apiFetch(`${BASE}/auth/me`, {
     method: 'PATCH',
@@ -647,6 +666,7 @@ export interface AuthMeResponse {
   display_name: string | null;
   onboarding_completed: boolean;
   onboarding_completed_at: string | null;
+  preferences: Record<string, unknown>;
   last_login_at: string | null;
   created_at: string;
 }

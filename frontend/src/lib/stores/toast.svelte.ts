@@ -1,8 +1,16 @@
-export type ToastType = 'info' | 'success' | 'error' | 'warning';
+export type ToastType = 'info' | 'success' | 'error' | 'warning' | 'milestone';
 
 export interface ToastAction {
   label: string;
   onClick: () => void;
+}
+
+export interface MilestoneData {
+  id: string;
+  title: string;
+  description: string;
+  color: string;
+  celebrationText: string;
 }
 
 export interface ToastItem {
@@ -11,6 +19,7 @@ export interface ToastItem {
   type: ToastType;
   dismissing: boolean;
   action?: ToastAction;
+  milestoneData?: MilestoneData;
 }
 
 const MAX_VISIBLE = 3;
@@ -24,39 +33,35 @@ const DEDUP_WINDOW_MS = 5_000;
 class ToastStore {
   toasts = $state<ToastItem[]>([]);
 
-  show(message: string, type: ToastType = 'info', duration = 5000, action?: ToastAction) {
-    // Suppress duplicate messages shown within the deduplication window.
-    const dedupeKey = `${type}:${message}`;
+  /** Core toast logic — dedup, queue management, auto-dismiss. */
+  private _push(item: Omit<ToastItem, 'id' | 'dismissing'>, dedupeKey: string, duration: number): void {
     const lastShown = _recentMessages.get(dedupeKey) ?? 0;
     if (Date.now() - lastShown < DEDUP_WINDOW_MS) return;
     _recentMessages.set(dedupeKey, Date.now());
 
     const id = nextId++;
-    const toast: ToastItem = { id, message, type, dismissing: false, action };
+    const toast: ToastItem = { ...item, id, dismissing: false };
 
-    // If we already have MAX_VISIBLE toasts, dismiss the oldest
     while (this.toasts.filter(t => !t.dismissing).length >= MAX_VISIBLE) {
       const oldest = this.toasts.find(t => !t.dismissing);
       if (oldest) this.dismiss(oldest.id);
     }
 
     this.toasts = [...this.toasts, toast];
+    setTimeout(() => { this.dismiss(id); }, duration);
+  }
 
-    // Auto-dismiss after duration
-    setTimeout(() => {
-      this.dismiss(id);
-    }, duration);
+  show(message: string, type: ToastType = 'info', duration = 5000, action?: ToastAction) {
+    this._push({ message, type, action }, `${type}:${message}`, duration);
   }
 
   dismiss(id: number) {
     const toast = this.toasts.find(t => t.id === id);
     if (!toast || toast.dismissing) return;
 
-    // Start exit animation
     toast.dismissing = true;
     this.toasts = [...this.toasts];
 
-    // Remove after animation completes (300ms)
     setTimeout(() => {
       this.toasts = this.toasts.filter(t => t.id !== id);
     }, 300);
@@ -76,6 +81,15 @@ class ToastStore {
 
   info(message: string, duration = 5000, action?: ToastAction) {
     this.show(message, 'info', duration, action);
+  }
+
+  /** Show a milestone achievement celebration toast. */
+  milestone(m: { id: string; title: string; description: string; color: string; celebrationText: string }, duration = 8000) {
+    this._push(
+      { message: m.celebrationText, type: 'milestone', milestoneData: m },
+      `milestone:${m.id}`,
+      duration,
+    );
   }
 }
 

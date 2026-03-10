@@ -37,6 +37,7 @@ class WorkbenchStore {
   isConnected = $state(false);
   mcpConnected = $state(false);
   githubOAuthEnabled = $state(false);
+  showOnboarding = $state(false);
 
   get navCssWidth() {
     return this.navigatorCollapsed ? '0px' : `${this.navigatorWidth}px`;
