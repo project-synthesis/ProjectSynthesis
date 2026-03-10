@@ -7,6 +7,7 @@
   import ScoreCircle from "$lib/components/shared/ScoreCircle.svelte";
   import ScoreBar from "$lib/components/shared/ScoreBar.svelte";
   import { getScoreColor } from "$lib/utils/colors";
+  import Tip from "$lib/components/shared/Tip.svelte";
 
   let strategyRecommendations = $derived.by(() => {
     // Prefer real forge strategy result when available
@@ -86,6 +87,7 @@
   class:opacity-0={workbench.inspectorCollapsed}
   style="width: {workbench.inspectorCssWidth}"
   aria-label="Inspector"
+  data-tour="inspector"
 >
   {#if !workbench.inspectorCollapsed}
     <div
@@ -368,6 +370,9 @@
             ></path>
           </svg>
           <p class="text-xs text-text-dim">Open a prompt to see metadata</p>
+          <div class="mt-2">
+            <Tip id="inspector-scores" text="Scores and details appear here after synthesis" />
+          </div>
         </div>
       {/if}
     </div>

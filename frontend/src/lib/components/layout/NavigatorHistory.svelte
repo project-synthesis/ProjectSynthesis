@@ -432,11 +432,27 @@
         </div>
       {:else if history.entries.length === 0}
         <div class="flex flex-col items-center justify-center text-center px-2 py-8">
-          <svg class="w-8 h-8 mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-          </svg>
-          <p class="text-xs text-text-secondary">No runs yet</p>
-          <p class="text-[10px] text-text-dim/50 mt-0.5">Synthesize a prompt to get started.</p>
+          <div class="font-display text-[11px] font-bold uppercase text-text-dim mb-3">NO RUNS YET</div>
+          <div class="space-y-2 text-left w-full max-w-[200px] mb-4">
+            <div class="flex items-start gap-2">
+              <span class="font-display text-[10px] text-neon-cyan shrink-0 w-5">01</span>
+              <span class="font-mono text-[9px] text-text-dim leading-snug">Write a prompt in the editor</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <span class="font-display text-[10px] text-neon-cyan shrink-0 w-5">02</span>
+              <span class="font-mono text-[9px] text-text-dim leading-snug">Press <kbd class="px-0.5 bg-bg-input border border-border-subtle text-[8px]">Ctrl+Enter</kbd> to synthesize</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <span class="font-display text-[10px] text-neon-cyan shrink-0 w-5">03</span>
+              <span class="font-mono text-[9px] text-text-dim leading-snug">View results and scores here</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              class="px-3 py-1 text-[10px] btn-outline-cyan"
+              onclick={() => editor.openTab({ id: `prompt-${Date.now()}`, label: 'New Prompt', type: 'prompt', promptText: '', dirty: false })}
+            >New Prompt</button>
+          </div>
         </div>
       {:else}
         {#each history.entries as entry, i (entry.id)}

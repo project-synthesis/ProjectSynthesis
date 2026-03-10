@@ -22,6 +22,8 @@
   import OnboardingModal from '$lib/components/layout/OnboardingModal.svelte';
   import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
   import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
+  import SpotlightOverlay from '$lib/components/shared/SpotlightOverlay.svelte';
+  import { walkthrough } from '$lib/stores/walkthrough.svelte';
 
   import type { Snippet } from 'svelte';
   let { children }: { children: Snippet } = $props();
@@ -131,8 +133,19 @@
 
   // Auth gate — false until the silent refresh attempt resolves
   let authChecked = $state(false);
-  // Onboarding modal — shown once for brand-new users after OAuth
-  let showOnboarding = $state(false);
+
+  // Auto-dismiss welcome-back banner after 10s
+  let showWelcomeBack = $derived(
+    authChecked && auth.isAuthenticated && user.isNewUser
+    && !workbench.showOnboarding
+    && !user.preferences.dismissedTips.includes('welcome-back-banner')
+  );
+  $effect(() => {
+    if (showWelcomeBack) {
+      const timer = setTimeout(() => user.dismissTip('welcome-back-banner'), 10_000);
+      return () => clearTimeout(timer);
+    }
+  });
 
   // Resize handle logic
   let resizing = $state<'nav' | 'inspector' | null>(null);
@@ -283,7 +296,7 @@
             const data: { access_token: string } = await res.json();
             auth.setToken(data.access_token);
             if (isNewUser) {
-              showOnboarding = true;
+              workbench.showOnboarding = true;
             }
           }
         } catch { /* token fetch failed — fall through to silent refresh */ }
@@ -476,6 +489,42 @@
       }
     });
 
+    // HELP — onboarding and reference
+    commandPalette.registerCommand({
+      id: 'help.welcome',
+      label: 'Show Welcome Guide',
+      group: 'Help',
+      action: () => { workbench.showOnboarding = true; }
+    });
+    commandPalette.registerCommand({
+      id: 'help.walkthrough',
+      label: 'Interactive Walkthrough',
+      group: 'Help',
+      action: () => walkthrough.start()
+    });
+    commandPalette.registerCommand({
+      id: 'help.shortcuts',
+      label: 'Keyboard Shortcuts',
+      group: 'Help',
+      action: () => {
+        editor.openTab({ id: 'welcome', label: 'Welcome', type: 'prompt', promptText: '', dirty: false });
+      }
+    });
+    commandPalette.registerCommand({
+      id: 'help.sample',
+      label: 'Load Sample Prompt',
+      group: 'Help',
+      action: () => workbench.setActivity('templates')
+    });
+    commandPalette.registerCommand({
+      id: 'help.strategies',
+      label: 'Strategy Reference',
+      group: 'Help',
+      action: () => {
+        editor.openTab({ id: 'strategy-ref', label: 'Strategies', type: 'strategy-ref', dirty: false });
+      }
+    });
+
     return () => {
       clearInterval(healthTimer);
       window.removeEventListener('resize', handleResize);
@@ -552,15 +601,37 @@
     </div>
 
     <!-- Row 2: Status Bar spans full width -->
-    <div style="grid-row: 2; grid-column: 1 / -1;">
+    <div style="grid-row: 2; grid-column: 1 / -1;" data-tour="statusbar">
       <StatusBar />
     </div>
   </div>
 
+  <!-- Welcome-back banner for returning users who haven't completed setup -->
+  {#if showWelcomeBack}
+    <div class="fixed top-0 left-0 right-0 z-40 bg-bg-card border-b border-neon-cyan/20 px-4 py-2 flex items-center justify-between animate-fade-in">
+      <span class="font-mono text-[10px] text-text-dim">
+        Welcome back — you haven't completed setup yet.
+      </span>
+      <div class="flex items-center gap-2">
+        <button
+          onclick={() => editor.openTab({ id: 'welcome', label: 'Welcome', type: 'prompt', promptText: '', dirty: false })}
+          class="font-mono text-[10px] text-neon-cyan hover:text-neon-cyan/80"
+        >OPEN GUIDE</button>
+        <button
+          onclick={() => user.dismissTip('welcome-back-banner')}
+          class="font-mono text-[10px] text-text-dim/40 hover:text-text-dim"
+        >DISMISS</button>
+      </div>
+    </div>
+  {/if}
+
   <!-- Global overlays -->
   <CommandPalette />
   <ToastContainer />
-  {#if showOnboarding}
-    <OnboardingModal onComplete={() => { showOnboarding = false; }} />
+  {#if walkthrough.active}
+    <SpotlightOverlay />
+  {/if}
+  {#if workbench.showOnboarding}
+    <OnboardingModal onComplete={() => { workbench.showOnboarding = false; }} />
   {/if}
 {/if}

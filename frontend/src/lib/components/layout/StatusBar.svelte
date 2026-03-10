@@ -8,6 +8,19 @@
   import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
   import { commandPalette } from '$lib/stores/commandPalette.svelte';
   import { user } from '$lib/stores/user.svelte';
+  import { history } from '$lib/stores/history.svelte';
+
+  let setupSteps = $derived(
+    (workbench.isConnected ? 1 : 0) +
+    (workbench.mcpConnected ? 1 : 0) +
+    (github.isConnected ? 1 : 0) +
+    (github.selectedRepo ? 1 : 0) +
+    (history.totalCount > 0 ? 1 : 0)
+  );
+
+  function openWelcomeTab() {
+    editor.openTab({ id: 'welcome', label: 'Welcome', type: 'prompt', promptText: '', dirty: false });
+  }
 </script>
 
 <footer
@@ -96,6 +109,16 @@
         data-testid="statusbar-score"
       >
         {forge.overallScore}/10
+      </button>
+    {:else if !forge.isForging && user.isNewUser && setupSteps < 5}
+      <button
+        onclick={openWelcomeTab}
+        class="flex items-center gap-1 h-full px-2 text-neon-cyan/60 hover:text-neon-cyan transition-colors cursor-pointer"
+        title="Setup progress — click to open guide"
+        data-testid="statusbar-setup"
+      >
+        <span class="w-1.5 h-1.5 bg-neon-cyan animate-status-pulse shrink-0"></span>
+        <span class="font-mono text-[10px]">Setup {setupSteps}/5</span>
       </button>
     {:else}
       <span class="px-2 text-text-dim/50" data-testid="forge-hint">Ctrl+Enter to synthesize</span>

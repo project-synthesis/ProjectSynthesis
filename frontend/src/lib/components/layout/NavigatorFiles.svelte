@@ -277,12 +277,29 @@
       </svg>
       <p class="text-xs text-text-secondary">No prompts yet</p>
       <p class="text-[10px] text-text-dim/50 mt-0.5">Create a new prompt to get started.</p>
-      <button
-        class="mt-2 px-3 py-1 text-[10px] rounded btn-outline-cyan"
-        onclick={() => editor.openTab({ id: `prompt-${Date.now()}`, label: 'New Prompt', type: 'prompt', promptText: '', dirty: false })}
-      >
-        + New Prompt
-      </button>
+      <div class="flex items-center gap-2 mt-2">
+        <button
+          class="px-3 py-1 text-[10px] btn-outline-cyan"
+          onclick={() => editor.openTab({ id: `prompt-${Date.now()}`, label: 'New Prompt', type: 'prompt', promptText: '', dirty: false })}
+        >+ New Prompt</button>
+      </div>
+      <div class="flex flex-col items-center gap-1 mt-2">
+        <button
+          class="font-mono text-[9px] text-neon-cyan/60 hover:text-neon-cyan transition-colors"
+          onclick={() => {
+            import('$lib/utils/samplePrompts').then(m => {
+              const sample = m.samplePrompts[Math.floor(Math.random() * m.samplePrompts.length)];
+              editor.openTab({ id: `sample-${sample.id}`, label: sample.title, type: 'prompt', promptText: sample.text, dirty: false });
+            });
+          }}
+        >Try a sample prompt</button>
+        <button
+          class="font-mono text-[9px] text-text-dim/50 hover:text-text-dim transition-colors"
+          onclick={() => {
+            import('$lib/stores/workbench.svelte').then(m => m.workbench.setActivity('templates'));
+          }}
+        >Browse templates</button>
+      </div>
     </div>
   {/if}
 </div>

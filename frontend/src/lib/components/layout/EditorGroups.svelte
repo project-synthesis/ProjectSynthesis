@@ -3,6 +3,9 @@
   import PromptDocument from '$lib/components/editor/PromptDocument.svelte';
   import ForgeArtifact from '$lib/components/editor/ForgeArtifact.svelte';
   import ChainComposer from '$lib/components/editor/ChainComposer.svelte';
+  import WelcomeTab from '$lib/components/editor/WelcomeTab.svelte';
+  import StrategyExplainer from '$lib/components/editor/StrategyExplainer.svelte';
+  import { workbench } from '$lib/stores/workbench.svelte';
 
   let tabBarEl = $state<HTMLElement | null>(null);
   let overflowCount = $state(0);
@@ -155,9 +158,13 @@
   </div>
 
   <!-- Document area -->
-  <div class="flex-1 min-h-0 overflow-y-auto" style="overscroll-behavior: contain;" role="tabpanel" aria-label={editor.activeTab ? editor.activeTab.label : 'No document open'}>
+  <div class="flex-1 min-h-0 overflow-y-auto" data-tour="editor" style="overscroll-behavior: contain;" role="tabpanel" aria-label={editor.activeTab ? editor.activeTab.label : 'No document open'}>
     {#if editor.activeTab}
-      {#if editor.activeTab.type === 'prompt'}
+      {#if editor.activeTab.id === 'welcome' && !editor.activeTab.promptText}
+        <WelcomeTab tab={editor.activeTab} />
+      {:else if editor.activeTab.type === 'strategy-ref'}
+        <StrategyExplainer />
+      {:else if editor.activeTab.type === 'prompt'}
         <PromptDocument tab={editor.activeTab} />
       {:else if editor.activeTab.type === 'artifact'}
         <ForgeArtifact />
@@ -172,9 +179,19 @@
         <span class="text-[11px] text-text-dim/60">
           Press <kbd>Ctrl+N</kbd> to create a new prompt
         </span>
-        <button class="btn-outline-cyan mt-1 px-3 py-1.5 text-xs rounded" onclick={handleNewTab}>
-          New Prompt
-        </button>
+        <div class="flex items-center gap-2 mt-1">
+          <button class="btn-outline-cyan px-3 py-1.5 text-xs" onclick={handleNewTab}>
+            New Prompt
+          </button>
+          <button
+            class="px-3 py-1.5 text-xs border border-border-subtle text-text-dim hover:border-neon-cyan/30 hover:text-text-secondary transition-colors font-mono"
+            onclick={() => editor.openTab({ id: 'welcome', label: 'Welcome', type: 'prompt', promptText: '', dirty: false })}
+          >Open Welcome Guide</button>
+          <button
+            class="px-3 py-1.5 text-xs border border-border-subtle text-text-dim hover:border-neon-cyan/30 hover:text-text-secondary transition-colors font-mono"
+            onclick={() => workbench.setActivity('templates')}
+          >Browse Templates</button>
+        </div>
       </div>
     {/if}
   </div>

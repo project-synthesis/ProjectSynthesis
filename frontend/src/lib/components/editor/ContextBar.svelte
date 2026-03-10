@@ -2,6 +2,7 @@
   import { github } from '$lib/stores/github.svelte';
   import { context } from '$lib/stores/context.svelte';
   import { toast } from '$lib/stores/toast.svelte';
+  import Tip from '$lib/components/shared/Tip.svelte';
 
   // Sync github.selectedFiles → context chips.
   // Runs whenever selectedFiles changes (file selected/deselected in the tree browser).
@@ -254,4 +255,9 @@
     accept="text/*,.md,.txt,.py,.ts,.js,.json,.yaml,.yml,.toml"
     onchange={handleFileSelect}
   />
+
+  <!-- Contextual tip -->
+  <div class="px-2">
+    <Tip id="context-at" text="Type @ in the editor to add file, repo, or URL context" />
+  </div>
 </div>

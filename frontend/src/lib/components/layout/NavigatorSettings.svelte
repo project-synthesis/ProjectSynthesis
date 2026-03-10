@@ -676,6 +676,41 @@
         <span class="text-xs text-text-secondary">Stream optimization</span>
       </label>
 
+      <!-- Onboarding -->
+      {#if auth.isAuthenticated}
+        <div class="space-y-1.5 mt-3 pt-3 border-t border-border-subtle">
+          <div class="font-display text-[11px] font-bold uppercase text-text-dim mb-2">Onboarding</div>
+          <button
+            onclick={() => { workbench.showOnboarding = true; }}
+            class="w-full flex items-center justify-between px-2 py-1.5
+                   border border-border-subtle text-text-secondary
+                   hover:border-neon-cyan/30 hover:text-text-primary
+                   transition-colors font-mono text-[10px] uppercase tracking-[0.05em]"
+          >
+            <span>Replay welcome guide</span>
+          </button>
+          <button
+            onclick={() => { import('$lib/stores/walkthrough.svelte').then(m => m.walkthrough.start()); }}
+            class="w-full flex items-center justify-between px-2 py-1.5
+                   border border-border-subtle text-text-secondary
+                   hover:border-neon-cyan/30 hover:text-text-primary
+                   transition-colors font-mono text-[10px] uppercase tracking-[0.05em]"
+          >
+            <span>Interactive walkthrough</span>
+          </button>
+          <button
+            onclick={() => { user.resetTips(); toast.success('Tips reset — they will appear again for new users'); }}
+            class="w-full flex items-center justify-between px-2 py-1.5
+                   border border-border-subtle text-text-secondary
+                   hover:border-neon-cyan/30 hover:text-text-primary
+                   transition-colors font-mono text-[10px] uppercase tracking-[0.05em]"
+          >
+            <span>Reset all tips</span>
+            <span class="text-[9px] text-text-dim/60">re-enables hints</span>
+          </button>
+        </div>
+      {/if}
+
       <!-- Session Security -->
       {#if auth.isAuthenticated}
         <div class="space-y-1 mt-3 pt-3 border-t border-border-subtle">

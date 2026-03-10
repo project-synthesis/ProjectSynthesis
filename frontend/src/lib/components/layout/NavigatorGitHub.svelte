@@ -6,6 +6,7 @@
   import type { RepoInfo } from '$lib/api/client';
   import GitHubStatus from '$lib/components/github/GitHubStatus.svelte';
   import RepoPickerModal from '$lib/components/github/RepoPickerModal.svelte';
+  import Tip from '$lib/components/shared/Tip.svelte';
 
   let showRepoPicker = $derived(github.showRepoPicker);
 
@@ -153,6 +154,10 @@
       {github.error}
     </div>
   {/if}
+
+  <div class="px-1">
+    <Tip id="github-context" text="Link a repo to enable the Explore stage for codebase-aware optimization" />
+  </div>
 </div>
 
 <RepoPickerModal open={showRepoPicker} onclose={() => { setShowRepoPicker(false); }} onselectrepo={handleSelectRepo} />

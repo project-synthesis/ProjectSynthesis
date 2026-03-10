@@ -9,10 +9,27 @@
   import ModelBadge from '$lib/components/shared/ModelBadge.svelte';
   import StrategyBadge from '$lib/components/shared/StrategyBadge.svelte';
   import { toast } from '$lib/stores/toast.svelte';
+  import { user } from '$lib/stores/user.svelte';
+  import { history } from '$lib/stores/history.svelte';
+  import { patchAuthMe, trackOnboardingEvent } from '$lib/api/client';
+  import { checkAndCelebrateMilestones } from '$lib/utils/milestones';
+  import { getStrategyInfo } from '$lib/utils/strategyReference';
+  import Tip from '$lib/components/shared/Tip.svelte';
 
   let { tab }: { tab: EditorTab } = $props();
 
   let strategy = $state('auto');
+
+  // Sync strategy from tab when it has a pre-selected strategy (e.g. opened from StrategyExplainer)
+  $effect(() => {
+    const tabStrategy = tab.strategy;
+    if (tabStrategy) {
+      strategy = tabStrategy;
+    }
+  });
+
+  // Strategy info for inline display
+  let selectedStrategyInfo = $derived(getStrategyInfo(strategy));
   let forgeSparking = $state(false);
 
   // @ context popup state
@@ -308,16 +325,36 @@
               forge.cacheRecord(optId, record);
             }
             forge.finishForge(forge.overallScore ?? undefined, data.total_duration_ms as number | undefined, data.total_tokens as number | undefined);
-            // N44: context-aware toast — show chip count when context was applied
+
+            // Milestone + celebration system
             const usedChips = [
               ...fileChips.map(c => c.label),
               ...instructionChips.map(() => 'instruction'),
               ...urlChips.map(() => 'URL'),
             ];
-            if (usedChips.length > 0) {
-              toast.success(`Forge complete — ${usedChips.length} context item${usedChips.length !== 1 ? 's' : ''} applied`);
-            } else {
-              toast.success('Forge complete — prompt optimized!');
+            const isFirstForge = history.totalCount === 0;
+            if (isFirstForge) {
+              patchAuthMe({ onboarding_completed: true }).catch(() => {});
+              user.onboardingCompleted = true;
+              trackOnboardingEvent('first_forge', { score: forge.overallScore }).catch(() => {});
+            }
+
+            // Check all milestones (including first-forge) — dedup handled by dismissMilestone
+            const achieved = checkAndCelebrateMilestones({
+              forgeCount: history.totalCount + 1,
+              score: forge.overallScore,
+              usedContext: usedChips.length > 0,
+              strategy: strategy,
+              repoLinked: !!github.selectedRepo,
+            });
+
+            // Standard completion toast only when no milestones fired
+            if (achieved.length === 0) {
+              if (usedChips.length > 0) {
+                toast.success(`Forge complete — ${usedChips.length} context item${usedChips.length !== 1 ? 's' : ''} applied`);
+              } else {
+                toast.success('Forge complete — prompt optimized!');
+              }
             }
             break;
           case 'error': {
@@ -434,8 +471,9 @@
   <ContextBar bind:this={contextBarRef} />
 
   <!-- Action row -->
-  <div class="flex items-center justify-between px-4 py-2 border-t border-border-subtle bg-bg-secondary/30 shrink-0">
-    <div class="flex items-center gap-2">
+  <div class="flex flex-col border-t border-border-subtle bg-bg-secondary/30 shrink-0">
+    <div class="flex items-center justify-between px-4 py-2">
+    <div class="flex items-center gap-2" data-tour="strategy">
       <!-- Strategy selector -->
       <select
         id="strategy-select"
@@ -450,6 +488,12 @@
       </select>
 
       <StrategyBadge strategy={strategy} />
+
+      {#if selectedStrategyInfo && strategy !== 'auto'}
+        <span class="font-mono text-[8px] text-text-dim/50 max-w-[200px] truncate hidden sm:inline" title={selectedStrategyInfo.fullName}>
+          {selectedStrategyInfo.fullName}
+        </span>
+      {/if}
 
       {#if tab.promptText}
         <CopyButton text={tab.promptText} />
@@ -489,5 +533,11 @@
         {/if}
       </button>
     </div>
+  </div>
+  <!-- Contextual tips -->
+  <div class="px-4 pb-1">
+    <Tip id="strategy-select" text="Strategy determines which prompt framework is applied" />
+    <Tip id="forge-shortcut" text="Ctrl+Enter is the shortcut to start synthesis" />
+  </div>
   </div>
 </div>
