@@ -80,3 +80,32 @@ async def test_compute_stats_respects_project_filter(tmp_path):
     assert result["codebase_aware_count"] == 0
     assert result["improvement_rate"] is None
     await eng.dispose()
+
+
+async def test_list_optimizations_with_user_id_filter(tmp_path):
+    """list_optimizations must filter by user_id when provided."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    import app.models.optimization  # noqa: F401
+    from app.database import Base
+    from app.models.optimization import Optimization
+    from app.services.optimization_service import list_optimizations
+
+    eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/list_user.db")
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    Session = async_sessionmaker(eng, class_=AsyncSession, expire_on_commit=False)
+
+    # Seed two records with different user_ids
+    async with Session() as session:
+        session.add(Optimization(id="opt-a", raw_prompt="prompt a", user_id="user-1", status="completed"))
+        session.add(Optimization(id="opt-b", raw_prompt="prompt b", user_id="user-2", status="completed"))
+        await session.commit()
+
+    async with Session() as session:
+        items, total = await list_optimizations(session, user_id="user-1")
+
+    assert total == 1
+    assert items[0]["id"] == "opt-a"
+    await eng.dispose()

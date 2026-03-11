@@ -83,6 +83,7 @@ async def list_optimizations(
     search: Optional[str] = None,
     sort: str = "created_at",
     order: str = "desc",
+    user_id: Optional[str] = None,
 ) -> tuple[list[dict], int]:
     """List optimizations with pagination, filtering, and sorting.
 
@@ -95,30 +96,34 @@ async def list_optimizations(
         search: Search term to match against raw_prompt and title.
         sort: Column name to sort by.
         order: Sort direction ('asc' or 'desc').
+        user_id: When provided, restrict to records owned by this user.
 
     Returns:
         Tuple of (list of optimization dicts, total count).
     """
     query = select(Optimization).where(Optimization.deleted_at.is_(None))
-    count_query = select(func.count(Optimization.id)).where(Optimization.deleted_at.is_(None))
+
+    if user_id:
+        query = query.where(Optimization.user_id == user_id)
 
     if project:
         query = query.where(Optimization.project == project)
-        count_query = count_query.where(Optimization.project == project)
 
     if task_type:
         query = query.where(Optimization.task_type == task_type)
-        count_query = count_query.where(Optimization.task_type == task_type)
 
     if search:
         escaped = escape_like(search)
         search_pattern = f"%{escaped}%"
-        search_filter = (
+        query = query.where(
             Optimization.raw_prompt.ilike(search_pattern, escape="\\")
             | Optimization.title.ilike(search_pattern, escape="\\")
         )
-        query = query.where(search_filter)
-        count_query = count_query.where(search_filter)
+
+    # DRY count — derived from the same filtered query (no filter duplication)
+    count_query = select(func.count()).select_from(query.subquery())
+    count_result = await session.execute(count_query)
+    total = count_result.scalar() or 0
 
     # Sorting — whitelist prevents getattr on arbitrary user input
     if sort not in VALID_SORT_COLUMNS:
@@ -135,9 +140,6 @@ async def list_optimizations(
 
     result = await session.execute(query)
     optimizations = result.scalars().all()
-
-    count_result = await session.execute(count_query)
-    total = count_result.scalar() or 0
 
     return [opt.to_dict() for opt in optimizations], total
 
