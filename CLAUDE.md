@@ -162,18 +162,25 @@ The explore phase uses **semantic retrieval + single-shot synthesis**, not an ag
 
 **Explore flow** (`codebase_explorer.py`):
 1. Token resolution + branch validation (falls back to default branch if not found)
-2. Check cache → return immediately on hit (1h TTL)
-3. Vector retrieval: embed prompt → cosine search pre-built index → top-K files
-4. Extract prompt-referenced files: 3-tier matching (exact path > filename > module stem) against repo tree
-5. 3-tier file merge: prompt-referenced > deterministic anchors > semantic-ranked (deduped, capped at `EXPLORE_MAX_FILES`)
-6. Dynamic line budget: `EXPLORE_TOTAL_LINE_BUDGET` / file count, capped at `EXPLORE_MAX_LINES_PER_FILE`
-7. Parallel file reads: batch-read via GitHub API (semaphore=10), line-numbered content with transparent truncation notices
-8. Context overflow guard: trim semantic-tier files if payload exceeds `EXPLORE_MAX_CONTEXT_CHARS`
-9. Single-shot synthesis: `complete_json()` (Haiku 4.5) with schema enforcement → normalized output
-10. Post-LLM validation: flag unverifiable line references and unsupported bug claims with `[unverified]` suffixes
-11. Cache complete results and yield `explore_result` SSE event
+2. Fetch current branch HEAD SHA via `get_branch_head_sha()` (single lightweight API call)
+3. Check cache → return immediately on hit (SHA-aware key: new push = new SHA = automatic cache miss)
+4. Check index staleness: compare current HEAD SHA against `repo_index_meta.head_sha`
+   - **Stale** (SHA mismatch): trigger background `build_index()`, skip semantic retrieval, use keyword fallback for fresh content
+   - **Fresh**: use semantic retrieval as normal
+   - **Unknown** (legacy rows with no `head_sha`): no staleness detection, normal TTL-based behavior
+5. Vector retrieval: embed prompt → cosine search pre-built index → top-K files
+6. Extract prompt-referenced files: 3-tier matching (exact path > filename > module stem) against repo tree
+7. 3-tier file merge: prompt-referenced > deterministic anchors > semantic-ranked (deduped, capped at `EXPLORE_MAX_FILES`)
+8. Dynamic line budget: `EXPLORE_TOTAL_LINE_BUDGET` / file count, capped at `EXPLORE_MAX_LINES_PER_FILE`
+9. Parallel file reads: batch-read via GitHub API (semaphore=10), line-numbered content with transparent truncation notices
+10. Context overflow guard: trim semantic-tier files if payload exceeds `EXPLORE_MAX_CONTEXT_CHARS`
+11. Single-shot synthesis: `complete_json()` (Haiku 4.5) with schema enforcement → normalized output
+12. Post-LLM validation: flag unverifiable line references and unsupported bug claims with `[unverified]` suffixes
+13. Cache complete results and yield `explore_result` SSE event
 
-**Fallback**: When embeddings are unavailable (model not loaded, index not ready), keyword matching on file paths provides ranked results.
+**Auto-refresh on branch changes**: When code is pushed to the linked branch, the next explore run automatically detects the new HEAD SHA, serves fresh content via keyword fallback (reads directly from GitHub API), and triggers a background reindex. No manual reindex needed — the semantic index catches up in the background for subsequent runs.
+
+**Fallback**: When embeddings are unavailable (model not loaded, index not ready, or index stale), keyword matching on file paths provides ranked results.
 
 **Key services**:
 - `embedding_service.py` — singleton model loader, `embed_texts()`, `embed_single()`, `cosine_search()`

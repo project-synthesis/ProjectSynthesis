@@ -196,6 +196,11 @@ class TestExploreFlow:
         with (
             patch("app.services.codebase_explorer.get_cache", return_value=mock_cache),
             patch("anyio.to_thread.run_sync", new_callable=AsyncMock),  # branch check
+            patch(
+                "app.services.codebase_explorer.get_branch_head_sha",
+                new_callable=AsyncMock,
+                return_value="abc123",
+            ),
         ):
             events = []
             async for event in run_explore(
@@ -262,6 +267,11 @@ class TestExploreFlow:
             patch("anyio.to_thread.run_sync", new_callable=AsyncMock),
             patch("app.services.codebase_explorer.get_cache", return_value=None),
             patch(
+                "app.services.codebase_explorer.get_branch_head_sha",
+                new_callable=AsyncMock,
+                return_value="abc123",
+            ),
+            patch(
                 "app.services.codebase_explorer.get_repo_tree",
                 new_callable=AsyncMock,
                 return_value=mock_tree,
@@ -305,6 +315,166 @@ class TestExploreFlow:
         assert "key_files_read" in result
         assert "observations" in result
         assert "explore_quality" in result
+
+
+class TestStaleIndexDetection:
+    """Test auto-refresh when branch HEAD changes."""
+
+    def _make_explore_mocks(
+        self,
+        *,
+        index_status: IndexStatus,
+        current_sha: str | None = "new_sha_abc",
+    ):
+        """Build the standard mock set for an explore run that reaches the index check."""
+        mock_provider = MagicMock()
+        mock_provider.complete_json = AsyncMock(return_value={
+            "tech_stack": ["Python"],
+            "key_files_read": ["main.py"],
+            "relevant_code_snippets": [],
+            "codebase_observations": ["obs"],
+            "prompt_grounding_notes": ["note"],
+        })
+        mock_tree = [
+            {"path": "README.md", "sha": "abc", "size_bytes": 500},
+            {"path": "main.py", "sha": "def", "size_bytes": 200},
+        ]
+        mock_idx_svc = MagicMock()
+        mock_idx_svc.get_index_status = AsyncMock(return_value=index_status)
+        mock_idx_svc.query_relevant_files = AsyncMock(return_value=[])
+        mock_idx_svc.build_index = AsyncMock()
+
+        return {
+            "provider": mock_provider,
+            "tree": mock_tree,
+            "idx_svc": mock_idx_svc,
+            "current_sha": current_sha,
+        }
+
+    async def _run(self, mocks):
+        from app.services.codebase_explorer import run_explore
+
+        with (
+            patch("anyio.to_thread.run_sync", new_callable=AsyncMock),
+            patch("app.services.codebase_explorer.get_cache", return_value=None),
+            patch(
+                "app.services.codebase_explorer.get_branch_head_sha",
+                new_callable=AsyncMock,
+                return_value=mocks["current_sha"],
+            ),
+            patch(
+                "app.services.codebase_explorer.get_repo_tree",
+                new_callable=AsyncMock,
+                return_value=mocks["tree"],
+            ),
+            patch(
+                "app.services.codebase_explorer.get_repo_index_service",
+                return_value=mocks["idx_svc"],
+            ),
+            patch(
+                "app.services.codebase_explorer.read_file_content",
+                new_callable=AsyncMock,
+                return_value="# content\nline2",
+            ),
+        ):
+            events = []
+            async for event in run_explore(
+                provider=mocks["provider"],
+                raw_prompt="test prompt",
+                repo_full_name="owner/repo",
+                repo_branch="main",
+                github_token="fake-token",
+            ):
+                events.append(event)
+        return events
+
+    @pytest.mark.asyncio
+    async def test_stale_index_triggers_background_reindex(self):
+        """SHA mismatch triggers background build_index and uses keyword fallback."""
+        mocks = self._make_explore_mocks(
+            index_status=IndexStatus(
+                status="ready", file_count=50, head_sha="old_sha_xyz",
+            ),
+            current_sha="new_sha_abc",
+        )
+        events = await self._run(mocks)
+
+        # build_index should have been called (background reindex)
+        mocks["idx_svc"].build_index.assert_called_once_with(
+            "fake-token", "owner/repo", "main",
+        )
+        # Semantic query should NOT have been called (stale index skipped)
+        mocks["idx_svc"].query_relevant_files.assert_not_called()
+
+        # Should still produce a valid explore_result via keyword fallback
+        result_events = [e for e in events if e[0] == "explore_result"]
+        assert len(result_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_fresh_index_uses_semantic_retrieval(self):
+        """Same SHA means index is fresh — uses semantic retrieval, no rebuild."""
+        mocks = self._make_explore_mocks(
+            index_status=IndexStatus(
+                status="ready", file_count=50, head_sha="same_sha",
+            ),
+            current_sha="same_sha",
+        )
+        events = await self._run(mocks)
+
+        # build_index should NOT have been called
+        mocks["idx_svc"].build_index.assert_not_called()
+        # Semantic query should have been called
+        mocks["idx_svc"].query_relevant_files.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sha_fetch_failure_falls_back_gracefully(self):
+        """When get_branch_head_sha returns None, no staleness detection occurs."""
+        mocks = self._make_explore_mocks(
+            index_status=IndexStatus(
+                status="ready", file_count=50, head_sha="old_sha",
+            ),
+            current_sha=None,  # SHA fetch failed
+        )
+        events = await self._run(mocks)
+
+        # Should NOT trigger reindex (can't compare SHAs)
+        mocks["idx_svc"].build_index.assert_not_called()
+        # Should use semantic retrieval normally
+        mocks["idx_svc"].query_relevant_files.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_legacy_index_without_sha_no_staleness_check(self):
+        """Legacy index rows with head_sha=None don't trigger staleness."""
+        mocks = self._make_explore_mocks(
+            index_status=IndexStatus(
+                status="ready", file_count=50, head_sha=None,
+            ),
+            current_sha="any_sha",
+        )
+        events = await self._run(mocks)
+
+        # No reindex triggered (can't compare — legacy row)
+        mocks["idx_svc"].build_index.assert_not_called()
+        # Normal semantic retrieval
+        mocks["idx_svc"].query_relevant_files.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stale_but_already_building_skips_rebuild(self):
+        """If index is stale but already building, don't fire another build task."""
+        mocks = self._make_explore_mocks(
+            index_status=IndexStatus(
+                status="building", file_count=50, head_sha="old_sha",
+            ),
+            current_sha="new_sha",
+        )
+        events = await self._run(mocks)
+
+        # build_index should NOT be called (already building)
+        mocks["idx_svc"].build_index.assert_not_called()
+
+        # Should still produce a result via keyword fallback
+        result_events = [e for e in events if e[0] == "explore_result"]
+        assert len(result_events) == 1
 
 
 class TestCodebaseContext:

@@ -114,6 +114,14 @@ class TestIndexStatus:
         assert IndexStatus(status="ready", expires_at=future).is_expired is False
         assert IndexStatus(status="ready", expires_at=None).is_expired is False
 
+    def test_head_sha_defaults_to_none(self):
+        status = IndexStatus(status="ready")
+        assert status.head_sha is None
+
+    def test_head_sha_stored(self):
+        status = IndexStatus(status="ready", head_sha="abc123def456")
+        assert status.head_sha == "abc123def456"
+
 
 class TestRepoIndexServiceQuery:
     """Test query_relevant_files."""
