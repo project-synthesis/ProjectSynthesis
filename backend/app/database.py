@@ -149,6 +149,8 @@ async def _migrate_add_missing_indexes(eng=None) -> None:
         ("idx_optimizations_is_improvement", "optimizations", "is_improvement"),
         ("idx_optimizations_linked_repo", "optimizations", "linked_repo_full_name"),
         ("idx_optimizations_retry_of", "optimizations", "retry_of"),
+        ("idx_optimizations_user_listing", "optimizations",
+         "user_id, deleted_at, created_at DESC"),
     ]
 
     async with _eng.begin() as conn:

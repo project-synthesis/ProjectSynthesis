@@ -52,9 +52,10 @@ async def test_pool_pre_ping():
 
 
 async def test_missing_indices_created(tmp_path):
-    """_migrate_add_missing_indexes must create all 5 new indices on optimizations."""
+    """_migrate_add_missing_indexes must create all expected indices on optimizations."""
     import app.models.auth  # noqa: F401
     import app.models.github  # noqa: F401
+    import app.models.optimization  # noqa: F401
 
     db_path = tmp_path / "idx_test.db"
     eng = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
@@ -139,4 +140,28 @@ async def test_schema_additions_migrated(tmp_path):
         cols2 = {row[1] for row in result2.fetchall()}
         assert "avatar_url" in cols2
 
+    await eng.dispose()
+
+
+async def test_migrate_adds_composite_user_listing_index(tmp_path):
+    """_migrate_add_missing_indexes creates idx_optimizations_user_listing."""
+    import app.models.optimization  # noqa: F401
+    import app.models.auth          # noqa: F401
+    import app.models.github        # noqa: F401
+
+    eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/idx_user_listing.db")
+    from app.database import Base, _migrate_add_missing_indexes
+
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    await _migrate_add_missing_indexes(eng)
+
+    async with eng.connect() as conn:
+        result = await conn.execute(
+            sa.text("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='optimizations'")
+        )
+        index_names = {row[0] for row in result.fetchall()}
+
+    assert "idx_optimizations_user_listing" in index_names
     await eng.dispose()

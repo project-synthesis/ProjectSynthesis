@@ -88,12 +88,23 @@ class Optimization(Base):
     linked_repo_branch = Column(Text, nullable=True)
     codebase_context_snapshot = Column(Text, nullable=True)  # JSON
 
+    # ── JSON-as-TEXT columns ────────────────────────────────────────────
+    # weaknesses, strengths, changes_made, issues, tags, secondary_frameworks
+    # are stored as JSON-encoded TEXT. At current scale (< 10K rows),
+    # application-level deserialization is acceptable. Upgrade paths:
+    #   SQLite:     json_extract(col, '$') + json_each() for membership tests
+    #   PostgreSQL: migrate to JSONB columns; use @> containment operator
+    #   Junction:   tags -> optimization_tags (id, tag) for heavy filtering
+    # ────────────────────────────────────────────────────────────────────
+
     __table_args__ = (
         Index("idx_optimizations_project", "project"),
         Index("idx_optimizations_task_type", "task_type"),
         Index("idx_optimizations_created_at", created_at.desc()),
         Index("idx_optimizations_user_id", "user_id"),
         Index("idx_optimizations_retry_of", "retry_of"),
+        Index("idx_optimizations_user_listing",
+              "user_id", "deleted_at", created_at.desc()),
     )
 
     def to_dict(self) -> dict:
