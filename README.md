@@ -67,6 +67,13 @@ We tag releases when meaningful milestones land. Watch the repo if you want to f
 
 ---
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) &nbsp; [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Claude](https://img.shields.io/badge/Powered_by-Claude-cc785c.svg?logo=anthropic&logoColor=white)](https://www.anthropic.com/claude)
+[![MCP](https://img.shields.io/badge/MCP-enabled-6366f1.svg)](docs/MCP.md)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg?logo=docker&logoColor=white)](docker-compose.yml)
 
-[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Terms](TERMS.md) · [Architecture](CLAUDE.md)
+`RAG` · `prompt engineering` · `agentic AI` · `codebase-aware` · `semantic search` · `real-time streaming` · `SSE` · `vector embeddings` · `multi-stage pipeline` · `MCP server` · `Claude API` · `FastAPI` · `SvelteKit` · `Svelte 5` · `Tailwind CSS 4` · `SQLAlchemy` · `sentence-transformers` · `Redis` · `Docker Compose` · `self-hosted`
+
+[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Terms](docs/TERMS.md) · [Architecture](CLAUDE.md)

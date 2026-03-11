@@ -34,7 +34,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by opening a [GitHub issue](../../issues) or contacting the maintainers directly via the support channels listed in [SUPPORT.md](SUPPORT.md). All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by opening a [GitHub issue](../../issues) or contacting the maintainers directly via the support channels listed in [SUPPORT.md](docs/SUPPORT.md). All complaints will be reviewed and investigated promptly and fairly.
 
 ## Enforcement Guidelines
 
