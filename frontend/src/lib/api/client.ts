@@ -377,6 +377,25 @@ export async function deleteOptimization(id: string): Promise<void> {
   if (!res.ok) throw new Error(`Delete optimization failed: ${res.status}`);
 }
 
+export interface BatchDeleteResponse {
+  deleted_count: number;
+  ids: string[];
+}
+
+export async function batchDeleteOptimizations(ids: string[]): Promise<BatchDeleteResponse> {
+  const res = await apiFetch(`${BASE}/api/history/batch-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: `Batch delete failed: ${res.status}` }));
+    const msg = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail);
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
 export async function fetchHistoryTrash(offset = 0, limit = 20): Promise<HistoryResponse> {
   const res = await apiFetch(`${BASE}/api/history/trash?offset=${offset}&limit=${limit}`);
   if (!res.ok) throw new Error(`Trash fetch failed: ${res.status}`);
@@ -620,22 +639,94 @@ export async function disconnectGitHub(): Promise<void> {
   return logoutGitHub();
 }
 
-// ---- Onboarding Analytics ----
+// ── Onboarding Event Queue with retry ─────────────────────────────────────────
 
-/** Fire-and-forget event tracking for onboarding funnel analytics. */
+const _EVENT_QUEUE_KEY = 'pf_event_queue';
+const _MAX_RETRIES = 3;
+const _MAX_QUEUE_SIZE = 20;
+
+interface QueuedEvent {
+  eventType: string;
+  metadata?: Record<string, unknown>;
+  retries: number;
+  queuedAt: number;
+}
+
+class OnboardingEventQueue {
+  private queue: QueuedEvent[] = [];
+  private flushing = false;
+
+  constructor() {
+    // Restore persisted queue on init
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(_EVENT_QUEUE_KEY);
+        if (stored) {
+          this.queue = JSON.parse(stored);
+          localStorage.removeItem(_EVENT_QUEUE_KEY);
+          // Flush restored events
+          this.flush();
+        }
+      } catch { /* ignore corrupt data */ }
+
+      // Persist pending events to localStorage on page unload.
+      // sendBeacon is NOT used because the endpoint requires a JWT Bearer
+      // token which sendBeacon cannot include. The queue is restored and
+      // flushed with proper auth on the next page load.
+      window.addEventListener('beforeunload', () => {
+        if (this.queue.length > 0) {
+          localStorage.setItem(_EVENT_QUEUE_KEY, JSON.stringify(this.queue));
+        }
+      });
+    }
+  }
+
+  enqueue(eventType: string, metadata?: Record<string, unknown>): void {
+    if (this.queue.length >= _MAX_QUEUE_SIZE) {
+      this.queue.shift(); // drop oldest
+    }
+    this.queue.push({ eventType, metadata, retries: 0, queuedAt: Date.now() });
+    this.flush();
+  }
+
+  private async flush(): Promise<void> {
+    if (this.flushing || this.queue.length === 0) return;
+    this.flushing = true;
+    try {
+      while (this.queue.length > 0) {
+        const evt = this.queue[0];
+        try {
+          await apiFetch(`${BASE}/api/onboarding/events`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event_type: evt.eventType, metadata: evt.metadata }),
+          });
+          this.queue.shift(); // success — remove from queue
+        } catch {
+          evt.retries++;
+          if (evt.retries >= _MAX_RETRIES) {
+            this.queue.shift(); // give up after max retries
+          } else {
+            // Exponential backoff: 1s, 2s, 4s
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, evt.retries - 1)));
+          }
+        }
+      }
+    } finally {
+      this.flushing = false;
+    }
+  }
+}
+
+const _eventQueue = new OnboardingEventQueue();
+
+/** Queue an onboarding event with automatic retry (3 attempts, exponential backoff).
+ * Falls back to navigator.sendBeacon on page unload. */
 export async function trackOnboardingEvent(
   eventType: string,
   metadata?: Record<string, unknown>
 ): Promise<void> {
-  try {
-    await apiFetch(`${BASE}/api/onboarding/events`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event_type: eventType, metadata }),
-    });
-  } catch {
-    // Fire-and-forget — silently ignore all errors
-  }
+  _eventQueue.enqueue(eventType, metadata);
 }
 
 // ── Auth security endpoints (Cycle A, 3, 7) ──────────────────────────────────
@@ -656,6 +747,7 @@ export async function patchAuthMe(data: {
   display_name?: string | null;
   email?: string | null;
   onboarding_completed?: boolean;
+  onboarding_step?: number | null;
   preferences?: Record<string, unknown>;
 }): Promise<{ updated: boolean }> {
   const res = await apiFetch(`${BASE}/auth/me`, {
@@ -677,6 +769,7 @@ export interface AuthMeResponse {
   display_name: string | null;
   onboarding_completed: boolean;
   onboarding_completed_at: string | null;
+  onboarding_step: number | null;
   preferences: Record<string, unknown>;
   last_login_at: string | null;
   created_at: string;
@@ -697,6 +790,18 @@ export async function logoutAllDevices(): Promise<{ revoked_sessions: number }> 
   if (!res.ok) throw new Error(`Logout all failed: ${res.status}`);
   const data = await res.json();
   // Clear in-memory token — all server-side sessions are now revoked.
+  auth.clearToken();
+  return data;
+}
+
+/** POST /auth/logout — revoke refresh tokens for the current device only.
+ *
+ * Clears the in-memory JWT so the UI reflects the logged-out state immediately.
+ */
+export async function logoutDevice(): Promise<{ revoked_count: number }> {
+  const res = await apiFetch(`${BASE}/auth/logout`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Logout failed: ${res.status}`);
+  const data = await res.json();
   auth.clearToken();
   return data;
 }

@@ -3,7 +3,7 @@
   import { editor } from '$lib/stores/editor.svelte';
   import { forge } from '$lib/stores/forge.svelte';
   import { toast } from '$lib/stores/toast.svelte';
-  import { fetchHistory, fetchHistoryStats, fetchOptimization, deleteOptimization, fetchHistoryTrash, restoreOptimization, patchOptimization, type HistoryStats, type HistoryResponse } from '$lib/api/client';
+  import { fetchHistory, fetchHistoryStats, fetchOptimization, deleteOptimization, fetchHistoryTrash, restoreOptimization, patchOptimization, batchDeleteOptimizations, type HistoryStats, type HistoryResponse } from '$lib/api/client';
   import { getStrategyHex } from '$lib/utils/strategy';
   import ScoreCircle from '$lib/components/shared/ScoreCircle.svelte';
   import { onMount, tick } from 'svelte';
@@ -12,6 +12,7 @@
   let stats = $state<HistoryStats | null>(null);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedIds = $state<Set<string>>(new Set());
+  let confirmBatchDelete = $state(false);
   let showFilters = $state(false);
 
   // Inline title editing state
@@ -60,6 +61,24 @@
   }
 
   function clearSelection() { selectedIds = new Set(); }
+
+  async function handleBatchDelete() {
+    if (!confirmBatchDelete) {
+      confirmBatchDelete = true;
+      return;
+    }
+    confirmBatchDelete = false;
+    const ids = Array.from(selectedIds);
+    const success = await history.batchDelete(ids);
+    if (success) {
+      selectedIds = new Set();
+      await loadStats();
+    }
+  }
+
+  function cancelBatchDelete() {
+    confirmBatchDelete = false;
+  }
 
   function handleCompare() {
     // Open a diff view comparing the two selected entries
@@ -394,20 +413,44 @@
       </div>
     </div>
 
-    <!-- Compare toolbar -->
-    {#if selectedIds.size >= 2}
+    <!-- Selection toolbar -->
+    {#if selectedIds.size >= 1}
       <div class="px-2 py-1.5 border-b border-neon-cyan/20 bg-neon-cyan/5 flex items-center justify-between">
         <span class="text-[10px] text-neon-cyan">{selectedIds.size} selected</span>
         <div class="flex items-center gap-1">
+          {#if selectedIds.size === 2}
+            <button
+              class="text-[10px] px-2 py-0.5 bg-neon-cyan/20 border border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/30 transition-colors"
+              onclick={handleCompare}
+            >
+              Compare
+            </button>
+          {/if}
+          {#if confirmBatchDelete}
+            <span class="text-[10px] text-neon-red">Confirm?</span>
+            <button
+              class="text-[10px] px-2 py-0.5 bg-neon-red/20 border border-neon-red/40 text-neon-red hover:bg-neon-red/30 transition-colors"
+              onclick={handleBatchDelete}
+            >
+              Yes, delete
+            </button>
+            <button
+              class="text-[10px] px-1.5 py-0.5 text-text-dim hover:text-text-secondary transition-colors"
+              onclick={cancelBatchDelete}
+            >
+              No
+            </button>
+          {:else}
+            <button
+              class="text-[10px] px-2 py-0.5 bg-neon-red/10 border border-neon-red/20 text-neon-red/70 hover:text-neon-red hover:border-neon-red/40 hover:bg-neon-red/20 transition-colors"
+              onclick={handleBatchDelete}
+            >
+              Delete Selected
+            </button>
+          {/if}
           <button
-            class="text-[10px] px-2 py-0.5 rounded bg-neon-cyan/20 border border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/30 transition-colors"
-            onclick={handleCompare}
-          >
-            Compare
-          </button>
-          <button
-            class="text-[10px] px-1.5 py-0.5 rounded text-text-dim hover:text-text-secondary transition-colors"
-            onclick={clearSelection}
+            class="text-[10px] px-1.5 py-0.5 text-text-dim hover:text-text-secondary transition-colors"
+            onclick={() => { clearSelection(); cancelBatchDelete(); }}
           >
             Cancel
           </button>

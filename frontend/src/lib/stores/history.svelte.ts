@@ -1,4 +1,4 @@
-import { fetchHistory, fetchHistoryTrash, restoreOptimization } from '$lib/api/client';
+import { fetchHistory, fetchHistoryTrash, restoreOptimization, batchDeleteOptimizations } from '$lib/api/client';
 import { toast } from '$lib/stores/toast.svelte';
 
 export interface HistoryEntry {
@@ -164,6 +164,24 @@ class HistoryStore {
       toast.success('Optimization restored');
     } catch (err) {
       toast.error(`Restore failed: ${(err as Error).message}`);
+    }
+  }
+
+  async batchDelete(ids: string[]): Promise<boolean> {
+    try {
+      const result = await batchDeleteOptimizations(ids);
+      // Remove deleted entries from local state
+      const deletedSet = new Set(result.ids);
+      this.entries = this.entries.filter(e => !deletedSet.has(e.id));
+      this.totalCount = Math.max(0, this.totalCount - result.deleted_count);
+      if (this.selectedId && deletedSet.has(this.selectedId)) {
+        this.selectedId = null;
+      }
+      toast.success(`Deleted ${result.deleted_count} optimization${result.deleted_count > 1 ? 's' : ''}`);
+      return true;
+    } catch (err) {
+      toast.error(`Batch delete failed: ${(err as Error).message}`);
+      return false;
     }
   }
 }
