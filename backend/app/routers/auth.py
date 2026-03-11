@@ -218,7 +218,10 @@ async def logout_single_device(
     # Clear the refresh cookie on this device
     response.delete_cookie(key="jwt_refresh_token", path="/auth/jwt/refresh")
 
-    await log_auth_event(AUTH_LOGOUT, request, user_id=current_user.id, metadata={"device_id": device_id, "revoked_count": count})
+    await log_auth_event(
+        AUTH_LOGOUT, request, user_id=current_user.id,
+        metadata={"device_id": device_id, "revoked_count": count},
+    )
 
     return {"revoked_count": count}
 

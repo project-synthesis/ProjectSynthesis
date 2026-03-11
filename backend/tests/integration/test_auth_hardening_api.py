@@ -10,15 +10,7 @@ Run: cd backend && source .venv/bin/activate && pytest tests/integration/test_au
 """
 from __future__ import annotations
 
-import json
-
-import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from tests.integration.conftest import TEST_USER_ID, TEST_USER_LOGIN
-
 
 # ── POST /auth/logout ─────────────────────────────────────────────────────
 

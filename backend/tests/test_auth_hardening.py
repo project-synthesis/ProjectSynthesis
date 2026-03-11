@@ -10,7 +10,6 @@ Run: cd backend && source .venv/bin/activate && pytest tests/test_auth_hardening
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -210,7 +209,6 @@ def test_multifernet_decrypts_old_key_tokens_after_rotation():
     """After key rotation, tokens encrypted with the old key can still be decrypted."""
     from cryptography.fernet import Fernet
 
-    from app.services.github_service import _fernet_lock
 
     old_key = Fernet.generate_key().decode()
     new_key = Fernet.generate_key().decode()
