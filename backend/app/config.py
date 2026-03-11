@@ -14,6 +14,7 @@ _WEAK_DEFAULTS = {
 }
 
 _SECRETS_FILE = Path("data/.app_secrets")
+_REDIS_PASSWORD_FILE = Path("data/.redis_password")
 
 
 class Settings(BaseSettings):
@@ -145,12 +146,64 @@ class Settings(BaseSettings):
 
         object.__setattr__(self, field_name, new_secret)
 
+    def _resolve_redis_password(self) -> None:
+        """Load Redis password from file when env var is not set.
+
+        In Docker, ``secrets-init`` generates ``data/.redis_password`` before
+        this process starts.  Env var ``REDIS_PASSWORD`` always takes precedence.
+
+        Validates that a file-based password is at least 32 characters to guard
+        against corrupted or truncated writes.
+        """
+        _log = logging.getLogger(__name__)
+
+        if self.REDIS_PASSWORD:
+            return  # Explicit env var — use it
+
+        if not _REDIS_PASSWORD_FILE.exists():
+            # Expected in local dev (no Docker, no file) — not an error.
+            return
+
+        try:
+            pw = _REDIS_PASSWORD_FILE.read_text().strip()
+        except OSError as exc:
+            _log.warning(
+                "SECURITY: Redis password file %s exists but is unreadable: %s. "
+                "Redis will attempt connection without auth.",
+                _REDIS_PASSWORD_FILE,
+                exc,
+            )
+            return
+
+        if not pw:
+            _log.warning(
+                "SECURITY: Redis password file %s is empty. "
+                "Redis will attempt connection without auth.",
+                _REDIS_PASSWORD_FILE,
+            )
+            return
+
+        if len(pw) < 32:
+            _log.warning(
+                "SECURITY: Redis password file %s contains only %d chars "
+                "(expected ≥32). File may be corrupted — ignoring.",
+                _REDIS_PASSWORD_FILE,
+                len(pw),
+            )
+            return
+
+        object.__setattr__(self, "REDIS_PASSWORD", pw)
+        _log.info("Redis password loaded from %s", _REDIS_PASSWORD_FILE)
+
     def model_post_init(self, __context) -> None:
         _log = logging.getLogger(__name__)
 
         # Auto-generate crypto secrets if using weak defaults
         for field, weak in _WEAK_DEFAULTS.items():
             self._bootstrap_secret(field, weak)
+
+        # Resolve Redis password from file if env var is empty
+        self._resolve_redis_password()
 
         # Warn if still using weak defaults (should only happen if file I/O failed)
         for field, weak in _WEAK_DEFAULTS.items():
