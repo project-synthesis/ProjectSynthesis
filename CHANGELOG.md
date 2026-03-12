@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Fixed SSE parser in `forge.svelte.ts` `_consumeSSEResponse` to concatenate multi-line `data:` fields (parity with `client.ts` fix — retry streams could silently drop data)
+- Fixed `save_settings` to use atomic temp-file + `os.replace` pattern (prevents settings corruption on crash)
+- Added indeterminate progress bar to `StageOptimize` when streaming is disabled (batch mode no longer shows bare spinner)
+- Added tooltip to Stream optimize toggle explaining streaming vs batch mode trade-off
+- Changed Welcome tab to adaptive layout — checklist collapses to single "All systems ready" line when 5/5 complete, reclaiming ~126px for returning users
+- Removed decorative gradient header from Welcome tab (`bg-gradient-to-r bg-clip-text` violated zero-effects directive)
+- Changed Welcome tab to 3-column grid layout — sample prompts in 3×3 card grid (9 cards), keyboard shortcuts grid aligned to same rhythm
+- Changed sample prompt cards from horizontal scroll to compact clickable cards (whole card is the action, removed separate TRY THIS button and 2-line description)
+- Changed Welcome tab container from `max-w-xl` to `max-w-2xl` to accommodate 3-column card grid
+- Changed Keyboard Shortcuts heading to reference-tier dimming (`text-text-secondary`, `text-text-dim/50`)
+- Removed dead `user` store import from `WelcomeTab.svelte`
+- Changed StatusBar from flat pipe-separated list to 3-zone semantic layout (Health, Context, Workspace) with progressive disclosure and visual hierarchy
+- Removed `ProviderBadge` component — logic inlined into StatusBar as flat label + dot (eliminates `rounded-md` brand violation)
 - Changed `sort` and `order` query parameters to return 400 on invalid values instead of silently defaulting
 - Improved SSE parser in `client.ts` to concatenate multi-line `data:` fields per SSE spec
 - Added wiring for all 6 pipeline settings — `default_model`, `pipeline_timeout`, `max_retries`, `default_strategy`, `stream_optimize`, and `auto_validate` now control pipeline behavior
