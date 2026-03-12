@@ -4,13 +4,12 @@ Classifies the prompt and identifies optimization opportunities.
 Uses claude-sonnet for structured JSON extraction with streaming.
 """
 
-import asyncio
 import logging
 from typing import AsyncGenerator, Optional
 
 from app.config import settings
 from app.prompts.analyzer_prompt import get_analyzer_prompt
-from app.providers.base import MODEL_ROUTING, LLMProvider, parse_json_robust
+from app.providers.base import MODEL_ROUTING, LLMProvider
 from app.services.cache_service import get_cache
 from app.services.context_builders import (
     build_codebase_summary,
@@ -18,6 +17,7 @@ from app.services.context_builders import (
     format_instructions,
     format_url_contexts,
 )
+from app.services.stage_runner import extract_json_with_fallback, stream_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -80,74 +80,36 @@ async def run_analyze(
 
     model = model or MODEL_ROUTING["analyze"]
 
-    # Stream with background task + queue (same pattern as optimizer.py).
-    # This lets step_progress events flow to the client in real time while
-    # we accumulate the full text for JSON extraction.
+    stream_ok = False
     full_text = ""
-    stream_failed = False
-    chunk_queue: asyncio.Queue = asyncio.Queue()
+    async for status, text in stream_with_timeout(
+        provider, system_prompt, user_message, model,
+        settings.ANALYZE_TIMEOUT_SECONDS, "Stage 1 (Analyze)",
+    ):
+        if status == "chunk":
+            yield ("step_progress", {"step": "analyze", "content": text})
+        elif status == "done":
+            full_text = text  # type: ignore[assignment]
+            stream_ok = True
+        elif status == "timeout":
+            full_text = text or ""  # type: ignore[assignment]
 
-    async def _stream_worker() -> None:
-        try:
-            async for chunk in provider.stream(system_prompt, user_message, model):
-                await chunk_queue.put(chunk)
-        finally:
-            await chunk_queue.put(None)  # Sentinel — always sent even on error
-
-    stream_task = asyncio.create_task(_stream_worker())
-    timeout_handle = asyncio.get_running_loop().call_later(
-        settings.ANALYZE_TIMEOUT_SECONDS,
-        lambda: stream_task.cancel() if not stream_task.done() else None,
+    result = await extract_json_with_fallback(
+        provider, system_prompt, user_message, model,
+        settings.ANALYZE_TIMEOUT_SECONDS, "Stage 1 (Analyze)",
+        full_text, stream_ok,
+        quality_key="analysis_quality",
+        quality_value_success="full",
+        quality_value_fallback_json="full",
+        default_result={
+            "task_type": "general",
+            "weaknesses": ["Analysis failed - using defaults"],
+            "strengths": [],
+            "complexity": "moderate",
+            "recommended_frameworks": [],
+            "analysis_quality": "fallback",
+        },
     )
-
-    try:
-        while True:
-            chunk = await chunk_queue.get()
-            if chunk is None:
-                break
-            full_text += chunk
-            yield ("step_progress", {"step": "analyze", "content": chunk})
-        await stream_task
-    except asyncio.CancelledError:
-        logger.warning("Analyze stage streaming timed out after %ds", settings.ANALYZE_TIMEOUT_SECONDS)
-        stream_failed = True
-    except Exception as e:
-        logger.error(f"Stage 1 (Analyze) streaming failed: {e}")
-        stream_failed = True
-    finally:
-        timeout_handle.cancel()
-        if not stream_task.done():
-            stream_task.cancel()
-
-    # JSON extraction from streamed text (parse_json_robust handles text-prefixed JSON)
-    result = None
-    if not stream_failed and full_text:
-        try:
-            result = parse_json_robust(full_text)
-            result["analysis_quality"] = "full"
-        except Exception:
-            pass
-
-    # Fallback to complete_json when streaming failed or parse failed
-    if not result:
-        try:
-            result = await asyncio.wait_for(
-                provider.complete_json(system_prompt, user_message, model),
-                timeout=settings.ANALYZE_TIMEOUT_SECONDS,
-            )
-            result["analysis_quality"] = "full"
-        except Exception as e:
-            logger.error(f"Stage 1 (Analyze) failed: {e}")
-            # Return sensible defaults so downstream stages can still run
-            result = {
-                "task_type": "general",
-                "weaknesses": ["Analysis failed - using defaults"],
-                "strengths": [],
-                "complexity": "moderate",
-                "recommended_frameworks": [],
-                "analysis_quality": "fallback",
-            }
-            # codebase_informed will be set by the setdefault block below
 
     # Ensure required fields
     result.setdefault("task_type", "general")

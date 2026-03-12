@@ -4,13 +4,12 @@ Selects the optimal optimization framework combination.
 Uses claude-opus for deep reasoning about framework selection.
 """
 
-import asyncio
 import logging
 from typing import AsyncGenerator, Optional
 
 from app.config import settings
 from app.prompts.strategy_prompt import get_strategy_prompt
-from app.providers.base import MODEL_ROUTING, LLMProvider, parse_json_robust
+from app.providers.base import MODEL_ROUTING, LLMProvider
 from app.services.cache_service import CacheService, get_cache
 from app.services.context_builders import (
     build_analysis_summary,
@@ -19,6 +18,7 @@ from app.services.context_builders import (
     format_instructions,
     format_url_contexts,
 )
+from app.services.stage_runner import extract_json_with_fallback, stream_with_timeout
 from app.services.strategy_selector import heuristic_strategy_fallback
 
 logger = logging.getLogger(__name__)
@@ -98,64 +98,32 @@ async def run_strategy(
 
     model = model or MODEL_ROUTING["strategy"]
 
-    # Stream with background task + queue (same pattern as optimizer.py).
+    stream_ok = False
     full_text = ""
-    stream_failed = False
-    chunk_queue: asyncio.Queue = asyncio.Queue()
+    async for status, text in stream_with_timeout(
+        provider, system_prompt, user_message, model,
+        settings.STRATEGY_TIMEOUT_SECONDS, "Stage 2 (Strategy)",
+    ):
+        if status == "chunk":
+            yield ("step_progress", {"step": "strategy", "content": text})
+        elif status == "done":
+            full_text = text  # type: ignore[assignment]
+            stream_ok = True
+        elif status == "timeout":
+            full_text = text or ""  # type: ignore[assignment]
 
-    async def _stream_worker() -> None:
-        try:
-            async for chunk in provider.stream(system_prompt, user_message, model):
-                await chunk_queue.put(chunk)
-        finally:
-            await chunk_queue.put(None)
-
-    stream_task = asyncio.create_task(_stream_worker())
-    timeout_handle = asyncio.get_running_loop().call_later(
-        settings.STRATEGY_TIMEOUT_SECONDS,
-        lambda: stream_task.cancel() if not stream_task.done() else None,
+    result = await extract_json_with_fallback(
+        provider, system_prompt, user_message, model,
+        settings.STRATEGY_TIMEOUT_SECONDS, "Stage 2 (Strategy)",
+        full_text, stream_ok,
+        quality_key="strategy_source",
+        quality_value_success="llm",
+        quality_value_fallback_json="llm_json",
+        default_result={
+            **heuristic_strategy_fallback(analysis.get("task_type", "general")),
+            "strategy_source": "heuristic",
+        },
     )
-
-    try:
-        while True:
-            chunk = await chunk_queue.get()
-            if chunk is None:
-                break
-            full_text += chunk
-            yield ("step_progress", {"step": "strategy", "content": chunk})
-        await stream_task
-    except asyncio.CancelledError:
-        logger.warning("Strategy stage streaming timed out after %ds", settings.STRATEGY_TIMEOUT_SECONDS)
-        stream_failed = True
-    except Exception as e:
-        logger.error(f"Stage 2 (Strategy) streaming failed: {e}")
-        stream_failed = True
-    finally:
-        timeout_handle.cancel()
-        if not stream_task.done():
-            stream_task.cancel()
-
-    # JSON extraction from streamed text
-    result = None
-    if not stream_failed and full_text:
-        try:
-            result = parse_json_robust(full_text)
-            result["strategy_source"] = "llm"
-        except Exception:
-            pass
-
-    # Fallback to complete_json when streaming failed or parse failed
-    if not result:
-        try:
-            result = await asyncio.wait_for(
-                provider.complete_json(system_prompt, user_message, model),
-                timeout=settings.STRATEGY_TIMEOUT_SECONDS,
-            )
-            result["strategy_source"] = "llm_json"
-        except Exception as e:
-            logger.error(f"Stage 2 (Strategy) failed: {e}. Using heuristic fallback.")
-            result = heuristic_strategy_fallback(analysis.get("task_type", "general"))
-            result["strategy_source"] = "heuristic"
 
     # Ensure required fields — derive default from task_type heuristic
     # rather than hardcoding a single framework

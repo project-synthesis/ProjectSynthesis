@@ -5,15 +5,15 @@ Uses claude-sonnet for quality assessment.
 Server-side weighted average computation (never trust LLM arithmetic).
 """
 
-import asyncio
 import json
 import logging
 from typing import AsyncGenerator
 
 from app.config import settings
 from app.prompts.validator_prompt import get_validator_prompt
-from app.providers.base import MODEL_ROUTING, LLMProvider, parse_json_robust
+from app.providers.base import MODEL_ROUTING, LLMProvider
 from app.services.context_builders import build_codebase_summary
+from app.services.stage_runner import extract_json_with_fallback, stream_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -136,61 +136,28 @@ async def run_validate(
 
     model = model or MODEL_ROUTING["validate"]
 
-    # Stream with background task + queue (same pattern as optimizer.py).
+    stream_ok = False
     full_text = ""
-    stream_failed = False
-    chunk_queue: asyncio.Queue = asyncio.Queue()
+    async for status, text in stream_with_timeout(
+        provider, system_prompt, user_message, model,
+        settings.VALIDATE_TIMEOUT_SECONDS, "Stage 4 (Validate)",
+    ):
+        if status == "chunk":
+            yield ("step_progress", {"step": "validate", "content": text})
+        elif status == "done":
+            full_text = text  # type: ignore[assignment]
+            stream_ok = True
+        elif status == "timeout":
+            full_text = text or ""  # type: ignore[assignment]
 
-    async def _stream_worker() -> None:
-        try:
-            async for chunk in provider.stream(system_prompt, user_message, model):
-                await chunk_queue.put(chunk)
-        finally:
-            await chunk_queue.put(None)
-
-    stream_task = asyncio.create_task(_stream_worker())
-    timeout_handle = asyncio.get_running_loop().call_later(
-        settings.VALIDATE_TIMEOUT_SECONDS,
-        lambda: stream_task.cancel() if not stream_task.done() else None,
+    raw = await extract_json_with_fallback(
+        provider, system_prompt, user_message, model,
+        settings.VALIDATE_TIMEOUT_SECONDS, "Stage 4 (Validate)",
+        full_text, stream_ok,
+        quality_key="validation_quality",
+        quality_value_success=None,  # Don't set on success (validator doesn't use quality flag for success)
+        default_result=_default_validation(),
     )
-
-    try:
-        while True:
-            chunk = await chunk_queue.get()
-            if chunk is None:
-                break
-            full_text += chunk
-            yield ("step_progress", {"step": "validate", "content": chunk})
-        await stream_task
-    except asyncio.CancelledError:
-        logger.warning("Validate stage streaming timed out after %ds", settings.VALIDATE_TIMEOUT_SECONDS)
-        stream_failed = True
-    except Exception as e:
-        logger.error(f"Stage 4 (Validate) streaming failed: {e}")
-        stream_failed = True
-    finally:
-        timeout_handle.cancel()
-        if not stream_task.done():
-            stream_task.cancel()
-
-    # JSON extraction from streamed text
-    raw = None
-    if not stream_failed and full_text:
-        try:
-            raw = parse_json_robust(full_text)
-        except Exception:
-            pass
-
-    # Fallback to complete_json when streaming failed or parse failed
-    if not raw:
-        try:
-            raw = await asyncio.wait_for(
-                provider.complete_json(system_prompt, user_message, model),
-                timeout=settings.VALIDATE_TIMEOUT_SECONDS,
-            )
-        except Exception as e:
-            logger.error(f"Stage 4 (Validate) failed: {e}")
-            raw = _default_validation()
 
     # Ensure all raw score fields exist and are numeric before computing
     for field in SCORE_WEIGHTS:
