@@ -1,4 +1,5 @@
 import { retryOptimization, fetchOptimization, type SSEEvent } from '$lib/api/client';
+import { parseSSEStream, POLL_INTERVAL_MS, MAX_POLL_ATTEMPTS } from '$lib/utils/sse-parser';
 import { toast } from '$lib/stores/toast.svelte';
 
 export type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped' | 'timed_out' | 'cancelled';
@@ -400,37 +401,9 @@ class ForgeStore {
   ): Promise<void> {
     if (!res.body) throw new Error('No response body for SSE stream');
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
     try {
-      while (true) {
-        if (signal.aborted) break;
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-
-        for (const raw of events) {
-          if (!raw.trim()) continue;
-          const typeMatch = raw.match(/^event: (.+)$/m);
-          // Concatenate all `data:` lines per SSE spec (multi-line safe)
-          const dataLines = raw.match(/^data: (.+)$/gm);
-          if (typeMatch && dataLines) {
-            const payload = dataLines.map((l) => l.slice(6)).join('\n');
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(payload);
-            } catch {
-              parsed = payload;
-            }
-            this.handleSSEEvent({ event: typeMatch[1], data: parsed });
-            await Promise.resolve(); // yield so Svelte flushes between events
-          }
-        }
+      for await (const sseEvent of parseSSEStream(res.body!, signal)) {
+        this.handleSSEEvent(sseEvent);
       }
       if (this.isForging) this.finishForge();
     } catch (err) {
@@ -447,8 +420,6 @@ class ForgeStore {
 
   /** Poll GET /api/optimize/:id until the record reaches a terminal status. */
   private async _pollUntilComplete(id: string, signal: AbortSignal): Promise<void> {
-    const POLL_INTERVAL_MS = 5000;
-    const MAX_POLL_ATTEMPTS = 12; // 60 s max
     for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
       if (signal.aborted) return;
       if (i > 0) await new Promise(res => setTimeout(res, POLL_INTERVAL_MS));

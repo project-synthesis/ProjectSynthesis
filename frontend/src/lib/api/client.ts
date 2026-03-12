@@ -1,5 +1,6 @@
 import type { HistoryEntry } from '$lib/stores/history.svelte';
 import { auth } from '$lib/stores/auth.svelte';
+import { parseSSEStream, POLL_INTERVAL_MS, MAX_POLL_ATTEMPTS, type SSEEvent } from '$lib/utils/sse-parser';
 
 const BASE = '';
 
@@ -191,10 +192,8 @@ export async function fetchHealth(): Promise<HealthResponse> {
 
 // ---- SSE Optimization Stream ----
 
-export interface SSEEvent {
-  event: string;
-  data: unknown;
-}
+// Re-export SSE types from the shared parser module
+export type { SSEEvent } from '$lib/utils/sse-parser';
 
 export type SSECallback = (event: SSEEvent) => void;
 
@@ -233,39 +232,10 @@ export async function startOptimization(
       throw new Error('No response body for SSE stream');
     }
 
-    // Parse SSE from ReadableStream (NOT EventSource — too limited)
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
     const processStream = async () => {
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // Split on double newlines to find complete events
-          const events = buffer.split('\n\n');
-          buffer = events.pop() || '';
-
-          for (const raw of events) {
-            if (!raw.trim()) continue;
-            const typeMatch = raw.match(/^event: (.+)$/m);
-            // Concatenate all `data:` lines per SSE spec (multi-line safe)
-            const dataLines = raw.match(/^data: (.+)$/gm);
-            if (typeMatch && dataLines) {
-              const payload = dataLines.map((l) => l.slice(6)).join('\n');
-              try {
-                const parsed = JSON.parse(payload);
-                wrappedOnEvent({ event: typeMatch[1], data: parsed });
-              } catch {
-                wrappedOnEvent({ event: typeMatch[1], data: payload });
-              }
-              await Promise.resolve(); // yield so Svelte flushes between events
-            }
-          }
+        for await (const sseEvent of parseSSEStream(res.body!, controller.signal)) {
+          wrappedOnEvent(sseEvent);
         }
         onComplete();
       } catch (err) {
@@ -297,9 +267,6 @@ export async function fetchOptimization(id: string): Promise<OptimizationRecord>
   if (!res.ok) throw new Error(`Fetch optimization failed: ${res.status}`);
   return res.json();
 }
-
-const POLL_INTERVAL_MS = 5000;
-const MAX_POLL_ATTEMPTS = 12;  // 60s max
 
 async function pollOptimizationStatus(
   id: string,
