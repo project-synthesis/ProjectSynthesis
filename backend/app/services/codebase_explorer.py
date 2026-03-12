@@ -545,6 +545,7 @@ async def run_explore(
     repo_branch: str,
     session_id: Optional[str] = None,
     github_token: Optional[str] = None,
+    model: str | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 0 codebase exploration via semantic retrieval + single-shot synthesis.
 
@@ -564,7 +565,7 @@ async def run_explore(
         ("explore_result", {...}) — final CodebaseContext dict
     """
     start_ms = time.monotonic()
-    model = MODEL_ROUTING["explore"]
+    model = model or MODEL_ROUTING["explore"]
     used_branch = repo_branch
     branch_fallback = False
 

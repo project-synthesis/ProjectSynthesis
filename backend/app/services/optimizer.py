@@ -35,6 +35,8 @@ async def run_optimize(
     file_contexts: list[dict] | None = None,        # N24: attached file content
     instructions: list[str] | None = None,          # N25: user output constraints
     url_fetched_contexts: list[dict] | None = None, # N26: pre-fetched URL content
+    model: str | None = None,
+    streaming: bool = True,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 3 optimization with streaming.
 
@@ -103,67 +105,79 @@ async def run_optimize(
     if instr_block:
         user_message = instr_block.lstrip("\n") + "\n\n" + user_message
 
-    model = MODEL_ROUTING["optimize"]
+    model = model or MODEL_ROUTING["optimize"]
     framework_applied = strategy.get("primary_framework", "")
 
-    # Stream the optimization with timeout.
-    # Use asyncio.Queue + create_task (same pattern as codebase_explorer.py)
-    # so we can enforce a wall-clock timeout via call_later while still yielding
-    # step_progress events in real time from a background task.
     full_text = ""
-    stream_failed = False
-    chunk_queue: asyncio.Queue = asyncio.Queue()
 
-    async def _stream_worker() -> None:
-        """Drain provider.stream() into chunk_queue; sentinel None signals done."""
-        try:
-            async for chunk in provider.stream(system_prompt, user_message, model):
-                await chunk_queue.put(chunk)
-        finally:
-            await chunk_queue.put(None)  # Sentinel — always sent even on error
-
-    stream_task = asyncio.create_task(_stream_worker())
-    timeout_handle = asyncio.get_running_loop().call_later(
-        settings.OPTIMIZE_TIMEOUT_SECONDS,
-        lambda: stream_task.cancel() if not stream_task.done() else None,
-    )
-
-    try:
-        while True:
-            chunk = await chunk_queue.get()
-            if chunk is None:
-                break  # Sentinel received — stream finished
-            full_text += chunk
-            yield ("step_progress", {"step": "optimize", "content": chunk})
-
-        # Re-raise any exception from the worker task
-        await stream_task
-
-    except asyncio.CancelledError:
-        logger.warning(
-            "Optimize stage streaming timed out after %ds", settings.OPTIMIZE_TIMEOUT_SECONDS
-        )
-        if not full_text:
-            raise  # Nothing accumulated — hard failure
-        # Partial text accumulated; fall through to JSON extraction
-    except Exception as e:
-        logger.error(f"Stage 3 (Optimize) streaming failed: {e}")
-        stream_failed = True
-    finally:
-        timeout_handle.cancel()
-        if not stream_task.done():
-            stream_task.cancel()
-
-    if stream_failed:
-        # Non-streaming fallback when streaming itself errors out
+    if not streaming:
+        # Non-streaming mode: single complete() call, no step_progress events.
         try:
             full_text = await asyncio.wait_for(
                 provider.complete(system_prompt, user_message, model),
                 timeout=settings.OPTIMIZE_TIMEOUT_SECONDS,
             )
-        except Exception as e2:
-            logger.error(f"Stage 3 (Optimize) complete() also failed: {e2}")
+        except Exception as e:
+            logger.error(f"Stage 3 (Optimize) non-streaming complete() failed: {e}")
             full_text = ""
+    else:
+        # Stream the optimization with timeout.
+        # Use asyncio.Queue + create_task (same pattern as codebase_explorer.py)
+        # so we can enforce a wall-clock timeout via call_later while still yielding
+        # step_progress events in real time from a background task.
+        stream_failed = False
+        chunk_queue: asyncio.Queue = asyncio.Queue()
+
+        async def _stream_worker() -> None:
+            """Drain provider.stream() into chunk_queue; sentinel None signals done."""
+            try:
+                async for chunk in provider.stream(system_prompt, user_message, model):
+                    await chunk_queue.put(chunk)
+            finally:
+                await chunk_queue.put(None)  # Sentinel — always sent even on error
+
+        stream_task = asyncio.create_task(_stream_worker())
+        timeout_handle = asyncio.get_running_loop().call_later(
+            settings.OPTIMIZE_TIMEOUT_SECONDS,
+            lambda: stream_task.cancel() if not stream_task.done() else None,
+        )
+
+        try:
+            while True:
+                chunk = await chunk_queue.get()
+                if chunk is None:
+                    break  # Sentinel received — stream finished
+                full_text += chunk
+                yield ("step_progress", {"step": "optimize", "content": chunk})
+
+            # Re-raise any exception from the worker task
+            await stream_task
+
+        except asyncio.CancelledError:
+            logger.warning(
+                "Optimize stage streaming timed out after %ds", settings.OPTIMIZE_TIMEOUT_SECONDS
+            )
+            if not full_text:
+                raise  # Nothing accumulated — hard failure
+            # Partial text accumulated; fall through to JSON extraction
+        except Exception as e:
+            logger.error(f"Stage 3 (Optimize) streaming failed: {e}")
+            stream_failed = True
+        finally:
+            timeout_handle.cancel()
+            if not stream_task.done():
+                stream_task.cancel()
+
+        if stream_failed:
+            # Non-streaming fallback when streaming itself errors out
+            try:
+                full_text = await asyncio.wait_for(
+                    provider.complete(system_prompt, user_message, model),
+                    timeout=settings.OPTIMIZE_TIMEOUT_SECONDS,
+                )
+            except Exception as e2:
+                logger.error(f"Stage 3 (Optimize) complete() also failed: {e2}")
+                full_text = ""
 
     # 3-strategy JSON extraction via shared parse_json_robust utility
     parsed = None

@@ -73,6 +73,7 @@ async def run_validate(
     optimized_prompt: str,
     changes_made: list[str],
     codebase_context: dict | None = None,
+    model: str | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 4 validation.
 
@@ -114,7 +115,7 @@ async def run_validate(
                 f"{codebase_summary[:2500]}"
             )
 
-    model = MODEL_ROUTING["validate"]
+    model = model or MODEL_ROUTING["validate"]
 
     # Stream with background task + queue (same pattern as optimizer.py).
     full_text = ""

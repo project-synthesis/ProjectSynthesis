@@ -35,6 +35,7 @@ async def run_strategy(
     file_contexts: list[dict] | None = None,
     url_fetched_contexts: list[dict] | None = None,
     instructions: list[str] | None = None,
+    model: str | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 2 strategy selection.
 
@@ -84,7 +85,7 @@ async def run_strategy(
 
     user_message += format_instructions(instructions)
 
-    model = MODEL_ROUTING["strategy"]
+    model = model or MODEL_ROUTING["strategy"]
 
     # Stream with background task + queue (same pattern as optimizer.py).
     full_text = ""

@@ -16,7 +16,7 @@ SETTINGS_FILE = os.path.join("data", "app_settings.json")
 # Default application settings
 DEFAULT_SETTINGS: dict = {
     "default_model": "auto",
-    "pipeline_timeout": 120,
+    "pipeline_timeout": 300,
     "max_retries": 1,
     "default_strategy": None,
     "auto_validate": True,

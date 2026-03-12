@@ -18,6 +18,7 @@ from app.models.optimization import Optimization
 from app.schemas.auth import AuthenticatedUser
 from app.schemas.optimization import OptimizeRequest, PatchOptimizationRequest, RetryRequest
 from app.services.optimization_service import accumulate_pipeline_event
+from app.services.settings_service import load_settings
 from app.services.url_fetcher import fetch_url_contexts
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,14 @@ async def optimize_prompt(
             # N26/N30: pre-fetch URL contexts with HTML stripping (shared service)
             url_fetched = await fetch_url_contexts(request.url_contexts)
 
-            async with asyncio.timeout(settings.PIPELINE_TIMEOUT_SECONDS):
+            # Compute effective timeout: user setting capped by config.py ceiling
+            user_settings = load_settings()
+            effective_timeout = min(
+                user_settings.get("pipeline_timeout", settings.PIPELINE_TIMEOUT_SECONDS),
+                settings.PIPELINE_TIMEOUT_SECONDS,  # config.py ceiling
+            )
+
+            async with asyncio.timeout(effective_timeout):
                 async for event_type, event_data in run_pipeline(
                     provider=req.app.state.provider,
                     raw_prompt=request.prompt,
@@ -154,11 +162,11 @@ async def optimize_prompt(
         except asyncio.TimeoutError:
             logger.error(
                 "Pipeline timeout (%ds) for opt %s",
-                settings.PIPELINE_TIMEOUT_SECONDS, opt_id,
+                effective_timeout, opt_id,
             )
             updates["status"] = "failed"
             updates["error_message"] = (
-                f"Pipeline timed out after {settings.PIPELINE_TIMEOUT_SECONDS}s"
+                f"Pipeline timed out after {effective_timeout}s"
             )
             updates["duration_ms"] = int((time.time() - start_time) * 1000)
             updates["updated_at"] = datetime.now(timezone.utc)
@@ -171,7 +179,7 @@ async def optimize_prompt(
                 await s.commit()
             yield _sse_event("error", {
                 "stage": "pipeline",
-                "error": f"Pipeline timed out after {settings.PIPELINE_TIMEOUT_SECONDS}s",
+                "error": f"Pipeline timed out after {effective_timeout}s",
                 "recoverable": False,
             })
             return

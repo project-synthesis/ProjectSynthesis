@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.dependencies.auth import get_current_user
 from app.schemas.auth import AuthenticatedUser
@@ -17,6 +17,19 @@ from app.services.settings_service import load_settings, save_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["settings"])
+
+KNOWN_STRATEGIES = frozenset({
+    "chain-of-thought",
+    "constraint-injection",
+    "context-enrichment",
+    "CO-STAR",
+    "few-shot-scaffolding",
+    "persona-assignment",
+    "RISEN",
+    "role-task-format",
+    "step-by-step",
+    "structured-output",
+})
 
 
 class SettingsUpdate(BaseModel):
@@ -50,6 +63,15 @@ class SettingsUpdate(BaseModel):
         None,
         description="Whether to stream the optimize stage output",
     )
+
+    @field_validator("default_strategy")
+    @classmethod
+    def validate_strategy(cls, v: str | None) -> str | None:
+        if v is not None and v not in KNOWN_STRATEGIES:
+            raise ValueError(
+                f"Unknown strategy '{v}'. Must be one of: {', '.join(sorted(KNOWN_STRATEGIES))}"
+            )
+        return v
 
 
 @router.get("/api/settings")
@@ -85,7 +107,9 @@ async def update_settings(
     """
     current = load_settings()
 
-    update_data = update.model_dump(exclude_none=True)
+    # exclude_unset (not exclude_none) so explicit null clears nullable fields
+    # like default_strategy, while omitted fields remain unchanged.
+    update_data = update.model_dump(exclude_unset=True)
     if not update_data:
         return current
 

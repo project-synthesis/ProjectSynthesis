@@ -76,6 +76,22 @@ async def run_pipeline(
       - Stage 0 (Explore) failures are recoverable; pipeline continues without codebase context
       - Stages 1-4 failures mark subsequent stages as 'skipped' and emit an error event
     """
+    # ---- Load user settings once for the entire pipeline run ----
+    app_settings = load_settings()
+
+    # Compute model override: "auto" means use MODEL_ROUTING defaults
+    _user_model = app_settings.get("default_model", "auto")
+    model_override: str | None = _user_model if _user_model != "auto" else None
+
+    # Effective max retries (user setting capped by config.py ceiling)
+    effective_max_retries = app_settings.get("max_retries", settings.MAX_PIPELINE_RETRIES)
+
+    # Effective default strategy
+    effective_strategy = strategy_override or app_settings.get("default_strategy")
+
+    # Streaming preference
+    stream_optimize = app_settings.get("stream_optimize", True)
+
     codebase_context = None
 
     # ---- Stage 0: Explore (conditional) ----
@@ -97,6 +113,7 @@ async def run_pipeline(
                 repo_branch=repo_branch or "main",
                 session_id=session_id,
                 github_token=github_token,
+                model=model_override,
             ):
                 if event_type == "explore_result":
                     codebase_context = event_data
@@ -115,7 +132,7 @@ async def run_pipeline(
                 } if codebase_context else None
                 if codebase_context:
                     codebase_context["duration_ms"] = duration_ms
-                    codebase_context["model"] = MODEL_ROUTING["explore"]
+                    codebase_context["model"] = model_override or MODEL_ROUTING["explore"]
                     yield ("codebase_context", codebase_context)
                 yield ("stage", {
                     "stage": "explore",
@@ -126,7 +143,7 @@ async def run_pipeline(
             else:
                 if codebase_context:
                     codebase_context["duration_ms"] = duration_ms
-                    codebase_context["model"] = MODEL_ROUTING["explore"]
+                    codebase_context["model"] = model_override or MODEL_ROUTING["explore"]
                     yield ("codebase_context", codebase_context)
                 yield ("stage", {
                     "stage": "explore",
@@ -182,6 +199,7 @@ async def run_pipeline(
             file_contexts=file_contexts,
             url_fetched_contexts=url_fetched_contexts,
             instructions=instructions,
+            model=model_override,
         ):
             if event_type == "analysis":
                 analysis = event_data
@@ -195,7 +213,7 @@ async def run_pipeline(
         if not analysis.get("complexity") or not isinstance(analysis.get("complexity"), str):
             logger.warning("Stage 1 produced no complexity; defaulting to 'moderate'")
             analysis["complexity"] = "moderate"
-        analysis["model"] = MODEL_ROUTING["analyze"]
+        analysis["model"] = model_override or MODEL_ROUTING["analyze"]
 
         stage_tokens = _estimate_tokens(raw_prompt) + _estimate_tokens(json.dumps(analysis))
         total_tokens += stage_tokens
@@ -223,14 +241,14 @@ async def run_pipeline(
         yield ("stage", {"stage": "strategy", "status": "started"})
         start = time.time()
 
-        if strategy_override:
+        if effective_strategy:
             strategy_result = {
-                "primary_framework": strategy_override,
+                "primary_framework": effective_strategy,
                 "secondary_frameworks": [],
-                "rationale": f"User-specified strategy override: {strategy_override}",
-                "approach_notes": f"Apply {strategy_override} framework as requested.",
+                "rationale": f"User-specified strategy override: {effective_strategy}",
+                "approach_notes": f"Apply {effective_strategy} framework as requested.",
                 "strategy_source": "override",
-                "model": MODEL_ROUTING["strategy"],
+                "model": model_override or MODEL_ROUTING["strategy"],
             }
         else:
             strategy_result = None
@@ -242,6 +260,7 @@ async def run_pipeline(
                 file_contexts=file_contexts,
                 url_fetched_contexts=url_fetched_contexts,
                 instructions=instructions,
+                model=model_override,
             ):
                 if event_type == "strategy":
                     strategy_result = event_data
@@ -249,7 +268,7 @@ async def run_pipeline(
                     yield (event_type, event_data)
 
             strategy_result = strategy_result or {}
-            strategy_result["model"] = MODEL_ROUTING["strategy"]
+            strategy_result["model"] = model_override or MODEL_ROUTING["strategy"]
 
         stage_tokens = _estimate_tokens(raw_prompt) + _estimate_tokens(json.dumps(strategy_result))
         total_tokens += stage_tokens
@@ -288,10 +307,12 @@ async def run_pipeline(
             file_contexts=file_contexts,
             url_fetched_contexts=url_fetched_contexts,
             instructions=instructions,
+            model=model_override,
+            streaming=stream_optimize,
         ):
             if event_type == "optimization":
                 optimization_result = event_data
-                optimization_result["model"] = MODEL_ROUTING["optimize"]
+                optimization_result["model"] = model_override or MODEL_ROUTING["optimize"]
             yield (event_type, event_data)
 
         opt_text = optimization_result.get("optimized_prompt", "") if optimization_result else ""
@@ -329,7 +350,6 @@ async def run_pipeline(
 
     # ---- Stage 4: Validate ----
     # Check auto_validate setting — skip when disabled by user
-    app_settings = load_settings()
     if not app_settings.get("auto_validate", True):
         logger.info("Stage 4 (Validate) skipped — auto_validate is disabled in settings")
         yield ("stage", {"stage": "validate", "status": "skipped"})
@@ -349,6 +369,7 @@ async def run_pipeline(
             optimized_prompt=optimized_prompt,
             changes_made=changes_made,
             codebase_context=codebase_context,
+            model=model_override,
         ):
             if event_type == "validation":
                 validation = event_data
@@ -356,7 +377,7 @@ async def run_pipeline(
                 yield (event_type, event_data)
 
         validation = validation or {}
-        validation["model"] = MODEL_ROUTING["validate"]
+        validation["model"] = model_override or MODEL_ROUTING["validate"]
 
         stage_tokens = (
             _estimate_tokens(raw_prompt) + _estimate_tokens(optimized_prompt)
@@ -391,21 +412,21 @@ async def run_pipeline(
     overall_score = validation.get("scores", {}).get("overall_score", 10)
     is_improvement = validation.get("is_improvement", False)
     while (
-        retry_count < settings.MAX_PIPELINE_RETRIES
+        retry_count < effective_max_retries
         and overall_score is not None
         and overall_score < LOW_SCORE_THRESHOLD
         and not is_improvement
     ):
         logger.info(
             f"Overall score {overall_score} < {LOW_SCORE_THRESHOLD} "
-            f"(retry {retry_count + 1}/{settings.MAX_PIPELINE_RETRIES}): "
+            f"(retry {retry_count + 1}/{effective_max_retries}): "
             "retrying optimize+validate with adjusted constraints"
         )
         yield ("rate_limit_warning", {
             "message": (
                 f"Score {overall_score}/10 below threshold — "
                 f"retrying with stricter constraints "
-                f"(attempt {retry_count + 1}/{settings.MAX_PIPELINE_RETRIES})"
+                f"(attempt {retry_count + 1}/{effective_max_retries})"
             ),
             "stage": "validate",
         })
@@ -450,10 +471,12 @@ async def run_pipeline(
                     "focus_areas": focus_areas,
                     "retry_attempt": retry_count + 1,
                 },
+                model=model_override,
+                streaming=stream_optimize,
             ):
                 if event_type == "optimization":
                     retry_optimization_result = event_data
-                    retry_optimization_result["model"] = MODEL_ROUTING["optimize"]
+                    retry_optimization_result["model"] = model_override or MODEL_ROUTING["optimize"]
                 yield (event_type, event_data)
 
             # Gate: if retry optimizer also failed totally, skip validate and stop retrying
@@ -497,6 +520,7 @@ async def run_pipeline(
                 optimized_prompt=optimized_prompt,
                 changes_made=changes_made,
                 codebase_context=codebase_context,
+                model=model_override,
             ):
                 if event_type == "validation":
                     validation = event_data
@@ -504,7 +528,7 @@ async def run_pipeline(
                     yield (event_type, event_data)
 
             validation = validation or {}
-            validation["model"] = MODEL_ROUTING["validate"]
+            validation["model"] = model_override or MODEL_ROUTING["validate"]
 
             stage_tokens = (
                 _estimate_tokens(raw_prompt) + _estimate_tokens(optimized_prompt)

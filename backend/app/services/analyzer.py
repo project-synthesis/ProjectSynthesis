@@ -31,6 +31,7 @@ async def run_analyze(
     file_contexts: list[dict] | None = None,        # N24: attached file content
     url_fetched_contexts: list[dict] | None = None, # N26: pre-fetched URL content
     instructions: list[str] | None = None,          # N37: user output constraints
+    model: str | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 1 analysis on the raw prompt.
 
@@ -76,7 +77,7 @@ async def run_analyze(
     # N37: inject output constraints so analyzer can flag incompatibilities
     user_message += format_instructions(instructions)
 
-    model = MODEL_ROUTING["analyze"]
+    model = model or MODEL_ROUTING["analyze"]
 
     # Stream with background task + queue (same pattern as optimizer.py).
     # This lets step_progress events flow to the client in real time while

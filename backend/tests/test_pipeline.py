@@ -1,9 +1,10 @@
-"""Tests for pipeline.py — context propagation, retry logic, and context builders.
+"""Tests for pipeline.py — context propagation, retry logic, settings wiring, and context builders.
 
 P-prop  — context forwarding from run_pipeline to downstream stages
 P-sentinel — optimizer failure sentinel gating
 P-default — default analysis values
 P-retry-err — retry exception error event emission
+P-settings — settings wiring (model override, max_retries, default_strategy, streaming)
 P-ctx — context_builders edge cases
 """
 from __future__ import annotations
@@ -11,6 +12,24 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def _full_settings(**overrides) -> dict:
+    """Return a complete settings dict with optional overrides.
+
+    Every test that mocks load_settings should use this so the pipeline's
+    top-of-function settings load always gets a valid dict.
+    """
+    defaults = {
+        "default_model": "auto",
+        "pipeline_timeout": 300,
+        "max_retries": 1,
+        "default_strategy": None,
+        "auto_validate": True,
+        "stream_optimize": True,
+    }
+    defaults.update(overrides)
+    return defaults
 
 # ---------------------------------------------------------------------------
 # P-prop-1: file/url/instruction contexts reach run_optimize
@@ -77,7 +96,7 @@ async def test_pipeline_forwards_file_contexts_to_run_optimize():
          patch("app.services.pipeline.run_strategy", mock_strategy), \
          patch("app.services.pipeline.run_optimize", mock_optimize), \
          patch("app.services.pipeline.run_validate", mock_validate), \
-         patch("app.services.pipeline.load_settings", return_value={"auto_validate": True}):
+         patch("app.services.pipeline.load_settings", return_value=_full_settings()):
         async for _ in run_pipeline(
             provider=MagicMock(),
             raw_prompt="Optimize this prompt for a Python service",
@@ -225,7 +244,8 @@ async def test_optimizer_failure_skips_validate():
     events = []
     with patch("app.services.pipeline.run_analyze", mock_analyze), \
          patch("app.services.pipeline.run_strategy", mock_strategy), \
-         patch("app.services.pipeline.run_optimize", mock_optimize):
+         patch("app.services.pipeline.run_optimize", mock_optimize), \
+         patch("app.services.pipeline.load_settings", return_value=_full_settings()):
         async for event_type, event_data in run_pipeline(
             provider=provider,
             raw_prompt="test prompt",
@@ -302,7 +322,7 @@ async def test_empty_analysis_defaults_to_general():
          patch("app.services.pipeline.run_strategy", mock_strategy), \
          patch("app.services.pipeline.run_optimize", mock_optimize), \
          patch("app.services.pipeline.run_validate", mock_validate), \
-         patch("app.services.pipeline.load_settings", return_value={"auto_validate": True}):
+         patch("app.services.pipeline.load_settings", return_value=_full_settings()):
         async for event_type, event_data in run_pipeline(
             provider=provider,
             raw_prompt="test prompt",
@@ -446,7 +466,7 @@ async def test_pipeline_skips_validate_when_auto_validate_false():
          patch("app.services.pipeline.run_strategy", mock_strategy), \
          patch("app.services.pipeline.run_optimize", mock_optimize), \
          patch("app.services.pipeline.run_validate", mock_validate), \
-         patch("app.services.pipeline.load_settings", return_value={"auto_validate": False}):
+         patch("app.services.pipeline.load_settings", return_value=_full_settings(auto_validate=False)):
         async for event_type, event_data in run_pipeline(
             provider=MagicMock(),
             raw_prompt="Test prompt",
@@ -600,3 +620,204 @@ def test_build_strategy_summary_empty_returns_empty():
 
     assert build_strategy_summary(None) == ""
     assert build_strategy_summary({}) == ""
+
+
+# ---------------------------------------------------------------------------
+# P-settings-1: model override propagates to all stages
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pipeline_model_override_propagates_to_stages():
+    """When default_model is set to a specific model, all stage calls receive it."""
+    from app.services.pipeline import run_pipeline
+
+    captured_kwargs: dict[str, dict] = {}
+
+    async def _capture(stage_name):
+        async def _inner(*args, **kwargs):
+            captured_kwargs[stage_name] = dict(kwargs)
+            if stage_name == "analyze":
+                yield ("analysis", {"task_type": "general", "complexity": "simple",
+                                    "weaknesses": [], "strengths": [], "recommended_frameworks": []})
+            elif stage_name == "strategy":
+                yield ("strategy", {"primary_framework": "CO-STAR", "secondary_frameworks": [],
+                                    "rationale": "test", "approach_notes": ""})
+            elif stage_name == "optimize":
+                yield ("optimization", {"optimized_prompt": "better", "changes_made": [],
+                                        "framework_applied": "CO-STAR", "optimization_notes": ""})
+            elif stage_name == "validate":
+                yield ("validation", {"scores": {"clarity_score": 8, "specificity_score": 8,
+                                                  "structure_score": 8, "faithfulness_score": 8,
+                                                  "conciseness_score": 8, "overall_score": 8},
+                                      "is_improvement": True, "verdict": "good", "issues": []})
+        return _inner
+
+    with patch("app.services.pipeline.run_analyze", await _capture("analyze")), \
+         patch("app.services.pipeline.run_strategy", await _capture("strategy")), \
+         patch("app.services.pipeline.run_optimize", await _capture("optimize")), \
+         patch("app.services.pipeline.run_validate", await _capture("validate")), \
+         patch("app.services.pipeline.load_settings",
+               return_value=_full_settings(default_model="claude-haiku-4-5-20251001")):
+        async for _ in run_pipeline(
+            provider=MagicMock(),
+            raw_prompt="Test",
+            optimization_id="model-override-test",
+        ):
+            pass
+
+    for stage in ("analyze", "strategy", "optimize", "validate"):
+        assert captured_kwargs[stage].get("model") == "claude-haiku-4-5-20251001", \
+            f"{stage} must receive model override"
+
+
+# ---------------------------------------------------------------------------
+# P-settings-2: max_retries=0 disables retry loop
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pipeline_max_retries_zero_disables_retry():
+    """When max_retries is 0, no retry should occur even with a low score."""
+    from app.services.pipeline import run_pipeline
+
+    optimize_call_count = 0
+
+    async def mock_analyze(*args, **kwargs):
+        yield ("analysis", {"task_type": "general", "complexity": "simple",
+                            "weaknesses": [], "strengths": [], "recommended_frameworks": []})
+
+    async def mock_strategy(*args, **kwargs):
+        yield ("strategy", {"primary_framework": "CO-STAR", "secondary_frameworks": [],
+                            "rationale": "test", "approach_notes": ""})
+
+    async def mock_optimize(*args, **kwargs):
+        nonlocal optimize_call_count
+        optimize_call_count += 1
+        yield ("optimization", {"optimized_prompt": "mediocre", "changes_made": [],
+                                "framework_applied": "CO-STAR", "optimization_notes": ""})
+
+    async def mock_validate(*args, **kwargs):
+        yield ("validation", {
+            "scores": {"clarity_score": 3, "specificity_score": 3, "structure_score": 3,
+                       "faithfulness_score": 3, "conciseness_score": 3, "overall_score": 3},
+            "is_improvement": False, "verdict": "poor", "issues": ["vague"],
+        })
+
+    with patch("app.services.pipeline.run_analyze", mock_analyze), \
+         patch("app.services.pipeline.run_strategy", mock_strategy), \
+         patch("app.services.pipeline.run_optimize", mock_optimize), \
+         patch("app.services.pipeline.run_validate", mock_validate), \
+         patch("app.services.pipeline.load_settings",
+               return_value=_full_settings(max_retries=0)):
+        async for _ in run_pipeline(
+            provider=MagicMock(),
+            raw_prompt="Test",
+            optimization_id="no-retry-test",
+        ):
+            pass
+
+    assert optimize_call_count == 1, "optimize must be called exactly once when max_retries=0"
+
+
+# ---------------------------------------------------------------------------
+# P-settings-3: default_strategy used when no strategy_override
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pipeline_default_strategy_from_settings():
+    """When default_strategy is set in settings and no strategy_override is passed,
+    the pipeline should use it as an override (skip LLM strategy stage)."""
+    from app.services.pipeline import run_pipeline
+
+    strategy_llm_called = False
+
+    async def mock_analyze(*args, **kwargs):
+        yield ("analysis", {"task_type": "general", "complexity": "simple",
+                            "weaknesses": [], "strengths": [], "recommended_frameworks": []})
+
+    async def mock_strategy(*args, **kwargs):
+        nonlocal strategy_llm_called
+        strategy_llm_called = True
+        yield ("strategy", {"primary_framework": "CO-STAR", "secondary_frameworks": [],
+                            "rationale": "test", "approach_notes": ""})
+
+    async def mock_optimize(*args, **kwargs):
+        yield ("optimization", {"optimized_prompt": "better", "changes_made": [],
+                                "framework_applied": "RISEN", "optimization_notes": ""})
+
+    async def mock_validate(*args, **kwargs):
+        yield ("validation", {
+            "scores": {"clarity_score": 8, "specificity_score": 8, "structure_score": 8,
+                       "faithfulness_score": 8, "conciseness_score": 8, "overall_score": 8},
+            "is_improvement": True, "verdict": "good", "issues": [],
+        })
+
+    events = []
+    with patch("app.services.pipeline.run_analyze", mock_analyze), \
+         patch("app.services.pipeline.run_strategy", mock_strategy), \
+         patch("app.services.pipeline.run_optimize", mock_optimize), \
+         patch("app.services.pipeline.run_validate", mock_validate), \
+         patch("app.services.pipeline.load_settings",
+               return_value=_full_settings(default_strategy="RISEN")):
+        async for event_type, event_data in run_pipeline(
+            provider=MagicMock(),
+            raw_prompt="Test",
+            optimization_id="default-strategy-test",
+        ):
+            events.append((event_type, event_data))
+
+    assert not strategy_llm_called, \
+        "LLM strategy stage must not run when default_strategy is set"
+
+    # Strategy event should report the override
+    strategy_events = [(et, ed) for et, ed in events if et == "strategy"]
+    assert len(strategy_events) == 1
+    assert strategy_events[0][1]["primary_framework"] == "RISEN"
+    assert strategy_events[0][1]["strategy_source"] == "override"
+
+
+# ---------------------------------------------------------------------------
+# P-settings-4: stream_optimize=False passes streaming=False to optimizer
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pipeline_stream_optimize_false():
+    """When stream_optimize is False, optimizer receives streaming=False."""
+    from app.services.pipeline import run_pipeline
+
+    captured: dict = {}
+
+    async def mock_analyze(*args, **kwargs):
+        yield ("analysis", {"task_type": "general", "complexity": "simple",
+                            "weaknesses": [], "strengths": [], "recommended_frameworks": []})
+
+    async def mock_strategy(*args, **kwargs):
+        yield ("strategy", {"primary_framework": "CO-STAR", "secondary_frameworks": [],
+                            "rationale": "test", "approach_notes": ""})
+
+    async def mock_optimize(*args, **kwargs):
+        captured.update(kwargs)
+        yield ("optimization", {"optimized_prompt": "better", "changes_made": [],
+                                "framework_applied": "CO-STAR", "optimization_notes": ""})
+
+    async def mock_validate(*args, **kwargs):
+        yield ("validation", {
+            "scores": {"clarity_score": 8, "specificity_score": 8, "structure_score": 8,
+                       "faithfulness_score": 8, "conciseness_score": 8, "overall_score": 8},
+            "is_improvement": True, "verdict": "good", "issues": [],
+        })
+
+    with patch("app.services.pipeline.run_analyze", mock_analyze), \
+         patch("app.services.pipeline.run_strategy", mock_strategy), \
+         patch("app.services.pipeline.run_optimize", mock_optimize), \
+         patch("app.services.pipeline.run_validate", mock_validate), \
+         patch("app.services.pipeline.load_settings",
+               return_value=_full_settings(stream_optimize=False)):
+        async for _ in run_pipeline(
+            provider=MagicMock(),
+            raw_prompt="Test",
+            optimization_id="no-stream-test",
+        ):
+            pass
+
+    assert captured.get("streaming") is False, \
+        "optimizer must receive streaming=False when stream_optimize is disabled"

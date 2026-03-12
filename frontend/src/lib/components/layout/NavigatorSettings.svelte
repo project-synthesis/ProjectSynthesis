@@ -816,6 +816,34 @@
         </select>
       </div>
 
+      <!-- Default Strategy -->
+      <div class="space-y-0.5">
+        <label class="font-mono text-[8px] text-text-dim/50 uppercase tracking-wider block" for="s-strategy">Strategy</label>
+        <select
+          id="s-strategy"
+          class="w-full bg-bg-input border border-border-subtle px-2 py-1 text-[11px] text-text-primary font-sans
+                 focus:outline-none focus:border-neon-cyan/30 cursor-pointer appearance-none"
+          style="background-image: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238b8ba8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E); background-repeat: no-repeat; background-position: right 8px center; padding-right: 24px;"
+          value={settings.default_strategy ?? ''}
+          onchange={(e) => {
+            const val = (e.target as HTMLSelectElement).value;
+            updateSettings({ default_strategy: val || null } as any).then(s => settings = s);
+          }}
+        >
+          <option value="">Auto (recommended)</option>
+          <option value="chain-of-thought">Chain of Thought</option>
+          <option value="CO-STAR">CO-STAR</option>
+          <option value="constraint-injection">Constraint Injection</option>
+          <option value="context-enrichment">Context Enrichment</option>
+          <option value="few-shot-scaffolding">Few-Shot Scaffolding</option>
+          <option value="persona-assignment">Persona Assignment</option>
+          <option value="RISEN">RISEN</option>
+          <option value="role-task-format">Role-Task-Format</option>
+          <option value="step-by-step">Step by Step</option>
+          <option value="structured-output">Structured Output</option>
+        </select>
+      </div>
+
       <!-- Timeout + Retries in 2-col grid -->
       <div class="grid grid-cols-2 gap-2">
         <div class="space-y-0.5">

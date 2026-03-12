@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added wiring for all 6 pipeline settings — `default_model`, `pipeline_timeout`, `max_retries`, `default_strategy`, `stream_optimize`, and `auto_validate` now control pipeline behavior
+- Added `model` parameter to all 5 stage services (`run_analyze`, `run_strategy`, `run_optimize`, `run_validate`, `run_explore`)
+- Added `streaming` parameter to `run_optimize` — when disabled, uses single `complete()` call instead of streaming
+- Added strategy dropdown to Settings panel with 10 known frameworks
+- Added `default_strategy` validation in settings router with `KNOWN_STRATEGIES` whitelist
+- Changed settings PATCH endpoint from `exclude_none` to `exclude_unset` so `null` can clear nullable fields like `default_strategy`
+- Changed `pipeline_timeout` default from 120s to 300s (realistic for 4-5 sequential LLM stages)
+- Changed pipeline timeout to respect user setting capped by `config.py` ceiling (900s)
 - Fixed README to clarify Claude Max subscription as the recommended (zero-cost) LLM provider
 - Removed multi-provider roadmap item — Project Synthesis is built for Claude
 - Added auto-generated Redis password via `secrets-init` init container (zero-config Docker deployment)
