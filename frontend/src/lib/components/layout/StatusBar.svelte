@@ -5,10 +5,16 @@
   import { github } from '$lib/stores/github.svelte';
   import { auth } from '$lib/stores/auth.svelte';
   import { getStrategyHex } from '$lib/utils/strategy';
-  import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
   import { commandPalette } from '$lib/stores/commandPalette.svelte';
   import { user } from '$lib/stores/user.svelte';
   import { history } from '$lib/stores/history.svelte';
+
+  const providerLabels: Record<string, string> = {
+    anthropic: 'CLI', claude_cli: 'CLI', openai: 'API', anthropic_api: 'API'
+  };
+  let providerLabel = $derived(!workbench.isConnected ? 'OFF' : (providerLabels[workbench.provider] ?? '???'));
+  let providerDotClass = $derived(!workbench.isConnected ? 'bg-neon-red' :
+    (['anthropic', 'claude_cli'].includes(workbench.provider) ? 'bg-neon-green' : 'bg-neon-yellow'));
 
   let setupSteps = $derived(
     (workbench.isConnected ? 1 : 0) +
@@ -24,54 +30,52 @@
 </script>
 
 <footer
-  class="h-[24px] flex items-center justify-between bg-bg-secondary border-t border-border-subtle text-[10px] font-mono select-none shrink-0 overflow-hidden"
+  class="h-[24px] flex items-center bg-bg-secondary border-t border-border-subtle text-[10px] font-mono select-none shrink-0 overflow-hidden"
   aria-label="Status Bar"
 >
-  <!-- Left group -->
-  <div class="flex items-center h-full">
-    <!-- Provider info -->
+  <!-- ZONE 1: System Health -->
+  <div class="flex items-center h-full bg-bg-primary shrink-0">
     <button
-      class="flex items-center gap-1 h-full px-2 hover:bg-bg-hover transition-colors cursor-pointer"
+      class="flex items-center gap-1.5 h-full px-2 hover:bg-bg-hover transition-colors cursor-pointer"
       onclick={() => workbench.setActivity('settings')}
       title="{workbench.isConnected ? 'Backend API: connected · Provider: ' + workbench.provider : 'Backend API: unreachable'} — click to open settings"
       data-testid="statusbar-provider"
     >
-      <ProviderBadge provider={workbench.provider} isConnected={workbench.isConnected} />
+      <span class="text-text-dim">{providerLabel}</span>
+      <span class="w-1.5 h-1.5 rounded-full shrink-0 {providerDotClass}" data-testid="provider-badge"></span>
     </button>
 
-    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
-
-    <!-- MCP dot -->
     <div
-      class="flex items-center gap-1 h-full px-2"
+      class="flex items-center gap-1 h-full px-1.5"
       title="MCP server (port 8001) — {workbench.mcpConnected ? 'online' : 'offline'}"
       data-testid="statusbar-mcp"
     >
       <span class="w-1.5 h-1.5 rounded-full shrink-0 {workbench.mcpConnected ? 'bg-neon-cyan' : 'bg-neon-red/70'}"></span>
       {#if !workbench.mcpConnected}
-        <span class="text-text-dim">MCP offline</span>
+        <span class="text-text-dim text-[9px]">MCP</span>
       {/if}
     </div>
 
-    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
-
-    <!-- Redis cache dot -->
     <div
-      class="flex items-center gap-1 h-full px-2"
+      class="flex items-center gap-1 h-full px-1.5"
       title="Redis cache — {workbench.redisConnected ? 'connected' : 'offline (in-memory fallback)'}"
       data-testid="statusbar-redis"
     >
       <span class="w-1.5 h-1.5 rounded-full shrink-0 {workbench.redisConnected ? 'bg-neon-green' : 'bg-neon-yellow/50'}"></span>
       {#if !workbench.redisConnected}
-        <span class="text-text-dim">Cache: mem</span>
+        <span class="text-text-dim text-[9px]">mem</span>
       {/if}
     </div>
+  </div>
 
-    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
+  <!-- Zone divider -->
+  <span class="h-full w-px bg-border-subtle shrink-0"></span>
 
-    <!-- Linked repo -->
+  <!-- ZONE 2: Context (hero) -->
+  <div class="flex items-center h-full flex-1 min-w-0 gap-3 px-1">
+    <!-- Repo badge -->
     <button
-      class="flex items-center gap-1 h-full px-2 text-text-dim hover:bg-bg-hover transition-colors cursor-pointer max-w-[220px]"
+      class="flex items-center gap-1 h-full px-1 text-text-dim hover:bg-bg-hover transition-colors cursor-pointer max-w-[220px]"
       onclick={() => workbench.setActivity('github')}
       title={github.selectedRepo ? `${github.selectedRepo}${github.selectedBranch ? ' @ ' + github.selectedBranch : ''}` : 'No repo linked'}
       data-testid="repo-badge"
@@ -89,11 +93,9 @@
       {/if}
     </button>
 
-    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
-
     <!-- Strategy chip -->
     <button
-      class="flex items-center h-full px-2 hover:bg-bg-hover transition-colors cursor-pointer"
+      class="flex items-center h-full px-1 hover:bg-bg-hover transition-colors cursor-pointer"
       style="color: {getStrategyHex(forge.stageResults?.strategy?.data?.primary_framework as string | undefined)}"
       onclick={() => { workbench.setInspectorCollapsed(false); editor.setSubTab('edit'); }}
       title="Strategy — click to open picker"
@@ -102,12 +104,10 @@
       {((forge.stageResults?.strategy?.data?.primary_framework as string | undefined) ?? 'auto').toUpperCase().replace(/-/g, ' ')}
     </button>
 
-    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
-
     <!-- Forge status -->
     {#if forge.isForging}
       <button
-        class="flex items-center gap-1 h-full px-2 text-neon-cyan hover:bg-bg-hover transition-colors cursor-pointer"
+        class="flex items-center gap-1 h-full px-1 text-neon-cyan/70 hover:bg-bg-hover transition-colors cursor-pointer"
         onclick={() => editor.setSubTab('pipeline')}
         title="Forging — click to open Pipeline sub-tab"
         data-testid="statusbar-forging"
@@ -117,7 +117,7 @@
       </button>
     {:else if forge.overallScore != null}
       <button
-        class="flex items-center h-full px-2 text-neon-green hover:text-neon-green/80 hover:bg-bg-hover transition-colors cursor-pointer"
+        class="flex items-center h-full px-1 text-neon-green hover:text-neon-green/80 hover:bg-bg-hover transition-colors cursor-pointer"
         onclick={() => { workbench.setInspectorCollapsed(false); editor.setSubTab('pipeline'); }}
         title="Score — click to show breakdown in Inspector"
         data-testid="statusbar-score"
@@ -127,7 +127,7 @@
     {:else if !forge.isForging && user.isNewUser && setupSteps < 5}
       <button
         onclick={openWelcomeTab}
-        class="flex items-center gap-1 h-full px-2 text-neon-cyan/60 hover:text-neon-cyan transition-colors cursor-pointer"
+        class="flex items-center gap-1 h-full px-1 text-neon-cyan/60 hover:text-neon-cyan transition-colors cursor-pointer"
         title="Setup progress — click to open guide"
         data-testid="statusbar-setup"
       >
@@ -135,12 +135,15 @@
         <span class="font-mono text-[10px]">Setup {setupSteps}/5</span>
       </button>
     {:else}
-      <span class="px-2 text-text-dim/50" data-testid="forge-hint">Ctrl+Enter to synthesize</span>
+      <span class="px-1 text-text-dim/40 text-[9px]" data-testid="forge-hint">Ctrl+Enter forge</span>
     {/if}
   </div>
 
-  <!-- Right group -->
-  <div class="flex items-center h-full">
+  <!-- Zone divider -->
+  <span class="h-full w-px bg-border-subtle shrink-0"></span>
+
+  <!-- ZONE 3: Workspace -->
+  <div class="flex items-center h-full shrink-0">
     <!-- Ctrl+K -->
     <button
       class="flex items-center h-full px-2 text-text-dim hover:text-text-secondary hover:bg-bg-hover transition-colors cursor-pointer"
@@ -150,26 +153,19 @@
       <kbd class="px-1 bg-bg-card border border-border-subtle text-[9px] text-text-secondary" style="padding-top:1px;padding-bottom:1px;">Ctrl+K</kbd>
     </button>
 
-    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
-
-    <!-- Active tab label -->
+    <!-- Tab label + count (merged) -->
     {#if editor.activeTab}
-      <span class="h-full flex items-center px-2 text-text-dim truncate max-w-[120px]">{editor.activeTab.label}</span>
-      <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
+      <span class="h-full flex items-center px-2 text-text-dim truncate max-w-[160px]">{editor.activeTab.label} · {editor.openTabs.length}</span>
+    {:else}
+      <span class="h-full flex items-center px-2 text-text-dim">{editor.openTabs.length} tab{editor.openTabs.length !== 1 ? 's' : ''}</span>
     {/if}
-
-    <!-- Tab count -->
-    <span class="h-full flex items-center px-2 text-text-dim">{editor.openTabs.length} tab{editor.openTabs.length !== 1 ? 's' : ''}</span>
-
-    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
 
     <!-- Model -->
     {#if workbench.providerModel}
-      <span class="h-full flex items-center px-2 text-text-dim">{workbench.providerModel}</span>
-      <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
+      <span class="h-full flex items-center px-2 text-text-dim/70">{workbench.providerModel}</span>
     {/if}
 
-    <!-- JWT Auth indicator -->
+    <!-- Auth indicator -->
     <button
       class="flex items-center gap-1 h-full px-2 transition-colors
         {auth.isAuthenticated
@@ -187,7 +183,6 @@
         {#if user.avatarUrl}
           <img src={user.avatarUrl} class="w-4 h-4 border border-neon-cyan/30 object-cover" alt="" />
         {:else}
-          <!-- lock-open icon -->
           <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
             <path stroke-linecap="round" stroke-linejoin="round"
               d="M13.5 10.5V6.75a4.5 4.5 0 1 1 9 0v3.75M3.75 21.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H3.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
@@ -195,7 +190,6 @@
         {/if}
         <span class="truncate max-w-[80px]">{user.label ?? github.username ?? 'JWT'}</span>
       {:else}
-        <!-- lock-closed icon -->
         <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
           <path stroke-linecap="round" stroke-linejoin="round"
             d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
@@ -203,8 +197,6 @@
         <span>Sign in</span>
       {/if}
     </button>
-
-    <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
 
     <!-- Inspector toggle -->
     <button
@@ -218,9 +210,9 @@
       </svg>
     </button>
 
+    <!-- Version -->
     {#if workbench.appVersion}
-      <span class="h-3 w-px bg-border-subtle/50 shrink-0"></span>
-      <span class="h-full flex items-center px-2 text-text-dim/50">v{workbench.appVersion}</span>
+      <span class="h-full flex items-center px-2 text-text-dim/30">v{workbench.appVersion}</span>
     {/if}
   </div>
 </footer>

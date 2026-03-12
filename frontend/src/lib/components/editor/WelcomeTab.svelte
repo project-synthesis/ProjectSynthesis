@@ -4,7 +4,6 @@
   import { workbench } from '$lib/stores/workbench.svelte';
   import { github } from '$lib/stores/github.svelte';
   import { history } from '$lib/stores/history.svelte';
-  import { user } from '$lib/stores/user.svelte';
   import { samplePrompts, categoryColors, difficultyColors, type SamplePrompt } from '$lib/utils/samplePrompts';
   import { pipelineStages } from '$lib/utils/strategyReference';
   import { trackOnboardingEvent } from '$lib/api/client';
@@ -61,57 +60,59 @@
 </script>
 
 <div class="h-full overflow-y-auto p-6" style="overscroll-behavior: contain;">
-  <div class="max-w-2xl mx-auto space-y-8">
+  <div class="max-w-2xl mx-auto space-y-6">
 
-    <!-- Section 1: Header -->
-    <div class="text-center">
-      <h1 class="font-display text-lg tracking-[0.2em] uppercase text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan to-neon-purple mb-1">
-        PROJECT SYNTHESIS
-      </h1>
-      <span class="inline-block px-2 py-0.5 border border-neon-cyan/30 font-mono text-[8px] text-neon-cyan/70 uppercase tracking-[0.1em]">
-        Quick Start Guide
-      </span>
-    </div>
+    <!-- Setup Checklist — adaptive: hero when incomplete, compact when done -->
+    {#if completedCount < checklistItems.length}
+      <div class="border border-border-subtle bg-bg-card p-4">
+        <h2 class="font-display text-[11px] uppercase tracking-[0.08em] text-text-primary mb-3">Setup Checklist</h2>
 
-    <!-- Section 2: Setup Checklist -->
-    <div class="border border-border-subtle p-4">
-      <h2 class="font-display text-[11px] uppercase tracking-[0.08em] text-text-primary mb-3">Setup Checklist</h2>
+        <!-- Progress bar -->
+        <div class="h-1 bg-bg-input mb-3 overflow-hidden">
+          <div
+            class="h-full bg-neon-cyan transition-all duration-500"
+            style="width: {progressPct}%"
+          ></div>
+        </div>
 
-      <!-- Progress bar -->
-      <div class="h-1 bg-bg-input mb-3 overflow-hidden">
-        <div
-          class="h-full bg-neon-cyan transition-all duration-500"
-          style="width: {progressPct}%"
-        ></div>
-      </div>
-
-      <div class="space-y-1.5">
-        {#each checklistItems as item}
-          <div class="flex items-center gap-2">
-            <span class="w-3 h-3 flex items-center justify-center shrink-0 border {item.done ? 'border-neon-green bg-neon-green/10' : 'border-border-subtle'}">
-              {#if item.done}
-                <svg class="w-2 h-2 text-neon-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
-                </svg>
+        <div class="space-y-1.5">
+          {#each checklistItems as item}
+            <div class="flex items-center gap-2">
+              <span class="w-3 h-3 flex items-center justify-center shrink-0 border {item.done ? 'border-neon-green bg-neon-green/10' : 'border-border-subtle'}">
+                {#if item.done}
+                  <svg class="w-2 h-2 text-neon-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+                  </svg>
+                {/if}
+              </span>
+              <span class="font-mono text-[10px] {item.done ? 'text-text-dim line-through' : 'text-text-secondary'}">
+                {item.label}
+              </span>
+              {#if !item.done && item.action}
+                <button
+                  onclick={item.action}
+                  class="font-mono text-[9px] text-neon-cyan/70 hover:text-neon-cyan ml-auto transition-colors"
+                >SET UP</button>
               {/if}
-            </span>
-            <span class="font-mono text-[10px] {item.done ? 'text-text-dim line-through' : 'text-text-secondary'}">
-              {item.label}
-            </span>
-            {#if !item.done && item.action}
-              <button
-                onclick={item.action}
-                class="font-mono text-[9px] text-neon-cyan/70 hover:text-neon-cyan ml-auto transition-colors"
-              >SET UP</button>
-            {/if}
-          </div>
-        {/each}
+            </div>
+          {/each}
+        </div>
+
+        <div class="mt-2 font-mono text-[9px] text-text-dim/50">{completedCount}/{checklistItems.length} complete</div>
       </div>
+    {:else}
+      <div class="flex items-center gap-2 py-1">
+        <span class="w-3 h-3 flex items-center justify-center shrink-0 border border-neon-green bg-neon-green/10">
+          <svg class="w-2 h-2 text-neon-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+          </svg>
+        </span>
+        <span class="font-mono text-[10px] text-neon-green/70">All systems ready</span>
+        <span class="font-mono text-[9px] text-text-dim/30 ml-auto">{completedCount}/{checklistItems.length}</span>
+      </div>
+    {/if}
 
-      <div class="mt-2 font-mono text-[9px] text-text-dim/50">{completedCount}/{checklistItems.length} complete</div>
-    </div>
-
-    <!-- Section 3: Sample Prompts Gallery -->
+    <!-- Sample Prompts — 3×3 card grid -->
     <div>
       <div class="flex items-center justify-between mb-3">
         <h2 class="font-display text-[11px] uppercase tracking-[0.08em] text-text-primary">Sample Prompts</h2>
@@ -121,29 +122,29 @@
         >VIEW ALL TEMPLATES</button>
       </div>
 
-      <div class="flex gap-3 overflow-x-auto pb-2" style="-webkit-overflow-scrolling: touch;">
-        {#each samplePrompts.slice(0, 6) as sample}
-          <div class="shrink-0 w-56 border border-border-subtle p-3 space-y-2 hover:border-neon-cyan/20 transition-colors">
-            <div class="flex items-center gap-2">
-              <span class="inline-block px-1.5 py-0.5 border font-mono text-[7px] uppercase" style="color: {categoryColors[sample.category]}; border-color: {categoryColors[sample.category]}40">
+      <div class="grid grid-cols-3 gap-2">
+        {#each samplePrompts.slice(0, 9) as sample}
+          <button
+            class="text-left border border-border-subtle p-2 hover:border-neon-cyan/20 transition-colors"
+            title={sample.description}
+            onclick={() => loadSample(sample)}
+          >
+            <div class="flex items-center gap-1.5">
+              <span class="inline-block px-1 py-0.5 border font-mono text-[7px] uppercase" style="color: {categoryColors[sample.category]}; border-color: {categoryColors[sample.category]}40">
                 {sample.category}
               </span>
               <span class="font-mono text-[7px] uppercase" style="color: {difficultyColors[sample.difficulty]}">
                 {sample.difficulty}
               </span>
             </div>
-            <div class="font-display text-[10px] uppercase text-text-primary">{sample.title}</div>
-            <div class="font-mono text-[8px] text-text-dim leading-snug line-clamp-2">{sample.description}</div>
-            <button
-              onclick={() => loadSample(sample)}
-              class="w-full px-2 py-1 border border-neon-cyan/30 font-mono text-[9px] text-neon-cyan uppercase tracking-[0.05em] hover:bg-neon-cyan/5 transition-colors"
-            >TRY THIS</button>
-          </div>
+            <div class="font-display text-[10px] uppercase text-text-primary mt-1 truncate">{sample.title}</div>
+            <div class="font-mono text-[8px] text-text-dim line-clamp-3 mt-0.5">{sample.description}</div>
+          </button>
         {/each}
       </div>
     </div>
 
-    <!-- Section 4: Pipeline Stages Reference -->
+    <!-- Pipeline Stages — linear flow (5 stages, semantically sequential) -->
     <div>
       <h2 class="font-display text-[11px] uppercase tracking-[0.08em] text-text-primary mb-3">Pipeline Stages</h2>
 
@@ -175,10 +176,10 @@
       {/if}
     </div>
 
-    <!-- Section 5: Keyboard Reference -->
+    <!-- Keyboard Shortcuts — 3-column grid (matches card rhythm) -->
     <div>
-      <h2 class="font-display text-[11px] uppercase tracking-[0.08em] text-text-primary mb-3">Keyboard Shortcuts</h2>
-      <div class="grid grid-cols-3 gap-4">
+      <h2 class="font-display text-[11px] uppercase tracking-[0.08em] text-text-secondary mb-3">Keyboard Shortcuts</h2>
+      <div class="grid grid-cols-3 gap-2">
         {#each Object.entries(shortcuts) as [category, items]}
           <div>
             <div class="font-mono text-[8px] text-neon-cyan/50 uppercase tracking-[0.1em] mb-1.5">{category}</div>
@@ -186,7 +187,7 @@
               {#each items as shortcut}
                 <div class="flex items-center justify-between gap-1">
                   <kbd class="px-1 bg-bg-input border border-border-subtle text-[8px] text-text-dim font-mono shrink-0" style="padding-top:1px;padding-bottom:1px;">{shortcut.keys}</kbd>
-                  <span class="font-mono text-[8px] text-text-dim/60 text-right">{shortcut.action}</span>
+                  <span class="font-mono text-[8px] text-text-dim/50 text-right">{shortcut.action}</span>
                 </div>
               {/each}
             </div>
