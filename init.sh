@@ -82,9 +82,34 @@ kill_by_pidfile() {
         local pid
         pid=$(cat "$pidfile")
         if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null || true
-            sleep 1
-            kill -9 "$pid" 2>/dev/null || true
+            # I5: Validate PID belongs to expected service
+            local cmd_match=false
+            if [ -f "/proc/$pid/cmdline" ]; then
+                local cmdline
+                cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+                if echo "$cmdline" | grep -qiE '(uvicorn|node|npm|python|mcp)'; then
+                    cmd_match=true
+                fi
+            elif command -v ps &>/dev/null; then
+                local ps_cmd
+                ps_cmd=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+                if echo "$ps_cmd" | grep -qiE '(uvicorn|node|npm|python|mcp)'; then
+                    cmd_match=true
+                fi
+            else
+                cmd_match=true  # Cannot validate — proceed anyway
+            fi
+            if [ "$cmd_match" = false ]; then
+                warn "PID $pid does not match expected service — skipping (stale pidfile?)"
+                rm -f "$pidfile"
+                return 0
+            fi
+            # I1: Graceful shutdown — SIGTERM first, SIGKILL only survivors
+            kill -15 "$pid" 2>/dev/null || true
+            sleep 2
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
         fi
         rm -f "$pidfile"
     fi
@@ -96,7 +121,14 @@ kill_on_port() {
         local pids
         pids=$(lsof -ti ":$port" 2>/dev/null || true)
         if [ -n "$pids" ]; then
-            echo "$pids" | xargs kill -9 2>/dev/null || true
+            echo "$pids" | xargs kill -15 2>/dev/null || true
+            sleep 2
+            # SIGKILL only survivors
+            for pid in $pids; do
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -9 "$pid" 2>/dev/null || true
+                fi
+            done
         fi
     elif command -v fuser &>/dev/null; then
         fuser -k "$port/tcp" 2>/dev/null || true
@@ -108,7 +140,7 @@ setup_backend() {
     cd backend
 
     if [ ! -d ".venv" ]; then
-        python3.14 -m venv .venv
+        python3 -m venv .venv
     fi
 
     source .venv/bin/activate
@@ -230,11 +262,11 @@ do_start() {
     fi
 
     start_backend
+    wait_for_port $BACKEND_PORT "Backend" 30 || true
+
     start_frontend
     start_mcp
 
-    # Wait for services
-    wait_for_port $BACKEND_PORT "Backend" 30 || true
     wait_for_port $FRONTEND_PORT "Frontend" 30 || true
 
     echo ""
@@ -251,6 +283,11 @@ do_start() {
     else
         warn "Redis:    offline — using in-memory fallback"
     fi
+    echo ""
+    log "  Logs:"
+    log "    Backend:  data/backend.log"
+    log "    Frontend: data/frontend.log"
+    log "    MCP:      data/mcp.log"
     log "═══════════════════════════════════════════"
 }
 
