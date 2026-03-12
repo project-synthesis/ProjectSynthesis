@@ -100,6 +100,9 @@ async def _reload_provider(request: Request) -> None:
     except ProviderNotAvailableError:
         request.app.state.provider = None
         logger.info("No provider available after reload")
+    except Exception:
+        request.app.state.provider = None
+        logger.exception("Provider reload failed unexpectedly")
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
@@ -144,7 +147,23 @@ async def save_provider_api_key(
     save_api_key(body.api_key)
     await _reload_provider(request)
 
-    return _provider_status_response(request, ok=True)
+    provider = getattr(request.app.state, "provider", None)
+
+    # B2: Validate key after save — warn if invalid but don't block
+    validation_warning: str | None = None
+    if provider is not None and hasattr(provider, "validate_key"):
+        try:
+            valid, msg = await provider.validate_key()
+            if not valid:
+                validation_warning = msg
+        except Exception:
+            validation_warning = "Key saved but validation check failed"
+
+    # B3: ok reflects whether a provider is now active
+    resp = _provider_status_response(request, ok=(provider is not None))
+    if validation_warning:
+        resp["validation_warning"] = validation_warning
+    return resp
 
 
 @router.delete("/api/provider/api-key")

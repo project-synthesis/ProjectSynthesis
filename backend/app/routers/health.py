@@ -7,6 +7,7 @@ from app._version import __version__
 from app.config import settings
 from app.database import check_db_connection
 from app.providers.base import MODEL_ROUTING
+from app.services.api_credentials_service import get_credential_load_error
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
@@ -68,7 +69,8 @@ async def health_check(request: Request):
         overall = "ok"
 
     mcp_url = f"http://{settings.MCP_HOST}:{settings.MCP_PORT}/mcp"
-    return {
+    credential_error = get_credential_load_error()
+    resp = {
         "status": overall,
         "provider": provider_name,
         "model_routing": MODEL_ROUTING,
@@ -79,3 +81,6 @@ async def health_check(request: Request):
         "mcp_url": mcp_url,
         "version": __version__,
     }
+    if credential_error:
+        resp["credential_error"] = credential_error
+    return resp

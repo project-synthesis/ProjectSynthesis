@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 _CREDS_FILE = Path("data/.api_credentials")
 
+# B5: Module-level flag for credential load errors
+_credential_load_error: str | None = None
+
 
 def load_api_key_from_file() -> None:
     """Load a saved API key and apply to settings singleton.
@@ -44,6 +47,8 @@ def load_api_key_from_file() -> None:
             settings.ANTHROPIC_API_KEY = api_key
             logger.info("Anthropic API key loaded from %s", _CREDS_FILE)
     except Exception as e:
+        global _credential_load_error
+        _credential_load_error = f"{type(e).__name__}: {e}"
         logger.warning("Failed to load API key from %s: %s", _CREDS_FILE, e)
 
 
@@ -77,8 +82,10 @@ def save_api_key(api_key: str) -> None:
             pass
         raise
 
-    # Hot-reload
+    # Hot-reload and clear any prior credential load error
+    global _credential_load_error
     settings.ANTHROPIC_API_KEY = api_key
+    _credential_load_error = None
     logger.info("Anthropic API key saved and hot-reloaded")
 
 
@@ -124,3 +131,8 @@ def get_api_key_status() -> dict:
         masked = "****"
 
     return {"configured": True, "source": source, "masked": masked}
+
+
+def get_credential_load_error() -> str | None:
+    """Return the credential load error message, if any."""
+    return _credential_load_error

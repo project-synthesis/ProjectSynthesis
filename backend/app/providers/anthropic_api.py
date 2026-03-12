@@ -30,6 +30,28 @@ class AnthropicAPIProvider(LLMProvider):
     def name(self) -> str:
         return "anthropic_api"
 
+    async def validate_key(self) -> tuple[bool, str]:
+        """Validate the API key with a minimal API call.
+
+        Returns:
+            (valid, message) — True + success message, or False + error detail.
+        """
+        import anthropic
+
+        try:
+            await self._client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+            return True, "API key is valid"
+        except anthropic.AuthenticationError:
+            return False, "Invalid API key — authentication failed"
+        except anthropic.PermissionDeniedError:
+            return False, "API key lacks required permissions"
+        except Exception as e:
+            return False, f"Key saved but validation failed: {type(e).__name__}: {e}"
+
     def _make_extra(self, model: str, *, schema: dict | None = None) -> tuple[int, dict]:
         """Return (max_tokens, extra_kwargs) for messages.stream() calls.
 
