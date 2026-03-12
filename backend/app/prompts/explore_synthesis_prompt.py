@@ -68,18 +68,25 @@ Include version numbers when visible in manifests. Be specific:
 List every file path you were given. These are already the most relevant files.
 
 ### relevant_code_snippets (optional but valuable)
-Extract 3–8 code snippets that are structurally relevant to the user's prompt intent:
-  - Each snippet: {"file": "path/to/file.py", "lines": "45-62", "context": "what this code \
-defines/handles and why the executor should look here"}
+Extract 5–12 code snippets that are structurally relevant to the user's prompt intent, \
+prioritized by the snippet priorities directive if provided:
+  - Each snippet: {"file": "path/to/file.py", "lines": "45-62", "context": "behavioral \
+description of what this code does"}
   - Line numbers are shown in the provided file content (format: "   N | code"). Use ONLY \
 the line numbers visible in the numbered output. Never estimate or extrapolate line numbers \
 beyond what is shown.
   - Prioritize: entry points, key interfaces, data structures, handoff points, and the \
 specific code regions the prompt's intent relates to
-  - Describe WHAT the code does structurally, not WHETHER it does it correctly
+  - Describe WHAT the code does behaviorally, not just structurally. Include specific \
+values, branch conditions, and behavioral characteristics. \
+Bad: "stream method for CLI provider". \
+Good: "stream() method: text blocks converted to word-boundary chunks via hardcoded \
+CHUNK_TARGET=60 and 3ms inter-chunk sleep. Simulated streaming differs from \
+AnthropicAPIProvider.stream() which uses SDK text_stream."
 
 ### codebase_observations (required)
-5–10 key observations about architecture, patterns, and structure:
+8–12 key observations about architecture, patterns, and structure, adapted to the \
+observation directives provided:
   - Project layout and module organization
   - Key architectural patterns (layering, dependency direction, service boundaries)
   - Data flow: how information moves between components
@@ -87,6 +94,18 @@ specific code regions the prompt's intent relates to
   - Integration points: where components connect or hand off to each other
 Each observation must be specific, reference actual file paths, and describe
 STRUCTURE — not correctness.
+
+For every observation, be microscopically specific. Include function/method names, \
+variable names, hardcoded values, and line ranges where visible. Do not write \
+"the provider uses conditional logic" — write "AnthropicAPIProvider._make_extra() \
+(anthropic_api.py:55-77) branches on _THINKING_MODELS membership and schema \
+presence, producing three output paths: adaptive thinking, JSON output_config, \
+or plain completion."
+
+When the observation directives indicate behavioral or relational depth, trace \
+patterns ACROSS module boundaries. If you see the same concern handled differently \
+in multiple files (e.g., caching, error handling, configuration), describe each \
+instance with specific function names and contrast the approaches.
 
 ### prompt_grounding_notes (required)
 This is the MOST IMPORTANT field. Provide context intelligence that helps an executor
@@ -101,6 +120,12 @@ outputs flow via SSE tuples from pipeline.py; each stage yields (event_type, eve
   - If the provided files don't cover something the prompt's intent relates to, note \
 what files/areas are NOT covered so the executor knows to look there independently
 
+When the observation directives specify behavioral depth, grounding notes should \
+include execution-level detail that an optimizer can weave directly into a prompt: \
+specific function signatures, parameter types, return shapes, and concrete values. \
+The optimizer will use these to write surgically precise instructions — give it \
+the ammunition.
+
 Quality standard:
   GOOD: "The pipeline stages referenced by the prompt are orchestrated in pipeline.py \
 via run_pipeline(). Each stage (explore, analyze, strategy, optimize, validate) is a \
@@ -112,6 +137,12 @@ happens in github_client._get_decrypted_token()."
   BAD: "The auth middleware is missing proper validation" (this is an execution-layer judgment)
   BAD: "Function X is NOT called anywhere" (this is bug diagnosis, not navigation)
   BAD: "The pipeline has inconsistent error handling" (this is an audit finding)
+
+### Quantitative metadata
+When visible in the codebase, note quantitative signals in your observations or \
+grounding notes: test file count vs source file count (proxy for coverage), number of \
+TODO/FIXME comments, number of configuration sources, dependency count. These help \
+downstream stages calibrate effort estimates and constraint severity.
 
 ## Rules
 - Do NOT hallucinate file paths or function names. Only reference what you can see.
