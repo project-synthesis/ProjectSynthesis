@@ -21,6 +21,19 @@ def _env_without_claudecode() -> dict:
     return {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
 
+@pytest.fixture(autouse=True)
+def _disable_testing_mode():
+    """Ensure detect_provider() runs real detection logic, not MockProvider.
+
+    The integration test conftest sets TESTING=true in os.environ which
+    persists for the whole process.  The pydantic settings instance caches
+    this value so we must patch it on the settings object directly.
+    """
+    from app.config import settings
+    with patch.object(settings, "TESTING", False):
+        yield
+
+
 def _mock_proc(communicate_sleep: float = 30.0) -> MagicMock:
     """Return an AsyncMock subprocess that hangs on communicate() by default."""
     proc = MagicMock()
