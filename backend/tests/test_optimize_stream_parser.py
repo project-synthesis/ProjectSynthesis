@@ -12,14 +12,11 @@ Covers:
 
 import json
 
-import pytest
-
 from app.services.optimizer import (
     OPTIMIZATION_META_CLOSE,
     OPTIMIZATION_META_OPEN,
     OptimizeStreamParser,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,7 +64,7 @@ class TestMarkerDetection:
         full = _make_full_output(prompt_text, meta)
 
         parser = OptimizeStreamParser()
-        safe = _feed_all(parser, full, chunk_size=50)
+        _feed_all(parser, full, chunk_size=50)
         prompt, metadata = parser.finalize()
 
         assert prompt_text.strip() in prompt

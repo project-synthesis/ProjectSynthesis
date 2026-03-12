@@ -509,12 +509,13 @@ async def test_cli_stream_yields_text_deltas_from_subprocess():
     """stream() should parse text_delta events and skip non-text events."""
     from app.providers.claude_cli import ClaudeCLIProvider
 
+    _delta = '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":'
     lines = [
         b'{"type":"stream_event","event":{"type":"content_block_start","index":0}}\n',
-        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}}\n',
-        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}}\n',
-        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"internal"}}}\n',
-        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}}\n',
+        (_delta + '{"type":"text_delta","text":"Hello "}}}\n').encode(),
+        (_delta + '{"type":"text_delta","text":"world"}}}\n').encode(),
+        (_delta + '{"type":"thinking_delta","thinking":"internal"}}}\n').encode(),
+        (_delta + '{"type":"signature_delta","signature":"sig"}}}\n').encode(),
         b'not valid json\n',
         b'\n',
         b'{"type":"result","result":"done"}\n',
@@ -558,13 +559,15 @@ async def test_cli_stream_logs_warning_on_nonzero_exit(caplog):
 async def test_cli_stream_kills_subprocess_on_cancellation():
     """Subprocess must be killed when the generator is cancelled mid-stream."""
     import asyncio
+
     from app.providers.claude_cli import ClaudeCLIProvider
 
     # Use an event to block the generator mid-stream so we can cancel it
     stall = asyncio.Event()
 
     async def _stalling_lines():
-        yield b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"tok1"}}}\n'
+        _d = '{"type":"stream_event","event":{"type":"content_block_delta"'
+        yield (_d + ',"index":0,"delta":{"type":"text_delta","text":"tok1"}}}\n').encode()
         await stall.wait()  # Block here until cancelled
 
     mock_proc = AsyncMock()
