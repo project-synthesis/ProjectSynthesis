@@ -190,25 +190,24 @@ def test_encrypt_decrypt_roundtrip_with_current_key():
     """encrypt_token → decrypt_token roundtrip succeeds with the current key."""
     from cryptography.fernet import Fernet
 
-    import app.services.github_service as gs
+    import app.services.encryption_service as es
 
     valid_key = Fernet.generate_key().decode()
-    original_fernet = gs._fernet
+    original_fernet = es._fernet
     try:
-        gs._fernet = None  # force re-initialization with our key
-        with patch.object(gs.settings, "GITHUB_TOKEN_ENCRYPTION_KEY", valid_key):
-            with patch.object(gs.settings, "GITHUB_TOKEN_ENCRYPTION_KEY_OLD", ""):
+        es._fernet = None  # force re-initialization with our key
+        with patch.object(es.settings, "GITHUB_TOKEN_ENCRYPTION_KEY", valid_key):
+            with patch.object(es.settings, "GITHUB_TOKEN_ENCRYPTION_KEY_OLD", ""):
                 plaintext = "ghp_test_token_abc123"
-                encrypted = gs.encrypt_token(plaintext)
-                assert gs.decrypt_token(encrypted) == plaintext
+                encrypted = es.encrypt_token(plaintext)
+                assert es.decrypt_token(encrypted) == plaintext
     finally:
-        gs._fernet = original_fernet
+        es._fernet = original_fernet
 
 
 def test_multifernet_decrypts_old_key_tokens_after_rotation():
     """After key rotation, tokens encrypted with the old key can still be decrypted."""
     from cryptography.fernet import Fernet
-
 
     old_key = Fernet.generate_key().decode()
     new_key = Fernet.generate_key().decode()
@@ -218,43 +217,43 @@ def test_multifernet_decrypts_old_key_tokens_after_rotation():
     ciphertext = old_fernet.encrypt(b"ghp_old_secret_token")
 
     # Now simulate rotation: new key is primary, old key is in OLD list
-    import app.services.github_service as gs
+    import app.services.encryption_service as es
 
-    original_fernet = gs._fernet
+    original_fernet = es._fernet
     try:
-        gs._fernet = None  # force re-initialization
+        es._fernet = None  # force re-initialization
         with (
-            patch.object(gs.settings, "GITHUB_TOKEN_ENCRYPTION_KEY", new_key),
-            patch.object(gs.settings, "GITHUB_TOKEN_ENCRYPTION_KEY_OLD", old_key),
+            patch.object(es.settings, "GITHUB_TOKEN_ENCRYPTION_KEY", new_key),
+            patch.object(es.settings, "GITHUB_TOKEN_ENCRYPTION_KEY_OLD", old_key),
         ):
-            result = gs.decrypt_token(ciphertext)
+            result = es.decrypt_token(ciphertext)
             assert result == "ghp_old_secret_token"
     finally:
-        gs._fernet = original_fernet
+        es._fernet = original_fernet
 
 
 def test_multifernet_encrypts_with_primary_key():
     """New encryptions use the primary (current) key, not old keys."""
     from cryptography.fernet import Fernet
 
-    import app.services.github_service as gs
+    import app.services.encryption_service as es
 
     new_key = Fernet.generate_key().decode()
     old_key = Fernet.generate_key().decode()
 
-    original_fernet = gs._fernet
+    original_fernet = es._fernet
     try:
-        gs._fernet = None
+        es._fernet = None
         with (
-            patch.object(gs.settings, "GITHUB_TOKEN_ENCRYPTION_KEY", new_key),
-            patch.object(gs.settings, "GITHUB_TOKEN_ENCRYPTION_KEY_OLD", old_key),
+            patch.object(es.settings, "GITHUB_TOKEN_ENCRYPTION_KEY", new_key),
+            patch.object(es.settings, "GITHUB_TOKEN_ENCRYPTION_KEY_OLD", old_key),
         ):
-            encrypted = gs.encrypt_token("ghp_new_secret")
+            encrypted = es.encrypt_token("ghp_new_secret")
             # Decrypt using ONLY the new key — must succeed (proves primary key was used)
             primary_only = Fernet(new_key.encode())
             assert primary_only.decrypt(encrypted).decode() == "ghp_new_secret"
     finally:
-        gs._fernet = original_fernet
+        es._fernet = original_fernet
 
 
 # ── Audit log creation (3 tests) ──────────────────────────────────────────
@@ -263,11 +262,6 @@ def test_multifernet_encrypts_with_primary_key():
 async def test_audit_log_creates_entry_for_auth_event():
     """log_auth_event creates an AuditLog record with correct fields."""
     from app.services.audit_service import AUTH_LOGIN, log_auth_event
-
-    mock_request = MagicMock()
-    mock_request.client = MagicMock()
-    mock_request.client.host = "192.168.1.42"
-    mock_request.headers = {"user-agent": "TestBrowser/1.0"}
 
     added_objects = []
 
@@ -278,7 +272,12 @@ async def test_audit_log_creates_entry_for_auth_event():
     with patch("app.services.audit_service.get_session_context") as mock_ctx:
         mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-        await log_auth_event(AUTH_LOGIN, mock_request, user_id="user-123")
+        await log_auth_event(
+            AUTH_LOGIN,
+            user_id="user-123",
+            ip_address="192.168.1.42",
+            user_agent="TestBrowser/1.0",
+        )
 
     assert len(added_objects) == 1
     entry = added_objects[0]
@@ -289,12 +288,8 @@ async def test_audit_log_creates_entry_for_auth_event():
 
 
 async def test_audit_log_handles_missing_client_gracefully():
-    """log_auth_event handles request.client being None (e.g. test environments)."""
+    """log_auth_event handles missing ip_address gracefully (defaults to 'unknown')."""
     from app.services.audit_service import AUTH_LOGOUT, log_auth_event
-
-    mock_request = MagicMock()
-    mock_request.client = None
-    mock_request.headers = {}
 
     added_objects = []
 
@@ -305,11 +300,11 @@ async def test_audit_log_handles_missing_client_gracefully():
     with patch("app.services.audit_service.get_session_context") as mock_ctx:
         mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-        await log_auth_event(AUTH_LOGOUT, mock_request, user_id="user-456")
+        await log_auth_event(AUTH_LOGOUT, user_id="user-456")
 
     assert len(added_objects) == 1
     entry = added_objects[0]
-    assert entry.ip_address == "unknown"
+    assert entry.ip_address is None
 
 
 async def test_audit_log_never_raises_on_db_error():
@@ -323,7 +318,7 @@ async def test_audit_log_never_raises_on_db_error():
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
         # Must NOT raise
-        await log_auth_event(AUTH_FAILURE, None, user_id=None, metadata={"reason": "bad token"})
+        await log_auth_event(AUTH_FAILURE, user_id=None, metadata={"reason": "bad token"})
 
 
 # ── onboarding_step in PATCH /auth/me (unit-level) ───────────────────────

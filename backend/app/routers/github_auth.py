@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from sqlalchemy import delete, select
@@ -14,6 +14,7 @@ from app.config import settings
 from app.database import get_session
 from app.dependencies.auth import get_current_user
 from app.dependencies.rate_limit import RateLimit
+from app.errors import bad_request, unauthorized
 from app.models.auth import RefreshToken, User
 from app.models.github import GitHubToken
 from app.routers.github_repos import evict_repo_cache
@@ -21,9 +22,17 @@ from app.schemas.auth import AuthenticatedUser
 from app.schemas.github import GitHubUserInfo
 from app.services.audit_service import AUTH_LOGIN, AUTH_LOGIN_NEW_USER, log_auth_event
 from app.services.auth_service import issue_jwt_pair, set_refresh_cookie
+from app.services.encryption_service import encrypt_token
 from app.services.github_app_service import refresh_user_token
-from app.services.github_service import encrypt_token
 from app.utils.jwt import decode_token
+
+
+def _audit_ctx(request: Request) -> dict:
+    """Extract IP and User-Agent from a request for audit logging."""
+    return {
+        "ip_address": request.client.host if request.client else "unknown",
+        "user_agent": request.headers.get("user-agent", "")[:512],
+    }
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["github-auth"])
@@ -124,10 +133,7 @@ async def github_login(
             pass  # Invalid/expired — proceed with OAuth flow
 
     if not settings.GITHUB_APP_CLIENT_ID or not settings.GITHUB_APP_CLIENT_SECRET:
-        raise HTTPException(
-            status_code=400,
-            detail="GitHub App not configured. Set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.",
-        )
+        raise bad_request("GitHub App not configured. Set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.")
 
     # Generate time-bound CSRF state via TimestampSigner
     raw_token = uuid.uuid4().hex
@@ -158,7 +164,7 @@ async def github_callback(
 ):
     """Handle GitHub App OAuth callback."""
     if not code or not state:
-        raise HTTPException(status_code=400, detail="Missing code or state parameter")
+        raise bad_request("Missing code or state parameter")
 
     # Verify CSRF state via signature + expiry check.
     # The signed state token is self-contained CSRF protection: it encodes a
@@ -169,15 +175,9 @@ async def github_callback(
     try:
         _csrf_signer().unsign(state, max_age=_CSRF_MAX_AGE)
     except SignatureExpired:
-        raise HTTPException(
-            status_code=400,
-            detail="OAuth state expired — please restart the login flow",
-        )
+        raise bad_request("OAuth state expired — please restart the login flow")
     except BadSignature:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid OAuth state signature (CSRF protection)",
-        )
+        raise bad_request("Invalid OAuth state signature (CSRF protection)")
     # Clean up any leftover session state (best-effort; may be absent in proxy setups).
     request.session.pop("oauth_state", None)
 
@@ -198,7 +198,7 @@ async def github_callback(
         access_token = token_data.get("access_token")
         if not access_token:
             error = token_data.get("error_description", "Failed to get access token")
-            raise HTTPException(status_code=400, detail=error)
+            raise bad_request(error)
 
         # Fetch user info in the same client session
         user_resp = await client.get(
@@ -209,7 +209,7 @@ async def github_callback(
             },
         )
         if user_resp.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to fetch GitHub user info")
+            raise bad_request("Failed to fetch GitHub user info")
         user_data = user_resp.json()
 
     # GitHub App tokens include expiry and refresh token fields.
@@ -283,7 +283,8 @@ async def github_callback(
         pass
     event_type = AUTH_LOGIN_NEW_USER if is_new else AUTH_LOGIN
     await log_auth_event(
-        event_type, request, user_id=user.id,
+        event_type, user_id=user.id,
+        **_audit_ctx(request),
         metadata={"github_login": github_login, "is_new": is_new},
     )
 
@@ -381,7 +382,7 @@ async def refresh_github_token(
     """
     session_id = request.session.get("session_id")
     if not session_id:
-        raise HTTPException(status_code=401, detail="No active session")
+        raise unauthorized("No active session")
 
     result = await session.execute(
         select(GitHubToken).where(GitHubToken.session_id == session_id)

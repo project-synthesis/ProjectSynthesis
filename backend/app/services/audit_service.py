@@ -3,14 +3,15 @@
 All auth events (login, logout, refresh, failure) are logged with
 timestamp, user_id, IP, and user-agent for compliance and debugging.
 Uses background tasks to never block the response path.
+
+This module has no dependency on FastAPI — callers extract IP and
+User-Agent from the request and pass them as plain strings.
 """
 from __future__ import annotations
 
 import json
 import logging
 from typing import Any
-
-from fastapi import Request
 
 from app.database import get_session_context
 from app.models.audit_log import AuditLog
@@ -27,21 +28,12 @@ AUTH_FAILURE = "auth.failure"
 AUTH_TOKEN_EXCHANGE = "auth.token_exchange"
 
 
-def _extract_ip(request: Request) -> str:
-    """Extract client IP, respecting X-Forwarded-For from trusted proxies."""
-    client = request.client
-    return client.host if client else "unknown"
-
-
-def _extract_ua(request: Request) -> str:
-    """Extract User-Agent header."""
-    return request.headers.get("user-agent", "")[:512]
-
-
 async def log_auth_event(
     event_type: str,
-    request: Request | None = None,
+    *,
     user_id: str | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """Write a structured audit log entry.
@@ -52,8 +44,9 @@ async def log_auth_event(
 
     Args:
         event_type: One of the AUTH_* constants.
-        request: The FastAPI request (for IP and User-Agent extraction).
         user_id: The authenticated user's ID, if known.
+        ip_address: Client IP address string.
+        user_agent: Client User-Agent string (truncated to 512 chars by caller).
         metadata: Additional context (e.g., device_id, failure reason).
     """
     try:
@@ -61,8 +54,8 @@ async def log_auth_event(
             entry = AuditLog(
                 event_type=event_type,
                 user_id=user_id,
-                ip_address=_extract_ip(request) if request else None,
-                user_agent=_extract_ua(request) if request else None,
+                ip_address=ip_address,
+                user_agent=user_agent,
                 metadata_=json.dumps(metadata) if metadata else None,
             )
             session.add(entry)

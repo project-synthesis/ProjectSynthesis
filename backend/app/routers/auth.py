@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from jose import ExpiredSignatureError, JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import get_session
 from app.dependencies.auth import get_current_user
 from app.dependencies.rate_limit import RateLimit
+from app.errors import not_found, unauthorized
 from app.models.auth import RefreshToken, User
 from app.schemas.auth import (
     ERR_TOKEN_EXPIRED,
@@ -41,6 +42,14 @@ from app.utils.jwt import (
     hash_token,
 )
 
+
+def _audit_ctx(request: Request) -> dict:
+    """Extract IP and User-Agent from a request for audit logging."""
+    return {
+        "ip_address": request.client.host if request.client else "unknown",
+        "user_agent": request.headers.get("user-agent", "")[:512],
+    }
+
 router = APIRouter(tags=["jwt-auth"])
 
 
@@ -58,11 +67,8 @@ async def get_auth_token(
     """
     token = request.session.pop("pending_access_token", None)
     if not token:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_MISSING, "message": "No pending auth token — please log in again"},
-        )
-    await log_auth_event(AUTH_TOKEN_EXCHANGE, request, user_id=None, metadata={"source": "session"})
+        raise unauthorized("No pending auth token — please log in again", code=ERR_TOKEN_MISSING)
+    await log_auth_event(AUTH_TOKEN_EXCHANGE, user_id=None, **_audit_ctx(request), metadata={"source": "session"})
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -77,7 +83,7 @@ async def get_auth_me(
     )
     user = result.scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise not_found("User not found")
 
     return {
         "id": user.id,
@@ -114,7 +120,7 @@ async def patch_auth_me(
     result = await session.execute(select(User).where(User.id == current_user.id))
     user = result.scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise not_found("User not found")
 
     if "display_name" in data.model_fields_set:
         user.display_name = data.display_name.strip() if data.display_name else None
@@ -156,7 +162,10 @@ async def logout_all_devices(
     # Clear the refresh cookie on this device
     response.delete_cookie(key="jwt_refresh_token", path="/auth/jwt/refresh")
 
-    await log_auth_event(AUTH_LOGOUT_ALL, request, user_id=current_user.id, metadata={"revoked_count": len(active_rts)})
+    await log_auth_event(
+        AUTH_LOGOUT_ALL, user_id=current_user.id,
+        **_audit_ctx(request), metadata={"revoked_count": len(active_rts)},
+    )
 
     return {"revoked_sessions": len(active_rts)}
 
@@ -219,7 +228,8 @@ async def logout_single_device(
     response.delete_cookie(key="jwt_refresh_token", path="/auth/jwt/refresh")
 
     await log_auth_event(
-        AUTH_LOGOUT, request, user_id=current_user.id,
+        AUTH_LOGOUT, user_id=current_user.id,
+        **_audit_ctx(request),
         metadata={"device_id": device_id, "revoked_count": count},
     )
 
@@ -241,31 +251,19 @@ async def jwt_refresh(
     # 1. Read cookie
     raw_token = request.cookies.get("jwt_refresh_token")
     if not raw_token:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_MISSING, "message": "Refresh token cookie missing"},
-        )
+        raise unauthorized("Refresh token cookie missing", code=ERR_TOKEN_MISSING)
 
     # 2. Decode — ExpiredSignatureError BEFORE JWTError (subclass ordering)
     try:
         payload = decode_refresh_token(raw_token)
     except ExpiredSignatureError:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_EXPIRED, "message": "Refresh token has expired"},
-        )
+        raise unauthorized("Refresh token has expired", code=ERR_TOKEN_EXPIRED)
     except JWTError:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_INVALID, "message": "Refresh token is invalid"},
-        )
+        raise unauthorized("Refresh token is invalid", code=ERR_TOKEN_INVALID)
 
     user_id: str = payload.get("sub", "")
     if not user_id:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_INVALID, "message": "Refresh token is invalid"},
-        )
+        raise unauthorized("Refresh token is invalid", code=ERR_TOKEN_INVALID)
 
     # 3. Look up stored refresh token by hash
     token_hash = hash_token(raw_token)
@@ -274,31 +272,19 @@ async def jwt_refresh(
     )
     stored_rt = rt_result.scalar_one_or_none()
     if stored_rt is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_INVALID, "message": "Authentication failed"},
-        )
+        raise unauthorized("Authentication failed", code=ERR_TOKEN_INVALID)
 
     # 4. Cross-validate: stored user_id must match JWT sub claim
     if stored_rt.user_id != user_id:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_INVALID, "message": "Refresh token is invalid"},
-        )
+        raise unauthorized("Refresh token is invalid", code=ERR_TOKEN_INVALID)
 
     # 5. Revocation check
     if stored_rt.revoked:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_REVOKED, "message": "Refresh token has been revoked"},
-        )
+        raise unauthorized("Refresh token has been revoked", code=ERR_TOKEN_REVOKED)
 
     # 6. Expiry check (SQLite returns naive datetimes — ensure_utc bridges that)
     if ensure_utc(stored_rt.expires_at) < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_EXPIRED, "message": "Refresh token has expired"},
-        )
+        raise unauthorized("Refresh token has expired", code=ERR_TOKEN_EXPIRED)
 
     # 7. Load user
     user_result = await session.execute(
@@ -306,10 +292,7 @@ async def jwt_refresh(
     )
     user = user_result.scalar_one_or_none()
     if user is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": ERR_TOKEN_INVALID, "message": "Authentication failed"},
-        )
+        raise unauthorized("Authentication failed", code=ERR_TOKEN_INVALID)
 
     # 8. Revoke old token, issue new pair via shared service
     # Preserve device_id so per-device revocation works across refresh rotations.
@@ -320,6 +303,6 @@ async def jwt_refresh(
 
     set_refresh_cookie(response, new_raw_refresh)
 
-    await log_auth_event(AUTH_REFRESH, request, user_id=user_id)
+    await log_auth_event(AUTH_REFRESH, user_id=user_id, **_audit_ctx(request))
 
     return {"access_token": access_token, "token_type": "bearer"}
