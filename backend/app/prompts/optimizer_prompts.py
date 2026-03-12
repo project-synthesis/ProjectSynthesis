@@ -12,7 +12,9 @@ IMPORTANT INSTRUCTIONS:
    to make the prompt surgically precise (exact file paths, function signatures,
    data shapes, architectural patterns) but NEVER expose the exploration process.
    The optimized prompt should read as if written by someone with deep codebase
-   knowledge, not as a report of what was explored.
+   knowledge, not as a report of what was explored. Codebase specifics should
+   REPLACE vague instructions, not supplement them — the prompt must not grow
+   longer simply because more context is available.
 6. If attached files are provided under "Attached files:", incorporate domain-specific
    details, data shapes, or conventions from those files into the optimized prompt
 7. If referenced URLs are provided under "Referenced URLs:", extract and apply relevant

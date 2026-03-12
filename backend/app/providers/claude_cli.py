@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json as _json
 import logging
 import os
 from typing import AsyncGenerator, Callable
@@ -56,49 +58,80 @@ class ClaudeCLIProvider(LLMProvider):
         return full_text
 
     async def stream(self, system: str, user: str, model: str) -> AsyncGenerator[str, None]:
-        """Stream LLM output in small chunks for progressive UI display.
+        """Stream LLM output via claude CLI subprocess with true token-level streaming.
 
-        The claude-agent-sdk returns full TextBlocks, so we split them into
-        smaller chunks to simulate token-level streaming and provide a
-        responsive UI experience.
+        Uses --output-format stream-json --include-partial-messages to get raw
+        Anthropic API streaming events (content_block_delta / text_delta) directly
+        from the CLI, bypassing the Agent SDK's message-level buffering.
         """
-        import asyncio
+        # Build environment: unset CLAUDECODE to avoid nested-session error
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock
+        cmd = [
+            "claude", "-p",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--no-session-persistence",
+            "--system-prompt", system,
+            "--model", model,
+        ]
 
-        options = ClaudeAgentOptions(
-            system_prompt=system,
-            model=model,
-            max_turns=1,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
-        async for msg in self._query(prompt=user, options=options):
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock):
-                        text = block.text
-                        if not text:
-                            continue
-                        # Word-boundary streaming: split on whitespace to avoid
-                        # cutting tokens mid-word, then batch words into chunks
-                        # of ~60 chars for a smooth progressive display.
-                        # First chunk yields immediately; subsequent chunks get
-                        # a 3ms pause (vs 10ms fixed — 70% less total sleep overhead).
-                        CHUNK_TARGET = 60
-                        words = text.split(" ")
-                        current = ""
-                        first = True
-                        for word in words:
-                            candidate = (current + " " + word).lstrip() if current else word
-                            if len(candidate) >= CHUNK_TARGET and current:
-                                yield current + " "
-                                if not first:
-                                    await asyncio.sleep(0.003)
-                                first = False
-                                current = word
-                            else:
-                                current = candidate
-                        if current:
-                            yield current
+
+        # Write prompt to stdin and close.  drain() flushes the write buffer
+        # so large prompts (>64 KB pipe buffer) don't silently truncate.
+        assert proc.stdin is not None
+        proc.stdin.write(user.encode("utf-8"))
+        await proc.stdin.drain()
+        proc.stdin.close()
+
+        # Parse streaming JSON events from stdout.  The try/finally ensures
+        # the subprocess is always cleaned up — even when the optimizer's
+        # timeout cancels the consuming task mid-stream.
+        assert proc.stdout is not None
+        try:
+            async for line_bytes in proc.stdout:
+                line = line_bytes.decode("utf-8").strip()
+                if not line:
+                    continue
+                try:
+                    event = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+
+                # Only yield text content deltas; skip thinking, signatures, etc.
+                if event.get("type") != "stream_event":
+                    continue
+                inner = event.get("event", {})
+                if inner.get("type") != "content_block_delta":
+                    continue
+                delta = inner.get("delta", {})
+                if delta.get("type") == "text_delta" and delta.get("text"):
+                    yield delta["text"]
+        finally:
+            # Kill the subprocess if it's still running (e.g. generator cancelled)
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass  # Already exited between our check and kill
+            await proc.wait()
+            if proc.returncode and proc.returncode != 0:
+                stderr_output = ""
+                if proc.stderr:
+                    stderr_bytes = await proc.stderr.read()
+                    stderr_output = stderr_bytes.decode("utf-8", errors="replace")[:500]
+                logger.warning(
+                    "claude CLI stream exited with code %d: %s",
+                    proc.returncode, stderr_output,
+                )
 
     async def complete_json(
         self,

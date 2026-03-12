@@ -295,7 +295,7 @@ async def run_pipeline(
     # ---- Stage 3: Optimize (streaming) ----
     _opt_failed = False  # M1: initialize before try so except path never leaves it unbound
     try:
-        yield ("stage", {"stage": "optimize", "status": "started"})
+        yield ("stage", {"stage": "optimize", "status": "started", "streaming": stream_optimize})
         start = time.time()
 
         optimization_result = None
@@ -370,6 +370,7 @@ async def run_pipeline(
             optimized_prompt=optimized_prompt,
             changes_made=changes_made,
             codebase_context=codebase_context,
+            instructions=instructions,
             model=model_override,
         ):
             if event_type == "validation":
@@ -453,7 +454,7 @@ async def run_pipeline(
         _retry_active_stage = "optimize"  # Track which stage is active for error reporting
         try:
             # Re-run optimize with adjusted constraints
-            yield ("stage", {"stage": "optimize", "status": "started"})
+            yield ("stage", {"stage": "optimize", "status": "started", "streaming": stream_optimize})
             start = time.time()
 
             retry_optimization_result = None
@@ -521,6 +522,7 @@ async def run_pipeline(
                 optimized_prompt=optimized_prompt,
                 changes_made=changes_made,
                 codebase_context=codebase_context,
+                instructions=instructions,
                 model=model_override,
             ):
                 if event_type == "validation":

@@ -80,9 +80,9 @@ specific code regions the prompt's intent relates to
   - Describe WHAT the code does behaviorally, not just structurally. Include specific \
 values, branch conditions, and behavioral characteristics. \
 Bad: "stream method for CLI provider". \
-Good: "stream() method: text blocks converted to word-boundary chunks via hardcoded \
-CHUNK_TARGET=60 and 3ms inter-chunk sleep. Simulated streaming differs from \
-AnthropicAPIProvider.stream() which uses SDK text_stream."
+Good: "stream() method: spawns claude subprocess with --output-format stream-json \
+--include-partial-messages, parses content_block_delta/text_delta events for true \
+token-level streaming. Both providers yield real-time text chunks."
 
 ### codebase_observations (required)
 8–12 key observations about architecture, patterns, and structure, adapted to the \

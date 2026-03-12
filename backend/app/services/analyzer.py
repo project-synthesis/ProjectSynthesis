@@ -40,7 +40,9 @@ async def run_analyze(
         ("analysis", dict) with keys: task_type, weaknesses, strengths, complexity,
                                        recommended_frameworks, codebase_informed
     """
-    # Cache check: same prompt + same context type flags = same classification
+    system_prompt = get_analyzer_prompt()
+
+    # Cache check: same prompt + same context type flags + same system prompt = same classification
     cache = get_cache()
     if cache:
         context_flags = (
@@ -49,7 +51,8 @@ async def run_analyze(
         )
         prompt_hash = cache.hash_content(raw_prompt)
         flags_hash = cache.hash_content(context_flags)
-        analyze_cache_key = cache.make_key("analyze_v2", prompt_hash, flags_hash)
+        sys_hash = cache.hash_content(system_prompt)
+        analyze_cache_key = cache.make_key("analyze_v3", prompt_hash, flags_hash, sys_hash)
         cached = await cache.get(analyze_cache_key)
         if cached is not None:
             cached["analysis_quality"] = "cached"
@@ -57,8 +60,6 @@ async def run_analyze(
             return
     else:
         analyze_cache_key = None
-
-    system_prompt = get_analyzer_prompt()
 
     user_message = f"Analyze this prompt:\n\n---\n{raw_prompt}\n---"
 

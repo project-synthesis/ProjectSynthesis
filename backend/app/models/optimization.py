@@ -58,6 +58,7 @@ class Optimization(Base):
 
     # Timing & provider
     duration_ms = Column(Integer, nullable=True)
+    stage_durations = Column(Text, nullable=True)  # JSON: {"explore": {"duration_ms": N, "token_count": N}, ...}
     provider_used = Column(Text, nullable=True)
     model_explore = Column(Text, nullable=True)
     model_analyze = Column(Text, nullable=True)
@@ -114,7 +115,7 @@ class Optimization(Base):
             value = getattr(self, col.name)
             if isinstance(value, datetime):
                 value = value.isoformat()
-            # Parse JSON fields
+            # Parse JSON fields (list columns — default to [] on error)
             if col.name in ("weaknesses", "strengths", "changes_made", "issues", "tags", "secondary_frameworks"):
                 if value and isinstance(value, str):
                     try:
@@ -125,5 +126,12 @@ class Optimization(Base):
                             self.__tablename__, col.name, self.id,
                         )
                         value = []
+            # Parse stage_durations dict (separate from list-columns — wrong default type)
+            if col.name == "stage_durations":
+                if value and isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = None
             result[col.name] = value
         return result

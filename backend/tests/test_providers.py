@@ -1,6 +1,7 @@
 """Tests for LLM provider implementations (P2-P8, T1-T11)."""
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -479,49 +480,119 @@ def test_abc_stream_is_async():
 
 
 # ---------------------------------------------------------------------------
-# P8 — ClaudeCLIProvider.stream() word-boundary chunking
+# P8 — ClaudeCLIProvider.stream() subprocess token-level streaming
 # ---------------------------------------------------------------------------
 
+def _make_stream_proc(lines: list[bytes], returncode: int = 0, stderr_text: str = ""):
+    """Helper: build a mock subprocess for ClaudeCLIProvider.stream() tests."""
+    mock_proc = AsyncMock()
+    mock_proc.stdin = AsyncMock()
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.stdin.close = MagicMock()
+    mock_proc.returncode = returncode
+    mock_proc.wait = AsyncMock(return_value=returncode)
+    mock_proc.stderr = AsyncMock()
+    mock_proc.stderr.read = AsyncMock(return_value=stderr_text.encode())
+    mock_proc.kill = MagicMock()
+
+    async def _aiter_lines():
+        for line in lines:
+            yield line
+
+    mock_proc.stdout = _aiter_lines()
+    return mock_proc
+
+
 @pytest.mark.asyncio
-async def test_cli_stream_yields_word_boundary_chunks():
-    """Chunks should not split words mid-token."""
+async def test_cli_stream_yields_text_deltas_from_subprocess():
+    """stream() should parse text_delta events and skip non-text events."""
     from app.providers.claude_cli import ClaudeCLIProvider
 
-    long_text = "hello world foo bar baz " * 100  # 2400 chars
-
-    async def mock_query(prompt, options):
-        msg = MagicMock()
-        msg.__class__.__name__ = "AssistantMessage"
-        block = MagicMock()
-        block.__class__.__name__ = "TextBlock"
-        block.text = long_text
-        msg.content = [block]
-        yield msg
-
+    lines = [
+        b'{"type":"stream_event","event":{"type":"content_block_start","index":0}}\n',
+        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}}\n',
+        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}}\n',
+        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"internal"}}}\n',
+        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}}\n',
+        b'not valid json\n',
+        b'\n',
+        b'{"type":"result","result":"done"}\n',
+    ]
+    mock_proc = _make_stream_proc(lines)
     provider = ClaudeCLIProvider.__new__(ClaudeCLIProvider)
-    provider._query = mock_query
 
-    # Patch the isinstance checks by using actual classes
-    from claude_agent_sdk import AssistantMessage, TextBlock
-
-    real_msg = MagicMock(spec=AssistantMessage)
-    real_block = MagicMock(spec=TextBlock)
-    real_block.text = long_text
-    real_msg.content = [real_block]
-
-    async def mock_query_real(prompt, options):
-        yield real_msg
-
-    provider._query = mock_query_real
-
-    with patch.dict("os.environ", {}, clear=True):
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         chunks = []
         async for chunk in provider.stream("sys", "user", "claude-haiku-4-5"):
             chunks.append(chunk)
 
-    full = "".join(chunks)
-    assert full == long_text
-    # Should produce multiple chunks for a 2400-char response
+    assert chunks == ["Hello ", "world"]
+    mock_proc.stdin.drain.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cli_stream_logs_warning_on_nonzero_exit(caplog):
+    """Non-zero exit code should be logged as warning, not raised."""
+    from app.providers.claude_cli import ClaudeCLIProvider
+
+    lines = [
+        b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}}\n',
+    ]
+    mock_proc = _make_stream_proc(lines, returncode=1, stderr_text="some error")
+    provider = ClaudeCLIProvider.__new__(ClaudeCLIProvider)
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        chunks = []
+        with caplog.at_level(logging.WARNING, logger="app.providers.claude_cli"):
+            async for chunk in provider.stream("sys", "user", "claude-haiku-4-5"):
+                chunks.append(chunk)
+
+    # Partial output is still yielded
+    assert chunks == ["partial"]
+    assert "exited with code 1" in caplog.text
+    assert "some error" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cli_stream_kills_subprocess_on_cancellation():
+    """Subprocess must be killed when the generator is cancelled mid-stream."""
+    import asyncio
+    from app.providers.claude_cli import ClaudeCLIProvider
+
+    # Use an event to block the generator mid-stream so we can cancel it
+    stall = asyncio.Event()
+
+    async def _stalling_lines():
+        yield b'{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"tok1"}}}\n'
+        await stall.wait()  # Block here until cancelled
+
+    mock_proc = AsyncMock()
+    mock_proc.stdin = AsyncMock()
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.stdin.close = MagicMock()
+    mock_proc.returncode = None  # Still running
+    mock_proc.wait = AsyncMock(return_value=-9)
+    mock_proc.kill = MagicMock()
+    mock_proc.stderr = AsyncMock()
+    mock_proc.stderr.read = AsyncMock(return_value=b"")
+    mock_proc.stdout = _stalling_lines()
+
+    provider = ClaudeCLIProvider.__new__(ClaudeCLIProvider)
+
+    async def _consume():
+        async for _ in provider.stream("sys", "user", "claude-haiku-4-5"):
+            pass
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        task = asyncio.create_task(_consume())
+        await asyncio.sleep(0.01)  # Let the task start and yield first token
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    mock_proc.kill.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

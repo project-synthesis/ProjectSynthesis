@@ -82,6 +82,7 @@ async def optimize_prompt(
         # Accumulate field updates as pipeline events arrive (no ORM object needed)
         updates: dict = {}
         total_tokens = 0
+        stage_timings: dict = {}
         pipeline_failed = False
         pipeline_error_message = None
 
@@ -115,9 +116,15 @@ async def optimize_prompt(
                 ):
                     yield _sse_event(event_type, event_data)
 
-                    # Track total tokens from stage complete events
+                    # Track total tokens and per-stage durations from stage complete events
                     if event_type == "stage" and event_data.get("status") == "complete":
                         total_tokens += event_data.get("token_count", 0)
+                        _sname = event_data.get("stage")
+                        if _sname:
+                            stage_timings[_sname] = {
+                                "duration_ms": event_data.get("duration_ms", 0),
+                                "token_count": event_data.get("token_count", 0),
+                            }
 
                     # Detect non-recoverable pipeline errors (failed stage)
                     if event_type == "error" and not event_data.get("recoverable", True):
@@ -131,6 +138,10 @@ async def optimize_prompt(
                             opt_id, list(event_data.keys())
                         )
                     updates.update(accumulate_pipeline_event(event_type, event_data))
+
+                # Persist per-stage durations
+                if stage_timings:
+                    updates["stage_durations"] = json.dumps(stage_timings)
 
                 # Finalize — success or partial failure
                 duration_ms = int((time.time() - start_time) * 1000)
@@ -164,6 +175,8 @@ async def optimize_prompt(
                 "Pipeline timeout (%ds) for opt %s",
                 effective_timeout, opt_id,
             )
+            if stage_timings:
+                updates["stage_durations"] = json.dumps(stage_timings)
             updates["status"] = "failed"
             updates["error_message"] = (
                 f"Pipeline timed out after {effective_timeout}s"
@@ -186,6 +199,8 @@ async def optimize_prompt(
 
         except Exception as e:
             logger.exception(f"Pipeline error for {opt_id}: {e}")
+            if stage_timings:
+                updates["stage_durations"] = json.dumps(stage_timings)
             updates["status"] = "failed"
             updates["error_message"] = str(e)
             updates["duration_ms"] = int((time.time() - start_time) * 1000)

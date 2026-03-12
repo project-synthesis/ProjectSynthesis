@@ -98,8 +98,8 @@ class LLMProvider(ABC):
         """Streaming completion. Yields text chunks as they arrive.
 
         AnthropicAPIProvider: true token-level streaming via SDK text_stream.
-        ClaudeCLIProvider: simulated streaming (full TextBlocks chunked into
-        word-boundary pieces with a small inter-chunk delay for progressive UI).
+        ClaudeCLIProvider: true token-level streaming via CLI subprocess with
+        --output-format stream-json --include-partial-messages (text_delta events).
         """
         ...
 

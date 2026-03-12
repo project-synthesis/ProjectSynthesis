@@ -118,6 +118,7 @@ export interface OptimizationRecord {
   verdict: string | null;
   issues: string[] | null;
   duration_ms: number | null;
+  stage_durations?: Record<string, { duration_ms?: number; token_count?: number }> | null;
   provider_used: string | null;
   model_explore: string | null;
   model_analyze: string | null;

@@ -145,6 +145,7 @@ async def _run_and_persist(
 
     updates: dict = {}
     results: dict = {}
+    stage_timings: dict = {}
     start = time.time()
 
     try:
@@ -163,6 +164,13 @@ async def _run_and_persist(
             updates.update(accumulate_pipeline_event(event_type, event_data))
             if event_type in ("analysis", "strategy", "optimization", "validation"):
                 results[event_type] = event_data
+            if event_type == "stage" and event_data.get("status") == "complete":
+                _sname = event_data.get("stage")
+                if _sname:
+                    stage_timings[_sname] = {
+                        "duration_ms": event_data.get("duration_ms", 0),
+                        "token_count": event_data.get("token_count", 0),
+                    }
 
         updates["status"] = "completed"
     except Exception as e:
@@ -170,6 +178,8 @@ async def _run_and_persist(
         updates["status"] = "failed"
         updates["error_message"] = str(e)
 
+    if stage_timings:
+        updates["stage_durations"] = json.dumps(stage_timings)
     updates["duration_ms"] = int((time.time() - start) * 1000)
     updates["provider_used"] = provider.name
     updates["updated_at"] = datetime.now(timezone.utc)

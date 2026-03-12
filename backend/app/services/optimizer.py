@@ -29,7 +29,12 @@ logger = logging.getLogger(__name__)
 # optimizer HOW to integrate codebase intelligence into the final prompt.
 _WEAVING_GUIDANCE: dict[str, str] = {
     "refactoring": (
-        "- Construct a prioritized Scope section mapping observations to specific files/functions\n"
+        "- Provide architectural context (module boundaries, data flow, dependency direction)\n"
+        "  that helps the executor discover refactoring opportunities independently\n"
+        "- Frame scope zones as structural observations ('X is defined in Y, also used in Z'),\n"
+        "  not diagnoses ('X is wrong because Y') — let the executor draw conclusions\n"
+        "- Preserve discovery: note that listed zones are highest-signal starting points,\n"
+        "  not an exhaustive list — the executor may find additional opportunities\n"
         "- Use coverage % and test file counts to calibrate effort estimates\n"
         "- Extract architectural constraints from project docs and make them explicit"
     ),
@@ -51,7 +56,9 @@ _WEAVING_GUIDANCE: dict[str, str] = {
     ),
     "architecture_review": (
         "- Use dependency and coupling observations to define review dimensions\n"
-        "- Reference layer violations and cross-cutting concerns as explicit review criteria"
+        "- Reference layer boundaries and cross-cutting concerns as review scope\n"
+        "- Preserve discovery: listed areas are navigational context, not the complete\n"
+        "  set of findings — the executor may identify additional architectural concerns"
     ),
     "performance": (
         "- Reference hot paths, I/O boundaries, and caching patterns as profiling targets"
@@ -206,6 +213,12 @@ async def run_optimize(
             user_message += (
                 "\n\n--- Codebase reference (INTELLIGENCE LAYER — for YOUR understanding only) ---\n"
                 f"Intent focus: {intent_cat} · Coverage: {coverage}% · {files_read} files\n\n"
+                "Conciseness calibration: this reference is rich with specifics. Absorb them\n"
+                "into precise instructions — do NOT expand the prompt proportionally. Every\n"
+                "file path or function name should REPLACE a vague instruction, not supplement\n"
+                "it. Fold constraints into the section they govern (output rules into the output\n"
+                "format, ranking rules into the scope header) — do NOT create separate sections\n"
+                "that restate requirements already embedded elsewhere.\n\n"
                 "Weaving guidance (how to USE this context in the optimized prompt):\n"
                 f"{weaving}\n\n"
                 "Guardrails:\n"

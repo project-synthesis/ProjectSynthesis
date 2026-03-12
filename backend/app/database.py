@@ -96,6 +96,7 @@ async def _migrate_add_missing_columns() -> None:
             "analysis_quality": "VARCHAR(20)",  # pipeline quality flag for analysis stage
             "validation_quality": "VARCHAR(20)", # pipeline quality flag for validation stage
             "row_version": "INTEGER NOT NULL DEFAULT 0",  # optimistic locking counter
+            "stage_durations": "TEXT",           # JSON dict of per-stage timing
         },
         "github_tokens": {
             "avatar_url": "TEXT",              # cached avatar URL

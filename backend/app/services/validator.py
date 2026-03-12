@@ -73,6 +73,7 @@ async def run_validate(
     optimized_prompt: str,
     changes_made: list[str],
     codebase_context: dict | None = None,
+    instructions: list[str] | None = None,
     model: str | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 4 validation.
@@ -94,8 +95,17 @@ async def run_validate(
         codebase_context: When provided, a codebase summary is injected into
             the user message so the LLM can assess codebase accuracy when
             scoring faithfulness_score.
+        instructions: User-specified output constraints. When provided, the
+            validator checks whether the optimized prompt honors them.
     """
-    system_prompt = get_validator_prompt(has_codebase_context=codebase_context is not None)
+    intent_cat = ""
+    if codebase_context is not None:
+        intent_cat = codebase_context.get("intent_category", "")
+
+    system_prompt = get_validator_prompt(
+        has_codebase_context=codebase_context is not None,
+        intent_category=intent_cat,
+    )
 
     user_message = (
         f"Original prompt:\n---\n{original_prompt}\n---\n\n"
@@ -114,6 +124,15 @@ async def run_validate(
                 f"does NOT mean something doesn't exist — this is partial coverage.\n"
                 f"{codebase_summary[:4000]}"
             )
+
+    if instructions:
+        constraint_list = "\n".join(f"  - {c}" for c in instructions[:10])
+        user_message += (
+            f"\n\nUser-specified output constraints (the optimized prompt MUST honor these):\n"
+            f"{constraint_list}\n"
+            "Verify each constraint is reflected in the optimized prompt. "
+            "Missing or violated constraints are faithfulness failures."
+        )
 
     model = model or MODEL_ROUTING["validate"]
 

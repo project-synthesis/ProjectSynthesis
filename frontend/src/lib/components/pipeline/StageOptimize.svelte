@@ -15,13 +15,21 @@
         <div class="bg-bg-primary border border-border-accent rounded-lg p-3 relative">
           <pre class="text-text-primary text-[13px] font-sans whitespace-pre-wrap leading-relaxed">{forge.streamingText}<span class="streaming-cursor"></span></pre>
         </div>
-      {:else}
-        <!-- Non-streaming mode: indeterminate progress bar while waiting for atomic response -->
+      {:else if forge.optimizeStreaming === false}
+        <!-- Confirmed batch mode: indeterminate progress bar while waiting for atomic response -->
         <div class="bg-bg-primary border border-border-subtle p-3">
           <div class="h-0.5 w-full bg-border-subtle overflow-hidden">
             <div class="h-full w-1/3 bg-neon-cyan/40 animate-indeterminate"></div>
           </div>
           <p class="text-text-dim text-[10px] mt-2">Processing prompt (batch mode)</p>
+        </div>
+      {:else}
+        <!-- Streaming enabled but no text yet (adaptive thinking phase) -->
+        <div class="bg-bg-primary border border-border-subtle p-3">
+          <div class="h-0.5 w-full bg-border-subtle overflow-hidden">
+            <div class="h-full w-1/3 bg-neon-cyan/40 animate-indeterminate"></div>
+          </div>
+          <p class="text-text-dim text-[10px] mt-2">Thinking…</p>
         </div>
       {/if}
     </div>

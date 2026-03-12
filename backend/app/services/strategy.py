@@ -43,8 +43,11 @@ async def run_strategy(
         ("strategy", dict) with keys: primary_framework, secondary_frameworks,
                                        rationale, approach_notes
     """
-    # Cache check: keyed on prompt content + analysis signature so different
-    # prompts with the same task_type get distinct strategies.
+    system_prompt = get_strategy_prompt()
+
+    # Cache check: keyed on prompt content + analysis signature + system prompt
+    # so different prompts with the same task_type get distinct strategies,
+    # and prompt template changes auto-invalidate cached results.
     cache = get_cache()
     task_type = analysis.get("task_type", "general")
     complexity = analysis.get("complexity", "moderate")
@@ -56,7 +59,8 @@ async def run_strategy(
             f"{','.join(analysis.get('weaknesses', [])[:5])}:"
             f"{','.join(analysis.get('recommended_frameworks', []))}"
         )
-        cache_key = CacheService.make_key("strategy_v2", prompt_hash, analysis_hash)
+        sys_hash = CacheService.hash_content(system_prompt)
+        cache_key = CacheService.make_key("strategy_v3", prompt_hash, analysis_hash, sys_hash)
 
     if cache and cache_key:
         cached = await cache.get(cache_key)
@@ -64,8 +68,6 @@ async def run_strategy(
             cached["strategy_source"] = "cached"
             yield ("strategy", cached)
             return
-
-    system_prompt = get_strategy_prompt()
 
     user_message = (
         f"Raw prompt:\n---\n{raw_prompt}\n---\n\n"
@@ -75,6 +77,16 @@ async def run_strategy(
         codebase_summary = build_codebase_summary(codebase_context)
         if codebase_summary:
             user_message += f"\n\nCodebase intelligence (navigational context):\n{codebase_summary}"
+
+        # Intent-aware framework hint
+        intent_cat = codebase_context.get("intent_category", "")
+        if intent_cat and intent_cat != "general":
+            user_message += (
+                f"\n\nIntent signal: codebase exploration classified this as '{intent_cat}'. "
+                f"Consider frameworks that align — e.g., constraint-injection for boundary-heavy "
+                f"intents, chain-of-thought for investigation intents, structured-output for "
+                f"specification intents."
+            )
 
     # Inject attached files / URLs / user constraints so strategy selection
     # can account for domain-specific signals (the strategy prompt already
