@@ -8,6 +8,7 @@ read settings without violating the layer rule (services → routers is forbidde
 import json
 import logging
 import os
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,18 @@ def save_settings(settings_data: dict) -> None:
     Raises:
         OSError: If the file cannot be written.
     """
-    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings_data, f, indent=2)
+    dir_path = os.path.dirname(SETTINGS_FILE)
+    os.makedirs(dir_path, exist_ok=True)
+    # Atomic write: temp file + rename prevents corruption on crash
+    fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(settings_data, f, indent=2)
+        os.replace(tmp_path, SETTINGS_FILE)
+    except BaseException:
+        # Clean up temp file on any failure (including KeyboardInterrupt)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise

@@ -395,13 +395,15 @@ class ForgeStore {
         for (const raw of events) {
           if (!raw.trim()) continue;
           const typeMatch = raw.match(/^event: (.+)$/m);
-          const dataMatch = raw.match(/^data: (.+)$/m);
-          if (typeMatch && dataMatch) {
+          // Concatenate all `data:` lines per SSE spec (multi-line safe)
+          const dataLines = raw.match(/^data: (.+)$/gm);
+          if (typeMatch && dataLines) {
+            const payload = dataLines.map((l) => l.slice(6)).join('\n');
             let parsed: unknown;
             try {
-              parsed = JSON.parse(dataMatch[1]);
+              parsed = JSON.parse(payload);
             } catch {
-              parsed = dataMatch[1];
+              parsed = payload;
             }
             this._handleSSEEvent({ event: typeMatch[1], data: parsed });
             await Promise.resolve(); // yield so Svelte flushes between events
