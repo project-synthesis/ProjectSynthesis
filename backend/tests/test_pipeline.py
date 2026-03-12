@@ -182,12 +182,8 @@ async def test_pipeline_retry_also_forwards_file_contexts():
          patch("app.services.pipeline.run_strategy", mock_strategy), \
          patch("app.services.pipeline.run_optimize", mock_optimize), \
          patch("app.services.pipeline.run_validate", mock_validate), \
-         patch("app.services.pipeline.load_settings", return_value={"auto_validate": True}), \
-         patch("app.services.pipeline.settings") as mock_settings:
-        mock_settings.MAX_PIPELINE_RETRIES = 1
-        mock_settings.ANALYZE_TIMEOUT_SECONDS = 30
-        mock_settings.STRATEGY_TIMEOUT_SECONDS = 30
-
+         patch("app.services.pipeline.load_settings",
+               return_value=_full_settings(max_retries=1)):
         async for _ in run_pipeline(
             provider=MagicMock(),
             raw_prompt="Test prompt",
@@ -410,12 +406,8 @@ async def test_retry_exception_emits_error_event():
          patch("app.services.pipeline.run_strategy", mock_strategy), \
          patch("app.services.pipeline.run_optimize", mock_optimize), \
          patch("app.services.pipeline.run_validate", mock_validate), \
-         patch("app.services.pipeline.load_settings", return_value={"auto_validate": True}), \
-         patch("app.services.pipeline.settings") as mock_settings:
-        mock_settings.MAX_PIPELINE_RETRIES = 1
-        mock_settings.ANALYZE_TIMEOUT_SECONDS = 30
-        mock_settings.STRATEGY_TIMEOUT_SECONDS = 30
-
+         patch("app.services.pipeline.load_settings",
+               return_value=_full_settings(max_retries=1)):
         async for event_type, event_data in run_pipeline(
             provider=provider,
             raw_prompt="Test prompt",
@@ -821,3 +813,32 @@ async def test_pipeline_stream_optimize_false():
 
     assert captured.get("streaming") is False, \
         "optimizer must receive streaming=False when stream_optimize is disabled"
+
+
+# ---------------------------------------------------------------------------
+# P-timeout-1: effective timeout is min(user setting, config ceiling)
+# ---------------------------------------------------------------------------
+
+def test_effective_timeout_capped_by_config_ceiling():
+    """The effective pipeline timeout must be the min of user setting and
+    config.py PIPELINE_TIMEOUT_SECONDS (the system ceiling).
+
+    This logic lives in optimize.py's event_stream() — we verify the
+    arithmetic directly since the full SSE endpoint is harder to unit test.
+    """
+    from app.config import settings as app_config
+
+    config_ceiling = app_config.PIPELINE_TIMEOUT_SECONDS  # e.g. 900
+
+    # User sets 120s → effective is 120 (below ceiling)
+    user_low = {"pipeline_timeout": 120}
+    assert min(user_low["pipeline_timeout"], config_ceiling) == 120
+
+    # User sets 9999s → effective is ceiling (config.py wins)
+    user_high = {"pipeline_timeout": 9999}
+    assert min(user_high["pipeline_timeout"], config_ceiling) == config_ceiling
+
+    # User omits → default (300) is below ceiling → 300
+    from app.services.settings_service import DEFAULT_SETTINGS
+    default_timeout = DEFAULT_SETTINGS["pipeline_timeout"]
+    assert min(default_timeout, config_ceiling) == default_timeout

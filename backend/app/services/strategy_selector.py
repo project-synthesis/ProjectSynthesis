@@ -99,6 +99,14 @@ TASK_FRAMEWORK_MAP: dict[str, tuple[str, list[str], str]] = {
 # been added — log a warning so developers can decide whether to add it.
 KNOWN_TASK_TYPES: frozenset[str] = frozenset(TASK_FRAMEWORK_MAP.keys())
 
+# All unique framework names referenced in TASK_FRAMEWORK_MAP (primary + secondary).
+# Single source of truth — settings validation and frontend dropdowns derive from this.
+KNOWN_FRAMEWORKS: frozenset[str] = frozenset(
+    framework
+    for primary, secondaries, _ in TASK_FRAMEWORK_MAP.values()
+    for framework in [primary, *secondaries]
+)
+
 
 def heuristic_strategy_fallback(task_type: str) -> dict:
     """Return a heuristic strategy based on task type.

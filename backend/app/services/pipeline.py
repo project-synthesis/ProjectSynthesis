@@ -83,7 +83,8 @@ async def run_pipeline(
     _user_model = app_settings.get("default_model", "auto")
     model_override: str | None = _user_model if _user_model != "auto" else None
 
-    # Effective max retries (user setting capped by config.py ceiling)
+    # Effective max retries (user setting with config.py default as fallback;
+    # the settings router validates 0-5 at the API layer)
     effective_max_retries = app_settings.get("max_retries", settings.MAX_PIPELINE_RETRIES)
 
     # Effective default strategy

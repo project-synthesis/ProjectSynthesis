@@ -31,7 +31,6 @@ async def run_strategy(
     raw_prompt: str,
     analysis: dict,
     codebase_context: Optional[dict] = None,
-    strategy_override: Optional[str] = None,
     file_contexts: list[dict] | None = None,
     url_fetched_contexts: list[dict] | None = None,
     instructions: list[str] | None = None,
@@ -59,7 +58,7 @@ async def run_strategy(
         )
         cache_key = CacheService.make_key("strategy_v2", prompt_hash, analysis_hash)
 
-    if cache and cache_key and not strategy_override:
+    if cache and cache_key:
         cached = await cache.get(cache_key)
         if cached is not None:
             cached["strategy_source"] = "cached"
@@ -156,7 +155,7 @@ async def run_strategy(
     result.setdefault("approach_notes", "")
 
     # Cache successful LLM results
-    if cache and cache_key and not strategy_override and result.get("strategy_source") in ("llm", "llm_json"):
+    if cache and cache_key and result.get("strategy_source") in ("llm", "llm_json"):
         await cache.set(cache_key, result, ttl_seconds=_STRATEGY_CACHE_TTL)
 
     yield ("strategy", result)
