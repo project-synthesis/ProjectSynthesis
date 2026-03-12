@@ -327,55 +327,91 @@ def test_codebase_relevant_snippets_as_list():
     assert "def optimize():" in result
 
 
-def test_codebase_snippets_capped_at_5():
-    """P1.5: snippet count cap raised from 3 to 5."""
+def test_codebase_observations_capped_at_12():
+    """Observations cap raised from 8 to 12."""
+    ctx = {"observations": [f"obs {i}" for i in range(16)]}
+    result = build_codebase_summary(ctx)
+    assert "obs 11" in result
+    assert "obs 12" not in result
+
+
+def test_codebase_grounding_notes_capped_at_12():
+    """Grounding notes cap raised from 8 to 12."""
+    ctx = {"grounding_notes": [f"note {i}" for i in range(16)]}
+    result = build_codebase_summary(ctx)
+    assert "note 11" in result
+    assert "note 12" not in result
+
+
+def test_codebase_snippets_capped_at_10():
+    """Snippet count cap raised from 5 to 10."""
     ctx = {
         "relevant_snippets": [
             {"file": f"file{i}.py", "lines": "1-5", "context": f"code {i}"}
-            for i in range(8)
+            for i in range(14)
         ]
     }
     result = build_codebase_summary(ctx)
-    assert "file0.py" in result
-    assert "file4.py" in result
-    assert "file5.py" not in result  # 6th snippet should be excluded
+    assert "file9.py" in result
+    assert "file10.py" not in result
 
 
-def test_codebase_snippet_content_capped_at_600_chars():
-    """P1.5: snippet content cap raised from 400 to 600 chars."""
-    long_content = "x" * 700
+def test_codebase_snippet_content_capped_at_1200_chars():
+    """Snippet content cap raised from 600 to 1200 chars."""
+    long_content = "x" * 1400
     ctx = {
         "relevant_snippets": [
             {"file": "big.py", "lines": "1-100", "context": long_content}
         ]
     }
     result = build_codebase_summary(ctx)
-    assert "x" * 600 in result
-    assert "x" * 601 not in result
+    assert "x" * 1200 in result
+    assert "x" * 1201 not in result
 
 
-def test_codebase_observations_capped_at_8():
-    """P1.5: observations cap raised from 5 to 8."""
-    ctx = {"observations": [f"obs {i}" for i in range(12)]}
+def test_codebase_key_files_capped_at_20():
+    """Key files cap raised from 10 to 20."""
+    ctx = {"key_files_read": [f"file{i}.py" for i in range(25)]}
     result = build_codebase_summary(ctx)
-    assert "obs 7" in result
-    assert "obs 8" not in result
+    assert "file19.py" in result
+    assert "file20.py" not in result
 
 
-def test_codebase_grounding_notes_capped_at_8():
-    """P1.5: grounding_notes cap raised from 5 to 8."""
-    ctx = {"grounding_notes": [f"note {i}" for i in range(12)]}
+def test_codebase_tech_stack_capped_at_15():
+    """Tech stack cap raised from 10 to 15."""
+    ctx = {"tech_stack": [f"lang{i}" for i in range(20)]}
     result = build_codebase_summary(ctx)
-    assert "note 7" in result
-    assert "note 8" not in result
+    assert "lang14" in result
+    assert "lang15" not in result
 
 
-def test_codebase_tech_stack_capped_at_10():
-    """Tech stack should cap at 10 entries."""
-    ctx = {"tech_stack": [f"lang{i}" for i in range(15)]}
+def test_codebase_intent_header_shown_for_non_general():
+    """Intent header appears when intent_category is set and not 'general'."""
+    ctx = {"intent_category": "refactoring", "depth": "behavioral", "repo": "o/r", "branch": "main"}
     result = build_codebase_summary(ctx)
-    assert "lang9" in result
-    assert "lang10" not in result
+    assert "Intent focus: refactoring (depth: behavioral)" in result
+
+
+def test_codebase_intent_header_omitted_for_general():
+    """Intent header is omitted when intent_category is 'general'."""
+    ctx = {"intent_category": "general", "repo": "o/r", "branch": "main"}
+    result = build_codebase_summary(ctx)
+    assert "Intent focus" not in result
+
+
+def test_codebase_intent_header_omitted_when_absent():
+    """Intent header is omitted when intent_category is empty/absent."""
+    ctx = {"repo": "o/r", "branch": "main"}
+    result = build_codebase_summary(ctx)
+    assert "Intent focus" not in result
+
+
+def test_codebase_intent_header_no_depth_when_empty():
+    """Intent header omits depth qualifier when depth is empty."""
+    ctx = {"intent_category": "testing", "depth": "", "repo": "o/r", "branch": "main"}
+    result = build_codebase_summary(ctx)
+    assert "Intent focus: testing" in result
+    assert "(depth:" not in result
 
 
 def test_codebase_files_read_count_appears():

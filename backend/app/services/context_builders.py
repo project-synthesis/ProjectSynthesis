@@ -25,6 +25,15 @@ Round 6 (P1.5) further improves build_codebase_summary():
 
 Round 7 (P2.2) extends build_analysis_summary():
   analysis_quality caveat prepended when quality is 'fallback' or 'failed'
+
+Round 8 (P3) raises build_codebase_summary() caps and adds intent header:
+  - Tech stack cap raised 10→15
+  - Key files cap raised 10→20
+  - Observations cap raised 8→12
+  - Grounding notes cap raised 8→12
+  - Snippet count cap raised 5→10
+  - Snippet content cap raised 600→1200 chars
+  - Intent focus header added (shown when intent_category is set and not 'general')
 """
 
 
@@ -32,9 +41,10 @@ def build_codebase_summary(codebase_context: dict) -> str:
     """Build a human-readable summary of codebase exploration results.
 
     Includes specific quality warning (partial/failed), repository @ branch header,
-    files_read_count, coverage_pct (when >0), tech stack, key_files_read,
-    observations and grounding_notes (capped at 8 each), and up to 5
-    relevant_snippets (content capped at 600 chars).
+    intent focus header (when intent_category is set and not 'general'),
+    files_read_count, coverage_pct (when >0), tech stack (capped at 15),
+    key_files_read (capped at 20), observations and grounding_notes (capped
+    at 12 each), and up to 10 relevant_snippets (content capped at 1200 chars).
     """
     if not codebase_context:
         return ""
@@ -74,6 +84,11 @@ def build_codebase_summary(codebase_context: dict) -> str:
     elif branch:
         parts.append(f"Branch: {branch}")
 
+    intent = codebase_context.get("intent_category")
+    depth = codebase_context.get("depth", "")
+    if intent and intent != "general":
+        parts.append(f"Intent focus: {intent}" + (f" (depth: {depth})" if depth else ""))
+
     if files_read_count:
         parts.append(f"Files read: {files_read_count}")
 
@@ -82,31 +97,31 @@ def build_codebase_summary(codebase_context: dict) -> str:
 
     tech_stack = codebase_context.get("tech_stack", [])
     if tech_stack:
-        parts.append(f"Tech stack: {', '.join(str(t) for t in tech_stack[:10])}")
+        parts.append(f"Tech stack: {', '.join(str(t) for t in tech_stack[:15])}")
 
     key_files = codebase_context.get("key_files_read", [])      # was "key_files"
     if key_files:
-        parts.append(f"Key files: {', '.join(str(f) for f in key_files[:10])}")
+        parts.append(f"Key files: {', '.join(str(f) for f in key_files[:20])}")
 
     observations = codebase_context.get("observations", [])
     if observations:
         parts.append("Architecture (structural observations, not correctness judgments):")
-        for obs in list(observations)[:8]:
+        for obs in list(observations)[:12]:
             parts.append(f"  - {obs}")
 
     grounding_notes = codebase_context.get("grounding_notes", [])   # was "notes"
     if grounding_notes:
         parts.append("Context intelligence (navigation hints for executor):")
-        for note in list(grounding_notes)[:8]:
+        for note in list(grounding_notes)[:12]:
             parts.append(f"  - {note}")
 
     snippets = codebase_context.get("relevant_snippets", [])     # was "snippets" (dict)
     if snippets and isinstance(snippets, list):
         parts.append("Key snippets:")
-        for snip in snippets[:5]:
+        for snip in snippets[:10]:
             file_name = snip.get("file", "?")
             lines = snip.get("lines", "")
-            ctx_text = str(snip.get("context", ""))[:600]
+            ctx_text = str(snip.get("context", ""))[:1200]
             loc = f"{file_name}:{lines}" if lines else file_name
             parts.append(f"  [{loc}]: {ctx_text}")
 
