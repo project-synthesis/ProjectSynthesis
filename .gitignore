@@ -75,3 +75,4 @@ feature_list_gen.py
 generations/
 docs/marketplace-webhook.md
 docs/superpowers/
+.superpowers/

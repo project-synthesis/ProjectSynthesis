@@ -1,5 +1,6 @@
 <script lang="ts">
   import { editor } from '$lib/stores/editor.svelte';
+  import HelixMark from '$lib/components/shared/HelixMark.svelte';
   import PromptDocument from '$lib/components/editor/PromptDocument.svelte';
   import ForgeArtifact from '$lib/components/editor/ForgeArtifact.svelte';
   import ChainComposer from '$lib/components/editor/ChainComposer.svelte';
@@ -174,7 +175,7 @@
     {:else}
       <!-- Empty state -->
       <div class="flex flex-col items-center justify-center h-full gap-3 animate-fade-in select-none">
-        <span class="text-gradient-forge font-display text-5xl font-bold opacity-[0.12] leading-none">PF</span>
+        <HelixMark size={56} instanceId={8} speed={-0.15} opacity={0.10} />
         <span class="text-[12px] text-text-dim">No prompt open</span>
         <span class="text-[11px] text-text-dim/60">
           Press <kbd>Ctrl+N</kbd> to create a new prompt

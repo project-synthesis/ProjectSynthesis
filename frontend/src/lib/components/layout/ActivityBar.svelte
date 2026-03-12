@@ -1,5 +1,6 @@
 <script lang="ts">
   import { workbench, type Activity } from '$lib/stores/workbench.svelte';
+  import HelixMark from '$lib/components/shared/HelixMark.svelte';
 
   const activities: { id: Activity; icon: string; label: string }[] = [
     { id: 'files', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z', label: 'Files' },
@@ -64,6 +65,6 @@
 
   <!-- Branding at bottom -->
   <div class="w-8 h-8 flex items-center justify-center" title="Project Synthesis">
-    <span class="text-sm font-bold text-gradient-forge">PS</span>
+    <HelixMark size={20} instanceId={7} opacity={0.7} />
   </div>
 </nav>

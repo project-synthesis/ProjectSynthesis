@@ -1,4 +1,4 @@
-<h1 align="center">Project Synthesis</h1>
+<h1 align="center">🧬 Project Synthesis</h1>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/Apache_2.0-blue.svg?logo=apache&logoColor=white" alt="License"></a>
