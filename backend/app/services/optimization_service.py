@@ -6,6 +6,7 @@ and deleting optimization records via SQLAlchemy async sessions.
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -88,10 +89,199 @@ def accumulate_pipeline_event(event_type: str, event_data: dict) -> dict:
     return updates
 
 
+class PipelineAccumulator:
+    """Accumulates pipeline SSE events into a dict of DB column updates.
+
+    Used by both the SSE endpoint (optimize.py) and the MCP server
+    (_run_and_persist) to avoid duplicating the accumulation logic.
+    """
+
+    def __init__(self) -> None:
+        self.updates: dict = {}
+        self.stage_timings: dict = {}
+        self.results: dict = {}
+        self.pipeline_failed = False
+        self.error_message: str | None = None
+        self.total_tokens: int = 0
+
+    def process_event(self, event_type: str, event_data: dict) -> None:
+        """Process a single pipeline event, accumulating updates."""
+        self.updates.update(accumulate_pipeline_event(event_type, event_data))
+
+        # Track per-stage results for MCP return values
+        if event_type in ("analysis", "strategy", "optimization", "validation"):
+            self.results[event_type] = event_data
+
+        # Track stage timings and token counts
+        if event_type == "stage" and event_data.get("status") == "complete":
+            stage_name = event_data.get("stage")
+            if stage_name:
+                self.stage_timings[stage_name] = {
+                    "duration_ms": event_data.get("duration_ms", 0),
+                    "token_count": event_data.get("token_count", 0),
+                }
+            self.total_tokens += event_data.get("token_count", 0)
+
+        # Detect non-recoverable errors
+        if event_type == "error" and not event_data.get("recoverable", True):
+            self.pipeline_failed = True
+            self.error_message = event_data.get("error", "Unknown stage failure")
+
+    def finalize(
+        self,
+        provider_name: str,
+        start_time: float,
+        error: Exception | None = None,
+    ) -> dict:
+        """Build final updates dict with stage_durations, duration_ms, status, etc.
+
+        Args:
+            provider_name: Name of the LLM provider used.
+            start_time: Pipeline start timestamp (from time.time()).
+            error: If set, marks the pipeline as failed with this error.
+
+        Returns:
+            Dict of Optimization column updates ready for DB persistence.
+        """
+        import time
+        from datetime import datetime, timezone
+
+        if self.stage_timings:
+            self.updates["stage_durations"] = json.dumps(self.stage_timings)
+
+        self.updates["duration_ms"] = int((time.time() - start_time) * 1000)
+        self.updates["updated_at"] = datetime.now(timezone.utc)
+        self.updates["provider_used"] = provider_name
+
+        if error is not None:
+            self.updates["status"] = "failed"
+            self.updates["error_message"] = str(error)
+        elif self.pipeline_failed:
+            self.updates["status"] = "failed"
+            self.updates["error_message"] = self.error_message
+        else:
+            self.updates["status"] = "completed"
+
+        return self.updates
+
+
 VALID_SORT_COLUMNS: frozenset[str] = frozenset({
     "created_at", "overall_score", "task_type", "updated_at",
     "duration_ms", "primary_framework", "status",
 })
+
+VALID_ORDERS: frozenset[str] = frozenset({"asc", "desc"})
+
+
+def validate_sort_params(sort: str, order: str) -> None:
+    """Validate sort column and order against whitelist. Raises ValueError on invalid input."""
+    if sort not in VALID_SORT_COLUMNS:
+        raise ValueError(f"Invalid sort column '{sort}'. Must be one of: {', '.join(sorted(VALID_SORT_COLUMNS))}")
+    if order not in VALID_ORDERS:
+        raise ValueError(f"Invalid order '{order}'. Must be 'asc' or 'desc'.")
+
+
+@dataclass
+class OptimizationQuery:
+    limit: int = 50
+    offset: int = 0
+    project: str | None = None
+    task_type: str | None = None
+    framework: str | None = None
+    has_repo: bool | None = None
+    min_score: float | None = None
+    max_score: float | None = None
+    status: str | None = None
+    search: str | None = None
+    search_columns: int = 2  # 2 = raw_prompt+title, 3 = +optimized_prompt, 4 = +project
+    sort: str = "created_at"
+    order: str = "desc"
+    user_id: str | None = None
+    deleted_only: bool = False  # True = show soft-deleted items (trash), False = active only
+
+
+async def query_optimizations(session: AsyncSession, params: OptimizationQuery) -> dict:
+    """Build query, count, sort, paginate, and return pagination envelope dict.
+
+    Handles both active and trash queries via ``deleted_only``.
+    Search depth is controlled by ``search_columns``:
+      2 = raw_prompt + title (default, MCP list_optimizations)
+      3 = + optimized_prompt (MCP search_optimizations)
+      4 = + project (history router)
+    """
+    validate_sort_params(params.sort, params.order)
+
+    if params.deleted_only:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        query = select(Optimization).where(
+            Optimization.deleted_at.isnot(None),
+            Optimization.deleted_at >= cutoff,
+        )
+    else:
+        query = select(Optimization).where(Optimization.deleted_at.is_(None))
+
+    if params.user_id:
+        query = query.where(Optimization.user_id == params.user_id)
+    if params.project:
+        query = query.where(Optimization.project == params.project)
+    if params.task_type:
+        query = query.where(Optimization.task_type == params.task_type)
+    if params.framework:
+        query = query.where(Optimization.primary_framework == params.framework)
+    if params.has_repo is True:
+        query = query.where(Optimization.linked_repo_full_name.isnot(None))
+    elif params.has_repo is False:
+        query = query.where(Optimization.linked_repo_full_name.is_(None))
+    if params.min_score is not None:
+        query = query.where(Optimization.overall_score >= params.min_score)
+    if params.max_score is not None:
+        query = query.where(Optimization.overall_score <= params.max_score)
+    if params.status:
+        query = query.where(Optimization.status == params.status)
+    if params.search:
+        escaped = escape_like(params.search)
+        pattern = f"%{escaped}%"
+        conditions = [
+            Optimization.raw_prompt.ilike(pattern, escape="\\"),
+            Optimization.title.ilike(pattern, escape="\\"),
+        ]
+        if params.search_columns >= 3:
+            conditions.append(Optimization.optimized_prompt.ilike(pattern, escape="\\"))
+        if params.search_columns >= 4:
+            conditions.append(Optimization.project.ilike(pattern, escape="\\"))
+        from sqlalchemy import or_
+        query = query.where(or_(*conditions))
+
+    # Count
+    count_query = select(func.count()).select_from(query.subquery())
+    count_result = await session.execute(count_query)
+    total = count_result.scalar() or 0
+
+    # Sort — trash queries default to deleted_at desc
+    if params.deleted_only and params.sort == "created_at":
+        query = query.order_by(Optimization.deleted_at.desc())
+    else:
+        sort_column = getattr(Optimization, params.sort)
+        if params.order == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+    # Paginate
+    query = query.offset(params.offset).limit(params.limit)
+    result = await session.execute(query)
+    items = [opt.to_dict() for opt in result.scalars().all()]
+
+    fetched = len(items)
+    has_more = (params.offset + fetched) < total
+    return {
+        "total": total,
+        "count": fetched,
+        "offset": params.offset,
+        "items": items,
+        "has_more": has_more,
+        "next_offset": params.offset + fetched if has_more else None,
+    }
 
 
 async def create_optimization(
@@ -146,65 +336,12 @@ async def list_optimizations(
     order: str = "desc",
     user_id: Optional[str] = None,
 ) -> tuple[list[dict], int]:
-    """List optimizations with pagination, filtering, and sorting.
-
-    Args:
-        session: Async database session.
-        limit: Maximum number of results to return.
-        offset: Number of results to skip.
-        project: Filter by project name.
-        task_type: Filter by task type classification.
-        search: Search term to match against raw_prompt and title.
-        sort: Column name to sort by.
-        order: Sort direction ('asc' or 'desc').
-        user_id: When provided, restrict to records owned by this user.
-
-    Returns:
-        Tuple of (list of optimization dicts, total count).
-    """
-    query = select(Optimization).where(Optimization.deleted_at.is_(None))
-
-    if user_id:
-        query = query.where(Optimization.user_id == user_id)
-
-    if project:
-        query = query.where(Optimization.project == project)
-
-    if task_type:
-        query = query.where(Optimization.task_type == task_type)
-
-    if search:
-        escaped = escape_like(search)
-        search_pattern = f"%{escaped}%"
-        query = query.where(
-            Optimization.raw_prompt.ilike(search_pattern, escape="\\")
-            | Optimization.title.ilike(search_pattern, escape="\\")
-        )
-
-    # DRY count — derived from the same filtered query (no filter duplication)
-    count_query = select(func.count()).select_from(query.subquery())
-    count_result = await session.execute(count_query)
-    total = count_result.scalar() or 0
-
-    # Sorting — whitelist prevents getattr on arbitrary user input
-    if sort not in VALID_SORT_COLUMNS:
-        raise ValueError(
-            f"Invalid sort column '{sort}'. Must be one of: {', '.join(sorted(VALID_SORT_COLUMNS))}"
-        )
-    if order not in ("asc", "desc"):
-        raise ValueError(f"Invalid order '{order}'. Must be 'asc' or 'desc'.")
-    sort_column = getattr(Optimization, sort)
-    if order == "asc":
-        query = query.order_by(sort_column.asc())
-    else:
-        query = query.order_by(sort_column.desc())
-
-    query = query.limit(limit).offset(offset)
-
-    result = await session.execute(query)
-    optimizations = result.scalars().all()
-
-    return [opt.to_dict() for opt in optimizations], total
+    """List optimizations with pagination, filtering, and sorting. Returns (items, total)."""
+    envelope = await query_optimizations(session, OptimizationQuery(
+        limit=limit, offset=offset, project=project, task_type=task_type,
+        search=search, sort=sort, order=order, user_id=user_id,
+    ))
+    return envelope["items"], envelope["total"]
 
 
 async def compute_stats(
@@ -458,8 +595,7 @@ async def batch_delete_optimizations(
         HTTPException 404: If any ID does not exist (or is already deleted).
         HTTPException 403: If any record belongs to a different user.
     """
-    from fastapi import HTTPException
-
+    from app.errors import forbidden, not_found
     from app.schemas.auth import ERR_INSUFFICIENT_PERMISSIONS
 
     # Fetch all records matching the provided IDs (including other users' records
@@ -475,22 +611,13 @@ async def batch_delete_optimizations(
     # Validate: every requested ID must exist
     missing = [oid for oid in ids if oid not in records]
     if missing:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Optimization(s) not found: {', '.join(missing)}",
-        )
+        raise not_found(f"Optimization(s) not found: {', '.join(missing)}")
 
     # Validate: every record must belong to the authenticated user
     if user_id:
-        unauthorized = [oid for oid, opt in records.items() if opt.user_id != user_id]
-        if unauthorized:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "code": ERR_INSUFFICIENT_PERMISSIONS,
-                    "message": "Not authorized to delete one or more optimizations",
-                },
-            )
+        unauthorized_ids = [oid for oid, opt in records.items() if opt.user_id != user_id]
+        if unauthorized_ids:
+            raise forbidden("Not authorized to delete one or more optimizations", code=ERR_INSUFFICIENT_PERMISSIONS)
 
     # All checks passed — mutate
     now = datetime.now(timezone.utc)
