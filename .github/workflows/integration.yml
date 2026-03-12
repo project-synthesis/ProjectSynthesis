@@ -24,8 +24,8 @@ jobs:
       - run: pytest tests/integration/ -q --tb=short
         env:
           TESTING: "true"
-          SECRET_KEY: "ci-integration-test-secret-32chars!!"
-          GITHUB_TOKEN_ENCRYPTION_KEY: "Zm9vYmFyYmF6cXV4cXV4cXV4cXV4cXV4cXV4cXU="
+          SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
+          GITHUB_TOKEN_ENCRYPTION_KEY: ${{ secrets.CI_ENCRYPTION_KEY }}
 
   frontend-e2e:
     name: frontend-e2e
@@ -55,8 +55,8 @@ jobs:
         env:
           CI: "true"
           TESTING: "true"
-          SECRET_KEY: "ci-e2e-test-secret-32chars-minimum!!"
-          GITHUB_TOKEN_ENCRYPTION_KEY: "Zm9vYmFyYmF6cXV4cXV4cXV4cXV4cXV4cXV4cXU="
+          SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
+          GITHUB_TOKEN_ENCRYPTION_KEY: ${{ secrets.CI_ENCRYPTION_KEY }}
           DATABASE_URL: "sqlite+aiosqlite:///./e2e_test.db"
 
       - uses: actions/upload-artifact@v4
