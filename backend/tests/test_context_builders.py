@@ -208,6 +208,26 @@ def test_codebase_context_asdict_complete_roundtrip():
     assert d["explore_quality"] == "partial"
 
 
+def test_codebase_context_intent_category_default():
+    """intent_category defaults to empty string."""
+    ctx = CodebaseContext()
+    assert ctx.intent_category == ""
+
+
+def test_codebase_context_depth_default():
+    """depth defaults to empty string."""
+    ctx = CodebaseContext()
+    assert ctx.depth == ""
+
+
+def test_codebase_context_asdict_includes_intent_fields():
+    """asdict() includes intent_category and depth."""
+    ctx = CodebaseContext(intent_category="refactoring", depth="behavioral")
+    d = asdict(ctx)
+    assert d["intent_category"] == "refactoring"
+    assert d["depth"] == "behavioral"
+
+
 # ── build_codebase_summary ────────────────────────────────────────────────────
 
 

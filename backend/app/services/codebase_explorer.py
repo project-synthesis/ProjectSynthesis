@@ -284,6 +284,8 @@ class CodebaseContext:
     coverage_pct: int = 0
     duration_ms: int = 0
     explore_quality: str = "complete"
+    intent_category: str = ""
+    depth: str = ""
 
 
 # Code extension set for module stem matching
