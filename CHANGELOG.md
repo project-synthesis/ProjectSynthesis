@@ -2,92 +2,38 @@
 
 ## Unreleased
 
-- Fixed history list, stats, and prompt history not auto-refreshing after forge completion — added reactive `completionSeq` counter with coordinating layout effect
-- Fixed editor tab not syncing new optimization ID after retry (stale tab association)
-- Fixed record cache not invalidated after inline title/tag edits in ForgeArtifact
-- Fixed PromptHistory clobbering NavigatorHistory entries with separate fetch (shared store method)
-- Fixed forge record cache not invalidated on single delete, batch delete, restore, and history-panel title edit — deleted records could appear as ghost artifacts
-- Fixed deleting the currently-viewed optimization leaving stale data in ForgeArtifact (now resets pipeline)
-- Changed CLI provider `stream()` from simulated chunking (Agent SDK) to true token-level streaming via `claude` subprocess with `--include-partial-messages`
-- Fixed StageOptimize showing "batch mode" during Opus 4.6 adaptive thinking phase — backend now propagates `streaming` boolean through SSE stage event for correct three-way UI state
-- Fixed Analyze and Strategy cache keys ignoring system prompt content — template edits now auto-invalidate cached results (cache prefix bumped to v3)
-- Added `stage_durations` column to persist per-stage timing and token counts to the database — history TraceView now shows real durations instead of "---"
-- Added intent-specific scoring calibration to validator — discovery intents (refactoring, architecture_review) penalize pre-identified scope items as faithfulness concerns; prescriptive intents (debugging, testing, feature_build, security) reward them
-- Added user-specified output constraints injection to validator — `instructions` are now passed through and verified as faithfulness requirements
-- Added intent-aware framework hint to strategy stage — explore-derived `intent_category` is surfaced as a soft signal for framework selection
-- Added pre-explore intent classification to adapt codebase observations to prompt intent (refactoring, api_design, testing, debugging, etc.)
-- Improved explore synthesis prompt with behavioral specificity guidance, cross-cutting pattern tracing, and quantitative metadata instructions
-- Changed context builder caps: observations 8→12, grounding notes 8→12, snippets 5→10, snippet content 600→1200 chars, key files 10→20, tech stack 10→15
-- Added intent-specific weaving guidance to optimizer codebase context injection (positive instructions per intent category)
-- Changed refactoring and architecture_review weaving guidance to frame scope zones as structural observations with discovery preservation — executor draws conclusions, listed zones are starting points not exhaustive
-- Improved conciseness calibration to prevent section proliferation — constraints fold into the section they govern instead of creating separate Rules/Constraints sections
-- Added codebase-aware paragraphs to coding, analysis, reasoning, and general optimizer prompts
-- Improved validator scoring rubrics — dimension descriptions now distinguish earned precision from bloat, protective constraints from restrictive ones, and proportional structure from over-engineering
-- Added "Do NOT penalize" counterbalance to low-score patterns — codebase-grounded references, informed scope narrowing, and protective constraints are legitimate techniques
-- Added codebase-aware scoring calibration to validator — specificity rewards code navigation precision, conciseness ignores earned length, faithfulness accepts informed scope narrowing
-- Changed validator codebase summary cap from 2500 to 4000 chars
-- Fixed streaming optimize showing raw JSON tokens instead of clean prompt text — new `OptimizeStreamParser` extracts prompt from metadata in real-time
-- Fixed `streamingText` not clearing on optimize retry (stale text + new chunks concatenated)
-- Changed optimizer prompt format from pure JSON to plain text with `<optimization_meta>` block for clean streaming
-- Improved streaming robustness with cross-boundary marker detection and JSON fallback
-- Changed event handling in `PromptEdit.svelte` from duplicated 140-line switch to delegating to `forge.handleSSEEvent()`
-- Fixed Stream optimize tooltip to accurately describe behavior
-- Changed keyboard shortcuts to avoid browser conflicts — `Alt` modifier for navigation (`Alt+N`, `Alt+W`, `Alt+↑↓`, `Alt+←→`, `Alt+1-8`), `Ctrl` reserved for actions
-- Changed Templates panel shortcut from `Ctrl+Shift+T` to `Ctrl+Shift+Y` (browser conflict with reopen-closed-tab)
-- Added `Alt+←` / `Alt+→` directional focus shortcuts for Navigator and Inspector panels
-- Removed `F6` zone cycling (replaced by `Alt+←→` directional focus)
-- Fixed double-fire bug where `Ctrl+S`, `Ctrl+W`, and `Ctrl+,` were handled by both `handleKeyboard` and the command palette dispatch
-- Added DNA helix brand mark component (`HelixMark.svelte`) with Canvas 2D parametric rendering, organic animations, and adaptive level-of-detail
-- Changed ActivityBar brand mark from "PS" text to animated DNA helix
-- Changed empty editor watermark from "PF" text to animated DNA helix
-- Changed favicon from fire emoji to DNA emoji
-- Added DNA emoji to README header
-- Removed phantom `anthropic` and `openai` provider values from workbench store type, StatusBar, NavigatorSettings, and health polling cast — backend only returns `claude_cli` or `anthropic_api`
-- Fixed Settings panel `$effect` infinite fetch loop — replaced with `onMount` for single load
-- Fixed Settings panel toggle/number save errors replacing entire UI with error box — now shows toast notification
-- Added JS-side clamping on pipeline timeout (10–600) and max retries (0–5) number inputs in Settings panel
-- Added `.catch()` error handler to walkthrough dynamic import in Settings panel
-- Fixed `unlinkRepo()` silently swallowing errors during GitHub disconnect — now shows toast warning
-- Removed unnecessary `as any` typecast on strategy setting update
-- Fixed StatusBar provider fallback label from `???` to `--` and dot from yellow to red when provider is unknown
-- Fixed SSE parser in `forge.svelte.ts` `_consumeSSEResponse` to concatenate multi-line `data:` fields (parity with `client.ts` fix — retry streams could silently drop data)
-- Fixed `save_settings` to use atomic temp-file + `os.replace` pattern (prevents settings corruption on crash)
-- Added indeterminate progress bar to `StageOptimize` when streaming is disabled (batch mode no longer shows bare spinner)
-- Added tooltip to Stream optimize toggle explaining streaming vs batch mode trade-off
-- Changed Welcome tab to adaptive layout — checklist collapses to single "All systems ready" line when 5/5 complete, reclaiming ~126px for returning users
-- Removed decorative gradient header from Welcome tab (`bg-gradient-to-r bg-clip-text` violated zero-effects directive)
-- Changed Welcome tab to 3-column grid layout — sample prompts in 3×3 card grid (9 cards), keyboard shortcuts grid aligned to same rhythm
-- Changed sample prompt cards from horizontal scroll to compact clickable cards (whole card is the action, removed separate TRY THIS button and 2-line description)
-- Changed Welcome tab container from `max-w-xl` to `max-w-2xl` to accommodate 3-column card grid
-- Changed Keyboard Shortcuts heading to reference-tier dimming (`text-text-secondary`, `text-text-dim/50`)
-- Removed dead `user` store import from `WelcomeTab.svelte`
-- Changed StatusBar from flat pipe-separated list to 3-zone semantic layout (Health, Context, Workspace) with progressive disclosure and visual hierarchy
-- Removed `ProviderBadge` component — logic inlined into StatusBar as flat label + dot (eliminates `rounded-md` brand violation)
-- Changed `sort` and `order` query parameters to return 400 on invalid values instead of silently defaulting
-- Improved SSE parser in `client.ts` to concatenate multi-line `data:` fields per SSE spec
+## 0.7.0
+
+- Added intent-aware pipeline — pre-explore classification adapts codebase observations, strategy hints, optimizer weaving, and validator scoring per intent category (refactoring, api_design, testing, debugging, etc.)
+- Added codebase-aware scoring calibration across all pipeline stages — specificity rewards code navigation precision, conciseness ignores earned length, faithfulness accepts informed scope narrowing
+- Added `stage_durations` persistence — per-stage timing and token counts saved to database, TraceView shows real durations
+- Improved explore synthesis prompt with behavioral specificity, cross-cutting pattern tracing, and quantitative metadata
+- Improved validator scoring rubrics — distinguish earned precision from bloat, protective constraints from restrictive ones, proportional structure from over-engineering
+- Changed context builder caps: observations 8→12, grounding notes 8→12, snippets 5→10, content 600→1200 chars, key files 10→20, tech stack 10→15
+- Changed CLI provider from simulated chunking to true token-level streaming via `claude` subprocess with `--include-partial-messages`
+- Changed optimizer output format from pure JSON to plain text with `<optimization_meta>` block — new `OptimizeStreamParser` extracts prompt from metadata in real-time
+- Improved streaming robustness with cross-boundary marker detection, multi-line SSE data field concatenation, and JSON fallback
 - Added wiring for all 6 pipeline settings — `default_model`, `pipeline_timeout`, `max_retries`, `default_strategy`, `stream_optimize`, and `auto_validate` now control pipeline behavior
-- Added `model` parameter to all 5 stage services (`run_analyze`, `run_strategy`, `run_optimize`, `run_validate`, `run_explore`)
-- Added `streaming` parameter to `run_optimize` — when disabled, uses single `complete()` call instead of streaming
-- Added strategy dropdown to Settings panel with 10 known frameworks
-- Added `default_strategy` validation in settings router with `KNOWN_STRATEGIES` whitelist
-- Changed settings PATCH endpoint from `exclude_none` to `exclude_unset` so `null` can clear nullable fields like `default_strategy`
-- Changed `pipeline_timeout` default from 120s to 300s (realistic for 4-5 sequential LLM stages)
-- Changed pipeline timeout to respect user setting capped by `config.py` ceiling (900s)
-- Fixed README to clarify Claude Max subscription as the recommended (zero-cost) LLM provider
-- Removed multi-provider roadmap item — Project Synthesis is built for Claude
-- Added auto-generated Redis password via `secrets-init` init container (zero-config Docker deployment)
-- Removed manual `REDIS_PASSWORD` requirement from `.env.docker.example`
-- Added single-source-of-truth versioning via `backend/app/_version.py`
-- Added version display in the status bar (far right, dim text)
-- Added version to MCP server `initialize` response
-- Removed hardcoded version strings from 5 files
+- Added strategy dropdown to Settings panel with 10 known frameworks and `KNOWN_STRATEGIES` validation
+- Changed `pipeline_timeout` default from 120s to 300s, capped by `config.py` ceiling (900s)
+- Added DNA helix brand mark (`HelixMark.svelte`) with Canvas 2D parametric rendering and organic animations — replaces text marks in ActivityBar, editor watermark, and favicon
+- Changed keyboard shortcuts to avoid browser conflicts — `Alt` modifier for navigation, `Ctrl` reserved for actions, `Alt+←/→` directional panel focus
+- Changed StatusBar to 3-zone semantic layout (Health, Context, Workspace) with progressive disclosure
+- Changed Welcome tab to adaptive 3-column grid layout — checklist collapses when complete, sample prompts in compact clickable card grid
+- Added indeterminate progress bar and tooltip to Stream optimize toggle in batch mode
 - Added in-app Anthropic API key management — configure, update, or remove via Settings UI without editing `.env`
 - Added bootstrap mode — app starts without an LLM provider and guides first-time setup through the UI
 - Added auto-generated crypto secrets (`SECRET_KEY`, `JWT_SECRET`, `JWT_REFRESH_SECRET`) persisted to `data/.app_secrets`
+- Added auto-generated Redis password via `secrets-init` init container (zero-config Docker deployment)
 - Added Fernet encryption for GitHub App credentials at rest with automatic plaintext migration
-- Added `RATE_LIMIT_PROVIDER_READ` and `RATE_LIMIT_PROVIDER_WRITE` settings
+- Added single-source-of-truth versioning via `backend/app/_version.py` with status bar and MCP display
+- Fixed 6 cache invalidation bugs — history auto-refresh, editor tab sync, inline edit propagation, delete/restore/batch-delete eviction, and stale artifact cleanup
+- Fixed Analyze and Strategy cache keys ignoring system prompt content — template edits now invalidate cached results
+- Fixed Settings panel `$effect` infinite fetch loop, save error handling, and `unlinkRepo()` silent failures
+- Fixed `save_settings` to use atomic temp-file + `os.replace` pattern (prevents corruption on crash)
+- Changed `sort` and `order` query parameters to return 400 on invalid values instead of silently defaulting
+- Changed error responses to structured `{code, message}` format via centralized error factories
 - Changed startup behavior from fatal crash to graceful degradation when no LLM provider is available
-- Changed `.env.docker.example` to reflect optional API key and auto-generated secrets
 
 ## 0.5.0
 
