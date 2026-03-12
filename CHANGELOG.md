@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added pre-explore intent classification to adapt codebase observations to prompt intent (refactoring, api_design, testing, debugging, etc.)
+- Improved explore synthesis prompt with behavioral specificity guidance, cross-cutting pattern tracing, and quantitative metadata instructions
+- Changed context builder caps: observations 8→12, grounding notes 8→12, snippets 5→10, snippet content 600→1200 chars, key files 10→20, tech stack 10→15
+- Added intent-specific weaving guidance to optimizer codebase context injection (positive instructions per intent category)
+- Added codebase-aware paragraphs to coding, analysis, reasoning, and general optimizer prompts
+- Changed validator codebase summary cap from 2500 to 4000 chars
+- Fixed streaming optimize showing raw JSON tokens instead of clean prompt text — new `OptimizeStreamParser` extracts prompt from metadata in real-time
+- Fixed `streamingText` not clearing on optimize retry (stale text + new chunks concatenated)
+- Changed optimizer prompt format from pure JSON to plain text with `<optimization_meta>` block for clean streaming
+- Improved streaming robustness with cross-boundary marker detection and JSON fallback
+- Changed event handling in `PromptEdit.svelte` from duplicated 140-line switch to delegating to `forge.handleSSEEvent()`
+- Fixed Stream optimize tooltip to accurately describe behavior
 - Changed keyboard shortcuts to avoid browser conflicts — `Alt` modifier for navigation (`Alt+N`, `Alt+W`, `Alt+↑↓`, `Alt+←→`, `Alt+1-8`), `Ctrl` reserved for actions
 - Changed Templates panel shortcut from `Ctrl+Shift+T` to `Ctrl+Shift+Y` (browser conflict with reopen-closed-tab)
 - Added `Alt+←` / `Alt+→` directional focus shortcuts for Navigator and Inspector panels
