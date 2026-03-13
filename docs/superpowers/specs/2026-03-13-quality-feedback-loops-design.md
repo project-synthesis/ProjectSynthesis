@@ -176,7 +176,7 @@ class SelectRequest(BaseModel):
 - **`retry_history` on Optimization, not a separate table:** Retry data is always read together with the optimization. JSON is write-once (set at pipeline completion).
 - **`session_id` on Optimization:** Natural place -- one pipeline run = one session context.
 - **Separate `refinement_branch` table:** Branches need independent querying, concurrent access, and tree traversal. JSON array on Optimization would be unmanageable.
-- **`active_branch_id` as plain Text (no FK):** Avoids circular FK dependency between Optimization and refinement_branch. Referential integrity enforced at application layer, matching the existing `retry_of` pattern.
+- **`active_branch_id` as plain Text (no FK):** Avoids circular FK dependency between Optimization and refinement_branch. Adding an FK from Optimization → refinement_branch while refinement_branch already has an FK → Optimization creates a cycle that complicates table creation order, cascade behavior, and SQLite's limited ALTER TABLE support. Referential integrity enforced at application layer instead (branch CRUD validates the FK programmatically). Note: `retry_of` on Optimization *does* use a real FK since it's a self-referential (non-circular) relationship — different situation.
 - **`row_version` on refinement_branch:** Consistent with Optimization's optimistic locking pattern. Prevents concurrent refine calls from overwriting each other.
 - **User orphan handling:** Feedback records are retained if a user is removed (no CASCADE). The project uses soft-delete for optimizations; feedback is similarly preserved for historical adaptation accuracy.
 
@@ -899,20 +899,22 @@ _new_columns = {
 }
 ```
 
-**New indexes** (added to `_migrate_add_missing_indexes`):
+**New indexes** (appended to `_new_indexes` list in `_migrate_add_missing_indexes`):
 
 ```python
-_new_indexes = {
+# Existing format: list[tuple[str, str, str]]  →  (index_name, table_name, column_spec)
+_new_indexes: list[tuple[str, str, str]] = [
     # ... existing entries ...
-    "ix_feedback_opt_user": ("feedback", ["optimization_id", "user_id"], True),
-    "ix_feedback_user_created": ("feedback", ["user_id", "created_at"], False),
-    "ix_branch_optimization": ("refinement_branch", ["optimization_id"], False),
-    "ix_branch_opt_status": ("refinement_branch", ["optimization_id", "status"], False),
-    "ix_pairwise_user": ("pairwise_preference", ["user_id"], False),
-    "ix_pairwise_optimization": ("pairwise_preference", ["optimization_id"], False),
-    "ix_pairwise_user_created": ("pairwise_preference", ["user_id", "created_at"], False),
-}
+    ("ix_feedback_user_created", "feedback", "user_id, created_at"),
+    ("ix_branch_optimization", "refinement_branch", "optimization_id"),
+    ("ix_branch_opt_status", "refinement_branch", "optimization_id, status"),
+    ("ix_pairwise_user", "pairwise_preference", "user_id"),
+    ("ix_pairwise_optimization", "pairwise_preference", "optimization_id"),
+    ("ix_pairwise_user_created", "pairwise_preference", "user_id, created_at"),
+]
 ```
+
+**Unique constraint for `(optimization_id, user_id)` on `feedback`:** The existing `_migrate_add_missing_indexes` only supports `CREATE INDEX`. The unique constraint is defined on the ORM model via `UniqueConstraint("optimization_id", "user_id")` in `__table_args__` and created by `Base.metadata.create_all()` for new databases. For existing databases that predate the feedback table, `create_all()` creates the table with the constraint already in place — no ALTER needed since the table is new.
 
 All new columns are nullable. No data backfill needed. SQLite compatible (plain ALTER TABLE ADD COLUMN, no FK constraints).
 
