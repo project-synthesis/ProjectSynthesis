@@ -92,13 +92,12 @@ class RetryOracle:
         if self.user_weights:
             scores = []
             for a in self._attempts:
-                # Square weights to amplify high-priority dimensions
                 weighted = sum(
-                    a.scores.get(d, 0) * (self.user_weights.get(d, 0) ** 2)
+                    a.scores.get(d, 0) * self.user_weights.get(d, 0)
                     for d in SCORE_DIMENSIONS
                 )
-                total_w2 = sum(self.user_weights.get(d, 0) ** 2 for d in SCORE_DIMENSIONS)
-                scores.append(weighted / total_w2 if total_w2 > 0 else a.overall_score)
+                total_w = sum(self.user_weights.get(d, 0) for d in SCORE_DIMENSIONS)
+                scores.append(weighted / total_w if total_w > 0 else a.overall_score)
             return max(range(len(scores)), key=lambda i: scores[i])
         return max(range(len(self._attempts)), key=lambda i: self._attempts[i].overall_score)
 

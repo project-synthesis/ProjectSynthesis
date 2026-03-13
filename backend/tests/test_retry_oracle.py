@@ -142,8 +142,11 @@ class TestBestOfNSelection:
         assert oracle.best_attempt_index == 1
 
     def test_best_attempt_with_user_weights(self):
-        weights = {"clarity_score": 0.40, "specificity_score": 0.15, "structure_score": 0.15,
-                   "faithfulness_score": 0.15, "conciseness_score": 0.15}
+        # Heavy clarity weight (0.60) makes V1 (high clarity, low others) win
+        # V1: 9*0.60 + 3*0.10*4 = 5.40 + 1.20 = 6.60
+        # V2: 5*0.60 + 6*0.10*4 = 3.00 + 2.40 = 5.40
+        weights = {"clarity_score": 0.60, "specificity_score": 0.10, "structure_score": 0.10,
+                   "faithfulness_score": 0.10, "conciseness_score": 0.10}
         oracle = RetryOracle(max_retries=5, user_weights=weights)
         oracle.record_attempt(
             scores={"overall_score": 5.0, "clarity_score": 9, "specificity_score": 3,
