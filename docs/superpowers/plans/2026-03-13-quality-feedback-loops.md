@@ -2195,6 +2195,7 @@ async def recompute_adaptation(
 
     async with lock:
         from app.services.feedback_service import get_all_feedbacks_for_user
+        from sqlalchemy import select as sa_select
 
         if feedbacks is None:
             feedbacks_orm = await get_all_feedbacks_for_user(user_id, db)
@@ -3399,6 +3400,7 @@ from app.dependencies.rate_limit import RateLimit
 from app.routers._sse import sse_event
 from app.schemas.auth import AuthenticatedUser
 from app.schemas.refinement import ForkRequest, RefineRequest, SelectRequest
+from app.routers.feedback import _recompute_adaptation_safe
 from app.services.adaptation_engine import load_adaptation, recompute_adaptation
 from app.services.refinement_service import (
     fork_branch,
@@ -3582,13 +3584,9 @@ async def compare_branches(
             deltas[dim] = round(va - vb, 1)
 
     return {"branch_a": a, "branch_b": b, "score_deltas": deltas}
-
-
-    # Reuse the shared background task from feedback router (no duplication)
-    from app.routers.feedback import _recompute_adaptation_safe  # noqa: E402
 ```
 
-**Note:** `_recompute_adaptation_safe` is defined once in `feedback.py` and imported by `refinement.py` to avoid duplication.
+**Note:** `_recompute_adaptation_safe` is imported at module level from `feedback.py` to avoid duplication.
 
 - [ ] **Step 4: Register router in main.py**
 
