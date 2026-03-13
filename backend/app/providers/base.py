@@ -263,6 +263,35 @@ class LLMProvider(ABC):
         """
         return None
 
+    async def complete_with_session(
+        self,
+        system: str,
+        user: str,
+        model: str,
+        session: "SessionContext | None" = None,
+        schema: dict | None = None,
+    ) -> "tuple[str, SessionContext]":
+        """Completion with session continuity. Returns (response, updated_session).
+
+        Default: delegates to complete/complete_json, returns fresh SessionContext.
+        CLI and API providers override with session-aware behavior.
+        """
+        from app.services.session_context import SessionContext as SC
+
+        if schema:
+            response = await self.complete_json(system, user, model, schema)
+            text = json.dumps(response) if isinstance(response, dict) else str(response)
+        else:
+            text = await self.complete(system, user, model)
+
+        from datetime import datetime, timezone
+        new_session = SC(
+            provider_type=self.name,
+            created_at=session.created_at if session else datetime.now(timezone.utc),
+            turn_count=(session.turn_count + 1) if session else 1,
+        )
+        return text, new_session
+
     @abstractmethod
     async def complete(self, system: str, user: str, model: str) -> str:
         """Single-shot completion. Returns full response text."""
