@@ -106,6 +106,6 @@ test('onboarding modal can be triggered', async ({ page }) => {
   // tagline "AI-Powered Prompt Engineering" and a 4-step flow.
   await expect(page.locator('#wizard-display-name')).toBeVisible({ timeout: 10_000 });
   // The wizard shows NEXT (step 1) and SKIP ALL buttons
-  await expect(page.getByRole('button', { name: /next/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'NEXT', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /skip all/i })).toBeVisible();
 });
