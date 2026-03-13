@@ -3,6 +3,7 @@
   import { history } from '$lib/stores/history.svelte';
   import { editor } from '$lib/stores/editor.svelte';
   import { github } from '$lib/stores/github.svelte';
+  import { toast } from '$lib/stores/toast.svelte';
   import ScoreCircle from '$lib/components/shared/ScoreCircle.svelte';
   import StrategyBadge from '$lib/components/shared/StrategyBadge.svelte';
   import { formatRelativeTime } from '$lib/utils/format';
@@ -30,7 +31,16 @@
       // Switch to edit sub-tab so the forge button is visible, then await DOM update
       editor.setSubTab('edit');
       await tick();
-      document.querySelector<HTMLButtonElement>('[data-testid="forge-button"]')?.click();
+      const btn = document.querySelector<HTMLButtonElement>('[data-testid="forge-button"]');
+      if (!btn) {
+        toast.error('Unable to start re-run — editor not ready');
+        return;
+      }
+      if (btn.disabled) {
+        toast.error('Enter a prompt before re-running');
+        return;
+      }
+      btn.click();
     } finally {
       reforgingId = null;
     }

@@ -251,6 +251,66 @@ class ForgeStore {
     this.completionSeq++;
   }
 
+  /** Build a ForgeRecord from the current store state (shared by PromptEdit and retryForge). */
+  buildRecordFromState(id: string, durationMs?: number, totalTokens?: number): ForgeRecord {
+    const validateData = this.stageResults?.validate?.data;
+    const validateScores = validateData?.scores as Record<string, number> | undefined;
+
+    // Build stage_durations from live stage results
+    const stageDurations: Record<string, { duration_ms?: number; token_count?: number }> = {};
+    for (const [stage, result] of Object.entries(this.stageResults)) {
+      if (result.duration != null || result.tokenCount != null) {
+        stageDurations[stage] = {
+          duration_ms: result.duration,
+          token_count: result.tokenCount,
+        };
+      }
+    }
+
+    return {
+      id,
+      raw_prompt: this.rawPrompt,
+      optimized_prompt: this.streamingText,
+      overall_score: this.overallScore,
+      // Analyze
+      task_type: (this.stageResults?.analyze?.data?.task_type as string) ?? null,
+      complexity: (this.stageResults?.analyze?.data?.complexity as string) ?? null,
+      weaknesses: (this.stageResults?.analyze?.data?.weaknesses as string[]) ?? null,
+      strengths: (this.stageResults?.analyze?.data?.strengths as string[]) ?? null,
+      recommended_frameworks: (this.stageResults?.analyze?.data?.recommended_frameworks as string[]) ?? [],
+      // Strategy
+      primary_framework: (this.stageResults?.strategy?.data?.primary_framework as string) ?? null,
+      secondary_frameworks: (this.stageResults?.strategy?.data?.secondary_frameworks as string[]) ?? [],
+      approach_notes: (this.stageResults?.strategy?.data?.approach_notes as string) ?? null,
+      strategy_rationale: (this.stageResults?.strategy?.data?.rationale as string) ?? null,
+      // Optimize
+      changes_made: (this.stageResults?.optimize?.data?.changes_made as string[]) ?? null,
+      optimization_notes: (this.stageResults?.optimize?.data?.optimization_notes as string) ?? null,
+      // Validate
+      clarity_score: validateScores?.clarity_score ?? null,
+      specificity_score: validateScores?.specificity_score ?? null,
+      structure_score: validateScores?.structure_score ?? null,
+      faithfulness_score: validateScores?.faithfulness_score ?? null,
+      conciseness_score: validateScores?.conciseness_score ?? null,
+      issues: (validateData?.issues as string[]) ?? null,
+      verdict: (validateData?.verdict as string) ?? null,
+      // Explore
+      linked_repo_full_name: (this.stageResults?.explore?.data?.repo as string) ?? null,
+      // Per-stage model names
+      model_explore: (this.stageResults?.explore?.data?.model as string) ?? null,
+      model_analyze: (this.stageResults?.analyze?.data?.model as string) ?? null,
+      model_strategy: (this.stageResults?.strategy?.data?.model as string) ?? null,
+      model_optimize: (this.stageResults?.optimize?.data?.model as string) ?? null,
+      model_validate: (validateData?.model as string) ?? null,
+      // Timing
+      duration_ms: durationMs ?? null,
+      total_tokens: totalTokens ?? null,
+      stage_durations: Object.keys(stageDurations).length > 0 ? stageDurations : null,
+      // Metadata
+      tags: this.tags.length > 0 ? [...this.tags] : null,
+    };
+  }
+
   loadFromRecord(record: ForgeRecord) {
     this.resetPipeline();
     this.optimizationId = record.id;
@@ -368,8 +428,15 @@ class ForgeStore {
     }
   }
 
-  async retryForge(optimizationId: string, strategy?: string) {
+  async retryForge(optimizationId: string, strategy?: string, rawPrompt?: string) {
+    // Resolve rawPrompt before resetPipeline() clears this.rawPrompt
+    const resolvedRawPrompt = rawPrompt
+      || this.rawPrompt
+      || this._recordCache.get(optimizationId)?.raw_prompt
+      || '';
+
     this.resetPipeline();
+    this.rawPrompt = resolvedRawPrompt;  // restore after reset
     this.isForging = true;
 
     const controller = new AbortController();
@@ -377,11 +444,25 @@ class ForgeStore {
 
     try {
       const res = await retryOptimization(optimizationId, strategy);
-      await this._consumeSSEResponse(res, controller.signal, optimizationId);
+      // Don't pass optimizationId as capturedOptId — the original is already
+      // completed so polling it would return stale data immediately.
+      // _consumeSSEResponse will use this.optimizationId (set by the 'complete'
+      // SSE event) for the polling fallback instead.
+      await this._consumeSSEResponse(res, controller.signal);
+
+      // Post-completion: cache record + toast
+      if (this.optimizationId && !this.error) {
+        const record = this.buildRecordFromState(
+          this.optimizationId,
+          this.totalDuration ?? undefined,
+          this.totalTokens ?? undefined
+        );
+        this.cacheRecord(this.optimizationId, record);
+        toast.success('Forge complete — prompt re-optimized!');
+      }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         this.error = (err as Error).message;
-        this.isForging = false;
         this.finishForge();
       }
     }
@@ -408,9 +489,12 @@ class ForgeStore {
       if (this.isForging) this.finishForge();
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
-      // Stream dropped mid-run — fall back to polling if we have an opt ID
-      if (capturedOptId) {
-        await this._pollUntilComplete(capturedOptId, signal);
+      // Stream dropped mid-run — fall back to polling if we have an opt ID.
+      // Prefer this.optimizationId (set by 'complete' SSE event if received
+      // before stream dropped) over the captured original ID.
+      const pollId = this.optimizationId || capturedOptId;
+      if (pollId) {
+        await this._pollUntilComplete(pollId, signal);
       } else {
         this.error = (err as Error).message;
         this.finishForge();
@@ -427,8 +511,9 @@ class ForgeStore {
       try {
         const record = await fetchOptimization(id);
         if (record.status === 'completed') {
+          // handleSSEEvent('complete') calls finishForge() internally —
+          // do NOT call finishForge() again to avoid double completionSeq increment.
           this.handleSSEEvent({ event: 'complete', data: { optimization_id: id, total_duration_ms: record.duration_ms, total_tokens: null } });
-          this.finishForge();
           return;
         }
         if (record.status === 'failed') {

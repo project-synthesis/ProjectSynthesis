@@ -222,7 +222,7 @@
       });
       editor.setSubTab('pipeline');
     }
-    await forge.retryForge(id);
+    await forge.retryForge(id, undefined, entry?.raw_prompt);
   }
 
   onMount(() => {

@@ -494,7 +494,10 @@
       description: 'Re-run with same settings',
       group: 'Forge',
       action: () => {
-        if (forge.optimizationId) forge.retryForge(forge.optimizationId);
+        if (forge.optimizationId) {
+          const rawPrompt = forge.rawPrompt;
+          forge.retryForge(forge.optimizationId, undefined, rawPrompt);
+        }
       }
     });
 

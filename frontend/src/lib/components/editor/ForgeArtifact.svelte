@@ -118,7 +118,16 @@
   async function handleReforge() {
     editor.setSubTab('edit');
     await tick();
-    document.querySelector<HTMLButtonElement>('[data-testid="forge-button"]')?.click();
+    const btn = document.querySelector<HTMLButtonElement>('[data-testid="forge-button"]');
+    if (!btn) {
+      toast.error('Unable to start re-run — editor not ready');
+      return;
+    }
+    if (btn.disabled) {
+      toast.error('Enter a prompt before re-running');
+      return;
+    }
+    btn.click();
   }
 
   async function saveTitle() {

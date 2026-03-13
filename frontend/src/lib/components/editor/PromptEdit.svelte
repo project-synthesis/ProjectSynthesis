@@ -1,12 +1,11 @@
 <script lang="ts">
   import { editor, type EditorTab } from '$lib/stores/editor.svelte';
-  import { forge, type ForgeRecord } from '$lib/stores/forge.svelte';
+  import { forge } from '$lib/stores/forge.svelte';
   import { github } from '$lib/stores/github.svelte';
   import { context } from '$lib/stores/context.svelte';
   import { startOptimization, type SSEEvent } from '$lib/api/client';
   import ContextBar from './ContextBar.svelte';
   import CopyButton from '$lib/components/shared/CopyButton.svelte';
-  import ModelBadge from '$lib/components/shared/ModelBadge.svelte';
   import StrategyBadge from '$lib/components/shared/StrategyBadge.svelte';
   import { toast } from '$lib/stores/toast.svelte';
   import { user } from '$lib/stores/user.svelte';
@@ -239,29 +238,11 @@
             const optId = data.optimization_id as string;
             const storeTab = editor.openTabs.find(t => t.id === tab.id);
             if (storeTab) storeTab.optimizationId = optId;
-            const validateScores = forge.stageResults?.validate?.data?.scores as Record<string, number> | undefined;
-            const record: ForgeRecord = {
-              id: optId,
-              raw_prompt: forge.rawPrompt,
-              optimized_prompt: forge.streamingText,
-              overall_score: forge.overallScore,
-              primary_framework: (forge.stageResults?.strategy?.data?.primary_framework as string) ?? null,
-              secondary_frameworks: (forge.stageResults?.strategy?.data?.secondary_frameworks as string[]) ?? [],
-              approach_notes: (forge.stageResults?.strategy?.data?.approach_notes as string) ?? null,
-              strategy_rationale: (forge.stageResults?.strategy?.data?.rationale as string) ?? null,
-              task_type: (forge.stageResults?.analyze?.data?.task_type as string) ?? null,
-              complexity: (forge.stageResults?.analyze?.data?.complexity as string) ?? null,
-              weaknesses: (forge.stageResults?.analyze?.data?.weaknesses as string[]) ?? null,
-              strengths: (forge.stageResults?.analyze?.data?.strengths as string[]) ?? null,
-              recommended_frameworks: (forge.stageResults?.analyze?.data?.recommended_frameworks as string[]) ?? [],
-              clarity_score: validateScores?.clarity_score ?? null,
-              specificity_score: validateScores?.specificity_score ?? null,
-              structure_score: validateScores?.structure_score ?? null,
-              faithfulness_score: validateScores?.faithfulness_score ?? null,
-              conciseness_score: validateScores?.conciseness_score ?? null,
-              duration_ms: (data.total_duration_ms as number) ?? null,
-              total_tokens: (data.total_tokens as number) ?? null,
-            };
+            const record = forge.buildRecordFromState(
+              optId,
+              (data.total_duration_ms as number) ?? undefined,
+              (data.total_tokens as number) ?? undefined
+            );
             forge.cacheRecord(optId, record);
           }
 

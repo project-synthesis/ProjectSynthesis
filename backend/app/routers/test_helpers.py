@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -39,10 +40,18 @@ async def issue_test_token(
             github_login=body.github_login,
             email=body.email,
             display_name=body.github_login,
+            # Mark onboarding complete so the modal doesn't block e2e tests.
+            # The dedicated onboarding test triggers the modal via URL params,
+            # bypassing this flag entirely.
+            onboarding_completed_at=datetime.now(timezone.utc),
         )
         session.add(user)
         await session.commit()
         await session.refresh(user)
+    elif user.onboarding_completed_at is None:
+        # Fix pre-existing test users from earlier runs that lack the stamp.
+        user.onboarding_completed_at = datetime.now(timezone.utc)
+        await session.commit()
 
     token = sign_access_token(
         user_id=user.id,
