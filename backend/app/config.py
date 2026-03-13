@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_SETTINGS: str = "30/minute"
     RATE_LIMIT_PROVIDER_READ: str = "30/minute"
     RATE_LIMIT_PROVIDER_WRITE: str = "10/minute"
+    RATE_LIMIT_FEEDBACK: str = "10/minute"
+    RATE_LIMIT_REFINE: str = "5/minute"
+    RATE_LIMIT_BRANCH_FORK: str = "3/minute"
+    RATE_LIMIT_BRANCH_SELECT: str = "10/minute"
 
     # Trusted reverse-proxy IPs (comma-separated). X-Forwarded-For is only
     # honoured when the direct connection comes from one of these addresses.
