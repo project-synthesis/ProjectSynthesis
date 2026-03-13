@@ -1043,6 +1043,8 @@ def test_tool_categories_covers_all_tools():
         "synthesis_github_list_repos", "synthesis_github_read_file",
         "synthesis_github_search_code", "synthesis_submit_feedback",
         "synthesis_get_branches", "synthesis_get_adaptation_state",
+        "synthesis_get_framework_performance",
+        "synthesis_get_adaptation_summary",
     }
     assert set(TOOL_CATEGORIES.keys()) == expected_tools
 

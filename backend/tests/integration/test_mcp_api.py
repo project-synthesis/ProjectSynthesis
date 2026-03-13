@@ -158,11 +158,11 @@ async def test_mcp_initialize_returns_session_id(mcp_client: AsyncClient):
     assert len(session_id) > 0
 
 
-async def test_mcp_tools_list_returns_18_tools(mcp_client: AsyncClient):
+async def test_mcp_tools_list_returns_20_tools(mcp_client: AsyncClient):
     session_id = await _init_session(mcp_client)
     result = await _call_tool(mcp_client, session_id, "tools/list", {})
     tools = result.get("result", {}).get("tools", [])
-    assert len(tools) == 18, f"Expected 18 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 20, f"Expected 20 tools, got {len(tools)}: {[t['name'] for t in tools]}"
     tool_names = [t["name"] for t in tools]
     for expected in (
         "synthesis_optimize", "synthesis_get_optimization",
@@ -170,6 +170,8 @@ async def test_mcp_tools_list_returns_18_tools(mcp_client: AsyncClient):
         "synthesis_batch_delete", "synthesis_list_trash", "synthesis_restore",
         "synthesis_submit_feedback", "synthesis_get_branches",
         "synthesis_get_adaptation_state",
+        "synthesis_get_framework_performance",
+        "synthesis_get_adaptation_summary",
     ):
         assert expected in tool_names, f"Tool '{expected}' not found in: {tool_names}"
 

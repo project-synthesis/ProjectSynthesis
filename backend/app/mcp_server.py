@@ -71,9 +71,11 @@ TOOL_CATEGORIES: dict[str, dict] = {
     "synthesis_github_list_repos":     {"category": "github",   "tags": ["read", "repos"]},
     "synthesis_github_read_file":      {"category": "github",   "tags": ["read", "files"]},
     "synthesis_github_search_code":    {"category": "github",   "tags": ["read", "search"]},
-    "synthesis_submit_feedback":       {"category": "feedback", "tags": ["write"]},
-    "synthesis_get_branches":          {"category": "refinement", "tags": ["read"]},
-    "synthesis_get_adaptation_state":  {"category": "feedback", "tags": ["read"]},
+    "synthesis_submit_feedback":            {"category": "feedback", "tags": ["write"]},
+    "synthesis_get_branches":               {"category": "refinement", "tags": ["read"]},
+    "synthesis_get_adaptation_state":       {"category": "feedback", "tags": ["read"]},
+    "synthesis_get_framework_performance":  {"category": "feedback", "tags": ["read"]},
+    "synthesis_get_adaptation_summary":     {"category": "feedback", "tags": ["read"]},
 }
 
 # Stage → (progress_fraction, human_message) for pipeline progress reporting.
@@ -1186,6 +1188,7 @@ def create_mcp_server(
         optimization_id: str,
         rating: int,
         dimension_overrides: Optional[dict] = None,
+        corrected_issues: Optional[list[str]] = None,
         comment: Optional[str] = None,
     ) -> FeedbackSubmitResult:
         """Submit quality feedback (thumbs up/down) on an optimization.
@@ -1198,16 +1201,20 @@ def create_mcp_server(
         Args:
             optimization_id: UUID of the optimization to rate.
             rating: Feedback rating: -1 (negative), 0 (neutral), 1 (positive).
-            dimension_overrides: Per-dimension score overrides (1–10), e.g.
+            dimension_overrides: Per-dimension score overrides (1-10), e.g.
                                  {"clarity_score": 8, "specificity_score": 7}.
                                  Valid dimensions: clarity_score, specificity_score,
                                  structure_score, faithfulness_score, conciseness_score.
+            corrected_issues: Issue IDs the user observed (e.g. 'lost_key_terms',
+                             'too_verbose'). See CORRECTABLE_ISSUES for valid IDs.
             comment: Free-text feedback comment (max 2000 chars).
 
         Returns:
             FeedbackSubmitResult with the feedback ID and whether it was newly created.
         """
+        from app.services.adaptation_engine import schedule_adaptation_recompute
         from app.services.feedback_service import upsert_feedback
+
         if rating not in (-1, 0, 1):
             raise ValueError("Rating must be -1 (negative), 0 (neutral), or 1 (positive)")
         async with _opt_session(optimization_id) as (db, opt):
@@ -1219,17 +1226,14 @@ def create_mcp_server(
                 user_id=mcp_user,
                 rating=rating,
                 dimension_overrides=dimension_overrides,
-                corrected_issues=None,
+                corrected_issues=corrected_issues,
                 comment=comment,
                 db=db,
             )
             await db.commit()
 
-        # Trigger adaptation recomputation (matches REST router behavior)
-        import asyncio
-
-        from app.services.adaptation_engine import recompute_adaptation_safe
-        asyncio.create_task(recompute_adaptation_safe(mcp_user))
+        # Trigger debounced adaptation recomputation
+        schedule_adaptation_recompute(mcp_user)
 
         return FeedbackSubmitResult(**result)
 
@@ -1304,6 +1308,136 @@ def create_mcp_server(
         # Return as JSON string — adaptation state shape varies and
         # AdaptationStateResponse from feedback.py is the canonical model.
         return json.dumps(state)
+
+    @mcp.tool(
+        name="synthesis_get_framework_performance",
+        annotations=ToolAnnotations(
+            title="Get Framework Performance",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def synthesis_get_framework_performance(
+        task_type: str,
+        user_id: Optional[str] = None,
+    ) -> str:
+        """Get framework performance data for a task type.
+
+        Returns per-framework average scores, user rating averages,
+        issue frequency, and sample counts for the given task type.
+
+        Args:
+            task_type: The task classification to query (e.g. 'coding',
+                      'writing', 'analysis').
+            user_id: User identifier. Omit to resolve from recent activity.
+
+        Returns:
+            JSON with task_type and a list of framework performance records.
+        """
+        from app.database import get_session_context
+        from app.models.framework_performance import FrameworkPerformance
+        from app.utils.json_fields import parse_json_column
+
+        resolved_user = user_id or await _resolve_mcp_user_id() or "mcp"
+
+        async with get_session_context() as db:
+            stmt = select(FrameworkPerformance).where(
+                FrameworkPerformance.user_id == resolved_user,
+                FrameworkPerformance.task_type == task_type,
+            )
+            result = await db.execute(stmt)
+            rows = result.scalars().all()
+
+        items = []
+        for row in rows:
+            items.append({
+                "framework": row.framework,
+                "avg_scores": parse_json_column(row.avg_scores) if row.avg_scores else None,
+                "user_rating_avg": row.user_rating_avg,
+                "issue_frequency": parse_json_column(row.issue_frequency) if row.issue_frequency else None,
+                "sample_count": row.sample_count,
+                "elasticity_snapshot": (
+                    parse_json_column(row.elasticity_snapshot)
+                    if row.elasticity_snapshot else None
+                ),
+            })
+
+        return json.dumps({"task_type": task_type, "frameworks": items})
+
+    @mcp.tool(
+        name="synthesis_get_adaptation_summary",
+        annotations=ToolAnnotations(
+            title="Get Adaptation Summary",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def synthesis_get_adaptation_summary(
+        user_id: Optional[str] = None,
+    ) -> str:
+        """Get a high-level adaptation summary for dashboard display.
+
+        Returns feedback count, dimension weight priorities, active
+        guardrails, framework preferences, and retry threshold.
+
+        Args:
+            user_id: User identifier. Omit to resolve from recent activity.
+
+        Returns:
+            JSON with adaptation summary including priorities,
+            guardrails, and framework preferences.
+        """
+        from app.database import get_session_context
+        from app.services.adaptation_engine import DEFAULT_WEIGHTS, load_adaptation
+
+        resolved_user = user_id or await _resolve_mcp_user_id() or "mcp"
+
+        async with get_session_context() as db:
+            adaptation = await load_adaptation(resolved_user, db)
+
+        if not adaptation:
+            return json.dumps({"feedback_count": 0, "priorities": [], "active_guardrails": []})
+
+        weights = adaptation.get("dimension_weights") or {}
+        priorities = []
+        for dim, weight in sorted(
+            weights.items(),
+            key=lambda x: abs(x[1] - DEFAULT_WEIGHTS.get(x[0], 0.2)),
+            reverse=True,
+        ):
+            default = DEFAULT_WEIGHTS.get(dim, 0.2)
+            shift = weight - default
+            if abs(shift) > 0.01:
+                priorities.append({
+                    "dimension": dim,
+                    "weight": round(weight, 3),
+                    "shift": round(shift, 3),
+                })
+
+        issue_freq = adaptation.get("issue_frequency") or {}
+        active_guardrails = [
+            issue_id for issue_id, count in issue_freq.items() if count >= 2
+        ]
+
+        affinities = adaptation.get("strategy_affinities") or {}
+        framework_prefs: dict[str, float] = {}
+        for _task_type, prefs in affinities.items():
+            for fw in prefs.get("preferred", []):
+                framework_prefs[fw] = framework_prefs.get(fw, 0) + 1.0
+            for fw in prefs.get("avoid", []):
+                framework_prefs[fw] = framework_prefs.get(fw, 0) - 1.0
+
+        return json.dumps({
+            "feedback_count": adaptation.get("feedback_count", 0),
+            "priorities": priorities,
+            "active_guardrails": active_guardrails,
+            "framework_preferences": framework_prefs,
+            "retry_threshold": adaptation.get("retry_threshold", 5.0),
+        })
 
     return mcp
 
