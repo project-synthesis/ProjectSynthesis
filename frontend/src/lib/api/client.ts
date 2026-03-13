@@ -850,10 +850,21 @@ export async function logoutDevice(): Promise<{ revoked_count: number }> {
 
 // ── Feedback API ────────────────────────────────────────────────────
 
+export interface FeedbackConfirmation {
+  summary: string;
+  effects: string[];
+  stage_note: string | null;
+}
+
 export async function submitFeedback(
   optimizationId: string,
-  body: { rating: -1 | 0 | 1; dimension_overrides?: Record<string, number>; comment?: string }
-): Promise<{ id: string; status: string }> {
+  body: {
+    rating: -1 | 0 | 1;
+    dimension_overrides?: Record<string, number>;
+    corrected_issues?: string[];
+    comment?: string;
+  }
+): Promise<FeedbackConfirmation> {
   const res = await apiFetch(`${BASE}/api/optimize/${optimizationId}/feedback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -886,6 +897,32 @@ export async function getFeedbackHistory(
 export async function getFeedbackStats(): Promise<any> {
   const res = await apiFetch(`${BASE}/api/feedback/stats`);
   if (!res.ok) throw new Error(`Feedback stats failed: ${res.status}`);
+  return res.json();
+}
+
+// ── Adaptation & Framework API ───────────────────────────────────────
+
+export async function getAdaptationPulse(): Promise<any> {
+  const res = await apiFetch(`${BASE}/api/feedback/pulse`);
+  if (!res.ok) throw new Error('Failed to load adaptation pulse');
+  return res.json();
+}
+
+export async function getAdaptationSummary(): Promise<any> {
+  const res = await apiFetch(`${BASE}/api/feedback/summary`);
+  if (!res.ok) throw new Error('Failed to load adaptation summary');
+  return res.json();
+}
+
+export async function getFrameworkProfiles(): Promise<any> {
+  const res = await apiFetch(`${BASE}/api/framework-profiles`);
+  if (!res.ok) throw new Error('Failed to load framework profiles');
+  return res.json();
+}
+
+export async function getFrameworkPerformance(taskType: string): Promise<any> {
+  const res = await apiFetch(`${BASE}/api/framework-performance/${encodeURIComponent(taskType)}`);
+  if (!res.ok) throw new Error('Failed to load framework performance');
   return res.json();
 }
 
