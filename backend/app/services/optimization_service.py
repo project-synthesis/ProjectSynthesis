@@ -114,6 +114,17 @@ class PipelineAccumulator:
         if event_type in ("analysis", "strategy", "optimization", "validation"):
             self.results[event_type] = event_data
 
+        # H3: New pipeline events
+        if event_type == "retry_diagnostics":
+            # Store latest retry diagnostics (no DB column needed, for SSE only)
+            self.results["retry_diagnostics"] = event_data
+        elif event_type == "retry_best_selected":
+            self.results["retry_best_selected"] = event_data
+        elif event_type == "adaptation_snapshot":
+            self.updates["adaptation_snapshot"] = json.dumps(event_data)
+        elif event_type == "branch_created":
+            self.results["branch_created"] = event_data
+
         # Track stage timings, token counts, and per-stage usage
         if event_type == "stage" and event_data.get("status") == "complete":
             stage_name = event_data.get("stage")

@@ -1040,6 +1040,7 @@ def test_tool_categories_covers_all_tools():
         "tag_optimization", "delete_optimization", "batch_delete_optimizations",
         "list_trash", "restore_optimization",
         "github_list_repos", "github_read_file", "github_search_code",
+        "submit_feedback", "get_branches", "get_adaptation_state",
     }
     assert set(TOOL_CATEGORIES.keys()) == expected_tools
 

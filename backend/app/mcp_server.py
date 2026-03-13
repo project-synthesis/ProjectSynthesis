@@ -52,6 +52,9 @@ TOOL_CATEGORIES: dict[str, dict] = {
     "github_list_repos":         {"category": "github",   "tags": ["read", "repos"]},
     "github_read_file":          {"category": "github",   "tags": ["read", "files"]},
     "github_search_code":        {"category": "github",   "tags": ["read", "search"]},
+    "submit_feedback":           {"category": "feedback", "tags": ["write"]},
+    "get_branches":              {"category": "refinement", "tags": ["read"]},
+    "get_adaptation_state":      {"category": "feedback", "tags": ["read"]},
 }
 
 try:
@@ -1004,6 +1007,59 @@ def create_mcp_server(
             [{"path": i["path"], "name": i["name"]} for i in items],
             indent=2,
         )
+
+    @mcp.tool(
+        name="submit_feedback",
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    async def submit_feedback_tool(
+        ctx: Context,
+        optimization_id: str,
+        rating: int,
+        dimension_overrides: dict | None = None,
+        comment: str | None = None,
+    ) -> str:
+        """Submit feedback (thumbs up/down) on an optimization. Rating: -1, 0, or 1."""
+        from app.services.feedback_service import upsert_feedback
+        if rating not in (-1, 0, 1):
+            return json.dumps({"error": "Rating must be -1, 0, or 1"})
+        async with _opt_session(optimization_id) as (db, opt):
+            result = await upsert_feedback(
+                optimization_id=optimization_id,
+                user_id="mcp",
+                rating=rating,
+                dimension_overrides=dimension_overrides,
+                corrected_issues=None,
+                comment=comment,
+                db=db,
+            )
+            await db.commit()
+        return json.dumps(result)
+
+    @mcp.tool(
+        name="get_branches",
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    async def get_branches_tool(ctx: Context, optimization_id: str) -> str:
+        """List all refinement branches for an optimization."""
+        from app.services.refinement_service import get_branches
+        async with _opt_session(optimization_id) as (db, opt):
+            branches = await get_branches(optimization_id, db)
+        return json.dumps({"branches": branches, "total": len(branches)})
+
+    @mcp.tool(
+        name="get_adaptation_state",
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    async def get_adaptation_state_tool(ctx: Context, user_id: str) -> str:
+        """Get the current adaptation state (learned weights, threshold, affinities) for a user."""
+        from app.services.adaptation_engine import load_adaptation
+        from app.database import get_session_context
+        async with get_session_context() as db:
+            state = await load_adaptation(user_id, db)
+        if not state:
+            return json.dumps({"error": "No adaptation state found", "user_id": user_id})
+        return json.dumps(state)
 
     return mcp
 
