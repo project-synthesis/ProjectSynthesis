@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import AsyncGenerator, Literal
 
 from sqlalchemy import func, select, update
@@ -17,9 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.branch import PairwisePreference, RefinementBranch
 from app.models.optimization import Optimization
 from app.providers.base import LLMProvider
-from app.services.prompt_diff import SCORE_DIMENSIONS, compute_dimension_deltas, compute_prompt_hash
+from app.services.prompt_diff import compute_prompt_hash
 from app.services.session_context import SessionContext, compact_session, needs_compaction
-from app.services.validator import compute_overall_score
 
 logger = logging.getLogger(__name__)
 
@@ -186,9 +184,9 @@ async def refine(
     session = None
     if branch.session_context:
         try:
-            session = SessionContext.from_dict(
-                json.loads(branch.session_context) if isinstance(branch.session_context, str) else branch.session_context
-            )
+            raw_ctx = branch.session_context
+            ctx_data = json.loads(raw_ctx) if isinstance(raw_ctx, str) else raw_ctx
+            session = SessionContext.from_dict(ctx_data)
         except (json.JSONDecodeError, TypeError):
             logger.warning("Failed to load session context for branch %s", branch_id)
 
@@ -232,8 +230,6 @@ async def refine(
 
     # Update branch
     prompt_hash = compute_prompt_hash(refined_prompt)
-    deltas = compute_dimension_deltas(scores_before, scores_before)  # Placeholder: validation runs separately
-
     turn_entry = {
         "turn": branch.turn_count + 1,
         "source": source,

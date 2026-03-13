@@ -564,7 +564,11 @@ async def test_analyze_cache_key_varies_with_context_content():
     mock_cache.make_key = CacheService.make_key
 
     mock_provider = MagicMock()
-    mock_provider.complete = AsyncMock(return_value='{"task_type":"general","complexity":"simple","weaknesses":[],"strengths":[],"recommended_frameworks":[]}')
+    analyze_json = (
+        '{"task_type":"general","complexity":"simple",'
+        '"weaknesses":[],"strengths":[],"recommended_frameworks":[]}'
+    )
+    mock_provider.complete = AsyncMock(return_value=analyze_json)
 
     cache_keys_used = []
 

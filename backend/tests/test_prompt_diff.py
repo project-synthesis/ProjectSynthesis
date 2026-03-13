@@ -1,5 +1,9 @@
-import pytest
-from app.services.prompt_diff import compute_prompt_hash, compute_dimension_deltas, detect_cycle
+from app.services.prompt_diff import (
+    compute_dimension_deltas,
+    compute_prompt_entropy,
+    compute_prompt_hash,
+    detect_cycle,
+)
 
 
 class TestComputePromptHash:
@@ -68,9 +72,6 @@ class TestDetectCycle:
         # A -> B -> A pattern
         result = detect_cycle("hash_a", ["hash_a", "hash_b"])
         assert result == 1
-
-
-from app.services.prompt_diff import compute_prompt_entropy
 
 
 class TestComputePromptEntropy:

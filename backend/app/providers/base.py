@@ -5,7 +5,10 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from typing import AsyncGenerator, Awaitable, Callable  # noqa: F401 — Awaitable used by invoke_tool
+from typing import TYPE_CHECKING, AsyncGenerator, Awaitable, Callable  # noqa: F401 — Awaitable used by invoke_tool
+
+if TYPE_CHECKING:
+    from app.services.session_context import SessionContext
 
 logger = logging.getLogger(__name__)
 

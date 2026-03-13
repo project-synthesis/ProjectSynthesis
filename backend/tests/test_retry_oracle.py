@@ -1,7 +1,12 @@
 """Tests for the 7-gate adaptive RetryOracle."""
 
-import pytest
-from app.services.retry_oracle import RetryOracle, RetryDecision
+import os
+
+from hypothesis import given
+from hypothesis import settings as h_settings
+from hypothesis import strategies as st
+
+from app.services.retry_oracle import RetryOracle
 
 
 class TestOracleInit:
@@ -185,9 +190,6 @@ class TestDiagnosticMessage:
         assert "clarity" in msg.lower()
         assert "faithfulness" in msg.lower()
 
-
-import os
-from hypothesis import given, settings as h_settings, strategies as st
 
 h_settings.register_profile("ci", max_examples=200, deadline=5000)
 h_settings.register_profile("dev", max_examples=1000, deadline=10000)

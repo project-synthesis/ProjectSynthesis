@@ -8,9 +8,8 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.feedback import Feedback
@@ -96,7 +95,8 @@ async def get_feedback_aggregate(
     for f in feedbacks:
         if f.dimension_overrides:
             try:
-                overrides = json.loads(f.dimension_overrides) if isinstance(f.dimension_overrides, str) else f.dimension_overrides
+                raw = f.dimension_overrides
+                overrides = json.loads(raw) if isinstance(raw, str) else raw
                 for k, v in overrides.items():
                     all_overrides.setdefault(k, []).append(v)
             except (json.JSONDecodeError, TypeError):
@@ -161,7 +161,8 @@ def _to_dict(fb: Feedback) -> dict:
     overrides = None
     if fb.dimension_overrides:
         try:
-            overrides = json.loads(fb.dimension_overrides) if isinstance(fb.dimension_overrides, str) else fb.dimension_overrides
+            raw = fb.dimension_overrides
+            overrides = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
             pass
 

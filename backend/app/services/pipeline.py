@@ -11,6 +11,7 @@ from typing import AsyncGenerator
 
 from app.config import settings
 from app.providers.base import MODEL_ROUTING, LLMProvider, select_model
+from app.services.adaptation_engine import load_adaptation
 from app.services.analyzer import run_analyze
 from app.services.codebase_explorer import run_explore
 from app.services.context_builders import (
@@ -19,12 +20,11 @@ from app.services.context_builders import (
     MAX_URL_CONTEXTS,
 )
 from app.services.optimizer import run_optimize
+from app.services.refinement_service import create_trunk_branch
+from app.services.retry_oracle import RetryOracle
 from app.services.settings_service import load_settings
 from app.services.strategy import run_strategy
 from app.services.validator import run_validate
-from app.services.retry_oracle import RetryOracle
-from app.services.adaptation_engine import load_adaptation
-from app.services.refinement_service import create_trunk_branch
 
 logger = logging.getLogger(__name__)
 
@@ -370,7 +370,8 @@ async def run_pipeline(
         analysis["model"] = model_override or MODEL_ROUTING["analyze"]
 
         usage = provider.get_last_usage()
-        stage_tokens = usage.total_tokens if usage else _estimate_tokens(raw_prompt) + _estimate_tokens(json.dumps(analysis))
+        est = _estimate_tokens(raw_prompt) + _estimate_tokens(json.dumps(analysis))
+        stage_tokens = usage.total_tokens if usage else est
 
         analyze_events.append(("analysis", analysis))
         analyze_events.append(("stage", {
@@ -482,7 +483,8 @@ async def run_pipeline(
             strategy_result["model"] = model_strategy
 
         usage = provider.get_last_usage()
-        stage_tokens = usage.total_tokens if usage else _estimate_tokens(raw_prompt) + _estimate_tokens(json.dumps(strategy_result))
+        est = _estimate_tokens(raw_prompt) + _estimate_tokens(json.dumps(strategy_result))
+        stage_tokens = usage.total_tokens if usage else est
         total_tokens += stage_tokens
 
         yield ("strategy", strategy_result)

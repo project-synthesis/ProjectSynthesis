@@ -1,14 +1,19 @@
 """Tests for the adaptation engine — feedback → pipeline parameter tuning."""
 
-import pytest
+import os
+
+from hypothesis import given
+from hypothesis import settings as h_settings
+from hypothesis import strategies as st
+
 from app.services.adaptation_engine import (
     DEFAULT_WEIGHTS,
+    MAX_DAMPING,
+    WEIGHT_LOWER_BOUND,
+    WEIGHT_UPPER_BOUND,
     adjust_weights_from_deltas,
     compute_override_deltas,
     compute_threshold_from_feedback,
-    WEIGHT_LOWER_BOUND,
-    WEIGHT_UPPER_BOUND,
-    MAX_DAMPING,
 )
 
 
@@ -81,9 +86,6 @@ class TestComputeThreshold:
         t = compute_threshold_from_feedback(feedbacks, default=5.0, bounds=(3.0, 8.0))
         assert t <= 8.0
 
-
-import os
-from hypothesis import given, settings as h_settings, strategies as st
 
 h_settings.register_profile("ci", max_examples=200, deadline=5000)
 h_settings.register_profile("dev", max_examples=1000, deadline=10000)

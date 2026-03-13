@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import weakref
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -208,8 +208,9 @@ async def recompute_adaptation(
         return
 
     async with lock:
-        from app.services.feedback_service import get_all_feedbacks_for_user
         from sqlalchemy import select as sa_select
+
+        from app.services.feedback_service import get_all_feedbacks_for_user
 
         if feedbacks is None:
             feedbacks_orm = await get_all_feedbacks_for_user(user_id, db)
@@ -220,7 +221,8 @@ async def recompute_adaptation(
                 overrides = None
                 if fb.dimension_overrides:
                     try:
-                        overrides = json.loads(fb.dimension_overrides) if isinstance(fb.dimension_overrides, str) else fb.dimension_overrides
+                        raw = fb.dimension_overrides
+                        overrides = json.loads(raw) if isinstance(raw, str) else raw
                     except (json.JSONDecodeError, TypeError):
                         pass
                 # Fetch optimization scores for this feedback
@@ -296,14 +298,16 @@ async def load_adaptation(user_id: str, db: AsyncSession) -> dict | None:
     weights = None
     if adaptation.dimension_weights:
         try:
-            weights = json.loads(adaptation.dimension_weights) if isinstance(adaptation.dimension_weights, str) else adaptation.dimension_weights
+            raw_w = adaptation.dimension_weights
+            weights = json.loads(raw_w) if isinstance(raw_w, str) else raw_w
         except (json.JSONDecodeError, TypeError):
             pass
 
     affinities = None
     if adaptation.strategy_affinities:
         try:
-            affinities = json.loads(adaptation.strategy_affinities) if isinstance(adaptation.strategy_affinities, str) else adaptation.strategy_affinities
+            raw_a = adaptation.strategy_affinities
+            affinities = json.loads(raw_a) if isinstance(raw_a, str) else raw_a
         except (json.JSONDecodeError, TypeError):
             pass
 
