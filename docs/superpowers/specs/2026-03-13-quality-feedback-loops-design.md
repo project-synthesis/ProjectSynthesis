@@ -67,6 +67,7 @@ First-class refinement branches. Every optimization gets a "trunk" branch on com
 | `turn_count` | Int | How many refinement turns on this branch |
 | `turn_history` | JSON | `[{turn, source, message_summary, scores_before, scores_after, dimension_deltas, prompt_hash}]` |
 | `status` | Text | `"active"` / `"selected"` / `"abandoned"` |
+| `row_version` | Int | Optimistic locking (matches Optimization pattern) |
 | `created_at` | DateTime | |
 | `updated_at` | DateTime | |
 
@@ -88,7 +89,7 @@ Recorded when a user selects a branch over others. Stronger adaptation signal th
 | `reason` | Text (nullable) | Optional rationale |
 | `created_at` | DateTime | |
 
-**Indexes:** `(user_id)`, `(optimization_id)`.
+**Indexes:** `(user_id)`, `(optimization_id)`, `(user_id, created_at)` (for decay-ordered queries).
 
 ### Extensions to `Optimization` Model
 
@@ -98,7 +99,8 @@ Recorded when a user selects a branch over others. Stronger adaptation signal th
 | `per_instruction_compliance` | JSON | `[{instruction, satisfied, note}]` |
 | `session_id` | Text | H3 -- captured from provider for resumption |
 | `refinement_turns` | Int | Total refinement turns across all branches |
-| `active_branch_id` | FK -> refinement_branch (nullable) | Currently selected branch |
+| `active_branch_id` | Text (nullable) | Currently selected branch (app-layer referential integrity, no DB FK -- avoids circular dependency with refinement_branch) |
+| `adaptation_snapshot` | JSON (nullable) | Exact weights/threshold/affinities used for this run (audit trail) |
 | `branch_count` | Int | Quick count (avoids JOIN for display) |
 
 **Invariant:** `optimization.optimized_prompt` always mirrors `active_branch.optimized_prompt`. The active branch is the source of truth; the optimization column is a denormalized convenience.
@@ -106,11 +108,24 @@ Recorded when a user selects a branch over others. Stronger adaptation signal th
 ### Pydantic Schemas
 
 ```python
+VALID_DIMENSIONS = {"clarity_score", "specificity_score", "structure_score",
+                     "faithfulness_score", "conciseness_score"}
+
 class FeedbackCreate(BaseModel):
     rating: Literal[-1, 0, 1]
-    dimension_overrides: dict[str, int] | None = None  # validated 1-10
+    dimension_overrides: dict[str, int] | None = None
     corrected_issues: list[str] | None = None
     comment: str | None = None
+
+    @model_validator(mode="after")
+    def validate_dimension_overrides(self) -> "FeedbackCreate":
+        if self.dimension_overrides:
+            for key, value in self.dimension_overrides.items():
+                if key not in VALID_DIMENSIONS:
+                    raise ValueError(f"Unknown dimension: {key}")
+                if not 1 <= value <= 10:
+                    raise ValueError(f"Score for {key} must be 1-10, got {value}")
+        return self
 
 class FeedbackResponse(BaseModel):
     id: str
@@ -161,6 +176,9 @@ class SelectRequest(BaseModel):
 - **`retry_history` on Optimization, not a separate table:** Retry data is always read together with the optimization. JSON is write-once (set at pipeline completion).
 - **`session_id` on Optimization:** Natural place -- one pipeline run = one session context.
 - **Separate `refinement_branch` table:** Branches need independent querying, concurrent access, and tree traversal. JSON array on Optimization would be unmanageable.
+- **`active_branch_id` as plain Text (no FK):** Avoids circular FK dependency between Optimization and refinement_branch. Referential integrity enforced at application layer, matching the existing `retry_of` pattern.
+- **`row_version` on refinement_branch:** Consistent with Optimization's optimistic locking pattern. Prevents concurrent refine calls from overwriting each other.
+- **User orphan handling:** Feedback records are retained if a user is removed (no CASCADE). The project uses soft-delete for optimizations; feedback is similarly preserved for historical adaptation accuracy.
 
 ---
 
@@ -209,6 +227,8 @@ Added to `ValidateOutput` as optional field. Unsatisfied instructions become hig
 
 Replaces the fixed-threshold retry logic with a stateful oracle that tracks five real-time signals across attempts within a single pipeline run.
 
+**Module:** `backend/app/services/retry_oracle.py` (own module, not in `pipeline.py` -- the oracle is a complex stateful class that belongs in the service layer, matching the `strategy_selector.py` pattern).
+
 #### Core Signals
 
 **1. Score Momentum** -- is the trajectory improving or flattening?
@@ -222,6 +242,21 @@ Per-dimension ratio of successful improvements when targeted vs total times targ
 **3. Prompt Entropy** -- is the optimizer exploring or just rephrasing?
 
 Jaccard similarity on sentence-level tokenization between consecutive attempts. High (>0.4) = genuinely different output. Low (<0.15) = cosmetic changes only (creative exhaustion).
+
+**Configurable constants** (defined at module top, candidates for future user-configurability):
+
+```python
+ENTROPY_EXHAUSTION_THRESHOLD = 0.15    # below = creative exhaustion
+ENTROPY_EXPLORATION_THRESHOLD = 0.40   # above = genuinely different
+REGRESSION_RATIO_THRESHOLD = 0.40      # above = zero-sum trap
+ELASTICITY_HIGH = 0.60                 # above = responsive to retries
+ELASTICITY_LOW = 0.30                  # below = structurally constrained
+FOCUS_EFFECTIVENESS_LOW = 0.30         # below = retargeting failing
+MOMENTUM_NEGATIVE_THRESHOLD = -0.30    # below = getting worse
+MOMENTUM_DECAY_FACTOR = 0.70           # exponential decay for weighting
+DIMINISHING_RETURNS_BASE = 0.50        # base expected gain
+DIMINISHING_RETURNS_GROWTH = 1.30      # growth factor per attempt
+```
 
 **4. Regression Ratio** -- are retries robbing Peter to pay Paul?
 
@@ -286,23 +321,23 @@ def _select_focus(self) -> list[str]:
 
 **`POST /api/optimize/{id}/feedback`** -- submit or update feedback.
 
-Upsert semantics: second submission for same `optimization_id + user_id` replaces the first. Returns 201 on create, 200 on update.
+Upsert semantics: second submission for same `optimization_id + user_id` replaces the first. Returns 201 on create, 200 on update. Rate limit: `Depends(RateLimit(lambda: "10/minute"))` -- tighter than reads because it triggers background adaptation recomputation.
 
 **`GET /api/optimize/{id}/feedback`** -- feedback for an optimization.
 
-Returns `{feedback: {...} | null, aggregate: {total_ratings, positive, negative, neutral, avg_dimension_overrides}}`. Aggregate computed via single GROUP BY query.
+Returns `{feedback: {...} | null, aggregate: {total_ratings, positive, negative, neutral, avg_dimension_overrides}}`. Aggregate computed via single GROUP BY query. Rate limit: `Depends(RateLimit(lambda: settings.RATE_LIMIT_HISTORY))`.
 
 **`GET /api/feedback/history`** -- paginated feedback history for current user.
 
-Query params: `offset`, `limit`, `rating_filter`, `sort`. Standard pagination envelope.
+Query params: `offset`, `limit`, `rating_filter`, `sort`. Standard pagination envelope. Rate limit: `Depends(RateLimit(lambda: settings.RATE_LIMIT_HISTORY))`.
 
 **`GET /api/feedback/stats`** -- user's feedback patterns + adaptation transparency.
 
-Returns `{total_feedbacks, rating_distribution, avg_override_delta, most_corrected_dimension, adaptation_state}`.
+Returns `{total_feedbacks, rating_distribution, avg_override_delta, most_corrected_dimension, adaptation_state}`. Rate limit: `Depends(RateLimit(lambda: settings.RATE_LIMIT_HISTORY))`.
 
 ### Adaptation Trigger
 
-Feedback submission triggers async `recompute_adaptation()` as a background task:
+Feedback submission triggers async `recompute_adaptation()` as a background task. **Concurrency guard:** A per-user asyncio.Lock (keyed by user_id in a module-level WeakValueDictionary) prevents concurrent recomputation. If a lock is already held for a user_id, the new request skips recomputation (the in-flight one will pick up the latest feedback):
 
 ```python
 async def recompute_adaptation(user_id: str, db: AsyncSession):
@@ -389,7 +424,7 @@ This is a soft signal, not a hard override. The LLM can still pick a "disliked" 
 
 ### Integration Point 3: RetryOracle Calibration
 
-**Where:** `RetryOracle.__init__()` in `pipeline.py`
+**Where:** `RetryOracle.__init__()` in `retry_oracle.py` (instantiated by `pipeline.py`)
 
 Three parameters from adaptation: `threshold` (personal retry trigger), `user_weights` (for best-attempt scoring), `task_baseline` (task-type calibration).
 
@@ -408,7 +443,7 @@ Adaptation loaded once per pipeline run (single DB query by PK). Passed to stage
 
 ### Audit Trail
 
-Every pipeline run stores `adaptation_snapshot` in `stage_durations` JSON -- the exact weights/threshold/affinities used. Reproducible even if adaptation changes later.
+Every pipeline run stores the exact weights/threshold/affinities used in the `adaptation_snapshot` column on the Optimization model (separate JSON column, not mixed into `stage_durations`). This preserves reproducibility even if adaptation changes later, and avoids schema pollution of the timing-focused `stage_durations` blob.
 
 ---
 
@@ -442,29 +477,82 @@ class SessionContext:
 ### Base Class Addition
 
 ```python
-# Added to LLMProvider ABC
-@abstractmethod
+# Added to LLMProvider as concrete method with default implementation
+# NOT @abstractmethod — avoids breaking MockProvider and all existing providers
 async def complete_with_session(
     self, system: str, user: str, model: str,
     session: SessionContext | None = None,
     schema: dict | None = None,
 ) -> tuple[str, SessionContext]:
-    """Completion with session continuity. Returns (response, updated_session)."""
+    """Completion with session continuity. Returns (response, updated_session).
+
+    Default implementation: delegates to complete(), returns a fresh SessionContext.
+    AnthropicAPIProvider and ClaudeCLIProvider override with session-aware behavior.
+    MockProvider inherits the default (sufficient for testing).
+    """
+    if schema:
+        response = await self.complete_json(system, user, model, schema)
+        text = json.dumps(response)
+    else:
+        text = await self.complete(system, user, model)
+    new_session = SessionContext(
+        provider_type=self.name,
+        created_at=session.created_at if session else utcnow(),
+        turn_count=(session.turn_count + 1) if session else 1,
+    )
+    return text, new_session
 ```
+
+`AnthropicAPIProvider` and `ClaudeCLIProvider` override this with their session-specific implementations (message history replay and SDK resume respectively). `MockProvider` inherits the default — no changes needed for tests to pass.
 
 Existing methods (`complete`, `stream`, `complete_json`, `complete_parsed`, `complete_agentic`) remain unchanged.
 
 ### Session Compaction
 
+Triggered by **either** turn count or byte size, whichever threshold is hit first:
+
 ```python
 MAX_REFINEMENT_TURNS = 10
+MAX_SESSION_CONTEXT_BYTES = 256_000  # 256KB hard cap per branch
 
 async def compact_session(session: SessionContext, provider) -> SessionContext:
-    if session.turn_count <= MAX_REFINEMENT_TURNS:
+    needs_compaction = (
+        session.turn_count > MAX_REFINEMENT_TURNS
+        or len(json.dumps(session.message_history or [])) > MAX_SESSION_CONTEXT_BYTES
+    )
+    if not needs_compaction:
         return session
-    # Keep system + summary of old turns + last 4 turn pairs
-    # Summary generated by Haiku (cheap, fast)
+
+    # Keep system message + summary of old turns + last 4 turn pairs
+    # Summary generated by Haiku 4.5 (cheap, fast, max 500 output tokens)
+    old_turns = session.message_history[1:-8]  # skip system, keep last 4 pairs
+    try:
+        summary = await provider.complete(
+            system="Summarize this conversation concisely, preserving all decisions and constraints.",
+            user=json.dumps(old_turns),
+            model="claude-haiku-4-5",
+        )
+    except Exception:
+        # Compaction failure: continue with uncompacted session, log warning
+        logger.warning("Session compaction failed, continuing with full history")
+        return session
+
+    compacted_history = [
+        session.message_history[0],  # system
+        {"role": "user", "content": f"[Previous refinement context]\n{summary}"},
+        {"role": "assistant", "content": "Understood. I have the full context."},
+        *session.message_history[-8:],  # last 4 turn pairs
+    ]
+    return SessionContext(
+        session_id=session.session_id,
+        message_history=compacted_history,
+        provider_type=session.provider_type,
+        created_at=session.created_at,
+        turn_count=session.turn_count,
+    )
 ```
+
+**Storage expectations:** CLI sessions store only a session_id string (~50 bytes per branch). API sessions grow ~30-80KB per turn (system prompt + optimizer output). With compaction at 256KB, worst case per optimization: 5 branches x 256KB = 1.28MB. Abandoned branch cleanup clears `session_context` at 7 days.
 
 ### Unified Refine Operation
 
@@ -521,7 +609,7 @@ Key changes from old retry loop:
 
 ### Branching Operations
 
-**Fork:** Deep-copies session context from parent branch. CLI sessions start fresh (SDK can't fork); first turn on fork gets parent history injected as summary.
+**Fork:** Deep-copies session context from parent branch. API provider: true deep-copy of message_history. CLI provider: SDK sessions can't be forked server-side, so the fork starts with `session_context=None`. The first refinement turn on the forked branch gets a context preamble generated by Haiku 4.5 (max 500 output tokens) summarizing the parent branch's turn history. This summary is injected as the first user message in the new session. On summary generation failure: proceed without context summary (log warning); the optimizer will lack parent context but the fork remains functional. The summary is consumed on the first turn and not stored permanently — subsequent turns build their own session context from that point.
 
 **Select:** Updates optimization's active_branch_id and syncs prompt+scores. Marks non-selected branches as abandoned. Records N-1 pairwise preferences. Triggers adaptation recomputation.
 
@@ -549,6 +637,16 @@ GET  /api/optimize/{id}/branches/compare?branch_a={id}&branch_b={id}
 POST /api/optimize/{id}/branches/select -- pick winner
 GET  /api/optimize/{id}/branches/{branch_id}  -- branch detail + turn history
 ```
+
+**Rate limits:**
+- `POST .../refine`: `Depends(RateLimit(lambda: "5/minute"))` -- triggers Opus-level LLM calls
+- `POST .../branches` (fork): `Depends(RateLimit(lambda: "3/minute"))` -- creates branch + LLM call
+- `POST .../branches/select`: `Depends(RateLimit(lambda: "10/minute"))` -- DB-only, lighter
+- `GET` endpoints: `Depends(RateLimit(lambda: settings.RATE_LIMIT_HISTORY))` -- standard read rate
+
+**SSE streaming:** Both `POST .../refine` and `POST .../branches` return `StreamingResponse(media_type="text/event-stream")`. Events use the same `_sse_event()` formatter extracted to `backend/app/routers/_sse.py` (shared with `optimize.py`). Terminal event: `refinement_complete` with final scores and prompt. Error events follow the existing `{stage, error, recoverable}` pattern.
+
+**Router:** New file `backend/app/routers/refinement.py`. Mounted under `/api/optimize` prefix. All endpoints require authenticated user.
 
 ---
 
@@ -602,11 +700,15 @@ src/lib/components/
     InspectorAdaptation.svelte   -- learned weights transparency
 ```
 
-### Store: `feedback.svelte.ts`
+### Stores
 
-Class-based store with Svelte 5 runes matching existing patterns (forge.svelte.ts, editor.svelte.ts). State: `currentFeedback`, `submitting`, `aggregate`, `refinementOpen`, `refinementStreaming`, `protectedDimensions`, `branches`, `activeBranchId`, `comparingBranches`, `adaptationState`. Derived: `activeBranch`, `activeBranchTurns`, `branchTree`.
+Two class-based stores matching existing patterns (forge.svelte.ts, editor.svelte.ts):
 
-Handles new SSE events via `handleRefinementEvent()` method dispatching on event type.
+**`feedback.svelte.ts`** — feedback + adaptation state. State: `currentFeedback`, `submitting`, `aggregate`, `adaptationState`. Handles absolute rating lifecycle.
+
+**`refinement.svelte.ts`** — branches + refinement sessions. State: `refinementOpen`, `refinementStreaming`, `protectedDimensions`, `branches`, `activeBranchId`, `comparingBranches`. Derived: `activeBranch`, `activeBranchTurns`, `branchTree`. Handles new SSE events via `handleRefinementEvent()` method.
+
+This split mirrors the existing separation between `forge.svelte.ts` (pipeline) and `editor.svelte.ts` (prompt editing).
 
 ### FeedbackInline.svelte -- Compact Strip (32px)
 
@@ -759,21 +861,60 @@ Full user flows with mock provider:
 
 Shared factories: `oracle_factory` (build oracle with configurable score history), `feedback_factory` (create feedback records), `branch_factory` (create branches), `adaptation_factory` (build adaptation from feedback specs). Hypothesis strategies: `feedback_strategy()`, `valid_weight_strategy()`.
 
+**Hypothesis configuration:** All property-based tests use `@settings(max_examples=200)` for CI predictability. A `ci` profile caps at 200 examples; a `dev` profile allows 1000 for local fuzzing:
+
+```python
+settings.register_profile("ci", max_examples=200, deadline=5000)
+settings.register_profile("dev", max_examples=1000, deadline=10000)
+settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "ci"))
+```
+
 ---
 
 ## 8. Migration & Rollout
 
 ### Database Migrations
 
-Three Alembic migrations ordered by dependency:
+The project uses no Alembic. Migrations are handled via:
+- **New tables:** Defined as SQLAlchemy models and created by `Base.metadata.create_all()` on startup.
+- **New columns on existing tables:** Added to the `_new_columns` dict in `database.py`'s `_migrate_add_missing_columns()`.
+- **New indexes:** Added to `_migrate_add_missing_indexes()`.
 
-**Migration 1:** `feedback` + `user_adaptation` tables. Indexes on (optimization_id, user_id) unique, (user_id, created_at).
+**New model files:**
+- `backend/app/models/feedback.py` — `Feedback`, `UserAdaptation` ORM models
+- `backend/app/models/branch.py` — `RefinementBranch`, `PairwisePreference` ORM models
 
-**Migration 2:** `refinement_branch` + `pairwise_preference` tables. Indexes on (optimization_id), (optimization_id, status), (user_id).
+**New columns on `optimization` table** (added to `_new_columns` dict):
 
-**Migration 3:** Optimization table extensions -- 6 new nullable columns (retry_history, per_instruction_compliance, session_id, refinement_turns, active_branch_id, branch_count).
+```python
+_new_columns = {
+    # ... existing entries ...
+    "retry_history": "TEXT",
+    "per_instruction_compliance": "TEXT",
+    "session_id": "TEXT",
+    "refinement_turns": "INTEGER DEFAULT 0",
+    "active_branch_id": "TEXT",
+    "branch_count": "INTEGER DEFAULT 0",
+    "adaptation_snapshot": "TEXT",
+}
+```
 
-All columns nullable. No data backfill needed. SQLite compatible (no ALTER TABLE constraints).
+**New indexes** (added to `_migrate_add_missing_indexes`):
+
+```python
+_new_indexes = {
+    # ... existing entries ...
+    "ix_feedback_opt_user": ("feedback", ["optimization_id", "user_id"], True),
+    "ix_feedback_user_created": ("feedback", ["user_id", "created_at"], False),
+    "ix_branch_optimization": ("refinement_branch", ["optimization_id"], False),
+    "ix_branch_opt_status": ("refinement_branch", ["optimization_id", "status"], False),
+    "ix_pairwise_user": ("pairwise_preference", ["user_id"], False),
+    "ix_pairwise_optimization": ("pairwise_preference", ["optimization_id"], False),
+    "ix_pairwise_user_created": ("pairwise_preference", ["user_id", "created_at"], False),
+}
+```
+
+All new columns are nullable. No data backfill needed. SQLite compatible (plain ALTER TABLE ADD COLUMN, no FK constraints).
 
 ### Backward Compatibility
 
@@ -784,7 +925,9 @@ All columns nullable. No data backfill needed. SQLite compatible (no ALTER TABLE
 
 ### Sort Whitelist Extension
 
-`refinement_turns` added to `_VALID_SORT_COLUMNS` in `history.py`, `optimization_service.py`, and `mcp_server.py`.
+`refinement_turns` and `branch_count` added to `VALID_SORT_COLUMNS` in `optimization_service.py` (single source of truth -- `history.py` and `mcp_server.py` import `validate_sort_params` from there, not maintain separate whitelists).
+
+Note: The CLAUDE.md documentation incorrectly states the whitelist exists in three files. A follow-up task should correct CLAUDE.md to reflect the single-source pattern.
 
 ### MCP Server Extensions
 
@@ -827,7 +970,7 @@ No migration downgrades needed -- all changes are additive and nullable.
 |---------|-----------|
 | Adaptation lookup | Single PK query, sub-ms |
 | Feedback aggregate | Single GROUP BY, typically <10 rows |
-| Session storage (API) | Capped 10 turns, compacted |
+| Session storage (API) | Capped at 256KB per branch via size+turn-based compaction. CLI stores ~50 bytes. Worst case: 5 branches x 256KB = 1.28MB per optimization. Abandoned cleanup at 7 days. |
 | Branch proliferation | Max 5 per optimization, cleanup at 7 days |
 | Pairwise growth | Max 10 per optimization (5 branches, C(5,2)) |
 | RetryOracle | In-memory arrays (max 5 entries), sub-ms |
