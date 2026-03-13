@@ -317,13 +317,42 @@ class RetryOracle:
         return "\n".join(parts)
 
     def get_diagnostics(self) -> dict:
-        """Return diagnostic data for SSE events."""
+        """Return diagnostic data for SSE events.
+
+        The returned dict is consumed by the frontend RetryDiagnostics component.
+        Keys must match the component's TypeScript interface exactly.
+        """
+        latest = self._attempts[-1] if self._attempts else None
+        decision = self.should_retry() if self.attempt_count > 0 else None
+
+        # Determine which gate fired (from decision reason or "pending")
+        gate = "pending"
+        if decision:
+            reason_lower = decision.reason.lower()
+            if "threshold" in reason_lower:
+                gate = "threshold"
+            elif "budget" in reason_lower:
+                gate = "budget"
+            elif "cycle" in reason_lower:
+                gate = "cycle"
+            elif "exhaustion" in reason_lower or "entropy" in reason_lower:
+                gate = "entropy"
+            elif "diminishing" in reason_lower:
+                gate = "diminishing"
+            elif "momentum" in reason_lower:
+                gate = "momentum"
+            elif "regression" in reason_lower:
+                gate = "regression"
+
         return {
             "attempt": self.attempt_count,
+            "overall_score": round(latest.overall_score, 3) if latest else 0,
+            "threshold": round(self.threshold, 3),
+            "action": decision.action if decision else "pending",
+            "reason": decision.reason if decision else "",
+            "focus_areas": decision.focus_areas if decision else [],
+            "gate": gate,
             "momentum": round(self._compute_momentum(), 3),
-            "entropy": round(self._last_entropy, 3) if self.attempt_count >= 2 else None,
-            "regression_ratio": round(self._compute_regression_ratio(), 3),
-            "focus_effectiveness": round(self._compute_focus_effectiveness(), 3),
-            "best_attempt": self.best_attempt_index,
+            "best_attempt_index": self.best_attempt_index,
             "best_score": self._attempts[self.best_attempt_index].overall_score if self._attempts else None,
         }

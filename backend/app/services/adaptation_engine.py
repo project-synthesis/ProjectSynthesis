@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import weakref
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,8 +38,9 @@ MIN_SAMPLES_PER_STRATEGY = 2
 STRATEGY_DECAY_DAYS = 90
 PAIRWISE_WEIGHT_MULTIPLIER = 2.0
 
-# Concurrency guard: per-user locks
-_user_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+# Concurrency guard: per-user locks with skip-if-busy semantics
+_user_locks: dict[str, asyncio.Lock] = {}
+_user_busy: dict[str, bool] = {}
 
 
 def _get_user_lock(user_id: str) -> asyncio.Lock:
@@ -199,86 +199,106 @@ async def recompute_adaptation(
 ) -> None:
     """Recompute user adaptation from accumulated feedback.
 
-    Protected by per-user asyncio.Lock — concurrent calls for same user skip.
+    Protected by per-user busy flag — concurrent calls for same user skip.
+    Uses an atomic flag check (single-threaded asyncio) instead of a TOCTOU
+    ``if lock.locked()`` pattern.
     """
-    lock = _get_user_lock(user_id)
-    # Use try_lock pattern: acquire non-blocking, skip if already held.
-    # This avoids the check-then-act race of `if lock.locked(): return`.
-    if lock.locked():
+    if _user_busy.get(user_id, False):
         logger.info("Adaptation recompute already in progress for user %s, skipping", user_id)
         return
 
+    lock = _get_user_lock(user_id)
     async with lock:
-        from sqlalchemy import select as sa_select
+        _user_busy[user_id] = True
+        try:
+            from sqlalchemy import select as sa_select
 
-        from app.services.feedback_service import get_all_feedbacks_for_user
+            from app.services.feedback_service import get_all_feedbacks_for_user
 
-        if feedbacks is None:
-            feedbacks_orm = await get_all_feedbacks_for_user(user_id, db)
-            # Join with optimization to get validator scores for delta computation
-            from app.models.optimization import Optimization
-            feedbacks = []
-            for fb in feedbacks_orm:
-                overrides = parse_json_column(fb.dimension_overrides) if fb.dimension_overrides else None
-                # Fetch optimization scores for this feedback
-                opt_stmt = sa_select(Optimization).where(Optimization.id == fb.optimization_id)
-                opt_result = await db.execute(opt_stmt)
-                opt = opt_result.scalar_one_or_none()
-                scores: dict = {}
-                if opt:
-                    for dim in SCORE_DIMENSIONS:
-                        val = getattr(opt, dim, None)
-                        if val is not None:
-                            scores[dim] = val
-                    scores["overall_score"] = opt.overall_score
-                feedbacks.append({
-                    "rating": fb.rating,
-                    "dimension_overrides": overrides,
-                    "scores": scores,
-                    "overall_score": scores.get("overall_score"),
-                    "task_type": getattr(opt, "task_type", None) if opt else None,
-                    "primary_framework": getattr(opt, "primary_framework", None) if opt else None,
-                    "created_at": fb.created_at,
-                })
+            if feedbacks is None:
+                feedbacks_orm = await get_all_feedbacks_for_user(user_id, db)
+                # Join with optimization to get validator scores for delta computation
+                from app.models.optimization import Optimization
+                feedbacks = []
+                for fb in feedbacks_orm:
+                    overrides = parse_json_column(fb.dimension_overrides) if fb.dimension_overrides else None
+                    # Fetch optimization scores for this feedback
+                    opt_stmt = sa_select(Optimization).where(Optimization.id == fb.optimization_id)
+                    opt_result = await db.execute(opt_stmt)
+                    opt = opt_result.scalar_one_or_none()
+                    scores: dict = {}
+                    if opt:
+                        for dim in SCORE_DIMENSIONS:
+                            val = getattr(opt, dim, None)
+                            if val is not None:
+                                scores[dim] = val
+                        scores["overall_score"] = opt.overall_score
+                    feedbacks.append({
+                        "rating": fb.rating,
+                        "dimension_overrides": overrides,
+                        "scores": scores,
+                        "overall_score": scores.get("overall_score"),
+                        "task_type": getattr(opt, "task_type", None) if opt else None,
+                        "primary_framework": getattr(opt, "primary_framework", None) if opt else None,
+                        "created_at": fb.created_at,
+                    })
 
-        if len(feedbacks) < MIN_FEEDBACKS_FOR_ADAPTATION:
-            return
+            if len(feedbacks) < MIN_FEEDBACKS_FOR_ADAPTATION:
+                return
 
-        override_deltas = compute_override_deltas(feedbacks)
-        adjusted_weights = adjust_weights_from_deltas(
-            base_weights=DEFAULT_WEIGHTS,
-            deltas=override_deltas,
-            damping=MAX_DAMPING,
-            min_samples=MIN_SAMPLES_PER_DIMENSION,
-        )
-        threshold = compute_threshold_from_feedback(feedbacks)
-        affinities = compute_strategy_affinities(feedbacks)
-
-        # Upsert user_adaptation (sa_select already imported above)
-        stmt = sa_select(UserAdaptation).where(UserAdaptation.user_id == user_id)
-        result = await db.execute(stmt)
-        existing = result.scalar_one_or_none()
-
-        now = datetime.now(timezone.utc)
-        if existing:
-            existing.dimension_weights = json.dumps(adjusted_weights)
-            existing.strategy_affinities = json.dumps(affinities)
-            existing.retry_threshold = threshold
-            existing.feedback_count = len(feedbacks)
-            existing.last_computed_at = now
-        else:
-            adaptation = UserAdaptation(
-                user_id=user_id,
-                dimension_weights=json.dumps(adjusted_weights),
-                strategy_affinities=json.dumps(affinities),
-                retry_threshold=threshold,
-                feedback_count=len(feedbacks),
-                last_computed_at=now,
+            override_deltas = compute_override_deltas(feedbacks)
+            adjusted_weights = adjust_weights_from_deltas(
+                base_weights=DEFAULT_WEIGHTS,
+                deltas=override_deltas,
+                damping=MAX_DAMPING,
+                min_samples=MIN_SAMPLES_PER_DIMENSION,
             )
-            db.add(adaptation)
+            threshold = compute_threshold_from_feedback(feedbacks)
+            affinities = compute_strategy_affinities(feedbacks)
 
-        await db.flush()
-        logger.info("Recomputed adaptation for user %s (%d feedbacks)", user_id, len(feedbacks))
+            # Upsert user_adaptation (sa_select already imported above)
+            stmt = sa_select(UserAdaptation).where(UserAdaptation.user_id == user_id)
+            result = await db.execute(stmt)
+            existing = result.scalar_one_or_none()
+
+            now = datetime.now(timezone.utc)
+            if existing:
+                existing.dimension_weights = json.dumps(adjusted_weights)
+                existing.strategy_affinities = json.dumps(affinities)
+                existing.retry_threshold = threshold
+                existing.feedback_count = len(feedbacks)
+                existing.last_computed_at = now
+            else:
+                adaptation = UserAdaptation(
+                    user_id=user_id,
+                    dimension_weights=json.dumps(adjusted_weights),
+                    strategy_affinities=json.dumps(affinities),
+                    retry_threshold=threshold,
+                    feedback_count=len(feedbacks),
+                    last_computed_at=now,
+                )
+                db.add(adaptation)
+
+            await db.flush()
+            logger.info("Recomputed adaptation for user %s (%d feedbacks)", user_id, len(feedbacks))
+        finally:
+            _user_busy[user_id] = False
+
+
+async def recompute_adaptation_safe(user_id: str) -> None:
+    """Background-safe wrapper: manages its own DB session.
+
+    Used by ``BackgroundTasks`` in routers — routers should import this
+    instead of calling ``recompute_adaptation`` directly.
+    """
+    from app.database import get_session_context
+
+    try:
+        async with get_session_context() as db:
+            await recompute_adaptation(user_id, db)
+            await db.commit()
+    except Exception:
+        logger.exception("Background adaptation recompute failed for user %s", user_id)
 
 
 async def load_adaptation(user_id: str, db: AsyncSession) -> dict | None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from app.services.prompt_diff import SCORE_DIMENSIONS
 
@@ -14,8 +14,8 @@ VALID_DIMENSIONS = set(SCORE_DIMENSIONS)
 class FeedbackCreate(BaseModel):
     rating: Literal[-1, 0, 1]
     dimension_overrides: dict[str, int] | None = None
-    corrected_issues: list[str] | None = None
-    comment: str | None = None
+    corrected_issues: list[str] | None = Field(None, max_length=50)
+    comment: str | None = Field(None, max_length=2000)
 
     @model_validator(mode="after")
     def validate_dimension_overrides(self) -> "FeedbackCreate":

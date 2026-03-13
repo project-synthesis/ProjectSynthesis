@@ -17,7 +17,7 @@ from app.schemas.feedback import (
     FeedbackStatsResponse,
     FeedbackWithAggregate,
 )
-from app.services.adaptation_engine import load_adaptation, recompute_adaptation
+from app.services.adaptation_engine import load_adaptation, recompute_adaptation_safe
 from app.services.feedback_service import (
     get_feedback_aggregate,
     get_feedback_for_optimization,
@@ -53,7 +53,7 @@ async def submit_feedback(
 
     # Trigger background adaptation recomputation
     background_tasks.add_task(
-        _recompute_adaptation_safe, current_user.id
+        recompute_adaptation_safe, current_user.id
     )
 
     return {"id": result["id"], "status": "created" if result["created"] else "updated"}
@@ -120,12 +120,3 @@ async def feedback_stats(
     )
 
 
-async def _recompute_adaptation_safe(user_id: str) -> None:
-    """Background task wrapper with its own DB session."""
-    from app.database import get_session_context
-    try:
-        async with get_session_context() as db:
-            await recompute_adaptation(user_id, db)
-            await db.commit()
-    except Exception:
-        logger.exception("Background adaptation recompute failed for user %s", user_id)

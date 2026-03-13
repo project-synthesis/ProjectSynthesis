@@ -137,10 +137,9 @@
               </span>
             </div>
 
-            {#if branch.scores}
-              {@const overall = Object.values(branch.scores).reduce((s, v) => s + v, 0) / Object.values(branch.scores).length}
+            {#if branch.scores?.overall_score != null}
               <span class="font-mono text-[9px] text-neon-green/70 shrink-0">
-                {overall.toFixed(1)}
+                {branch.scores.overall_score.toFixed(1)}
               </span>
             {/if}
           </div>

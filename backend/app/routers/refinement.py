@@ -9,14 +9,13 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import get_session
+from app.database import get_session, get_session_context
 from app.dependencies.auth import get_current_user
 from app.dependencies.rate_limit import RateLimit
 from app.routers._sse import sse_event
-from app.routers.feedback import _recompute_adaptation_safe
 from app.schemas.auth import AuthenticatedUser
 from app.schemas.refinement import ForkRequest, RefineRequest, SelectRequest
-from app.services.adaptation_engine import load_adaptation
+from app.services.adaptation_engine import load_adaptation, recompute_adaptation_safe
 from app.services.prompt_diff import SCORE_DIMENSIONS
 from app.services.refinement_service import (
     fork_branch,
@@ -47,30 +46,37 @@ async def refine_optimization(
 
     adaptation = await load_adaptation(current_user.id, db)
 
-    # Find active branch
+    # Find active branch (uses DI session — safe, runs before generator)
     branches = await get_branches(optimization_id, db)
     active = next((b for b in branches if b["status"] == "active"), None)
     if not active:
         raise HTTPException(404, "No active branch found")
 
+    # Capture values needed by the generator before DI session is torn down
+    active_branch_id = active["id"]
+    provider = req.app.state.provider
+
     async def event_stream():
-        try:
-            async for event in refine(
-                branch_id=active["id"],
-                message=body.message,
-                source="user",
-                protect_dimensions=body.protect_dimensions,
-                provider=req.app.state.provider,
-                user_adaptation=adaptation,
-                db=db,
-            ):
-                yield sse_event(event.get("event", "refinement_update"), event)
-            await db.commit()
-        except ValueError as e:
-            yield sse_event("error", {"error": str(e), "recoverable": False})
-        except Exception:
-            logger.exception("Refinement stream error for %s", optimization_id)
-            yield sse_event("error", {"error": "Internal error", "recoverable": False})
+        # Own session: DI-injected session may be closed by FastAPI before
+        # the streaming generator completes (known FastAPI lifecycle issue).
+        async with get_session_context() as stream_db:
+            try:
+                async for event in refine(
+                    branch_id=active_branch_id,
+                    message=body.message,
+                    source="user",
+                    protect_dimensions=body.protect_dimensions,
+                    provider=provider,
+                    user_adaptation=adaptation,
+                    db=stream_db,
+                ):
+                    yield sse_event(event.get("event", "refinement_update"), event)
+                await stream_db.commit()
+            except ValueError as e:
+                yield sse_event("error", {"error": str(e), "recoverable": False})
+            except Exception:
+                logger.exception("Refinement stream error for %s", optimization_id)
+                yield sse_event("error", {"error": "Internal error", "recoverable": False})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -91,25 +97,27 @@ async def create_branch(
         raise HTTPException(503, "LLM provider not initialized")
 
     adaptation = await load_adaptation(current_user.id, db)
+    provider = req.app.state.provider
 
     async def event_stream():
-        try:
-            async for event in fork_branch(
-                optimization_id=optimization_id,
-                parent_branch_id=body.parent_branch_id,
-                message=body.message,
-                provider=req.app.state.provider,
-                db=db,
-                label=body.label,
-                user_adaptation=adaptation,
-            ):
-                yield sse_event(event.get("event", "branch_update"), event)
-            await db.commit()
-        except ValueError as e:
-            yield sse_event("error", {"error": str(e), "recoverable": False})
-        except Exception:
-            logger.exception("Branch fork error for %s", optimization_id)
-            yield sse_event("error", {"error": "Internal error", "recoverable": False})
+        async with get_session_context() as stream_db:
+            try:
+                async for event in fork_branch(
+                    optimization_id=optimization_id,
+                    parent_branch_id=body.parent_branch_id,
+                    message=body.message,
+                    provider=provider,
+                    db=stream_db,
+                    label=body.label,
+                    user_adaptation=adaptation,
+                ):
+                    yield sse_event(event.get("event", "branch_update"), event)
+                await stream_db.commit()
+            except ValueError as e:
+                yield sse_event("error", {"error": str(e), "recoverable": False})
+            except Exception:
+                logger.exception("Branch fork error for %s", optimization_id)
+                yield sse_event("error", {"error": "Internal error", "recoverable": False})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -168,7 +176,7 @@ async def select_winner(
 
     # Trigger adaptation recomputation (pairwise preferences)
     background_tasks.add_task(
-        _recompute_adaptation_safe, current_user.id
+        recompute_adaptation_safe, current_user.id
     )
 
     return result

@@ -33,4 +33,9 @@ class TestPipelineOracleIntegration:
         diag = oracle.get_diagnostics()
         assert "attempt" in diag
         assert "momentum" in diag
-        assert "best_attempt" in diag
+        assert "best_attempt_index" in diag
+        assert "overall_score" in diag
+        assert "threshold" in diag
+        assert "action" in diag
+        assert "gate" in diag
+        assert "focus_areas" in diag

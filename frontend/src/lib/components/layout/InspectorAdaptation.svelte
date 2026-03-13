@@ -2,12 +2,22 @@
   import { feedback } from '$lib/stores/feedback.svelte';
   import { getScoreColor } from '$lib/utils/colors';
 
+  // Keys match backend adaptation_engine output: full `_score` suffixed keys
   const DEFAULT_WEIGHTS: Record<string, number> = {
-    clarity: 0.20,
-    specificity: 0.20,
-    structure: 0.15,
-    faithfulness: 0.25,
-    conciseness: 0.20,
+    clarity_score: 0.20,
+    specificity_score: 0.20,
+    structure_score: 0.15,
+    faithfulness_score: 0.25,
+    conciseness_score: 0.20,
+  };
+
+  // Display-friendly short labels
+  const DIM_LABELS: Record<string, string> = {
+    clarity_score: 'clarity',
+    specificity_score: 'specificity',
+    structure_score: 'structure',
+    faithfulness_score: 'faithfulness',
+    conciseness_score: 'conciseness',
   };
 
   // Map retry threshold (3.0–8.0) to a 0–100% position on bar
@@ -60,7 +70,7 @@
         {@const dimColor = getScoreColor(liveW * 40)}
         <div class="space-y-0.5">
           <div class="flex justify-between">
-            <span class="font-mono text-[10px] text-text-dim capitalize">{dim}</span>
+            <span class="font-mono text-[10px] text-text-dim capitalize">{DIM_LABELS[dim] ?? dim}</span>
             <span class="font-mono text-[10px] text-text-primary">{(liveW * 100).toFixed(0)}%</span>
           </div>
           <!-- Bar -->
