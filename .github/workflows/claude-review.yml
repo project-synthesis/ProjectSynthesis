@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: []   # remove this line if you want to gate on ci.yml passing first
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # full history so Claude can diff against base branch
 
