@@ -227,7 +227,15 @@ async def refine(
 
     # Compact session if needed
     if needs_compaction(updated_session):
+        logger.info(
+            "Session compaction triggered for branch %s (turn %d)",
+            branch_id, updated_session.turn_count,
+        )
         updated_session = await compact_session(updated_session, provider)
+        logger.info(
+            "Session compaction complete for branch %s (turn_count now %d)",
+            branch_id, updated_session.turn_count,
+        )
 
     # Update branch
     prompt_hash = compute_prompt_hash(refined_prompt)
