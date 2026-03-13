@@ -47,6 +47,26 @@ Instead: Use codebase knowledge to make every instruction precise. The output sh
 as if written by someone with deep codebase knowledge — not as a report about exploration.
 Where you lack specific data, write clear general instructions — never homework assignments.
 
+OUTPUT CALIBRATION — framework-neutral quality standards:
+- Output length must be proportional to input complexity, NOT to framework verbosity.
+  There is NO hard cap on length — a rich, multi-requirement prompt warrants a rich,
+  comprehensive output. The test is substance, not size: every paragraph must earn its place.
+- Length guidelines by complexity (floor, not ceiling):
+  * simple: ~800+ chars minimum — direct, focused, 1-3 sections
+  * moderate: ~2000+ chars typical — full framework application, all relevant sections populated
+  * complex: ~3000+ chars typical — exhaustive treatment, multi-layered structure, comprehensive constraints
+  These are starting points. If the prompt's requirements genuinely demand more depth, write more.
+  If a framework's sections are substantive and non-redundant, fill them all.
+- Scope must match the original prompt's scope. One-thing input → one-thing output, deeply.
+- Every section must contain substantive content. Empty structural headers are worse than omission.
+- Framework structure is a tool, not a target. If a framework defines 6 sections but the prompt
+  only needs 3, use 3. Do not pad sections to fill the template — but if all 6 sections add
+  genuine value, use all 6.
+- The only length penalty is noise: filler phrases, redundant restatements of the same constraint,
+  boilerplate headers with no content, and sections that repeat what another section already covers.
+  Precision, specificity, and thoroughness are never penalized regardless of character count.
+- When approach_notes specify depth calibration, follow them as the authoritative signal.
+
 CRITICAL OUTPUT FORMAT — your output is machine-parsed, not read by a human reviewer:
 - Output ONLY the optimized prompt as plain text. Nothing else.
 - Do NOT think out loud. Do NOT write "Let me...", "Here is...", "I'll...", or any self-referential text.
@@ -93,7 +113,8 @@ For ANALYSIS prompts specifically:
 - Include comparison frameworks where relevant
 - When codebase context is available, use architectural observations to define analysis
   dimensions. Reference specific data flow patterns and module relationships to bound
-  the scope. Turn cross-cutting observations into explicit review criteria.""",
+  the scope. Turn cross-cutting observations into explicit review criteria. Use quantitative
+  signals (file counts, dependency counts, test coverage) to calibrate depth expectations.""",
 
     "reasoning": """
 
@@ -114,7 +135,9 @@ For MATH prompts specifically:
 - Specify notation and precision requirements
 - Include verification/check steps
 - Define the expected format for mathematical expressions
-- Request explanation of the approach before computation""",
+- Request explanation of the approach before computation
+- When codebase context is available and the math task operates on code-generated data,
+  reference specific data shapes, numeric ranges, or algorithmic constraints from observations""",
 
     "writing": """
 
@@ -123,7 +146,9 @@ For WRITING prompts specifically:
 - Specify the target audience and their background
 - Include structural requirements (length, sections, format)
 - Provide examples of desired quality level
-- Set constraints on content scope""",
+- Set constraints on content scope
+- When codebase context is available, use project conventions (naming, terminology,
+  documentation style) to calibrate voice and vocabulary expectations""",
 
     "creative": """
 
@@ -132,7 +157,9 @@ For CREATIVE prompts specifically:
 - Define the mood, atmosphere, or aesthetic desired
 - Include specific elements that must be incorporated
 - Specify originality requirements
-- Set quality benchmarks with examples if possible""",
+- Set quality benchmarks with examples if possible
+- When codebase context is available, extract project-specific terminology, brand voice
+  patterns, or domain conventions to anchor creative constraints""",
 
     "extraction": """
 
@@ -141,7 +168,9 @@ For EXTRACTION prompts specifically:
 - Specify handling of missing or ambiguous data
 - Include edge case instructions
 - Define confidence or certainty requirements
-- Provide examples of expected input-output pairs""",
+- Provide examples of expected input-output pairs
+- When codebase context is available, reference actual data shapes, field names, and
+  type definitions from observations to define the extraction schema precisely""",
 
     "classification": """
 
@@ -150,7 +179,10 @@ For CLASSIFICATION prompts specifically:
 - Include examples for each category
 - Specify handling of ambiguous or multi-label cases
 - Define confidence thresholds
-- Include edge cases in examples""",
+- Include edge cases in examples
+- When codebase context is available, use observed categories, enum definitions, or
+  configuration values to define the classification taxonomy precisely
+- Reference actual data examples from the codebase to build illustrative few-shot cases""",
 
     "formatting": """
 
@@ -159,7 +191,9 @@ For FORMATTING prompts specifically:
 - Include both correct and incorrect examples
 - Specify handling of edge cases in data
 - Define validation criteria for the output
-- Include all formatting rules explicitly""",
+- Include all formatting rules explicitly
+- When codebase context is available, extract formatting conventions, template patterns,
+  and output schemas from observations to define exact formatting requirements""",
 
     "medical": """
 
@@ -168,7 +202,9 @@ For MEDICAL prompts specifically:
 - Specify the evidence level required
 - Define scope limitations explicitly
 - Require citations or references where appropriate
-- Include differential consideration requirements""",
+- Include differential consideration requirements
+- When codebase context is available, reference clinical data models, patient record
+  structures, or health system integrations to ground medical prompt constraints precisely""",
 
     "legal": """
 
@@ -177,7 +213,9 @@ For LEGAL prompts specifically:
 - Include appropriate legal disclaimers
 - Define the level of legal analysis required
 - Require consideration of precedent where relevant
-- Include limitation and scope statements""",
+- Include limitation and scope statements
+- When codebase context is available, reference compliance models, regulatory data
+  structures, or contract templates to ground legal prompt constraints precisely""",
 
     "education": """
 
@@ -185,7 +223,9 @@ For EDUCATION prompts specifically:
 - Define the learner level (beginner/intermediate/advanced)
 - Specify learning objectives explicitly
 - Include scaffolding: build from known concepts to new ones
-- Request examples, analogies, or exercises where appropriate""",
+- Request examples, analogies, or exercises where appropriate
+- When codebase context is available, reference specific code constructs, patterns,
+  or architectural concepts as teaching examples grounded in real implementation""",
 
     "general": """
 

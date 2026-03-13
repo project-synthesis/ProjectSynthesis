@@ -26,6 +26,63 @@ logger = logging.getLogger(__name__)
 
 _STRATEGY_CACHE_TTL = 86400  # 24 hours (prompt-specific; was 7 days when keyed only on task_type)
 
+# ── Intent-specific framework hints ────────────────────────────────────────
+# Maps explore intent_category to actionable framework recommendations for
+# the strategy stage. Each hint names 2-3 frameworks with WHY they fit the
+# intent, plus one anti-recommendation where applicable.
+_INTENT_FRAMEWORK_HINTS: dict[str, str] = {
+    "refactoring": (
+        "Favour chain-of-thought (systematic discovery of refactoring opportunities) or "
+        "constraint-injection (scope boundaries, safety rules, backward-compat constraints). "
+        "Avoid few-shot — refactoring is too context-dependent for generic examples."
+    ),
+    "api_design": (
+        "Favour structured-output (contract definitions, schema specifications) or "
+        "constraint-injection (interface rules, versioning constraints, error contract standards). "
+        "CO-STAR adds audience clarity for public-facing APIs."
+    ),
+    "feature_build": (
+        "Favour step-by-step (implementation sequence with clear milestones) or "
+        "role-task-format (clear executor assignment with acceptance criteria). "
+        "Constraint-injection prevents scope creep."
+    ),
+    "testing": (
+        "Favour few-shot-scaffolding (test case examples showing input/expected/assertion pattern) or "
+        "structured-output (test specification format). "
+        "Constraint-injection defines coverage targets and test isolation requirements."
+    ),
+    "debugging": (
+        "Favour chain-of-thought (hypothesis → evidence → conclusion methodology) or "
+        "step-by-step (systematic elimination procedure). "
+        "Avoid persona — debugging needs process rigour, not character."
+    ),
+    "architecture_review": (
+        "Favour chain-of-thought (multi-dimensional analysis across coupling, cohesion, layering) or "
+        "RISEN (role + structured review steps with explicit end goal). "
+        "Context-enrichment grounds the review in domain-specific architectural standards."
+    ),
+    "performance": (
+        "Favour step-by-step (measurement → analysis → optimization sequence) or "
+        "structured-output (benchmark result format, profiling checklist). "
+        "Constraint-injection defines performance targets and SLA boundaries."
+    ),
+    "documentation": (
+        "Favour CO-STAR (audience-aware writing with clear tone and format) or "
+        "role-task-format (clear scope + output format for documentation deliverable). "
+        "Context-enrichment grounds documentation in domain conventions and existing style."
+    ),
+    "migration": (
+        "Favour step-by-step (ordered migration phases with rollback checkpoints) or "
+        "constraint-injection (compatibility rules, rollback requirements, data integrity constraints). "
+        "RISEN adds explicit end-goal clarity for migration success criteria."
+    ),
+    "security": (
+        "Favour constraint-injection (security rules, compliance requirements, threat boundaries) or "
+        "chain-of-thought (threat modeling sequence: assets → threats → mitigations). "
+        "RISEN adds explicit scope narrowing to prevent audit scope creep."
+    ),
+}
+
 
 async def run_strategy(
     provider: LLMProvider,
@@ -83,12 +140,16 @@ async def run_strategy(
         # Intent-aware framework hint
         intent_cat = codebase_context.get("intent_category", "")
         if intent_cat and intent_cat != "general":
+            hint = _INTENT_FRAMEWORK_HINTS.get(intent_cat, "")
             user_message += (
                 f"\n\nIntent signal: codebase exploration classified this as '{intent_cat}'. "
-                f"Consider frameworks that align — e.g., constraint-injection for boundary-heavy "
-                f"intents, chain-of-thought for investigation intents, structured-output for "
-                f"specification intents."
             )
+            if hint:
+                user_message += f"Framework alignment: {hint}"
+            else:
+                user_message += (
+                    "Consider frameworks that align with this intent's primary focus."
+                )
     else:
         user_message += (
             "\n\nNo codebase context is available — no repository was linked.\n"

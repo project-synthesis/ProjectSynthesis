@@ -22,7 +22,7 @@ Score each dimension on a scale of 1-10:
 - specificity_score: How specific and concrete are the requirements? Codebase-grounded references (file paths, line numbers, function signatures) are the highest tier of specificity.
 - structure_score: How well-organized and logically structured is it? Structure should match task complexity — judge whether each section earns its place, not whether sections exist.
 - faithfulness_score: How well does it preserve the original intent while improving quality? Constraints that serve the original goal are faithful; constraints that restrict beyond original intent are not.
-- conciseness_score: Is it appropriately concise without losing important detail? Length earned by precision (specific references replacing vague instructions) is not bloat.
+- conciseness_score: Is every paragraph substantive and non-redundant? Long, rich prompts are NOT penalized — only noise is penalized. Length earned by precision, specificity, thorough framework application, or comprehensive constraint sets is legitimate. Only penalize: filler phrases, redundant restatements, boilerplate headers with no content, and sections that repeat what another section already covers.
 
 Also determine:
 - is_improvement: Is the optimized version genuinely better than the original? (true/false)
@@ -70,6 +70,8 @@ Do NOT penalize these — they are legitimate optimization techniques:
 - Scope narrowing that focuses a broad request on high-signal areas backed by domain analysis
 - Protective constraints that serve the original goal (preventing low-value output, making implicit criteria explicit)
 - Structure proportional to task complexity (a multi-file review warrants more sections than a simple question)
+- Long, rich, thoroughly structured prompts where every section adds genuine value — length is not a penalty signal when the content is substantive and non-redundant
+- Comprehensive framework application that populates all relevant sections with actionable content
 
 Be rigorous. Most optimizations achieve moderate (5-7) improvement, not strong (8+). Reserve 8+ for optimizations that demonstrably transform the prompt quality.
 
@@ -128,5 +130,42 @@ investigation paths is appropriate and serves the original intent.
   directing the executor to specific areas improves precision without reducing faithfulness.
 - specificity_score: Prescriptive scope items with file paths and line numbers represent
   the highest tier of specificity for this intent."""
+
+        else:
+            specification_intents = {"api_design", "documentation"}
+            investigation_intents = {"performance", "migration"}
+
+            if intent_category in specification_intents:
+                base += f"""
+
+Intent-specific calibration ({intent_category}):
+This is a specification-oriented prompt — the user wants precise definitions, contracts, or
+documentation. Score accordingly:
+- structure_score: Logical organization of specifications is critical — reward clear section
+  hierarchy, consistent field definitions, and systematic coverage. Penalize fragmented or
+  arbitrarily ordered specifications.
+- specificity_score: Exact endpoint paths, field types, response shapes, and parameter names
+  represent the highest tier. Vague 'define the API' instructions are low-value specificity.
+- conciseness_score: Specification prompts legitimately require more detail. Do not penalize
+  length earned by precise contract definitions — only penalize redundant or restated content."""
+
+            elif intent_category in investigation_intents:
+                base += f"""
+
+Intent-specific calibration ({intent_category}):
+This is an investigation-oriented prompt — the user wants systematic examination of a specific
+concern. Score accordingly:
+- specificity_score: References to specific code paths, configuration values, and measurable
+  targets (response times, memory limits, version numbers) are the highest tier of specificity.
+- structure_score: A clear investigation methodology (what to measure, where to look, what
+  thresholds matter) adds structural value. Reward systematic investigation plans.
+- faithfulness_score: Scope narrowing to high-impact areas (hot paths for performance,
+  high-risk modules for migration) serves the original intent when backed by codebase evidence."""
+
+            elif intent_category and intent_category != "general":
+                base += f"""
+
+Intent-specific calibration ({intent_category}):
+No specific scoring adjustments for this intent category. Apply the base calibration uniformly."""
 
     return base

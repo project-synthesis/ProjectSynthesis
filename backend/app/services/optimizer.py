@@ -42,20 +42,32 @@ _WEAVING_GUIDANCE: dict[str, str] = {
         "- Extract architectural constraints from project docs and make them explicit"
     ),
     "api_design": (
-        "- Use endpoint observations to define the API surface\n"
-        "- Reference data contracts and integration points as explicit interface requirements"
+        "- Use endpoint observations to define the API surface (routes, HTTP methods, path params)\n"
+        "- Reference data contracts and integration points as explicit interface requirements\n"
+        "- Surface middleware chain, auth guards, and request validation patterns as boundary constraints\n"
+        "- Extract naming conventions, versioning patterns, and error response shapes from existing endpoints\n"
+        "- Use observed request/response types to specify exact schema expectations (not generic 'JSON body')"
     ),
     "feature_build": (
-        "- Reference existing patterns the executor should follow\n"
-        "- Name extension points and module boundaries"
+        "- Reference existing patterns the executor should follow (naming, file placement, component structure)\n"
+        "- Name extension points and module boundaries where the new feature integrates\n"
+        "- Extract architectural constraints from layer rules and dependency direction observed in the codebase\n"
+        "- Use existing test patterns and fixture setups to specify how the new feature should be tested\n"
+        "- Surface configuration sources and environment variables relevant to the feature's domain"
     ),
     "testing": (
         "- Use coverage signals and testability observations to scope what needs testing\n"
-        "- Reference mock patterns and test infrastructure"
+        "- Reference mock patterns, fixture setups, and test infrastructure conventions already in use\n"
+        "- Surface side effects, I/O boundaries, and state mutations that affect test isolation\n"
+        "- Extract test naming conventions, assertion patterns, and test organization from existing tests\n"
+        "- Use observed dependency injection patterns to specify how test doubles should be constructed"
     ),
     "debugging": (
         "- Map error paths and state mutations into a structured investigation plan\n"
-        "- Reference specific functions and their behavioral characteristics"
+        "- Reference specific functions and their behavioral characteristics (branching, side effects, return shapes)\n"
+        "- Surface exception handling patterns and error propagation chains across module boundaries\n"
+        "- Use observed logging patterns and observability hooks to specify diagnostic entry points\n"
+        "- Extract data flow sequences that cross service boundaries to define the investigation scope"
     ),
     "architecture_review": (
         "- Use dependency and coupling observations to define review dimensions\n"
@@ -64,16 +76,37 @@ _WEAVING_GUIDANCE: dict[str, str] = {
         "  set of findings — the executor may identify additional architectural concerns"
     ),
     "performance": (
-        "- Reference hot paths, I/O boundaries, and caching patterns as profiling targets"
+        "- Reference hot paths, I/O boundaries, and caching patterns as profiling targets\n"
+        "- Surface concurrency primitives (locks, semaphores, async patterns) and their usage scope\n"
+        "- Extract query patterns, batch sizes, and connection pooling configurations as tuning parameters\n"
+        "- Use observed data flow volumes and serialization costs to calibrate optimization priorities\n"
+        "- Reference memory allocation patterns and object lifecycle characteristics where visible"
     ),
     "security": (
-        "- Map auth flows and credential handling into explicit review scope\n"
-        "- Reference input validation patterns and encryption usage"
+        "- Map auth flows and credential handling into explicit review scope with specific file:function references\n"
+        "- Reference input validation patterns, sanitization functions, and encryption usage\n"
+        "- Surface trust boundaries: where external input enters, where privilege checks occur, where secrets are accessed\n"
+        "- Extract configuration-driven security controls (CORS, rate limiting, cookie flags) as audit checkpoints\n"
+        "- Use observed token lifecycle patterns (creation, storage, rotation, expiry) to scope credential review"
+    ),
+    "documentation": (
+        "- Reference public API surfaces (exported functions, route handlers, class interfaces) as documentation targets\n"
+        "- Use module-level docstrings and existing documentation patterns to establish voice and depth conventions\n"
+        "- Surface configuration knobs, environment variables, and deployment parameters as documentation scope\n"
+        "- Extract data flow paths and component relationships to inform architecture documentation structure"
+    ),
+    "migration": (
+        "- Map dependency versions, integration boundaries, and version-specific API usage as migration scope\n"
+        "- Reference configuration sources and environment variable patterns that may require migration\n"
+        "- Surface cross-module contracts and interface shapes that constrain safe migration ordering\n"
+        "- Extract test coverage distribution to identify migration risk zones (low-coverage areas need extra care)"
     ),
 }
 _DEFAULT_WEAVING = (
     "- Use file paths, function names, and data shapes to make instructions precise\n"
-    "- Let codebase specifics inform the precision of your instructions"
+    "- Let codebase specifics inform the precision of your instructions\n"
+    "- Reference module boundaries and data flow patterns to scope the task appropriately\n"
+    "- Surface architectural constraints and conventions that the executor must respect"
 )
 
 OPTIMIZATION_META_OPEN = "<optimization_meta>"
@@ -304,10 +337,16 @@ async def run_optimize(
     analysis_summary = build_analysis_summary(analysis)
     strategy_summary = build_strategy_summary(strategy)
 
+    input_complexity = analysis.get("complexity", "moderate")
+    input_char_count = len(raw_prompt)
+
     user_message = (
         f"Raw prompt to optimize:\n---\n{raw_prompt}\n---\n\n"
         f"Analysis:\n{analysis_summary}\n\n"
-        f"Strategy:\n{strategy_summary}"
+        f"Strategy:\n{strategy_summary}\n\n"
+        f"Input metrics (for output calibration):\n"
+        f"  Complexity: {input_complexity}\n"
+        f"  Input length: {input_char_count} characters"
     )
     if codebase_context:
         codebase_summary = build_codebase_summary(codebase_context)
