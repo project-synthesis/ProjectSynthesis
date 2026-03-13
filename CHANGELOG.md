@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added quality feedback loops with thumbs up/down, dimension overrides, and issue corrections
+- Added adaptive RetryOracle replacing fixed 5.0 threshold with 7-gate decision algorithm
+- Added user adaptation engine tuning validator weights, strategy selection, and retry thresholds per-user
+- Added session resumption with unified refinement service and parallel branching
+- Added feedback, refinement, and branch API endpoints (`/api/feedback`, `/api/refinement`)
+- Added 3 MCP tools (`submit_feedback`, `get_branches`, `get_adaptation_state`) bringing total to 18
+- Added frontend inline feedback, refinement input, branch management, and adaptation transparency
+- Added Inspector panels for feedback verdict, refinement history, branch tree, and adaptation weights
+- Changed retry logic from fixed threshold to adaptive oracle with best-of-N selection
 - Added `pause_turn` stop reason handling in agentic loop — re-sends instead of terminating when server-side tool hits iteration limit
 - Added model-family effort parameter to `_make_extra()` — Opus `high`, Sonnet `medium`, Haiku `low` via `output_config.effort`
 - Added row version guard (`row_version == 0`) on all pipeline DB updates to prevent concurrent PATCH overwrites

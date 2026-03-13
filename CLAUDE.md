@@ -43,6 +43,8 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 - `provider_config.py` — in-app API key management (GET/PATCH/DELETE `/api/provider/config` and `/api/provider/api-key`)
 - `settings.py` — app settings read/write
 - `health.py` — liveness check
+- `feedback.py` — feedback CRUD, stats, and history (`POST/GET /api/feedback`)
+- `refinement.py` — refine, fork, select, compare branches (`POST/GET /api/refinement`)
 
 ### Services (`backend/app/services/`)
 - `pipeline.py` — orchestrates the 5 stages; call `run_pipeline()` for SSE events
@@ -59,6 +61,12 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 - `github_client.py` — raw GitHub API calls; token always resolved here
 - `redis_service.py` — Redis connection singleton with graceful degradation
 - `cache_service.py` — Generic async cache (Redis with in-memory LRU fallback)
+- `feedback_service.py` — Feedback CRUD + aggregation per optimization
+- `adaptation_engine.py` — Feedback → pipeline parameter tuning (dimension weights, retry threshold, strategy affinities)
+- `refinement_service.py` — Unified refinement with branch CRUD, fork, and selection
+- `retry_oracle.py` — 7-gate adaptive retry algorithm replacing fixed threshold
+- `session_context.py` — Session abstraction + compaction for multi-turn refinement
+- `prompt_diff.py` — Prompt hashing, dimension deltas, and cycle detection
 
 ### Providers (`backend/app/providers/`)
 - `detector.py` — auto-selects provider in order: Claude CLI → Anthropic API
@@ -69,7 +77,7 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 Provider is detected **once at startup** and injected via `app.state.provider` and the MCP lifespan context. Never call `detect_provider()` inside a request handler or tool.
 
 ### Sort column whitelist
-`history.py`, `optimization_service.py`, and `mcp_server.py` all guard `getattr(Optimization, sort)` with a whitelist:
+`optimization_service.py` defines `_VALID_SORT_COLUMNS`, shared by `history.py` and `mcp_server.py` via import:
 ```python
 _VALID_SORT_COLUMNS = {"created_at", "overall_score", "task_type",
                        "updated_at", "duration_ms", "primary_framework", "status"}
@@ -78,7 +86,7 @@ Add new sortable columns here before using them.
 
 ## MCP server
 
-15 tools split into two groups — optimization CRUD (including batch delete and trash/restore) and GitHub read tools. See **[docs/MCP.md](docs/MCP.md)** for the full tool reference, all parameters, and connection instructions.
+18 tools split into three groups — optimization CRUD (including batch delete and trash/restore), GitHub read tools, and feedback/refinement tools (`submit_feedback`, `get_branches`, `get_adaptation_state`). See **[docs/MCP.md](docs/MCP.md)** for the full tool reference, all parameters, and connection instructions.
 
 **Transports:**
 - `http://127.0.0.1:8001/mcp` — streamable HTTP, standalone process (primary; used by `.mcp.json`)
@@ -99,7 +107,7 @@ Add new sortable columns here before using them.
 - **Framework**: SvelteKit 2 (Svelte 5 runes) + Tailwind CSS 4
 - **Dev server**: `npm run dev` → port 5199
 - **API client**: `frontend/src/lib/api/client.ts` — all backend calls go through here
-- **Stores**: `frontend/src/lib/stores/` — `forge.svelte.ts` (pipeline state), `editor.svelte.ts`, `github.svelte.ts`
+- **Stores**: `frontend/src/lib/stores/` — `forge.svelte.ts` (pipeline state), `editor.svelte.ts`, `github.svelte.ts`, `feedback.svelte.ts` (feedback + adaptation), `refinement.svelte.ts` (branches + refinement sessions)
 - **Theme**: industrial cyberpunk, flat neon contour — do not introduce rounded corners or drop shadows
 
 ### Component layout
