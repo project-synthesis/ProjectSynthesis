@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     CONTEXT_1M_ENABLED: bool = False
     CONTEXT_1M_BETA_STRING: str = "context-1m-2025-08-07"
 
+    # Compaction beta (M6).  Enables automatic context summarization in agentic loops.
+    COMPACTION_ENABLED: bool = False
+    COMPACTION_BETA_STRING: str = "compact-2026-01-12"
+
     # Redis (optional — in-memory fallback when unavailable)
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379

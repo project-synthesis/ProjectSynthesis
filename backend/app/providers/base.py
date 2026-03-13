@@ -182,10 +182,13 @@ class AgenticResult:
     """Why the agentic loop terminated.
 
     Values:
-      "end_turn"   — model completed naturally (most common)
-      "max_turns"  — loop hit the max_turns limit without completing
-      "tool_error" — a tool call failed after exhausting retries
-      "cancelled"  — loop was cancelled externally
+      "end_turn"    — model completed naturally (most common)
+      "pause_turn"  — server-side tool hit its iteration limit; the loop
+                      automatically re-sends and this never appears as a
+                      final stop_reason under normal operation
+      "max_turns"   — loop hit the max_turns limit without completing
+      "tool_error"  — a tool call failed after exhausting retries
+      "cancelled"   — loop was cancelled externally
     """
     session_id: str | None = None  # H3: SDK session_id for resume support
 

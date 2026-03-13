@@ -170,13 +170,15 @@ async def _detect_provider_inner() -> LLMProvider:
             betas: list[str] = []
             if settings.CONTEXT_1M_ENABLED:
                 betas.append(settings.CONTEXT_1M_BETA_STRING)
+            if settings.COMPACTION_ENABLED:
+                betas.append(settings.COMPACTION_BETA_STRING)
             provider = AnthropicAPIProvider(
                 api_key=settings.ANTHROPIC_API_KEY,
                 betas=betas if betas else None,
             )
             logger.info("Using AnthropicAPIProvider (direct API)")
             if betas:
-                logger.info("1M context beta enabled: %s", betas)
+                logger.info("API betas enabled: %s", betas)
             return provider
         except ImportError as ie:
             logger.warning(
