@@ -847,3 +847,164 @@ export async function logoutDevice(): Promise<{ revoked_count: number }> {
   auth.clearToken();
   return data;
 }
+
+// ── Feedback API ────────────────────────────────────────────────────
+
+export async function submitFeedback(
+  optimizationId: string,
+  body: { rating: -1 | 0 | 1; dimension_overrides?: Record<string, number>; comment?: string }
+): Promise<{ id: string; status: string }> {
+  const res = await apiFetch(`${BASE}/api/optimize/${optimizationId}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Submit feedback failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getFeedback(
+  optimizationId: string
+): Promise<{ feedback: any | null; aggregate: any }> {
+  const res = await apiFetch(`${BASE}/api/optimize/${optimizationId}/feedback`);
+  if (!res.ok) throw new Error(`Get feedback failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getFeedbackHistory(
+  params: { offset?: number; limit?: number; rating?: number } = {}
+): Promise<any> {
+  const qs = new URLSearchParams();
+  if (params.offset) qs.set('offset', String(params.offset));
+  if (params.limit) qs.set('limit', String(params.limit));
+  if (params.rating !== undefined) qs.set('rating', String(params.rating));
+  const res = await apiFetch(`${BASE}/api/feedback/history?${qs}`);
+  if (!res.ok) throw new Error(`Feedback history failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getFeedbackStats(): Promise<any> {
+  const res = await apiFetch(`${BASE}/api/feedback/stats`);
+  if (!res.ok) throw new Error(`Feedback stats failed: ${res.status}`);
+  return res.json();
+}
+
+// ── Refinement API ──────────────────────────────────────────────────
+
+/**
+ * Start a refinement turn (SSE stream). Follows the same pattern as
+ * startOptimization: get Response, check ok, iterate parseSSEStream.
+ */
+export function startRefinement(
+  optimizationId: string,
+  body: { message: string; protect_dimensions?: string[] },
+  onEvent: (event: SSEEvent) => void,
+  onComplete?: () => void,
+  onError?: (error: Error) => void
+): AbortController {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await apiFetch(`${BASE}/api/optimize/${optimizationId}/refine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Refinement failed (${res.status}): ${errorText}`);
+      }
+      if (!res.body) throw new Error('No response body for SSE stream');
+
+      for await (const sseEvent of parseSSEStream(res.body, controller.signal)) {
+        onEvent(sseEvent);
+      }
+      onComplete?.();
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') onError?.(err as Error);
+    }
+  })();
+
+  return controller;
+}
+
+export function startBranchFork(
+  optimizationId: string,
+  body: { parent_branch_id: string; message: string; label?: string },
+  onEvent: (event: SSEEvent) => void,
+  onComplete?: () => void,
+  onError?: (error: Error) => void
+): AbortController {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await apiFetch(`${BASE}/api/optimize/${optimizationId}/branches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Branch fork failed (${res.status}): ${errorText}`);
+      }
+      if (!res.body) throw new Error('No response body for SSE stream');
+
+      for await (const sseEvent of parseSSEStream(res.body, controller.signal)) {
+        onEvent(sseEvent);
+      }
+      onComplete?.();
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') onError?.(err as Error);
+    }
+  })();
+
+  return controller;
+}
+
+export async function listBranches(
+  optimizationId: string
+): Promise<{ branches: any[]; total: number }> {
+  const res = await apiFetch(`${BASE}/api/optimize/${optimizationId}/branches`);
+  if (!res.ok) throw new Error(`List branches failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getBranch(
+  optimizationId: string,
+  branchId: string
+): Promise<any> {
+  const res = await apiFetch(`${BASE}/api/optimize/${optimizationId}/branches/${branchId}`);
+  if (!res.ok) throw new Error(`Get branch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function selectBranch(
+  optimizationId: string,
+  body: { branch_id: string; reason?: string }
+): Promise<any> {
+  const res = await apiFetch(`${BASE}/api/optimize/${optimizationId}/branches/select`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Select branch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function compareBranches(
+  optimizationId: string,
+  branchA: string,
+  branchB: string
+): Promise<any> {
+  const res = await apiFetch(
+    `${BASE}/api/optimize/${optimizationId}/branches/compare?branch_a=${encodeURIComponent(branchA)}&branch_b=${encodeURIComponent(branchB)}`
+  );
+  if (!res.ok) throw new Error(`Compare branches failed: ${res.status}`);
+  return res.json();
+}
