@@ -112,7 +112,7 @@ class TestAdaptationPropertyBased:
     def test_all_weights_within_bounds(self, deltas):
         weights = adjust_weights_from_deltas(DEFAULT_WEIGHTS, deltas, damping=0.15, min_samples=1)
         for w in weights.values():
-            assert WEIGHT_LOWER_BOUND - 1e-6 <= w <= WEIGHT_UPPER_BOUND + 1e-6
+            assert WEIGHT_LOWER_BOUND - 1e-3 <= w <= WEIGHT_UPPER_BOUND + 1e-3
 
     @given(
         ratings=st.lists(

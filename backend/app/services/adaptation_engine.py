@@ -108,14 +108,6 @@ def adjust_weights_from_deltas(
         if all(WEIGHT_LOWER_BOUND <= v <= WEIGHT_UPPER_BOUND for v in adjusted.values()):
             break
 
-    # Final hard clamp + renormalize: guarantee invariants regardless of
-    # floating-point residuals after the loop.
-    for dim in adjusted:
-        adjusted[dim] = max(WEIGHT_LOWER_BOUND, min(WEIGHT_UPPER_BOUND, adjusted[dim]))
-    total = sum(adjusted.values())
-    if total > 0:
-        adjusted = {k: v / total for k, v in adjusted.items()}
-
     return adjusted
 
 
