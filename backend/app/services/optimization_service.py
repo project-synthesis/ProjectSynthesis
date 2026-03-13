@@ -105,6 +105,7 @@ class PipelineAccumulator:
         self.error_message: str | None = None
         self.total_tokens: int = 0
         self.usage_totals = CompletionUsage()
+        self._retry_diagnostics_log: list[dict] = []
 
     def process_event(self, event_type: str, event_data: dict) -> None:
         """Process a single pipeline event, accumulating updates."""
@@ -116,8 +117,8 @@ class PipelineAccumulator:
 
         # H3: New pipeline events
         if event_type == "retry_diagnostics":
-            # Store latest retry diagnostics (no DB column needed, for SSE only)
             self.results["retry_diagnostics"] = event_data
+            self._retry_diagnostics_log.append(event_data)
         elif event_type == "retry_best_selected":
             self.results["retry_best_selected"] = event_data
         elif event_type == "adaptation_snapshot":
@@ -178,6 +179,9 @@ class PipelineAccumulator:
 
         if self.stage_timings:
             self.updates["stage_durations"] = json.dumps(self.stage_timings)
+
+        if self._retry_diagnostics_log:
+            self.updates["retry_history"] = json.dumps(self._retry_diagnostics_log)
 
         self.updates["duration_ms"] = int((time.time() - start_time) * 1000)
         self.updates["updated_at"] = datetime.now(timezone.utc)

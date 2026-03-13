@@ -37,12 +37,20 @@ class DimensionDelta(BaseModel):
 
 
 class RetryHistoryEntry(BaseModel):
-    """One entry in the retry_history JSON array on Optimization."""
+    """One entry in the retry_history JSON array on Optimization.
+
+    Shape matches ``RetryOracle.get_diagnostics()`` output exactly.
+    """
     attempt: int
-    scores: dict[str, int | float]
-    focus_areas: list[str]
-    dimension_deltas: dict[str, int] = {}
-    prompt_hash: str = ""
+    overall_score: float
+    threshold: float
+    action: str
+    reason: str = ""
+    focus_areas: list[str] = []
+    gate: str = "pending"
+    momentum: float = 0.0
+    best_attempt_index: int = 0
+    best_score: float | None = None
 
 
 class InstructionCompliance(BaseModel):

@@ -476,16 +476,21 @@ async def test_explore_does_not_cache_when_sha_is_none():
     """Fix #11/#12: explore should not cache results when HEAD SHA fetch failed."""
     from unittest.mock import patch
 
+    from app.schemas.pipeline_outputs import ExploreSynthesisOutput, IntentClassificationOutput
     from app.services.codebase_explorer import run_explore
 
     mock_provider = MagicMock()
-    mock_provider.complete_json = AsyncMock(return_value={
-        "tech_stack": ["Python"],
-        "key_files_read": ["main.py"],
-        "relevant_code_snippets": [],
-        "codebase_observations": ["obs"],
-        "prompt_grounding_notes": ["note"],
-    })
+    mock_provider.complete_parsed = AsyncMock(side_effect=[
+        IntentClassificationOutput(
+            intent_category="general", observation_directives=[],
+            snippet_priorities=[], depth="structural",
+        ),
+        ExploreSynthesisOutput(
+            tech_stack=["Python"], key_files_read=["main.py"],
+            relevant_code_snippets=[], codebase_observations=["obs"],
+            prompt_grounding_notes=["note"],
+        ),
+    ])
 
     mock_cache = AsyncMock()
     mock_cache.get = AsyncMock(return_value=None)  # cache miss

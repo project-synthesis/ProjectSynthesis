@@ -20,11 +20,37 @@ from app.schemas.github import (
     LinkRepoRequest,
     RepoInfo,
 )
+from app.schemas.mcp_models import (
+    BatchDeleteResult,
+    BranchesResult,
+    BranchItem,
+    DeleteResult,
+    FeedbackSubmitResult,
+    GitHubCodeMatch,
+    GitHubFileContent,
+    GitHubRepoItem,
+    GitHubSearchResult,
+    MCPError,
+    OptimizationRecord,
+    PaginationEnvelope,
+    PipelineResult,
+    RestoreResult,
+    StatsResult,
+)
 from app.schemas.optimization import (
     HistoryStatsResponse,
     OptimizeRequest,
     PatchOptimizationRequest,
     RetryRequest,
+)
+from app.schemas.pipeline_outputs import (
+    AnalyzeOutput,
+    CodeSnippet,
+    ExploreSynthesisOutput,
+    IntentClassificationOutput,
+    OptimizeFallbackOutput,
+    StrategyOutput,
+    ValidateOutput,
 )
 from app.schemas.refinement import (
     BranchCompareResponse,
@@ -62,4 +88,28 @@ __all__ = [
     "ForkRequest",
     "RefineRequest",
     "SelectRequest",
+    # MCP structured output models
+    "BatchDeleteResult",
+    "BranchesResult",
+    "BranchItem",
+    "DeleteResult",
+    "FeedbackSubmitResult",
+    "GitHubCodeMatch",
+    "GitHubFileContent",
+    "GitHubRepoItem",
+    "GitHubSearchResult",
+    "MCPError",
+    "OptimizationRecord",
+    "PaginationEnvelope",
+    "PipelineResult",
+    "RestoreResult",
+    "StatsResult",
+    # Pipeline output schemas
+    "IntentClassificationOutput",
+    "CodeSnippet",
+    "ExploreSynthesisOutput",
+    "AnalyzeOutput",
+    "StrategyOutput",
+    "ValidateOutput",
+    "OptimizeFallbackOutput",
 ]

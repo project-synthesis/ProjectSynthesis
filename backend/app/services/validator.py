@@ -12,6 +12,7 @@ from typing import AsyncGenerator
 from app.config import settings
 from app.prompts.validator_prompt import get_validator_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider
+from app.schemas.pipeline_outputs import ValidateOutput
 from app.services.context_builders import build_codebase_summary
 from app.services.stage_runner import extract_json_with_fallback, stream_with_timeout
 
@@ -161,6 +162,7 @@ async def run_validate(
         quality_key="validation_quality",
         quality_value_success=None,  # Don't set on success (validator doesn't use quality flag for success)
         default_result=_default_validation(),
+        output_type=ValidateOutput,
     )
 
     # Ensure all raw score fields exist and are numeric before computing

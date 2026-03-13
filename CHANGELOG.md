@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Changed MCP server name from `project-synthesis` to `synthesis_mcp` following Python MCP naming conventions
+- Changed all 18 MCP tool names to use `synthesis_` prefix (e.g. `optimize` → `synthesis_optimize`) for multi-server disambiguation
+- Added Pydantic structured output on all MCP tools — `outputSchema` in `tools/list` and `structuredContent` in `tools/call` responses
+- Added `schemas/mcp_models.py` with typed input/output models for all MCP tools
+- Added shared `httpx.AsyncClient` in MCP lifespan context for GitHub API connection pooling
+- Added `ctx.report_progress()` calls in `synthesis_optimize` and `synthesis_retry` for per-stage progress updates
+- Changed all MCP tool annotations to use `ToolAnnotations(title=...)` consistently with human-readable display names
+- Changed MCP error handling from JSON string returns to `ValueError` raises for proper `isError: true` protocol responses
+- Added comprehensive docstrings with Args/Returns on all 18 MCP tools
+- Fixed `retry_best_selected` SSE event shape to include `best_attempt_index` and `best_score` fields expected by frontend
+- Fixed `retrying` stage status not handled by frontend store — stage card now re-pulses during retry passes
+- Removed dead `retryCycleDetected` and `instructionCompliance` frontend state and SSE handlers (backend never emitted these)
+- Fixed `retry_history` column never populated — pipeline now persists accumulated retry diagnostics on completion
 - Added quality feedback loops with thumbs up/down, dimension overrides, and issue corrections
 - Added adaptive RetryOracle replacing fixed 5.0 threshold with 7-gate decision algorithm
 - Added user adaptation engine tuning validator weights, strategy selection, and retry thresholds per-user
@@ -11,6 +24,10 @@
 - Added frontend inline feedback, refinement input, branch management, and adaptation transparency
 - Added Inspector panels for feedback verdict, refinement history, branch tree, and adaptation weights
 - Changed retry logic from fixed threshold to adaptive oracle with best-of-N selection
+- Added type-safe structured output via Pydantic models for all pipeline stages — `IntentClassificationOutput`, `ExploreSynthesisOutput`, `AnalyzeOutput`, `StrategyOutput`, `ValidateOutput`, `OptimizeFallbackOutput`
+- Added `complete_parsed()` provider method using SDK `messages.parse()` for server-side schema enforcement with Pydantic type safety
+- Changed `extract_json_with_fallback()` to accept `output_type` for centralized Pydantic validation on the streaming parse path
+- Removed `INTENT_CLASSIFICATION_SCHEMA` and `EXPLORE_OUTPUT_SCHEMA` dict constants in favor of Pydantic model schema generation
 - Added `pause_turn` stop reason handling in agentic loop — re-sends instead of terminating when server-side tool hits iteration limit
 - Added model-family effort parameter to `_make_extra()` — Opus `high`, Sonnet `medium`, Haiku `low` via `output_config.effort`
 - Added row version guard (`row_version == 0`) on all pipeline DB updates to prevent concurrent PATCH overwrites

@@ -14,6 +14,7 @@ from typing import AsyncGenerator, Optional
 from app.config import settings
 from app.prompts.optimizer_prompts import get_optimizer_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider, parse_json_robust
+from app.schemas.pipeline_outputs import OptimizeFallbackOutput
 from app.services.context_builders import (
     build_analysis_summary,
     build_codebase_summary,
@@ -439,18 +440,20 @@ async def run_optimize(
         logger.warning("Optimize stage: metadata extraction failed; using prompt text only")
     elif full_text:
         # Last resort: try complete_json() fallback
-        logger.warning("No prompt text or metadata; trying complete_json() fallback")
+        logger.warning("No prompt text or metadata; trying complete_parsed() fallback")
         try:
-            fallback = await asyncio.wait_for(
-                provider.complete_json(system_prompt, user_message, model),
+            fallback_obj = await asyncio.wait_for(
+                provider.complete_parsed(
+                    system_prompt, user_message, model, OptimizeFallbackOutput,
+                ),
                 timeout=settings.OPTIMIZE_TIMEOUT_SECONDS,
             )
-            optimized_prompt = fallback.get("optimized_prompt", full_text)
-            changes_made = fallback.get("changes_made", [])
-            framework_applied = fallback.get("framework_applied", framework_applied)
-            optimization_notes = fallback.get("optimization_notes", "")
+            optimized_prompt = fallback_obj.optimized_prompt
+            changes_made = fallback_obj.changes_made
+            framework_applied = fallback_obj.framework_applied or framework_applied
+            optimization_notes = fallback_obj.optimization_notes
         except Exception as e:
-            logger.error("complete_json() fallback also failed: %s", e)
+            logger.error("complete_parsed() fallback also failed: %s", e)
             optimized_prompt = full_text
             changes_made = []
             optimization_notes = ""

@@ -5,7 +5,17 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, AsyncGenerator, Awaitable, Callable  # noqa: F401 — Awaitable used by invoke_tool
+from typing import (  # noqa: F401 — Awaitable used by invoke_tool
+    TYPE_CHECKING,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    TypeVar,
+)
+
+from pydantic import BaseModel as PydanticBaseModel
+
+T = TypeVar("T", bound=PydanticBaseModel)
 
 if TYPE_CHECKING:
     from app.services.session_context import SessionContext
@@ -368,3 +378,24 @@ class LLMProvider(ABC):
             concatenate multiple text blocks). Thinking blocks are excluded.
         """
         ...
+
+    async def complete_parsed(
+        self,
+        system: str,
+        user: str,
+        model: str,
+        output_type: type[T],
+    ) -> T:
+        """Structured output with Pydantic type safety.
+
+        Returns a validated Pydantic model instance.  Providers with native
+        schema enforcement (``AnthropicAPIProvider``) override this with
+        SDK-level parsing.  The default calls ``complete_json()`` +
+        ``model_validate()``.
+
+        ``ClaudeCLIProvider`` inherits this default and gets schema injection
+        (via its ``complete_json``) + Pydantic validation for free.
+        """
+        schema = output_type.model_json_schema()
+        raw = await self.complete_json(system, user, model, schema=schema)
+        return output_type.model_validate(raw)

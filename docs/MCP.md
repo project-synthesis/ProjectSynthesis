@@ -1,6 +1,6 @@
 # Project Synthesis MCP Server
 
-Project Synthesis exposes 18 tools over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, manage trash/restore, interact with linked GitHub repositories, and submit feedback on optimizations directly from a chat session. The explore stage uses semantic retrieval (pre-built embedding index) for fast codebase analysis.
+Project Synthesis exposes 18 tools (all prefixed `synthesis_`) over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, manage trash/restore, interact with linked GitHub repositories, and submit feedback on optimizations directly from a chat session. Tools return structured output via Pydantic models (`outputSchema` / `structuredContent`). The explore stage uses semantic retrieval (pre-built embedding index) for fast codebase analysis.
 
 ## Transports
 
@@ -22,6 +22,10 @@ The **standalone process** (port 8001) runs independently of the FastAPI app. Th
 
 The **FastAPI-mounted transports** (port 8000) share the same dynamic provider reference and database connection as the REST API. When an API key is configured or changed via the UI, tools pick up the new provider immediately without a restart. They are used when the full app is running and you want a single origin.
 
+### Structured output
+
+All tools return Pydantic models with `outputSchema` and `structuredContent`, enabling clients to parse responses programmatically without JSON-string extraction. Errors raise `ValueError`, which the MCP framework surfaces as `isError: true` responses to the client.
+
 ---
 
 ## Connecting from Claude Code
@@ -31,7 +35,7 @@ The project ships a `.mcp.json` that Claude Code reads automatically when you op
 ```json
 {
   "mcpServers": {
-    "project-synthesis": {
+    "synthesis_mcp": {
       "type": "http",
       "url": "http://127.0.0.1:8001/mcp"
     }
@@ -45,13 +49,13 @@ Start the services, then verify the connection:
 
 ```bash
 ./init.sh          # starts backend (port 8000), frontend, and standalone MCP (port 8001)
-claude mcp list    # should show "project-synthesis" as connected
+claude mcp list    # should show "synthesis_mcp" as connected
 ```
 
 To add it manually or to a different Claude Code workspace:
 
 ```bash
-claude mcp add --transport http --scope project project-synthesis http://127.0.0.1:8001/mcp
+claude mcp add --transport http --scope project synthesis_mcp http://127.0.0.1:8001/mcp
 ```
 
 ### Docker deployment
@@ -94,7 +98,7 @@ curl -X POST http://127.0.0.1:8001/mcp \
 
 ### Optimization tools
 
-#### `optimize`
+#### `synthesis_optimize`
 Run the full 5-stage pipeline (Explore → Analyze → Strategy → Optimize → Validate) on a prompt.
 
 | Parameter | Type | Required | Description |
@@ -114,7 +118,7 @@ Returns: optimization record with `id`, `status`, `optimized_prompt`, `overall_s
 
 ---
 
-#### `get_optimization`
+#### `synthesis_get_optimization`
 Fetch a single optimization record by ID.
 
 | Parameter | Type | Required | Description |
@@ -123,7 +127,7 @@ Fetch a single optimization record by ID.
 
 ---
 
-#### `list_optimizations`
+#### `synthesis_list_optimizations`
 List optimizations with pagination.
 
 | Parameter | Type | Default | Description |
@@ -151,7 +155,7 @@ Returns a pagination envelope:
 
 ---
 
-#### `search_optimizations`
+#### `synthesis_search_optimizations`
 Full-text search across prompt content and metadata.
 
 | Parameter | Type | Required | Description |
@@ -160,11 +164,11 @@ Full-text search across prompt content and metadata.
 | `limit` | int | no (default 10) | Results per page (1–100) |
 | `offset` | int | no (default 0) | Pagination offset |
 
-Returns the same pagination envelope as `list_optimizations`.
+Returns the same pagination envelope as `synthesis_list_optimizations`.
 
 ---
 
-#### `get_by_project`
+#### `synthesis_get_by_project`
 Fetch all optimizations belonging to a project.
 
 | Parameter | Type | Required | Description |
@@ -175,7 +179,7 @@ Fetch all optimizations belonging to a project.
 
 ---
 
-#### `get_stats`
+#### `synthesis_get_stats`
 Return aggregate statistics: total runs, average score, and task type breakdown.
 
 | Parameter | Type | Required | Description |
@@ -184,7 +188,7 @@ Return aggregate statistics: total runs, average score, and task type breakdown.
 
 ---
 
-#### `tag_optimization`
+#### `synthesis_tag_optimization`
 Add or remove tags on an optimization. Tags are deduplicated and insertion order is preserved.
 
 | Parameter | Type | Required | Description |
@@ -197,8 +201,8 @@ Add or remove tags on an optimization. Tags are deduplicated and insertion order
 
 ---
 
-#### `delete_optimization`
-Soft-delete an optimization record (sets `deleted_at`; purged permanently after 7 days). Use `restore_optimization` to undo within the recovery window.
+#### `synthesis_delete_optimization`
+Soft-delete an optimization record (sets `deleted_at`; purged permanently after 7 days). Use `synthesis_restore` to undo within the recovery window.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -206,19 +210,19 @@ Soft-delete an optimization record (sets `deleted_at`; purged permanently after 
 
 ---
 
-#### `batch_delete_optimizations`
-Batch soft-delete multiple optimization records (sets `deleted_at`; purged permanently after 7 days). All-or-nothing semantics: if any ID is not found, none are deleted. Use `list_trash` + `restore_optimization` to undo within the recovery window.
+#### `synthesis_batch_delete`
+Batch soft-delete multiple optimization records (sets `deleted_at`; purged permanently after 7 days). All-or-nothing semantics: if any ID is not found, none are deleted. Use `synthesis_list_trash` + `synthesis_restore` to undo within the recovery window.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `ids` | list[string] | yes | UUIDs of optimizations to delete (1–50 items). Use `list_optimizations` to discover valid IDs. |
+| `ids` | list[string] | yes | UUIDs of optimizations to delete (1–50 items). Use `synthesis_list_optimizations` to discover valid IDs. |
 | `user_id` | string | no | Owner filter — when set, all records must belong to this user. Omit for unscoped access (single-user/localhost mode). |
 
 Returns `{"deleted_count": N, "ids": [...]}` on success, or `{"error": "..."}` on validation failure.
 
 ---
 
-#### `list_trash`
+#### `synthesis_list_trash`
 List soft-deleted optimizations still within the 7-day recovery window.
 
 | Parameter | Type | Required | Description |
@@ -230,18 +234,18 @@ Returns a pagination envelope `{total, count, offset, items, has_more, next_offs
 
 ---
 
-#### `restore_optimization`
+#### `synthesis_restore`
 Restore a soft-deleted optimization from the trash (clears `deleted_at`). The record must still be within the 7-day recovery window.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `optimization_id` | string | yes | UUID of the optimization to restore (use `list_trash` to discover valid IDs) |
+| `optimization_id` | string | yes | UUID of the optimization to restore (use `synthesis_list_trash` to discover valid IDs) |
 
 Returns `{"restored": true, "id": "..."}` on success, or `{"error": "..."}` if not found or window expired.
 
 ---
 
-#### `retry_optimization`
+#### `synthesis_retry`
 Re-run the pipeline on an existing optimization (useful after a failure or provider change).
 
 | Parameter | Type | Required | Description |
@@ -259,7 +263,7 @@ Re-run the pipeline on an existing optimization (useful after a failure or provi
 
 All GitHub tools require an explicit `token` parameter (a GitHub Personal Access Token with `repo` scope). No session-level state is shared between calls.
 
-#### `github_list_repos`
+#### `synthesis_github_list_repos`
 List repositories accessible to the token.
 
 | Parameter | Type | Required | Description |
@@ -271,7 +275,7 @@ Returns each repo with `full_name`, `default_branch`, `language`, `private`.
 
 ---
 
-#### `github_read_file`
+#### `synthesis_github_read_file`
 Read a file from a GitHub repository at a specific ref.
 
 | Parameter | Type | Required | Description |
@@ -283,7 +287,7 @@ Read a file from a GitHub repository at a specific ref.
 
 ---
 
-#### `github_search_code`
+#### `synthesis_github_search_code`
 Search for a pattern within a repository using the GitHub code search API.
 
 | Parameter | Type | Required | Description |
@@ -299,7 +303,7 @@ Returns up to 20 matches with `path` and `name`.
 
 ### Feedback and refinement tools
 
-#### `submit_feedback`
+#### `synthesis_submit_feedback`
 Submit quality feedback (thumbs up/down + dimension overrides) on an optimization. Triggers background adaptation recomputation.
 
 | Parameter | Type | Required | Description |
@@ -315,7 +319,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
 
 ---
 
-#### `get_branches`
+#### `synthesis_get_branches`
 List all refinement branches for an optimization.
 
 | Parameter | Type | Required | Description |
@@ -328,7 +332,7 @@ Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: tr
 
 ---
 
-#### `get_adaptation_state`
+#### `synthesis_get_adaptation_state`
 Retrieve the current learned adaptation state for a user (dimension weights, retry threshold, strategy affinities).
 
 | Parameter | Type | Required | Description |
@@ -343,7 +347,7 @@ Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: tr
 
 ## Tool annotations
 
-Every tool is decorated with MCP tool annotations to help clients understand side effects:
+Every tool is decorated with `ToolAnnotations(title=...)` to provide a human-readable display name and help clients understand side effects:
 
 | Annotation | Meaning |
 |---|---|
@@ -366,7 +370,7 @@ The MCP server resolves the LLM provider in order of preference:
 
 **FastAPI-mounted** (port 8000): uses a dynamic provider getter that resolves to `app.state.provider` on each tool call. API keys configured via the UI take effect immediately — no restart needed.
 
-If no provider is available, `optimize` and `retry_optimization` return a JSON error with a configuration hint instead of crashing.
+If no provider is available, `synthesis_optimize` and `synthesis_retry` return a JSON error with a configuration hint instead of crashing.
 
 ---
 
@@ -374,7 +378,7 @@ If no provider is available, `optimize` and `retry_optimization` return a JSON e
 
 All tools return actionable error messages as JSON strings. Common cases:
 
-- **No LLM provider**: `optimize` and `retry_optimization` return `{"error": "No LLM provider configured", "hint": "..."}` when no API key is set
-- **Optimization not found**: includes the ID that was looked up and a suggestion to call `list_optimizations`
+- **No LLM provider**: `synthesis_optimize` and `synthesis_retry` return `{"error": "No LLM provider configured", "hint": "..."}` when no API key is set
+- **Optimization not found**: includes the ID that was looked up and a suggestion to call `synthesis_list_optimizations`
 - **GitHub API error**: includes HTTP status and response body
 - **Missing token/session**: raised at the explore stage if a repo is linked but no GitHub token is available

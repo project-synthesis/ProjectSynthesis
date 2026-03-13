@@ -1034,13 +1034,15 @@ def test_tool_categories_covers_all_tools():
     """TOOL_CATEGORIES must have an entry for every tool registered in the MCP server."""
     from app.mcp_server import TOOL_CATEGORIES
     expected_tools = {
-        "optimize", "retry_optimization",
-        "get_optimization", "list_optimizations", "search_optimizations",
-        "get_by_project", "get_stats",
-        "tag_optimization", "delete_optimization", "batch_delete_optimizations",
-        "list_trash", "restore_optimization",
-        "github_list_repos", "github_read_file", "github_search_code",
-        "submit_feedback", "get_branches", "get_adaptation_state",
+        "synthesis_optimize", "synthesis_retry",
+        "synthesis_get_optimization", "synthesis_list_optimizations",
+        "synthesis_search_optimizations", "synthesis_get_by_project",
+        "synthesis_get_stats", "synthesis_tag_optimization",
+        "synthesis_delete_optimization", "synthesis_batch_delete",
+        "synthesis_list_trash", "synthesis_restore",
+        "synthesis_github_list_repos", "synthesis_github_read_file",
+        "synthesis_github_search_code", "synthesis_submit_feedback",
+        "synthesis_get_branches", "synthesis_get_adaptation_state",
     }
     assert set(TOOL_CATEGORIES.keys()) == expected_tools
 
@@ -1150,6 +1152,116 @@ def test_pipeline_accumulator_finalize_writes_cost_columns():
     assert updates["total_output_tokens"] == 200
     assert updates["estimated_cost_usd"] is not None
     assert updates["usage_is_estimated"] is False
+
+
+# ---------------------------------------------------------------------------
+# H3-fix — PipelineAccumulator retry_history persistence
+# ---------------------------------------------------------------------------
+
+def test_pipeline_accumulator_retry_history_accumulation():
+    """PipelineAccumulator accumulates retry_diagnostics into retry_history."""
+    import time
+
+    from app.services.optimization_service import PipelineAccumulator
+    acc = PipelineAccumulator()
+
+    diag1 = {
+        "attempt": 1,
+        "overall_score": 4.5,
+        "threshold": 6.0,
+        "action": "retry",
+        "reason": "Below threshold",
+        "focus_areas": ["clarity"],
+        "gate": "threshold",
+        "momentum": 0.0,
+        "best_attempt_index": 0,
+        "best_score": 4.5,
+    }
+    diag2 = {
+        "attempt": 2,
+        "overall_score": 7.2,
+        "threshold": 6.0,
+        "action": "accept",
+        "reason": "Score 7.2 >= threshold 6.0",
+        "focus_areas": [],
+        "gate": "threshold",
+        "momentum": 2.7,
+        "best_attempt_index": 1,
+        "best_score": 7.2,
+    }
+
+    acc.process_event("retry_diagnostics", diag1)
+    acc.process_event("retry_diagnostics", diag2)
+
+    assert len(acc._retry_diagnostics_log) == 2
+    assert acc._retry_diagnostics_log[0]["attempt"] == 1
+    assert acc._retry_diagnostics_log[1]["overall_score"] == 7.2
+
+    updates = acc.finalize("mock", time.time())
+    assert "retry_history" in updates
+
+    import json
+    parsed = json.loads(updates["retry_history"])
+    assert len(parsed) == 2
+    assert parsed[0]["action"] == "retry"
+    assert parsed[1]["action"] == "accept"
+
+
+def test_pipeline_accumulator_no_retry_history_when_no_diagnostics():
+    """PipelineAccumulator omits retry_history when no retry_diagnostics events."""
+    import time
+
+    from app.services.optimization_service import PipelineAccumulator
+    acc = PipelineAccumulator()
+
+    acc.process_event("analysis", {"task_type": "instruction"})
+    updates = acc.finalize("mock", time.time())
+    assert "retry_history" not in updates
+
+
+def test_pipeline_accumulator_retry_best_selected_stored():
+    """PipelineAccumulator stores retry_best_selected in results."""
+    from app.services.optimization_service import PipelineAccumulator
+    acc = PipelineAccumulator()
+
+    best_data = {
+        "best_attempt_index": 0,
+        "best_score": 7.5,
+        "selected_attempt": 1,
+        "total_attempts": 2,
+        "reason": "Accept best",
+    }
+    acc.process_event("retry_best_selected", best_data)
+    assert acc.results["retry_best_selected"] == best_data
+
+
+def test_retry_history_entry_validates_diagnostics_shape():
+    """RetryHistoryEntry schema validates real get_diagnostics() output."""
+    from app.schemas.feedback import RetryHistoryEntry
+
+    # Shape matching RetryOracle.get_diagnostics()
+    data = {
+        "attempt": 2,
+        "overall_score": 7.2,
+        "threshold": 6.0,
+        "action": "accept",
+        "reason": "Score 7.2 >= threshold 6.0",
+        "focus_areas": ["specificity"],
+        "gate": "threshold",
+        "momentum": 2.7,
+        "best_attempt_index": 1,
+        "best_score": 7.2,
+    }
+    entry = RetryHistoryEntry.model_validate(data)
+    assert entry.attempt == 2
+    assert entry.overall_score == 7.2
+    assert entry.gate == "threshold"
+    assert entry.best_score == 7.2
+
+    # Roundtrip
+    dumped = entry.model_dump()
+    re_entry = RetryHistoryEntry.model_validate(dumped)
+    assert re_entry == entry
 
 
 # ---------------------------------------------------------------------------
@@ -1298,3 +1410,328 @@ def test_detector_includes_compaction_beta():
     source = inspect.getsource(det_mod._detect_provider_inner)
     assert "COMPACTION_ENABLED" in source
     assert "COMPACTION_BETA_STRING" in source
+
+
+# ---------------------------------------------------------------------------
+# L8 — complete_parsed() provider tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_complete_parsed_calls_sdk_parse():
+    """AnthropicAPIProvider.complete_parsed() calls _client.messages.parse() with output_format."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    from app.schemas.pipeline_outputs import AnalyzeOutput
+
+    parsed_output = AnalyzeOutput(task_type="instruction", complexity="simple")
+    mock_response = MagicMock()
+    mock_response.parsed_output = parsed_output
+    mock_response.content = []
+
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    provider._client = MagicMock()
+    provider._client.messages.parse = AsyncMock(return_value=mock_response)
+
+    result = await provider.complete_parsed("sys", "user", "claude-haiku-4-5", AnalyzeOutput)
+
+    provider._client.messages.parse.assert_called_once()
+    call_kwargs = provider._client.messages.parse.call_args.kwargs
+    assert call_kwargs["output_format"] is AnalyzeOutput
+    assert call_kwargs["max_tokens"] == 8192
+    assert isinstance(result, AnalyzeOutput)
+
+
+@pytest.mark.asyncio
+async def test_complete_parsed_returns_typed_instance():
+    """complete_parsed() returns a Pydantic model instance, not a dict."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    from app.schemas.pipeline_outputs import StrategyOutput
+
+    parsed_output = StrategyOutput(primary_framework="CRISPE", rationale="good fit")
+    mock_response = MagicMock()
+    mock_response.parsed_output = parsed_output
+    mock_response.content = []
+
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    provider._client = MagicMock()
+    provider._client.messages.parse = AsyncMock(return_value=mock_response)
+
+    result = await provider.complete_parsed("sys", "user", "claude-sonnet-4-6", StrategyOutput)
+
+    assert isinstance(result, StrategyOutput)
+    assert result.primary_framework == "CRISPE"
+    assert not isinstance(result, dict)
+
+
+@pytest.mark.asyncio
+async def test_complete_parsed_no_thinking():
+    """complete_parsed() does NOT pass thinking to parse (incompatible with JSON schema)."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    from app.schemas.pipeline_outputs import ValidateOutput
+
+    parsed_output = ValidateOutput(clarity_score=8)
+    mock_response = MagicMock()
+    mock_response.parsed_output = parsed_output
+    mock_response.content = []
+
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    provider._client = MagicMock()
+    provider._client.messages.parse = AsyncMock(return_value=mock_response)
+
+    await provider.complete_parsed("sys", "user", "claude-opus-4-6", ValidateOutput)
+
+    call_kwargs = provider._client.messages.parse.call_args.kwargs
+    assert "thinking" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_complete_parsed_effort_by_model():
+    """complete_parsed() sets effort via output_config — Haiku low, Sonnet medium, Opus high."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    from app.schemas.pipeline_outputs import AnalyzeOutput
+
+    parsed_output = AnalyzeOutput()
+    mock_response = MagicMock()
+    mock_response.parsed_output = parsed_output
+    mock_response.content = []
+
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    provider._client = MagicMock()
+    provider._client.messages.parse = AsyncMock(return_value=mock_response)
+
+    # Haiku → low
+    await provider.complete_parsed("sys", "user", "claude-haiku-4-5", AnalyzeOutput)
+    kwargs = provider._client.messages.parse.call_args.kwargs
+    assert kwargs.get("output_config", {}).get("effort") == "low"
+
+    # Sonnet → medium
+    await provider.complete_parsed("sys", "user", "claude-sonnet-4-6", AnalyzeOutput)
+    kwargs = provider._client.messages.parse.call_args.kwargs
+    assert kwargs.get("output_config", {}).get("effort") == "medium"
+
+    # Opus → high
+    await provider.complete_parsed("sys", "user", "claude-opus-4-6", AnalyzeOutput)
+    kwargs = provider._client.messages.parse.call_args.kwargs
+    assert kwargs.get("output_config", {}).get("effort") == "high"
+
+
+@pytest.mark.asyncio
+async def test_complete_parsed_fallback_on_none_parsed_output():
+    """When parsed_output is None, falls back to parse_json_robust + model_validate."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    from app.schemas.pipeline_outputs import AnalyzeOutput
+
+    text_block = MagicMock()
+    text_block.text = '{"task_type": "debugging", "complexity": "complex"}'
+    text_block.type = "text"
+
+    mock_response = MagicMock()
+    mock_response.parsed_output = None
+    mock_response.content = [text_block]
+
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    provider._client = MagicMock()
+    provider._client.messages.parse = AsyncMock(return_value=mock_response)
+
+    result = await provider.complete_parsed("sys", "user", "claude-haiku-4-5", AnalyzeOutput)
+    assert isinstance(result, AnalyzeOutput)
+    assert result.task_type == "debugging"
+    assert result.complexity == "complex"
+
+
+@pytest.mark.asyncio
+async def test_complete_parsed_usage_tracked():
+    """complete_parsed() sets _usage_var after the call."""
+    from app.providers.anthropic_api import AnthropicAPIProvider, _usage_var
+    from app.schemas.pipeline_outputs import AnalyzeOutput
+
+    usage_mock = MagicMock()
+    usage_mock.input_tokens = 100
+    usage_mock.output_tokens = 50
+    usage_mock.cache_read_input_tokens = 0
+    usage_mock.cache_creation_input_tokens = 0
+
+    parsed_output = AnalyzeOutput()
+    mock_response = MagicMock()
+    mock_response.parsed_output = parsed_output
+    mock_response.usage = usage_mock
+    mock_response.content = []
+
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    provider._client = MagicMock()
+    provider._client.messages.parse = AsyncMock(return_value=mock_response)
+
+    await provider.complete_parsed("sys", "user", "claude-haiku-4-5", AnalyzeOutput)
+
+    usage = _usage_var.get(None)
+    assert usage is not None
+    assert usage.input_tokens == 100
+    assert usage.output_tokens == 50
+
+
+@pytest.mark.asyncio
+async def test_complete_parsed_default_impl():
+    """Base class default calls complete_json + model_validate."""
+    from app.providers.base import LLMProvider
+    from app.schemas.pipeline_outputs import AnalyzeOutput
+
+    # Create a minimal concrete subclass
+    class TestProvider(LLMProvider):
+        @property
+        def name(self): return "test"
+        async def complete(self, system, user, model): return ""
+        async def stream(self, system, user, model):
+            yield ""
+        async def complete_json(self, system, user, model, schema=None):
+            return {"task_type": "api_design", "complexity": "complex"}
+        async def complete_agentic(self, *a, **kw):
+            raise NotImplementedError
+
+    provider = TestProvider()
+    result = await provider.complete_parsed("sys", "user", "model", AnalyzeOutput)
+
+    assert isinstance(result, AnalyzeOutput)
+    assert result.task_type == "api_design"
+    assert result.complexity == "complex"
+
+
+@pytest.mark.asyncio
+async def test_mock_complete_parsed_filters_extra_fields():
+    """MockProvider.complete_parsed() filters superset dict so extra='forbid' doesn't reject."""
+    from app.providers.mock import MockProvider
+    from app.schemas.pipeline_outputs import AnalyzeOutput
+
+    provider = MockProvider()
+    result = await provider.complete_parsed("sys", "user", "mock", AnalyzeOutput)
+
+    assert isinstance(result, AnalyzeOutput)
+    # MockProvider returns fields like "overall_score", "framework" etc.
+    # that are NOT in AnalyzeOutput — they should be filtered out, not raise
+    assert result.task_type == "instruction"
+
+
+# ---------------------------------------------------------------------------
+# L8 — extract_json_with_fallback() with output_type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_json_with_output_type_validates():
+    """When output_type is provided and streaming parse succeeds, Pydantic validates the result."""
+    from app.schemas.pipeline_outputs import AnalyzeOutput
+    from app.services.stage_runner import extract_json_with_fallback
+
+    provider = MagicMock()
+
+    result = await extract_json_with_fallback(
+        provider=provider,
+        system_prompt="sys",
+        user_message="user",
+        model="model",
+        timeout_seconds=10,
+        stage_name="test",
+        full_text='{"task_type": "instruction", "complexity": "simple"}',
+        stream_ok=True,
+        quality_key="quality",
+        quality_value_success="full",
+        output_type=AnalyzeOutput,
+    )
+
+    assert result["task_type"] == "instruction"
+    assert result["complexity"] == "simple"
+    assert result["quality"] == "full"
+    # Should NOT have called complete_parsed (streaming parse succeeded)
+    provider.complete_parsed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extract_json_output_type_fallback_to_complete_parsed():
+    """On Pydantic validation failure, falls through to complete_parsed."""
+    from app.schemas.pipeline_outputs import ValidateOutput
+    from app.services.stage_runner import extract_json_with_fallback
+
+    # Streamed text has score=0 which violates ge=1 — should fail validation
+    invalid_json = '{"clarity_score": 0, "specificity_score": 5}'
+
+    mock_parsed = ValidateOutput(clarity_score=7, specificity_score=8)
+    provider = MagicMock()
+    provider.complete_parsed = AsyncMock(return_value=mock_parsed)
+
+    result = await extract_json_with_fallback(
+        provider=provider,
+        system_prompt="sys",
+        user_message="user",
+        model="model",
+        timeout_seconds=10,
+        stage_name="test",
+        full_text=invalid_json,
+        stream_ok=True,
+        quality_key="quality",
+        quality_value_success="full",
+        quality_value_fallback_json="fallback",
+        output_type=ValidateOutput,
+    )
+
+    # Should have fallen back to complete_parsed
+    provider.complete_parsed.assert_called_once()
+    assert result["clarity_score"] == 7
+    assert result["quality"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_extract_json_without_output_type_unchanged():
+    """output_type=None preserves existing complete_json behavior."""
+    from app.services.stage_runner import extract_json_with_fallback
+
+    provider = MagicMock()
+    provider.complete_json = AsyncMock(return_value={"task_type": "general"})
+
+    result = await extract_json_with_fallback(
+        provider=provider,
+        system_prompt="sys",
+        user_message="user",
+        model="model",
+        timeout_seconds=10,
+        stage_name="test",
+        full_text="not valid json {",
+        stream_ok=True,
+        quality_key="quality",
+        quality_value_success="full",
+        quality_value_fallback_json="fallback",
+        output_type=None,
+    )
+
+    # Should have fallen back to complete_json (not complete_parsed)
+    provider.complete_json.assert_called_once()
+    provider.complete_parsed.assert_not_called()
+    assert result["quality"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_extract_json_complete_parsed_failure_uses_default():
+    """When complete_parsed also fails, falls back to default_result."""
+    from app.schemas.pipeline_outputs import AnalyzeOutput
+    from app.services.stage_runner import extract_json_with_fallback
+
+    provider = MagicMock()
+    provider.complete_parsed = AsyncMock(side_effect=Exception("API down"))
+
+    default = {"task_type": "general", "quality": "failed"}
+
+    result = await extract_json_with_fallback(
+        provider=provider,
+        system_prompt="sys",
+        user_message="user",
+        model="model",
+        timeout_seconds=10,
+        stage_name="test",
+        full_text="",
+        stream_ok=False,
+        quality_key="quality",
+        quality_value_success="full",
+        default_result=default,
+        output_type=AnalyzeOutput,
+    )
+
+    assert result["task_type"] == "general"
+    assert result["quality"] == "failed"

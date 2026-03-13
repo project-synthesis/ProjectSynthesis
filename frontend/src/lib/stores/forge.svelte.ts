@@ -110,8 +110,6 @@ class ForgeStore {
   liveStageText = $state<Record<string, string>>({});
   retryDiagnostics = $state<any>(null);
   retryBestSelected = $state<any>(null);
-  retryCycleDetected = $state<any>(null);
-  instructionCompliance = $state<any>(null);
 
   get stages() {
     return ['explore', 'analyze', 'strategy', 'optimize', 'validate'];
@@ -169,8 +167,6 @@ class ForgeStore {
     this.liveStageText = {};
     this.retryDiagnostics = null;
     this.retryBestSelected = null;
-    this.retryCycleDetected = null;
-    this.instructionCompliance = null;
   }
 
   startForge(rawPrompt?: string) {
@@ -566,6 +562,9 @@ class ForgeStore {
           }
         } else if (data.status === 'skipped') {
           this.setStageSkipped(stageName);
+        } else if (data.status === 'retrying') {
+          this.stageStatuses[stageName] = 'running';
+          this.currentStage = stageName;
         } else if (data.status === 'failed') {
           this.setStageFailed(stageName, data.error as string || `Stage ${stageName} failed`);
         }
@@ -667,12 +666,6 @@ class ForgeStore {
         break;
       case 'retry_best_selected':
         this.retryBestSelected = data;
-        break;
-      case 'retry_cycle_detected':
-        this.retryCycleDetected = data;
-        break;
-      case 'instruction_compliance':
-        this.instructionCompliance = data;
         break;
       case 'adaptation_snapshot':
         // Store for inspector panel — no immediate UI action

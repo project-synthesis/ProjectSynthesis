@@ -11,6 +11,7 @@ from typing import AsyncGenerator, Optional
 from app.config import settings
 from app.prompts.analyzer_prompt import get_analyzer_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider
+from app.schemas.pipeline_outputs import AnalyzeOutput
 from app.services.cache_service import CacheService, get_cache
 from app.services.context_builders import (
     build_codebase_summary,
@@ -123,6 +124,7 @@ async def run_analyze(
             "recommended_frameworks": [],
             "analysis_quality": "fallback",
         },
+        output_type=AnalyzeOutput,
     )
 
     # Ensure required fields

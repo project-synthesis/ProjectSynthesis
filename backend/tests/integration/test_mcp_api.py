@@ -137,6 +137,20 @@ async def _call_tool(
     return resp.json()
 
 
+def _extract_body(result: dict) -> dict:
+    """Extract the response body from an MCP tools/call result.
+
+    Handles both structured output (structuredContent) and legacy text content.
+    """
+    res = result.get("result", {})
+    body = res.get("structuredContent")
+    if body is not None:
+        return body
+    content = res.get("content", [{}])
+    text = content[0].get("text", "{}") if content else "{}"
+    return json.loads(text)
+
+
 # ── Tests ─────────────────────────────────────────────────────────────────
 
 async def test_mcp_initialize_returns_session_id(mcp_client: AsyncClient):
@@ -151,9 +165,11 @@ async def test_mcp_tools_list_returns_18_tools(mcp_client: AsyncClient):
     assert len(tools) == 18, f"Expected 18 tools, got {len(tools)}: {[t['name'] for t in tools]}"
     tool_names = [t["name"] for t in tools]
     for expected in (
-        "optimize", "get_optimization", "list_optimizations", "delete_optimization",
-        "batch_delete_optimizations", "list_trash", "restore_optimization",
-        "submit_feedback", "get_branches", "get_adaptation_state",
+        "synthesis_optimize", "synthesis_get_optimization",
+        "synthesis_list_optimizations", "synthesis_delete_optimization",
+        "synthesis_batch_delete", "synthesis_list_trash", "synthesis_restore",
+        "synthesis_submit_feedback", "synthesis_get_branches",
+        "synthesis_get_adaptation_state",
     ):
         assert expected in tool_names, f"Tool '{expected}' not found in: {tool_names}"
 
@@ -172,11 +188,15 @@ async def test_mcp_tools_have_required_annotations(mcp_client: AsyncClient):
 async def test_mcp_list_optimizations_returns_envelope(mcp_client: AsyncClient):
     session_id = await _init_session(mcp_client)
     result = await _call_tool(mcp_client, session_id, "tools/call", {
-        "name": "list_optimizations", "arguments": {"limit": 5}
+        "name": "synthesis_list_optimizations", "arguments": {"limit": 5}
     })
-    content = result.get("result", {}).get("content", [{}])
-    text = content[0].get("text", "{}") if content else "{}"
-    body = json.loads(text)
+    res = result.get("result", {})
+    # Structured output: check structuredContent first, fall back to content text
+    body = res.get("structuredContent")
+    if body is None:
+        content = res.get("content", [{}])
+        text = content[0].get("text", "{}") if content else "{}"
+        body = json.loads(text)
     assert "total" in body
     assert "items" in body
 
@@ -195,22 +215,22 @@ async def test_mcp_delete_and_restore_round_trip(
 
     # Delete via MCP
     del_result = await _call_tool(mcp_client, session_id, "tools/call", {
-        "name": "delete_optimization", "arguments": {"optimization_id": opt_id}
+        "name": "synthesis_delete_optimization", "arguments": {"optimization_id": opt_id}
     })
-    del_text = del_result.get("result", {}).get("content", [{}])[0].get("text", "{}")
-    assert json.loads(del_text).get("deleted") is True, f"Delete failed: {del_text}"
+    del_body = _extract_body(del_result)
+    assert del_body.get("deleted") is True, f"Delete failed: {del_body}"
 
     # Verify in trash via MCP
     trash_result = await _call_tool(mcp_client, session_id, "tools/call", {
-        "name": "list_trash", "arguments": {}
+        "name": "synthesis_list_trash", "arguments": {}
     })
-    trash_text = trash_result.get("result", {}).get("content", [{}])[0].get("text", "{}")
-    trash_ids = [item["id"] for item in json.loads(trash_text).get("items", [])]
+    trash_body = _extract_body(trash_result)
+    trash_ids = [item["id"] for item in trash_body.get("items", [])]
     assert opt_id in trash_ids, f"{opt_id} not found in trash: {trash_ids}"
 
     # Restore via MCP
     restore_result = await _call_tool(mcp_client, session_id, "tools/call", {
-        "name": "restore_optimization", "arguments": {"optimization_id": opt_id}
+        "name": "synthesis_restore", "arguments": {"optimization_id": opt_id}
     })
-    restore_text = restore_result.get("result", {}).get("content", [{}])[0].get("text", "{}")
-    assert json.loads(restore_text).get("restored") is True, f"Restore failed: {restore_text}"
+    restore_body = _extract_body(restore_result)
+    assert restore_body.get("restored") is True, f"Restore failed: {restore_body}"

@@ -10,6 +10,7 @@ from typing import AsyncGenerator, Optional
 from app.config import settings
 from app.prompts.strategy_prompt import get_strategy_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider
+from app.schemas.pipeline_outputs import StrategyOutput
 from app.services.cache_service import CacheService, get_cache
 from app.services.context_builders import (
     build_analysis_summary,
@@ -124,6 +125,7 @@ async def run_strategy(
             **heuristic_strategy_fallback(analysis.get("task_type", "general")),
             "strategy_source": "heuristic",
         },
+        output_type=StrategyOutput,
     )
 
     # Ensure required fields — derive default from task_type heuristic

@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.schemas.pipeline_outputs import ExploreSynthesisOutput, IntentClassificationOutput
 from app.services.codebase_explorer import (
-    INTENT_CLASSIFICATION_SCHEMA,
     CodebaseContext,
     _classify_prompt_intent,
     _extract_prompt_referenced_files,
@@ -251,13 +251,20 @@ class TestExploreFlow:
         from app.services.codebase_explorer import run_explore
 
         mock_provider = MagicMock()
-        mock_provider.complete_json = AsyncMock(return_value={
-            "tech_stack": ["Python"],
-            "key_files_read": ["main.py"],
-            "relevant_code_snippets": [],
-            "codebase_observations": ["test observation"],
-            "prompt_grounding_notes": ["test grounding"],
-        })
+        # complete_parsed is called for both intent classification and synthesis
+        mock_provider.complete_parsed = AsyncMock(side_effect=[
+            # First call: intent classification
+            IntentClassificationOutput(
+                intent_category="general", observation_directives=[],
+                snippet_priorities=[], depth="structural",
+            ),
+            # Second call: explore synthesis
+            ExploreSynthesisOutput(
+                tech_stack=["Python"], key_files_read=["main.py"],
+                relevant_code_snippets=[], codebase_observations=["test observation"],
+                prompt_grounding_notes=["test grounding"],
+            ),
+        ])
 
         mock_tree = [
             {"path": "README.md", "sha": "abc", "size_bytes": 500},
@@ -331,13 +338,18 @@ class TestStaleIndexDetection:
     ):
         """Build the standard mock set for an explore run that reaches the index check."""
         mock_provider = MagicMock()
-        mock_provider.complete_json = AsyncMock(return_value={
-            "tech_stack": ["Python"],
-            "key_files_read": ["main.py"],
-            "relevant_code_snippets": [],
-            "codebase_observations": ["obs"],
-            "prompt_grounding_notes": ["note"],
-        })
+        # complete_parsed is called for both intent classification and synthesis
+        mock_provider.complete_parsed = AsyncMock(side_effect=[
+            IntentClassificationOutput(
+                intent_category="general", observation_directives=[],
+                snippet_priorities=[], depth="structural",
+            ),
+            ExploreSynthesisOutput(
+                tech_stack=["Python"], key_files_read=["main.py"],
+                relevant_code_snippets=[], codebase_observations=["obs"],
+                prompt_grounding_notes=["note"],
+            ),
+        ])
         mock_tree = [
             {"path": "README.md", "sha": "abc", "size_bytes": 500},
             {"path": "main.py", "sha": "def", "size_bytes": 200},
@@ -836,30 +848,25 @@ class TestValidateExploreOutput:
 class TestIntentClassification:
     """Tests for the pre-explore intent classification microstep."""
 
-    def test_schema_has_required_fields(self):
-        """INTENT_CLASSIFICATION_SCHEMA requires all four output fields."""
-        assert set(INTENT_CLASSIFICATION_SCHEMA["required"]) == {
+    def test_pydantic_model_has_required_fields(self):
+        """IntentClassificationOutput requires all four output fields."""
+        schema = IntentClassificationOutput.model_json_schema()
+        assert set(schema["required"]) == {
             "intent_category", "observation_directives", "snippet_priorities", "depth"
         }
 
-    def test_schema_intent_category_is_enum(self):
-        """intent_category is constrained to known categories."""
-        enum_vals = INTENT_CLASSIFICATION_SCHEMA["properties"]["intent_category"]["enum"]
-        assert "refactoring" in enum_vals
-        assert "general" in enum_vals
-        assert "api_design" in enum_vals
-        assert len(enum_vals) == 11
-
-    def test_schema_depth_is_enum(self):
-        """depth is constrained to structural/behavioral/relational."""
-        enum_vals = INTENT_CLASSIFICATION_SCHEMA["properties"]["depth"]["enum"]
-        assert set(enum_vals) == {"structural", "behavioral", "relational"}
+    def test_model_generates_valid_schema(self):
+        """IntentClassificationOutput generates a JSON schema with additionalProperties: false."""
+        schema = IntentClassificationOutput.model_json_schema()
+        assert schema.get("additionalProperties") is False
+        assert "intent_category" in schema["properties"]
+        assert "depth" in schema["properties"]
 
     @pytest.mark.asyncio
     async def test_returns_default_on_provider_failure(self):
         """On provider error, returns general/structural fallback."""
         provider = AsyncMock()
-        provider.complete_json = AsyncMock(side_effect=Exception("API error"))
+        provider.complete_parsed = AsyncMock(side_effect=Exception("API error"))
         result = await _classify_prompt_intent(provider, "some prompt")
         assert result["intent_category"] == "general"
         assert result["depth"] == "structural"
@@ -871,27 +878,30 @@ class TestIntentClassification:
         """On timeout, returns general/structural fallback."""
         async def slow_call(**kwargs):
             await asyncio.sleep(20)
-            return {}
+            return IntentClassificationOutput(
+                intent_category="general", observation_directives=[],
+                snippet_priorities=[], depth="structural",
+            )
 
         provider = AsyncMock()
-        provider.complete_json = slow_call
+        provider.complete_parsed = slow_call
         result = await _classify_prompt_intent(provider, "some prompt", timeout_seconds=0.1)
         assert result["intent_category"] == "general"
 
     @pytest.mark.asyncio
-    async def test_passes_schema_to_provider(self):
-        """Verifies complete_json is called with the schema parameter."""
+    async def test_passes_output_type_to_provider(self):
+        """Verifies complete_parsed is called with IntentClassificationOutput."""
         provider = AsyncMock()
-        provider.complete_json = AsyncMock(return_value={
-            "intent_category": "refactoring",
-            "observation_directives": ["find smells"],
-            "snippet_priorities": ["complex functions"],
-            "depth": "behavioral",
-        })
+        provider.complete_parsed = AsyncMock(return_value=IntentClassificationOutput(
+            intent_category="refactoring",
+            observation_directives=["find smells"],
+            snippet_priorities=["complex functions"],
+            depth="behavioral",
+        ))
         result = await _classify_prompt_intent(provider, "refactor this code")
-        provider.complete_json.assert_called_once()
-        call_kwargs = provider.complete_json.call_args.kwargs
-        assert call_kwargs["schema"] is INTENT_CLASSIFICATION_SCHEMA
+        provider.complete_parsed.assert_called_once()
+        call_kwargs = provider.complete_parsed.call_args.kwargs
+        assert call_kwargs["output_type"] is IntentClassificationOutput
         assert result["intent_category"] == "refactoring"
 
     @pytest.mark.asyncio
@@ -904,6 +914,8 @@ class TestIntentClassification:
             "depth": "behavioral",
         }
         provider = AsyncMock()
-        provider.complete_json = AsyncMock(return_value=expected)
+        provider.complete_parsed = AsyncMock(
+            return_value=IntentClassificationOutput.model_validate(expected)
+        )
         result = await _classify_prompt_intent(provider, "write tests for auth")
         assert result == expected

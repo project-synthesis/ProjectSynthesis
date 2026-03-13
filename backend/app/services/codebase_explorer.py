@@ -23,6 +23,7 @@ import anyio
 from app.config import settings
 from app.prompts.explore_synthesis_prompt import get_explore_synthesis_prompt
 from app.providers.base import MODEL_ROUTING, LLMProvider, parse_json_robust
+from app.schemas.pipeline_outputs import ExploreSynthesisOutput, IntentClassificationOutput
 from app.services.cache_service import CacheService, get_cache
 from app.services.codebase_patterns import ANCHOR_FILENAMES
 from app.services.github_service import (
@@ -210,100 +211,7 @@ def _validate_explore_output(
     return validated_snippets, validated_obs, validated_notes
 
 
-# JSON Schema for the explore stage output.
-# Used by complete_json for structured output enforcement.
-EXPLORE_OUTPUT_SCHEMA: dict = {
-    "type": "object",
-    "properties": {
-        "tech_stack": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "List of technologies, frameworks, and languages used",
-        },
-        "key_files_read": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "File paths that were read during exploration",
-        },
-        "relevant_code_snippets": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "file": {"type": "string"},
-                    "lines": {"type": "string"},
-                    "context": {"type": "string"},
-                },
-                "required": ["file", "context"],
-            },
-            "description": (
-                "Code snippets structurally relevant to the prompt intent"
-                " — entry points, interfaces, data shapes"
-            ),
-        },
-        "codebase_observations": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": (
-                "Architectural observations: project structure, data flow,"
-                " component relationships, patterns"
-            ),
-        },
-        "prompt_grounding_notes": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": (
-                "Context intelligence: maps prompt intent to codebase"
-                " locations, key abstractions, and navigation hints"
-            ),
-        },
-        "coverage_pct": {
-            "type": "integer",
-            "description": "Server-computed — do not set.",
-        },
-    },
-    "required": [
-        "tech_stack",
-        "key_files_read",
-        "codebase_observations",
-        "prompt_grounding_notes",
-    ],
-}
-
-
-# ── Intent classification schema ──────────────────────────────────────
-# Used by _classify_prompt_intent() to classify the user's prompt intent
-# before synthesis, so the explore model can adapt its observations.
-
-INTENT_CLASSIFICATION_SCHEMA: dict = {
-    "type": "object",
-    "properties": {
-        "intent_category": {
-            "type": "string",
-            "enum": [
-                "refactoring", "api_design", "feature_build", "testing",
-                "debugging", "architecture_review", "performance",
-                "documentation", "migration", "security", "general",
-            ],
-        },
-        "observation_directives": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "2-4 specific instructions for what the explore model should focus on",
-        },
-        "snippet_priorities": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "2-3 types of code regions to prioritize in snippet extraction",
-        },
-        "depth": {
-            "type": "string",
-            "enum": ["structural", "behavioral", "relational"],
-            "description": "Observation depth preference",
-        },
-    },
-    "required": ["intent_category", "observation_directives", "snippet_priorities", "depth"],
-}
+# ── Intent classification ─────────────────────────────────────────────
 
 _INTENT_DEFAULT: dict = {
     "intent_category": "general",
@@ -360,15 +268,16 @@ async def _classify_prompt_intent(
     (general/structural) — this is a best-effort enhancement, not a gate.
     """
     try:
-        result = await asyncio.wait_for(
-            provider.complete_json(
+        parsed = await asyncio.wait_for(
+            provider.complete_parsed(
                 system=_INTENT_SYSTEM_PROMPT,
                 user=raw_prompt,
                 model=model,
-                schema=INTENT_CLASSIFICATION_SCHEMA,
+                output_type=IntentClassificationOutput,
             ),
             timeout=timeout_seconds,
         )
+        result = parsed.model_dump()
         # Validate required fields are present
         if not isinstance(result, dict) or "intent_category" not in result:
             logger.warning("Intent classification returned invalid result, using default")
@@ -967,15 +876,16 @@ async def run_explore(
     )
 
     try:
-        parsed = await asyncio.wait_for(
-            provider.complete_json(
+        explore_out = await asyncio.wait_for(
+            provider.complete_parsed(
                 system=system_prompt,
                 user=user_message,
                 model=model,
-                schema=EXPLORE_OUTPUT_SCHEMA,
+                output_type=ExploreSynthesisOutput,
             ),
             timeout=settings.EXPLORE_TIMEOUT_SECONDS,
         )
+        parsed = explore_out.model_dump()
     except asyncio.TimeoutError:
         logger.warning("Stage 0 (Explore) synthesis timed out")
         parsed = {}

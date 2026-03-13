@@ -8,6 +8,9 @@ import asyncio
 import logging
 from typing import AsyncGenerator
 
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ValidationError
+
 from app.providers.base import LLMProvider, parse_json_robust
 
 logger = logging.getLogger(__name__)
@@ -79,8 +82,9 @@ async def extract_json_with_fallback(
     quality_value_success: str | None,
     quality_value_fallback_json: str | None = None,
     default_result: dict | None = None,
+    output_type: type[PydanticBaseModel] | None = None,
 ) -> dict:
-    """Parse JSON from streamed text, falling back to complete_json, then to default.
+    """Parse JSON from streamed text, falling back to complete_json/complete_parsed, then to default.
 
     Args:
         full_text: Accumulated text from streaming.
@@ -89,6 +93,12 @@ async def extract_json_with_fallback(
         quality_value_success: Value for quality_key on successful parse. If None, skipped.
         quality_value_fallback_json: Value when complete_json fallback is used.
         default_result: Fallback dict when all extraction fails.
+        output_type: Optional Pydantic model class.  When provided:
+            (a) validates the streamed-text JSON against the model, falling
+                through on ``ValidationError``;
+            (b) uses ``complete_parsed()`` instead of ``complete_json()`` in the
+                fallback path for server-side schema enforcement + Pydantic
+                type safety.
 
     Returns:
         Parsed JSON dict with quality_key set.
@@ -98,19 +108,41 @@ async def extract_json_with_fallback(
     # Try parsing streamed text first
     if stream_ok and full_text:
         try:
-            result = parse_json_robust(full_text)
-            if quality_value_success is not None:
-                result[quality_key] = quality_value_success
+            parsed_dict = parse_json_robust(full_text)
+            # L8: Validate with Pydantic when output_type is provided
+            if output_type is not None:
+                try:
+                    validated = output_type.model_validate(parsed_dict)
+                    parsed_dict = validated.model_dump()
+                except ValidationError as ve:
+                    logger.warning(
+                        "%s Pydantic validation failed on streamed text: %s",
+                        stage_name, ve,
+                    )
+                    parsed_dict = None  # type: ignore[assignment]
+            if parsed_dict is not None:
+                result = parsed_dict
+                if quality_value_success is not None:
+                    result[quality_key] = quality_value_success
         except Exception:
             pass
 
-    # Fallback to complete_json
+    # Fallback to complete_parsed (when output_type) or complete_json
     if not result:
         try:
-            result = await asyncio.wait_for(
-                provider.complete_json(system_prompt, user_message, model),
-                timeout=timeout_seconds,
-            )
+            if output_type is not None:
+                parsed_model = await asyncio.wait_for(
+                    provider.complete_parsed(
+                        system_prompt, user_message, model, output_type,
+                    ),
+                    timeout=timeout_seconds,
+                )
+                result = parsed_model.model_dump()
+            else:
+                result = await asyncio.wait_for(
+                    provider.complete_json(system_prompt, user_message, model),
+                    timeout=timeout_seconds,
+                )
             if quality_value_fallback_json is not None:
                 result[quality_key] = quality_value_fallback_json
             elif quality_value_success is not None:

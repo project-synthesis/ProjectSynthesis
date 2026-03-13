@@ -644,6 +644,8 @@ async def run_pipeline(
                 optimization_result = best["optimization_result"]
                 validation = best["validation"]
                 yield ("retry_best_selected", {
+                    "best_attempt_index": decision.best_attempt,
+                    "best_score": oracle._attempts[decision.best_attempt].overall_score,
                     "selected_attempt": decision.best_attempt + 1,
                     "total_attempts": len(all_attempts),
                     "reason": decision.reason,

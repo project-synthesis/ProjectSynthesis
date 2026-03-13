@@ -9,6 +9,7 @@ from app.providers.base import (
     AgenticResult,
     CompletionUsage,
     LLMProvider,
+    T,
     ToolDefinition,
     invoke_tool,
     parse_json_robust,
@@ -40,6 +41,18 @@ _EFFORT_BY_MODEL_PREFIX: dict[str, str] = {
     "claude-sonnet-4": "medium",
     "claude-haiku-4": "low",
 }
+
+
+def _resolve_effort(model: str) -> str | None:
+    """Return the default effort level for *model*, or ``None`` if unknown.
+
+    Shared by ``_make_extra()`` and ``complete_parsed()`` to avoid duplicating
+    the prefix-matching loop.
+    """
+    for prefix, eff in _EFFORT_BY_MODEL_PREFIX.items():
+        if model.startswith(prefix):
+            return eff
+    return None
 
 
 def _extract_usage(response, model: str) -> CompletionUsage:
@@ -129,12 +142,7 @@ class AnthropicAPIProvider(LLMProvider):
             extra = {}
 
         # L2: Resolve effort — explicit > model-family default
-        resolved_effort = effort
-        if resolved_effort is None:
-            for prefix, eff in _EFFORT_BY_MODEL_PREFIX.items():
-                if model.startswith(prefix):
-                    resolved_effort = eff
-                    break
+        resolved_effort = effort if effort is not None else _resolve_effort(model)
         if resolved_effort is not None:
             extra.setdefault("output_config", {})["effort"] = resolved_effort
 
@@ -206,6 +214,53 @@ class AnthropicAPIProvider(LLMProvider):
 
         raw = await self.complete(system, user, model)
         return parse_json_robust(raw)
+
+    async def complete_parsed(
+        self,
+        system: str,
+        user: str,
+        model: str,
+        output_type: type[T],
+    ) -> T:
+        """Structured output via SDK ``messages.parse()`` with Pydantic type safety.
+
+        Uses the Anthropic SDK's native ``output_format`` parameter for
+        server-side schema enforcement + client-side Pydantic validation.
+        Thinking is suppressed (incompatible with JSON schema output).
+        Non-streaming is acceptable: schema calls are Haiku/Sonnet with small
+        outputs, and external ``asyncio.wait_for()`` enforces stage timeouts.
+        """
+        use_thinking = model in _THINKING_MODELS
+        if use_thinking:
+            logger.warning(
+                "Adaptive thinking disabled for model %s in complete_parsed "
+                "(JSON schema output is incompatible with extended thinking).",
+                model,
+            )
+
+        resolved_effort = _resolve_effort(model)
+
+        # Build kwargs dynamically (avoids importing SDK's omit sentinel)
+        parse_kwargs: dict = {
+            "model": model,
+            "max_tokens": _MAX_TOKENS_DEFAULT,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+            "output_format": output_type,
+        }
+        if resolved_effort is not None:
+            parse_kwargs["output_config"] = {"effort": resolved_effort}
+
+        parsed_msg = await self._client.messages.parse(**parse_kwargs)
+        _usage_var.set(_extract_usage(parsed_msg, model))
+
+        if parsed_msg.parsed_output is not None:
+            return parsed_msg.parsed_output
+
+        # Defensive fallback — parse text manually if SDK parsing returned None
+        text = next((b.text for b in parsed_msg.content if hasattr(b, "text")), "")
+        raw = parse_json_robust(text)
+        return output_type.model_validate(raw)
 
     async def complete_agentic(
         self,

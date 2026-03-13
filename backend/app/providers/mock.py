@@ -10,7 +10,7 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from app.providers.base import AgenticResult, CompletionUsage, LLMProvider, ToolDefinition
+from app.providers.base import AgenticResult, CompletionUsage, LLMProvider, T, ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,20 @@ class MockProvider(LLMProvider):
             "strengths": ["Clear intent"],
             "weaknesses": ["No examples"],
         }
+
+    async def complete_parsed(
+        self, system: str, user: str, model: str, output_type: type[T],
+    ) -> T:
+        """Override for extra='forbid' compatibility.
+
+        The mock's complete_json() returns a superset dict (all stages combined).
+        With extra='forbid', model_validate() would reject unknown fields.
+        Filter to valid fields first.
+        """
+        raw = await self.complete_json(system, user, model)
+        valid_fields = set(output_type.model_fields.keys())
+        filtered = {k: v for k, v in raw.items() if k in valid_fields}
+        return output_type.model_validate(filtered)
 
     async def complete_agentic(
         self,

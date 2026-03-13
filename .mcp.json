@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "project-synthesis": {
+    "synthesis_mcp": {
       "type": "http",
       "url": "http://127.0.0.1:8001/mcp"
     }

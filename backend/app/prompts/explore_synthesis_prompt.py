@@ -16,7 +16,7 @@ def get_explore_synthesis_prompt() -> str:
 
     The model receives pre-assembled file contents (selected by embedding
     similarity + deterministic anchors) and must produce structured output
-    matching EXPLORE_OUTPUT_SCHEMA — no tool calls, no multi-turn.
+    matching ExploreSynthesisOutput — no tool calls, no multi-turn.
 
     IMPORTANT: This prompt must produce INTELLIGENCE (navigational context
     for a downstream executor) — NOT execution-layer output (auditing,

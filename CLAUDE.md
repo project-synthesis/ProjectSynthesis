@@ -86,7 +86,7 @@ Add new sortable columns here before using them.
 
 ## MCP server
 
-18 tools split into three groups — optimization CRUD (including batch delete and trash/restore), GitHub read tools, and feedback/refinement tools (`submit_feedback`, `get_branches`, `get_adaptation_state`). See **[docs/MCP.md](docs/MCP.md)** for the full tool reference, all parameters, and connection instructions.
+18 tools split into three groups — optimization CRUD (including batch delete and trash/restore), GitHub read tools, and feedback/refinement tools (`synthesis_submit_feedback`, `synthesis_get_branches`, `synthesis_get_adaptation_state`). All tools use the `synthesis_` prefix to avoid name collisions in multi-server environments. Tools return Pydantic models for structured output (`outputSchema` + `structuredContent`). See **[docs/MCP.md](docs/MCP.md)** for the full tool reference, all parameters, and connection instructions.
 
 **Transports:**
 - `http://127.0.0.1:8001/mcp` — streamable HTTP, standalone process (primary; used by `.mcp.json`)
@@ -96,11 +96,13 @@ Add new sortable columns here before using them.
 **`.mcp.json`** points Claude Code at `http://127.0.0.1:8001/mcp` (streamable HTTP) automatically when this directory is open. The schema field is `"type"` (not `"transport"`); valid values are `stdio`, `sse`, `http`.
 
 ### Adding a tool
-1. Add a `@mcp.tool(name="...", annotations={...})` function inside `create_mcp_server()` in `mcp_server.py`
-2. Include all four annotations: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`
-3. DB access: use the `_opt_session(optimization_id)` context manager
-4. GitHub calls: take an explicit `token: str` parameter — no shared session state
-5. Document the tool in `docs/MCP.md`
+1. Add a `@mcp.tool(name="synthesis_...", annotations=ToolAnnotations(title="...", ...))` function inside `create_mcp_server()` in `mcp_server.py`
+2. Use the `synthesis_` prefix for all tool names
+3. Use `ToolAnnotations(title=..., readOnlyHint=..., destructiveHint=..., idempotentHint=..., openWorldHint=...)` — always include `title`
+4. Return a Pydantic model (defined in `schemas/mcp_models.py`) for structured output; raise `ValueError` for errors
+5. DB access: use the `_opt_session(optimization_id)` context manager
+6. GitHub calls: use `ctx.request_context.lifespan_context.http_client` (shared connection pool) and take an explicit `token: str` parameter — no shared session state
+7. Document the tool in `docs/MCP.md`
 
 ## Frontend
 
