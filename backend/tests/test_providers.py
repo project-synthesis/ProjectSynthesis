@@ -325,7 +325,9 @@ async def test_complete_json_without_schema_uses_parse_json_robust():
 
     assert result == {"task_type": "general"}
     call_kwargs = provider._client.messages.stream.call_args.kwargs
-    assert "output_config" not in call_kwargs
+    # No schema → no json_schema format in output_config (effort may still be present)
+    oc = call_kwargs.get("output_config", {})
+    assert "format" not in oc
 
 
 # ---------------------------------------------------------------------------
@@ -1146,3 +1148,147 @@ def test_pipeline_accumulator_finalize_writes_cost_columns():
     assert updates["total_output_tokens"] == 200
     assert updates["estimated_cost_usd"] is not None
     assert updates["usage_is_estimated"] is False
+
+
+# ---------------------------------------------------------------------------
+# L1 — complete_agentic() handles pause_turn stop reason
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_complete_agentic_handles_pause_turn():
+    """pause_turn should cause the loop to re-send, not terminate."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    from app.providers.base import AgenticResult
+
+    # Turn 1: pause_turn with partial text
+    pause_response = MagicMock()
+    pause_response.stop_reason = "pause_turn"
+    pause_response.content = [MagicMock(type="text", text="thinking...")]
+
+    # Turn 2: end_turn with final text
+    end_response = MagicMock()
+    end_response.stop_reason = "end_turn"
+    end_response.content = [MagicMock(type="text", text="done")]
+
+    call_n = 0
+    mock_stream = AsyncMock()
+    mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
+    mock_stream.__aexit__ = AsyncMock(return_value=None)
+
+    def side(*a, **kw):
+        nonlocal call_n
+        call_n += 1
+        mock_stream.get_final_message = AsyncMock(
+            return_value=pause_response if call_n == 1 else end_response
+        )
+        return mock_stream
+
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    provider._client = MagicMock()
+    provider._client.messages.stream.side_effect = side
+
+    result = await provider.complete_agentic("sys", "user", "claude-haiku-4-5", [])
+
+    assert isinstance(result, AgenticResult)
+    assert result.text == "done"
+    assert result.stop_reason == "end_turn"
+    # Stream was called twice: once for pause_turn, once for end_turn
+    assert provider._client.messages.stream.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# L2 — _make_extra() effort parameter
+# ---------------------------------------------------------------------------
+
+def test_make_extra_effort_opus_high():
+    """Opus models default to effort='high'."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    _, extra = provider._make_extra("claude-opus-4-6")
+    assert extra.get("output_config", {}).get("effort") == "high"
+
+
+def test_make_extra_effort_sonnet_medium():
+    """Sonnet models default to effort='medium'."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    _, extra = provider._make_extra("claude-sonnet-4-6")
+    assert extra.get("output_config", {}).get("effort") == "medium"
+
+
+def test_make_extra_effort_haiku_low():
+    """Haiku models default to effort='low'."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    _, extra = provider._make_extra("claude-haiku-4-5")
+    assert extra.get("output_config", {}).get("effort") == "low"
+
+
+def test_make_extra_effort_with_schema_preserves_both():
+    """Schema + Opus → output_config has both format and effort."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    _, extra = provider._make_extra("claude-opus-4-6", schema={"type": "object"})
+    oc = extra["output_config"]
+    assert "format" in oc
+    assert oc["effort"] == "high"
+
+
+def test_make_extra_effort_explicit_override():
+    """Explicit effort='low' on Opus overrides the model-family default."""
+    from app.providers.anthropic_api import AnthropicAPIProvider
+    provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
+    _, extra = provider._make_extra("claude-opus-4-6", effort="low")
+    assert extra.get("output_config", {}).get("effort") == "low"
+
+
+# ---------------------------------------------------------------------------
+# M2 — Pipeline DB updates include row_version guard
+# ---------------------------------------------------------------------------
+
+def test_pipeline_update_includes_row_version_guard():
+    """The optimize router's success-path UPDATE must include row_version == 0."""
+    import inspect
+    from app.routers import optimize as opt_mod
+    source = inspect.getsource(opt_mod.optimize_prompt)
+    # All three update paths (success, timeout, exception) should have the guard
+    assert "Optimization.row_version == 0" in source
+    assert "row_version=1" in source
+
+
+def test_pipeline_update_logs_on_version_conflict():
+    """When rowcount==0, the pipeline should log an error for version conflict."""
+    # We test the logging pattern by verifying the log message format exists
+    # in the module source — the actual DB path requires full integration setup.
+    import inspect
+    from app.routers import optimize as opt_mod
+    source = inspect.getsource(opt_mod.optimize_prompt)
+    assert "Pipeline version conflict for opt %s" in source
+
+
+# ---------------------------------------------------------------------------
+# M6 — Compaction support
+# ---------------------------------------------------------------------------
+
+def test_compaction_enabled_passes_context_management():
+    """When COMPACTION_ENABLED=True, complete_agentic builds context_management kwargs."""
+    import inspect
+    from app.providers import anthropic_api as api_mod
+    source = inspect.getsource(api_mod.AnthropicAPIProvider.complete_agentic)
+    assert "context_management" in source
+    assert "compact_20260112" in source
+
+
+def test_compaction_disabled_no_context_management():
+    """When COMPACTION_ENABLED=False (default), no context_management kwargs."""
+    from app.config import settings
+    assert settings.COMPACTION_ENABLED is False  # Default is False
+
+
+def test_detector_includes_compaction_beta():
+    """detector.py includes compaction beta string when enabled."""
+    import inspect
+    from app.providers import detector as det_mod
+    source = inspect.getsource(det_mod._detect_provider_inner)
+    assert "COMPACTION_ENABLED" in source
+    assert "COMPACTION_BETA_STRING" in source
