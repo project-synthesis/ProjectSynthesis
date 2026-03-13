@@ -207,6 +207,55 @@ async def _get_mcp_token(token: str) -> str:
         return ""
 
 
+async def _resolve_mcp_user_id() -> str | None:
+    """Resolve the default user_id for MCP-created records.
+
+    The MCP server is localhost-only and has no auth layer.  To ensure
+    records created via MCP tools appear in the frontend (which filters
+    by the authenticated user), we resolve the most recently active user
+    from the DB.  Returns None if no users exist yet.
+    """
+    from sqlalchemy import text as sa_text
+    try:
+        async with async_session() as s:
+            result = await s.execute(sa_text(
+                "SELECT user_id FROM optimizations "
+                "WHERE user_id IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT 1"
+            ))
+            row = result.first()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+async def _resolve_linked_repo() -> tuple[str | None, str | None, str | None]:
+    """Auto-resolve the most recently linked repo for MCP callers.
+
+    The MCP server is localhost-only and has no session cookie.  To enable
+    codebase-aware optimization without explicit ``repo_full_name`` params,
+    we look up the most recently linked repo from the DB and return its
+    ``session_id`` so the existing token resolution path in
+    ``codebase_explorer.py`` can decrypt the stored GitHub token.
+
+    Returns:
+        (repo_full_name, branch, session_id) or (None, None, None).
+    """
+    from sqlalchemy import text as sa_text
+    try:
+        async with async_session() as s:
+            result = await s.execute(sa_text(
+                "SELECT full_name, branch, session_id "
+                "FROM linked_repos ORDER BY linked_at DESC LIMIT 1"
+            ))
+            row = result.first()
+            if row:
+                return row[0], row[1], row[2]
+    except Exception:
+        pass
+    return None, None, None
+
+
 async def _run_and_persist(
     provider,
     prompt: str,
@@ -223,6 +272,8 @@ async def _run_and_persist(
     project=None,
     title=None,
     progress_ctx=None,
+    user_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """Create Optimization record, run pipeline, persist results.
 
@@ -249,6 +300,7 @@ async def _run_and_persist(
             retry_of=retry_of,
             project=project,
             title=title,
+            user_id=user_id,
         ))
         await s.commit()
 
@@ -263,10 +315,12 @@ async def _run_and_persist(
             strategy_override=strategy,
             repo_full_name=repo_full_name,
             repo_branch=repo_branch,
+            session_id=session_id,
             github_token=github_token,
             file_contexts=file_contexts,
             instructions=instructions,
             url_fetched_contexts=url_fetched,
+            user_id=user_id,
         ):
             acc.process_event(event_type, event_data)
             # Report progress for mapped stage events
@@ -431,14 +485,28 @@ def create_mcp_server(
                 "No LLM provider configured. "
                 "Configure an API key via the UI (Settings > Provider) or set ANTHROPIC_API_KEY."
             )
+
+        # Auto-resolve linked repo when not explicitly provided
+        resolved_session_id = None
+        if not repo_full_name:
+            resolved_repo, resolved_branch, resolved_session_id = await _resolve_linked_repo()
+            if resolved_repo:
+                repo_full_name = resolved_repo
+                repo_branch = repo_branch or resolved_branch
+        # Fallback to installation token when repo is set but no credentials
+        if repo_full_name and not github_token and not resolved_session_id:
+            github_token = await _get_mcp_token("")
+
         url_fetched = await fetch_url_contexts(url_contexts)
         opt_id = _new_run_id("mcp")
+        mcp_user = await _resolve_mcp_user_id()
         results = await _run_and_persist(
             prov, prompt, opt_id=opt_id, strategy=strategy,
             repo_full_name=repo_full_name, repo_branch=repo_branch,
             github_token=github_token, file_contexts=file_contexts,
             instructions=instructions, url_fetched=url_fetched,
             project=project, title=title, progress_ctx=ctx,
+            user_id=mcp_user, session_id=resolved_session_id,
         )
         return PipelineResult(optimization_id=opt_id, **results)
 
@@ -498,14 +566,24 @@ def create_mcp_server(
                 "No LLM provider configured. "
                 "Configure an API key via the UI (Settings > Provider) or set ANTHROPIC_API_KEY."
             )
+
+        # Resolve token for explore when original had a linked repo
+        resolved_session_id = None
+        if repo_full_name and not github_token:
+            _, _, resolved_session_id = await _resolve_linked_repo()
+            if not resolved_session_id:
+                github_token = await _get_mcp_token("")
+
         url_fetched = await fetch_url_contexts(url_contexts)
         opt_id = _new_run_id("mcp-retry")
+        mcp_user = await _resolve_mcp_user_id()
         results = await _run_and_persist(
             prov, raw_prompt, opt_id=opt_id, strategy=strategy,
             repo_full_name=repo_full_name, repo_branch=repo_branch,
             github_token=github_token, file_contexts=file_contexts,
             instructions=instructions, url_fetched=url_fetched,
             retry_of=optimization_id, progress_ctx=ctx,
+            user_id=mcp_user, session_id=resolved_session_id,
         )
         return PipelineResult(optimization_id=opt_id, retry_of=optimization_id, **results)
 
@@ -1135,9 +1213,10 @@ def create_mcp_server(
         async with _opt_session(optimization_id) as (db, opt):
             if not opt:
                 raise ValueError(_not_found_msg(optimization_id))
+            mcp_user = await _resolve_mcp_user_id() or "mcp"
             result = await upsert_feedback(
                 optimization_id=optimization_id,
-                user_id="mcp",
+                user_id=mcp_user,
                 rating=rating,
                 dimension_overrides=dimension_overrides,
                 corrected_issues=None,
@@ -1145,6 +1224,12 @@ def create_mcp_server(
                 db=db,
             )
             await db.commit()
+
+        # Trigger adaptation recomputation (matches REST router behavior)
+        from app.services.adaptation_engine import recompute_adaptation_safe
+        import asyncio
+        asyncio.create_task(recompute_adaptation_safe(mcp_user))
+
         return FeedbackSubmitResult(**result)
 
     @mcp.tool(
