@@ -197,12 +197,13 @@
     accepting = true;
     try {
       const result = await acceptMerge(idA, idB, mergedText);
-      // Open the new optimization in a tab
+      // Open the merged prompt as a new prompt tab — user forges it through the pipeline
       editor.openTab({
-        id: result.optimization_id,
-        label: 'Merged',
-        type: 'artifact',
-        optimizationId: result.optimization_id,
+        id: `prompt-${result.optimization_id}`,
+        label: 'Merged Prompt',
+        type: 'prompt',
+        promptText: mergedText,
+        dirty: false,
       });
       // Refresh history
       await history.loadHistory();
