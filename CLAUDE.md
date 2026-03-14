@@ -44,6 +44,7 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 - `settings.py` — app settings read/write
 - `health.py` — liveness check
 - `feedback.py` — feedback CRUD, stats, and history (`POST/GET /api/feedback`)
+- `framework.py` — framework validation profiles and per-user framework performance data (`GET /api/framework-profiles`, `/api/framework-performance/{task_type}`)
 - `refinement.py` — refine, fork, select, compare branches (`POST/GET /api/refinement`)
 
 ### Services (`backend/app/services/`)
@@ -63,6 +64,11 @@ Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
 - `cache_service.py` — Generic async cache (Redis with in-memory LRU fallback)
 - `feedback_service.py` — Feedback CRUD + aggregation per optimization
 - `adaptation_engine.py` — Feedback → pipeline parameter tuning (dimension weights, retry threshold, strategy affinities)
+- `framework_profiles.py` — Static framework validation profiles (10 frameworks), correctable issues registry, issue-dimension mappings, trade-off patterns
+- `framework_scoring.py` — Framework composite scoring (quality × satisfaction × recency decay) and performance prompt builder
+- `issue_guardrails.py` — Issue guardrail builder for optimizer prompts and verification prompt builder for validator
+- `issue_suggestions.py` — Proactive issue suggestion engine (score-based + history-based, top 3 by confidence)
+- `result_intelligence.py` — Post-pipeline result assessment: verdict, confidence, dimension insights, trade-offs, retry journey, framework fit, improvement potential, actionable guidance
 - `refinement_service.py` — Unified refinement with branch CRUD, fork, and selection
 - `retry_oracle.py` — 7-gate adaptive retry algorithm replacing fixed threshold
 - `session_context.py` — Session abstraction + compaction for multi-turn refinement
@@ -86,7 +92,7 @@ Add new sortable columns here before using them.
 
 ## MCP server
 
-18 tools split into three groups — optimization CRUD (including batch delete and trash/restore), GitHub read tools, and feedback/refinement tools (`synthesis_submit_feedback`, `synthesis_get_branches`, `synthesis_get_adaptation_state`). All tools use the `synthesis_` prefix to avoid name collisions in multi-server environments. Tools return Pydantic models for structured output (`outputSchema` + `structuredContent`). See **[docs/MCP.md](docs/MCP.md)** for the full tool reference, all parameters, and connection instructions.
+20 tools split into three groups — optimization CRUD (including batch delete and trash/restore), GitHub read tools, and feedback/refinement tools (`synthesis_submit_feedback`, `synthesis_get_branches`, `synthesis_get_adaptation_state`, `synthesis_get_framework_performance`, `synthesis_get_adaptation_summary`). All tools use the `synthesis_` prefix to avoid name collisions in multi-server environments. Tools return Pydantic models for structured output (`outputSchema` + `structuredContent`). See **[docs/MCP.md](docs/MCP.md)** for the full tool reference, all parameters, and connection instructions.
 
 **Transports:**
 - `http://127.0.0.1:8001/mcp` — streamable HTTP, standalone process (primary; used by `.mcp.json`)
@@ -116,7 +122,7 @@ Add new sortable columns here before using them.
 ```
 src/lib/components/
   layout/     # Navigator, Inspector, StatusBar, EditorGroups
-  editor/     # PromptEdit, ForgeArtifact, PromptPipeline, ChainComposer, ContextBar
+  editor/     # PromptEdit, ForgeArtifact, PromptPipeline, ChainComposer, ContextBar, FeedbackInline, FeedbackTier2, ResultAssessment
   pipeline/   # StageCard, StageAnalyze, StageExplore, StageOptimize, …
   github/     # RepoBadge, RepoPickerModal
   shared/     # CommandPalette, DiffView, ToastContainer, ProviderBadge
@@ -215,6 +221,7 @@ Auto-managed hook matchers. Safe to edit following the existing structure — ea
 - **Rate limiting**: Uses the `limits` library (not slowapi) via a `RateLimit` FastAPI dependency class (`backend/app/dependencies/rate_limit.py`). Endpoints use `Depends(RateLimit(lambda: settings.RATE_LIMIT_*))` instead of decorators. `X-Forwarded-For` is only trusted from IPs in `TRUSTED_PROXIES` (defaults to loopback) to prevent rate-limit bypass via header spoofing.
 - **Pipeline caching**: Strategy (24-hour TTL, keyed by prompt_hash+analysis_hash) and Analyze (24-hour TTL, keyed by prompt+context flags) stages are cached. Optimize and Validate are NOT cached (non-deterministic creative output).
 - **Brand mark reference**: The DNA helix brand mark renderer is documented in `.superpowers/brainstorm/2581704-1773287459/helix-v6.html` — a standalone Canvas 2D reference page showing all size variants, context placements, and hover animations. The production component is `frontend/src/lib/components/shared/HelixMark.svelte`.
+- **Feedback loop hardening**: Progressive damping replaces the fixed 3-feedback threshold — adaptation starts from the first feedback with logarithmic ramp and consistency-weighted confidence multiplier (ceiling at `MAX_DAMPING * 1.2`). Framework performance is tracked per-user per-task per-framework with composite scoring (quality × satisfaction × recency decay). Corrected issues (8 predefined categories) feed into dimension weight adjustments via `ISSUE_DIMENSION_MAP`, inject guardrails into the optimizer prompt, and add verification checks to the validator prompt. The result intelligence service computes a `ResultAssessment` (verdict, confidence, insights, trade-offs, actions) after each optimization. Debounced adaptation recomputation uses `asyncio.call_later` with per-user version tracking to collapse rapid feedback into single recomputes. Framework-aware elasticity tracking in the retry oracle records responsiveness for all dimensions per framework, informing focus selection. The adaptation event audit trail uses 90-day retention purged during recompute.
 
 ### Explore architecture (Stage 0)
 
@@ -255,6 +262,9 @@ The explore phase uses **semantic retrieval + single-shot synthesis**, not an ag
 - `explore_prompt.py` — **DEPRECATED** (old 25-turn agentic prompt, kept for reference only)
 
 **Config** (`config.py`): `EMBEDDING_MODEL`, `REPO_INDEX_TTL_HOURS`, `REPO_INDEX_MAX_FILES`, `EXPLORE_INDEX_WAIT_TIMEOUT`, `EXPLORE_FILE_READ_CONCURRENCY`, `EXPLORE_MAX_FILES`, `EXPLORE_TOTAL_LINE_BUDGET`, `EXPLORE_MAX_LINES_PER_FILE`, `EXPLORE_MAX_AMBIGUOUS_MATCHES`, `EXPLORE_MAX_CONTEXT_CHARS`, `EXPLORE_RESULT_CACHE_TTL`, `EXPLORE_TIMEOUT_SECONDS`
+
+**Config** (`config.py`) — Feedback loop constants:
+- `ADAPTATION_DEBOUNCE_MS` (500), `ADAPTATION_MAX_REQUEUE` (1), `BASE_DAMPING` (0.065), `MAX_DAMPING` (0.15), `CONSISTENCY_CEILING_FACTOR` (1.2), `MIN_FEEDBACKS_FOR_ADAPTATION` (1), `ISSUE_WEIGHT_FACTOR` (0.04), `MAX_ISSUE_GUARDRAILS` (4), `MIN_ISSUE_FREQUENCY_FOR_GUARDRAIL` (2), `ADAPTATION_EVENT_RETENTION_DAYS` (90), `FRAMEWORK_PERF_RECENCY_DECAY` (0.01), `ELASTICITY_EMA_ALPHA` (0.4), `ELASTICITY_COLD_START` (0.5).
 
 ## Docker deployment
 

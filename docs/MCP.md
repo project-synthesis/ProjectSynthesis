@@ -1,6 +1,6 @@
 # Project Synthesis MCP Server
 
-Project Synthesis exposes 18 tools (all prefixed `synthesis_`) over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, manage trash/restore, interact with linked GitHub repositories, and submit feedback on optimizations directly from a chat session. Tools return structured output via Pydantic models (`outputSchema` / `structuredContent`). The explore stage uses semantic retrieval (pre-built embedding index) for fast codebase analysis.
+Project Synthesis exposes 20 tools (all prefixed `synthesis_`) over the Model Context Protocol (MCP), allowing Claude Code and other MCP clients to optimize prompts, query history, manage trash/restore, interact with linked GitHub repositories, and submit feedback on optimizations directly from a chat session. Tools return structured output via Pydantic models (`outputSchema` / `structuredContent`). The explore stage uses semantic retrieval (pre-built embedding index) for fast codebase analysis.
 
 ## Transports
 
@@ -352,8 +352,9 @@ Submit quality feedback (thumbs up/down + dimension overrides) on an optimizatio
 | `rating` | int | yes | Feedback rating: `-1` (negative), `0` (neutral), `1` (positive) |
 | `dimension_overrides` | dict | no | Per-dimension score overrides (1–10), e.g. `{"clarity_score": 8, "specificity_score": 7}`. Valid dimensions: `clarity_score`, `specificity_score`, `structure_score`, `faithfulness_score`, `conciseness_score`. |
 | `comment` | string | no | Free-text feedback comment (max 2000 chars) |
+| `corrected_issues` | list[string] | no | Issue categories observed in the output (max 50). Valid values: `lost_constraints`, `added_hallucinations`, `changed_intent`, `wrong_audience`, `verbosity`, `vague_instructions`, `poor_structure`, `weak_examples`. Fidelity group: `lost_constraints`, `added_hallucinations`, `changed_intent`, `wrong_audience`. Quality group: `verbosity`, `vague_instructions`, `poor_structure`, `weak_examples`. |
 
-One feedback per optimization per user (upsert semantics). Requires 3+ feedbacks before adaptation weights are computed.
+One feedback per optimization per user (upsert semantics). Adaptation starts from the first feedback with progressive damping.
 
 ---
 
@@ -375,7 +376,34 @@ Retrieve the current learned adaptation state for a user (dimension weights, ret
 |---|---|---|---|
 | `user_id` | string | yes | User identifier |
 
-Returns the adaptation state object with `dimension_weights`, `strategy_affinities`, `retry_threshold`, and `feedback_count`. Returns an error if the user has fewer than 3 feedbacks (the minimum for adaptation computation).
+Returns the adaptation state object with `dimension_weights`, `strategy_affinities`, `retry_threshold`, and `feedback_count`.
+
+---
+
+#### `synthesis_get_framework_performance`
+Retrieve per-framework performance data for a specific task type. Returns composite scores (quality × satisfaction × recency decay), attempt counts, and trend indicators for each framework the user has used.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `task_type` | string | yes | Task type to query (e.g. `coding`, `writing`, `analysis`, `general`) |
+| `user_id` | string | no | User identifier. When omitted, auto-resolves the most recently active user. |
+
+Returns a list of framework performance entries with `framework`, `composite_score`, `attempt_count`, `avg_scores`, and `trend`.
+
+Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`.
+
+---
+
+#### `synthesis_get_adaptation_summary`
+Retrieve a human-readable adaptation dashboard for a user. Includes priority dimensions, active issue guardrails, framework preferences, issue resolution tracking, and recent adaptation events.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `user_id` | string | no | User identifier. When omitted, auto-resolves the most recently active user. |
+
+Returns a summary object with `priorities`, `active_guardrails`, `framework_preferences`, `issue_tracking`, and `recent_events`.
+
+Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`.
 
 ---
 

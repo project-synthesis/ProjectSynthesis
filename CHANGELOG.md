@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- Added framework performance tracking model with per-user, per-task, per-framework scoring
+- Added framework validation profiles for 10 optimization frameworks with emphasis/de-emphasis multipliers
+- Added correctable issues system with 8 predefined issue categories (Fidelity + Quality groups)
+- Added proactive issue suggestion engine based on scores, framework history, and user patterns
+- Added issue guardrails injected into optimizer prompts when issues are reported 2+ times
+- Added issue verification prompts injected into validator for recurring user-reported issues
+- Added result intelligence service computing verdict, confidence, dimension insights, trade-offs, and actionable guidance
+- Added progressive damping algorithm replacing fixed MIN_FEEDBACKS_FOR_ADAPTATION=3 with logarithmic ramp + consistency weighting from first feedback
+- Added debounced adaptation recomputation with version tracking to prevent redundant recomputes
+- Added framework-aware elasticity tracking in retry oracle for all dimensions per attempt
+- Added `GateName` enum replacing string-matched gate detection in retry oracle
+- Added compound soft cycle detection combining prompt divergence and dimension deltas
+- Added multi-signal prompt divergence replacing sentence-level entropy (token overlap + structural similarity + length ratio)
+- Added adaptation observability layer with L0 pulse, L1 cause-effect toasts, L2 summary dashboard, L3 diagnostics
+- Added `GET /api/feedback/pulse` endpoint returning adaptation status pulse
+- Added `GET /api/feedback/summary` endpoint returning human-readable adaptation dashboard
+- Added `GET /api/framework-profiles` and `GET /api/framework-performance/{task_type}` endpoints
+- Added `synthesis_get_framework_performance` and `synthesis_get_adaptation_summary` MCP tools
+- Added `corrected_issues` parameter to `synthesis_submit_feedback` MCP tool
+- Added three-tier progressive disclosure feedback UX (inline strip, expanded panel, Inspector intelligence)
+- Added `ResultAssessment` component with L0/L1/L2 click-to-expand verdict, dimensions, and journey
+- Added `FeedbackTier2` component with issue checkboxes, dimension overrides, and explicit save
+- Added toast confirmations showing cause-effect feedback on submission
+- Added SSE events: `result_assessment`, `issue_suggestions`, `adaptation_impact`, `adaptation_injected`
+- Added adaptation event audit trail with 90-day retention and automatic purge
+- Added framework performance table write-back after each optimization
+- Improved adaptation engine with issue-frequency-weighted dimension adjustments
+- Improved strategy selection with framework affinity injection and performance statistics in LLM prompt
+- Improved optimizer with framework profile hints and user priority weights in prompt
+- Improved validator with framework-calibrated effective weights (user × framework multipliers)
+- Improved retry oracle focus selection excluding framework-de-emphasized dimensions
+- Improved feedback service with defense-in-depth validation and structured parameterized logging
+- Improved `/api/feedback/stats` endpoint using SQL aggregation instead of loading all rows
+- Fixed concurrency race in adaptation recomputation (busy flag checked inside lock)
+- Fixed retry oracle Gate 2 off-by-one (>= instead of >)
+- Fixed session compaction never being called from refinement service
+- Fixed adaptation state never loading in frontend (InspectorAdaptation always hidden)
+- Fixed silent error swallowing in frontend feedback store
+- Fixed `corrected_issues` parameter accepted but never used (now fully wired)
 - Added `max_length=50` to MCP `SubmitFeedbackInput.corrected_issues` to match REST schema bounds
 - Fixed `framework_scoring.py` crash on malformed `avg_scores` JSON by wrapping `json.loads` with try/except
 - Added public accessors (`framework`, `attempts`, `last_decision`, `get_elasticity_snapshot()`) to `RetryOracle` and migrated `pipeline.py` off private attributes
