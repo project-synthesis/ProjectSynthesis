@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0-dev
+
 - Added framework performance tracking model with per-user, per-task, per-framework scoring
 - Added framework validation profiles for 10 optimization frameworks with emphasis/de-emphasis multipliers
 - Added correctable issues system with 8 predefined issue categories (Fidelity + Quality groups)
@@ -108,7 +110,7 @@
 - Improved `on_agent_text` callback docstring with per-provider granularity semantics
 - Changed SDK version constraints in `requirements.txt` — pinned `anthropic>=1.45.0,<2.0`, `mcp>=1.0,<2.0`, `claude-agent-sdk>=0.1.46,<1.0` to prevent breaking changes
 
-## 0.7.0
+## 0.6.0
 
 - Added intent-aware pipeline — pre-explore classification adapts codebase observations, strategy hints, optimizer weaving, and validator scoring per intent category (refactoring, api_design, testing, debugging, etc.)
 - Added codebase-aware scoring calibration across all pipeline stages — specificity rewards code navigation precision, conciseness ignores earned length, faithfulness accepts informed scope narrowing

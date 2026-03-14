@@ -55,7 +55,6 @@ The roadmap is wide open and growing. Some of the directions we're exploring:
 - **Team workspaces** — shared optimization history, collective strategy refinement, and organizational prompt libraries that get smarter as your team uses them
 - **Custom strategy authoring** — define your own optimization frameworks tuned to your domain, your codebase, your way of thinking
 - **Deeper codebase understanding** — richer semantic indexing, cross-repository awareness, dependency graph analysis, and architectural pattern recognition that makes context injection even more precise
-- **Quality feedback loops** — track how optimized prompts perform in practice and feed that signal back into the optimization pipeline itself
 - **Plugin and extension system** — open the pipeline to community-built stages, custom validators, and domain-specific analyzers
 
 Some of these are closer than others. Some will change shape as we learn what matters most. That's the nature of building something in the open — the path reveals itself as you walk it.
@@ -68,8 +67,10 @@ Project Synthesis is under **active development**. The core pipeline is stable a
 
 What you can count on today:
 - ✅ Five-stage optimization pipeline with real-time SSE streaming
+- ✅ Quality feedback loops — rate results, report issues, and the pipeline adapts to your preferences. Progressive damping, framework-aware elasticity, and issue guardrails close the loop from first feedback
+- ✅ Result intelligence — every optimization gets a verdict, confidence score, dimension insights, trade-off analysis, and actionable next steps via progressive disclosure UI
 - ✅ GitHub repository integration with semantic codebase indexing
-- ✅ MCP server for CLI-native workflows
+- ✅ 20-tool MCP server for CLI-native workflows
 - ✅ Works with Claude Max subscription (zero API cost) or Anthropic API key
 - ✅ Encrypted credential storage with in-app configuration
 - ✅ Docker deployment with auto-generated secrets
@@ -77,7 +78,7 @@ What you can count on today:
 What's still taking shape:
 - 🔧 API stability (endpoints may shift as the architecture matures)
 - 📖 Documentation depth (improving steadily)
-- 🧪 Test coverage (520+ tests and growing, targeting 90%+)
+- 🧪 Test coverage (885+ tests and growing, targeting 90%+)
 
 We tag releases when meaningful milestones land. Watch the repo if you want to follow along.
 
