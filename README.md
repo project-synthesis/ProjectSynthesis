@@ -47,6 +47,8 @@ Your prompt moves through five stages — **Explore, Analyze, Strategy, Optimize
 
 After validation, you rate the result. That feedback feeds back into the pipeline: dimension weights shift toward what you care about, strategy selection favors frameworks that have worked for your task types, and the retry oracle recalibrates its thresholds. The adaptation is progressive — it starts from the first rating and compounds with consistency.
 
+Compare any two optimizations side by side — the engine classifies the relationship, surfaces score deltas across every dimension, and tells you exactly why one outperformed the other. When both have strengths worth keeping, merge them: the system feeds the full analytical intelligence into the LLM and synthesizes a single prompt that combines the best of both parents.
+
 There's also an [MCP server](docs/MCP.md) that exposes the full API as tools, so you can run optimizations directly from Claude Code without touching the browser.
 
 ## 🗺️ Where This Is Going
@@ -73,6 +75,7 @@ What you can count on today:
 - ✅ Five-stage optimization pipeline with real-time SSE streaming
 - ✅ Adaptive feedback loops — your ratings tune pipeline weights, strategy selection, and retry thresholds
 - ✅ Result intelligence — verdict, dimension insights, trade-offs, and next actions for every optimization
+- ✅ Cross-optimization comparison and merge — side-by-side analysis with intelligent prompt synthesis
 - ✅ GitHub repository integration with semantic codebase indexing
 - ✅ 20-tool MCP server for CLI-native workflows
 - ✅ Works with Claude Max subscription (zero API cost) or Anthropic API key
@@ -82,7 +85,7 @@ What you can count on today:
 What's still taking shape:
 - 🔧 API stability (endpoints may shift as the architecture matures)
 - 📖 Documentation depth (improving steadily)
-- 🧪 Test coverage (885+ tests and growing, targeting 90%+)
+- 🧪 Test coverage (900+ tests and growing, targeting 90%+)
 
 We tag releases when meaningful milestones land. Watch the repo if you want to follow along.
 
