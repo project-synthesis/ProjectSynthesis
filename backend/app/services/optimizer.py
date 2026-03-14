@@ -111,6 +111,44 @@ _DEFAULT_WEAVING = (
     "- Surface architectural constraints and conventions that the executor must respect"
 )
 
+def build_adaptation_hints(
+    framework_profile: dict | None,
+    user_weights: dict[str, float] | None,
+    issue_guardrails: list[str],
+) -> str:
+    """Build adaptation hints for the optimizer prompt."""
+    sections: list[str] = []
+    if framework_profile and framework_profile.get("emphasis"):
+        emphasis = framework_profile["emphasis"]
+        priorities = [
+            dim.replace("_score", "").replace("_", " ").title()
+            for dim, mult in sorted(emphasis.items(), key=lambda x: -x[1])
+        ]
+        if priorities:
+            sections.append(
+                f"This framework excels at: {', '.join(priorities)}. "
+                "Prioritize these qualities where trade-offs exist."
+            )
+    if user_weights:
+        default_w = 1.0 / len(user_weights)
+        high_priority = [
+            (dim.replace("_score", "").replace("_", " ").title(), w)
+            for dim, w in sorted(user_weights.items(), key=lambda x: -x[1])
+            if w > default_w + 0.03
+        ]
+        if high_priority:
+            labels = [f"{name} ({w:.0%})" for name, w in high_priority[:3]]
+            sections.append(
+                f"User priorities (higher = more important): {', '.join(labels)}. "
+                "Bias your rewrite toward these dimensions."
+            )
+    if issue_guardrails:
+        sections.append("## Quality Guardrails (from user feedback history)")
+        for guardrail in issue_guardrails[:4]:
+            sections.append(f"- {guardrail}")
+    return "\n\n".join(sections) if sections else ""
+
+
 OPTIMIZATION_META_OPEN = "<optimization_meta>"
 OPTIMIZATION_META_CLOSE = "</optimization_meta>"
 
@@ -322,6 +360,7 @@ async def run_optimize(
     url_fetched_contexts: list[dict] | None = None, # N26: pre-fetched URL content
     model: str | None = None,
     streaming: bool = True,
+    adaptation_hints: str = "",
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 3 optimization with streaming.
 
@@ -400,6 +439,14 @@ async def run_optimize(
 
     # N26: inject pre-fetched URL content
     user_message += format_url_contexts(url_fetched_contexts)
+
+    # Adaptation hints (framework profile, user priorities, guardrails)
+    if adaptation_hints:
+        user_message += (
+            "\n\n--- Adaptation (from user feedback history) ---\n"
+            f"{adaptation_hints}\n"
+            "--- End adaptation ---"
+        )
 
     if retry_constraints:
         user_message += (

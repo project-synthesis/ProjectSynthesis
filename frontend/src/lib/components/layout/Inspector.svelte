@@ -222,8 +222,8 @@
           <InspectorBranches />
         {/if}
 
-        <!-- Adaptation transparency — visible when adaptation state is loaded -->
-        {#if feedback.adaptationState !== null}
+        <!-- Adaptation transparency — visible when adaptation data is available or user requested -->
+        {#if feedback.adaptationSummary !== null || feedback.showAdaptationPanel}
           <InspectorAdaptation />
         {/if}
 

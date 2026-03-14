@@ -45,6 +45,7 @@ from app.schemas.mcp_models import (
     PipelineResult,
     RestoreResult,
     StatsResult,
+    SubmitFeedbackInput,
 )
 from app.services.url_fetcher import fetch_url_contexts
 
@@ -71,9 +72,11 @@ TOOL_CATEGORIES: dict[str, dict] = {
     "synthesis_github_list_repos":     {"category": "github",   "tags": ["read", "repos"]},
     "synthesis_github_read_file":      {"category": "github",   "tags": ["read", "files"]},
     "synthesis_github_search_code":    {"category": "github",   "tags": ["read", "search"]},
-    "synthesis_submit_feedback":       {"category": "feedback", "tags": ["write"]},
-    "synthesis_get_branches":          {"category": "refinement", "tags": ["read"]},
-    "synthesis_get_adaptation_state":  {"category": "feedback", "tags": ["read"]},
+    "synthesis_submit_feedback":            {"category": "feedback", "tags": ["write"]},
+    "synthesis_get_branches":               {"category": "refinement", "tags": ["read"]},
+    "synthesis_get_adaptation_state":       {"category": "feedback", "tags": ["read"]},
+    "synthesis_get_framework_performance":  {"category": "feedback", "tags": ["read"]},
+    "synthesis_get_adaptation_summary":     {"category": "feedback", "tags": ["read"]},
 }
 
 # Stage → (progress_fraction, human_message) for pipeline progress reporting.
@@ -1186,6 +1189,7 @@ def create_mcp_server(
         optimization_id: str,
         rating: int,
         dimension_overrides: Optional[dict] = None,
+        corrected_issues: Optional[list[str]] = None,
         comment: Optional[str] = None,
     ) -> FeedbackSubmitResult:
         """Submit quality feedback (thumbs up/down) on an optimization.
@@ -1198,38 +1202,51 @@ def create_mcp_server(
         Args:
             optimization_id: UUID of the optimization to rate.
             rating: Feedback rating: -1 (negative), 0 (neutral), 1 (positive).
-            dimension_overrides: Per-dimension score overrides (1–10), e.g.
+            dimension_overrides: Per-dimension score overrides (1-10), e.g.
                                  {"clarity_score": 8, "specificity_score": 7}.
                                  Valid dimensions: clarity_score, specificity_score,
                                  structure_score, faithfulness_score, conciseness_score.
+            corrected_issues: Issue IDs the user observed (e.g. 'lost_key_terms',
+                             'too_verbose'). See CORRECTABLE_ISSUES for valid IDs.
             comment: Free-text feedback comment (max 2000 chars).
 
         Returns:
             FeedbackSubmitResult with the feedback ID and whether it was newly created.
         """
+        from pydantic import ValidationError
+
+        from app.services.adaptation_engine import schedule_adaptation_recompute
         from app.services.feedback_service import upsert_feedback
-        if rating not in (-1, 0, 1):
-            raise ValueError("Rating must be -1 (negative), 0 (neutral), or 1 (positive)")
-        async with _opt_session(optimization_id) as (db, opt):
-            if not opt:
-                raise ValueError(_not_found_msg(optimization_id))
-            mcp_user = await _resolve_mcp_user_id() or "mcp"
-            result = await upsert_feedback(
+
+        # Validate through Pydantic model
+        try:
+            validated = SubmitFeedbackInput(
                 optimization_id=optimization_id,
-                user_id=mcp_user,
                 rating=rating,
                 dimension_overrides=dimension_overrides,
-                corrected_issues=None,
+                corrected_issues=corrected_issues,
                 comment=comment,
+            )
+        except ValidationError as e:
+            raise ValueError(str(e)) from None
+
+        async with _opt_session(validated.optimization_id) as (db, opt):
+            if not opt:
+                raise ValueError(_not_found_msg(validated.optimization_id))
+            mcp_user = await _resolve_mcp_user_id() or "mcp"
+            result = await upsert_feedback(
+                optimization_id=validated.optimization_id,
+                user_id=mcp_user,
+                rating=validated.rating,
+                dimension_overrides=validated.dimension_overrides,
+                corrected_issues=validated.corrected_issues,
+                comment=validated.comment,
                 db=db,
             )
             await db.commit()
 
-        # Trigger adaptation recomputation (matches REST router behavior)
-        import asyncio
-
-        from app.services.adaptation_engine import recompute_adaptation_safe
-        asyncio.create_task(recompute_adaptation_safe(mcp_user))
+        # Trigger debounced adaptation recomputation
+        schedule_adaptation_recompute(mcp_user)
 
         return FeedbackSubmitResult(**result)
 
@@ -1304,6 +1321,88 @@ def create_mcp_server(
         # Return as JSON string — adaptation state shape varies and
         # AdaptationStateResponse from feedback.py is the canonical model.
         return json.dumps(state)
+
+    @mcp.tool(
+        name="synthesis_get_framework_performance",
+        annotations=ToolAnnotations(
+            title="Get Framework Performance",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def synthesis_get_framework_performance(
+        task_type: str,
+        user_id: Optional[str] = None,
+    ) -> str:
+        """Get framework performance data for a task type.
+
+        Returns per-framework average scores, user rating averages,
+        issue frequency, and sample counts for the given task type.
+
+        Args:
+            task_type: The task classification to query (e.g. 'coding',
+                      'writing', 'analysis').
+            user_id: User identifier. Omit to resolve from recent activity.
+
+        Returns:
+            JSON with task_type and a list of framework performance records.
+        """
+        from app.database import get_session_context
+        from app.models.framework_performance import FrameworkPerformance
+        from app.services.framework_scoring import format_framework_performance
+
+        resolved_user = user_id or await _resolve_mcp_user_id() or "mcp"
+
+        async with get_session_context() as db:
+            stmt = select(FrameworkPerformance).where(
+                FrameworkPerformance.user_id == resolved_user,
+                FrameworkPerformance.task_type == task_type,
+            )
+            result = await db.execute(stmt)
+            rows = result.scalars().all()
+
+        items = format_framework_performance(rows, include_last_updated=False)
+        return json.dumps({"task_type": task_type, "frameworks": items})
+
+    @mcp.tool(
+        name="synthesis_get_adaptation_summary",
+        annotations=ToolAnnotations(
+            title="Get Adaptation Summary",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def synthesis_get_adaptation_summary(
+        user_id: Optional[str] = None,
+    ) -> str:
+        """Get a high-level adaptation summary for dashboard display.
+
+        Returns feedback count, dimension weight priorities, active
+        guardrails, framework preferences, and retry threshold.
+
+        Args:
+            user_id: User identifier. Omit to resolve from recent activity.
+
+        Returns:
+            JSON with adaptation summary including priorities,
+            guardrails, and framework preferences.
+        """
+        from app.database import get_session_context
+        from app.services.adaptation_engine import (
+            build_adaptation_summary_data,
+            load_adaptation,
+        )
+
+        resolved_user = user_id or await _resolve_mcp_user_id() or "mcp"
+
+        async with get_session_context() as db:
+            adaptation = await load_adaptation(resolved_user, db)
+
+        return json.dumps(build_adaptation_summary_data(adaptation))
 
     return mcp
 

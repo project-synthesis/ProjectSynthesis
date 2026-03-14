@@ -122,6 +122,22 @@ class Settings(BaseSettings):
     # Test mode — enables test-only endpoints. Never set True in production.
     TESTING: bool = False
 
+    # Feedback loop hardening
+    ADAPTATION_DEBOUNCE_MS: int = 500
+    ADAPTATION_MAX_REQUEUE: int = 1
+    BASE_DAMPING: float = 0.065
+    MAX_DAMPING: float = 0.15
+    CONSISTENCY_CEILING_FACTOR: float = 1.2
+    MIN_FEEDBACKS_FOR_ADAPTATION: int = 1
+    ISSUE_WEIGHT_FACTOR: float = 0.04
+    MAX_ISSUE_GUARDRAILS: int = 4
+    MIN_ISSUE_FREQUENCY_FOR_GUARDRAIL: int = 2
+    MIN_ISSUE_FREQUENCY_FOR_SUGGESTION: int = 2
+    ADAPTATION_EVENT_RETENTION_DAYS: int = 90
+    FRAMEWORK_PERF_RECENCY_DECAY: float = 0.01
+    ELASTICITY_EMA_ALPHA: float = 0.4
+    ELASTICITY_COLD_START: float = 0.5
+
     def _bootstrap_secret(self, field_name: str, weak_default: str) -> None:
         """Auto-generate a crypto secret if using the weak dev default.
 

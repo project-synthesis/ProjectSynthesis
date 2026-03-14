@@ -56,6 +56,31 @@ def compute_overall_score(
     return max(1.0, min(10.0, round(raw, 1)))
 
 
+def compute_effective_weights(
+    user_weights: dict[str, float] | None,
+    framework_profile: dict | None,
+) -> dict[str, float]:
+    """Combine user weights with framework profile multipliers, renormalize to sum=1.0."""
+    from app.services.prompt_diff import SCORE_DIMENSIONS
+
+    dims = sorted(SCORE_DIMENSIONS)
+    default_w = 1.0 / len(dims)
+    if not user_weights:
+        base = {d: default_w for d in dims}
+    else:
+        base = {d: user_weights.get(d, default_w) for d in dims}
+    if framework_profile:
+        emphasis = framework_profile.get("emphasis", {})
+        de_emphasis = framework_profile.get("de_emphasis", {})
+        for dim in dims:
+            multiplier = emphasis.get(dim, de_emphasis.get(dim, 1.0))
+            base[dim] *= multiplier
+    total = sum(base.values())
+    if total > 0:
+        base = {d: w / total for d, w in base.items()}
+    return base
+
+
 def _default_validation() -> dict:
     """Default validation result used when all providers fail."""
     return {
@@ -80,6 +105,7 @@ async def run_validate(
     instructions: list[str] | None = None,
     model: str | None = None,
     user_weights: dict[str, float] | None = None,
+    extra_validation_context: str | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 4 validation.
 
@@ -102,6 +128,9 @@ async def run_validate(
             scoring faithfulness_score.
         instructions: User-specified output constraints. When provided, the
             validator checks whether the optimized prompt honors them.
+        extra_validation_context: Additional validation instructions (e.g.
+            issue verification prompts from adaptation). Appended to the
+            user message when provided.
     """
     intent_cat = ""
     if codebase_context is not None:
@@ -146,6 +175,9 @@ async def run_validate(
             "Verify each constraint is reflected in the optimized prompt. "
             "Missing or violated constraints are faithfulness failures."
         )
+
+    if extra_validation_context:
+        user_message += extra_validation_context
 
     model = model or MODEL_ROUTING["validate"]
 

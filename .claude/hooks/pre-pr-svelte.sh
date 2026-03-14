@@ -39,10 +39,26 @@ if [[ "$IS_GIT_PUSH" == false && "$IS_GH_PR" == false ]]; then
 fi
 
 # ── Locate frontend directory ────────────────────────────────────────────────
+# In a git worktree, node_modules may not exist. Resolve to the main repo's
+# frontend dir if the local one lacks dependencies.
 FRONTEND_DIR="frontend"
+
 if [[ ! -d "$FRONTEND_DIR" ]]; then
   echo "⚠  frontend/ directory not found — skipping svelte-check."
   exit 0
+fi
+
+# Check if node_modules exist locally; if not, try the main worktree
+if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
+  MAIN_WORKTREE="$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
+  if [[ -n "$MAIN_WORKTREE" && -d "$MAIN_WORKTREE/frontend/node_modules" ]]; then
+    FRONTEND_DIR="$MAIN_WORKTREE/frontend"
+    echo "ℹ  Using main worktree frontend at $FRONTEND_DIR"
+  else
+    echo "⚠  frontend/node_modules not found (worktree without deps) — skipping svelte-check."
+    echo "   Run from main repo or install: cd frontend && npm install"
+    exit 0
+  fi
 fi
 
 # ── Describe what triggered the check ────────────────────────────────────────

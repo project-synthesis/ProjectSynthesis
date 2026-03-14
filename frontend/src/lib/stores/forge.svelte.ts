@@ -671,6 +671,42 @@ class ForgeStore {
         // Store for inspector panel — no immediate UI action
         this.stageResults['adaptation'] = { stage: 'adaptation', data };
         break;
+      case 'adaptation_injected':
+        // Merge into adaptation results for UI consumption
+        this.stageResults['adaptation'] = {
+          stage: 'adaptation',
+          data: { ...(this.stageResults['adaptation']?.data ?? {}), ...data, adaptation_injected: true },
+        };
+        break;
+      case 'adaptation_impact':
+        // Merge impact data for UI consumption
+        this.stageResults['adaptation'] = {
+          stage: 'adaptation',
+          data: { ...(this.stageResults['adaptation']?.data ?? {}), adaptation_impact: data },
+        };
+        break;
+      case 'result_assessment':
+        // Merge result assessment into adaptation stage for ForgeArtifact consumption
+        if (this.stageResults['adaptation']) {
+          this.stageResults['adaptation'] = {
+            ...this.stageResults['adaptation'],
+            data: { ...this.stageResults['adaptation'].data, result_assessment: data },
+          };
+        } else {
+          this.stageResults['adaptation'] = { stage: 'adaptation', data: { result_assessment: data } };
+        }
+        break;
+      case 'issue_suggestions':
+        // Merge issue suggestions into adaptation stage for ForgeArtifact consumption
+        if (this.stageResults['adaptation']) {
+          this.stageResults['adaptation'] = {
+            ...this.stageResults['adaptation'],
+            data: { ...this.stageResults['adaptation'].data, issue_suggestions: data },
+          };
+        } else {
+          this.stageResults['adaptation'] = { stage: 'adaptation', data: { issue_suggestions: data } };
+        }
+        break;
       case 'branch_created':
         this.stageResults['branch'] = { stage: 'branch', data };
         break;

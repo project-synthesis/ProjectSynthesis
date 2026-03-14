@@ -4,7 +4,7 @@
   import ScoreBar from '$lib/components/shared/ScoreBar.svelte';
   import { getScoreColor } from '$lib/utils/colors';
 
-  const DIMENSIONS = ['clarity', 'specificity', 'structure', 'faithfulness', 'conciseness'];
+  const DIMENSIONS = ['clarity_score', 'specificity_score', 'structure_score', 'faithfulness_score', 'conciseness_score'];
 
   function clamp(val: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, val));
@@ -19,8 +19,7 @@
   function getBaseScore(dim: string): number {
     const scores = (forge.stageResults['validate']?.data as Record<string, unknown>)?.scores as Record<string, number> | undefined;
     if (!scores) return 5;
-    const key = dim + '_score';
-    return typeof scores[key] === 'number' ? scores[key] : 5;
+    return typeof scores[dim] === 'number' ? scores[dim] : 5;
   }
 
   function getDisplayScore(dim: string): number {
@@ -85,18 +84,18 @@
       {@const isOverridden = dim in feedback.currentFeedback.dimensionOverrides}
       <div class="space-y-1">
         <div class="flex items-center justify-between">
-          <span class="font-mono text-[10px] {isOverridden ? 'text-neon-cyan' : 'text-text-dim'} capitalize">{dim}</span>
+          <span class="font-mono text-[10px] {isOverridden ? 'text-neon-cyan' : 'text-text-dim'} capitalize">{dim.replace('_score', '')}</span>
           <div class="flex items-center gap-1">
             <button
               class="w-6 h-6 flex items-center justify-center border border-border-subtle text-text-dim hover:border-neon-cyan/50 hover:text-neon-cyan text-[10px] leading-none transition-colors"
               onclick={() => stepDimension(dim, -1)}
-              aria-label="Decrease {dim} score"
+              aria-label="Decrease {dim.replace('_score', '')} score"
             >−</button>
             <span class="font-mono text-[10px] text-text-primary w-6 text-center">{score}/10</span>
             <button
               class="w-6 h-6 flex items-center justify-center border border-border-subtle text-text-dim hover:border-neon-cyan/50 hover:text-neon-cyan text-[10px] leading-none transition-colors"
               onclick={() => stepDimension(dim, 1)}
-              aria-label="Increase {dim} score"
+              aria-label="Increase {dim.replace('_score', '')} score"
             >+</button>
           </div>
         </div>

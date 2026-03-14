@@ -94,6 +94,12 @@ async def _migrate_add_missing_columns() -> None:
 
     # Map: table_name -> {column_name: column_type_sql}
     _new_columns: dict[str, dict[str, str]] = {
+        "user_adaptation": {
+            "issue_frequency": "TEXT",
+            "adaptation_version": "INTEGER DEFAULT 0",
+            "damping_level": "REAL DEFAULT 0.15",
+            "consistency_score": "REAL DEFAULT 0.5",
+        },
         "optimizations": {
             "secondary_frameworks": "TEXT",
             "approach_notes": "TEXT",
@@ -122,6 +128,8 @@ async def _migrate_add_missing_columns() -> None:
             "active_branch_id": "TEXT",
             "branch_count": "INTEGER DEFAULT 0",
             "adaptation_snapshot": "TEXT",
+            "framework": "TEXT",
+            "active_guardrails": "TEXT",
         },
         "github_tokens": {
             "avatar_url": "TEXT",              # cached avatar URL
@@ -196,11 +204,15 @@ async def _migrate_add_missing_indexes(eng: AsyncEngine | None = None) -> None:
          "user_id, deleted_at, created_at DESC"),
         # H3 tables — indexes also defined in ORM __table_args__ (safety net for migrations)
         ("ix_feedback_user_created", "feedback", "user_id, created_at"),
+        ("ix_feedback_optimization_id", "feedback", "optimization_id"),
         ("ix_branch_optimization", "refinement_branch", "optimization_id"),
         ("ix_branch_opt_status", "refinement_branch", "optimization_id, status"),
         ("ix_pairwise_user", "pairwise_preference", "user_id"),
         ("ix_pairwise_optimization", "pairwise_preference", "optimization_id"),
         ("ix_pairwise_user_created", "pairwise_preference", "user_id, created_at"),
+        # H4 tables — indexes also defined in ORM __table_args__ (safety net for migrations)
+        ("ix_framework_perf_user_task", "framework_performance", "user_id, task_type"),
+        ("ix_adaptation_events_user_created", "adaptation_events", "user_id, created_at"),
     ]
 
     async with _eng.begin() as conn:
@@ -226,10 +238,12 @@ async def _migrate_add_missing_indexes(eng: AsyncEngine | None = None) -> None:
 async def create_tables():
     """Create all tables on startup. Acts as simple migration."""
     # Import all models so they register with Base.metadata
+    import app.models.adaptation_event  # noqa: F401
     import app.models.audit_log  # noqa: F401
     import app.models.auth  # noqa: F401
     import app.models.branch  # noqa: F401
     import app.models.feedback  # noqa: F401
+    import app.models.framework_performance  # noqa: F401
     import app.models.github  # noqa: F401
     import app.models.onboarding_event  # noqa: F401
     import app.models.optimization  # noqa: F401

@@ -1,13 +1,22 @@
 /**
  * Feedback + adaptation state store.
- * Manages user feedback submission, dimension overrides, and adaptation transparency.
+ * Manages user feedback submission, dimension overrides, adaptation transparency,
+ * pulse status, and adaptation summary loading.
  */
 
-import { submitFeedback, getFeedback, getFeedbackStats } from '$lib/api/client';
+import {
+  submitFeedback,
+  getFeedback,
+  getFeedbackStats,
+  getAdaptationPulse,
+  getAdaptationSummary,
+  type FeedbackConfirmation,
+} from '$lib/api/client';
 
 export interface FeedbackState {
   rating: -1 | 0 | 1 | null;
   dimensionOverrides: Record<string, number>;
+  correctedIssues: string[];
   comment: string;
   submitting: boolean;
 }
@@ -19,10 +28,33 @@ export interface AdaptationState {
   feedbackCount: number;
 }
 
+export interface AdaptationPulseState {
+  status: 'inactive' | 'learning' | 'active';
+  label: string;
+  detail: string;
+}
+
+export interface AdaptationSummaryState {
+  feedbackCount: number;
+  priorities: Array<{
+    dimension: string;
+    weight: number;
+    shift: number;
+    direction: 'up' | 'down';
+  }>;
+  activeGuardrails: string[];
+  frameworkPreferences: Record<string, number>;
+  topFrameworks: string[];
+  issueResolution: Record<string, number>;
+  retryThreshold: number;
+  lastUpdated: string | null;
+}
+
 class FeedbackStore {
   currentFeedback = $state<FeedbackState>({
     rating: null,
     dimensionOverrides: {},
+    correctedIssues: [],
     comment: '',
     submitting: false,
   });
@@ -35,15 +67,21 @@ class FeedbackStore {
   }>({ totalRatings: 0, positive: 0, negative: 0, neutral: 0 });
 
   adaptationState = $state<AdaptationState | null>(null);
+  adaptationPulse = $state<AdaptationPulseState | null>(null);
+  adaptationSummary = $state<AdaptationSummaryState | null>(null);
+  showAdaptationPanel = $state(false);
   currentOptimizationId = $state<string | null>(null);
+  error = $state<string | null>(null);
 
   async loadFeedback(optimizationId: string) {
     this.currentOptimizationId = optimizationId;
+    this.error = null;
     try {
       const result = await getFeedback(optimizationId);
       if (result.feedback) {
         this.currentFeedback.rating = result.feedback.rating;
         this.currentFeedback.dimensionOverrides = result.feedback.dimension_overrides || {};
+        this.currentFeedback.correctedIssues = result.feedback.corrected_issues || [];
         this.currentFeedback.comment = result.feedback.comment || '';
       } else {
         this.resetFeedback();
@@ -56,24 +94,42 @@ class FeedbackStore {
           neutral: result.aggregate.neutral,
         };
       }
-    } catch {
-      // Silent fail — feedback is non-critical
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to load feedback';
     }
   }
 
-  async submit(optimizationId: string) {
-    if (this.currentFeedback.rating === null) return;
+  async submit(optimizationId: string): Promise<FeedbackConfirmation | null> {
+    if (this.currentFeedback.rating === null) return null;
     this.currentFeedback.submitting = true;
+    this.error = null;
+
+    const body: any = { rating: this.currentFeedback.rating };
+    if (Object.keys(this.currentFeedback.dimensionOverrides).length > 0) {
+      body.dimension_overrides = this.currentFeedback.dimensionOverrides;
+    }
+    if (this.currentFeedback.correctedIssues.length > 0) {
+      body.corrected_issues = this.currentFeedback.correctedIssues;
+    }
+    if (this.currentFeedback.comment) {
+      body.comment = this.currentFeedback.comment;
+    }
+
     try {
-      const body: any = { rating: this.currentFeedback.rating };
-      if (Object.keys(this.currentFeedback.dimensionOverrides).length > 0) {
-        body.dimension_overrides = this.currentFeedback.dimensionOverrides;
-      }
-      if (this.currentFeedback.comment) {
-        body.comment = this.currentFeedback.comment;
-      }
-      await submitFeedback(optimizationId, body);
+      const confirmation = await submitFeedback(optimizationId, body);
       await this.loadFeedback(optimizationId);
+      return confirmation;
+    } catch (err) {
+      // Auto-retry once after 2s
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      try {
+        const confirmation = await submitFeedback(optimizationId, body);
+        await this.loadFeedback(optimizationId);
+        return confirmation;
+      } catch (retryErr) {
+        this.error = retryErr instanceof Error ? retryErr.message : 'Feedback submission failed';
+        return null;
+      }
     } finally {
       this.currentFeedback.submitting = false;
     }
@@ -91,7 +147,23 @@ class FeedbackStore {
     delete this.currentFeedback.dimensionOverrides[dimension];
   }
 
+  setCorrectedIssues(issues: string[]) {
+    this.currentFeedback.correctedIssues = issues;
+  }
+
+  toggleCorrectedIssue(issueId: string) {
+    const idx = this.currentFeedback.correctedIssues.indexOf(issueId);
+    if (idx >= 0) {
+      this.currentFeedback.correctedIssues = this.currentFeedback.correctedIssues.filter(
+        (id) => id !== issueId,
+      );
+    } else {
+      this.currentFeedback.correctedIssues = [...this.currentFeedback.correctedIssues, issueId];
+    }
+  }
+
   async loadAdaptationState() {
+    this.error = null;
     try {
       const stats = await getFeedbackStats();
       if (stats.adaptation_state) {
@@ -102,8 +174,39 @@ class FeedbackStore {
           feedbackCount: stats.adaptation_state.feedback_count,
         };
       }
-    } catch {
-      // Silent fail
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to load adaptation state';
+    }
+  }
+
+  async loadAdaptationPulse() {
+    try {
+      const pulse = await getAdaptationPulse();
+      this.adaptationPulse = {
+        status: pulse.status,
+        label: pulse.label,
+        detail: pulse.detail,
+      };
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to load adaptation pulse';
+    }
+  }
+
+  async loadAdaptationSummary() {
+    try {
+      const summary = await getAdaptationSummary();
+      this.adaptationSummary = {
+        feedbackCount: summary.feedback_count ?? 0,
+        priorities: summary.priorities ?? [],
+        activeGuardrails: summary.active_guardrails ?? [],
+        frameworkPreferences: summary.framework_preferences ?? {},
+        topFrameworks: summary.top_frameworks ?? [],
+        issueResolution: summary.issue_resolution ?? {},
+        retryThreshold: summary.retry_threshold ?? 5.0,
+        lastUpdated: summary.last_updated ?? null,
+      };
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to load adaptation summary';
     }
   }
 
@@ -111,6 +214,7 @@ class FeedbackStore {
     this.currentFeedback = {
       rating: null,
       dimensionOverrides: {},
+      correctedIssues: [],
       comment: '',
       submitting: false,
     };

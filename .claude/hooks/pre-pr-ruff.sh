@@ -39,14 +39,21 @@ if [[ "$IS_GIT_PUSH" == false && "$IS_GH_PR" == false ]]; then
 fi
 
 # ── Locate Ruff ──────────────────────────────────────────────────────────────
+# Check local venv first, then main worktree's venv, then system PATH.
 RUFF=""
 if [[ -x "backend/.venv/bin/ruff" ]]; then
   RUFF="backend/.venv/bin/ruff"
-elif command -v ruff &>/dev/null; then
-  RUFF="ruff"
 else
-  echo "⚠  ruff not found — skipping lint gate."
-  exit 0
+  MAIN_WORKTREE="$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
+  if [[ -n "$MAIN_WORKTREE" && -x "$MAIN_WORKTREE/backend/.venv/bin/ruff" ]]; then
+    RUFF="$MAIN_WORKTREE/backend/.venv/bin/ruff"
+    echo "ℹ  Using main worktree ruff at $RUFF"
+  elif command -v ruff &>/dev/null; then
+    RUFF="ruff"
+  else
+    echo "⚠  ruff not found — skipping lint gate."
+    exit 0
+  fi
 fi
 
 # ── Describe what triggered the check ────────────────────────────────────────

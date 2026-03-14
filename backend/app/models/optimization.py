@@ -37,6 +37,8 @@ class Optimization(Base):
     optimization_notes = Column(Text, nullable=True)
     strategy_rationale = Column(Text, nullable=True)
     strategy_source = Column(Text, nullable=True)  # "llm" | "llm_json" | "heuristic" | "override"
+    framework = Column(Text, nullable=True)
+    active_guardrails = Column(Text, nullable=True)  # JSON
 
     # Validation scores (1-10)
     clarity_score = Column(Integer, nullable=True)
@@ -154,7 +156,7 @@ class Optimization(Base):
                     except (json.JSONDecodeError, TypeError):
                         value = []
             # Parse H3 JSON columns (dict-type)
-            if col.name == "adaptation_snapshot":
+            if col.name in ("adaptation_snapshot", "active_guardrails", "codebase_context_snapshot"):
                 if value and isinstance(value, str):
                     try:
                         value = json.loads(value)

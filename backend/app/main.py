@@ -25,6 +25,7 @@ from app.providers.detector import ProviderNotAvailableError, detect_provider
 from app.routers import github_auth, github_repos, health, history, optimize
 from app.routers.auth import router as jwt_auth_router
 from app.routers.feedback import router as feedback_router
+from app.routers.framework import router as framework_router
 from app.routers.github import router as github_router
 from app.routers.github_config import router as github_config_router
 from app.routers.onboarding import router as onboarding_router
@@ -281,6 +282,7 @@ app.include_router(jwt_auth_router)
 app.include_router(github_config_router)
 app.include_router(provider_config_router)
 app.include_router(feedback_router)
+app.include_router(framework_router)
 app.include_router(onboarding_router)
 app.include_router(refinement_router)
 

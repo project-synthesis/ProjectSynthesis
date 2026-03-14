@@ -20,7 +20,10 @@ from app.services.context_builders import (
     format_url_contexts,
 )
 from app.services.stage_runner import extract_json_with_fallback, stream_with_timeout
-from app.services.strategy_selector import heuristic_strategy_fallback
+from app.services.strategy_selector import (
+    build_affinity_prompt_section,
+    heuristic_strategy_fallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +97,7 @@ async def run_strategy(
     instructions: list[str] | None = None,
     model: str | None = None,
     strategy_affinities: dict | None = None,
+    framework_perf_rows: list[dict] | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 2 strategy selection.
 
@@ -168,6 +172,18 @@ async def run_strategy(
     user_message += format_url_contexts(url_fetched_contexts)
 
     user_message += format_instructions(instructions)
+
+    # Inject user framework preferences so the LLM can weight them during selection
+    affinity_section = build_affinity_prompt_section(task_type, strategy_affinities)
+    if affinity_section:
+        user_message += affinity_section
+
+    # Inject framework performance history for data-driven selection
+    if framework_perf_rows:
+        from app.services.framework_scoring import build_performance_prompt_section
+        perf_section = build_performance_prompt_section(task_type, framework_perf_rows)
+        if perf_section:
+            user_message += perf_section
 
     model = model or MODEL_ROUTING["strategy"]
 

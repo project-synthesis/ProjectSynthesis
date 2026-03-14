@@ -13,9 +13,56 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.feedback import Feedback
+from app.services.framework_profiles import CORRECTABLE_ISSUES
+from app.services.prompt_diff import SCORE_DIMENSIONS
 from app.utils.json_fields import parse_json_column
 
 logger = logging.getLogger(__name__)
+
+_VALID_DIMENSIONS = set(SCORE_DIMENSIONS)
+
+
+def validate_dimension_overrides(
+    overrides: dict[str, int] | None,
+) -> dict[str, int] | None:
+    """Validate dimension override keys and value ranges.
+
+    Raises ValueError for unknown dimensions or values outside 1-10.
+    Returns the validated overrides unchanged, or None if input is None.
+    """
+    if overrides is None:
+        return None
+    for key, value in overrides.items():
+        if key not in _VALID_DIMENSIONS:
+            raise ValueError(
+                f"Invalid dimension: {key}. "
+                f"Valid: {sorted(_VALID_DIMENSIONS)}"
+            )
+        if not isinstance(value, (int, float)) or not (1 <= value <= 10):
+            raise ValueError(
+                f"Score must be 1-10, got {value} for {key}"
+            )
+    return overrides
+
+
+def validate_corrected_issues(
+    issues: list[str] | None,
+) -> list[str] | None:
+    """Validate corrected issue IDs and deduplicate.
+
+    Raises ValueError for unknown issue IDs.
+    Returns deduplicated list, or None if input is None.
+    """
+    if issues is None:
+        return None
+    for issue_id in issues:
+        if issue_id not in CORRECTABLE_ISSUES:
+            raise ValueError(
+                f"Invalid issue ID: {issue_id}. "
+                f"Valid: {sorted(CORRECTABLE_ISSUES)}"
+            )
+    # Deduplicate while preserving order
+    return list(dict.fromkeys(issues))
 
 
 async def upsert_feedback(
@@ -28,6 +75,10 @@ async def upsert_feedback(
     db: AsyncSession,
 ) -> dict:
     """Create or update feedback. Returns {id, created: bool}."""
+    # Service-layer validation
+    dimension_overrides = validate_dimension_overrides(dimension_overrides)
+    corrected_issues = validate_corrected_issues(corrected_issues)
+
     stmt = select(Feedback).where(
         Feedback.optimization_id == optimization_id,
         Feedback.user_id == user_id,
@@ -41,6 +92,19 @@ async def upsert_feedback(
         existing.corrected_issues = json.dumps(corrected_issues) if corrected_issues else None
         existing.comment = comment
         await db.flush()
+
+        logger.info(
+            "feedback_submitted",
+            extra={
+                "feedback_id": existing.id,
+                "optimization_id": optimization_id,
+                "user_id": user_id,
+                "rating": rating,
+                "created": False,
+                "has_overrides": dimension_overrides is not None,
+                "issue_count": len(corrected_issues) if corrected_issues else 0,
+            },
+        )
         return {"id": existing.id, "created": False}
 
     fb = Feedback(
@@ -54,6 +118,19 @@ async def upsert_feedback(
     )
     db.add(fb)
     await db.flush()
+
+    logger.info(
+        "feedback_submitted",
+        extra={
+            "feedback_id": fb.id,
+            "optimization_id": optimization_id,
+            "user_id": user_id,
+            "rating": rating,
+            "created": True,
+            "has_overrides": dimension_overrides is not None,
+            "issue_count": len(corrected_issues) if corrected_issues else 0,
+        },
+    )
     return {"id": fb.id, "created": True}
 
 
@@ -70,7 +147,25 @@ async def get_feedback_for_optimization(
     result = await db.execute(stmt)
     fb = result.scalar_one_or_none()
     if not fb:
+        logger.debug(
+            "feedback_loaded",
+            extra={
+                "optimization_id": optimization_id,
+                "user_id": user_id,
+                "found": False,
+            },
+        )
         return None
+
+    logger.debug(
+        "feedback_loaded",
+        extra={
+            "optimization_id": optimization_id,
+            "user_id": user_id,
+            "found": True,
+            "feedback_id": fb.id,
+        },
+    )
     return _to_dict(fb)
 
 

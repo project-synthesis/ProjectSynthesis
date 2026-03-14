@@ -315,6 +315,35 @@ KNOWN_FRAMEWORKS: frozenset[str] = frozenset(
 )
 
 
+def build_affinity_prompt_section(
+    task_type: str,
+    strategy_affinities: dict | None,
+) -> str:
+    """Build a prompt section injecting user's framework preferences.
+
+    Returns empty string if no affinities for this task type.
+    """
+    if not strategy_affinities:
+        return ""
+    affinities = strategy_affinities.get(task_type, {})
+    if not affinities:
+        return ""
+    preferred = affinities.get("preferred", [])
+    avoid = affinities.get("avoid", [])
+    if not preferred and not avoid:
+        return ""
+    lines = ["\n## User Framework Preferences (from feedback history)"]
+    if preferred:
+        lines.append(f"- Preferred frameworks: {', '.join(preferred)}")
+    if avoid:
+        lines.append(f"- Frameworks to avoid: {', '.join(avoid)}")
+    lines.append(
+        "Weight these preferences when selecting a framework, but override "
+        "if the prompt characteristics strongly favor a different choice."
+    )
+    return "\n".join(lines)
+
+
 def heuristic_strategy_fallback(task_type: str) -> dict:
     """Return a heuristic strategy based on task type.
 

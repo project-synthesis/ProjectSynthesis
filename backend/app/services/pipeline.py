@@ -3,11 +3,16 @@
 Runs the full optimization pipeline (up to 5 stages) and yields SSE events.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import time
-from typing import AsyncGenerator
+from typing import TYPE_CHECKING, AsyncGenerator
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.providers.base import MODEL_ROUTING, LLMProvider, select_model
@@ -19,12 +24,19 @@ from app.services.context_builders import (
     MAX_INSTRUCTIONS,
     MAX_URL_CONTEXTS,
 )
-from app.services.optimizer import run_optimize
+from app.services.framework_profiles import get_profile
+from app.services.issue_guardrails import (
+    build_issue_guardrails,
+    build_issue_verification_prompt,
+)
+from app.services.issue_suggestions import suggest_likely_issues
+from app.services.optimizer import build_adaptation_hints, run_optimize
 from app.services.refinement_service import create_trunk_branch
+from app.services.result_intelligence import compute_result_assessment
 from app.services.retry_oracle import RetryOracle
 from app.services.settings_service import load_settings
 from app.services.strategy import run_strategy
-from app.services.validator import run_validate
+from app.services.validator import compute_effective_weights, run_validate
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +60,141 @@ def _skip_remaining(remaining_stages: list[str]):
         yield ("stage", {"stage": stage_name, "status": "skipped"})
 
 
+async def _load_framework_perf(
+    user_id: str,
+    task_type: str,
+    framework: str,
+    db: AsyncSession,
+) -> dict | None:
+    """Load framework performance for a user/task/framework triple."""
+    from sqlalchemy import select as sa_select
+
+    from app.models.framework_performance import FrameworkPerformance
+    from app.utils.json_fields import parse_json_column
+
+    stmt = (
+        sa_select(FrameworkPerformance)
+        .where(FrameworkPerformance.user_id == user_id)
+        .where(FrameworkPerformance.task_type == task_type)
+        .where(FrameworkPerformance.framework == framework)
+    )
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if not row:
+        return None
+    return {
+        "avg_scores": parse_json_column(row.avg_scores) if row.avg_scores else None,
+        "user_rating_avg": row.user_rating_avg,
+        "sample_count": row.sample_count,
+        "issue_frequency": (
+            parse_json_column(row.issue_frequency) if row.issue_frequency else None
+        ),
+        "elasticity_snapshot": (
+            parse_json_column(row.elasticity_snapshot)
+            if row.elasticity_snapshot
+            else None
+        ),
+        "last_updated": row.last_updated,
+    }
+
+
+async def _load_all_framework_perfs(
+    user_id: str,
+    task_type: str,
+    db: AsyncSession,
+) -> list[dict]:
+    """Load all framework performance rows for a user/task pair."""
+    from sqlalchemy import select as sa_select
+
+    from app.models.framework_performance import FrameworkPerformance
+    from app.utils.json_fields import parse_json_column
+
+    stmt = (
+        sa_select(FrameworkPerformance)
+        .where(FrameworkPerformance.user_id == user_id)
+        .where(FrameworkPerformance.task_type == task_type)
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    return [
+        {
+            "framework": r.framework,
+            "avg_scores": (
+                parse_json_column(r.avg_scores) if r.avg_scores else None
+            ),
+            "user_rating_avg": r.user_rating_avg,
+            "sample_count": r.sample_count,
+        }
+        for r in rows
+    ]
+
+
+async def _upsert_framework_perf(
+    user_id: str,
+    task_type: str,
+    framework: str,
+    scores: dict[str, float],
+    elasticity_snapshot: dict[str, float] | None,
+    db: AsyncSession,
+) -> None:
+    """Upsert framework performance after pipeline validation."""
+    from sqlalchemy import select as sa_select
+
+    from app.models.framework_performance import FrameworkPerformance
+
+    stmt = (
+        sa_select(FrameworkPerformance)
+        .where(FrameworkPerformance.user_id == user_id)
+        .where(FrameworkPerformance.task_type == task_type)
+        .where(FrameworkPerformance.framework == framework)
+    )
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+
+    from datetime import datetime, timezone
+
+    from app.utils.json_fields import parse_json_column
+
+    now = datetime.now(timezone.utc)
+
+    if row:
+        # Incremental average update
+        old_count = row.sample_count or 0
+        new_count = old_count + 1
+        old_avg = parse_json_column(row.avg_scores) if row.avg_scores else {}
+
+        merged_avg: dict[str, float] = {}
+        for dim, score in scores.items():
+            if dim == "overall_score":
+                continue
+            old_val = old_avg.get(dim, score)
+            merged_avg[dim] = (old_val * old_count + score) / new_count
+
+        row.avg_scores = json.dumps(merged_avg)
+        row.sample_count = new_count
+        row.last_updated = now
+        if elasticity_snapshot:
+            row.elasticity_snapshot = json.dumps(elasticity_snapshot)
+    else:
+        dim_scores = {
+            k: v for k, v in scores.items() if k != "overall_score"
+        }
+        row = FrameworkPerformance(
+            user_id=user_id,
+            task_type=task_type,
+            framework=framework,
+            avg_scores=json.dumps(dim_scores),
+            sample_count=1,
+            last_updated=now,
+            elasticity_snapshot=(
+                json.dumps(elasticity_snapshot) if elasticity_snapshot else None
+            ),
+        )
+        db.add(row)
+
+    await db.flush()
+
+
 async def _run_optimize_validate(
     provider: LLMProvider,
     raw_prompt: str,
@@ -62,6 +209,8 @@ async def _run_optimize_validate(
     stream_optimize: bool,
     retry_constraints: dict | None = None,
     user_weights: dict[str, float] | None = None,
+    adaptation_hints: str = "",
+    extra_validation_context: str | None = None,
 ) -> AsyncGenerator[tuple, None]:
     """Run optimize + validate stages and yield all events.
 
@@ -95,6 +244,7 @@ async def _run_optimize_validate(
         retry_constraints=retry_constraints,
         model=model_optimize,
         streaming=stream_optimize,
+        adaptation_hints=adaptation_hints,
     ):
         if event_type == "optimization":
             optimization_result = event_data
@@ -146,6 +296,7 @@ async def _run_optimize_validate(
         instructions=instructions,
         model=model_validate,
         user_weights=user_weights,
+        extra_validation_context=extra_validation_context,
     ):
         if event_type == "validation":
             validation = event_data
@@ -460,6 +611,18 @@ async def run_pipeline(
     })
 
     # ---- Stage 2: Strategy ----
+    # Pre-load framework performance rows for strategy (non-fatal)
+    _strategy_perf_rows: list[dict] | None = None
+    if user_id:
+        try:
+            from app.database import get_session_context as _gs_sp
+            async with _gs_sp() as _db_sp:
+                _strategy_perf_rows = await _load_all_framework_perfs(
+                    user_id, analysis.get("task_type", "general"), _db_sp,
+                )
+        except Exception as e:
+            logger.warning("Failed to load perf rows for strategy: %s", e)
+
     try:
         yield ("stage", {"stage": "strategy", "status": "started"})
         start = time.time()
@@ -487,6 +650,7 @@ async def run_pipeline(
                 instructions=instructions,
                 model=model_strategy,
                 strategy_affinities=strategy_affinities,
+                framework_perf_rows=_strategy_perf_rows,
             ):
                 if event_type == "strategy":
                     strategy_result = event_data
@@ -520,6 +684,74 @@ async def run_pipeline(
             yield item
         return
 
+    # ---- Adaptation wiring (between strategy and optimize) ----
+    primary_framework = (strategy_result or {}).get("primary_framework", "")
+    fw_profile = get_profile(primary_framework) if primary_framework else None
+
+    # Build issue guardrails from feedback-reported issue frequency
+    issue_frequency = adaptation.get("issue_frequency") if adaptation else None
+    # Load framework-specific issue frequency for guardrail merging
+    framework_performance: dict | None = None
+    framework_issue_freq: dict[str, int] | None = None
+    if user_id and primary_framework:
+        try:
+            from app.database import get_session_context as _gs2
+            async with _gs2() as _db2:
+                framework_performance = await _load_framework_perf(
+                    user_id, analysis.get("task_type", "general"),
+                    primary_framework, _db2,
+                )
+                if framework_performance:
+                    framework_issue_freq = framework_performance.get(
+                        "issue_frequency",
+                    )
+        except Exception as e:
+            logger.warning("Failed to load framework performance: %s", e)
+
+    active_guardrails_text = ""
+    if issue_frequency:
+        active_guardrails_text = build_issue_guardrails(
+            issue_frequency, framework_issue_freq,
+        )
+
+    # Build issue verification prompt for the validator
+    issue_verification_context: str | None = None
+    if issue_frequency:
+        issue_verification_context = build_issue_verification_prompt(
+            issue_frequency,
+        )
+
+    # Build adaptation hints for the optimizer (pass guardrails text as list)
+    # build_adaptation_hints expects a list of guardrail strings
+    _guardrail_list: list[str] = []
+    if active_guardrails_text:
+        # Extract individual guardrails from the formatted text
+        _guardrail_list = [
+            line.lstrip("- ").strip()
+            for line in active_guardrails_text.splitlines()
+            if line.strip().startswith("- ")
+        ]
+    _adaptation_hints = build_adaptation_hints(
+        fw_profile, oracle_weights, _guardrail_list,
+    )
+
+    # Compute effective weights for the validator (user weights + framework profile)
+    effective_weights = compute_effective_weights(oracle_weights, fw_profile)
+
+    # Update oracle with framework context (not known at init time)
+    if primary_framework:
+        oracle.framework = primary_framework
+
+    # Emit adaptation_injected event for observability
+    if adaptation:
+        yield ("adaptation_injected", {
+            "framework": primary_framework,
+            "has_user_weights": oracle_weights is not None,
+            "guardrail_count": len(_guardrail_list),
+            "has_verification_prompt": issue_verification_context is not None,
+            "feedback_count": adaptation.get("feedback_count", 0),
+        })
+
     # ---- Stage 3: Optimize (streaming) ----
     _opt_failed = False  # M1: initialize before try so except path never leaves it unbound
     try:
@@ -538,6 +770,7 @@ async def run_pipeline(
             instructions=instructions,
             model=model_optimize,
             streaming=stream_optimize,
+            adaptation_hints=_adaptation_hints,
         ):
             if event_type == "optimization":
                 optimization_result = event_data
@@ -602,7 +835,8 @@ async def run_pipeline(
             codebase_context=codebase_context,
             instructions=instructions,
             model=model_validate,
-            user_weights=oracle_weights,
+            user_weights=effective_weights,
+            extra_validation_context=issue_verification_context,
         ):
             if event_type == "validation":
                 validation = event_data
@@ -659,7 +893,7 @@ async def run_pipeline(
                 validation = best["validation"]
                 yield ("retry_best_selected", {
                     "best_attempt_index": decision.best_attempt,
-                    "best_score": oracle._attempts[decision.best_attempt].overall_score,
+                    "best_score": oracle.attempts[decision.best_attempt].overall_score,
                     "selected_attempt": decision.best_attempt + 1,
                     "total_attempts": len(all_attempts),
                     "reason": decision.reason,
@@ -687,10 +921,12 @@ async def run_pipeline(
                 retry_constraints={
                     "focus_areas": decision.focus_areas,
                     "min_score_target": oracle.threshold + 2,
-                    "previous_score": oracle._attempts[-1].overall_score,
+                    "previous_score": oracle.attempts[-1].overall_score,
                     "retry_attempt": oracle.attempt_count,
                 },
-                user_weights=oracle_weights,
+                user_weights=effective_weights,
+                adaptation_hints=_adaptation_hints,
+                extra_validation_context=issue_verification_context,
             ):
                 if event_type == "_ov_result":
                     ov_result = event_data
@@ -734,12 +970,167 @@ async def run_pipeline(
             })
             break
 
+    # ---- Post-validation intelligence (non-fatal, guarded) ----
+    final_scores = (validation or {}).get("scores", {})
+    final_overall = (validation or {}).get("overall_score", 0.0)
+    final_task_type = analysis.get("task_type", "general")
+
+    # Pre-initialize elasticity_snap so it's available across try blocks
+    elasticity_snap: dict[str, float] | None = None
+    elasticity_matrix = oracle.get_elasticity_snapshot()
+    if primary_framework and elasticity_matrix.get(primary_framework):
+        elasticity_snap = dict(elasticity_matrix[primary_framework])
+
+    # Issue 3: Suggest likely issues
+    try:
+        suggestions = suggest_likely_issues(
+            scores=final_scores,
+            framework=primary_framework,
+            framework_issue_freq=framework_issue_freq,
+            user_issue_freq=issue_frequency,
+        )
+        if suggestions:
+            yield ("issue_suggestions", {
+                "suggestions": [
+                    {
+                        "issue_id": s.issue_id,
+                        "reason": s.reason,
+                        "confidence": round(s.confidence, 2),
+                    }
+                    for s in suggestions
+                ],
+            })
+    except Exception as e:
+        logger.warning("Issue suggestion failed: %s (non-fatal)", e)
+
+    # Issue 4: Result assessment
+    try:
+        oracle_diag = oracle.get_diagnostics()
+        gate_triggered = oracle_diag.get("gate")
+
+        # Build attempt score dicts for trade-off detection
+        attempt_score_dicts = []
+        for att in oracle.attempts:
+            att_dict = dict(att.scores)
+            att_dict["overall_score"] = att.overall_score
+            attempt_score_dicts.append(att_dict)
+
+        # Get previous scores (from first attempt if retried, else None)
+        prev_scores: dict[str, float] | None = None
+        oracle_attempts = oracle.attempts
+        if len(oracle_attempts) >= 2:
+            prev_scores = dict(oracle_attempts[0].scores)
+
+        assessment = compute_result_assessment(
+            overall_score=final_overall,
+            scores=final_scores,
+            threshold=oracle.threshold,
+            framework=primary_framework,
+            task_type=final_task_type,
+            user_weights=oracle_weights,
+            framework_perf=framework_performance,
+            all_framework_perfs=None,  # loaded below if user_id available
+            elasticity=elasticity_snap,
+            previous_scores=prev_scores,
+            attempts=attempt_score_dicts,
+            oracle_diagnostics=[oracle_diag],
+            gate_triggered=gate_triggered,
+            active_guardrails=_guardrail_list or None,
+        )
+        # Load all framework perfs for fit comparison if user authenticated
+        if user_id:
+            try:
+                from app.database import get_session_context as _gs_fit
+                async with _gs_fit() as _db_fit:
+                    all_perfs = await _load_all_framework_perfs(
+                        user_id, final_task_type, _db_fit,
+                    )
+                    if all_perfs:
+                        from app.services.result_intelligence import (
+                            compute_framework_fit,
+                        )
+                        assessment.framework_fit = compute_framework_fit(
+                            framework=primary_framework,
+                            task_type=final_task_type,
+                            overall_score=final_overall,
+                            framework_perf=framework_performance,
+                            all_perfs=all_perfs,
+                        )
+            except Exception as e:
+                logger.warning("Framework fit computation failed: %s", e)
+
+        yield ("result_assessment", assessment.model_dump(mode="json"))
+    except Exception as e:
+        logger.warning("Result assessment failed: %s (non-fatal)", e)
+
+    # Issue 5: Adaptation impact report
+    try:
+        from app.schemas.result_assessment import AdaptationImpactReport
+        from app.services.prompt_diff import SCORE_DIMENSIONS
+        impact_data = AdaptationImpactReport(
+            weights_applied=effective_weights,
+            guardrails_active=_guardrail_list,
+            active_guardrails=[g for g in (_guardrail_list or [])],
+            threshold_used=oracle.threshold,
+        )
+        # Estimate impact by comparing with default behavior
+        if adaptation and oracle_weights:
+            # If adapted weights exist and scores are good, adaptation likely helped
+            if final_overall >= oracle.threshold:
+                impact_data.estimated_impact = "positive"
+            elif final_overall >= oracle.threshold - 1.0:
+                impact_data.estimated_impact = "neutral"
+            else:
+                impact_data.estimated_impact = "negative"
+        # Compute per-dimension improvements/regressions vs previous scores
+        if prev_scores and final_scores:
+            for dim in SCORE_DIMENSIONS:
+                prev_val = prev_scores.get(dim, 0)
+                curr_val = final_scores.get(dim, 0)
+                delta = curr_val - prev_val
+                if delta >= 0.5:
+                    impact_data.improvements.append({
+                        "dim": dim,
+                        "prev": round(prev_val, 1),
+                        "curr": round(curr_val, 1),
+                    })
+                elif delta <= -0.5:
+                    impact_data.regressions.append({
+                        "dim": dim,
+                        "prev": round(prev_val, 1),
+                        "curr": round(curr_val, 1),
+                    })
+            impact_data.has_meaningful_change = bool(
+                impact_data.improvements or impact_data.regressions
+            )
+        yield ("adaptation_impact", impact_data.model_dump(mode="json"))
+    except Exception as e:
+        logger.warning("Adaptation impact report failed: %s (non-fatal)", e)
+
+    # Issue 6: Upsert framework_performance table
+    if user_id and primary_framework and final_scores:
+        try:
+            from app.database import get_session_context as _gs_fp
+            async with _gs_fp() as _db_fp:
+                await _upsert_framework_perf(
+                    user_id=user_id,
+                    task_type=final_task_type,
+                    framework=primary_framework,
+                    scores=final_scores,
+                    elasticity_snapshot=elasticity_snap,
+                    db=_db_fp,
+                )
+                await _db_fp.commit()
+        except Exception as e:
+            logger.warning(
+                "Framework performance upsert failed: %s (non-fatal)", e,
+            )
+
     # Create trunk branch for refinement support
     try:
         from app.database import get_session_context as _gs
         async with _gs() as db:
             final_prompt = (optimization_result or {}).get("optimized_prompt", "")
-            final_scores = validation.get("scores", {})
             if final_prompt:
                 trunk = await create_trunk_branch(
                     optimization_id=optimization_id,

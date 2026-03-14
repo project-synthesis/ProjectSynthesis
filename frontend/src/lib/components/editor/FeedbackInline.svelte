@@ -1,82 +1,97 @@
 <script lang="ts">
   import { feedback } from '$lib/stores/feedback.svelte';
   import { refinement } from '$lib/stores/refinement.svelte';
-  import { forge } from '$lib/stores/forge.svelte';
+  import { toast } from '$lib/stores/toast.svelte';
 
-  let { optimizationId }: { optimizationId: string } = $props();
-
-  // Dimension definitions: abbreviation -> score key
-  const DIMENSIONS: { abbr: string; key: string; label: string }[] = [
-    { abbr: 'CLR', key: 'clarity_score',      label: 'Clarity' },
-    { abbr: 'SPC', key: 'specificity_score',  label: 'Specificity' },
-    { abbr: 'STR', key: 'structure_score',    label: 'Structure' },
-    { abbr: 'FTH', key: 'faithfulness_score', label: 'Faithfulness' },
-    { abbr: 'CNC', key: 'conciseness_score',  label: 'Conciseness' },
-  ];
-
-  // Scores from the validate stage result
-  let validateScores = $derived(
-    (forge.stageResults['validate']?.data?.scores as Record<string, number> | undefined) ?? {}
-  );
+  let {
+    optimizationId,
+    onexpandTier2,
+    onopenTier3,
+  }: {
+    optimizationId: string;
+    onexpandTier2?: () => void;
+    onopenTier3?: () => void;
+  } = $props();
 
   // Current rating from the feedback store
   let currentRating = $derived(feedback.currentFeedback.rating);
 
-  // Overridden dimensions
-  let dimensionOverrides = $derived(feedback.currentFeedback.dimensionOverrides);
+  // Adaptation pulse
+  let pulse = $derived(feedback.adaptationPulse);
 
-  function handleThumbUp() {
+  // Impact delta flash state
+  let impactDelta = $state<{ label: string; value: string } | null>(null);
+  let impactTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  export function flashImpactDelta(label: string, value: string) {
+    if (impactTimeout) clearTimeout(impactTimeout);
+    impactDelta = { label, value };
+    impactTimeout = setTimeout(() => {
+      impactDelta = null;
+    }, 3000);
+  }
+
+  async function handleThumbUp() {
     const next: -1 | 0 | 1 = currentRating === 1 ? 0 : 1;
     feedback.setRating(next);
-    if (next !== 0) {
-      feedback.submit(optimizationId);
+    if (next === 1) {
+      const confirmation = await feedback.submit(optimizationId);
+      if (confirmation) {
+        toast.success(confirmation.summary, 3000);
+      } else if (feedback.error) {
+        toast.error(`Feedback failed: ${feedback.error}`);
+      }
     }
   }
 
-  function handleThumbDown() {
+  async function handleThumbDown() {
     const next: -1 | 0 | 1 = currentRating === -1 ? 0 : -1;
     feedback.setRating(next);
-    if (next !== 0) {
-      feedback.submit(optimizationId);
+    if (next === -1) {
+      onexpandTier2?.();
     }
   }
 
-  function handleDimensionClick(key: string) {
-    if (key in dimensionOverrides) {
-      feedback.removeDimensionOverride(key);
-    } else {
-      // Default override score: bump by 1 if score available, else 5
-      const currentScore = validateScores[key];
-      const overrideScore = currentScore != null ? Math.min(10, Math.round(currentScore) + 1) : 5;
-      feedback.setDimensionOverride(key, overrideScore);
-    }
+  function handleDetails() {
+    onopenTier3?.();
   }
 
   function handleRefine() {
     refinement.openRefinement();
   }
+
+  // Pulse dot class
+  let pulseDotClass = $derived(
+    pulse?.status === 'active'
+      ? 'bg-neon-cyan'
+      : pulse?.status === 'learning'
+        ? 'bg-neon-yellow'
+        : 'bg-text-dim'
+  );
 </script>
 
 <!--
   FeedbackInline — compact strip beneath the optimized prompt.
-  Thumbs + dimension chips + Refine ghost button.
+  Thumbs + adaptation pulse + impact delta + Details + Refine.
   Zero-effects: 1px solid borders only; no box-shadow, text-shadow, drop-shadow.
 -->
 <div
-  class="flex items-center h-7 px-3 gap-2 border-t border-border-subtle bg-bg-card"
+  class="flex items-center h-7 px-2 gap-2 border-t border-border-subtle bg-bg-card"
   aria-label="Inline feedback controls"
 >
   <!-- Thumbs Up -->
   <button
-    class="inline-flex items-center justify-center w-6 h-6 transition-colors
+    class="inline-flex items-center justify-center w-6 h-6 transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed
            {currentRating === 1
              ? 'border border-neon-green bg-neon-green/8 text-neon-green'
              : 'border border-border-subtle text-text-dim hover:border-neon-green/40 hover:text-neon-green'}"
     onclick={handleThumbUp}
     disabled={feedback.currentFeedback.submitting}
+    role="radio"
     aria-label="Thumbs up"
     aria-pressed={currentRating === 1}
     title="Positive feedback"
+    data-testid="feedback-thumb-up"
   >
     <svg width="12" height="12" viewBox="0 0 24 24" fill={currentRating === 1 ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2">
       <path stroke-linecap="round" stroke-linejoin="round"
@@ -88,15 +103,17 @@
 
   <!-- Thumbs Down -->
   <button
-    class="inline-flex items-center justify-center w-6 h-6 transition-colors
+    class="inline-flex items-center justify-center w-6 h-6 transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed
            {currentRating === -1
              ? 'border border-neon-red bg-neon-red/8 text-neon-red'
              : 'border border-border-subtle text-text-dim hover:border-neon-red/40 hover:text-neon-red'}"
     onclick={handleThumbDown}
     disabled={feedback.currentFeedback.submitting}
+    role="radio"
     aria-label="Thumbs down"
     aria-pressed={currentRating === -1}
     title="Negative feedback"
+    data-testid="feedback-thumb-down"
   >
     <svg width="12" height="12" viewBox="0 0 24 24" fill={currentRating === -1 ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2">
       <path stroke-linecap="round" stroke-linejoin="round"
@@ -109,41 +126,45 @@
   <!-- Divider -->
   <div class="w-px h-4 bg-border-subtle" aria-hidden="true"></div>
 
-  <!-- Dimension chips -->
-  {#each DIMENSIONS as dim}
-    {@const score = validateScores[dim.key]}
-    {@const isOverridden = dim.key in dimensionOverrides}
-    <button
-      class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono border transition-colors
-             {isOverridden
-               ? 'border-neon-purple bg-neon-purple/8 text-neon-purple'
-               : score != null
-                 ? 'border-border-subtle text-text-secondary hover:border-neon-cyan/30 hover:text-neon-cyan'
-                 : 'border-border-subtle/60 text-text-dim/60 hover:border-neon-cyan/20 hover:text-text-secondary'}"
-      onclick={() => handleDimensionClick(dim.key)}
-      aria-label="{dim.label} dimension{isOverridden ? ' (overridden)' : ''}"
-      aria-pressed={isOverridden}
-      title="{dim.label}{score != null ? ': ' + score.toFixed(1) + '/10' : ''}{isOverridden ? ' (click to remove override)' : ' (click to override)'}"
-    >
-      <span>{dim.abbr}</span>
-      {#if score != null}
-        <span class="text-[9px] opacity-70">{Math.round(score)}</span>
-      {/if}
-    </button>
-  {/each}
+  <!-- Adaptation pulse dot + label -->
+  {#if pulse}
+    <div class="inline-flex items-center gap-1.5" title={pulse.detail}>
+      <span
+        class="inline-block w-[5px] h-[5px] rounded-full {pulseDotClass}"
+        aria-hidden="true"
+      ></span>
+      <span class="text-[9px] font-mono text-text-dim">{pulse.label}</span>
+    </div>
+  {/if}
+
+  <!-- Impact delta flash -->
+  {#if impactDelta}
+    <span class="text-[9px] font-mono text-neon-green animate-fade-in">
+      {impactDelta.label} {impactDelta.value}
+    </span>
+  {/if}
 
   <!-- Spacer -->
   <div class="flex-1" aria-hidden="true"></div>
 
+  <!-- Details button -->
+  <button
+    class="btn-ghost inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono"
+    onclick={handleDetails}
+    aria-label="Open adaptation details"
+    title="View adaptation intelligence"
+    data-testid="feedback-details"
+  >
+    Details
+  </button>
+
   <!-- Refine ghost button -->
   <button
-    class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono border
-           border-border-subtle text-text-secondary
-           hover:border-neon-cyan/30 hover:text-neon-cyan
-           transition-colors"
+    class="btn-ghost inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono"
     onclick={handleRefine}
     aria-label="Open refinement panel"
     title="Open refinement panel"
+    data-testid="feedback-refine"
   >
     {#if refinement.branchCount > 0}
       <span class="text-neon-purple">&#x25C8;</span>
