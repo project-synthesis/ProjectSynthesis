@@ -286,7 +286,13 @@ async def _record_adaptation_event(
 
 
 async def _purge_old_events(user_id: str, db: AsyncSession) -> None:
-    """Delete adaptation events older than retention period."""
+    """Delete adaptation events older than retention period.
+
+    Retention boundary: events with ``created_at`` strictly before
+    ``now - ADAPTATION_EVENT_RETENTION_DAYS`` (default 90 days) are
+    deleted.  Events exactly at the boundary are preserved.  Only
+    events belonging to ``user_id`` are affected.
+    """
     from sqlalchemy import delete as sa_delete
 
     from app.models.adaptation_event import AdaptationEvent

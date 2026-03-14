@@ -740,7 +740,7 @@ async def run_pipeline(
 
     # Update oracle with framework context (not known at init time)
     if primary_framework:
-        oracle._framework = primary_framework
+        oracle.framework = primary_framework
 
     # Emit adaptation_injected event for observability
     if adaptation:
@@ -893,7 +893,7 @@ async def run_pipeline(
                 validation = best["validation"]
                 yield ("retry_best_selected", {
                     "best_attempt_index": decision.best_attempt,
-                    "best_score": oracle._attempts[decision.best_attempt].overall_score,
+                    "best_score": oracle.attempts[decision.best_attempt].overall_score,
                     "selected_attempt": decision.best_attempt + 1,
                     "total_attempts": len(all_attempts),
                     "reason": decision.reason,
@@ -921,7 +921,7 @@ async def run_pipeline(
                 retry_constraints={
                     "focus_areas": decision.focus_areas,
                     "min_score_target": oracle.threshold + 2,
-                    "previous_score": oracle._attempts[-1].overall_score,
+                    "previous_score": oracle.attempts[-1].overall_score,
                     "retry_attempt": oracle.attempt_count,
                 },
                 user_weights=effective_weights,
@@ -977,8 +977,9 @@ async def run_pipeline(
 
     # Pre-initialize elasticity_snap so it's available across try blocks
     elasticity_snap: dict[str, float] | None = None
-    if primary_framework and oracle._elasticity_matrix.get(primary_framework):
-        elasticity_snap = dict(oracle._elasticity_matrix[primary_framework])
+    elasticity_matrix = oracle.get_elasticity_snapshot()
+    if primary_framework and elasticity_matrix.get(primary_framework):
+        elasticity_snap = dict(elasticity_matrix[primary_framework])
 
     # Issue 3: Suggest likely issues
     try:
@@ -1009,15 +1010,16 @@ async def run_pipeline(
 
         # Build attempt score dicts for trade-off detection
         attempt_score_dicts = []
-        for att in oracle._attempts:
+        for att in oracle.attempts:
             att_dict = dict(att.scores)
             att_dict["overall_score"] = att.overall_score
             attempt_score_dicts.append(att_dict)
 
         # Get previous scores (from first attempt if retried, else None)
         prev_scores: dict[str, float] | None = None
-        if len(oracle._attempts) >= 2:
-            prev_scores = dict(oracle._attempts[0].scores)
+        oracle_attempts = oracle.attempts
+        if len(oracle_attempts) >= 2:
+            prev_scores = dict(oracle_attempts[0].scores)
 
         assessment = compute_result_assessment(
             overall_score=final_overall,

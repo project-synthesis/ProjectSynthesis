@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["framework"])
 
 
+# No authentication required — static configuration data, no user context needed.
+# Rate limited to prevent enumeration/DoS.
 @router.get(
     "/framework-profiles",
     dependencies=[Depends(RateLimit(lambda: settings.RATE_LIMIT_HISTORY))],

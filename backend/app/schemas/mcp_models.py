@@ -310,6 +310,7 @@ class SubmitFeedbackInput(BaseModel):
     )
     corrected_issues: list[str] | None = Field(
         default=None,
+        max_length=50,
         description=(
             "Issue IDs the user observed (e.g. 'lost_key_terms', 'too_verbose'). "
             "See CORRECTABLE_ISSUES for valid IDs."

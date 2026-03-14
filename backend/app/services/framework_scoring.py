@@ -20,12 +20,18 @@ def compute_framework_composite_score(
     """Compute composite score for framework ranking.
     composite = weighted_avg * satisfaction_factor * recency_decay"""
     if user_weights and avg_scores:
-        scores = json.loads(avg_scores) if isinstance(avg_scores, str) else avg_scores
-        total_w = sum(user_weights.get(d, 0.2) for d in scores)
-        if total_w > 0:
-            base = sum(scores[d] * user_weights.get(d, 0.2) for d in scores) / total_w
+        try:
+            scores = json.loads(avg_scores) if isinstance(avg_scores, str) else avg_scores
+        except (json.JSONDecodeError, TypeError):
+            scores = None
+        if not scores:
+            base = avg_overall  # fall back to raw average
         else:
-            base = avg_overall
+            total_w = sum(user_weights.get(d, 0.2) for d in scores)
+            if total_w > 0:
+                base = sum(scores[d] * user_weights.get(d, 0.2) for d in scores) / total_w
+            else:
+                base = avg_overall
     else:
         base = avg_overall
 

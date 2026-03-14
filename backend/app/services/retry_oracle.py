@@ -102,6 +102,26 @@ class RetryOracle:
         self._last_decision: RetryDecision | None = None
 
     @property
+    def framework(self) -> str | None:
+        return self._framework
+
+    @framework.setter
+    def framework(self, value: str | None) -> None:
+        self._framework = value
+
+    @property
+    def attempts(self) -> list:
+        return list(self._attempts)
+
+    @property
+    def last_decision(self) -> RetryDecision | None:
+        return self._last_decision
+
+    def get_elasticity_snapshot(self) -> dict[str, dict[str, float]]:
+        """Return a copy of the elasticity matrix for persistence."""
+        return {fw: dict(dims) for fw, dims in self._elasticity_matrix.items()}
+
+    @property
     def attempt_count(self) -> int:
         return len(self._attempts)
 

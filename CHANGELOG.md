@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added `max_length=50` to MCP `SubmitFeedbackInput.corrected_issues` to match REST schema bounds
+- Fixed `framework_scoring.py` crash on malformed `avg_scores` JSON by wrapping `json.loads` with try/except
+- Added public accessors (`framework`, `attempts`, `last_decision`, `get_elasticity_snapshot()`) to `RetryOracle` and migrated `pipeline.py` off private attributes
+- Added `_purge_old_events` integration tests covering retention boundary, user isolation, and old event deletion
+- Added no-auth rationale comment on `/api/framework-profiles` endpoint
 - Improved adaptation summary by extracting `build_adaptation_summary_data()` shared by REST and MCP endpoints
 - Improved framework performance by extracting `format_framework_performance()` shared by REST and MCP endpoints
 - Fixed `to_dict()` not parsing `active_guardrails` and `codebase_context_snapshot` JSON columns
