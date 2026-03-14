@@ -60,13 +60,13 @@
     refinement.openRefinement();
   }
 
-  // Pulse dot color
-  let pulseDotColor = $derived(
+  // Pulse dot class
+  let pulseDotClass = $derived(
     pulse?.status === 'active'
-      ? '#00e5ff'
+      ? 'bg-neon-cyan'
       : pulse?.status === 'learning'
-        ? '#fbbf24'
-        : '#555'
+        ? 'bg-neon-yellow'
+        : 'bg-text-dim'
   );
 </script>
 
@@ -81,7 +81,7 @@
 >
   <!-- Thumbs Up -->
   <button
-    class="inline-flex items-center justify-center w-6 h-6 transition-colors
+    class="inline-flex items-center justify-center w-6 h-6 transition-colors disabled:opacity-40 disabled:cursor-not-allowed
            {currentRating === 1
              ? 'border border-neon-green bg-neon-green/8 text-neon-green'
              : 'border border-border-subtle text-text-dim hover:border-neon-green/40 hover:text-neon-green'}"
@@ -103,7 +103,7 @@
 
   <!-- Thumbs Down -->
   <button
-    class="inline-flex items-center justify-center w-6 h-6 transition-colors
+    class="inline-flex items-center justify-center w-6 h-6 transition-colors disabled:opacity-40 disabled:cursor-not-allowed
            {currentRating === -1
              ? 'border border-neon-red bg-neon-red/8 text-neon-red'
              : 'border border-border-subtle text-text-dim hover:border-neon-red/40 hover:text-neon-red'}"
@@ -130,8 +130,7 @@
   {#if pulse}
     <div class="inline-flex items-center gap-1.5" title={pulse.detail}>
       <span
-        class="inline-block rounded-full"
-        style="width: 5px; height: 5px; background: {pulseDotColor};"
+        class="inline-block w-[5px] h-[5px] rounded-full {pulseDotClass}"
         aria-hidden="true"
       ></span>
       <span class="text-[9px] font-mono text-text-dim">{pulse.label}</span>

@@ -153,7 +153,7 @@
     <div class="grid grid-cols-2 gap-x-4" style="gap-y: 3px;">
       <!-- Fidelity group -->
       <div role="group" aria-label="Fidelity issues">
-        <p class="text-[9px] font-mono uppercase mb-1" style="color: #fbbf24;">Fidelity</p>
+        <p class="text-[9px] font-mono uppercase mb-1 text-neon-yellow">Fidelity</p>
         {#each FIDELITY_ISSUES as issue}
           {@const checked = isIssueChecked(issue.id)}
           {@const suggested = suggestedIds.has(issue.id)}
@@ -193,7 +193,7 @@
 
       <!-- Quality group -->
       <div role="group" aria-label="Quality issues">
-        <p class="text-[9px] font-mono uppercase mb-1" style="color: #4d8eff;">Quality</p>
+        <p class="text-[9px] font-mono uppercase mb-1 text-neon-blue">Quality</p>
         {#each QUALITY_ISSUES as issue}
           {@const checked = isIssueChecked(issue.id)}
           {@const suggested = suggestedIds.has(issue.id)}
@@ -310,10 +310,10 @@
 
 <style>
   .tier2-enter {
-    animation: tier2SlideIn 300ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    animation: tier2SlideIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
   .tier2-exit {
-    animation: tier2SlideOut 200ms cubic-bezier(0.55, 0, 1, 0.45) forwards;
+    animation: tier2SlideOut 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
   }
   @keyframes tier2SlideIn {
     from {
@@ -337,6 +337,11 @@
       opacity: 0;
       max-height: 0;
       transform: scaleY(0.8);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tier2-enter, .tier2-exit {
+      animation-duration: 0.01ms !important;
     }
   }
 </style>

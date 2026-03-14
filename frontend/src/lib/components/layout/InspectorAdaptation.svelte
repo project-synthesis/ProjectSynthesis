@@ -1,6 +1,14 @@
 <script lang="ts">
   import { feedback } from '$lib/stores/feedback.svelte';
-  import { getScoreColor } from '$lib/utils/colors';
+
+  // Weight-to-Tailwind class helper for bar fills
+  function getScoreBarClass(weight: number): string {
+    const score = weight * 40; // normalize weight (0-0.25) to score-like range (0-10)
+    if (score >= 9) return 'bg-neon-green/15 border border-neon-green/30';
+    if (score >= 7) return 'bg-neon-cyan/15 border border-neon-cyan/30';
+    if (score >= 4) return 'bg-neon-yellow/15 border border-neon-yellow/30';
+    return 'bg-neon-red/15 border border-neon-red/30';
+  }
 
   // Keys match backend adaptation_engine output: full `_score` suffixed keys
   const DEFAULT_WEIGHTS: Record<string, number> = {
@@ -63,13 +71,12 @@
         {#each Object.keys(DEFAULT_WEIGHTS) as dim}
           {@const liveW = state?.dimensionWeights?.[dim] ?? DEFAULT_WEIGHTS[dim]}
           {@const pct = Math.round((liveW / maxWeight) * 100)}
-          {@const dimColor = getScoreColor(liveW * 40)}
           {@const shift = summary?.priorities?.find((p) => p.dimension === dim)}
           <div class="flex flex-col items-center gap-0.5">
             <div class="w-full bg-bg-primary relative" style="height: 40px;">
               <div
-                class="absolute bottom-0 w-full transition-all"
-                style="height: {pct}%; background: {dimColor};"
+                class="absolute bottom-0 w-full transition-all {getScoreBarClass(liveW)}"
+                style="height: {pct}%;"
               ></div>
             </div>
             <span class="text-[8px] font-mono text-text-dim text-center leading-tight">

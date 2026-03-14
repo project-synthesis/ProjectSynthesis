@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { getScoreColor } from '$lib/utils/colors';
   import { forge } from '$lib/stores/forge.svelte';
 
   let { assessment }: {
@@ -66,12 +65,12 @@
   let expandedL1 = $state(false);
   let expandedDimension = $state<string | null>(null);
 
-  // Verdict colors
-  const verdictColors: Record<string, string> = {
-    strong: '#22ff88',
-    solid: '#00e5ff',
-    mixed: '#fbbf24',
-    weak: '#ff3366',
+  // Verdict Tailwind class maps
+  const verdictClasses: Record<string, string> = {
+    strong: 'text-neon-green',
+    solid: 'text-neon-cyan',
+    mixed: 'text-neon-yellow',
+    weak: 'text-neon-red',
   };
 
   const verdictBorderColors: Record<string, string> = {
@@ -87,9 +86,17 @@
     low: 'LOW',
   };
 
+  // Score-to-Tailwind-class helper
+  function getScoreClass(score: number): string {
+    if (score >= 9) return 'text-neon-green border-neon-green/20';
+    if (score >= 7) return 'text-neon-cyan border-neon-cyan/20';
+    if (score >= 4) return 'text-neon-yellow border-neon-yellow/20';
+    return 'text-neon-red border-neon-red/20';
+  }
+
   let overallScore = $derived(forge.overallScore ?? 0);
-  let scoreColor = $derived(getScoreColor(overallScore));
-  let verdictColor = $derived(verdictColors[assessment.verdict] ?? '#fbbf24');
+  let overallScoreClass = $derived(getScoreClass(overallScore));
+  let verdictClass = $derived(verdictClasses[assessment.verdict] ?? 'text-neon-yellow');
   let verdictBorder = $derived(verdictBorderColors[assessment.verdict] ?? 'border-neon-yellow');
 
   // Retry sparkline: max score for normalizing bar heights
@@ -135,16 +142,16 @@
   >
     <!-- Score circle -->
     <div
-      class="shrink-0 flex items-center justify-center border-2 font-mono text-[11px] font-bold"
-      style="width: 36px; height: 36px; border-radius: 50%; border-color: {scoreColor}; color: {scoreColor};"
+      class="shrink-0 flex items-center justify-center border-0 font-mono text-[11px] font-bold {overallScoreClass}"
+      style="width: 36px; height: 36px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px currentColor;"
     >
       {overallScore.toFixed(1)}
     </div>
 
     <!-- Verdict badge -->
     <span
-      class="shrink-0 px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase border {verdictBorder}"
-      style="color: {verdictColor}; border-radius: 2px;"
+      class="shrink-0 px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase border {verdictBorder} {verdictClass}"
+      style="border-radius: 2px;"
     >
       {assessment.verdict.toUpperCase()}
     </span>
@@ -167,8 +174,8 @@
           {@const barH = Math.max(2, (score / sparklineMax) * 16)}
           {@const isBest = i + 1 === assessment.retry_journey.best_attempt}
           <div
-            class="w-1"
-            style="height: {barH}px; background: {isBest ? '#00e5ff' : '#555'};"
+            class="w-1 {isBest ? 'bg-neon-cyan' : 'bg-text-dim/30'}"
+            style="height: {barH}px;"
           ></div>
         {/each}
       </div>
@@ -185,7 +192,6 @@
   {#if expandedL1}
     <div class="border-t border-border-subtle">
       {#each sortedInsights as insight, i}
-        {@const dimColor = getScoreColor(insight.score)}
         {@const isTradeOff = tradeOffLosers.has(insight.dimension)}
         {@const isExpanded = expandedDimension === insight.dimension}
         {@const elasticity = assessment.improvement_signals.find(
@@ -201,8 +207,8 @@
         >
           <!-- Score -->
           <span
-            class="shrink-0 w-9 text-center text-[11px] font-mono font-bold border-l-2"
-            style="border-color: {dimColor}; color: {dimColor}; padding-left: 4px;"
+            class="shrink-0 w-9 text-center text-[11px] font-mono font-bold border-l {getScoreClass(insight.score)}"
+            style="padding-left: 4px;"
           >
             {insight.score.toFixed(0)}
           </span>
@@ -253,8 +259,8 @@
                       {@const h = Math.max(2, (score / sparklineMax) * 24)}
                       {@const best = j + 1 === assessment.retry_journey.best_attempt}
                       <div
-                        class="flex-1"
-                        style="height: {h}px; background: {best ? '#00e5ff' : '#333'}; max-width: 12px;"
+                        class="flex-1 {best ? 'bg-neon-cyan' : 'bg-text-dim/30'}"
+                        style="height: {h}px; max-width: 12px;"
                       ></div>
                     {/each}
                   </div>
