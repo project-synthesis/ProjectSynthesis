@@ -7,7 +7,7 @@
   import { fetchHistory, fetchHistoryStats, fetchOptimization, deleteOptimization, patchOptimization, type HistoryStats } from '$lib/api/client';
   import { getStrategyHex } from '$lib/utils/strategy';
   import ScoreCircle from '$lib/components/shared/ScoreCircle.svelte';
-  import CompareModal from '$lib/components/shared/CompareModal.svelte';
+  import { workbench } from '$lib/stores/workbench.svelte';
   import { onMount } from 'svelte';
 
   let loading = $state(false);
@@ -16,9 +16,6 @@
   let selectedIds = $state<Set<string>>(new Set());
   let confirmBatchDelete = $state(false);
   let showFilters = $state(false);
-  let showCompare = $state(false);
-  let compareIdA = $state('');
-  let compareIdB = $state('');
 
   // Inline title editing state
   let editingId = $state<string | null>(null);
@@ -97,9 +94,7 @@
   function handleCompare() {
     const ids = Array.from(selectedIds);
     if (ids.length === 2) {
-      compareIdA = ids[0];
-      compareIdB = ids[1];
-      showCompare = true;
+      workbench.openCompare(ids[0], ids[1]);
       clearSelection();
     }
   }
@@ -624,10 +619,3 @@
   </div>
 </div>
 
-{#if showCompare}
-  <CompareModal
-    idA={compareIdA}
-    idB={compareIdB}
-    onclose={() => { showCompare = false; }}
-  />
-{/if}

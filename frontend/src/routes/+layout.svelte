@@ -20,6 +20,7 @@
   import StatusBar from '$lib/components/layout/StatusBar.svelte';
   import AuthGate from '$lib/components/layout/AuthGate.svelte';
   import OnboardingModal from '$lib/components/layout/OnboardingModal.svelte';
+  import CompareModal from '$lib/components/shared/CompareModal.svelte';
   import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
   import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
   import SpotlightOverlay from '$lib/components/shared/SpotlightOverlay.svelte';
@@ -707,6 +708,13 @@
       repoLinked={github.selectedRepo != null}
       providerReady={workbench.isConnected && workbench.provider !== 'unknown'}
       providerType={workbench.provider}
+    />
+  {/if}
+  {#if workbench.showCompare}
+    <CompareModal
+      idA={workbench.compareIdA}
+      idB={workbench.compareIdB}
+      onclose={() => { workbench.closeCompare(); }}
     />
   {/if}
 {/if}

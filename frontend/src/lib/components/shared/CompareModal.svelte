@@ -348,8 +348,8 @@
           {#if compareData.modifiers.length > 0}
             <div class="flex flex-wrap gap-1 mb-1">
               {#each compareData.modifiers as mod}
-                <span class="font-mono text-[8px] px-1 py-0.5 border border-neon-teal/25 text-neon-teal uppercase tracking-wider">
-                  {mod}
+                <span class="font-mono text-[8px] px-1 py-0.5 border border-neon-teal/25 text-neon-teal bg-neon-teal/5 uppercase tracking-wider">
+                  {mod.replace(/_/g, ' ')}
                 </span>
               {/each}
             </div>

@@ -41,6 +41,23 @@ class WorkbenchStore {
   showOnboarding = $state(false);
   appVersion = $state('');
 
+  // Compare modal state (rendered at layout level, triggered from NavigatorHistory)
+  showCompare = $state(false);
+  compareIdA = $state('');
+  compareIdB = $state('');
+
+  openCompare(idA: string, idB: string) {
+    this.compareIdA = idA;
+    this.compareIdB = idB;
+    this.showCompare = true;
+  }
+
+  closeCompare() {
+    this.showCompare = false;
+    this.compareIdA = '';
+    this.compareIdB = '';
+  }
+
   get navCssWidth() {
     return this.navigatorCollapsed ? '0px' : `${this.navigatorWidth}px`;
   }

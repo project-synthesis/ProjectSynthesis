@@ -57,7 +57,9 @@ async def compare_optimizations(
     opt_a = await _fetch_user_optimization(a, current_user.id)
     opt_b = await _fetch_user_optimization(b, current_user.id)
     if not opt_a.optimized_prompt or not opt_b.optimized_prompt:
-        raise HTTPException(status_code=422, detail="Cannot compare incomplete optimizations")
+        raise HTTPException(status_code=422, detail="Cannot compare incomplete optimizations — both must have an optimized prompt")
+    if opt_a.overall_score is None or opt_b.overall_score is None:
+        raise HTTPException(status_code=422, detail="Cannot compare unscored optimizations — both must have validation scores")
 
     cache = get_cache()
     key = _cache_key(a, b)
