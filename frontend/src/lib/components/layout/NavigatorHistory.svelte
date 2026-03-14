@@ -436,47 +436,37 @@
       </div>
     </div>
 
-    <!-- Selection toolbar -->
+    <!-- Selection toolbar — fixed 2-column grid: count left, actions right -->
     {#if selectedIds.size >= 1}
-      <div class="px-2 py-1.5 border-b border-neon-cyan/20 bg-neon-cyan/5 flex items-center justify-between">
-        <span class="text-[10px] text-neon-cyan">{selectedIds.size} selected</span>
-        <div class="flex items-center gap-1">
+      <div class="grid grid-cols-[auto_1fr] items-center gap-x-2 px-2 py-1 border-b border-neon-cyan/20 bg-neon-cyan/5 min-h-[28px]">
+        <span class="font-mono text-[10px] text-neon-cyan shrink-0">{selectedIds.size} selected</span>
+        <div class="flex items-center gap-1 justify-end">
           {#if selectedIds.size === 2}
             <button
               class="text-[10px] px-2 py-0.5 bg-neon-cyan/20 border border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/30 transition-colors"
               onclick={handleCompare}
-            >
-              Compare
-            </button>
+            >Compare</button>
           {/if}
           {#if confirmBatchDelete}
-            <span class="text-[10px] text-neon-red">Confirm?</span>
+            <span class="text-[10px] text-neon-red font-mono">Confirm?</span>
             <button
               class="text-[10px] px-2 py-0.5 bg-neon-red/20 border border-neon-red/40 text-neon-red hover:bg-neon-red/30 transition-colors"
               onclick={handleBatchDelete}
-            >
-              Yes, delete
-            </button>
+            >Delete</button>
             <button
               class="text-[10px] px-1.5 py-0.5 text-text-dim hover:text-text-secondary transition-colors"
               onclick={cancelBatchDelete}
-            >
-              No
-            </button>
+            >No</button>
           {:else}
             <button
               class="text-[10px] px-2 py-0.5 bg-neon-red/10 border border-neon-red/20 text-neon-red/70 hover:text-neon-red hover:border-neon-red/40 hover:bg-neon-red/20 transition-colors"
               onclick={handleBatchDelete}
-            >
-              Delete Selected
-            </button>
+            >Delete</button>
           {/if}
           <button
             class="text-[10px] px-1.5 py-0.5 text-text-dim hover:text-text-secondary transition-colors"
             onclick={() => { clearSelection(); cancelBatchDelete(); }}
-          >
-            Cancel
-          </button>
+          >Cancel</button>
         </div>
       </div>
     {/if}
@@ -487,11 +477,11 @@
         <!-- Skeleton loading rows with shimmer animation -->
         <div class="space-y-1 p-1" data-testid="history-skeleton">
           {#each Array(5) as _, i}
-            <div class="h-[32px] flex items-center gap-2 px-2 rounded" style="animation: shimmer 2s linear infinite; animation-delay: {i * 50}ms;">
-              <div class="w-5 h-5 rounded-full bg-bg-hover animate-shimmer" style="background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
+            <div class="h-[32px] flex items-center gap-2 px-2" style="animation: shimmer 2s linear infinite; animation-delay: {i * 50}ms;">
+              <div class="w-5 h-5 bg-bg-hover" style="background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
               <div class="flex-1 space-y-1">
-                <div class="h-2.5 rounded bg-bg-hover animate-shimmer" style="width: {70 + i * 5}%; background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
-                <div class="h-2 rounded bg-bg-hover animate-shimmer" style="width: {40 + i * 8}%; background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
+                <div class="h-2.5 bg-bg-hover" style="width: {70 + i * 5}%; background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
+                <div class="h-2 bg-bg-hover" style="width: {40 + i * 8}%; background: linear-gradient(90deg, var(--color-bg-hover) 25%, var(--color-bg-card) 50%, var(--color-bg-hover) 75%); background-size: 200% 100%;"></div>
               </div>
             </div>
           {/each}
@@ -523,7 +513,7 @@
       {:else}
         {#each history.entries as entry, i (entry.id)}
           <div
-            class="w-full text-left px-2 rounded text-xs transition-colors duration-200 mb-0.5 cursor-pointer group/entry h-[32px] flex items-center
+            class="w-full text-left px-2 text-xs transition-colors duration-200 mb-0.5 cursor-pointer group/entry h-[32px] flex items-center
               {selectedIds.has(entry.id)
                 ? 'bg-neon-cyan/5 border border-neon-cyan/20'
                 : history.selectedId === entry.id
@@ -556,7 +546,7 @@
                   checked={selectedIds.has(entry.id)}
                   onchange={(e: Event) => toggleSelect(e as unknown as MouseEvent, entry.id)}
                   onclick={(e: MouseEvent) => e.stopPropagation()}
-                  class="w-3 h-3 rounded border-border-subtle accent-neon-cyan cursor-pointer"
+                  class="w-3 h-3 border-border-subtle accent-neon-cyan cursor-pointer"
                 />
               </label>
               {#if entry.overall_score != null}
