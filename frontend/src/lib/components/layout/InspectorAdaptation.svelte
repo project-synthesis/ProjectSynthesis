@@ -42,7 +42,7 @@
 
   let showTechnicalDetails = $state(false);
 
-  let state = $derived(feedback.adaptationState);
+  let adaptState = $derived(feedback.adaptationState);
   let summary = $derived(feedback.adaptationSummary);
 
   // Load adaptation data on mount
@@ -61,7 +61,7 @@
 <div class="space-y-3">
   <h3 class="section-heading">Adaptation</h3>
 
-  {#if !state && !summary}
+  {#if !adaptState && !summary}
     <p class="text-xs text-text-dim">No adaptation data.</p>
   {:else}
     <!-- Priority bar chart: 5-column grid showing relative dimension weights -->
@@ -69,7 +69,7 @@
       <p class="text-[10px] text-text-dim uppercase font-mono">Dimension Priorities</p>
       <div class="grid grid-cols-5 gap-1">
         {#each Object.keys(DEFAULT_WEIGHTS) as dim}
-          {@const liveW = state?.dimensionWeights?.[dim] ?? DEFAULT_WEIGHTS[dim]}
+          {@const liveW = adaptState?.dimensionWeights?.[dim] ?? DEFAULT_WEIGHTS[dim]}
           {@const pct = Math.round((liveW / maxWeight) * 100)}
           {@const shift = summary?.priorities?.find((p) => p.dimension === dim)}
           <div class="flex flex-col items-center gap-0.5">
@@ -152,10 +152,10 @@
     {/if}
 
     <!-- Strategy affinities (existing, more detailed) -->
-    {#if state?.strategyAffinities && Object.keys(state.strategyAffinities).length > 0}
+    {#if adaptState?.strategyAffinities && Object.keys(adaptState.strategyAffinities).length > 0}
       <div class="space-y-1.5">
         <p class="text-[10px] text-text-dim uppercase font-mono">Strategy Affinities</p>
-        {#each Object.entries(state.strategyAffinities) as [taskType, affinity]}
+        {#each Object.entries(adaptState.strategyAffinities) as [taskType, affinity]}
           {@const aff = affinity as { preferred?: string[]; avoid?: string[] } | null}
           <div class="p-1.5 bg-bg-card border border-border-subtle space-y-1">
             <span class="font-mono text-[10px] text-text-secondary capitalize">{taskType}</span>
@@ -183,12 +183,12 @@
       <p class="text-[10px] text-text-dim uppercase font-mono">Quality Threshold</p>
       <div class="flex items-center gap-2">
         <span class="font-mono text-sm text-text-primary">
-          {(summary?.retryThreshold ?? state?.retryThreshold ?? 5.0).toFixed(1)}
+          {(summary?.retryThreshold ?? adaptState?.retryThreshold ?? 5.0).toFixed(1)}
         </span>
         <div class="flex-1 relative h-1 bg-bg-primary">
           <div
             class="absolute top-0 h-full w-px bg-neon-cyan"
-            style="left: {(((summary?.retryThreshold ?? state?.retryThreshold ?? 5.0) - 3.0) / 5.0) * 100}%;"
+            style="left: {(((summary?.retryThreshold ?? adaptState?.retryThreshold ?? 5.0) - 3.0) / 5.0) * 100}%;"
           ></div>
         </div>
       </div>
@@ -203,7 +203,7 @@
       <div class="flex justify-between">
         <span class="text-text-dim">Feedback count</span>
         <span class="text-text-primary">
-          {summary?.feedbackCount ?? state?.feedbackCount ?? 0}
+          {summary?.feedbackCount ?? adaptState?.feedbackCount ?? 0}
         </span>
       </div>
     </div>
@@ -224,17 +224,17 @@
       </svg>
       Technical Details
     </button>
-    {#if showTechnicalDetails && state}
+    {#if showTechnicalDetails && adaptState}
       <div class="p-1.5 bg-bg-primary border border-border-subtle text-[9px] font-mono text-text-dim space-y-1">
-        <div>Retry threshold: {state.retryThreshold.toFixed(2)}</div>
-        {#if state.dimensionWeights}
+        <div>Retry threshold: {adaptState.retryThreshold.toFixed(2)}</div>
+        {#if adaptState.dimensionWeights}
           <div>Weights: {JSON.stringify(
             Object.fromEntries(
-              Object.entries(state.dimensionWeights).map(([k, v]) => [k.replace('_score', ''), (v as number).toFixed(3)])
+              Object.entries(adaptState.dimensionWeights).map(([k, v]) => [k.replace('_score', ''), (v as number).toFixed(3)])
             )
           )}</div>
         {/if}
-        <div>Feedback count: {state.feedbackCount}</div>
+        <div>Feedback count: {adaptState.feedbackCount}</div>
       </div>
     {/if}
   {/if}
