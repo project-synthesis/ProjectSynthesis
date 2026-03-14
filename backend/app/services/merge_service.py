@@ -334,9 +334,10 @@ async def stream_merge(
         f"## Prompt B ({b_label})\n\n{b_prompt}"
     )
 
-    # Resolve model — "auto" falls back to a concrete model string because
-    # provider.stream() requires model as a positional argument.
-    resolved_model = model if model != "auto" else "claude-sonnet-4-5-20250514"
+    # Resolve model — "auto" uses the optimize stage's model from MODEL_ROUTING
+    # (Opus 4.6 by default) since merge is a quality-critical creative task.
+    from app.providers.base import MODEL_ROUTING
+    resolved_model = model if model != "auto" else MODEL_ROUTING.get("optimize", "claude-opus-4-6")
 
     logger.info(
         "Starting merge stream: model=%s, situation=%s",

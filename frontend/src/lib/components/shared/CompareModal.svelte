@@ -83,6 +83,26 @@
   let mergeController = $state<AbortController | null>(null);
   let accepting = $state(false);
 
+  // Loading step rotation
+  const loadingSteps = [
+    'Computing semantic similarity...',
+    'Extracting score intelligence...',
+    'Analyzing strategy effectiveness...',
+    'Evaluating context impact...',
+    'Generating merge directives...',
+  ];
+  let loadingStepIndex = $state(0);
+
+  // Cycle loading step every 800ms while loading
+  $effect(() => {
+    if (!loading) return;
+    loadingStepIndex = 0;
+    const interval = setInterval(() => {
+      loadingStepIndex = (loadingStepIndex + 1) % loadingSteps.length;
+    }, 800);
+    return () => clearInterval(interval);
+  });
+
   // Accordion open state — all collapsed initially
   let openAccordions = $state<Record<string, boolean>>({
     structural: false,
@@ -325,7 +345,7 @@
       {/if}
     </div>
 
-    <!-- Loading: branded thinking blocks -->
+    <!-- Loading: branded thinking block with rotating step -->
     {#if loading}
       <div class="flex-1 flex items-center justify-center">
         <div class="w-72 space-y-3">
@@ -333,18 +353,14 @@
           <div class="h-0.5 w-full bg-border-subtle overflow-hidden">
             <div class="h-full w-1/3 bg-neon-cyan/40 animate-indeterminate"></div>
           </div>
-          <!-- Staggered thinking steps -->
-          <div class="space-y-1.5">
-            <div class="flex items-center gap-2" style="animation: list-item-in 0.2s cubic-bezier(0.16,1,0.3,1) 0ms both;">
-              <span class="w-3 h-3 rounded-full shrink-0 border-t animate-spin" style="border-color: transparent; border-top-color: #00e5ff;"></span>
-              <span class="font-mono text-[10px] text-text-dim">Computing semantic similarity...</span>
-            </div>
-            <div class="flex items-center gap-2" style="animation: list-item-in 0.2s cubic-bezier(0.16,1,0.3,1) 300ms both;">
-              <span class="font-mono text-[10px] text-text-dim">Extracting score intelligence...</span>
-            </div>
-            <div class="flex items-center gap-2" style="animation: list-item-in 0.2s cubic-bezier(0.16,1,0.3,1) 600ms both;">
-              <span class="font-mono text-[10px] text-text-dim">Generating merge directives...</span>
-            </div>
+          <!-- Single rotating step -->
+          <div class="flex items-center gap-2 justify-center">
+            <span class="w-3 h-3 rounded-full shrink-0 border-t animate-spin" style="border-color: transparent; border-top-color: #00e5ff;"></span>
+            {#key loadingStepIndex}
+              <span class="font-mono text-[10px] text-text-dim" style="animation: list-item-in 0.15s cubic-bezier(0.16,1,0.3,1) both;">
+                {loadingSteps[loadingStepIndex]}
+              </span>
+            {/key}
           </div>
         </div>
       </div>
@@ -812,13 +828,13 @@
               onclick={handleAccept}
               disabled={accepting}
             >
-              {accepting ? 'Accepting...' : 'Accept \u2014 Archive Parents'}
+              {accepting ? 'Accepting...' : 'Accept — Archive Parents'}
             </button>
             <button
               class="font-mono text-[10px] px-3 py-1.5 border border-neon-red/25 text-neon-red bg-neon-red/5 hover:bg-neon-red/10 transition-colors duration-200 flex-1 text-center uppercase"
               onclick={onclose}
             >
-              Discard \u2014 Cancel Merge
+              Discard — Cancel Merge
             </button>
           </div>
         {/if}
