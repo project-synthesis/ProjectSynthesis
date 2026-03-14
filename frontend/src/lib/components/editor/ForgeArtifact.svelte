@@ -532,11 +532,10 @@
     <FeedbackInline
       bind:this={feedbackInlineRef}
       optimizationId={forge.optimizationId}
-      on:expandTier2={() => { showTier2 = true; }}
-      on:openTier3={() => {
-        // Dispatch to Inspector to show adaptation panel
-        const evt = new CustomEvent('open-inspector-adaptation', { bubbles: true });
-        document.dispatchEvent(evt);
+      onexpandTier2={() => { showTier2 = true; }}
+      onopenTier3={async () => {
+        await feedback.loadAdaptationSummary();
+        feedback.showAdaptationPanel = true;
       }}
     />
   {/if}

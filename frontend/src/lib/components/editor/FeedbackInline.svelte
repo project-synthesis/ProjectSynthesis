@@ -1,21 +1,17 @@
 <script lang="ts">
   import { feedback } from '$lib/stores/feedback.svelte';
   import { refinement } from '$lib/stores/refinement.svelte';
-  import { forge } from '$lib/stores/forge.svelte';
   import { toast } from '$lib/stores/toast.svelte';
-  import { createEventDispatcher } from 'svelte';
 
-  let { optimizationId }: { optimizationId: string } = $props();
-
-  const dispatch = createEventDispatcher<{
-    expandTier2: void;
-    openTier3: void;
-  }>();
-
-  // Scores from the validate stage result
-  let validateScores = $derived(
-    (forge.stageResults['validate']?.data?.scores as Record<string, number> | undefined) ?? {}
-  );
+  let {
+    optimizationId,
+    onexpandTier2,
+    onopenTier3,
+  }: {
+    optimizationId: string;
+    onexpandTier2?: () => void;
+    onopenTier3?: () => void;
+  } = $props();
 
   // Current rating from the feedback store
   let currentRating = $derived(feedback.currentFeedback.rating);
@@ -52,12 +48,12 @@
     const next: -1 | 0 | 1 = currentRating === -1 ? 0 : -1;
     feedback.setRating(next);
     if (next === -1) {
-      dispatch('expandTier2');
+      onexpandTier2?.();
     }
   }
 
   function handleDetails() {
-    dispatch('openTier3');
+    onopenTier3?.();
   }
 
   function handleRefine() {

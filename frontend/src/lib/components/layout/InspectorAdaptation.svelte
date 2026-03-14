@@ -37,13 +37,14 @@
   let state = $derived(feedback.adaptationState);
   let summary = $derived(feedback.adaptationSummary);
 
-  // Load adaptation summary on mount
+  // Load adaptation data on mount
   $effect(() => {
     feedback.loadAdaptationSummary();
+    feedback.loadAdaptationState();
   });
 
   // Priority bar max: use the highest weight to normalize bars
-  let maxWeight = $derived(() => {
+  let maxWeight = $derived.by(() => {
     if (!summary?.priorities?.length) return 0.3;
     return Math.max(...summary.priorities.map((p) => p.weight), 0.3);
   });
@@ -61,7 +62,7 @@
       <div class="grid grid-cols-5 gap-1">
         {#each Object.keys(DEFAULT_WEIGHTS) as dim}
           {@const liveW = state?.dimensionWeights?.[dim] ?? DEFAULT_WEIGHTS[dim]}
-          {@const pct = Math.round((liveW / maxWeight()) * 100)}
+          {@const pct = Math.round((liveW / maxWeight) * 100)}
           {@const dimColor = getScoreColor(liveW * 40)}
           {@const shift = summary?.priorities?.find((p) => p.dimension === dim)}
           <div class="flex flex-col items-center gap-0.5">

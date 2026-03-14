@@ -69,6 +69,7 @@ class FeedbackStore {
   adaptationState = $state<AdaptationState | null>(null);
   adaptationPulse = $state<AdaptationPulseState | null>(null);
   adaptationSummary = $state<AdaptationSummaryState | null>(null);
+  showAdaptationPanel = $state(false);
   currentOptimizationId = $state<string | null>(null);
   error = $state<string | null>(null);
 
