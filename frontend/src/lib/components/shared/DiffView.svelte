@@ -183,24 +183,24 @@
   }
 </script>
 
-<div class="font-mono text-xs">
+<div class="text-xs">
   <!-- Toolbar -->
-  <div class="flex items-center justify-between px-3 py-1.5 bg-bg-secondary/50 border-b border-border-subtle">
-    <div class="flex items-center gap-2">
+  <div class="flex items-center justify-between px-2 py-1 bg-bg-secondary/50 border-b border-border-subtle">
+    <div class="flex items-center gap-1.5">
       <button
-        class="text-[10px] px-2 py-0.5 rounded {viewMode === 'side-by-side' ? 'btn-outline-cyan' : 'btn-outline-subtle'}"
+        class="text-[10px] px-2 py-0.5 {viewMode === 'side-by-side' ? 'btn-outline-cyan' : 'btn-outline-subtle'}"
         onclick={() => viewMode = 'side-by-side'}
       >
         Side-by-side
       </button>
       <button
-        class="text-[10px] px-2 py-0.5 rounded {viewMode === 'inline' ? 'btn-outline-cyan' : 'btn-outline-subtle'}"
+        class="text-[10px] px-2 py-0.5 {viewMode === 'inline' ? 'btn-outline-cyan' : 'btn-outline-subtle'}"
         onclick={() => viewMode = 'inline'}
       >
         Inline
       </button>
       <button
-        class="text-[10px] px-2 py-0.5 rounded {granularity === 'word' ? 'btn-outline-cyan' : 'btn-outline-subtle'}"
+        class="text-[10px] px-2 py-0.5 {granularity === 'word' ? 'btn-outline-cyan' : 'btn-outline-subtle'}"
         onclick={() => granularity = granularity === 'line' ? 'word' : 'line'}
       >
         Word
@@ -211,9 +211,9 @@
         type="checkbox"
         name="show-diffs-only"
         bind:checked={showDiffsOnly}
-        class="w-3 h-3 rounded border-border-subtle accent-neon-cyan"
+        class="w-3 h-3 border-border-subtle accent-neon-cyan"
       />
-      <span class="text-[10px] text-text-dim">Show differences only</span>
+      <span class="text-[10px] text-text-dim">Diffs only</span>
     </label>
   </div>
 
@@ -221,8 +221,8 @@
   {#if viewMode === 'side-by-side'}
     <div class="grid grid-cols-2 gap-px bg-border-subtle">
       <!-- Original -->
-      <div bind:this={leftCol} onscroll={() => syncScroll(leftCol!, rightCol)} class="bg-bg-card p-2 overflow-auto max-h-[60vh]">
-        <div class="text-[10px] text-neon-red/60 uppercase tracking-wider font-semibold mb-2">Original</div>
+      <div bind:this={leftCol} onscroll={() => syncScroll(leftCol!, rightCol)} class="bg-bg-card p-1 overflow-auto max-h-[60vh] font-mono">
+        <div class="text-[10px] text-neon-red/60 uppercase tracking-wider font-semibold mb-1">Original</div>
         {#each filteredSidePairs as pair, i}
           {@const oi = sidePairs.indexOf(pair)}
           {@const leftWordDiff = granularity === 'word' && pair.left?.type === 'removed' && sideWordDiffs.has(oi)}
@@ -251,8 +251,8 @@
       </div>
 
       <!-- Modified -->
-      <div bind:this={rightCol} onscroll={() => syncScroll(rightCol!, leftCol)} class="bg-bg-card p-2 overflow-auto max-h-[60vh]">
-        <div class="text-[10px] text-neon-green/60 uppercase tracking-wider font-semibold mb-2">Modified</div>
+      <div bind:this={rightCol} onscroll={() => syncScroll(rightCol!, leftCol)} class="bg-bg-card p-1 overflow-auto max-h-[60vh] font-mono">
+        <div class="text-[10px] text-neon-green/60 uppercase tracking-wider font-semibold mb-1">Modified</div>
         {#each filteredSidePairs as pair, i}
           {@const oi = sidePairs.indexOf(pair)}
           {@const rightWordDiff = granularity === 'word' && pair.right?.type === 'added' && sideWordDiffs.has(oi - 1)}
@@ -283,7 +283,7 @@
 
   <!-- Inline view -->
   {:else}
-    <div class="bg-bg-card p-2">
+    <div class="bg-bg-card p-1 font-mono">
       {#each filteredDiffLines as line, i}
         {@const originalIdx = diffLines.indexOf(line)}
         {@const hasWordDiff = granularity === 'word' && line.type !== 'same' && inlineWordDiffs.has(originalIdx)}

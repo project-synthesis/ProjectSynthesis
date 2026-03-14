@@ -160,13 +160,13 @@
 
 {#if !hasData}
   <div class="flex items-center justify-center h-32">
-    <p class="text-sm text-text-dim">Pipeline trace will appear during forging.</p>
+    <p class="text-xs text-text-dim">Pipeline trace will appear during forging.</p>
   </div>
 {:else}
-  <div class="space-y-3 font-mono text-xs">
+  <div class="space-y-1.5 text-xs">
 
     <!-- ── Summary strip ────────────────────────────────────────── -->
-    <div class="flex items-center gap-4 px-3 py-2 border border-border-subtle bg-bg-card">
+    <div class="flex items-center gap-3 px-2 py-1 border border-border-subtle bg-bg-card font-mono">
       {#if completionTime}
         <span class="text-text-dim">
           {completionTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -187,8 +187,8 @@
 
     <!-- ── Waterfall visualization ───────────────────────────────── -->
     {#if hasTimingData}
-      <div class="px-3">
-        <div class="text-[10px] text-text-dim mb-1.5 uppercase tracking-widest font-sans">
+      <div class="px-2">
+        <div class="text-[10px] text-text-dim mb-1 uppercase tracking-widest font-sans">
           Timeline
         </div>
         <div class="flex h-3.5 gap-px">
@@ -232,7 +232,7 @@
 
         <!-- Collapsed row -->
         <button
-          class="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-bg-hover/40
+          class="w-full flex items-center gap-2 px-2 py-1 hover:bg-bg-hover/40
                  transition-colors text-left"
           onclick={() => toggleExpanded(stage)}
           aria-expanded={isExpanded}
@@ -266,19 +266,19 @@
           <span class="flex-1 text-text-dim truncate text-[11px]">{summary}</span>
 
           <!-- Duration -->
-          <span class="shrink-0 text-text-secondary w-16 text-right">
+          <span class="shrink-0 text-text-secondary w-16 text-right font-mono">
             {dur > 0 ? fmtMs(dur) : (status === 'running' ? '…' : '—')}
           </span>
 
           <!-- Token count -->
-          <span class="shrink-0 text-text-dim w-16 text-right">
+          <span class="shrink-0 text-text-dim w-16 text-right font-mono">
             {tok > 0 ? fmtTok(tok) + 'tok' : ''}
           </span>
         </button>
 
         <!-- Expanded details -->
         {#if isExpanded && result}
-          <div class="px-6 py-3 bg-bg-input border-t border-border-subtle space-y-3 text-[11px]">
+          <div class="px-2 py-1 bg-bg-input border-t border-border-subtle space-y-1 text-[11px]">
 
             {#if stage === 'explore'}
               {#if data.repo}
@@ -519,7 +519,7 @@
     <!-- ── Warning / error footer ──────────────────────────────── -->
     {#if forge.contextWarning}
       {@const w = forge.contextWarning}
-      <div class="flex items-start gap-2 px-3 py-2 border border-neon-yellow/30 bg-neon-yellow/5 text-[11px]">
+      <div class="flex items-start gap-2 px-2 py-1 border border-neon-yellow/30 bg-neon-yellow/5 text-[11px]">
         <span class="text-neon-yellow shrink-0 mt-px">⚠</span>
         <span class="text-text-secondary leading-relaxed">
           Context limit reached —
@@ -539,7 +539,7 @@
     {/if}
 
     {#if forge.error}
-      <div class="flex items-start gap-2 px-3 py-2 border border-neon-red/30 bg-neon-red/5 text-[11px]">
+      <div class="flex items-start gap-2 px-2 py-1 border border-neon-red/30 bg-neon-red/5 text-[11px]">
         <span class="text-neon-red shrink-0 mt-px">✗</span>
         <span class="text-text-secondary">{forge.error}</span>
       </div>
@@ -549,7 +549,7 @@
     <div class="border border-border-subtle">
       {#if forge.pipelineEvents.length > 0}
         <button
-          class="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-bg-hover/30
+          class="w-full flex items-center gap-2 px-2 py-1 hover:bg-bg-hover/30
                  transition-colors text-left"
           onclick={() => { rawEventsExpanded = !rawEventsExpanded; }}
         >
@@ -560,9 +560,9 @@
           <span class="text-text-dim">Raw events ({forge.pipelineEvents.length})</span>
         </button>
         {#if rawEventsExpanded}
-          <div class="divide-y divide-border-subtle/40 border-t border-border-subtle">
+          <div class="divide-y divide-border-subtle/40 border-t border-border-subtle font-mono">
             {#each forge.pipelineEvents as ev, i}
-              <div class="flex items-center gap-2 px-3 py-0.5 hover:bg-bg-hover/20">
+              <div class="flex items-center gap-2 px-2 py-0.5 hover:bg-bg-hover/20">
                 <span class="text-text-dim/40 w-5 text-right shrink-0">{i + 1}</span>
                 <span class="text-text-dim/60 w-20 shrink-0">
                   {new Date(ev.timestamp).toLocaleTimeString()}
@@ -580,7 +580,7 @@
         {/if}
       {:else}
         <!-- History load: stageResults populated but no live events -->
-        <div class="flex items-center gap-2 px-3 py-1.5">
+        <div class="flex items-center gap-2 px-2 py-1">
           <span class="text-text-dim/30 text-[9px]">▶</span>
           <span class="text-text-dim/40">Raw events — not available for history loads</span>
         </div>
@@ -606,20 +606,20 @@
     font-size: 10px;
     color: var(--color-text-dim);
     flex-shrink: 0;
-    width: 5rem; /* 80px — fits longest label "weaknesses" */
-    line-height: 1.6;
+    width: 4.5rem;
+    line-height: 1.4;
   }
 
   /* Chip/badge — rectangular, stage-colored border + text */
   .trace-chip {
     display: inline-flex;
     align-items: center;
-    padding: 1px 6px;
+    padding: 0px 4px;
     font-family: var(--font-mono);
     font-size: 10px;
     border: 1px solid color-mix(in srgb, var(--chip-color) 30%, transparent);
     color: var(--chip-color);
-    line-height: 1.6;
+    line-height: 1.4;
   }
 
   /* Bullet list row — marker stays at top, text wraps with indent */
@@ -645,8 +645,8 @@
     font-family: var(--font-sans);
     font-size: 11px;
     color: var(--color-text-secondary);
-    line-height: 1.65;
+    line-height: 1.4;
     border-left: 1px solid color-mix(in srgb, var(--prose-accent) 25%, transparent);
-    padding-left: 10px;
+    padding-left: 8px;
   }
 </style>

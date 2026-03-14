@@ -593,25 +593,23 @@
 
     {:else if activeSubTab === 'scores'}
       {#if Object.keys(scores).length > 0}
-        <div class="space-y-3">
+        <div class="space-y-1.5">
           {#each Object.entries(scores).filter(([k]) => k !== 'overall_score') as [key, val]}
             {@const scoreVal = typeof val === 'number' ? val : 0}
-            <div class="space-y-1">
-              <div class="flex justify-between text-xs">
-                <span class="text-text-secondary capitalize">{key.replace(/_/g, ' ')}</span>
+            <div class="space-y-0.5">
+              <div class="flex justify-between text-[10px]">
+                <span class="text-text-secondary capitalize">{key.replace(/_score$/, '').replace(/_/g, ' ')}</span>
                 <span class="font-mono text-text-primary">{scoreVal}/10</span>
               </div>
-              <div class="relative h-1.5 bg-bg-primary overflow-hidden"
-                   style="--bar-accent: {getScoreColor(scoreVal)}33;">
+              <div class="relative h-1 bg-bg-primary overflow-hidden">
                 <ScoreBar score={scoreVal} max={10} />
-                <div class="bar-glass absolute inset-0 pointer-events-none"></div>
               </div>
             </div>
           {/each}
         </div>
       {:else}
-        <div class="text-center py-12">
-          <p class="text-sm text-text-dim">Scores will appear after validation completes.</p>
+        <div class="text-center py-8">
+          <p class="text-xs text-text-dim">Scores will appear after validation completes.</p>
         </div>
       {/if}
 
