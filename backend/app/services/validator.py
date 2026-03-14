@@ -105,6 +105,7 @@ async def run_validate(
     instructions: list[str] | None = None,
     model: str | None = None,
     user_weights: dict[str, float] | None = None,
+    extra_validation_context: str | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 4 validation.
 
@@ -127,6 +128,9 @@ async def run_validate(
             scoring faithfulness_score.
         instructions: User-specified output constraints. When provided, the
             validator checks whether the optimized prompt honors them.
+        extra_validation_context: Additional validation instructions (e.g.
+            issue verification prompts from adaptation). Appended to the
+            user message when provided.
     """
     intent_cat = ""
     if codebase_context is not None:
@@ -171,6 +175,9 @@ async def run_validate(
             "Verify each constraint is reflected in the optimized prompt. "
             "Missing or violated constraints are faithfulness failures."
         )
+
+    if extra_validation_context:
+        user_message += extra_validation_context
 
     model = model or MODEL_ROUTING["validate"]
 

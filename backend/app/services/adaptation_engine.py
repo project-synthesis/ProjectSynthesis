@@ -575,7 +575,7 @@ async def recompute_adaptation(
                 existing.issue_frequency = json.dumps(issue_freq) if issue_freq else None
                 existing.damping_level = damping
                 existing.consistency_score = consistency
-                existing.adaptation_version = (existing.adaptation_version or 0) + 1
+                existing.adaptation_version = _adaptation_versions.get(user_id, 0)
             else:
                 adaptation = UserAdaptation(
                     user_id=user_id,

@@ -97,6 +97,7 @@ async def run_strategy(
     instructions: list[str] | None = None,
     model: str | None = None,
     strategy_affinities: dict | None = None,
+    framework_perf_rows: list[dict] | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Run Stage 2 strategy selection.
 
@@ -176,6 +177,13 @@ async def run_strategy(
     affinity_section = build_affinity_prompt_section(task_type, strategy_affinities)
     if affinity_section:
         user_message += affinity_section
+
+    # Inject framework performance history for data-driven selection
+    if framework_perf_rows:
+        from app.services.framework_scoring import build_performance_prompt_section
+        perf_section = build_performance_prompt_section(task_type, framework_perf_rows)
+        if perf_section:
+            user_message += perf_section
 
     model = model or MODEL_ROUTING["strategy"]
 
