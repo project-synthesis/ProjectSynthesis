@@ -7,6 +7,7 @@
   import { fetchHistory, fetchHistoryStats, fetchOptimization, deleteOptimization, patchOptimization, type HistoryStats } from '$lib/api/client';
   import { getStrategyHex } from '$lib/utils/strategy';
   import ScoreCircle from '$lib/components/shared/ScoreCircle.svelte';
+  import CompareModal from '$lib/components/shared/CompareModal.svelte';
   import { onMount } from 'svelte';
 
   let loading = $state(false);
@@ -15,6 +16,9 @@
   let selectedIds = $state<Set<string>>(new Set());
   let confirmBatchDelete = $state(false);
   let showFilters = $state(false);
+  let showCompare = $state(false);
+  let compareIdA = $state('');
+  let compareIdB = $state('');
 
   // Inline title editing state
   let editingId = $state<string | null>(null);
@@ -91,20 +95,11 @@
   }
 
   function handleCompare() {
-    // Open a diff view comparing the two selected entries
     const ids = Array.from(selectedIds);
     if (ids.length === 2) {
-      const a = history.entries.find(e => e.id === ids[0]);
-      const b = history.entries.find(e => e.id === ids[1]);
-      if (a && b) {
-        editor.openTab({
-          id: `compare-${ids[0]}-${ids[1]}`,
-          label: 'Compare',
-          type: 'prompt',
-          promptText: `Comparing: ${a.raw_prompt.slice(0, 30)} vs ${b.raw_prompt.slice(0, 30)}`,
-          dirty: false
-        });
-      }
+      compareIdA = ids[0];
+      compareIdB = ids[1];
+      showCompare = true;
       clearSelection();
     }
   }
@@ -628,3 +623,10 @@
   </div>
 </div>
 
+{#if showCompare}
+  <CompareModal
+    idA={compareIdA}
+    idB={compareIdB}
+    onclose={() => { showCompare = false; }}
+  />
+{/if}
