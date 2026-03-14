@@ -3,18 +3,15 @@
   import { forge } from '$lib/stores/forge.svelte';
   import { github } from '$lib/stores/github.svelte';
   import { context } from '$lib/stores/context.svelte';
-  import { startOptimization, type SSEEvent } from '$lib/api/client';
-  import ContextBar from './ContextBar.svelte';
-  import CopyButton from '$lib/components/shared/CopyButton.svelte';
+  import { startOptimization, patchAuthMe, trackOnboardingEvent, type SSEEvent } from '$lib/api/client';
   import StrategyBadge from '$lib/components/shared/StrategyBadge.svelte';
   import { toast } from '$lib/stores/toast.svelte';
   import { user } from '$lib/stores/user.svelte';
   import { history } from '$lib/stores/history.svelte';
-  import { patchAuthMe, trackOnboardingEvent } from '$lib/api/client';
   import { checkAndCelebrateMilestones } from '$lib/utils/milestones';
   import { getStrategyInfo } from '$lib/utils/strategyReference';
-  import Tip from '$lib/components/shared/Tip.svelte';
   import { getCaretCoordinates } from '$lib/utils/caretCoords';
+  import { slide } from 'svelte/transition';
 
   let { tab }: { tab: EditorTab } = $props();
 
@@ -28,20 +25,32 @@
     }
   });
 
-  // Strategy info for inline display
+  // Strategy info for hover title
   let selectedStrategyInfo = $derived(getStrategyInfo(strategy));
   let forgeSparking = $state(false);
 
   // @ context popup state
   let showAtPopup = $state(false);
   let atQuery = $state('');
-  let contextBarRef: ContextBar | undefined = $state();
   let textareaRef: HTMLTextAreaElement | undefined = $state();
   let atSelectedIndex = $state(0);
   let containerRef: HTMLDivElement | undefined = $state();
+  let popupRef: HTMLDivElement | undefined = $state();
   let popupTop = $state(0);
   let popupLeft = $state(0);
   let popupAbove = $state(false);
+
+  // Context panel expansion state
+  let showContextPanel = $state(false);
+
+  // Inline input states (inlined from ContextBar)
+  let showInstructionInput = $state(false);
+  let showUrlInput = $state(false);
+  let instructionText = $state('');
+  let urlText = $state('');
+  let fileInput: HTMLInputElement | undefined = $state();
+
+  const FILE_CONTENT_CAP = 50_000;
 
   const contextSources = [
     { type: 'file', label: 'File', category: 'Sources', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
@@ -60,30 +69,134 @@
         )
   );
 
-  function handleAtSelect(source: typeof contextSources[0]) {
-    // file/instruction/url open their own UX flows in ContextBar (file picker,
-    // inline text/URL inputs). Delegate so they behave identically to the
-    // ContextBar dropdown clicks and produce chips with actual content.
-    if (['file', 'instruction', 'url'].includes(source.type)) {
-      contextBarRef?.handleContextOptionClick(source.type);
+  // Clamp selected index when filtered list shrinks (prevents stale highlight)
+  $effect(() => {
+    if (atSelectedIndex >= filteredSources.length) {
+      atSelectedIndex = Math.max(0, filteredSources.length - 1);
+    }
+  });
+
+  // Sync github.selectedFiles → context chips (from ContextBar)
+  $effect(() => {
+    const files = github.selectedFiles;
+    const toRemove = context.chips.filter(
+      c => c.source === 'github' && !files.some(f => f.path === c.filePath)
+    );
+    for (const chip of toRemove) {
+      context.removeChip(chip.id);
+    }
+    for (const f of files) {
+      if (!context.chips.some(c => c.source === 'github' && c.filePath === f.path)) {
+        context.addChip('file', f.name, f.content.length, f.content, 'github', f.path);
+      }
+    }
+  });
+
+  // Format byte size for chip display
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes}b`;
+    return `${(bytes / 1024).toFixed(0)}kb`;
+  }
+
+  // Context management functions (inlined from ContextBar)
+  function handleContextOptionClick(type: string) {
+    if (type === 'file') {
+      fileInput?.click();
+    } else if (type === 'instruction') {
+      showUrlInput = false;
+      showInstructionInput = true;
+      showContextPanel = true;
+    } else if (type === 'url') {
+      showInstructionInput = false;
+      showUrlInput = true;
+      showContextPanel = true;
     } else {
-      // For 'repo' type, omit label so ContextBar.addChip resolves github.selectedRepo itself
+      addChip(type);
+    }
+  }
+
+  function addChip(type: string, label?: string, size?: number) {
+    const chipLabel = label || (type === 'repo' && github.selectedRepo
+      ? github.selectedRepo
+      : `@${type}`);
+    context.addChip(type, chipLabel, size);
+  }
+
+  async function handleFileSelect(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    let text = await file.text();
+    if (text.length > FILE_CONTENT_CAP) {
+      text = text.slice(0, FILE_CONTENT_CAP);
+      toast.warning(`"${file.name}" truncated to 50KB for context injection`);
+    }
+    context.addChip('file', file.name, text.length, text);
+    if (fileInput) fileInput.value = '';
+  }
+
+  function submitInstruction() {
+    const text = instructionText.trim();
+    if (!text) return;
+    const preview = text.length > 35 ? text.slice(0, 35) + '\u2026' : text;
+    context.addChip('instruction', preview, undefined, text);
+    instructionText = '';
+    showInstructionInput = false;
+    if (!showUrlInput) showContextPanel = false;
+  }
+
+  function submitUrl() {
+    const url = urlText.trim();
+    if (!url || !/^https?:\/\//.test(url)) return;
+    const label = url.replace(/^https?:\/\//, '').slice(0, 40);
+    context.addChip('url', label, undefined, url);
+    urlText = '';
+    showUrlInput = false;
+    if (!showInstructionInput) showContextPanel = false;
+  }
+
+  function removeChip(chip: typeof context.chips[0]) {
+    if (chip.source === 'github' && chip.filePath && github.selectedRepo) {
+      const [owner, repo] = github.selectedRepo.split('/');
+      const branch = github.selectedBranch ?? github.currentRepo?.default_branch ?? 'main';
+      github.toggleFileSelection(owner, repo, chip.filePath, branch);
+    } else {
+      context.removeChip(chip.id);
+    }
+  }
+
+  // Svelte action: focus on mount
+  function focusEl(node: HTMLElement) {
+    node.focus();
+  }
+
+  function handleAtSelect(source: typeof contextSources[0]) {
+    if (['file', 'instruction', 'url'].includes(source.type)) {
+      handleContextOptionClick(source.type);
+    } else {
       const chipLabel = source.type === 'repo' ? undefined : source.label;
-      contextBarRef?.addChip(source.type, chipLabel);
+      addChip(source.type, chipLabel);
     }
     closeAtPopup();
-    // Remove the @query from textarea
+    // Remove the @query from textarea and restore cursor position
     if (textareaRef) {
       const text = tab.promptText || '';
       const cursorPos = textareaRef.selectionStart;
-      // Find the @ that triggered this popup
       const beforeCursor = text.slice(0, cursorPos);
       const atIdx = beforeCursor.lastIndexOf('@');
       if (atIdx >= 0) {
         const newText = text.slice(0, atIdx) + text.slice(cursorPos);
         editor.updateTabPrompt(tab.id, newText);
+        // Wait one frame for Svelte's reactive value= binding to flush to DOM
+        const insertPos = atIdx;
+        requestAnimationFrame(() => {
+          if (textareaRef) {
+            textareaRef.focus();
+            textareaRef.setSelectionRange(insertPos, insertPos);
+          }
+        });
+      } else {
+        textareaRef.focus();
       }
-      textareaRef.focus();
     }
   }
 
@@ -105,16 +218,18 @@
     const value = target.value;
     editor.updateTabPrompt(tab.id, value);
 
-    // Detect @ trigger
+    // Detect @ trigger — only after whitespace or at start of text (word-boundary guard)
     const cursorPos = target.selectionStart;
     const charBefore = value[cursorPos - 1];
     if (charBefore === '@') {
-      showAtPopup = true;
-      atQuery = '';
-      atSelectedIndex = 0;
-      updatePopupPosition();
+      const charBeforeThat = cursorPos > 1 ? value[cursorPos - 2] : undefined;
+      if (charBeforeThat === undefined || /\s/.test(charBeforeThat)) {
+        showAtPopup = true;
+        atQuery = '';
+        atSelectedIndex = 0;
+        updatePopupPosition();
+      }
     } else if (showAtPopup) {
-      // Update fuzzy query with characters after @
       const beforeCursor = value.slice(0, cursorPos);
       const atIdx = beforeCursor.lastIndexOf('@');
       if (atIdx >= 0) {
@@ -130,14 +245,10 @@
     const POPUP_W = 256, POPUP_H_EST = 220, MARGIN = 8;
     const coords = getCaretCoordinates(textareaRef, textareaRef.selectionStart);
 
-    // Textarea-relative → container-relative
     const rawTop = textareaRef.offsetTop + coords.top;
     const rawLeft = textareaRef.offsetLeft + coords.left;
-
-    // Container viewport rect for edge detection
     const cr = containerRef.getBoundingClientRect();
 
-    // Vertical: below caret by default, flip above if overflows viewport
     const belowY = rawTop + coords.height + 4;
     if (cr.top + belowY + POPUP_H_EST > window.innerHeight - MARGIN) {
       popupAbove = true;
@@ -147,7 +258,6 @@
       popupTop = belowY;
     }
 
-    // Horizontal: start at caret, shift left if overflows right edge
     const viewportRight = cr.left + rawLeft + POPUP_W;
     if (viewportRight > window.innerWidth - MARGIN) {
       popupLeft = Math.max(0, rawLeft - (viewportRight - window.innerWidth + MARGIN));
@@ -165,6 +275,29 @@
       return () => ta.removeEventListener('scroll', onScroll);
     }
   });
+
+  // Dismiss popup on outside click (Bug 2)
+  $effect(() => {
+    if (!showAtPopup) return;
+    const onMousedown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (popupRef?.contains(target) || textareaRef?.contains(target)) return;
+      closeAtPopup();
+    };
+    document.addEventListener('mousedown', onMousedown, true);
+    return () => document.removeEventListener('mousedown', onMousedown, true);
+  });
+
+  // Dismiss popup on textarea blur (Bug 3)
+  function handleTextareaBlur() {
+    if (!showAtPopup) return;
+    // Delay to let popup mousedown (which calls preventDefault) fire first
+    setTimeout(() => {
+      if (showAtPopup && document.activeElement !== textareaRef) {
+        closeAtPopup();
+      }
+    }, 150);
+  }
 
   function handleTextareaKeydown(e: KeyboardEvent) {
     if (!showAtPopup) return;
@@ -198,22 +331,19 @@
     forge.startForge(tab.promptText);
     editor.setSubTab('pipeline');
 
-    const chips = contextBarRef?.getChips() ?? [];
+    const chips = context.getChips();
     const repoChip = chips.find(c => c.type === 'repo');
     const repoFullName = (repoChip?.label?.includes('/') ? repoChip.label : null)
       ?? github.selectedRepo
       ?? undefined;
     const repoBranch = github.selectedBranch ?? github.currentRepo?.default_branch ?? undefined;
 
-    // N24: collect file chips with content
     const fileChips = context.chips.filter(c => c.type === 'file' && c.content);
     const fileContexts = fileChips.map(c => ({ name: c.label, content: c.content! }));
 
-    // N25: collect instruction chips with content
     const instructionChips = context.chips.filter(c => c.type === 'instruction' && c.content);
     const instructions = instructionChips.map(c => c.content!);
 
-    // N26: collect url chips with content (URL string)
     const urlChips = context.chips.filter(c => c.type === 'url' && c.content);
     const urlContexts = urlChips.map(c => c.content!);
 
@@ -228,10 +358,8 @@
         url_contexts: urlContexts.length > 0 ? urlContexts : undefined,
       },
       (event: SSEEvent) => {
-        // Delegate all event dispatching to the store (single source of truth)
         forge.handleSSEEvent(event);
 
-        // Post-processing for 'complete' event only (tab linkage, caching, milestones)
         if (event.event === 'complete' && typeof event.data === 'object' && event.data !== null) {
           const data = event.data as Record<string, unknown>;
           if (data.optimization_id) {
@@ -246,7 +374,6 @@
             forge.cacheRecord(optId, record);
           }
 
-          // Milestone + celebration system
           const usedChips = [
             ...fileChips.map(c => c.label),
             ...instructionChips.map(() => 'instruction'),
@@ -294,6 +421,14 @@
   function handleCancel() {
     forge.cancel();
   }
+
+  function toggleContextPanel() {
+    showContextPanel = !showContextPanel;
+    if (!showContextPanel) {
+      showInstructionInput = false;
+      showUrlInput = false;
+    }
+  }
 </script>
 
 <div class="flex flex-col h-full">
@@ -308,6 +443,7 @@
       value={tab.promptText || ''}
       oninput={handleInput}
       onkeydown={handleTextareaKeydown}
+      onfocusout={handleTextareaBlur}
       spellcheck="false"
     ></textarea>
 
@@ -315,6 +451,7 @@
     {#if showAtPopup}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
+        bind:this={popupRef}
         class="absolute w-64 bg-bg-card border border-border-subtle z-[300]"
         class:animate-dropdown-enter={!popupAbove}
         class:animate-dropdown-enter-up={popupAbove}
@@ -360,51 +497,146 @@
     {/if}
   </div>
 
-  <!-- Context bar (below textarea per spec) -->
-  <ContextBar bind:this={contextBarRef} />
+  <!-- Context expansion panel (slides down when adding context) -->
+  {#if showContextPanel}
+    <div class="px-2 py-1.5 border-t border-border-subtle bg-bg-secondary/30 shrink-0" transition:slide={{ duration: 200 }}>
+      <!-- Context source type buttons -->
+      <div class="flex items-center gap-2 mb-1.5">
+        {#each contextSources as source}
+          <button
+            class="flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono border transition-colors
+              {(source.type === 'instruction' && showInstructionInput) || (source.type === 'url' && showUrlInput)
+                ? 'border-neon-cyan/30 text-neon-cyan bg-neon-cyan/5'
+                : 'border-border-subtle text-text-dim hover:text-text-secondary hover:border-border-accent'}"
+            onclick={() => handleContextOptionClick(source.type)}
+          >
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d={source.icon}></path>
+            </svg>
+            {source.label}
+          </button>
+        {/each}
+      </div>
 
-  <!-- Action row -->
-  <div class="flex flex-col border-t border-border-subtle bg-bg-secondary/30 shrink-0">
-    <div class="flex items-center justify-between px-2 py-1.5">
-    <div class="flex items-center gap-2" data-tour="strategy">
-      <!-- Strategy selector -->
+      <!-- Instruction input -->
+      {#if showInstructionInput}
+        <div class="flex items-center gap-1" transition:slide={{ duration: 150 }}>
+          <input
+            bind:value={instructionText}
+            use:focusEl
+            class="flex-1 bg-bg-input border border-border-accent text-text-primary font-sans
+                   text-xs px-2 py-1 focus:outline-none focus:border-neon-cyan/50"
+            placeholder="e.g. always use bullet points"
+            onkeydown={(e) => {
+              if (e.key === 'Enter') submitInstruction();
+              if (e.key === 'Escape') { showInstructionInput = false; if (!showUrlInput) showContextPanel = false; }
+            }}
+          />
+          <button
+            class="px-2 py-1 text-[10px] font-mono text-neon-cyan border border-neon-cyan/20 hover:bg-neon-cyan/5 transition-colors"
+            onclick={submitInstruction}
+          >Add</button>
+        </div>
+      {/if}
+
+      <!-- URL input -->
+      {#if showUrlInput}
+        <div class="flex items-center gap-1" transition:slide={{ duration: 150 }}>
+          <input
+            bind:value={urlText}
+            use:focusEl
+            class="flex-1 bg-bg-input border border-border-accent text-text-primary font-sans
+                   text-xs px-2 py-1 focus:outline-none focus:border-neon-cyan/50"
+            placeholder="https://..."
+            onkeydown={(e) => {
+              if (e.key === 'Enter') submitUrl();
+              if (e.key === 'Escape') { showUrlInput = false; if (!showInstructionInput) showContextPanel = false; }
+            }}
+          />
+          <button
+            class="px-2 py-1 text-[10px] font-mono text-neon-cyan border border-neon-cyan/20 hover:bg-neon-cyan/5 transition-colors"
+            onclick={submitUrl}
+          >Add</button>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Forge Command Bar — unified context + strategy + action -->
+  <div class="flex items-center gap-1.5 px-2 py-1 border-t border-border-subtle bg-bg-secondary/30 shrink-0 min-h-[32px]">
+    <!-- Left zone: Context -->
+    {#if context.chips.length === 0}
+      <span class="font-mono text-[9px] text-text-dim/50 shrink-0">@</span>
+    {/if}
+
+    <div class="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto cmd-chips-scroll">
+      {#each context.chips as chip (chip.id)}
+        <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 font-mono text-[10px] bg-neon-teal/10 border border-neon-teal/40 text-neon-teal/90 animate-scale-in whitespace-nowrap shrink-0" data-testid="context-chip">
+          <span class="text-[9px]">@</span>{chip.label}{#if chip.size}<span class="text-text-dim/60">({formatSize(chip.size)})</span>{/if}
+          <button
+            class="ml-0.5 text-text-dim hover:text-neon-red transition-colors duration-150"
+            onclick={() => removeChip(chip)}
+            aria-label="Remove context"
+          >&times;</button>
+        </span>
+      {/each}
+
+      {#if context.chips.length > 1}
+        <button
+          class="text-[9px] font-mono text-text-dim hover:text-neon-red transition-colors duration-150 px-0.5 whitespace-nowrap shrink-0"
+          onclick={() => { github.clearFileSelection(); context.clear(); }}
+          aria-label="Clear all context"
+        >clear</button>
+      {/if}
+    </div>
+
+    <button
+      class="w-5 h-5 flex items-center justify-center text-text-dim hover:text-neon-cyan transition-colors shrink-0"
+      onclick={toggleContextPanel}
+      aria-label="Add context"
+      aria-haspopup="true"
+      aria-expanded={showContextPanel}
+    >
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path>
+      </svg>
+    </button>
+
+    <!-- Divider -->
+    <span class="w-px h-4 bg-border-subtle shrink-0"></span>
+
+    <!-- Center zone: Strategy -->
+    <div class="flex items-center gap-1 shrink-0" data-tour="strategy">
       <select
         id="strategy-select"
         name="strategy"
-        class="bg-bg-input border border-border-subtle px-2 py-1 text-[11px] text-text-primary focus:outline-none focus:border-neon-cyan/30 cursor-pointer appearance-none"
-        style="background-image: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238b8ba8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E); background-repeat: no-repeat; background-position: right 8px center; padding-right: 24px;"
+        class="bg-bg-input border border-border-subtle px-1.5 py-0.5 text-[11px] text-text-primary focus:outline-none focus:border-neon-cyan/30 cursor-pointer appearance-none"
+        style="background-image: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238b8ba8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E); background-repeat: no-repeat; background-position: right 6px center; padding-right: 20px;"
         bind:value={strategy}
+        title={selectedStrategyInfo?.fullName ?? strategy}
       >
         {#each strategies as s}
-          <option value={s} class="bg-bg-card">{s === 'auto' ? 'Auto Strategy' : s}</option>
+          <option value={s} class="bg-bg-card">{s === 'auto' ? 'Auto' : s}</option>
         {/each}
       </select>
 
       <StrategyBadge strategy={strategy} />
-
-      {#if selectedStrategyInfo && strategy !== 'auto'}
-        <span class="font-mono text-[8px] text-text-dim/50 max-w-[200px] truncate hidden sm:inline" title={selectedStrategyInfo.fullName}>
-          {selectedStrategyInfo.fullName}
-        </span>
-      {/if}
-
-      {#if tab.promptText}
-        <CopyButton text={tab.promptText} />
-      {/if}
     </div>
 
-    <div class="flex items-center gap-2">
+    <!-- Divider -->
+    <span class="w-px h-4 bg-border-subtle shrink-0"></span>
+
+    <!-- Right zone: Action -->
+    <div class="flex items-center gap-1.5 shrink-0">
       {#if forge.isForging}
         <button
-          class="px-2.5 py-1 text-[11px] font-medium bg-neon-red/10 text-neon-red border border-neon-red/20 hover:bg-neon-red/20 transition-colors"
+          class="px-2 py-0.5 text-[11px] font-medium bg-neon-red/10 text-neon-red border border-neon-red/20 hover:bg-neon-red/20 transition-colors"
           onclick={handleCancel}
-        >
-          Cancel
-        </button>
+        >Cancel</button>
       {/if}
 
       <button
-        class="btn-forge px-3 py-1 text-[11px] font-semibold transition-colors duration-200
+        class="btn-forge px-2.5 py-0.5 text-[11px] font-semibold transition-colors duration-200
           {forge.isForging
             ? 'opacity-40 cursor-not-allowed'
             : 'hover:-translate-y-px active:translate-y-0'}
@@ -414,12 +646,12 @@
         data-testid="forge-button"
       >
         {#if forge.isForging}
-          <span class="inline-flex items-center gap-1.5">
+          <span class="inline-flex items-center gap-1">
             <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
             </svg>
-            Synthesizing...
+            Forging
           </span>
         {:else}
           Synthesize
@@ -427,10 +659,23 @@
       </button>
     </div>
   </div>
-  <!-- Contextual tips -->
-  <div class="px-4 pb-1">
-    <Tip id="strategy-select" text="Strategy determines which prompt framework is applied" />
-    <Tip id="forge-shortcut" text="Ctrl+Enter is the shortcut to start synthesis" />
-  </div>
-  </div>
+
+  <!-- Hidden file picker -->
+  <input
+    bind:this={fileInput}
+    type="file"
+    class="hidden"
+    accept="text/*,.md,.txt,.py,.ts,.js,.json,.yaml,.yml,.toml"
+    onchange={handleFileSelect}
+  />
 </div>
+
+<style>
+  .cmd-chips-scroll::-webkit-scrollbar {
+    display: none;
+  }
+  .cmd-chips-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+</style>

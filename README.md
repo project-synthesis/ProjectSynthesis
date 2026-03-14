@@ -67,8 +67,8 @@ Project Synthesis is under **active development**. The core pipeline is stable a
 
 What you can count on today:
 - ✅ Five-stage optimization pipeline with real-time SSE streaming
-- ✅ Adaptive feedback loops — rate results, flag issues, and the pipeline learns your quality priorities over time
-- ✅ Result intelligence — post-optimization verdict engine with dimension-level insights, trade-off detection, and guided next actions
+- ✅ Adaptive feedback loops — your ratings tune pipeline weights, strategy selection, and retry thresholds
+- ✅ Result intelligence — verdict, dimension insights, trade-offs, and next actions for every optimization
 - ✅ GitHub repository integration with semantic codebase indexing
 - ✅ 20-tool MCP server for CLI-native workflows
 - ✅ Works with Claude Max subscription (zero API cost) or Anthropic API key
