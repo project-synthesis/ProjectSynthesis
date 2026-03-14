@@ -227,6 +227,16 @@ def extract_efficiency(opt: Any) -> dict:
             if total_tokens is None and fallback_total > 0:
                 total_tokens = fallback_total
 
+    # Final fallback: estimate from prompt text length (~1.3 tokens/word)
+    is_estimated = bool(getattr(opt, "usage_is_estimated", False))
+    if total_tokens is None:
+        raw_text = getattr(opt, "raw_prompt", "") or ""
+        opt_text = getattr(opt, "optimized_prompt", "") or ""
+        word_count = len(raw_text.split()) + len(opt_text.split())
+        if word_count > 0:
+            total_tokens = int(word_count * 1.3)
+            is_estimated = True
+
     cost = getattr(opt, "estimated_cost_usd", None)
     overall = getattr(opt, "overall_score", None)
 
@@ -240,6 +250,7 @@ def extract_efficiency(opt: Any) -> dict:
         "cost": cost,
         "score_per_token": score_per_token,
         "stage_tokens": stage_tokens if stage_tokens else None,
+        "is_estimated": is_estimated,
     }
 
 
@@ -299,11 +310,12 @@ def extract_validation(opt: Any) -> dict:
 
 # ── 9. extract_adaptation ────────────────────────────────────────────────
 
-def extract_adaptation(a: Any, b: Any) -> AdaptationComparison:
+async def extract_adaptation(a: Any, b: Any) -> AdaptationComparison:
     """Compare adaptation snapshots between two optimizations.
 
-    Returns feedbacks_between (0 if not accessible), weight_shifts from
-    snapshot diff, and guardrails added in B but not in A.
+    Queries real ``Feedback`` records between the two optimizations'
+    creation timestamps for an accurate ``feedbacks_between`` count.
+    Weight shifts and guardrails come from adaptation snapshot diffs.
     """
     snap_a = _parse_json_field(getattr(a, "adaptation_snapshot", None), default={})
     snap_b = _parse_json_field(getattr(b, "adaptation_snapshot", None), default={})
@@ -333,10 +345,37 @@ def extract_adaptation(a: Any, b: Any) -> AdaptationComparison:
     )
     guardrails_added = sorted(guardrails_b - guardrails_a)
 
-    # Feedbacks between — attempt to get count from snapshots
-    fb_count_a = snap_a.get("feedback_count", 0)
-    fb_count_b = snap_b.get("feedback_count", 0)
-    feedbacks_between = max(0, fb_count_b - fb_count_a)
+    # Count real Feedback records between the two optimizations
+    feedbacks_between = 0
+    created_a = getattr(a, "created_at", None)
+    created_b = getattr(b, "created_at", None)
+    user_id = getattr(a, "user_id", None)
+    if user_id and created_a and created_b:
+        try:
+            from sqlalchemy import func as sa_func
+            from sqlalchemy import select as sa_select
+
+            from app.database import async_session
+            from app.models.feedback import Feedback
+
+            earlier = min(created_a, created_b)
+            later = max(created_a, created_b)
+            async with async_session() as db:
+                count = await db.scalar(
+                    sa_select(sa_func.count())
+                    .select_from(Feedback)
+                    .where(
+                        Feedback.user_id == user_id,
+                        Feedback.created_at >= earlier,
+                        Feedback.created_at <= later,
+                    )
+                )
+                feedbacks_between = count or 0
+        except Exception:
+            # Fall back to snapshot-based count on DB error
+            fb_count_a = snap_a.get("feedback_count", 0)
+            fb_count_b = snap_b.get("feedback_count", 0)
+            feedbacks_between = max(0, fb_count_b - fb_count_a)
 
     return AdaptationComparison(
         feedbacks_between=feedbacks_between,
@@ -347,7 +386,7 @@ def extract_adaptation(a: Any, b: Any) -> AdaptationComparison:
 
 # ── 10. compute_modifiers ────────────────────────────────────────────────
 
-def compute_modifiers(a: Any, b: Any) -> list[str]:
+async def compute_modifiers(a: Any, b: Any) -> list[str]:
     """Return list of applicable modifier strings."""
     modifiers: list[str] = []
 
@@ -378,7 +417,7 @@ def compute_modifiers(a: Any, b: Any) -> list[str]:
             if dt_a and dt_b:
                 gap = abs((dt_b - dt_a).total_seconds())
                 # Check both time gap AND feedback between runs
-                adaptation = extract_adaptation(a, b)
+                adaptation = await extract_adaptation(a, b)
                 if gap > 3600 and adaptation.feedbacks_between > 0:
                     modifiers.append("adapted")
         except (ValueError, TypeError):
@@ -636,8 +675,8 @@ async def compute_comparison(
     ctx_b = extract_context(b)
     val_a = extract_validation(a)
     val_b = extract_validation(b)
-    adaptation = extract_adaptation(a, b)
-    modifiers = compute_modifiers(a, b)
+    adaptation = await extract_adaptation(a, b)
+    modifiers = await compute_modifiers(a, b)
 
     # Compute similarity
     raw_a = getattr(a, "raw_prompt", "") or ""
@@ -711,6 +750,8 @@ async def compute_comparison(
         b_score_per_token=eff_b["score_per_token"],
         a_stage_tokens=eff_a.get("stage_tokens"),
         b_stage_tokens=eff_b.get("stage_tokens"),
+        a_is_estimated=eff_a.get("is_estimated", False),
+        b_is_estimated=eff_b.get("is_estimated", False),
     )
 
     # Build strategy comparison
@@ -820,7 +861,7 @@ async def compute_comparison(
 
     # Build insight headline
     insight_headline = _build_insight_headline(
-        situation, overall_delta, fw_a, fw_b, similarity,
+        situation, overall_delta, fw_a, fw_b, similarity, deltas=deltas,
     )
 
     # Optional LLM guidance
@@ -895,8 +936,8 @@ async def stream_comparison(
     ctx_b = extract_context(b)
     val_a = extract_validation(a)
     val_b = extract_validation(b)
-    adaptation = extract_adaptation(a, b)
-    modifiers = compute_modifiers(a, b)
+    adaptation = await extract_adaptation(a, b)
+    modifiers = await compute_modifiers(a, b)
 
     yield {"type": "step", "step": "insights", "label": "Generating insights and directives..."}
 
@@ -947,6 +988,7 @@ async def stream_comparison(
         a_cost=eff_a["cost"], b_cost=eff_b["cost"],
         a_score_per_token=eff_a["score_per_token"], b_score_per_token=eff_b["score_per_token"],
         a_stage_tokens=eff_a.get("stage_tokens"), b_stage_tokens=eff_b.get("stage_tokens"),
+        a_is_estimated=eff_a.get("is_estimated", False), b_is_estimated=eff_b.get("is_estimated", False),
     )
     strategy_comparison = StrategyComparison(
         a_framework=strat_a["framework"], a_source=strat_a["source"],
@@ -1020,7 +1062,7 @@ async def stream_comparison(
         if situation == "CROSS" else []
     )
     insight_headline = _build_insight_headline(
-        situation, overall_delta, fw_a, fw_b, similarity,
+        situation, overall_delta, fw_a, fw_b, similarity, deltas=deltas,
     )
 
     # LLM guidance — the bottleneck
@@ -1084,24 +1126,41 @@ def _build_insight_headline(
     fw_a: str | None,
     fw_b: str | None,
     similarity: float,
+    deltas: dict[str, float | None] | None = None,
 ) -> str:
-    """Build a concise headline summarizing the comparison."""
+    """Build a concise headline summarizing the comparison.
+
+    Appends the top 2 dimension deltas (by magnitude) when available.
+    """
     if situation == "REFORGE":
         if overall_delta is not None and abs(overall_delta) >= 0.5:
             direction = "improved" if overall_delta > 0 else "regressed"
-            return f"Reforged with {fw_a or 'same framework'}: {direction} by {abs(overall_delta):.1f}"
-        return f"Reforged with {fw_a or 'same framework'}: marginal change"
-
-    if situation == "STRATEGY":
+            base = f"Reforged with {fw_a or 'same framework'}: {direction} by {abs(overall_delta):.1f}"
+        else:
+            base = f"Reforged with {fw_a or 'same framework'}: marginal change"
+    elif situation == "STRATEGY":
         if overall_delta is not None:
             better = fw_a if overall_delta > 0 else fw_b
-            return f"Strategy shift: {better} leads by {abs(overall_delta):.1f}"
-        return f"Strategy shift: {fw_a} vs {fw_b}"
+            base = f"Strategy shift: {better} leads by {abs(overall_delta):.1f}"
+        else:
+            base = f"Strategy shift: {fw_a} vs {fw_b}"
+    elif situation == "EVOLVED":
+        base = f"Evolved prompt ({similarity:.0%} similar): comparing growth"
+    else:
+        base = f"Cross-comparison ({similarity:.0%} similar): distinct prompts"
 
-    if situation == "EVOLVED":
-        return f"Evolved prompt ({similarity:.0%} similar): comparing growth"
+    # Append top 2 dimension deltas for specificity
+    if deltas:
+        ranked = sorted(
+            ((d, v) for d, v in deltas.items() if v is not None and v != 0.0),
+            key=lambda x: abs(x[1]),
+            reverse=True,
+        )[:2]
+        if ranked:
+            parts = [f"{dim} {val:+.1f}" for dim, val in ranked]
+            base += f", {', '.join(parts)}"
 
-    return f"Cross-comparison ({similarity:.0%} similar): distinct prompts"
+    return base
 
 
 async def _generate_llm_guidance(

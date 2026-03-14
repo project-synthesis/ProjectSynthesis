@@ -38,6 +38,8 @@ class EfficiencyComparison(BaseModel):
     b_score_per_token: float | None
     a_stage_tokens: dict[str, int] | None = None  # per-stage token breakdown
     b_stage_tokens: dict[str, int] | None = None
+    a_is_estimated: bool = False  # True when token count is estimated, not real
+    b_is_estimated: bool = False
 
 
 class StrategyComparison(BaseModel):

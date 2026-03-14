@@ -36,6 +36,8 @@
     b_score_per_token: number | null;
     a_stage_tokens: Record<string, number> | null;
     b_stage_tokens: Record<string, number> | null;
+    a_is_estimated: boolean;
+    b_is_estimated: boolean;
   }
 
   interface Strategy {
@@ -308,6 +310,32 @@
     return `${Math.max(0, Math.min(100, (val / max) * 100))}%`;
   }
 
+  // ---- Adaptation summary helpers ----
+  let topWeightShift = $derived(() => {
+    if (!adpt || Object.keys(adpt.weight_shifts).length === 0) return null;
+    const sorted = Object.entries(adpt.weight_shifts).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    return sorted[0] ? { dim: sorted[0][0], delta: sorted[0][1] } : null;
+  });
+
+  // ---- Efficiency summary ----
+  function buildEffSummary(): string[] {
+    if (!eff) return [];
+    const parts: string[] = [];
+    if (eff.a_duration_ms != null && eff.b_duration_ms != null) {
+      const diff = Math.abs(eff.a_duration_ms - eff.b_duration_ms);
+      if (diff > 1000) parts.push(`${eff.a_duration_ms < eff.b_duration_ms ? 'A' : 'B'} ${fmtDuration(diff)} faster`);
+    }
+    if (eff.a_tokens != null && eff.b_tokens != null && eff.a_tokens > 0 && eff.b_tokens > 0) {
+      const pct = Math.abs(Math.round(((eff.a_tokens - eff.b_tokens) / Math.max(eff.a_tokens, eff.b_tokens)) * 100));
+      if (pct > 0) parts.push(`${eff.a_tokens < eff.b_tokens ? 'A' : 'B'} ${pct}% fewer tokens`);
+    }
+    if (eff.a_cost != null && eff.b_cost != null) {
+      const diff = Math.abs(eff.a_cost - eff.b_cost);
+      if (diff > 0.0005) parts.push(`$${diff.toFixed(3)} cheaper on ${eff.a_cost < eff.b_cost ? 'A' : 'B'}`);
+    }
+    return parts;
+  }
+
   // ---- Merge validation helpers ----
   function computeTarget(dim: string): number | null {
     if (!compareData) return null;
@@ -442,9 +470,9 @@
               <thead>
                 <tr class="border-b border-border-subtle">
                   <th class="text-left py-0.5 pr-2 font-mono text-[9px] font-medium uppercase tracking-wider text-text-dim">Dimension</th>
-                  <th class="text-right py-0.5 px-2 font-mono text-[9px] font-medium text-neon-purple/70">A</th>
+                  <th class="text-right py-0.5 px-2 font-mono text-[9px] font-medium text-neon-purple/70">A{strat?.a_framework ? ` (${strat.a_framework})` : ''}</th>
                   <th class="py-0.5 px-2 w-24"></th>
-                  <th class="text-right py-0.5 px-2 font-mono text-[9px] font-medium text-neon-blue/70">B</th>
+                  <th class="text-right py-0.5 px-2 font-mono text-[9px] font-medium text-neon-blue/70">B{strat?.b_framework ? ` (${strat.b_framework})` : ''}</th>
                   <th class="text-right py-0.5 pl-2 font-mono text-[9px] font-medium text-text-dim">Delta</th>
                 </tr>
               </thead>
@@ -525,36 +553,45 @@
             </span>
           </button>
           {#if openAccordions.structural}
+            {@const inputDelta = str.b_input_words && str.a_input_words ? Math.round(((str.b_input_words - str.a_input_words) / Math.max(str.a_input_words, 1)) * 100) : 0}
+            {@const outputDelta = str.b_output_words && str.a_output_words ? Math.round(((str.b_output_words - str.a_output_words) / Math.max(str.a_output_words, 1)) * 100) : 0}
+            {@const expansionDelta = str.a_expansion ? Math.round(((str.b_expansion - str.a_expansion) / Math.max(str.a_expansion, 0.1)) * 100) : 0}
             <div transition:slide={{ duration: 200 }} class="px-2 pb-2">
-              <div class="grid grid-cols-4 gap-1.5">
-                <div class="border border-border-subtle p-1.5">
-                  <div class="font-mono text-[8px] text-text-dim uppercase mb-0.5">Input Words</div>
-                  <div class="flex justify-between font-mono text-[10px]" style="font-variant-numeric: tabular-nums;">
-                    <span class="text-neon-purple/80">{str.a_input_words}</span>
-                    <span class="text-neon-blue/80">{str.b_input_words}</span>
-                  </div>
+              <div class="space-y-0.5">
+                <div class="flex items-center justify-between h-5 font-mono text-[10px]" style="font-variant-numeric: tabular-nums;">
+                  <span class="text-text-dim w-16 shrink-0 text-[8px] uppercase">Input</span>
+                  <span class="text-neon-purple/80">{str.a_input_words}</span>
+                  <span class="text-text-dim/40 mx-1">&#8594;</span>
+                  <span class="text-neon-blue/80">{str.b_input_words}</span>
+                  <span class="ml-auto {inputDelta > 0 ? 'text-neon-green' : inputDelta < 0 ? 'text-neon-red' : 'text-text-dim'} text-[9px] w-10 text-right">{inputDelta !== 0 ? `${inputDelta > 0 ? '+' : ''}${inputDelta}%` : '\u2014'}</span>
                 </div>
-                <div class="border border-border-subtle p-1.5">
-                  <div class="font-mono text-[8px] text-text-dim uppercase mb-0.5">Output Words</div>
-                  <div class="flex justify-between font-mono text-[10px]" style="font-variant-numeric: tabular-nums;">
-                    <span class="text-neon-purple/80">{str.a_output_words}</span>
-                    <span class="text-neon-blue/80">{str.b_output_words}</span>
-                  </div>
+                <div class="flex items-center justify-between h-5 font-mono text-[10px]" style="font-variant-numeric: tabular-nums;">
+                  <span class="text-text-dim w-16 shrink-0 text-[8px] uppercase">Output</span>
+                  <span class="text-neon-purple/80">{str.a_output_words}</span>
+                  <span class="text-text-dim/40 mx-1">&#8594;</span>
+                  <span class="text-neon-blue/80">{str.b_output_words}</span>
+                  <span class="ml-auto {outputDelta > 0 ? 'text-neon-green' : outputDelta < 0 ? 'text-neon-red' : 'text-text-dim'} text-[9px] w-10 text-right">{outputDelta !== 0 ? `${outputDelta > 0 ? '+' : ''}${outputDelta}%` : '\u2014'}</span>
                 </div>
-                <div class="border border-border-subtle p-1.5">
-                  <div class="font-mono text-[8px] text-text-dim uppercase mb-0.5">Expansion</div>
-                  <div class="flex justify-between font-mono text-[10px]" style="font-variant-numeric: tabular-nums;">
-                    <span class="text-neon-purple/80">{str.a_expansion.toFixed(1)}x</span>
-                    <span class="text-neon-blue/80">{str.b_expansion.toFixed(1)}x</span>
-                  </div>
+                <div class="flex items-center justify-between h-5 font-mono text-[10px]" style="font-variant-numeric: tabular-nums;">
+                  <span class="text-text-dim w-16 shrink-0 text-[8px] uppercase">Expansion</span>
+                  <span class="text-neon-purple/80">{str.a_expansion.toFixed(1)}x</span>
+                  <span class="text-text-dim/40 mx-1">&#8594;</span>
+                  <span class="text-neon-blue/80">{str.b_expansion.toFixed(1)}x</span>
+                  <span class="ml-auto {expansionDelta > 0 ? 'text-neon-green' : expansionDelta < 0 ? 'text-neon-red' : 'text-text-dim'} text-[9px] w-10 text-right">{expansionDelta !== 0 ? `${expansionDelta > 0 ? '+' : ''}${expansionDelta}%` : '\u2014'}</span>
                 </div>
-                <div class="border border-border-subtle p-1.5">
-                  <div class="font-mono text-[8px] text-text-dim uppercase mb-0.5">Complexity</div>
-                  <div class="flex justify-between font-mono text-[10px]" style="font-variant-numeric: tabular-nums;">
+                {#if str.a_complexity || str.b_complexity}
+                  <div class="flex items-center justify-between h-5 font-mono text-[10px]" style="font-variant-numeric: tabular-nums;">
+                    <span class="text-text-dim w-16 shrink-0 text-[8px] uppercase">Complexity</span>
                     <span class="text-neon-purple/80">{str.a_complexity ?? '\u2014'}</span>
-                    <span class="text-neon-blue/80">{str.b_complexity ?? '\u2014'}</span>
+                    {#if str.a_complexity !== str.b_complexity}
+                      <span class="text-text-dim/40 mx-1">&#8594;</span>
+                      <span class="text-neon-blue/80">{str.b_complexity ?? '\u2014'}</span>
+                      <span class="ml-auto text-neon-yellow text-[9px] w-10 text-right">shifted</span>
+                    {:else}
+                      <span class="ml-auto text-text-dim text-[9px]"></span>
+                    {/if}
                   </div>
-                </div>
+                {/if}
               </div>
             </div>
           {/if}
@@ -572,7 +609,7 @@
             <span class="font-mono text-[9px] text-text-dim">
               {fmtDuration(eff.a_duration_ms)} / {fmtDuration(eff.b_duration_ms)}
               {#if eff.a_tokens != null || eff.b_tokens != null}
-                &middot; {fmtTokens(eff.a_tokens)} / {fmtTokens(eff.b_tokens)} tok
+                &middot; {fmtTokens(eff.a_tokens)}{eff.a_is_estimated ? ' est.' : ''} / {fmtTokens(eff.b_tokens)}{eff.b_is_estimated ? ' est.' : ''} tok
               {/if}
             </span>
           </button>
@@ -596,7 +633,7 @@
               </div>
               <!-- Token bars -->
               <div class="mb-1.5">
-                <div class="font-mono text-[8px] text-text-dim uppercase mb-0.5">Tokens</div>
+                <div class="font-mono text-[8px] text-text-dim uppercase mb-0.5">Tokens{eff.a_is_estimated || eff.b_is_estimated ? ' (estimated)' : ''}</div>
                 <div class="flex items-center gap-2 h-5" style="font-variant-numeric: tabular-nums;">
                   <span class="font-mono text-[10px] text-neon-purple/80 w-12 text-right shrink-0">{fmtTokens(eff.a_tokens)}</span>
                   <div class="flex-1 h-2 bg-bg-secondary/40 overflow-hidden">
@@ -646,6 +683,12 @@
                   {/if}
                 </div>
               {/if}
+              <!-- Comparative summary line -->
+              {#if buildEffSummary().length > 0}
+                <div class="mt-1 font-mono text-[9px] text-neon-cyan/70" style="font-variant-numeric: tabular-nums;">
+                  {buildEffSummary().join(' \u00B7 ')}
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
@@ -660,7 +703,15 @@
               Strategy
             </span>
             <span class="font-mono text-[9px] text-text-dim">
-              {strat.a_framework ?? 'none'} / {strat.b_framework ?? 'none'}
+              {strat.a_framework ?? 'none'} {strat.a_source ?? ''}
+              {#if strat.a_framework !== strat.b_framework}
+                &middot; {strat.b_framework ?? 'none'} {strat.b_source ?? ''}
+              {:else}
+                {strat.b_source && strat.b_source !== strat.a_source ? ` / ${strat.b_source}` : ''}
+              {/if}
+              {#if strat.a_guardrails.length > 0}
+                &middot; {strat.a_guardrails.length} guardrail{strat.a_guardrails.length !== 1 ? 's' : ''} on A
+              {/if}
             </span>
           </button>
           {#if openAccordions.strategy}
@@ -723,7 +774,14 @@
               Context &amp; Adaptation
             </span>
             <span class="font-mono text-[9px] text-text-dim">
-              {adpt.feedbacks_between} feedback{adpt.feedbacks_between !== 1 ? 's' : ''} between
+              {#if ctx.a_has_codebase && !ctx.b_has_codebase}A had repo &middot;
+              {:else if ctx.b_has_codebase && !ctx.a_has_codebase}B had repo &middot;
+              {:else if ctx.a_has_codebase && ctx.b_has_codebase}both repos &middot;
+              {/if}
+              {adpt.feedbacks_between} feedback{adpt.feedbacks_between !== 1 ? 's' : ''}
+              {#if topWeightShift()}
+                &middot; {topWeightShift()?.dim} wt {(topWeightShift()?.delta ?? 0) > 0 ? '+' : ''}{((topWeightShift()?.delta ?? 0) * 100).toFixed(0)}%
+              {/if}
             </span>
           </button>
           {#if openAccordions.context}
