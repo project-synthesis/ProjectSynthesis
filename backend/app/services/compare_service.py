@@ -167,18 +167,23 @@ def extract_scores(opt: Any) -> dict:
 # ── 4. extract_structural ────────────────────────────────────────────────
 
 def extract_structural(opt: Any) -> dict:
-    """Compute word counts and expansion ratio."""
+    """Compute word counts, sentence count, and expansion ratio."""
+    import re
+
     raw = getattr(opt, "raw_prompt", "") or ""
     optimized = getattr(opt, "optimized_prompt", "") or ""
     input_words = len(raw.split())
     output_words = len(optimized.split())
     expansion = output_words / input_words if input_words > 0 else 0.0
     complexity = getattr(opt, "complexity", None)
+    # Sentence count: split on sentence-ending punctuation
+    sentences = len(re.split(r"[.!?]+", optimized.strip())) if optimized.strip() else 0
     return {
         "input_words": input_words,
         "output_words": output_words,
         "expansion": round(expansion, 2),
         "complexity": complexity,
+        "sentence_count": sentences,
     }
 
 
@@ -208,13 +213,16 @@ def extract_efficiency(opt: Any) -> dict:
 # ── 6. extract_strategy ──────────────────────────────────────────────────
 
 def extract_strategy(opt: Any) -> dict:
-    """Extract framework, strategy source, rationale, and guardrails."""
+    """Extract framework, strategy source, rationale, guardrails, secondary frameworks, and approach notes."""
     guardrails = _parse_json_field(getattr(opt, "active_guardrails", None), default=[])
+    secondary = _parse_json_field(getattr(opt, "secondary_frameworks", None), default=[])
     return {
         "framework": getattr(opt, "primary_framework", None),
         "source": getattr(opt, "strategy_source", None),
         "rationale": getattr(opt, "strategy_rationale", None),
         "guardrails": guardrails if isinstance(guardrails, list) else [],
+        "secondary_frameworks": secondary if isinstance(secondary, list) else [],
+        "approach_notes": getattr(opt, "approach_notes", None),
     }
 
 
@@ -239,14 +247,18 @@ def extract_context(opt: Any) -> dict:
 # ── 8. extract_validation ────────────────────────────────────────────────
 
 def extract_validation(opt: Any) -> dict:
-    """Extract verdict, parsed issues, parsed changes, and improvement flag."""
+    """Extract verdict, parsed issues, parsed changes, improvement flag, weaknesses, and strengths."""
     issues = _parse_json_field(getattr(opt, "issues", None), default=[])
     changes = _parse_json_field(getattr(opt, "changes_made", None), default=[])
+    weaknesses = _parse_json_field(getattr(opt, "weaknesses", None), default=[])
+    strengths = _parse_json_field(getattr(opt, "strengths", None), default=[])
     return {
         "verdict": getattr(opt, "verdict", None),
         "issues": issues if isinstance(issues, list) else [],
         "changes_made": changes if isinstance(changes, list) else [],
         "is_improvement": getattr(opt, "is_improvement", None),
+        "weaknesses": weaknesses if isinstance(weaknesses, list) else [],
+        "strengths": strengths if isinstance(strengths, list) else [],
     }
 
 

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.optimization import Optimization
 from app.providers.base import CompletionUsage
+from app.services.cache_service import get_cache
 
 logger = logging.getLogger(__name__)
 
@@ -557,6 +558,10 @@ async def update_optimization(
 
     await session.flush()
     await session.refresh(opt)
+
+    # Invalidate any cached comparison involving this optimization
+    await _invalidate_compare_cache(optimization_id)
+
     return opt.to_dict()
 
 
@@ -619,7 +624,29 @@ async def delete_optimization(
     opt.deleted_at = datetime.now(timezone.utc)
     await session.flush()
     logger.info("Soft-deleted optimization %s", optimization_id)
+
+    # Invalidate any cached comparison involving this optimization
+    await _invalidate_compare_cache(optimization_id)
+
     return True
+
+
+async def _invalidate_compare_cache(optimization_id: str) -> None:
+    """Invalidate any cached comparison that includes this optimization.
+
+    Compare cache keys use the format ``compare:{sorted_id_a}:{sorted_id_b}``,
+    so any key containing the optimization ID should be evicted.
+    """
+    try:
+        cache = get_cache()
+        deleted = await cache.delete_by_substring(optimization_id)
+        if deleted:
+            logger.info(
+                "Invalidated %d compare cache entries for %s",
+                deleted, optimization_id,
+            )
+    except Exception as e:
+        logger.debug("Compare cache invalidation failed for %s: %s", optimization_id, e)
 
 
 async def batch_delete_optimizations(

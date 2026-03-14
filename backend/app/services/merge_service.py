@@ -226,14 +226,28 @@ def build_merge_system_prompt(compare: CompareResponse) -> str:
     a_changes_str = ", ".join(val.a_changes_made) if val.a_changes_made else "none"
     b_changes_str = ", ".join(val.b_changes_made) if val.b_changes_made else "none"
 
+    # Weaknesses / strengths from full optimization records
+    a_weaknesses = compare.a.get("weaknesses", []) or []
+    b_weaknesses = compare.b.get("weaknesses", []) or []
+    a_strengths = compare.a.get("strengths", []) or []
+    b_strengths = compare.b.get("strengths", []) or []
+    a_weak_str = ", ".join(a_weaknesses[:5]) if a_weaknesses else "none"
+    b_weak_str = ", ".join(b_weaknesses[:5]) if b_weaknesses else "none"
+    a_str_str = ", ".join(a_strengths[:5]) if a_strengths else "none"
+    b_str_str = ", ".join(b_strengths[:5]) if b_strengths else "none"
+
     sections.append(
         f"## VALIDATION INTELLIGENCE\n"
         f"A verdict: {val.a_verdict or 'N/A'}\n"
         f"  Issues: {a_issues_str}\n"
         f"  Changes made: {a_changes_str}\n"
+        f"  Weaknesses identified: {a_weak_str}\n"
+        f"  Strengths identified: {a_str_str}\n"
         f"B verdict: {val.b_verdict or 'N/A'}\n"
         f"  Issues: {b_issues_str}\n"
-        f"  Changes made: {b_changes_str}"
+        f"  Changes made: {b_changes_str}\n"
+        f"  Weaknesses identified: {b_weak_str}\n"
+        f"  Strengths identified: {b_str_str}"
     )
 
     # ── 9. MERGE DIRECTIVES ──────────────────────────────────────────────

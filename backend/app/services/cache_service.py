@@ -99,6 +99,44 @@ class CacheService:
         # Always clean up in-memory too
         self._memory.pop(key, None)
 
+    async def delete_by_substring(self, substring: str) -> int:
+        """Delete all keys containing the given substring.
+
+        Scans Redis keys matching ``*substring*`` and removes matching
+        in-memory entries.  Returns the number of keys deleted.
+        """
+        deleted = 0
+
+        # Redis: SCAN with pattern
+        if self._redis.is_ready:
+            try:
+                pattern = f"*{substring}*"
+                cursor = 0
+                while True:
+                    cursor, keys = await self._redis.client.scan(
+                        cursor=cursor, match=pattern, count=100,
+                    )
+                    if keys:
+                        await self._redis.client.delete(*keys)
+                        deleted += len(keys)
+                    if cursor == 0:
+                        break
+            except Exception as e:
+                logger.debug(
+                    "Redis pattern delete failed for *%s*: %s",
+                    substring, e,
+                )
+
+        # In-memory: iterate and remove matching keys
+        matching = [
+            k for k in self._memory if substring in k
+        ]
+        for k in matching:
+            del self._memory[k]
+            deleted += 1
+
+        return deleted
+
     def _cleanup_memory(self) -> None:
         """Remove expired entries from in-memory fallback.
 
