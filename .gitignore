@@ -17,9 +17,9 @@ build/
 .ruff_cache/
 .hypothesis/
 
-# Database
+# Database & runtime data
 data/*
-!data/.gitkeep
+!data/.gitignore
 e2e_test.db*
 
 # Playwright E2E test outputs

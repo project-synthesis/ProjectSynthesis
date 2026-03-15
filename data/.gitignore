@@ -1,0 +1,3 @@
+*.db
+traces/
+.app_secrets
