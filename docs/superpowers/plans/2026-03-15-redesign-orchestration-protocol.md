@@ -286,8 +286,8 @@ Overall progress is tracked in this file. Update after each phase completes:
 
 | Phase | Plan File | Status | Tests | Coverage |
 |-------|-----------|--------|-------|----------|
-| 0 | `2026-03-15-redesign-phase-0-archive-scaffold.md` | Pending | — | — |
-| 1a | `2026-03-15-redesign-phase-1a-pipeline-core.md` | Pending | — | — |
+| 0 | `2026-03-15-redesign-phase-0-archive-scaffold.md` | Complete | 0 | — |
+| 1a | `2026-03-15-redesign-phase-1a-pipeline-core.md` | Complete | 68 | 93% |
 | 1b | `2026-03-15-redesign-phase-1b-supporting-services.md` | Pending | — | — |
 | 2 | `2026-03-15-redesign-phase-2-github-mcp.md` | Pending | — | — |
 | 3 | `2026-03-15-redesign-phase-3-frontend.md` | Pending | — | — |
