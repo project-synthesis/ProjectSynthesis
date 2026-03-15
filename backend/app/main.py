@@ -75,4 +75,28 @@ try:
 except ImportError:
     pass
 
+try:
+    from app.routers.providers import router as providers_router
+    app.include_router(providers_router)
+except ImportError:
+    pass
+
+try:
+    from app.routers.settings import router as settings_router
+    app.include_router(settings_router)
+except ImportError:
+    pass
+
+try:
+    from app.routers.github_auth import router as github_auth_router
+    app.include_router(github_auth_router)
+except ImportError:
+    pass
+
+try:
+    from app.routers.github_repos import router as github_repos_router
+    app.include_router(github_repos_router)
+except ImportError:
+    pass
+
 asgi_app = app
