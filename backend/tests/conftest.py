@@ -1,10 +1,14 @@
 """Shared test fixtures."""
 
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock
 
 import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+
+from app.providers.base import LLMProvider
 
 # No custom event_loop fixture needed — pytest-asyncio manages it
 # automatically with asyncio_mode = "auto" in pyproject.toml.
@@ -25,3 +29,29 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def mock_provider():
+    provider = AsyncMock(spec=LLMProvider)
+    provider.name = "mock"
+    return provider
+
+
+@pytest_asyncio.fixture
+async def app_client(mock_provider, db_session):
+    from app.main import app
+    from app.database import get_db
+
+    app.state.provider = mock_provider
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+    app.dependency_overrides.clear()
