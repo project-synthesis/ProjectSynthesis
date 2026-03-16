@@ -62,6 +62,74 @@ html, body {
 ::-webkit-scrollbar-thumb { background: rgba(74, 74, 106, 0.3); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(74, 74, 106, 0.5); }
 
+/* ---- Focus & Accessibility ---- */
+:focus-visible {
+  outline: 1px solid rgba(0, 229, 255, 0.3);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---- Animation Timing ---- */
+:root {
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);   /* all entrances */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);         /* all exits */
+  --duration-micro: 150ms;
+  --duration-hover: 200ms;
+  --duration-structural: 300ms;
+  --duration-progress: 500ms;
+}
+
+/* ---- Interactive Defaults ---- */
+button, [role="button"] {
+  cursor: pointer;
+  border: 1px solid var(--color-border-subtle);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  transition: all var(--duration-hover) var(--ease-spring);
+}
+
+button:hover, [role="button"]:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-accent);
+}
+
+button:active, [role="button"]:active {
+  transform: translateY(0);
+  border-color: var(--color-border-subtle);
+}
+
+button:disabled, [role="button"][aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+input, textarea, select {
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  transition: border-color var(--duration-hover) var(--ease-spring);
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: rgba(0, 229, 255, 0.3);
+}
+
 /* ---- Utility Classes ---- */
 .font-display { font-family: var(--font-display); }
 .font-mono { font-family: var(--font-mono); }
@@ -71,4 +139,36 @@ html, body {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+/* Section headings — Syne, uppercase, tracked */
+.section-heading {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-text-secondary);
+}
+
+.sub-heading {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-text-dim);
+}
+
+/* Accessibility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
