@@ -43,3 +43,12 @@
 - Added init.sh service manager with PID tracking, process group kill, preflight checks, health probes, and log rotation
 - Added Docker single-container deployment (backend + frontend + MCP + nginx)
 - Added graceful shutdown marking in-flight optimizations as interrupted
+- Fixed Docker: switched SvelteKit from adapter-auto to adapter-static for nginx static serving
+- Fixed Docker: nginx listens on unprivileged port 8080, removed NET_BIND_SERVICE capability
+- Fixed Docker: Alembic migration errors now fail hard instead of being silently ignored
+- Fixed Docker: entrypoint cleanup propagates actual exit code instead of always returning 0
+- Fixed Docker: healthcheck validates full stack via nginx (port 8080) not just backend directly
+- Fixed Docker: removed text/event-stream from nginx gzip (breaks SSE chunked encoding)
+- Fixed Docker: added .env files to .dockerignore to prevent secret leakage into images
+- Fixed Docker: removed unused pyproject.toml COPY from Dockerfile
+- Added custom 503 error page matching project brand for nginx backend-down scenarios

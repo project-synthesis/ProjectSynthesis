@@ -28,7 +28,6 @@ cleanup() {
         (( waited++ ))
     done
     echo "[entrypoint] Shutdown complete"
-    exit 0
 }
 
 trap cleanup SIGTERM SIGINT SIGQUIT
@@ -38,7 +37,11 @@ echo "[entrypoint] Starting Project Synthesis..."
 # Run Alembic migrations
 cd /app/backend
 echo "[entrypoint] Running database migrations..."
-python -m alembic upgrade head 2>&1 || echo "[entrypoint] Warning: migrations failed (DB may already be current)"
+if ! python -m alembic upgrade head 2>&1; then
+    echo "[entrypoint] ERROR: Database migration failed. Check alembic configuration."
+    exit 1
+fi
+echo "[entrypoint] Migrations complete."
 
 # Start backend (uvicorn)
 echo "[entrypoint] Starting backend on :8000..."
@@ -65,7 +68,7 @@ for i in $(seq 1 30); do
 done
 
 # Start nginx (foreground-ish — we manage it via PID)
-echo "[entrypoint] Starting nginx on :80..."
+echo "[entrypoint] Starting nginx on :8080..."
 nginx -g 'daemon off;' &
 PIDS+=($!)
 
@@ -77,3 +80,4 @@ EXIT_CODE=$?
 
 echo "[entrypoint] Process exited with code $EXIT_CODE — shutting down all services"
 cleanup
+exit $EXIT_CODE
