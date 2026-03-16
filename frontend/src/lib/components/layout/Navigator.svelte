@@ -2,8 +2,8 @@
   import { onMount } from 'svelte';
   import { githubStore } from '$lib/stores/github.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
-  import { getSettings, getProviders } from '$lib/api/client';
-  import type { SettingsResponse, ProvidersResponse } from '$lib/api/client';
+  import { getSettings, getProviders, getHistory } from '$lib/api/client';
+  import type { SettingsResponse, ProvidersResponse, HistoryItem } from '$lib/api/client';
 
   type Activity = 'editor' | 'history' | 'github' | 'settings';
 
@@ -20,14 +20,9 @@
   ];
 
   // ---- History panel state ----
-  // Static mock — will be wired to API in Task 8
-  const mockHistory = [
-    { id: '1', task_type: 'code', strategy_used: 'chain_of_thought', overall_score: 0.87 },
-    { id: '2', task_type: 'analysis', strategy_used: 'few_shot', overall_score: 0.74 },
-    { id: '3', task_type: 'creative', strategy_used: 'role_persona', overall_score: 0.92 },
-    { id: '4', task_type: 'qa', strategy_used: 'zero_shot', overall_score: 0.65 },
-    { id: '5', task_type: 'code', strategy_used: 'structured_output', overall_score: 0.81 },
-  ];
+  let historyItems = $state<HistoryItem[]>([]);
+  let historyError = $state<string | null>(null);
+  let historyLoaded = $state(false);
 
   // ---- Settings panel state ----
   let settings = $state<SettingsResponse | null>(null);
@@ -39,6 +34,22 @@
       [settings, providers] = await Promise.all([getSettings(), getProviders()]);
     } catch {
       // Silently ignore — backend may not be running
+    }
+  });
+
+  // Fetch history when the history panel becomes active
+  $effect(() => {
+    if (active === 'history' && !historyLoaded) {
+      getHistory({ limit: 50, sort_by: 'created_at', sort_order: 'desc' })
+        .then((resp) => {
+          historyItems = resp.items;
+          historyError = null;
+          historyLoaded = true;
+        })
+        .catch(() => {
+          historyError = 'Backend offline';
+          historyLoaded = true;
+        });
     }
   });
 
@@ -88,21 +99,28 @@
         <span class="section-heading">History</span>
       </header>
       <div class="panel-body">
-        {#each mockHistory as item}
-          <button class="row-item history-row" onclick={() => {}}>
-            <div class="history-meta">
-              <span class="row-label">{item.task_type}</span>
-              <span
-                class="row-score font-mono"
-                style="color: {scoreColor(item.overall_score)};"
-              >
-                {(item.overall_score * 100).toFixed(0)}
-              </span>
-            </div>
-            <span class="row-desc">{item.strategy_used.replace(/_/g, ' ')}</span>
-          </button>
-        {/each}
-        <p class="empty-note">Wired in Task 8 — showing mock data</p>
+        {#if historyError}
+          <p class="empty-note">{historyError}</p>
+        {:else if !historyLoaded}
+          <p class="empty-note">Loading…</p>
+        {:else if historyItems.length === 0}
+          <p class="empty-note">No optimizations yet.</p>
+        {:else}
+          {#each historyItems as item (item.id)}
+            <button class="row-item history-row" onclick={() => {}}>
+              <div class="history-meta">
+                <span class="row-label">{item.task_type}</span>
+                <span
+                  class="row-score font-mono"
+                  style="color: {scoreColor(item.overall_score)};"
+                >
+                  {(item.overall_score * 100).toFixed(0)}
+                </span>
+              </div>
+              <span class="row-desc">{item.strategy_used.replace(/_/g, ' ')}</span>
+            </button>
+          {/each}
+        {/if}
       </div>
     </div>
 

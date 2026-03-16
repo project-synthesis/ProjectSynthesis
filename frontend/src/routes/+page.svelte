@@ -1,5 +1,100 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
+  import { forgeStore } from '$lib/stores/forge.svelte';
+  import { githubStore } from '$lib/stores/github.svelte';
+  import { getHealth } from '$lib/api/client';
+  import type { HealthResponse } from '$lib/api/client';
+
+  let health = $state<HealthResponse | null>(null);
+  let backendError = $state<string | null>(null);
+
+  onMount(async () => {
+    // Check backend health
+    try {
+      health = await getHealth();
+      backendError = null;
+    } catch (err: any) {
+      backendError = 'Cannot connect to backend. Check that services are running.';
+    }
+
+    // Check GitHub auth (non-fatal)
+    githubStore.checkAuth().catch(() => {});
+  });
+
+  // Derived error states
+  let showNoProvider = $derived(health && !health.provider && !backendError);
+  let showRateLimit = $derived(forgeStore.error?.includes('Rate limit'));
+  let showForgeError = $derived(
+    forgeStore.status === 'error' && forgeStore.error && !showRateLimit
+  );
 </script>
 
+<!-- Error Banners -->
+{#if backendError}
+  <div class="error-banner error-critical">
+    <span>{backendError}</span>
+    <button onclick={() => location.reload()}>Retry</button>
+  </div>
+{/if}
+
+{#if showNoProvider}
+  <div class="error-banner error-warning">
+    <span>No provider configured. Set up Claude CLI or add an API key in Settings.</span>
+  </div>
+{/if}
+
+{#if showRateLimit}
+  <div class="error-banner error-warning">
+    <span>Rate limit reached. Try again in a moment.</span>
+    <button onclick={() => forgeStore.error = null}>Dismiss</button>
+  </div>
+{/if}
+
+{#if showForgeError}
+  <div class="error-banner error-critical">
+    <span>Optimization failed: {forgeStore.error}</span>
+    <button onclick={() => { forgeStore.error = null; forgeStore.status = 'idle'; }}>Dismiss</button>
+  </div>
+{/if}
+
+<!-- Main Editor -->
 <EditorGroups />
+
+<style>
+  .error-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-family: var(--font-sans);
+    color: var(--color-text-primary);
+  }
+
+  .error-critical {
+    border: 1px solid var(--color-neon-red);
+    background: rgba(255, 51, 102, 0.06);
+  }
+
+  .error-warning {
+    border: 1px solid var(--color-neon-yellow);
+    background: rgba(251, 191, 36, 0.06);
+  }
+
+  .error-banner button {
+    font-size: 10px;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border-subtle);
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font-family: var(--font-sans);
+  }
+
+  .error-banner button:hover {
+    border-color: var(--color-border-accent);
+    color: var(--color-text-primary);
+    background: var(--color-bg-hover);
+  }
+</style>
