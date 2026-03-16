@@ -37,10 +37,10 @@ class TestThinkingConfig:
 
 def _make_analysis_result() -> AnalysisResult:
     return AnalysisResult(
-        task_type="code_generation",
+        task_type="coding",
         weaknesses=["vague scope"],
         strengths=["clear goal"],
-        selected_strategy="chain_of_thought",
+        selected_strategy="chain-of-thought",
         strategy_rationale="Requires step-by-step reasoning.",
         confidence=0.85,
     )
@@ -176,7 +176,7 @@ class TestClaudeCLIProvider:
             )
 
         assert isinstance(result, AnalysisResult)
-        assert result.task_type == "code_generation"
+        assert result.task_type == "coding"
         assert result.confidence == 0.85
         mock_exec.assert_called_once()
 

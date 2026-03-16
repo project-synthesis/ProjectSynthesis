@@ -22,7 +22,7 @@ async def opt_id(db_session: AsyncSession) -> str:
         created_at=datetime.now(timezone.utc),
         raw_prompt="Sample prompt for feedback tests",
         task_type="generation",
-        strategy_used="chain_of_thought",
+        strategy_used="chain-of-thought",
         status="completed",
     )
     db_session.add(opt)

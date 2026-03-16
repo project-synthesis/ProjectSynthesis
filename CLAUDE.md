@@ -32,6 +32,8 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 
 ### Layer rules
 - `routers/` → `services/` → `models/` only. Services must never import from routers.
+- `PromptLoader.load()` for static templates (no variables: `agent-guidance.md`, `scoring.md`). `PromptLoader.render()` for templates with `{{variables}}`.
+- `AnalysisResult.task_type` is a `Literal` — valid values: `coding`, `writing`, `analysis`, `creative`, `data`, `system`, `general`. Same constraint on `selected_strategy`: must match a filename in `prompts/strategies/`.
 
 ### Key services (`backend/app/services/`)
 - `pipeline.py` — orchestrates analyzer → optimizer → scorer (3-phase pipeline)

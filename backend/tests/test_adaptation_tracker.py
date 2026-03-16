@@ -13,11 +13,11 @@ async def test_update_affinity_thumbs_up(db_session: AsyncSession) -> None:
     """update_affinity with thumbs_up creates a row with thumbs_up=1 and approval_rate=1.0."""
     tracker = AdaptationTracker(db_session)
 
-    await tracker.update_affinity("generation", "chain_of_thought", "thumbs_up")
+    await tracker.update_affinity("generation", "chain-of-thought", "thumbs_up")
 
     affinities = await tracker.get_affinities("generation")
-    assert "chain_of_thought" in affinities
-    data = affinities["chain_of_thought"]
+    assert "chain-of-thought" in affinities
+    data = affinities["chain-of-thought"]
     assert data["thumbs_up"] == 1
     assert data["thumbs_down"] == 0
     assert data["approval_rate"] == 1.0
@@ -27,11 +27,11 @@ async def test_update_affinity_thumbs_down(db_session: AsyncSession) -> None:
     """update_affinity with thumbs_down creates a row with thumbs_down=1 and approval_rate=0.0."""
     tracker = AdaptationTracker(db_session)
 
-    await tracker.update_affinity("classification", "few_shot", "thumbs_down")
+    await tracker.update_affinity("classification", "few-shot", "thumbs_down")
 
     affinities = await tracker.get_affinities("classification")
-    assert "few_shot" in affinities
-    data = affinities["few_shot"]
+    assert "few-shot" in affinities
+    data = affinities["few-shot"]
     assert data["thumbs_up"] == 0
     assert data["thumbs_down"] == 1
     assert data["approval_rate"] == 0.0
@@ -64,14 +64,14 @@ async def test_get_affinities_empty(db_session: AsyncSession) -> None:
 async def test_render_adaptation_state(db_session: AsyncSession) -> None:
     """render_adaptation_state returns a non-empty string containing the strategy name."""
     tracker = AdaptationTracker(db_session)
-    await tracker.update_affinity("generation", "chain_of_thought", "thumbs_up")
+    await tracker.update_affinity("generation", "chain-of-thought", "thumbs_up")
 
     rendered = await tracker.render_adaptation_state("generation")
 
     assert rendered is not None
     assert isinstance(rendered, str)
     assert len(rendered) > 0
-    assert "chain_of_thought" in rendered
+    assert "chain-of-thought" in rendered
 
 
 async def test_render_returns_none_when_no_data(db_session: AsyncSession) -> None:
@@ -88,9 +88,9 @@ async def test_degenerate_detection(db_session: AsyncSession) -> None:
     tracker = AdaptationTracker(db_session)
 
     for _ in range(11):
-        await tracker.update_affinity("generation", "few_shot", "thumbs_up")
+        await tracker.update_affinity("generation", "few-shot", "thumbs_up")
 
-    result = await tracker.check_degenerate("generation", "few_shot")
+    result = await tracker.check_degenerate("generation", "few-shot")
 
     assert result is True
 
@@ -100,10 +100,10 @@ async def test_not_degenerate_with_mixed_feedback(db_session: AsyncSession) -> N
     tracker = AdaptationTracker(db_session)
 
     for _ in range(8):
-        await tracker.update_affinity("generation", "chain_of_thought", "thumbs_up")
+        await tracker.update_affinity("generation", "chain-of-thought", "thumbs_up")
     for _ in range(3):
-        await tracker.update_affinity("generation", "chain_of_thought", "thumbs_down")
+        await tracker.update_affinity("generation", "chain-of-thought", "thumbs_down")
 
-    result = await tracker.check_degenerate("generation", "chain_of_thought")
+    result = await tracker.check_degenerate("generation", "chain-of-thought")
 
     assert result is False

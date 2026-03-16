@@ -116,14 +116,14 @@ class TestDimensionScores:
 class TestAnalysisResult:
     def test_valid(self):
         result = AnalysisResult(
-            task_type="code_generation",
+            task_type="coding",
             weaknesses=["vague scope"],
             strengths=["clear goal"],
-            selected_strategy="chain_of_thought",
+            selected_strategy="chain-of-thought",
             strategy_rationale="Requires step-by-step reasoning.",
             confidence=0.85,
         )
-        assert result.task_type == "code_generation"
+        assert result.task_type == "coding"
         assert result.confidence == 0.85
 
     def test_confidence_below_range_rejected(self):
@@ -171,9 +171,9 @@ class TestOptimizationResult:
         result = OptimizationResult(
             optimized_prompt="Write a Python function that...",
             changes_summary="Added context and constraints.",
-            strategy_used="chain_of_thought",
+            strategy_used="chain-of-thought",
         )
-        assert result.strategy_used == "chain_of_thought"
+        assert result.strategy_used == "chain-of-thought"
 
     def test_extra_fields_forbidden(self):
         with pytest.raises(ValidationError):
@@ -226,17 +226,17 @@ class TestAnalyzerInput:
     def test_valid_no_override(self):
         inp = AnalyzerInput(
             raw_prompt="Summarise this document.",
-            available_strategies=["chain_of_thought", "few_shot"],
+            available_strategies=["chain-of-thought", "few-shot"],
         )
         assert inp.strategy_override is None
 
     def test_valid_with_override(self):
         inp = AnalyzerInput(
             raw_prompt="Summarise this document.",
-            strategy_override="few_shot",
-            available_strategies=["chain_of_thought", "few_shot"],
+            strategy_override="few-shot",
+            available_strategies=["chain-of-thought", "few-shot"],
         )
-        assert inp.strategy_override == "few_shot"
+        assert inp.strategy_override == "few-shot"
 
     def test_extra_fields_forbidden(self):
         with pytest.raises(ValidationError):
@@ -255,10 +255,10 @@ class TestAnalyzerInput:
 class TestOptimizerInput:
     def _make_analysis(self) -> AnalysisResult:
         return AnalysisResult(
-            task_type="summarisation",
+            task_type="writing",
             weaknesses=[],
             strengths=["concise"],
-            selected_strategy="few_shot",
+            selected_strategy="few-shot",
             strategy_rationale="Examples help.",
             confidence=0.9,
         )
@@ -370,8 +370,8 @@ class TestPipelineResult:
             trace_id="trace-abc",
             raw_prompt="Original.",
             optimized_prompt="Optimized.",
-            task_type="code_generation",
-            strategy_used="chain_of_thought",
+            task_type="coding",
+            strategy_used="chain-of-thought",
             changes_summary="Added structure.",
             optimized_scores=_make_dim_scores(8.0),
             original_scores=_make_dim_scores(6.0),
