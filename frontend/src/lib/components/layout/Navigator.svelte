@@ -37,18 +37,24 @@
       });
   });
 
-  function formatStrategyLabel(name: string): string {
-    return name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-  }
+  // Title-case with lowercase prepositions
+  const STRATEGY_LABELS: Record<string, string> = {
+    'chain-of-thought': 'Chain of Thought',
+    'few-shot': 'Few-Shot',
+    'role-playing': 'Role-Playing',
+    'structured-output': 'Structured Output',
+    'meta-prompting': 'Meta-Prompting',
+    'auto': 'Auto',
+  };
 
-  // Concise inline tags (3 words max) — full description goes in tooltip
+  // 2-word max inline tags — full description in tooltip
   const STRATEGY_TAGS: Record<string, string> = {
-    'chain-of-thought': 'Step-by-step reasoning',
-    'few-shot': 'Example-driven prompting',
-    'role-playing': 'Expert persona framing',
-    'structured-output': 'Format + constraints',
-    'meta-prompting': 'Structural improvement',
-    'auto': 'Auto-select best',
+    'chain-of-thought': 'reasoning',
+    'few-shot': 'examples',
+    'role-playing': 'persona',
+    'structured-output': 'format',
+    'meta-prompting': 'structure',
+    'auto': 'adaptive',
   };
 
   async function openStrategyEditor(name: string) {
@@ -236,7 +242,7 @@
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStrategy(strat.name); } }}
             title={strat.description}
           >
-            <span class="strat-name">{formatStrategyLabel(strat.name)}</span>
+            <span class="strat-name">{STRATEGY_LABELS[strat.name] ?? strat.name}</span>
             <span class="strat-tag">{STRATEGY_TAGS[strat.name] ?? ''}</span>
             <button
               class="strat-edit"
@@ -596,11 +602,11 @@
   .strat-row {
     display: flex;
     align-items: center;
-    gap: 4px;
-    height: 20px;
-    padding: 0 4px;
+    gap: 6px;
+    height: 22px;
+    padding: 0 6px;
     background: transparent;
-    border: 1px solid var(--color-border-subtle);
+    border: 1px solid transparent;
     cursor: pointer;
     transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
                 background 200ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -617,19 +623,22 @@
   }
 
   .strat-name {
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-sans);
+    font-weight: 400;
     color: var(--color-text-primary);
     white-space: nowrap;
     flex-shrink: 0;
   }
 
+  .strat-row--active .strat-name {
+    color: var(--color-neon-cyan);
+  }
+
   .strat-tag {
     font-size: 9px;
     font-family: var(--font-mono);
-    color: var(--color-text-dim);
-    overflow: hidden;
-    text-overflow: ellipsis;
+    color: rgba(122, 122, 158, 0.6);
     white-space: nowrap;
     flex: 1;
     min-width: 0;
@@ -647,7 +656,7 @@
     cursor: pointer;
     opacity: 0;
     flex-shrink: 0;
-    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .strat-row:hover .strat-edit {
