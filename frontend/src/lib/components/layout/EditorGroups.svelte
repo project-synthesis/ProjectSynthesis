@@ -1,7 +1,9 @@
 <script lang="ts">
   import { editorStore } from '$lib/stores/editor.svelte';
+  import { forgeStore } from '$lib/stores/forge.svelte';
   import PromptEdit from '$lib/components/editor/PromptEdit.svelte';
   import ForgeArtifact from '$lib/components/editor/ForgeArtifact.svelte';
+  import DiffView from '$lib/components/shared/DiffView.svelte';
 </script>
 
 <div class="editor-groups">
@@ -47,9 +49,16 @@
         {:else if tab.type === 'result'}
           <ForgeArtifact />
         {:else if tab.type === 'diff'}
-          <div class="placeholder-panel">
-            <span class="placeholder-label">DiffView — coming in Task 7</span>
-          </div>
+          {#if forgeStore.prompt && forgeStore.result?.optimized_prompt}
+            <DiffView
+              original={forgeStore.prompt}
+              optimized={forgeStore.result.optimized_prompt}
+            />
+          {:else}
+            <div class="placeholder-panel">
+              <span class="placeholder-label">No diff available — forge a prompt first</span>
+            </div>
+          {/if}
         {/if}
       </div>
     {/each}

@@ -5,6 +5,7 @@
   import Navigator from '$lib/components/layout/Navigator.svelte';
   import Inspector from '$lib/components/layout/Inspector.svelte';
   import StatusBar from '$lib/components/layout/StatusBar.svelte';
+  import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
 
   let { children } = $props();
 
@@ -33,6 +34,7 @@
   <div class="status-bar">
     <StatusBar />
   </div>
+  <CommandPalette />
 </div>
 
 <style>

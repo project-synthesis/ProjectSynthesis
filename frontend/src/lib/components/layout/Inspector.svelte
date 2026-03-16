@@ -1,5 +1,6 @@
 <script lang="ts">
   import { forgeStore } from '$lib/stores/forge.svelte';
+  import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
 
   const DIMENSION_LABELS: Record<string, string> = {
     clarity: 'Clarity',
@@ -80,10 +81,17 @@
           </div>
         {/if}
 
-        <!-- ScoreCard placeholder — will be wired in Task 7 -->
-        <div class="scorecard-placeholder">
-          <span class="placeholder-label">ScoreCard — Task 7</span>
-        </div>
+        {#if forgeStore.scores}
+          <div class="scorecard-section">
+            <div class="section-heading" style="margin-bottom: 6px;">Score Details</div>
+            <ScoreCard
+              scores={forgeStore.scores}
+              originalScores={forgeStore.originalScores}
+              deltas={forgeStore.scoreDeltas}
+              overallScore={forgeStore.result?.overall_score ?? null}
+            />
+          </div>
+        {/if}
 
       </div>
 
@@ -230,20 +238,6 @@
   .strategy-value {
     font-size: 11px;
     color: var(--color-neon-cyan);
-    font-family: var(--font-mono);
-  }
-
-  .scorecard-placeholder {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 6px;
-    border: 1px dashed var(--color-border-subtle);
-  }
-
-  .placeholder-label {
-    font-size: 10px;
-    color: var(--color-text-dim);
     font-family: var(--font-mono);
   }
 

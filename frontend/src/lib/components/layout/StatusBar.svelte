@@ -1,5 +1,18 @@
 <script lang="ts">
-  // ProviderBadge and RepoBadge will be wired in a later task
+  import { onMount } from 'svelte';
+  import { getHealth } from '$lib/api/client';
+  import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
+
+  let provider = $state<string | null>(null);
+
+  onMount(async () => {
+    try {
+      const health = await getHealth();
+      provider = health.provider;
+    } catch {
+      // Backend not reachable — leave provider null
+    }
+  });
 </script>
 
 <div
@@ -10,7 +23,7 @@
 >
   <!-- Left side: provider badge + repo badge placeholders -->
   <div class="status-left">
-    <span class="status-item"><!-- ProviderBadge --></span>
+    <ProviderBadge {provider} />
     <span class="status-item"><!-- RepoBadge --></span>
   </div>
 
