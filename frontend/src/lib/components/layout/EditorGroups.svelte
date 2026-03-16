@@ -25,6 +25,8 @@
   const showRefinement = $derived(
     editorStore.activeTab?.type === 'result' && forgeStore.status === 'complete'
   );
+
+  const hasRefinementTurns = $derived(refinementStore.turns.length > 0);
 </script>
 
 <div class="editor-groups">
@@ -73,7 +75,7 @@
               <div class="result-split-top">
                 <ForgeArtifact />
               </div>
-              <div class="result-split-bottom">
+              <div class="result-split-bottom" class:collapsed={!hasRefinementTurns}>
                 <RefinementTimeline />
               </div>
             </div>
@@ -259,5 +261,11 @@
     min-height: 120px;
     max-height: 50%;
     overflow: hidden;
+  }
+
+  .result-split-bottom.collapsed {
+    height: auto;
+    min-height: 0;
+    max-height: 60px;
   }
 </style>
