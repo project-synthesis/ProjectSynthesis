@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { githubStore } from '$lib/stores/github.svelte';
@@ -10,8 +9,8 @@
   let backendError = $state<string | null>(null);
   let eventSource: EventSource | null = null;
 
-  // Real-time event stream (non-async so cleanup works)
-  onMount(() => {
+  // Real-time event stream
+  $effect(() => {
     eventSource = connectEventStream((type, data) => {
       if (type === 'optimization_created' || type === 'refinement_turn') {
         window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
@@ -23,14 +22,14 @@
     return () => eventSource?.close();
   });
 
-  onMount(async () => {
-    // Check backend health
-    try {
-      health = await getHealth();
-      backendError = null;
-    } catch (err: any) {
-      backendError = 'Cannot connect to backend. Check that services are running.';
-    }
+  // Check backend health (one-time on mount)
+  let healthChecked = false;
+  $effect(() => {
+    if (healthChecked) return;
+    healthChecked = true;
+    getHealth()
+      .then((h) => { health = h; backendError = null; })
+      .catch(() => { backendError = 'Cannot connect to backend. Check that services are running.'; });
 
     // GitHub auth checked lazily when user navigates to GitHub panel
     // (avoids 401 console noise on every page load when OAuth isn't configured)

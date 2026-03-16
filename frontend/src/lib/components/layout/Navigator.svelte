@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { githubStore } from '$lib/stores/github.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
@@ -35,19 +34,18 @@
   let apiKeyError = $state<string | null>(null);
   let apiKeySaving = $state(false);
 
-  onMount(async () => {
-    // Pre-fetch for settings panel (best effort)
-    try {
-      [settings, providers, apiKeyStatus] = await Promise.all([
-        getSettings(), getProviders(), getApiKey(),
-      ]);
-    } catch {
-      // Silently ignore — backend may not be running
-    }
+  // Pre-fetch for settings panel (one-time on mount, best effort)
+  let settingsLoaded = false;
+  $effect(() => {
+    if (settingsLoaded) return;
+    settingsLoaded = true;
+    Promise.all([getSettings(), getProviders(), getApiKey()])
+      .then(([s, p, k]) => { settings = s; providers = p; apiKeyStatus = k; })
+      .catch(() => {});
   });
 
   // Auto-refresh history when real-time events arrive from any source
-  onMount(() => {
+  $effect(() => {
     const handler = () => { historyLoaded = false; };
     window.addEventListener('optimization-event', handler);
     return () => window.removeEventListener('optimization-event', handler);

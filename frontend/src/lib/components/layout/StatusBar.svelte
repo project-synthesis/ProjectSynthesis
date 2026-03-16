@@ -1,19 +1,17 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { getHealth } from '$lib/api/client';
   import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
 
   let provider = $state<string | null>(null);
   let version = $state<string | null>(null);
 
-  onMount(async () => {
-    try {
-      const health = await getHealth();
-      provider = health.provider;
-      version = health.version;
-    } catch {
-      // Backend not reachable — leave provider/version null
-    }
+  let loaded = false;
+  $effect(() => {
+    if (loaded) return;
+    loaded = true;
+    getHealth()
+      .then((h) => { provider = h.provider; version = h.version; })
+      .catch(() => {});
   });
 </script>
 

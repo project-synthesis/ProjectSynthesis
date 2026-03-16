@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import '../app.css';
   import favicon from '$lib/assets/favicon.svg';
   import ActivityBar from '$lib/components/layout/ActivityBar.svelte';
@@ -13,7 +12,7 @@
   type Activity = 'editor' | 'history' | 'github' | 'settings';
   let activeActivity = $state<Activity>('editor');
 
-  onMount(() => {
+  $effect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail === 'editor' || detail === 'history' || detail === 'github' || detail === 'settings') {
