@@ -118,7 +118,25 @@ export class ApiError extends Error {
   }
 }
 
-// ---- Fetch Wrapper ----
+// ---- Fetch Wrappers ----
+
+/**
+ * Non-throwing fetch — returns null on any non-2xx response.
+ * Use for optional checks (e.g., auth status) where 401/404 is expected.
+ */
+export async function tryFetch<T>(path: string, options?: RequestInit): Promise<T | null> {
+  try {
+    const resp = await fetch(`${BASE_URL}${path}`, {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...options?.headers },
+      ...options,
+    });
+    if (!resp.ok) return null;
+    return resp.json();
+  } catch {
+    return null;
+  }
+}
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE_URL}${path}`, {

@@ -10,9 +10,16 @@ class GitHubStore {
   error = $state<string | null>(null);
 
   async checkAuth() {
+    // Use tryFetch to avoid 401 console noise (apiFetch throws on non-2xx)
     try {
-      this.user = await githubMe();
-      await this.loadLinked();
+      const { tryFetch } = await import('$lib/api/client');
+      const user = await tryFetch<GitHubUser>('/github/auth/me');
+      if (user) {
+        this.user = user;
+        await this.loadLinked();
+      } else {
+        this.user = null;
+      }
     } catch {
       this.user = null;
     }
