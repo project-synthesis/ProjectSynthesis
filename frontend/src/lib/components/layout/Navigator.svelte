@@ -41,6 +41,16 @@
     return name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   }
 
+  // Concise inline tags (3 words max) — full description goes in tooltip
+  const STRATEGY_TAGS: Record<string, string> = {
+    'chain-of-thought': 'Step-by-step reasoning',
+    'few-shot': 'Example-driven prompting',
+    'role-playing': 'Expert persona framing',
+    'structured-output': 'Format + constraints',
+    'meta-prompting': 'Structural improvement',
+    'auto': 'Auto-select best',
+  };
+
   async function openStrategyEditor(name: string) {
     if (editingStrategy === name) {
       editingStrategy = null;
@@ -216,51 +226,51 @@
       </header>
       <div class="panel-body">
         {#each strategiesList as strat (strat.name)}
-          <!-- Strategy row -->
-          <div class="strategy-card" class:strategy-card--active={forgeStore.strategy === strat.name}>
+          <!-- Single-line strategy row -->
+          <div
+            class="strat-row"
+            class:strat-row--active={forgeStore.strategy === strat.name}
+            role="button"
+            tabindex="0"
+            onclick={() => selectStrategy(strat.name)}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStrategy(strat.name); } }}
+            title={strat.description}
+          >
+            <span class="strat-name">{formatStrategyLabel(strat.name)}</span>
+            <span class="strat-tag">{STRATEGY_TAGS[strat.name] ?? ''}</span>
             <button
-              class="strategy-header"
-              onclick={() => selectStrategy(strat.name)}
+              class="strat-edit"
+              onclick={(e: MouseEvent) => { e.stopPropagation(); openStrategyEditor(strat.name); }}
+              title="Edit template"
             >
-              <span class="row-label">{formatStrategyLabel(strat.name)}</span>
-              {#if forgeStore.strategy === strat.name}
-                <span class="row-badge">active</span>
-              {/if}
+              {editingStrategy === strat.name ? '×' : '⋮'}
             </button>
-            <p class="strategy-tip">{strat.description}</p>
-            <button
-              class="strategy-edit-btn"
-              onclick={() => openStrategyEditor(strat.name)}
-              title="Edit strategy template"
-            >
-              {editingStrategy === strat.name ? 'close' : 'edit'}
-            </button>
-
-            <!-- Inline editor (expanded) -->
-            {#if editingStrategy === strat.name}
-              <div class="strategy-editor">
-                <textarea
-                  class="strategy-textarea"
-                  value={editContent}
-                  oninput={(e) => { editContent = (e.target as HTMLTextAreaElement).value; editDirty = true; }}
-                  spellcheck="false"
-                ></textarea>
-                <div class="strategy-editor-actions">
-                  <button
-                    class="action-btn action-btn--primary"
-                    onclick={saveStrategyEdit}
-                    disabled={editSaving || !editDirty}
-                  >
-                    {editSaving ? 'Saving...' : 'Save'}
-                  </button>
-                  <button class="action-btn" onclick={discardStrategyEdit}>
-                    Discard
-                  </button>
-                  <span class="strategy-file-path">strategies/{strat.name}.md</span>
-                </div>
-              </div>
-            {/if}
           </div>
+
+          <!-- Inline editor (expands below the row) -->
+          {#if editingStrategy === strat.name}
+            <div class="strategy-editor">
+              <textarea
+                class="strategy-textarea"
+                value={editContent}
+                oninput={(e) => { editContent = (e.target as HTMLTextAreaElement).value; editDirty = true; }}
+                spellcheck="false"
+              ></textarea>
+              <div class="strategy-editor-actions">
+                <button
+                  class="action-btn action-btn--primary"
+                  onclick={saveStrategyEdit}
+                  disabled={editSaving || !editDirty}
+                >
+                  {editSaving ? 'Saving...' : 'Save'}
+                </button>
+                <button class="action-btn" onclick={discardStrategyEdit}>
+                  Discard
+                </button>
+                <span class="strategy-file-path">strategies/{strat.name}.md</span>
+              </div>
+            </div>
+          {/if}
         {/each}
       </div>
     </div>
@@ -582,70 +592,70 @@
     min-height: 0;
   }
 
-  /* ---- Strategy cards ---- */
-  .strategy-card {
+  /* ---- Strategy rows (single-line, compact) ---- */
+  .strat-row {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 4px;
+    background: transparent;
     border: 1px solid var(--color-border-subtle);
-    background: var(--color-bg-card);
-    padding: 4px 6px;
-    gap: 2px;
-    position: relative;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    cursor: pointer;
+    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .strategy-card:hover {
+  .strat-row:hover {
+    background: var(--color-bg-hover);
     border-color: var(--color-border-accent);
   }
 
-  .strategy-card--active {
+  .strat-row--active {
     border-color: var(--color-neon-cyan);
+    background: rgba(0, 229, 255, 0.04);
   }
 
-  .strategy-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: transparent;
-    border: none;
-    padding: 0;
-    height: 18px;
-    cursor: pointer;
-  }
-
-  .strategy-header:hover {
-    background: transparent;
-    border-color: transparent;
-  }
-
-  .strategy-tip {
+  .strat-name {
     font-size: 10px;
     font-family: var(--font-sans);
-    color: var(--color-text-dim);
-    margin: 0;
-    line-height: 1.3;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
-  .strategy-edit-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    font-family: var(--font-mono);
+  .strat-tag {
     font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .strat-edit {
+    font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--color-text-dim);
     background: transparent;
     border: none;
-    padding: 0 3px;
-    height: 14px;
-    line-height: 14px;
+    padding: 0 2px;
+    height: 16px;
+    line-height: 16px;
     cursor: pointer;
     opacity: 0;
+    flex-shrink: 0;
     transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .strategy-card:hover .strategy-edit-btn,
-  .strategy-edit-btn:focus-visible {
+  .strat-row:hover .strat-edit {
     opacity: 1;
+  }
+
+  .strat-edit:hover {
+    color: var(--color-neon-cyan);
   }
 
   .strategy-editor {
@@ -716,23 +726,6 @@
 
   .row-item:active {
     transform: none;
-  }
-
-  .row-label {
-    font-size: 10px;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .row-badge {
-    font-size: 9px;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--color-neon-cyan);
-    flex-shrink: 0;
   }
 
   /* ---- History row ---- */
