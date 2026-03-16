@@ -6,7 +6,7 @@ class RefinementStore {
   turns = $state<RefinementTurn[]>([]);
   branches = $state<RefinementBranch[]>([]);
   activeBranchId = $state<string | null>(null);
-  suggestions = $state<Array<{ text: string; source: string }>>([]);
+  suggestions = $state<Array<Record<string, string>>>([]);
   status = $state<'idle' | 'refining' | 'complete' | 'error'>('idle');
   error = $state<string | null>(null);
 
@@ -82,7 +82,7 @@ class RefinementStore {
       // Reload versions
       if (this.optimizationId) this.init(this.optimizationId);
     } else if (type === 'suggestions') {
-      this.suggestions = (event.suggestions || event.items || []) as Array<{ text: string; source: string }>;
+      this.suggestions = (event.suggestions || event.items || []) as Array<Record<string, string>>;
     } else if (type === 'error') {
       this.error = (event.error || event.message) as string;
       this.status = 'error';

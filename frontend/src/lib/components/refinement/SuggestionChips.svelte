@@ -1,10 +1,18 @@
 <script lang="ts">
   interface Props {
-    suggestions: Array<{ text: string; source: string }>;
+    suggestions: Array<Record<string, string>>;
     onSelect: (text: string) => void;
   }
 
   let { suggestions, onSelect }: Props = $props();
+
+  function chipText(chip: Record<string, string>): string {
+    return chip.text || chip.action || JSON.stringify(chip);
+  }
+
+  function chipSource(chip: Record<string, string>): string {
+    return chip.source || chip.type || '';
+  }
 </script>
 
 {#if suggestions.length > 0}
@@ -12,10 +20,10 @@
     {#each suggestions.slice(0, 3) as chip}
       <button
         class="chip"
-        title="Source: {chip.source}"
-        onclick={() => onSelect(chip.text)}
+        title={chipSource(chip)}
+        onclick={() => onSelect(chipText(chip))}
       >
-        {chip.text}
+        {chipText(chip)}
       </button>
     {/each}
   </div>
