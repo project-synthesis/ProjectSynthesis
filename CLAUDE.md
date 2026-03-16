@@ -76,6 +76,7 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 - `refinement.py` — `POST /api/refine` (SSE), `GET /api/refine/{id}/versions`, `POST /api/refine/{id}/rollback`
 - `providers.py` — `GET /api/providers`, `GET/PATCH/DELETE /api/provider/api-key`
 - `preferences.py` — `GET /api/preferences`, `PATCH /api/preferences` (persistent user settings)
+- `strategies.py` — `GET /api/strategies`, `GET /api/strategies/{name}`, `PUT /api/strategies/{name}` (strategy template CRUD)
 - `settings.py` — `GET /api/settings` (read-only server config)
 - `github_auth.py` — OAuth flow (login, callback, me, logout)
 - `github_repos.py` — repo management (list, link, linked, unlink)

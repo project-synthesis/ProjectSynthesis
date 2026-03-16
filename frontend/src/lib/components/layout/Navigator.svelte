@@ -101,7 +101,7 @@
     Promise.all([getSettings(), getProviders(), getApiKey()])
       .then(([s, p, k]) => { settings = s; providers = p; apiKeyStatus = k; })
       .catch(() => {});
-    preferencesStore.init();
+    // preferencesStore.init() is called from +layout.svelte — no duplicate here
   });
 
   // Auto-refresh history when real-time events arrive from any source

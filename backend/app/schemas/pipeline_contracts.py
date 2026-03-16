@@ -181,6 +181,7 @@ class PipelineResult(BaseModel):
     context_sources: dict[str, bool]
     tokens_total: int = 0
     tokens_by_phase: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
     repo_full_name: str | None = None
     codebase_context_snapshot: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
