@@ -231,3 +231,104 @@ export const githubLink = (fullName: string) =>
   });
 export const githubLinked = () => apiFetch<LinkedRepo>('/github/repos/linked');
 export const githubUnlink = () => apiFetch<void>('/github/repos/unlink', { method: 'DELETE' });
+
+// ---- Refinement Types ----
+
+export interface RefinementTurn {
+  id: string;
+  optimization_id: string;
+  version: number;
+  branch_id: string;
+  parent_version: number | null;
+  refinement_request: string | null;
+  prompt: string;
+  scores: Record<string, number> | null;
+  deltas: Record<string, number> | null;
+  deltas_from_original: Record<string, number> | null;
+  strategy_used: string | null;
+  suggestions: Array<{ text: string; source: string }> | null;
+  created_at: string;
+}
+
+export interface RefinementBranch {
+  id: string;
+  optimization_id: string;
+  parent_branch_id: string | null;
+  forked_at_version: number | null;
+  created_at: string;
+}
+
+export interface VersionsResponse {
+  optimization_id: string;
+  count: number;
+  versions: RefinementTurn[];
+}
+
+// ---- Refinement (SSE) ----
+
+export function refineSSE(
+  optimizationId: string,
+  refinementRequest: string,
+  branchId: string | null,
+  onEvent: (event: SSEEvent) => void,
+  onError: (err: Error) => void,
+  onComplete: () => void,
+): AbortController {
+  const controller = new AbortController();
+  const body = JSON.stringify({
+    optimization_id: optimizationId,
+    refinement_request: refinementRequest,
+    branch_id: branchId || undefined,
+  });
+
+  fetch(`${BASE_URL}/refine`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body,
+    signal: controller.signal,
+  })
+    .then(async (resp) => {
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new ApiError(resp.status, err.detail || resp.statusText);
+      }
+      const reader = resp.body?.getReader();
+      if (!reader) throw new Error('No response body');
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              onEvent(data);
+            } catch { /* skip malformed */ }
+          }
+        }
+      }
+      onComplete();
+    })
+    .catch((err) => {
+      if (err.name !== 'AbortError') onError(err);
+    });
+
+  return controller;
+}
+
+export const getRefinementVersions = (optimizationId: string, branchId?: string) => {
+  const params = branchId ? `?branch_id=${branchId}` : '';
+  return apiFetch<VersionsResponse>(`/refine/${optimizationId}/versions${params}`);
+};
+
+export const rollbackRefinement = (optimizationId: string, toVersion: number) =>
+  apiFetch<RefinementBranch>(`/refine/${optimizationId}/rollback`, {
+    method: 'POST',
+    body: JSON.stringify({ to_version: toVersion }),
+  });
