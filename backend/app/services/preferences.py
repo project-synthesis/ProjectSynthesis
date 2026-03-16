@@ -153,9 +153,21 @@ class PreferencesService:
             )
             prefs.setdefault("defaults", {})["strategy"] = default_strategy
 
+        # Pipeline toggles must be boolean
+        pipeline = prefs.get("pipeline", {})
+        for toggle in ("enable_explore", "enable_scoring", "enable_adaptation"):
+            val = pipeline.get(toggle)
+            if not isinstance(val, bool):
+                default_val = DEFAULTS["pipeline"][toggle]
+                logger.warning(
+                    "Non-boolean pipeline toggle '%s'=%r — falling back to %s",
+                    toggle, val, default_val,
+                )
+                pipeline[toggle] = default_val
+
     @staticmethod
     def _validate(prefs: dict[str, Any]) -> None:
-        """Raise ``ValueError`` for invalid model or strategy values."""
+        """Raise ``ValueError`` for invalid model, strategy, or toggle values."""
         models = prefs.get("models", {})
         for role in ("analyzer", "optimizer", "scorer"):
             val = models.get(role)
@@ -169,6 +181,14 @@ class PreferencesService:
             raise ValueError(
                 f"Invalid strategy '{strategy}'. Valid: {sorted(VALID_STRATEGIES)}"
             )
+
+        pipeline = prefs.get("pipeline", {})
+        for toggle in ("enable_explore", "enable_scoring", "enable_adaptation"):
+            val = pipeline.get(toggle)
+            if val is not None and not isinstance(val, bool):
+                raise ValueError(
+                    f"Pipeline toggle '{toggle}' must be boolean, got {type(val).__name__}"
+                )
 
     def _write(self, prefs: dict[str, Any]) -> None:
         """Atomic write via tempfile + rename, mode 0o644."""

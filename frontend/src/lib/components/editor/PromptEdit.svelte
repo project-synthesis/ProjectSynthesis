@@ -1,6 +1,7 @@
 <script lang="ts">
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
+  import { preferencesStore } from '$lib/stores/preferences.svelte';
 
   const strategies = [
     { value: '', label: 'Auto' },
@@ -26,8 +27,12 @@
     }
   });
 
-  // Derived select value: null -> '' for the <select> element
-  const selectValue = $derived(forgeStore.strategy ?? '');
+  // Derived select value: explicit strategy > default preference > '' (auto)
+  const selectValue = $derived.by(() => {
+    if (forgeStore.strategy) return forgeStore.strategy;
+    const pref = preferencesStore.defaultStrategy;
+    return pref === 'auto' ? '' : pref;
+  });
 
   function handleStrategyChange(e: Event) {
     const val = (e.target as HTMLSelectElement).value;
