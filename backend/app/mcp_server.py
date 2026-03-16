@@ -22,6 +22,7 @@ from app.providers.detector import detect_provider
 from app.schemas.pipeline_contracts import AnalysisResult, DimensionScores, ScoreResult
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.pipeline import PipelineOrchestrator
+from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.strategy_loader import StrategyLoader
 from app.services.workspace_intelligence import WorkspaceIntelligence
@@ -235,6 +236,9 @@ async def synthesis_analyze(
     start = time.monotonic()
     logger.info("synthesis_analyze called: prompt_len=%d", len(prompt))
 
+    prefs = PreferencesService(DATA_DIR)
+    prefs_snapshot = prefs.load()
+
     loader = PromptLoader(PROMPTS_DIR)
     strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
 
@@ -247,7 +251,7 @@ async def synthesis_analyze(
 
     try:
         analysis: AnalysisResult = await provider.complete_parsed(
-            model=settings.MODEL_SONNET,
+            model=prefs.resolve_model("analyzer", prefs_snapshot),
             system_prompt=system_prompt,
             user_message=analyze_msg,
             output_format=AnalysisResult,
@@ -271,7 +275,7 @@ async def synthesis_analyze(
 
     try:
         score_result: ScoreResult = await provider.complete_parsed(
-            model=settings.MODEL_SONNET,
+            model=prefs.resolve_model("scorer", prefs_snapshot),
             system_prompt=scoring_system,
             user_message=scorer_msg,
             output_format=ScoreResult,
@@ -311,7 +315,7 @@ async def synthesis_analyze(
             score_conciseness=baseline.conciseness,
             overall_score=overall,
             provider=provider.name,
-            model_used=settings.MODEL_SONNET,
+            model_used=prefs.resolve_model("analyzer", prefs_snapshot),
             scoring_mode="baseline",
             status="analyzed",
             trace_id=trace_id,

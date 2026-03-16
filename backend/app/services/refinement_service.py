@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+from app.config import DATA_DIR, settings
 from app.models import Optimization, RefinementBranch, RefinementTurn
 from app.providers.base import LLMProvider
 from app.schemas.pipeline_contracts import (
@@ -29,6 +29,7 @@ from app.schemas.pipeline_contracts import (
     PipelineEvent,
     ScoreResult,
 )
+from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.strategy_loader import StrategyLoader
 
@@ -143,6 +144,9 @@ class RefinementService:
         Yields:
             PipelineEvent objects for each stage.
         """
+        _prefs = PreferencesService(DATA_DIR)
+        _prefs_snapshot = _prefs.load()
+
         # Get the latest turn on this branch
         result = await self.db.execute(
             select(RefinementTurn)
@@ -186,7 +190,7 @@ class RefinementService:
         })
 
         analysis: AnalysisResult = await self.provider.complete_parsed(
-            model=settings.MODEL_SONNET,
+            model=_prefs.resolve_model("analyzer", _prefs_snapshot),
             system_prompt=system_prompt,
             user_message=analyze_msg,
             output_format=AnalysisResult,
@@ -213,7 +217,7 @@ class RefinementService:
         })
 
         refined: OptimizationResult = await self.provider.complete_parsed(
-            model=settings.MODEL_OPUS,
+            model=_prefs.resolve_model("optimizer", _prefs_snapshot),
             system_prompt=system_prompt,
             user_message=refine_msg,
             output_format=OptimizationResult,
@@ -245,7 +249,7 @@ class RefinementService:
         scorer_msg = f"## Prompt A\n\n{prompt_a}\n\n## Prompt B\n\n{prompt_b}"
 
         scores: ScoreResult = await self.provider.complete_parsed(
-            model=settings.MODEL_SONNET,
+            model=_prefs.resolve_model("scorer", _prefs_snapshot),
             system_prompt=scoring_system,
             user_message=scorer_msg,
             output_format=ScoreResult,

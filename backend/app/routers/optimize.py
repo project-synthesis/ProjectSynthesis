@@ -8,11 +8,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import PROMPTS_DIR, settings
+from app.config import DATA_DIR, PROMPTS_DIR, settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.models import Optimization
 from app.services.pipeline import PipelineOrchestrator
+from app.services.preferences import PreferencesService
 from app.utils.sse import format_sse
 
 logger = logging.getLogger(__name__)
@@ -53,10 +54,13 @@ async def optimize(
 
     orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
 
+    _prefs = PreferencesService(DATA_DIR)
+    effective_strategy = body.strategy or _prefs.get("defaults.strategy") or "auto"
+
     async def event_stream():
         async for event in orchestrator.run(
             raw_prompt=body.prompt, provider=provider, db=db,
-            strategy_override=body.strategy,
+            strategy_override=effective_strategy if effective_strategy != "auto" else None,
             codebase_guidance=guidance,
         ):
             yield format_sse(event.event, event.data)
