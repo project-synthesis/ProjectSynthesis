@@ -7,26 +7,58 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from app.config import PROMPTS_DIR
+from app.services.workspace_intelligence import WorkspaceIntelligence
 
 logger = logging.getLogger(__name__)
 
 # Module-level provider cache — set once by the lifespan, read by tools.
 _provider = None
 
+# Shared workspace intelligence instance — caches profiles by root set.
+_workspace_intel = WorkspaceIntelligence()
+
+
+async def _resolve_workspace_guidance(
+    ctx: Context | None, workspace_path: str | None
+) -> str | None:
+    """Resolve workspace guidance: try roots/list first, fall back to workspace_path."""
+    roots: list[Path] = []
+
+    # Try MCP roots/list (zero-config)
+    if ctx:
+        try:
+            roots_result = await ctx.session.list_roots()
+            for root in roots_result.roots:
+                uri = str(root.uri)
+                if uri.startswith("file://"):
+                    roots.append(Path(uri.removeprefix("file://")))
+        except Exception:
+            logger.debug("Client does not support roots/list")
+
+    # Fallback: explicit workspace_path
+    if not roots and workspace_path:
+        roots = [Path(workspace_path)]
+
+    if not roots:
+        return None
+
+    return _workspace_intel.analyze(roots)
+
 
 @asynccontextmanager
 async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Detect the LLM provider once at startup and expose it to tools."""
     global _provider
-    from app.providers.detector import detect_provider
-
     # Enable WAL mode for SQLite (same as main.py)
     import aiosqlite
+
     from app.config import DATA_DIR
+    from app.providers.detector import detect_provider
     db_path = DATA_DIR / "synthesis.db"
     if db_path.exists():
         async with aiosqlite.connect(str(db_path)) as db:
@@ -63,6 +95,7 @@ async def synthesis_optimize(
     strategy: str | None = None,
     repo_full_name: str | None = None,
     workspace_path: str | None = None,
+    ctx: Context = None,
 ) -> dict:
     """Run the full optimization pipeline on a prompt.
 
@@ -77,14 +110,8 @@ async def synthesis_optimize(
     if not provider:
         raise ValueError("No LLM provider available")
 
-    # Scan workspace for guidance files
-    guidance = None
-    if workspace_path:
-        from pathlib import Path
-
-        from app.services.roots_scanner import RootsScanner
-        scanner = RootsScanner()
-        guidance = scanner.scan(Path(workspace_path))
+    # Auto-discover workspace roots (zero-config) or fall back to workspace_path
+    guidance = await _resolve_workspace_guidance(ctx, workspace_path)
 
     from app.database import async_session_factory
     from app.services.pipeline import PipelineOrchestrator
@@ -132,6 +159,7 @@ async def synthesis_prepare_optimization(
     max_context_tokens: int = 128000,
     workspace_path: str | None = None,
     repo_full_name: str | None = None,
+    ctx: Context = None,
 ) -> dict:
     """Assemble the full optimization prompt with context for an external LLM.
 
@@ -162,14 +190,8 @@ async def synthesis_prepare_optimization(
         else scoring_rubric
     )
 
-    # Scan workspace for guidance files
-    guidance = None
-    if workspace_path:
-        from pathlib import Path
-
-        from app.services.roots_scanner import RootsScanner
-        scanner = RootsScanner()
-        guidance = scanner.scan(Path(workspace_path))
+    # Auto-discover workspace roots (zero-config) or fall back to workspace_path
+    guidance = await _resolve_workspace_guidance(ctx, workspace_path)
 
     assembled = loader.render("passthrough.md", {
         "raw_prompt": prompt,
@@ -227,10 +249,12 @@ async def synthesis_save_result(
     strategy_used: str | None = None,
     scores: dict | None = None,
     model: str | None = None,
+    codebase_context: str | None = None,
 ) -> dict:
     """Persist an optimization result from an external LLM.
 
     Applies bias correction to self-rated scores.
+    Optionally stores IDE-provided codebase context snapshot.
     """
     from sqlalchemy import select
 
@@ -294,6 +318,13 @@ async def synthesis_save_result(
             else None
         )
 
+        # Truncate codebase context if provided
+        context_snapshot = None
+        if codebase_context:
+            from app.config import settings
+
+            context_snapshot = codebase_context[: settings.MAX_CODEBASE_CONTEXT_CHARS]
+
         if opt:
             # Update existing pending record from prepare
             opt.optimized_prompt = optimized_prompt
@@ -309,6 +340,8 @@ async def synthesis_save_result(
             opt.model_used = model or "unknown"
             opt.scoring_mode = "self_rated"
             opt.status = "completed"
+            if context_snapshot:
+                opt.codebase_context_snapshot = context_snapshot
             opt_id = opt.id
         else:
             # No prepare was called — create new record (standalone save)
@@ -331,6 +364,7 @@ async def synthesis_save_result(
                 scoring_mode="self_rated",
                 status="completed",
                 trace_id=trace_id,
+                codebase_context_snapshot=context_snapshot,
             )
             db.add(opt)
 

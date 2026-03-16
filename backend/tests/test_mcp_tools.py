@@ -135,3 +135,37 @@ async def test_optimize_validates_prompt_too_long() -> None:
     """synthesis_optimize rejects prompts over 200000 characters."""
     with pytest.raises(ValueError, match="too long"):
         await synthesis_optimize(prompt="x" * 200001)
+
+
+# ---------------------------------------------------------------------------
+# synthesis_save_result — codebase_context
+# ---------------------------------------------------------------------------
+
+
+async def test_save_result_stores_codebase_context(db_session) -> None:
+    """Passing codebase_context persists it (truncated) on the optimization record."""
+    context_text = "Project uses FastAPI + SvelteKit. Key patterns: async, runes."
+
+    with patch("app.database.async_session_factory") as mock_factory:
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = await synthesis_save_result(
+            trace_id="test-trace-with-context",
+            optimized_prompt="A well-structured prompt with clear requirements.",
+            strategy_used="auto",
+            codebase_context=context_text,
+        )
+
+    assert "optimization_id" in result
+
+    # Verify the record was persisted with codebase_context_snapshot
+    from sqlalchemy import select
+
+    from app.models import Optimization
+
+    row = await db_session.execute(
+        select(Optimization).where(Optimization.trace_id == "test-trace-with-context")
+    )
+    opt = row.scalar_one()
+    assert opt.codebase_context_snapshot == context_text
