@@ -1,96 +1,155 @@
-<h1 align="center">🧬 Project Synthesis</h1>
+# Project Synthesis
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/Apache_2.0-blue.svg?logo=apache&logoColor=white" alt="License"></a>
-  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs_Welcome-brightgreen.svg?logo=git&logoColor=white" alt="PRs Welcome"></a>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python_3.14-3776AB.svg?logo=python&logoColor=white" alt="Python"></a>
-  <a href="https://www.anthropic.com/claude"><img src="https://img.shields.io/badge/Powered_by_Claude-cc785c.svg?logo=anthropic&logoColor=white" alt="Claude"></a>
-  <a href="docs/MCP.md"><img src="https://img.shields.io/badge/MCP_Enabled-6366f1.svg?logo=anthropic&logoColor=white" alt="MCP"></a>
-  <a href="docker-compose.yml"><img src="https://img.shields.io/badge/Docker_Ready-2496ED.svg?logo=docker&logoColor=white" alt="Docker"></a>
-  <br>
-  <img src="https://img.shields.io/badge/FastAPI-009688.svg?logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/SvelteKit-FF3E00.svg?logo=svelte&logoColor=white" alt="SvelteKit">
-  <img src="https://img.shields.io/badge/Tailwind_CSS_4-06B6D4.svg?logo=tailwindcss&logoColor=white" alt="Tailwind CSS">
-  <img src="https://img.shields.io/badge/Redis-FF4438.svg?logo=redis&logoColor=white" alt="Redis">
-  <img src="https://img.shields.io/badge/SQLAlchemy-D71F00.svg?logo=sqlalchemy&logoColor=white" alt="SQLAlchemy">
-  <img src="https://img.shields.io/badge/sentence--transformers-EE4C2C.svg?logo=pytorch&logoColor=white" alt="sentence-transformers">
-</p>
+AI-powered prompt optimization. Paste a prompt, get a better version back with scored improvements.
 
-> **This project is in its early days.** The foundation is real and working, but there's a long road ahead — and that's the exciting part.
+## What It Does
 
-Your prompts carry intent, but most of it gets lost in translation. Project Synthesis closes that gap. It takes a raw prompt and runs it through a multi-stage pipeline that understands what you're actually trying to accomplish, then rewrites it so the AI on the other end gets the full picture.
+Project Synthesis takes a raw prompt and runs it through a 3-phase optimization pipeline:
 
-Link a GitHub repository and it goes deeper: it reads your codebase, maps the architecture, and bakes that context directly into the prompt. The result reads like it was written by someone who already knows your code.
+1. **Analyze** — Classifies the prompt type, identifies weaknesses, selects the best strategy (Sonnet)
+2. **Optimize** — Rewrites the prompt using the selected strategy while preserving intent (Opus)
+3. **Score** — Independently evaluates both original and optimized on 5 dimensions with randomized A/B presentation to prevent bias (Sonnet)
 
-Rate the results and the pipeline learns. Every thumbs-up or thumbs-down shifts the dimension weights, tunes strategy selection, and adjusts retry thresholds — so the next optimization already knows what quality means to you.
+The result: an optimized prompt with per-dimension score deltas showing exactly what improved.
 
-Everything happens inside a data-dense, VS Code-style IDE — prompts stream in real time, scores render across multiple quality dimensions, and diffs show exactly what changed and why. The interface is built for the same people who live in terminals and code editors: compact, keyboard-driven, and information-rich without getting in the way.
+After optimization, you can **refine iteratively** — click suggestions or type custom requests, and each turn runs a fresh pipeline pass with version tracking, branching, and rollback.
 
-## 🚀 Getting Started
+## Quick Start
+
+**Prerequisites:**
+- Python 3.12+
+- Node.js 24+
+- Either Claude CLI (`claude` on PATH — free for Max subscribers) or an Anthropic API key
 
 ```bash
-cp .env.docker.example .env.docker
-docker compose up --build -d
+# Set up backend
+cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && deactivate
+
+# Set up frontend
+cd ../frontend && npm install
+
+# Start everything
+cd .. && ./init.sh start
+
+# Open in browser
+open http://localhost:5199
 ```
 
-All secrets (including the Redis password) are auto-generated on first startup.
+The backend auto-detects your provider (Claude CLI first, then API key). No configuration needed for Max subscribers.
 
-Open **http://localhost** — the in-app setup flow walks you through LLM provider configuration and GitHub App authentication setup (both required for full functionality). Once authenticated, linking a specific repository for codebase-aware optimization is optional.
+### With an API key
 
-**LLM provider options** (choose one):
-- **Claude Max subscription** (recommended) — if the `claude` CLI is installed and authenticated on the host, the app detects it automatically at startup. Zero API cost, nothing to configure.
-- **Anthropic API key** — enter your `sk-ant-...` key through the in-app setup flow or set `ANTHROPIC_API_KEY` in `.env.docker`.
+Set via the UI (Settings panel) or environment:
 
-## ⚙️ How It Works
+```bash
+echo "ANTHROPIC_API_KEY=sk-..." > .env
+./init.sh restart
+```
 
-Your prompt moves through five stages — **Explore, Analyze, Strategy, Optimize, Validate** — each one building on the last. Explore reads your linked repo for architectural context. Analyze classifies the task. Strategy picks the right optimization framework. Optimize rewrites the prompt. Validate scores the result across multiple quality dimensions and tells you if it's actually better.
+## Architecture
 
-After validation, you rate the result. That feedback feeds back into the pipeline: dimension weights shift toward what you care about, strategy selection favors frameworks that have worked for your task types, and the retry oracle recalibrates its thresholds. The adaptation is progressive — it starts from the first rating and compounds with consistency.
+```
+┌──────┬────────────┬──────────────────────┬─────────────┐
+│ Act. │ Navigator  │   Editor Groups      │  Inspector  │
+│ Bar  │            │                      │             │
+│      │ History    │  Prompt Editor       │  Scores     │
+│      │ GitHub     │  Result Viewer       │  Deltas     │
+│      │ Settings   │  Diff View           │  Sparkline  │
+│      │            │  Refinement Timeline │             │
+├──────┴────────────┴──────────────────────┴─────────────┤
+│                      Status Bar                        │
+└────────────────────────────────────────────────────────┘
+```
 
-Compare any two optimizations side by side — the engine classifies the relationship, surfaces score deltas across every dimension, and tells you exactly why one outperformed the other. When both have strengths worth keeping, merge them: the system feeds the full analytical intelligence into the LLM and synthesizes a single prompt that combines the best of both parents.
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python 3.12, FastAPI, SQLAlchemy (async), aiosqlite |
+| Frontend | SvelteKit 2 (Svelte 5 runes), Tailwind CSS 4 |
+| Database | SQLite (WAL mode) |
+| Embeddings | sentence-transformers (all-MiniLM-L6-v2, 384-dim, CPU) |
+| LLM | Opus (optimizer), Sonnet (analyzer/scorer), Haiku (explore/suggestions) |
+| MCP | Streamable HTTP on port 8001 |
 
-There's also an [MCP server](docs/MCP.md) that exposes the full API as tools, so you can run optimizations directly from Claude Code without touching the browser.
+## Services
 
-## 🗺️ Where This Is Going
+| Service | Port | Purpose |
+|---------|------|---------|
+| Backend | 8000 | FastAPI API + pipeline orchestration |
+| Frontend | 5199 | SvelteKit dev server |
+| MCP Server | 8001 | 3-tool MCP server for IDE integration |
 
-What exists today is a working core — a five-stage pipeline, codebase-aware context injection, adaptive feedback loops, real-time streaming, GitHub integration, and an MCP interface. It works, and it works well for what it does. But it's a fraction of what we have in mind.
+```bash
+./init.sh start     # start all (with preflight checks + health probes)
+./init.sh stop      # graceful stop (process group kill, no orphans)
+./init.sh restart   # stop + start
+./init.sh status    # show PIDs and ports
+./init.sh logs      # tail all logs
+```
 
-The roadmap is wide open and growing. Some of the directions we're exploring:
+## Features
 
-- **Prompt chains and composition** — multi-step prompt workflows where one optimization feeds into the next, building compound instructions that handle complex tasks no single prompt can
-- **Team workspaces** — shared optimization history, collective strategy refinement, and organizational prompt libraries that get smarter as your team uses them
-- **Custom strategy authoring** — define your own optimization frameworks tuned to your domain, your codebase, your way of thinking
-- **Deeper codebase understanding** — richer semantic indexing, cross-repository awareness, dependency graph analysis, and architectural pattern recognition that makes context injection even more precise
-- **Plugin and extension system** — open the pipeline to community-built stages, custom validators, and domain-specific analyzers
+- **One-shot optimization** with 5-dimension scoring (clarity, specificity, structure, faithfulness, conciseness)
+- **Conversational refinement** — iterative improvement with version history, branching, and rollback
+- **3 suggestions per turn** — score-driven, analysis-driven, and strategic
+- **Strategy selection** — 6 strategies (chain-of-thought, few-shot, role-playing, structured-output, meta-prompting, auto)
+- **GitHub integration** — link a repo for codebase-aware optimization via semantic embedding search
+- **MCP server** — use from any MCP-compatible IDE (Claude Code, Cursor, etc.)
+- **Passthrough mode** — IDE's own LLM does the optimization; server provides context + bias correction
+- **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, .cursorrules for context injection
+- **Score calibration** — anchored rubric with calibration examples, anti-clustering detection
+- **Feedback loop** — thumbs up/down drives strategy affinity adaptation
+- **API key management** — set/update/remove via UI with Fernet encryption at rest
 
-Some of these are closer than others. Some will change shape as we learn what matters most. That's the nature of building something in the open — the path reveals itself as you walk it.
+## MCP Integration
 
-If any of this resonates with you, come build with us. The architecture is designed to grow, and there's room for ideas we haven't thought of yet.
+The MCP server provides 3 tools:
 
-## 📊 Current Status
+| Tool | Purpose |
+|------|---------|
+| `synthesis_optimize` | Full pipeline — send a prompt, get back optimized version with scores |
+| `synthesis_prepare_optimization` | Assemble prompt + context for your IDE's LLM to process |
+| `synthesis_save_result` | Persist the IDE LLM's result with bias correction |
 
-Project Synthesis is under **active development**. The core pipeline is stable and functional, but you should expect rough edges, evolving APIs, and occasional breaking changes. We're iterating fast and prioritizing substance over polish.
+Connect via `.mcp.json` (auto-loaded by Claude Code) or manually at `http://127.0.0.1:8001/mcp`.
 
-What you can count on today:
-- ✅ Five-stage optimization pipeline with real-time SSE streaming
-- ✅ Adaptive feedback loops — your ratings tune pipeline weights, strategy selection, and retry thresholds
-- ✅ Result intelligence — verdict, dimension insights, trade-offs, and next actions for every optimization
-- ✅ Cross-optimization comparison and merge — side-by-side analysis with intelligent prompt synthesis
-- ✅ GitHub repository integration with semantic codebase indexing
-- ✅ 20-tool MCP server for CLI-native workflows
-- ✅ Works with Claude Max subscription (zero API cost) or Anthropic API key
-- ✅ Encrypted credential storage with in-app configuration
-- ✅ Docker deployment with auto-generated secrets
+## Docker
 
-What's still taking shape:
-- 🔧 API stability (endpoints may shift as the architecture matures)
-- 📖 Documentation depth (improving steadily)
-- 🧪 Test coverage (900+ tests and growing, targeting 90%+)
+```bash
+docker compose up --build -d
+# Backend + Frontend + MCP + nginx on port 80
+```
 
-We tag releases when meaningful milestones land. Watch the repo if you want to follow along.
+## Development
 
----
+```bash
+# Backend tests (215 tests, ~25s)
+cd backend && source .venv/bin/activate && pytest --cov=app -v
 
-<p align="center">
-  <a href="CHANGELOG.md">Changelog</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="SECURITY.md">Security</a> · <a href="docs/TERMS.md">Terms</a> · <a href="CLAUDE.md">Architecture</a>
-</p>
+# Frontend type check
+cd frontend && npx svelte-check
+
+# Frontend build
+cd frontend && npm run build
+```
+
+## API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/optimize` | POST (SSE) | Run optimization pipeline |
+| `/api/optimize/{trace_id}` | GET | Get result (SSE reconnection) |
+| `/api/refine` | POST (SSE) | Run refinement turn |
+| `/api/refine/{id}/versions` | GET | List refinement versions |
+| `/api/refine/{id}/rollback` | POST | Fork from a version |
+| `/api/history` | GET | List past optimizations |
+| `/api/feedback` | POST/GET | Submit/list feedback |
+| `/api/providers` | GET | Active provider info |
+| `/api/provider/api-key` | GET/PATCH/DELETE | API key management |
+| `/api/settings` | GET | Read-only config |
+| `/api/health` | GET | Health + pipeline metrics |
+| `/api/github/auth/*` | GET/POST | GitHub OAuth flow |
+| `/api/github/repos/*` | GET/POST/DELETE | Repo management |
+
+## License
+
+MIT

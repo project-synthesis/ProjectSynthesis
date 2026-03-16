@@ -12,88 +12,101 @@ Guidance for Claude Code when working in this repository.
 
 ```bash
 ./init.sh            # start all three services
+./init.sh stop       # graceful stop (process group kill)
 ./init.sh restart    # stop + start
-./init.sh stop       # stop all
-./init.sh status     # check running/stopped
+./init.sh status     # show running/stopped with PIDs
+./init.sh logs       # tail all service logs
 ```
 
 Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`
+PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 
 ## Backend
 
-- **Framework**: FastAPI + uvicorn with `--reload`
+- **Framework**: FastAPI + uvicorn with `--reload` (watches `backend/app/`)
 - **Database**: SQLite via SQLAlchemy async + aiosqlite (`data/synthesis.db`)
 - **Config**: `backend/app/config.py` — reads from `.env` via pydantic-settings
-- **Key env vars**: `ANTHROPIC_API_KEY` (optional — configurable via UI), `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `SECRET_KEY`
-- **Auto-generated secrets**: `SECRET_KEY`, `JWT_SECRET`, `JWT_REFRESH_SECRET` are auto-generated on first startup and persisted to `data/.app_secrets`
+- **Key env vars**: `ANTHROPIC_API_KEY` (optional — configurable via UI or env), `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `SECRET_KEY` (auto-generated if not set)
+- **Auto-generated secrets**: `SECRET_KEY` auto-generated on first startup and persisted to `data/.app_secrets` (0o600)
+- **Encrypted credentials**: API key stored Fernet-encrypted in `data/.api_credentials`
 
 ### Layer rules
-- `routers/` -> `services/` -> `models/` only. Services must never import from routers.
+- `routers/` → `services/` → `models/` only. Services must never import from routers.
 
 ### Key services (`backend/app/services/`)
-- `pipeline.py` — orchestrates analyzer -> optimizer -> scorer
-- `prompt_loader.py` — template loading + variable substitution from `prompts/`
-- `strategy_loader.py` — strategy file discovery from `prompts/strategies/`
-- `context_resolver.py` — per-source character caps + injection hardening
-- `optimization_service.py` — CRUD, sort/filter, score distribution
-- `feedback_service.py` — feedback CRUD + adaptation update
-- `adaptation_tracker.py` — strategy affinity tracking
-- `heuristic_scorer.py` — passthrough bias correction
-- `refinement_service.py` — refinement sessions, versioning, branching
-- `trace_logger.py` — per-phase JSONL traces
-- `embedding_service.py` — singleton sentence-transformers model loader
-- `codebase_explorer.py` — semantic retrieval + single-shot synthesis
+- `pipeline.py` — orchestrates analyzer → optimizer → scorer (3-phase pipeline)
+- `prompt_loader.py` — template loading + variable substitution from `prompts/`. Validates all templates at startup.
+- `strategy_loader.py` — strategy file discovery from `prompts/strategies/`. Validates non-empty at startup.
+- `context_resolver.py` — per-source character caps, untrusted-context wrapping, workspace roots scanning
+- `roots_scanner.py` — discovers agent guidance files (CLAUDE.md, AGENTS.md, .cursorrules, etc.) from workspace paths
+- `optimization_service.py` — CRUD, sort/filter, score distribution tracking, recent error counts
+- `feedback_service.py` — feedback CRUD + synchronous adaptation tracker update
+- `adaptation_tracker.py` — strategy affinity tracking with degenerate pattern detection
+- `heuristic_scorer.py` — passthrough bias correction + 5-dimension heuristics (clarity, specificity, structure, faithfulness, conciseness)
+- `refinement_service.py` — refinement sessions, version CRUD, branching/rollback, suggestion generation
+- `trace_logger.py` — per-phase JSONL traces to `data/traces/`, daily rotation
+- `embedding_service.py` — singleton sentence-transformers (`all-MiniLM-L6-v2`, 384-dim). Async wrappers via `aembed_single`/`aembed_texts`.
+- `codebase_explorer.py` — semantic retrieval + single-shot Haiku synthesis. SHA-based result caching.
+- `explore_cache.py` — in-memory TTL cache with LRU eviction for explore results
 - `repo_index_service.py` — background repo file indexing and semantic query
-- `github_service.py` — token encryption/decryption (Fernet)
-- `github_client.py` — raw GitHub API calls; token always resolved here
+- `github_service.py` — Fernet token encryption/decryption
+- `github_client.py` — raw GitHub API calls; explicit token parameter on every method
+
+### Model configuration
+Model IDs are centralized in `config.py` as `MODEL_SONNET`, `MODEL_OPUS`, `MODEL_HAIKU` (default: `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`). Never hardcode model IDs in service code.
 
 ### Providers (`backend/app/providers/`)
-- `detector.py` — auto-selects provider in order: Claude CLI -> Anthropic API
-- `claude_cli.py` — uses `claude` CLI subprocess (Max subscription, zero cost)
-- `anthropic_api.py` — direct API via `anthropic` SDK
-- `base.py` — `LLMProvider` abstract base
+- `detector.py` — auto-selects: Claude CLI → Anthropic API
+- `claude_cli.py` — CLI subprocess (Max subscription, zero cost)
+- `anthropic_api.py` — direct API via `anthropic` SDK with prompt caching (`cache_control: ephemeral`)
+- `base.py` — `LLMProvider` abstract base with `complete_parsed()` and `thinking_config()`
 
-Provider is detected **once at startup** and stored in `app.state.provider`. Never call `detect_provider()` inside a request handler or tool.
+Provider is detected **once at startup** and stored in `app.state.provider`. Never call `detect_provider()` inside a request handler.
 
 ### Routers (`backend/app/routers/`)
 - `optimize.py` — `POST /api/optimize` (SSE), `GET /api/optimize/{trace_id}`
-- `history.py` — `GET /api/history` (sort/filter)
-- `feedback.py` — `POST /api/feedback`, `GET /api/feedback`
-- `refinement.py` — `POST /api/refine` (SSE), `GET` versions, `POST` rollback
-- `providers.py` — `GET /api/providers`
-- `settings.py` — `GET /api/settings`
-- `github_auth.py` — OAuth flow
-- `github_repos.py` — repo management
-- `health.py` — `GET /api/health`
+- `history.py` — `GET /api/history` (sort/filter with pagination envelope)
+- `feedback.py` — `POST /api/feedback`, `GET /api/feedback?optimization_id=X`
+- `refinement.py` — `POST /api/refine` (SSE), `GET /api/refine/{id}/versions`, `POST /api/refine/{id}/rollback`
+- `providers.py` — `GET /api/providers`, `GET/PATCH/DELETE /api/provider/api-key`
+- `settings.py` — `GET /api/settings` (read-only)
+- `github_auth.py` — OAuth flow (login, callback, me, logout)
+- `github_repos.py` — repo management (list, link, linked, unlink)
+- `health.py` — `GET /api/health` (status, provider, score_health, recent_errors, avg_duration_ms)
 
 ### Sort column whitelist
 `optimization_service.py` defines `_VALID_SORT_COLUMNS`. Add new sortable columns there before using them.
 
+### Shared utilities
+- `app/utils/sse.py` — shared `format_sse()` for SSE event formatting (used by optimize + refinement routers)
+- `app/dependencies/rate_limit.py` — in-memory rate limiting FastAPI dependency via `limits` library
+
 ## Frontend
 
 - **Framework**: SvelteKit 2 (Svelte 5 runes) + Tailwind CSS 4
-- **Dev server**: `npm run dev` -> port 5199
+- **Dev server**: `npm run dev` → port 5199
 - **API client**: `frontend/src/lib/api/client.ts` — all backend calls go through here
-- **Theme**: industrial cyberpunk — dark backgrounds, 1px neon contours, no rounded corners, no shadows
+- **Theme**: industrial cyberpunk — dark backgrounds (`#06060c`), 1px neon contours (`#00e5ff`), no rounded corners, no drop shadows, no glow effects
 
 ### Stores (`frontend/src/lib/stores/`)
-- `forge.svelte.ts` — optimization pipeline state
-- `editor.svelte.ts` — tab management
-- `github.svelte.ts` — GitHub state
-- `refinement.svelte.ts` — refinement sessions
+- `forge.svelte.ts` — optimization pipeline state (prompt, strategy, SSE events, result, feedback)
+- `editor.svelte.ts` — tab management (prompt/result/diff types)
+- `github.svelte.ts` — GitHub auth + repo link state
+- `refinement.svelte.ts` — refinement sessions (turns, branches, suggestions, score progression)
 
 ### Component layout
 ```
 src/lib/components/
-  layout/       # Navigator, Inspector, StatusBar, EditorGroups
-  editor/       # PromptEdit, ForgeArtifact, PromptPipeline, ContextBar
-  refinement/   # Refinement UI components
-  shared/       # CommandPalette, DiffView, ToastContainer, ProviderBadge
+  layout/       # ActivityBar, Navigator, EditorGroups, Inspector, StatusBar
+  editor/       # PromptEdit, ForgeArtifact
+  refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
+                # BranchSwitcher, ScoreSparkline, RefinementInput
+  shared/       # CommandPalette, DiffView, ProviderBadge, ScoreCard
 ```
 
 ## Prompt templates
 
-All prompts live in `prompts/`. `{{variable}}` syntax. Hot-reloaded on each call — edit any file and changes take effect immediately.
+All prompts live in `prompts/`. `{{variable}}` syntax. Hot-reloaded on each call. Validated at startup against `manifest.json`.
 
 | Template | Purpose |
 |----------|---------|
@@ -101,43 +114,33 @@ All prompts live in `prompts/`. `{{variable}}` syntax. Hot-reloaded on each call
 | `analyze.md` | Analyzer: classify + detect weaknesses |
 | `optimize.md` | Optimizer: rewrite using strategy |
 | `scoring.md` | Scorer: independent 5-dimension evaluation (static) |
-| `refine.md` | Refinement optimizer |
-| `suggest.md` | Suggestion generator |
-| `explore.md` | Codebase exploration synthesis |
+| `refine.md` | Refinement optimizer (replaces optimize.md during refinement) |
+| `suggest.md` | Suggestion generator (3 per turn) |
+| `explore.md` | Codebase exploration synthesis (Haiku) |
 | `adaptation.md` | Adaptation state formatter |
 | `passthrough.md` | MCP passthrough combined template |
-| `strategies/*.md` | 6 strategy files (static) |
+| `strategies/*.md` | 6 strategy files: chain-of-thought, few-shot, role-playing, structured-output, meta-prompting, auto |
 
 Variable reference: `prompts/manifest.json`
 
 ## MCP server
 
-3 tools with `synthesis_` prefix on port 8001:
+3 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`):
 - `synthesis_optimize` — full pipeline execution
-- `synthesis_prepare_optimization` — assemble prompt + context for external LLM
+- `synthesis_prepare_optimization` — assemble prompt + context for external LLM (supports `workspace_path` for roots scanning)
 - `synthesis_save_result` — persist result with bias correction
-
-**Transports:**
-- `http://127.0.0.1:8001/mcp` — streamable HTTP, standalone process (primary)
-- `http://localhost:8000/mcp` — streamable HTTP, FastAPI-mounted
-
-**`.mcp.json`** points Claude Code at `http://127.0.0.1:8001/mcp` automatically when this directory is open.
 
 ### Adding a tool
 1. Add a `@mcp.tool(name="synthesis_...", ...)` function in `mcp_server.py`
 2. Use the `synthesis_` prefix for all tool names
 3. Return a Pydantic model for structured output; raise `ValueError` for errors
-4. Document the tool in `docs/MCP.md`
 
 ## Common tasks
 
 ### Restart backend only
 ```bash
-pkill -f "uvicorn app.main" && cd backend && source .venv/bin/activate && \
-  nohup python -m uvicorn app.main:asgi_app --host 0.0.0.0 --port 8000 --reload \
-  > ../data/backend.log 2>&1 &
+./init.sh stop && ./init.sh start
 ```
-Use `./init.sh restart` instead when site-packages changed — `--reload` does not watch installed packages.
 
 ### Run backend tests
 ```bash
@@ -147,18 +150,6 @@ cd backend && source .venv/bin/activate && pytest --cov=app -v
 ### Run frontend dev server standalone
 ```bash
 cd frontend && npm run dev
-```
-
-### Verify MCP tools from the CLI
-```bash
-SESSION=$(curl -s -D - -X POST http://127.0.0.1:8001/mcp \
-  -H "Content-Type: application/json" -H "Accept: application/json" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}},"id":1}' \
-  | grep -i mcp-session-id | awk '{print $2}' | tr -d '\r')
-curl -s -X POST http://127.0.0.1:8001/mcp \
-  -H "Content-Type: application/json" -H "Accept: application/json" \
-  -H "Mcp-Session-Id: $SESSION" \
-  -d '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}'
 ```
 
 ### Docker deployment
@@ -184,38 +175,18 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 ### Subagents (`.claude/agents/`)
 - **`code-reviewer.md`** — Architecture compliance, brand guidelines, and consistency review.
 
-## Changelog
-
-`CHANGELOG.md` follows flat bullet list per version, past-tense prefix verb.
-
-**Format:** `- {Verb} {what changed}` — one line, no trailing period.
-
-| Verb | Use for |
-|------|---------|
-| Added | New feature, endpoint, tool, config, UI element |
-| Fixed | Bug fix, data correction, crash resolution |
-| Changed | Behavioral change to existing functionality |
-| Removed | Deleted feature, deprecated code cleanup |
-| Improved | Performance, UX, or quality enhancement to existing feature |
-
-## Versioning
-
-Single source of truth: `backend/app/_version.py`. All backend consumers import `__version__` from there.
-
-**When bumping the version:**
-1. Update `__version__` in `backend/app/_version.py`
-2. Update `version` in `frontend/package.json` to match
-3. Move `## Unreleased` entries in `CHANGELOG.md` under the new `## X.Y.Z` heading
-
 ## Key architectural decisions
 
-- **Pipeline**: 3 subagent phases (analyze -> optimize -> score) orchestrated by `pipeline.py`. Explore stage runs when a GitHub repo is linked.
+- **Pipeline**: 3 subagent phases (analyze → optimize → score) orchestrated by `pipeline.py`. Each phase is an independent LLM call with a fresh context window. Explore phase runs when a GitHub repo is linked.
 - **Provider injection**: detected once at startup, injected via `app.state.provider` and MCP lifespan context.
-- **Prompt templates**: all prompts live in `prompts/` with `{{variable}}` substitution. `prompt_loader.py` hot-reloads on every call. Never hardcode prompts in application code.
+- **Prompt templates**: all prompts live in `prompts/` with `{{variable}}` substitution. Validated at startup. Hot-reloaded on every call. Never hardcode prompts in application code.
+- **Scorer bias mitigation**: A/B randomized presentation order. Scorer sees "Prompt A" and "Prompt B", not "original" and "optimized".
 - **Passthrough protocol**: MCP `synthesis_prepare_optimization` assembles the full prompt; external LLM processes it; `synthesis_save_result` persists with heuristic bias correction.
 - **Pagination envelope**: all list endpoints return `{total, count, offset, items, has_more, next_offset}`.
 - **GitHub token layer**: tokens are Fernet-encrypted at rest. `github_service.encrypt_token` / `decrypt_token` are the only entry points.
-- **Explore architecture**: semantic retrieval + single-shot synthesis (not an agentic loop). Background indexing with `all-MiniLM-L6-v2` embeddings. Auto-refresh on branch changes via HEAD SHA detection.
-- **Feedback adaptation**: progressive damping from first feedback with strategy affinity tracking. Framework performance tracked per-user per-task.
-- **Bias correction**: `heuristic_scorer.py` applies passthrough bias correction when scores come from an external LLM via the MCP passthrough path.
-- **Trace logging**: `trace_logger.py` writes per-phase JSONL traces for pipeline observability and debugging.
+- **API key management**: `GET/PATCH/DELETE /api/provider/api-key`. Key encrypted at rest in `data/.api_credentials`. Provider hot-reloads when key is set.
+- **Explore architecture**: semantic retrieval + single-shot synthesis (not an agentic loop). SHA-based result caching. Background indexing with `all-MiniLM-L6-v2` embeddings.
+- **Roots scanning**: workspace directories scanned for agent guidance files (CLAUDE.md, AGENTS.md, .cursorrules, etc.). Per-file cap: 500 lines / 10K chars. Content wrapped in `<untrusted-context>`.
+- **Feedback adaptation**: simple strategy affinity counter. Degenerate pattern detection (>90% same rating over 10+ feedbacks).
+- **Refinement**: each turn is a fresh pipeline invocation (not multi-turn accumulation). Rollback creates a branch fork. 3 suggestions generated per turn.
+- **Trace logging**: `trace_logger.py` writes per-phase JSONL traces. Daily rotation with configurable retention (`TRACE_RETENTION_DAYS`).
