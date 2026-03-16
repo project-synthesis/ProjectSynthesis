@@ -12,6 +12,7 @@ anthropic==0.84.0
 
 # HTTP
 httpx==0.28.1
+mcp[cli]==1.26.0
 python-multipart==0.0.22
 
 # Security
