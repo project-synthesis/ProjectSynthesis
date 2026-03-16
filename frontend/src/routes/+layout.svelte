@@ -3,6 +3,8 @@
   import favicon from '$lib/assets/favicon.svg';
   import ActivityBar from '$lib/components/layout/ActivityBar.svelte';
   import Navigator from '$lib/components/layout/Navigator.svelte';
+  import Inspector from '$lib/components/layout/Inspector.svelte';
+  import StatusBar from '$lib/components/layout/StatusBar.svelte';
 
   let { children } = $props();
 
@@ -26,15 +28,10 @@
     {@render children()}
   </div>
   <div class="inspector">
-    <!-- Inspector component will go here -->
-    <div class="h-full" style="background: var(--color-bg-secondary); border-left: 1px solid var(--color-border-subtle);">
-      <div class="p-2 text-[10px]" style="color: var(--color-text-dim);">INSPECT</div>
-    </div>
+    <Inspector />
   </div>
   <div class="status-bar">
-    <div class="h-full flex items-center px-2 text-[10px]" style="background: var(--color-bg-secondary); border-top: 1px solid var(--color-border-subtle); color: var(--color-text-dim);">
-      Project Synthesis
-    </div>
+    <StatusBar />
   </div>
 </div>
 
