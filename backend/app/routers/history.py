@@ -33,6 +33,7 @@ async def get_history(
         "items": [
             {
                 "id": opt.id,
+                "trace_id": opt.trace_id,
                 "created_at": opt.created_at.isoformat() if opt.created_at else None,
                 "task_type": opt.task_type,
                 "strategy_used": opt.strategy_used,

@@ -159,7 +159,7 @@ async def rollback(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {
-        "branch_id": new_branch.id,
+        "id": new_branch.id,
         "optimization_id": new_branch.optimization_id,
         "parent_branch_id": new_branch.parent_branch_id,
         "forked_at_version": new_branch.forked_at_version,

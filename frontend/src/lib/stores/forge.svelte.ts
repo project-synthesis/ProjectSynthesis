@@ -23,7 +23,13 @@ class ForgeStore {
   private controller: AbortController | null = null;
 
   forge() {
-    if (!this.prompt.trim()) return;
+    const trimmed = this.prompt.trim();
+    if (!trimmed) return;
+    if (trimmed.length < 20) {
+      this.error = 'Prompt must be at least 20 characters.';
+      this.status = 'error';
+      return;
+    }
 
     this.status = 'analyzing';
     this.error = null;
@@ -75,7 +81,12 @@ class ForgeStore {
       this.originalScores = event.original_scores as DimensionScores;
       this.scoreDeltas = event.deltas as Record<string, number>;
     } else if (eventType === 'optimization_complete') {
-      this.result = event as unknown as OptimizationResult;
+      const data = event as any;
+      // Normalize: SSE sends optimized_scores, REST sends scores
+      if (data.optimized_scores && !data.scores) {
+        data.scores = data.optimized_scores;
+      }
+      this.result = data as OptimizationResult;
       this.status = 'complete';
     } else if (eventType === 'error') {
       this.error = (event.error || event.message) as string;

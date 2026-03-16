@@ -7,9 +7,9 @@
   const DIMENSION_LABELS: Record<string, string> = {
     clarity: 'Clarity',
     specificity: 'Specificity',
-    context: 'Context',
-    actionability: 'Actionability',
-    overall: 'Overall',
+    structure: 'Structure',
+    faithfulness: 'Faithfulness',
+    conciseness: 'Conciseness',
   };
 
   const PHASE_LABELS: Record<string, string> = {

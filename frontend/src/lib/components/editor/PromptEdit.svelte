@@ -26,6 +26,14 @@
     }
   });
 
+  // Derived select value: null -> '' for the <select> element
+  const selectValue = $derived(forgeStore.strategy ?? '');
+
+  function handleStrategyChange(e: Event) {
+    const val = (e.target as HTMLSelectElement).value;
+    forgeStore.strategy = val === '' ? null : val;
+  }
+
   function handleForge() {
     forgeStore.forge();
     if (forgeStore.traceId) {
@@ -50,7 +58,8 @@
     <span class="toolbar-label">STRATEGY</span>
     <select
       class="strategy-select"
-      bind:value={forgeStore.strategy}
+      value={selectValue}
+      onchange={handleStrategyChange}
     >
       {#each strategies as s}
         <option value={s.value}>{s.label}</option>

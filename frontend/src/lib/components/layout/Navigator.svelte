@@ -12,12 +12,12 @@
 
   // ---- Editor panel state ----
   const strategies: { id: string; label: string; description: string }[] = [
-    { id: 'chain_of_thought', label: 'Chain of Thought', description: 'Step-by-step reasoning' },
-    { id: 'few_shot', label: 'Few-Shot', description: 'Example-driven prompting' },
-    { id: 'role_persona', label: 'Role / Persona', description: 'Expert framing' },
-    { id: 'structured_output', label: 'Structured Output', description: 'Schema-constrained response' },
-    { id: 'zero_shot', label: 'Zero-Shot', description: 'Direct instruction, no examples' },
-    { id: 'react', label: 'ReAct', description: 'Reasoning + acting loop' },
+    { id: 'chain-of-thought', label: 'Chain of Thought', description: 'Step-by-step reasoning' },
+    { id: 'few-shot', label: 'Few-Shot', description: 'Example-driven prompting' },
+    { id: 'role-playing', label: 'Role-Playing', description: 'Expert persona framing' },
+    { id: 'structured-output', label: 'Structured Output', description: 'Format + constraints' },
+    { id: 'meta-prompting', label: 'Meta-Prompting', description: 'Structural improvement' },
+    { id: 'auto', label: 'Auto', description: 'Let the optimizer decide' },
   ];
 
   // ---- History panel state ----
@@ -78,8 +78,8 @@
           historyError = null;
           historyLoaded = true;
         })
-        .catch(() => {
-          historyError = 'Backend offline';
+        .catch((err: any) => {
+          historyError = err?.message || 'Failed to load history';
           historyLoaded = true;
         });
     }
@@ -100,7 +100,7 @@
 
   async function loadHistoryItem(item: HistoryItem) {
     try {
-      const opt = await getOptimization(item.id);
+      const opt = await getOptimization(item.trace_id);
       forgeStore.result = opt;
       forgeStore.status = 'complete';
       forgeStore.prompt = opt.raw_prompt;

@@ -206,7 +206,7 @@ class TestRollback:
         assert data["optimization_id"] == "refine-opt-1"
         assert data["forked_at_version"] == 1
         assert data["parent_branch_id"] == original_branch_id
-        assert data["branch_id"] != original_branch_id
+        assert data["id"] != original_branch_id
 
     async def test_rollback_not_found(self, app_client, sample_opt):
         """POST rollback on version that doesn't exist → 404."""

@@ -52,6 +52,7 @@ export interface SSEEvent {
 
 export interface HistoryItem {
   id: string;
+  trace_id: string;
   created_at: string;
   task_type: string;
   strategy_used: string;
@@ -245,7 +246,7 @@ export const getSettings = () => apiFetch<SettingsResponse>('/settings');
 export const githubLogin = () => apiFetch<{ url: string }>('/github/auth/login');
 export const githubMe = () => apiFetch<GitHubUser>('/github/auth/me');
 export const githubLogout = () => apiFetch<void>('/github/auth/logout', { method: 'POST' });
-export const githubRepos = (page = 1) => apiFetch<any[]>(`/github/repos?page=${page}`);
+export const githubRepos = (page = 1) => apiFetch<{ repos: any[]; count: number }>(`/github/repos?page=${page}`);
 export const githubLink = (fullName: string) =>
   apiFetch<LinkedRepo>('/github/repos/link', {
     method: 'POST',

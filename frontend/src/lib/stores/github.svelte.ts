@@ -41,7 +41,8 @@ class GitHubStore {
   async loadRepos() {
     this.loading = true;
     try {
-      this.repos = await githubRepos();
+      const response = await githubRepos();
+      this.repos = response.repos;
     } catch (err: any) {
       this.error = err.message;
     } finally {
