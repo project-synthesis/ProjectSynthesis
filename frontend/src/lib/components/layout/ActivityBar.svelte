@@ -16,6 +16,20 @@
   style="background: var(--color-bg-secondary); border-right: 1px solid var(--color-border-subtle);"
   aria-label="Activity bar"
 >
+  <!-- Brand mark at top of activity bar -->
+  <div class="brand-mark" title="Project Synthesis">
+    <svg width="12" height="12" viewBox="0 0 32 32" aria-hidden="true">
+      <defs>
+        <linearGradient id="ab" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#a855f7"/></linearGradient>
+        <clipPath id="abt"><rect x="0" y="0" width="32" height="15"/></clipPath>
+        <clipPath id="abb"><rect x="0" y="17" width="32" height="15"/></clipPath>
+      </defs>
+      <g clip-path="url(#abt)" transform="translate(-1.5,0)"><g transform="translate(16,16) skewX(-10) translate(-16,-16)"><polyline fill="none" stroke="url(#ab)" stroke-width="4" stroke-linecap="square" stroke-linejoin="bevel" points="23,6 9,6 9,10 12,14 20,18 23,22 23,26 9,26"/></g></g>
+      <g clip-path="url(#abb)" transform="translate(1.5,0)"><g transform="translate(16,16) skewX(-10) translate(-16,-16)"><polyline fill="none" stroke="url(#ab)" stroke-width="4" stroke-linecap="square" stroke-linejoin="bevel" points="23,6 9,6 9,10 12,14 20,18 23,22 23,26 9,26"/></g></g>
+      <rect x="0" y="15" width="32" height="2" fill="var(--color-bg-secondary)"/>
+    </svg>
+  </div>
+
   {#each activities as act}
     <button
       class="activity-icon"
@@ -43,14 +57,14 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding-top: 8px;
-    gap: 2px;
+    padding-top: 0;
+    gap: 1px;
     height: 100%;
   }
 
   .activity-icon {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -80,8 +94,8 @@
     content: '';
     position: absolute;
     left: -4px;
-    top: 8px;
-    bottom: 8px;
+    top: 6px;
+    bottom: 6px;
     width: 2px;
     background: var(--color-neon-cyan);
   }
@@ -91,9 +105,19 @@
     border-color: transparent;
   }
 
+  .brand-mark {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 24px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
   .icon-svg {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
   }
 </style>
