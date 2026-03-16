@@ -1,5 +1,7 @@
 <script lang="ts">
   import { editorStore } from '$lib/stores/editor.svelte';
+  import PromptEdit from '$lib/components/editor/PromptEdit.svelte';
+  import ForgeArtifact from '$lib/components/editor/ForgeArtifact.svelte';
 </script>
 
 <div class="editor-groups">
@@ -41,13 +43,9 @@
         aria-label="{tab.title} panel"
       >
         {#if tab.type === 'prompt'}
-          <div class="placeholder-panel">
-            <span class="placeholder-label">PromptEdit — coming in Task 6</span>
-          </div>
+          <PromptEdit />
         {:else if tab.type === 'result'}
-          <div class="placeholder-panel">
-            <span class="placeholder-label">ForgeArtifact — coming in Task 6</span>
-          </div>
+          <ForgeArtifact />
         {:else if tab.type === 'diff'}
           <div class="placeholder-panel">
             <span class="placeholder-label">DiffView — coming in Task 7</span>
