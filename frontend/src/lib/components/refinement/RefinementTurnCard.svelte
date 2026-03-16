@@ -4,10 +4,12 @@
   interface Props {
     turn: RefinementTurn;
     isExpanded: boolean;
+    isSelected: boolean;
     onToggle: () => void;
+    onSelect: () => void;
   }
 
-  let { turn, isExpanded, onToggle }: Props = $props();
+  let { turn, isExpanded, isSelected, onToggle, onSelect }: Props = $props();
 
   const DIMENSION_LABELS: Record<string, string> = {
     clarity: 'Clarity',
@@ -35,11 +37,13 @@
 
 <div
   class="turn-card"
+  class:selected={isSelected}
   role="button"
   tabindex="0"
   aria-expanded={isExpanded}
-  onclick={onToggle}
-  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+  onclick={onSelect}
+  ondblclick={onToggle}
+  onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onSelect(); } if (e.key === ' ') { e.preventDefault(); onToggle(); } }}
 >
   <!-- Always-visible header -->
   <div class="turn-header">
@@ -108,6 +112,11 @@
 
   .turn-card:hover {
     border-color: var(--color-border-accent);
+  }
+
+  .turn-card.selected {
+    border-color: var(--color-neon-cyan);
+    background: rgba(0, 229, 255, 0.03);
   }
 
   .turn-header {

@@ -1,19 +1,37 @@
 <script lang="ts">
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
+  import { refinementStore } from '$lib/stores/refinement.svelte';
 
   let copied = $state(false);
+  let showOriginal = $state(false);
+
+  // The displayed prompt: original, selected refinement version, or latest optimized
+  const displayPrompt = $derived.by(() => {
+    if (showOriginal) return forgeStore.prompt || forgeStore.result?.raw_prompt || '';
+    // If a refinement version is selected, show that version's prompt
+    const selected = refinementStore.selectedVersion;
+    if (selected && selected.prompt) return selected.prompt;
+    return forgeStore.result?.optimized_prompt || '';
+  });
+
+  const displayLabel = $derived.by(() => {
+    if (showOriginal) return 'ORIGINAL PROMPT';
+    const selected = refinementStore.selectedVersion;
+    if (selected) return `OPTIMIZED PROMPT — v${selected.version}`;
+    return 'OPTIMIZED PROMPT';
+  });
 
   async function copyToClipboard() {
     if (!forgeStore.result?.optimized_prompt) return;
     try {
-      await navigator.clipboard.writeText(forgeStore.result.optimized_prompt);
+      await navigator.clipboard.writeText(displayPrompt);
       copied = true;
       setTimeout(() => { copied = false; }, 2000);
     } catch {
       // fallback: create a temporary textarea
       const el = document.createElement('textarea');
-      el.value = forgeStore.result.optimized_prompt;
+      el.value = displayPrompt;
       document.body.appendChild(el);
       el.select();
       document.execCommand('copy');
@@ -37,8 +55,16 @@
   {:else}
     <!-- Header bar -->
     <div class="artifact-header">
-      <span class="section-title">OPTIMIZED PROMPT</span>
+      <span class="section-title">{displayLabel}</span>
       <div class="header-actions">
+        <button
+          class="action-btn"
+          class:action-btn--active={showOriginal}
+          onclick={() => showOriginal = !showOriginal}
+          title={showOriginal ? "Show optimized" : "Show original"}
+        >
+          {showOriginal ? 'OPTIMIZED' : 'ORIGINAL'}
+        </button>
         <button
           class="action-btn"
           onclick={viewDiff}
@@ -56,9 +82,9 @@
       </div>
     </div>
 
-    <!-- Optimized prompt -->
+    <!-- Prompt display (original / optimized / selected version) -->
     <div class="prompt-output-wrap">
-      <pre class="prompt-output">{forgeStore.result.optimized_prompt}</pre>
+      <pre class="prompt-output">{displayPrompt}</pre>
     </div>
 
     <!-- Changes summary -->

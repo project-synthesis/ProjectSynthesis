@@ -7,6 +7,7 @@ class RefinementStore {
   branches = $state<RefinementBranch[]>([]);
   activeBranchId = $state<string | null>(null);
   suggestions = $state<Array<Record<string, string>>>([]);
+  selectedVersion = $state<RefinementTurn | null>(null);
   status = $state<'idle' | 'refining' | 'complete' | 'error'>('idle');
   error = $state<string | null>(null);
 
@@ -26,10 +27,15 @@ class RefinementStore {
     return this.turns.length > 0 ? this.turns[this.turns.length - 1] : null;
   }
 
+  selectVersion(turn: RefinementTurn | null) {
+    this.selectedVersion = turn;
+  }
+
   async init(optimizationId: string) {
     this.optimizationId = optimizationId;
     this.status = 'idle';
     this.error = null;
+    this.selectedVersion = null;
     try {
       const data = await getRefinementVersions(optimizationId);
       this.turns = data.versions;

@@ -88,7 +88,9 @@
           <RefinementTurnCard
             {turn}
             isExpanded={expandedSet.has(turn.id)}
+            isSelected={refinementStore.selectedVersion?.id === turn.id}
             onToggle={() => toggleExpanded(turn.id)}
+            onSelect={() => refinementStore.selectVersion(turn)}
           />
         {/each}
       </div>
