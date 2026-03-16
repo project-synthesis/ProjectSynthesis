@@ -18,7 +18,7 @@ After optimization, you can **refine iteratively** — click suggestions or type
 
 **Prerequisites:**
 - Python 3.12+
-- Node.js 24+
+- Node.js 22+
 - Either Claude CLI (`claude` on PATH — free for Max subscribers) or an Anthropic API key
 
 ```bash
@@ -122,7 +122,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (215 tests, ~25s)
+# Backend tests (227 tests, ~25s)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
@@ -152,4 +152,4 @@ cd frontend && npm run build
 
 ## License
 
-MIT
+Apache 2.0

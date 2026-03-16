@@ -51,6 +51,8 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - `repo_index_service.py` — background repo file indexing and semantic query
 - `github_service.py` — Fernet token encryption/decryption
 - `github_client.py` — raw GitHub API calls; explicit token parameter on every method
+- `event_bus.py` — in-process pub/sub for real-time cross-client notifications
+- `workspace_intelligence.py` — zero-config workspace analysis (project type, tech stack from manifest files)
 
 ### Model configuration
 Model IDs are centralized in `config.py` as `MODEL_SONNET`, `MODEL_OPUS`, `MODEL_HAIKU` (default: `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`). Never hardcode model IDs in service code.
@@ -73,6 +75,7 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 - `github_auth.py` — OAuth flow (login, callback, me, logout)
 - `github_repos.py` — repo management (list, link, linked, unlink)
 - `health.py` — `GET /api/health` (status, provider, score_health, recent_errors, avg_duration_ms)
+- `events.py` — `GET /api/events` (SSE event stream), `POST /api/events/_publish` (internal cross-process)
 
 ### Sort column whitelist
 `optimization_service.py` defines `_VALID_SORT_COLUMNS`. Add new sortable columns there before using them.
@@ -190,3 +193,5 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **Feedback adaptation**: simple strategy affinity counter. Degenerate pattern detection (>90% same rating over 10+ feedbacks).
 - **Refinement**: each turn is a fresh pipeline invocation (not multi-turn accumulation). Rollback creates a branch fork. 3 suggestions generated per turn.
 - **Trace logging**: `trace_logger.py` writes per-phase JSONL traces. Daily rotation with configurable retention (`TRACE_RETENTION_DAYS`).
+- **Real-time event bus**: `event_bus.py` publishes events (optimization_created, feedback_submitted, refinement_turn) to all SSE subscribers. MCP server (separate process) notifies via HTTP POST to `/api/events/_publish`. Frontend auto-refreshes History on events.
+- **Workspace intelligence**: `workspace_intelligence.py` auto-detects project type from manifest files (package.json, requirements.txt, etc.) and injects workspace profile into MCP tool context via `roots/list`.

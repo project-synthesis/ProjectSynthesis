@@ -62,7 +62,7 @@ All prompts are in `prompts/`. Edit any file and changes take effect immediately
 - **Frontend**: SvelteKit 2, Svelte 5 runes, Tailwind CSS 4
 - **Pipeline**: Orchestrator + 3 subagent phases (analyze -> optimize -> score)
 - **Providers**: Claude CLI (Max subscribers) or Anthropic API (auto-detected at startup)
-- **MCP server**: Standalone on port 8001, also mounted on the backend at `/mcp`
+- **MCP server**: Standalone on port 8001 (`http://127.0.0.1:8001/mcp`)
 
 ## Key files
 
