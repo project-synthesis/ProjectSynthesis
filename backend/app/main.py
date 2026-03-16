@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app._version import __version__
-from app.config import settings, DATA_DIR
+from app.config import settings, DATA_DIR, PROMPTS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ async def lifespan(app: FastAPI):
     # Validate prompt templates at startup
     from app.services.prompt_loader import PromptLoader
     from app.services.strategy_loader import StrategyLoader
-    from app.config import PROMPTS_DIR
     try:
         loader = PromptLoader(PROMPTS_DIR)
         loader.validate_all()
@@ -67,7 +66,6 @@ async def lifespan(app: FastAPI):
     # Run trace rotation
     try:
         from app.services.trace_logger import TraceLogger
-        from app.config import DATA_DIR, settings
         tl = TraceLogger(DATA_DIR / "traces")
         deleted = tl.rotate(retention_days=settings.TRACE_RETENTION_DAYS)
         if deleted:
