@@ -92,9 +92,10 @@
     }
   });
 
-  function scoreColor(score: number): string {
-    if (score >= 0.85) return 'var(--color-neon-green)';
-    if (score >= 0.65) return 'var(--color-neon-yellow)';
+  function scoreColor(score: number | null): string {
+    if (score == null || score <= 0) return 'var(--color-text-dim)';
+    if (score >= 7.5) return 'var(--color-neon-green)';
+    if (score >= 5.0) return 'var(--color-neon-yellow)';
     return 'var(--color-neon-red)';
   }
 
@@ -173,20 +174,23 @@
         {:else if historyItems.length === 0}
           <p class="empty-note">No optimizations yet.</p>
         {:else}
-          {#each historyItems as item (item.id)}
+          {#each historyItems.filter(i => i.status === 'completed') as item (item.id)}
             <button class="row-item history-row" onclick={() => loadHistoryItem(item)}>
+              <span class="row-prompt">{item.raw_prompt || 'Untitled'}</span>
               <div class="history-meta">
-                <span class="row-label">{item.task_type}</span>
+                <span class="row-badge font-mono">{item.strategy_used || 'auto'}</span>
                 <span
                   class="row-score font-mono"
                   style="color: {scoreColor(item.overall_score)};"
                 >
-                  {(item.overall_score * 100).toFixed(0)}
+                  {item.overall_score != null ? item.overall_score.toFixed(1) : '—'}
                 </span>
               </div>
-              <span class="row-desc">{item.strategy_used.replace(/_/g, ' ')}</span>
             </button>
           {/each}
+          {#if historyItems.filter(i => i.status === 'completed').length === 0}
+            <p class="empty-note">No completed optimizations yet.</p>
+          {/if}
         {/if}
       </div>
     </div>
@@ -445,10 +449,20 @@
   .history-row {
     height: auto;
     min-height: 20px;
-    padding: 2px 6px;
+    padding: 2px 4px;
     flex-direction: column;
     align-items: stretch;
     gap: 1px;
+  }
+
+  .row-prompt {
+    font-size: 10px;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+    width: 100%;
   }
 
   .history-meta {
