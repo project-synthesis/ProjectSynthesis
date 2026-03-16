@@ -501,6 +501,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
     overflow: hidden;
   }
 
@@ -520,6 +521,7 @@
     flex-direction: column;
     gap: 2px;
     flex: 1;
+    min-height: 0;
   }
 
   /* ---- Row items ---- */

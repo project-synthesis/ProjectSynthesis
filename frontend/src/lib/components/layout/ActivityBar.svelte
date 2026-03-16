@@ -46,7 +46,7 @@
       {:else if act.id === 'github'}
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="4.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="13.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6 6v6M12 6c0 4-6 4-6 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
       {:else if act.id === 'settings'}
-        <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 1.5v2M9 14.5v2M1.5 9h2M14.5 9h2M3.3 3.3l1.4 1.4M13.3 13.3l1.4 1.4M3.3 14.7l1.4-1.4M13.3 4.7l1.4-1.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><path d="M7.5 2h3l.4 2.1a5.5 5.5 0 011.3.7l2-.8 1.5 2.6-1.6 1.3a5.5 5.5 0 010 1.5l1.6 1.3-1.5 2.6-2-.8a5.5 5.5 0 01-1.3.7L10.5 16h-3l-.4-2.1a5.5 5.5 0 01-1.3-.7l-2 .8-1.5-2.6 1.6-1.3a5.5 5.5 0 010-1.5L2.3 7.3l1.5-2.6 2 .8a5.5 5.5 0 011.3-.7z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="9" cy="9" r="2.2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
       {/if}
     </button>
   {/each}
