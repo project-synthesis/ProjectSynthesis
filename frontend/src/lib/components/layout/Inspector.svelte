@@ -74,6 +74,11 @@
               {/each}
             </ul>
           </div>
+        {:else}
+          <div class="scoring-disabled">
+            <span class="scoring-disabled-label">Scoring</span>
+            <span class="scoring-disabled-value">disabled</span>
+          </div>
         {/if}
 
         {#if forgeStore.result?.strategy_used}
@@ -273,6 +278,28 @@
     font-family: var(--font-sans);
     text-align: center;
     word-break: break-word;
+  }
+
+  /* Scoring disabled state */
+  .scoring-disabled {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border-subtle);
+  }
+
+  .scoring-disabled-label {
+    font-size: 10px;
+    font-family: var(--font-sans);
+    color: var(--color-text-dim);
+  }
+
+  .scoring-disabled-value {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--color-neon-yellow);
   }
 
   /* Sparkline section */
