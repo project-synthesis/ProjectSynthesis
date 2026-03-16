@@ -149,3 +149,43 @@ class TestContextResolver:
         # Each call gets a unique trace_id
         result2 = ContextResolver.resolve(raw_prompt=_VALID_PROMPT)
         assert result.trace_id != result2.trace_id
+
+
+class TestWorkspaceScanning:
+    def test_resolve_with_workspace_path(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("# Project rules\nUse pytest.")
+        ctx = ContextResolver.resolve(
+            raw_prompt="Write a function that sorts a list",
+            workspace_path=str(tmp_path),
+        )
+        assert ctx.codebase_guidance is not None
+        assert "Project rules" in ctx.codebase_guidance
+        assert ctx.context_sources["codebase_guidance"] is True
+
+    def test_explicit_guidance_takes_precedence(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("From workspace")
+        ctx = ContextResolver.resolve(
+            raw_prompt="Write a function that sorts a list",
+            codebase_guidance="Explicit guidance",
+            workspace_path=str(tmp_path),
+        )
+        assert "Explicit guidance" in ctx.codebase_guidance
+        # Workspace content should NOT be present (explicit wins)
+        assert "From workspace" not in ctx.codebase_guidance
+
+    def test_workspace_no_guidance_files(self, tmp_path):
+        ctx = ContextResolver.resolve(
+            raw_prompt="Write a function that sorts a list",
+            workspace_path=str(tmp_path),
+        )
+        assert ctx.codebase_guidance is None
+
+    def test_scanned_guidance_not_double_wrapped(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("Test content")
+        ctx = ContextResolver.resolve(
+            raw_prompt="Write a function that sorts a list",
+            workspace_path=str(tmp_path),
+        )
+        # Should have exactly one layer of untrusted-context wrapping
+        count = ctx.codebase_guidance.count("<untrusted-context")
+        assert count == 1  # from scanner, not double-wrapped by resolver

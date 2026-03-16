@@ -26,6 +26,7 @@ class ContextResolver:
         codebase_guidance: str | None = None,
         codebase_context: str | None = None,
         adaptation_state: str | None = None,
+        workspace_path: str | None = None,
     ) -> ResolvedContext:
         """Resolve and sanitise all context sources.
 
@@ -40,6 +41,10 @@ class ContextResolver:
                 ``<untrusted-context source="github-explore">``.
             adaptation_state: Optional serialised adaptation state.  Truncated
                 to ``MAX_ADAPTATION_CHARS``; no wrapping applied.
+            workspace_path: Optional filesystem path to a local workspace.
+                When ``codebase_guidance`` is ``None`` and a path is given,
+                the workspace is scanned for guidance files (e.g. ``CLAUDE.md``)
+                via :class:`~app.services.roots_scanner.RootsScanner`.
 
         Returns:
             A fully-resolved :class:`ResolvedContext` with a fresh trace_id.
@@ -60,14 +65,27 @@ class ContextResolver:
                 f"Maximum is {settings.MAX_RAW_PROMPT_CHARS} characters."
             )
 
+        # --- Auto-scan workspace if no explicit guidance provided ---
+        if codebase_guidance is None and workspace_path:
+            from app.services.roots_scanner import RootsScanner
+            from pathlib import Path
+
+            scanner = RootsScanner()
+            codebase_guidance = scanner.scan(Path(workspace_path))
+
         # --- Per-source cap + injection hardening ---
         if codebase_guidance is not None:
-            codebase_guidance = codebase_guidance[: settings.MAX_GUIDANCE_CHARS]
-            codebase_guidance = (
-                f'<untrusted-context source="codebase-guidance">\n'
-                f"{codebase_guidance}\n"
-                f"</untrusted-context>"
-            )
+            # Skip wrapping if already wrapped by roots scanner
+            if "<untrusted-context" not in codebase_guidance:
+                codebase_guidance = codebase_guidance[: settings.MAX_GUIDANCE_CHARS]
+                codebase_guidance = (
+                    f'<untrusted-context source="codebase-guidance">\n'
+                    f"{codebase_guidance}\n"
+                    f"</untrusted-context>"
+                )
+            else:
+                # Already wrapped by scanner — just enforce total cap
+                codebase_guidance = codebase_guidance[: settings.MAX_GUIDANCE_CHARS + 200]  # +200 for tag overhead
 
         if codebase_context is not None:
             codebase_context = codebase_context[: settings.MAX_CODEBASE_CONTEXT_CHARS]
