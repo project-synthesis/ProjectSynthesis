@@ -169,10 +169,10 @@ class PipelineResult(BaseModel):
     task_type: str
     strategy_used: str
     changes_summary: str
-    optimized_scores: DimensionScores
-    original_scores: DimensionScores
-    score_deltas: dict[str, float]
-    overall_score: float
+    optimized_scores: DimensionScores | None = None
+    original_scores: DimensionScores | None = None
+    score_deltas: dict[str, float] | None = None
+    overall_score: float | None = None
     provider: str
     model_used: str
     scoring_mode: str
