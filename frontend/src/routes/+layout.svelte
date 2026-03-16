@@ -1,8 +1,13 @@
 <script lang="ts">
   import '../app.css';
   import favicon from '$lib/assets/favicon.svg';
+  import ActivityBar from '$lib/components/layout/ActivityBar.svelte';
+  import Navigator from '$lib/components/layout/Navigator.svelte';
 
   let { children } = $props();
+
+  type Activity = 'editor' | 'history' | 'github' | 'settings';
+  let activeActivity = $state<Activity>('editor');
 </script>
 
 <svelte:head>
@@ -12,16 +17,10 @@
 
 <div class="workbench">
   <div class="activity-bar">
-    <!-- ActivityBar component will go here -->
-    <div class="h-full" style="background: var(--color-bg-secondary); border-right: 1px solid var(--color-border-subtle);">
-      <div class="p-2 text-[10px] text-center" style="color: var(--color-text-dim);">ACT</div>
-    </div>
+    <ActivityBar bind:active={activeActivity} />
   </div>
   <div class="navigator">
-    <!-- Navigator component will go here -->
-    <div class="h-full" style="background: var(--color-bg-secondary); border-right: 1px solid var(--color-border-subtle);">
-      <div class="p-2 text-[10px]" style="color: var(--color-text-dim);">NAV</div>
-    </div>
+    <Navigator active={activeActivity} />
   </div>
   <div class="editor-area">
     {@render children()}
