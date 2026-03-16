@@ -2,9 +2,11 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
+  import MarkdownRenderer from '$lib/components/shared/MarkdownRenderer.svelte';
 
   let copied = $state(false);
   let showOriginal = $state(false);
+  let renderMarkdown = $state(true);
 
   // The displayed prompt: original, selected refinement version, or latest optimized
   const displayPrompt = $derived.by(() => {
@@ -67,10 +69,18 @@
         </button>
         <button
           class="action-btn"
+          class:action-btn--active={renderMarkdown}
+          onclick={() => renderMarkdown = !renderMarkdown}
+          title={renderMarkdown ? "Show raw text" : "Render markdown"}
+        >
+          {renderMarkdown ? 'RAW' : 'RENDER'}
+        </button>
+        <button
+          class="action-btn"
           onclick={viewDiff}
           title="View diff"
         >
-          VIEW DIFF
+          DIFF
         </button>
         <button
           class="action-btn action-btn--primary"
@@ -84,7 +94,13 @@
 
     <!-- Prompt display (original / optimized / selected version) -->
     <div class="prompt-output-wrap">
-      <pre class="prompt-output">{displayPrompt}</pre>
+      {#if renderMarkdown}
+        <div class="prompt-output-md">
+          <MarkdownRenderer content={displayPrompt} />
+        </div>
+      {:else}
+        <pre class="prompt-output">{displayPrompt}</pre>
+      {/if}
     </div>
 
     <!-- Changes summary -->
@@ -94,7 +110,7 @@
           <span class="section-title">CHANGES</span>
         </div>
         <div class="changes-body">
-          <p class="changes-text">{forgeStore.result.changes_summary}</p>
+          <MarkdownRenderer content={forgeStore.result.changes_summary} class="changes-md" />
         </div>
       </div>
     {/if}
@@ -196,6 +212,12 @@
     color: var(--color-text-primary);
   }
 
+  .action-btn--active {
+    border-color: var(--color-border-accent);
+    color: var(--color-text-primary);
+    background: var(--color-bg-hover);
+  }
+
   .action-btn--primary {
     border-color: var(--color-neon-cyan);
     color: var(--color-neon-cyan);
@@ -226,6 +248,10 @@
     word-break: break-word;
   }
 
+  .prompt-output-md {
+    padding: 8px;
+  }
+
   .changes-section {
     flex-shrink: 0;
     border-bottom: 1px solid var(--color-border-subtle);
@@ -250,12 +276,9 @@
     flex: 1;
   }
 
-  .changes-text {
-    margin: 0;
-    font-size: 12px;
-    font-family: var(--font-sans);
+  .changes-body :global(.changes-md) {
+    font-size: 11px;
     color: var(--color-text-secondary);
-    line-height: 1.5;
   }
 
   .feedback-section {
