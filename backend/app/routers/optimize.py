@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api", tags=["optimize"])
 class OptimizeRequest(BaseModel):
     prompt: str = Field(..., min_length=20, description="The raw prompt to optimize")
     strategy: str | None = Field(None, description="Strategy override")
+    workspace_path: str | None = Field(None, description="Workspace root for guidance file scanning")
 
 
 @router.post("/optimize")
@@ -36,12 +37,22 @@ async def optimize(
     if not provider:
         raise HTTPException(status_code=503, detail="No LLM provider available.")
 
+    # Scan workspace for guidance files
+    guidance = None
+    if body.workspace_path:
+        from pathlib import Path
+
+        from app.services.roots_scanner import RootsScanner
+        scanner = RootsScanner()
+        guidance = scanner.scan(Path(body.workspace_path))
+
     orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
 
     async def event_stream():
         async for event in orchestrator.run(
             raw_prompt=body.prompt, provider=provider, db=db,
             strategy_override=body.strategy,
+            codebase_guidance=guidance,
         ):
             yield format_sse(event.event, event.data)
 

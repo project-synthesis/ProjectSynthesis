@@ -52,6 +52,7 @@ async def synthesis_optimize(
     prompt: str,
     strategy: str | None = None,
     repo_full_name: str | None = None,
+    workspace_path: str | None = None,
 ) -> dict:
     """Run the full optimization pipeline on a prompt.
 
@@ -66,6 +67,15 @@ async def synthesis_optimize(
     if not provider:
         raise ValueError("No LLM provider available")
 
+    # Scan workspace for guidance files
+    guidance = None
+    if workspace_path:
+        from pathlib import Path
+
+        from app.services.roots_scanner import RootsScanner
+        scanner = RootsScanner()
+        guidance = scanner.scan(Path(workspace_path))
+
     from app.database import async_session_factory
     from app.services.pipeline import PipelineOrchestrator
 
@@ -78,6 +88,7 @@ async def synthesis_optimize(
             provider=provider,
             db=db,
             strategy_override=strategy,
+            codebase_guidance=guidance,
         ):
             if event.event == "optimization_complete":
                 result = event.data
@@ -140,11 +151,20 @@ async def synthesis_prepare_optimization(
         else scoring_rubric
     )
 
+    # Scan workspace for guidance files
+    guidance = None
+    if workspace_path:
+        from pathlib import Path
+
+        from app.services.roots_scanner import RootsScanner
+        scanner = RootsScanner()
+        guidance = scanner.scan(Path(workspace_path))
+
     assembled = loader.render("passthrough.md", {
         "raw_prompt": prompt,
         "strategy_instructions": strategy_instructions,
         "scoring_rubric_excerpt": scoring_excerpt,
-        "codebase_guidance": None,
+        "codebase_guidance": guidance,
         "codebase_context": None,
         "adaptation_state": None,
     })
