@@ -43,6 +43,8 @@ export interface OptimizationResult {
   duration_ms: number;
   status: string;
   created_at: string;
+  model_used: string;
+  context_sources: Record<string, boolean> | null;
 }
 
 export interface SSEEvent {
@@ -283,7 +285,6 @@ export interface RefinementBranch {
 
 export interface VersionsResponse {
   optimization_id: string;
-  count: number;
   versions: RefinementTurn[];
 }
 

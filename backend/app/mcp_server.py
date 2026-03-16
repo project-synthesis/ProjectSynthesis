@@ -178,7 +178,7 @@ async def synthesis_optimize(
                     json={
                         "event_type": "optimization_created",
                         "data": {
-                            "optimization_id": result.get("id", ""),
+                            "id": result.get("id", ""),
                             "task_type": result.get("task_type", ""),
                             "strategy_used": result.get("strategy_used", ""),
                             "overall_score": result.get("overall_score"),

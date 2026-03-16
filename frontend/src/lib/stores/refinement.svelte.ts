@@ -28,6 +28,8 @@ class RefinementStore {
 
   async init(optimizationId: string) {
     this.optimizationId = optimizationId;
+    this.status = 'idle';
+    this.error = null;
     try {
       const data = await getRefinementVersions(optimizationId);
       this.turns = data.versions;
@@ -54,7 +56,22 @@ class RefinementStore {
       this.activeBranchId,
       (event: SSEEvent) => this.handleEvent(event),
       (err: Error) => { this.error = err.message; this.status = 'error'; },
-      () => { if (this.status === 'refining') this.status = 'complete'; },
+      () => {
+        if (this.status === 'refining') {
+          this.status = 'complete';
+          // Reload turns from backend to get the newly created turn
+          const branchId = this.activeBranchId;
+          if (this.optimizationId) {
+            getRefinementVersions(this.optimizationId)
+              .then((data) => {
+                this.turns = data.versions;
+                // Preserve active branch across reload
+                if (branchId) this.activeBranchId = branchId;
+              })
+              .catch(() => {});
+          }
+        }
+      },
     );
   }
 
@@ -76,8 +93,11 @@ class RefinementStore {
     if (!this.optimizationId) return;
     try {
       const branch = await rollbackRefinement(this.optimizationId, toVersion);
+      // Reload versions first, then set the new branch AFTER loading
+      const data = await getRefinementVersions(this.optimizationId);
+      this.turns = data.versions;
       this.activeBranchId = branch.id;
-      await this.init(this.optimizationId);
+      this.suggestions = [];
     } catch (err: any) {
       this.error = err.message;
     }
