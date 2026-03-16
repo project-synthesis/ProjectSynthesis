@@ -162,7 +162,7 @@
   .md-render :global(blockquote) {
     margin: 6px 0;
     padding: 4px 8px;
-    border-left: 2px solid var(--color-neon-purple);
+    border-left: 1px solid var(--color-neon-purple);
     background: rgba(168, 85, 247, 0.04);
     color: var(--color-text-secondary);
     font-style: italic;

@@ -167,17 +167,18 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 32px;
-    padding: 0 8px;
+    height: 28px;
+    padding: 0 6px;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
-    gap: 8px;
+    gap: 6px;
   }
 
   .section-title {
     font-size: 10px;
     font-family: var(--font-display);
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--color-text-dim);
@@ -190,7 +191,7 @@
   }
 
   .action-btn {
-    height: 22px;
+    height: 20px;
     padding: 0 8px;
     background: transparent;
     border: 1px solid var(--color-border-subtle);
@@ -284,9 +285,9 @@
   .feedback-section {
     display: flex;
     align-items: center;
-    gap: 8px;
-    height: 36px;
-    padding: 0 8px;
+    gap: 6px;
+    height: 28px;
+    padding: 0 6px;
     background: var(--color-bg-secondary);
     border-top: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
@@ -301,8 +302,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 24px;
+    width: 24px;
+    height: 20px;
     background: transparent;
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-dim);
@@ -330,7 +331,7 @@
   }
 
   .feedback-icon {
-    font-size: 1rem;
+    font-size: 12px;
     line-height: 1;
   }
 </style>

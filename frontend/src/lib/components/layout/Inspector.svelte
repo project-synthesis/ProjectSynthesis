@@ -163,8 +163,8 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    padding: 8px 0;
+    gap: 6px;
+    padding: 6px 0;
   }
 
   .spinner {
@@ -196,7 +196,7 @@
   .complete-state {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 6px;
   }
 
   .scores-section,
@@ -262,7 +262,7 @@
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    padding: 8px 0;
+    padding: 6px 0;
   }
 
   .error-icon {

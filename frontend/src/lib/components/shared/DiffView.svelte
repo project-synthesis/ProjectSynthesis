@@ -247,9 +247,9 @@
   .diff-toolbar {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     height: 28px;
-    padding: 0 8px;
+    padding: 0 6px;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
@@ -460,7 +460,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 0 8px;
+    padding: 0 6px;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-subtle);
   }

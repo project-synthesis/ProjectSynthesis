@@ -2,6 +2,7 @@
   import { githubStore } from '$lib/stores/github.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
+  import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { getSettings, getProviders, getHistory, getOptimization, getApiKey, setApiKey, deleteApiKey } from '$lib/api/client';
   import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus } from '$lib/api/client';
 
@@ -42,6 +43,7 @@
     Promise.all([getSettings(), getProviders(), getApiKey()])
       .then(([s, p, k]) => { settings = s; providers = p; apiKeyStatus = k; })
       .catch(() => {});
+    preferencesStore.init();
   });
 
   // Auto-refresh history when real-time events arrive from any source
@@ -90,10 +92,10 @@
     }
   });
 
-  // Lazy GitHub auth check — only when user navigates to GitHub panel
+  // Lazy GitHub auth check — when user navigates to GitHub or Settings panel
   let githubChecked = $state(false);
   $effect(() => {
-    if (active === 'github' && !githubChecked) {
+    if ((active === 'github' || active === 'settings') && !githubChecked) {
       githubChecked = true;
       githubStore.checkAuth().catch(() => {});
     }
@@ -265,6 +267,84 @@
         <span class="section-heading">Settings</span>
       </header>
       <div class="panel-body">
+        <!-- Models -->
+        <div class="sub-section">
+          <span class="sub-heading">Models</span>
+          <div class="info-block">
+            {#each [
+              { label: 'Analyzer', phase: 'analyzer' },
+              { label: 'Optimizer', phase: 'optimizer' },
+              { label: 'Scorer', phase: 'scorer' },
+            ] as { label, phase }}
+              <div class="info-row">
+                <span class="info-key">{label}</span>
+                <select
+                  class="pref-select"
+                  value={preferencesStore.models[phase as keyof typeof preferencesStore.models]}
+                  onchange={(e) => preferencesStore.setModel(phase, (e.target as HTMLSelectElement).value)}
+                >
+                  <option value="opus">Opus</option>
+                  <option value="sonnet">Sonnet</option>
+                  <option value="haiku">Haiku</option>
+                </select>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Pipeline -->
+        <div class="sub-section">
+          <span class="sub-heading">Pipeline</span>
+          <div class="info-block">
+            {#each [
+              { label: 'Codebase explore', key: 'enable_explore' },
+              { label: 'Quality scoring', key: 'enable_scoring' },
+              { label: 'Adaptation state', key: 'enable_adaptation' },
+            ] as { label, key }}
+              <div class="info-row">
+                <span class="info-key">{label}</span>
+                <button
+                  class="toggle-track"
+                  class:toggle-track--on={preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline]}
+                  onclick={() => preferencesStore.setPipelineToggle(key, !preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline])}
+                  role="switch"
+                  aria-checked={preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline]}
+                  aria-label="Toggle {label}"
+                >
+                  <span class="toggle-thumb"></span>
+                </button>
+              </div>
+            {/each}
+            {#if preferencesStore.isLeanMode}
+              <div class="info-row">
+                <span class="lean-badge">LEAN MODE</span>
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Defaults -->
+        <div class="sub-section">
+          <span class="sub-heading">Defaults</span>
+          <div class="info-block">
+            <div class="info-row">
+              <span class="info-key">Strategy</span>
+              <select
+                class="pref-select"
+                value={preferencesStore.defaultStrategy}
+                onchange={(e) => preferencesStore.setDefaultStrategy((e.target as HTMLSelectElement).value)}
+              >
+                <option value="auto">Auto</option>
+                <option value="chain-of-thought">Chain of Thought</option>
+                <option value="few-shot">Few-Shot</option>
+                <option value="meta-prompting">Meta-Prompting</option>
+                <option value="role-playing">Role-Playing</option>
+                <option value="structured-output">Structured Output</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
         <!-- Provider -->
         <div class="sub-section">
           <span class="sub-heading">Provider</span>
@@ -357,6 +437,53 @@
         {:else}
           <p class="empty-note">Backend offline — settings unavailable</p>
         {/if}
+
+        <!-- GitHub -->
+        <div class="sub-section">
+          <span class="sub-heading">GitHub</span>
+          {#if githubStore.linkedRepo}
+            <div class="info-block">
+              <div class="info-row">
+                <span class="info-key">Repo</span>
+                <span class="info-val font-mono">{githubStore.linkedRepo.full_name}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-key">Branch</span>
+                <span class="info-val font-mono">
+                  {githubStore.linkedRepo.branch ?? githubStore.linkedRepo.default_branch}
+                </span>
+              </div>
+              {#if githubStore.linkedRepo.language}
+                <div class="info-row">
+                  <span class="info-key">Lang</span>
+                  <span class="info-val">{githubStore.linkedRepo.language}</span>
+                </div>
+              {/if}
+            </div>
+            <button
+              class="action-btn"
+              onclick={() => githubStore.unlinkRepo()}
+            >
+              Unlink repo
+            </button>
+          {:else if githubStore.user}
+            <div class="info-block">
+              <div class="info-row">
+                <span class="info-key">User</span>
+                <span class="info-val font-mono">{githubStore.user.login}</span>
+              </div>
+            </div>
+            <p class="empty-note">No repo linked. Use Repo Picker in the editor to link one.</p>
+          {:else}
+            <p class="empty-note">Sign in to GitHub to link a repository for context-aware optimization.</p>
+            <button
+              class="action-btn action-btn--primary"
+              onclick={() => githubStore.login()}
+            >
+              Connect GitHub
+            </button>
+          {/if}
+        </div>
       </div>
     </div>
   {/if}
@@ -495,14 +622,14 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
 
   .info-row {
     display: flex;
     align-items: center;
     height: 20px;
-    gap: 8px;
+    gap: 6px;
     padding: 0 6px;
   }
 
@@ -527,7 +654,7 @@
 
   /* ---- Sub-sections ---- */
   .sub-section {
-    margin-bottom: 10px;
+    margin-bottom: 6px;
   }
 
   .sub-section > .sub-heading {
@@ -540,7 +667,7 @@
   .action-btn {
     width: calc(100% - 12px);
     margin: 4px 6px 0;
-    height: 24px;
+    height: 20px;
     font-size: 10px;
     display: flex;
     align-items: center;
@@ -606,7 +733,7 @@
 
   .api-key-input {
     width: 100%;
-    height: 22px;
+    height: 20px;
     padding: 0 6px;
     font-size: 11px;
     font-family: var(--font-mono);
@@ -634,5 +761,69 @@
     flex: 1;
     margin: 0;
     width: auto;
+  }
+
+  /* ---- Preference selects ---- */
+  .pref-select {
+    height: 20px;
+    padding: 0 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--color-bg-input);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    min-width: 80px;
+  }
+
+  .pref-select:focus {
+    border-color: rgba(0, 229, 255, 0.3);
+    outline: none;
+  }
+
+  /* ---- Toggle switches ---- */
+  .toggle-track {
+    width: 28px;
+    height: 14px;
+    background: var(--color-bg-input);
+    border: 1px solid var(--color-border-subtle);
+    cursor: pointer;
+    position: relative;
+    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    flex-shrink: 0;
+    padding: 0;
+  }
+
+  .toggle-track--on {
+    background: rgba(0, 229, 255, 0.15);
+    border-color: var(--color-neon-cyan);
+  }
+
+  .toggle-thumb {
+    width: 10px;
+    height: 10px;
+    background: var(--color-text-dim);
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .toggle-track--on .toggle-thumb {
+    left: 15px;
+    background: var(--color-neon-cyan);
+  }
+
+  /* ---- Lean mode badge ---- */
+  .lean-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-neon-yellow);
+    border: 1px solid var(--color-neon-yellow);
+    padding: 0 4px;
+    line-height: 16px;
+    letter-spacing: 0.08em;
   }
 </style>
