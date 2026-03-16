@@ -1,11 +1,15 @@
 """Health check endpoint with pipeline metrics."""
 
+import logging
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app._version import __version__
 from app.database import get_db
 from app.services.optimization_service import OptimizationService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -49,7 +53,7 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
         # Per-phase average durations
         phase_durations = await svc.get_avg_duration_by_phase()
     except Exception:
-        pass  # Non-fatal — health endpoint should always respond
+        logger.debug("Health check metrics collection failed", exc_info=True)
 
     return {
         "status": "healthy" if provider else "degraded",

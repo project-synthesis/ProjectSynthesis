@@ -45,7 +45,10 @@ async def refine(
     """Run a single refinement turn and stream SSE events."""
     provider = getattr(request.app.state, "provider", None)
     if not provider:
-        raise HTTPException(status_code=503, detail="No LLM provider available.")
+        raise HTTPException(
+            status_code=503,
+            detail="No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI.",
+        )
 
     from app.services.optimization_service import OptimizationService
     from app.services.refinement_service import RefinementService
@@ -53,7 +56,12 @@ async def refine(
     svc = OptimizationService(db)
     opt = await svc.get_by_id(body.optimization_id)
     if not opt:
-        raise HTTPException(status_code=404, detail="Optimization not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Optimization '%s' not found." % body.optimization_id,
+        )
+
+    logger.info("POST /api/refine: optimization_id=%s branch=%s", body.optimization_id, body.branch_id)
 
     ref_svc = RefinementService(db=db, provider=provider, prompts_dir=PROMPTS_DIR)
 
@@ -107,7 +115,10 @@ async def get_versions(
     opt_svc = OptimizationService(db)
     opt = await opt_svc.get_by_id(optimization_id)
     if not opt:
-        raise HTTPException(status_code=404, detail="Optimization not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Optimization '%s' not found." % optimization_id,
+        )
 
     ref_svc = RefinementService(db=db, provider=None, prompts_dir=PROMPTS_DIR)
     turns = await ref_svc.get_versions(optimization_id, branch_id=branch_id)
@@ -148,7 +159,10 @@ async def rollback(
     opt_svc = OptimizationService(db)
     opt = await opt_svc.get_by_id(optimization_id)
     if not opt:
-        raise HTTPException(status_code=404, detail="Optimization not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Optimization '%s' not found." % optimization_id,
+        )
 
     ref_svc = RefinementService(db=db, provider=None, prompts_dir=PROMPTS_DIR)
 

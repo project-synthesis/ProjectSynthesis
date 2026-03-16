@@ -441,6 +441,11 @@ class PipelineOrchestrator:
                 warnings=warnings if warnings else [],
             )
 
+            logger.info(
+                "Pipeline completed: trace_id=%s duration=%dms strategy=%s overall=%.2f",
+                trace_id, duration_ms, optimization.strategy_used, optimized_scores.overall,
+            )
+
             yield PipelineEvent(
                 event="optimization_complete",
                 data=result.model_dump(mode="json"),

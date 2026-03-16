@@ -35,12 +35,15 @@ class RootsScanner:
     def scan(self, root: Path) -> str | None:
         """Scan *root* and return wrapped guidance content, or None if empty."""
         if not root.exists() or not root.is_dir():
+            logger.debug("Root path does not exist or is not a directory: %s", root)
             return None
 
         files = self.discover(root)
         if not files:
+            logger.debug("No guidance files found under %s", root)
             return None
 
+        logger.info("Discovered %d guidance file(s) under %s: %s", len(files), root, [f.name for f in files])
         sections: list[str] = []
         total_chars = 0
 
@@ -54,17 +57,24 @@ class RootsScanner:
             # Per-file line cap
             lines = content.split("\n")
             if len(lines) > MAX_LINES_PER_FILE:
+                logger.debug("Truncating %s from %d to %d lines", path.name, len(lines), MAX_LINES_PER_FILE)
                 content = "\n".join(lines[:MAX_LINES_PER_FILE])
 
             # Per-file char cap
             if len(content) > MAX_CHARS_PER_FILE:
+                logger.debug("Truncating %s from %d to %d chars", path.name, len(content), MAX_CHARS_PER_FILE)
                 content = content[:MAX_CHARS_PER_FILE]
 
             # Total budget
             if total_chars + len(content) > self._max_total:
                 remaining = self._max_total - total_chars
                 if remaining <= 0:
+                    logger.warning(
+                        "Total guidance budget exhausted (%d chars). Skipping remaining files.",
+                        self._max_total,
+                    )
                     break
+                logger.debug("Truncating %s to fit total budget (%d remaining chars)", path.name, remaining)
                 content = content[:remaining]
 
             # Determine source label
@@ -81,6 +91,11 @@ class RootsScanner:
             sections.append(section)
             total_chars += len(content)
 
+        if sections:
+            logger.info(
+                "Roots scanner produced %d section(s), %d total chars from %s",
+                len(sections), total_chars, root,
+            )
         return "\n\n".join(sections) if sections else None
 
     def scan_roots(self, roots: list[Path]) -> str | None:

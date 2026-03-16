@@ -1,10 +1,14 @@
 """History endpoint — sorted/filtered optimization list."""
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.services.optimization_service import OptimizationService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["history"])
 

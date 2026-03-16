@@ -1,5 +1,6 @@
 """GitHub OAuth flow — login, callback, me, logout."""
 
+import logging
 import secrets
 
 import httpx
@@ -12,6 +13,8 @@ from app.database import get_db
 from app.models import GitHubToken
 from app.services.github_client import GitHubClient
 from app.services.github_service import GitHubService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/github", tags=["github"])
 
@@ -55,7 +58,10 @@ async def github_callback(
     """Exchange code for token, encrypt, store in DB."""
     cookie_state = request.cookies.get("github_oauth_state")
     if not cookie_state or cookie_state != state:
-        raise HTTPException(400, "Invalid OAuth state")
+        raise HTTPException(
+            400,
+            "Invalid OAuth state. The login link may have expired. Please try logging in again.",
+        )
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -71,7 +77,12 @@ async def github_callback(
 
     access_token = data.get("access_token")
     if not access_token:
-        raise HTTPException(400, "GitHub OAuth failed")
+        error_desc = data.get("error_description", "unknown error")
+        logger.warning("GitHub OAuth token exchange failed: %s", error_desc)
+        raise HTTPException(
+            400,
+            "GitHub OAuth token exchange failed: %s. Try logging in again." % error_desc,
+        )
 
     github_client = GitHubClient()
     user = await github_client.get_user(access_token)
@@ -102,6 +113,7 @@ async def github_callback(
     await db.commit()
 
     response.set_cookie("session_id", session_id, httponly=True, max_age=86400 * 30)
+    logger.info("GitHub OAuth callback completed: user=%s", user.get("login"))
     return {"login": user.get("login"), "avatar_url": user.get("avatar_url")}
 
 

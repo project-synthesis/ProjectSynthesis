@@ -65,6 +65,11 @@ class AdaptationTracker:
 
         await self._session.commit()
 
+        logger.info(
+            "Affinity updated: task_type=%s strategy=%s rating=%s approval_rate=%.2f total=%d",
+            task_type, strategy, rating, row.approval_rate, total,
+        )
+
     async def get_affinities(self, task_type: str) -> dict[str, dict]:
         """Return strategy affinity data for the given task_type.
 
@@ -126,4 +131,11 @@ class AdaptationTracker:
             return False
 
         dominant = max(row.thumbs_up or 0, row.thumbs_down or 0)
-        return (dominant / total) > 0.90
+        is_degenerate = (dominant / total) > 0.90
+        if is_degenerate:
+            logger.warning(
+                "Degenerate feedback pattern detected: task_type=%s strategy=%s "
+                "dominant=%d/%d (%.0f%%)",
+                task_type, strategy, dominant, total, dominant / total * 100,
+            )
+        return is_degenerate

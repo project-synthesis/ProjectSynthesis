@@ -41,9 +41,13 @@ async def set_api_key(body: ApiKeyRequest, request: Request):
     """Set or update the Anthropic API key. Persists encrypted to disk."""
     key = body.api_key.strip()
     if not key.startswith("sk-"):
-        raise HTTPException(400, "Invalid API key format")
+        raise HTTPException(
+            400,
+            "Invalid API key format. Anthropic API keys start with 'sk-'.",
+        )
 
     _write_api_key(key)
+    logger.info("API key updated (last 4: ...%s)", key[-4:])
 
     # Hot-reload: update the provider if we now have an API key
     if not getattr(request.app.state, "provider", None):
@@ -63,6 +67,7 @@ async def delete_api_key():
     cred_file = DATA_DIR / ".api_credentials"
     if cred_file.exists():
         cred_file.unlink()
+        logger.info("API key credentials file deleted")
     return {"configured": False, "masked_key": None}
 
 

@@ -4,14 +4,24 @@ Copyright 2025-2026 Project Synthesis contributors.
 """
 
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import aiosqlite
 from mcp.server.fastmcp import Context, FastMCP
+from sqlalchemy import select
 
-from app.config import PROMPTS_DIR
+from app.config import DATA_DIR, PROMPTS_DIR, settings
+from app.database import async_session_factory
+from app.models import Optimization
+from app.providers.detector import detect_provider
+from app.services.heuristic_scorer import HeuristicScorer
+from app.services.pipeline import PipelineOrchestrator
+from app.services.prompt_loader import PromptLoader
+from app.services.strategy_loader import StrategyLoader
 from app.services.workspace_intelligence import WorkspaceIntelligence
 
 logger = logging.getLogger(__name__)
@@ -37,17 +47,24 @@ async def _resolve_workspace_guidance(
                 uri = str(root.uri)
                 if uri.startswith("file://"):
                     roots.append(Path(uri.removeprefix("file://")))
+            if roots:
+                logger.debug("Resolved %d workspace roots via MCP roots/list", len(roots))
         except Exception:
-            logger.debug("Client does not support roots/list")
+            logger.debug("Client does not support roots/list — will try workspace_path fallback")
 
     # Fallback: explicit workspace_path
     if not roots and workspace_path:
         roots = [Path(workspace_path)]
+        logger.debug("Using explicit workspace_path fallback: %s", workspace_path)
 
     if not roots:
+        logger.debug("No workspace roots resolved — skipping guidance injection")
         return None
 
-    return _workspace_intel.analyze(roots)
+    profile = _workspace_intel.analyze(roots)
+    if profile:
+        logger.info("Workspace guidance resolved: %d chars from %d roots", len(profile), len(roots))
+    return profile
 
 
 @asynccontextmanager
@@ -55,10 +72,6 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Detect the LLM provider once at startup and expose it to tools."""
     global _provider
     # Enable WAL mode for SQLite (same as main.py)
-    import aiosqlite
-
-    from app.config import DATA_DIR
-    from app.providers.detector import detect_provider
     db_path = DATA_DIR / "synthesis.db"
     if db_path.exists():
         async with aiosqlite.connect(str(db_path)) as db:
@@ -102,19 +115,28 @@ async def synthesis_optimize(
     Returns the optimized prompt with 5-dimension scores and improvement deltas.
     """
     if len(prompt) < 20:
-        raise ValueError("Prompt too short (minimum 20 characters)")
+        raise ValueError(
+            "Prompt too short (%d chars). Minimum is 20 characters." % len(prompt)
+        )
     if len(prompt) > 200000:
-        raise ValueError("Prompt too long (maximum 200000 characters)")
+        raise ValueError(
+            "Prompt too long (%d chars). Maximum is 200,000 characters." % len(prompt)
+        )
 
     provider = _provider
     if not provider:
-        raise ValueError("No LLM provider available")
+        raise ValueError(
+            "No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI."
+        )
+
+    start = time.monotonic()
+    logger.info(
+        "synthesis_optimize called: prompt_len=%d strategy=%s repo=%s",
+        len(prompt), strategy, repo_full_name,
+    )
 
     # Auto-discover workspace roots (zero-config) or fall back to workspace_path
     guidance = await _resolve_workspace_guidance(ctx, workspace_path)
-
-    from app.database import async_session_factory
-    from app.services.pipeline import PipelineOrchestrator
 
     async with async_session_factory() as db:
         orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
@@ -131,10 +153,20 @@ async def synthesis_optimize(
             if event.event == "optimization_complete":
                 result = event.data
             elif event.event == "error":
-                raise ValueError(event.data.get("error", "Pipeline failed"))
+                error_msg = event.data.get("error", "Pipeline failed")
+                logger.error("synthesis_optimize pipeline error: %s", error_msg)
+                raise ValueError(error_msg)
 
         if not result:
-            raise ValueError("Pipeline produced no result")
+            raise ValueError(
+                "Pipeline completed but produced no result. Check server logs for details."
+            )
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        logger.info(
+            "synthesis_optimize completed in %dms: optimization_id=%s strategy=%s",
+            elapsed_ms, result.get("id", ""), result.get("strategy_used", ""),
+        )
 
         return {
             "optimization_id": result.get("id", ""),
@@ -166,10 +198,14 @@ async def synthesis_prepare_optimization(
     Call synthesis_save_result with the output.
     """
     if len(prompt) < 20:
-        raise ValueError("Prompt too short (minimum 20 characters)")
+        raise ValueError(
+            "Prompt too short (%d chars). Minimum is 20 characters." % len(prompt)
+        )
 
-    from app.services.prompt_loader import PromptLoader
-    from app.services.strategy_loader import StrategyLoader
+    logger.info(
+        "synthesis_prepare_optimization called: prompt_len=%d strategy=%s",
+        len(prompt), strategy,
+    )
 
     loader = PromptLoader(PROMPTS_DIR)
     strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
@@ -214,9 +250,6 @@ async def synthesis_prepare_optimization(
     trace_id = str(uuid.uuid4())
 
     # Store pending optimization with raw_prompt for later save_result linkage
-    from app.database import async_session_factory
-    from app.models import Optimization
-
     async with async_session_factory() as db:
         pending = Optimization(
             id=str(uuid.uuid4()),
@@ -228,6 +261,11 @@ async def synthesis_prepare_optimization(
         )
         db.add(pending)
         await db.commit()
+
+    logger.info(
+        "synthesis_prepare_optimization completed: trace_id=%s strategy=%s tokens=%d",
+        trace_id, strategy_name, context_size_tokens,
+    )
 
     return {
         "trace_id": trace_id,
@@ -256,11 +294,7 @@ async def synthesis_save_result(
     Applies bias correction to self-rated scores.
     Optionally stores IDE-provided codebase context snapshot.
     """
-    from sqlalchemy import select
-
-    from app.database import async_session_factory
-    from app.models import Optimization
-    from app.services.heuristic_scorer import HeuristicScorer
+    logger.info("synthesis_save_result called: trace_id=%s model=%s", trace_id, model)
 
     # Apply bias correction if scores provided
     bias_corrected: dict[str, float] = {}
@@ -321,8 +355,6 @@ async def synthesis_save_result(
         # Truncate codebase context if provided
         context_snapshot = None
         if codebase_context:
-            from app.config import settings
-
             context_snapshot = codebase_context[: settings.MAX_CODEBASE_CONTEXT_CHARS]
 
         if opt:
@@ -369,6 +401,11 @@ async def synthesis_save_result(
             db.add(opt)
 
         await db.commit()
+
+    logger.info(
+        "synthesis_save_result completed: optimization_id=%s strategy_compliance=%s flags=%d",
+        opt_id, strategy_compliance, len(heuristic_flags),
+    )
 
     return {
         "optimization_id": opt_id,

@@ -70,6 +70,11 @@ class FeedbackService:
         await self._session.commit()
         await self._session.refresh(fb)
 
+        logger.info(
+            "Feedback created: id=%s optimization_id=%s rating=%s",
+            fb.id, optimization_id, rating,
+        )
+
         # Synchronously call adaptation tracker — non-fatal
         if opt.task_type and opt.strategy_used:
             try:

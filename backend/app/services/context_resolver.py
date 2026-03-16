@@ -76,9 +76,15 @@ class ContextResolver:
 
         # --- Per-source cap + injection hardening ---
         if codebase_guidance is not None:
+            orig_len = len(codebase_guidance)
             # Skip wrapping if already wrapped by roots scanner
             if "<untrusted-context" not in codebase_guidance:
                 codebase_guidance = codebase_guidance[: settings.MAX_GUIDANCE_CHARS]
+                if len(codebase_guidance) < orig_len:
+                    logger.info(
+                        "Truncated codebase_guidance from %d to %d chars",
+                        orig_len, settings.MAX_GUIDANCE_CHARS,
+                    )
                 codebase_guidance = (
                     f'<untrusted-context source="codebase-guidance">\n'
                     f"{codebase_guidance}\n"
@@ -86,10 +92,19 @@ class ContextResolver:
                 )
             else:
                 # Already wrapped by scanner — just enforce total cap
-                codebase_guidance = codebase_guidance[: settings.MAX_GUIDANCE_CHARS + 200]  # +200 for tag overhead
+                cap = settings.MAX_GUIDANCE_CHARS + 200  # +200 for tag overhead
+                codebase_guidance = codebase_guidance[:cap]
+                if len(codebase_guidance) < orig_len:
+                    logger.info("Truncated pre-wrapped codebase_guidance from %d to %d chars", orig_len, cap)
 
         if codebase_context is not None:
+            orig_len = len(codebase_context)
             codebase_context = codebase_context[: settings.MAX_CODEBASE_CONTEXT_CHARS]
+            if len(codebase_context) < orig_len:
+                logger.info(
+                    "Truncated codebase_context from %d to %d chars",
+                    orig_len, settings.MAX_CODEBASE_CONTEXT_CHARS,
+                )
             codebase_context = (
                 f'<untrusted-context source="github-explore">\n'
                 f"{codebase_context}\n"
@@ -97,7 +112,13 @@ class ContextResolver:
             )
 
         if adaptation_state is not None:
+            orig_len = len(adaptation_state)
             adaptation_state = adaptation_state[: settings.MAX_ADAPTATION_CHARS]
+            if len(adaptation_state) < orig_len:
+                logger.info(
+                    "Truncated adaptation_state from %d to %d chars",
+                    orig_len, settings.MAX_ADAPTATION_CHARS,
+                )
 
         context_sources: dict[str, bool] = {
             "codebase_guidance": codebase_guidance is not None,

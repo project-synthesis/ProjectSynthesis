@@ -31,8 +31,12 @@ class PromptLoader:
         """Load a template file as raw text (no substitution)."""
         path = self.prompts_dir / name
         if not path.exists():
-            raise FileNotFoundError(f"Template not found: {path}")
-        return path.read_text()
+            raise FileNotFoundError(
+                "Template not found: %s. Check that the prompts/ directory contains this file." % path
+            )
+        content = path.read_text()
+        logger.debug("Loaded template %s (%d chars)", name, len(content))
+        return content
 
     def render(self, name: str, variables: dict[str, str | None] | None = None) -> str:
         """Load template and substitute variables.
@@ -49,7 +53,8 @@ class PromptLoader:
         for required in spec.get("required", []):
             if not variables.get(required):
                 raise ValueError(
-                    f"Required variable '{required}' missing or empty for template '{name}'"
+                    "Required variable '%s' missing or empty for template '%s'. "
+                    "Provide it in the variables dict." % (required, name)
                 )
 
         # Substitute variables

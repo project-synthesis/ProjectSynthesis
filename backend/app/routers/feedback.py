@@ -1,5 +1,7 @@
 """Feedback endpoints — submit and list feedback."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +10,8 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.services.feedback_service import FeedbackService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["feedback"])
 

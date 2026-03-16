@@ -35,7 +35,12 @@ async def optimize(
 ):
     provider = getattr(request.app.state, "provider", None)
     if not provider:
-        raise HTTPException(status_code=503, detail="No LLM provider available.")
+        raise HTTPException(
+            status_code=503,
+            detail="No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI.",
+        )
+
+    logger.info("POST /api/optimize: prompt_len=%d strategy=%s", len(body.prompt), body.strategy)
 
     # Scan workspace for guidance files
     guidance = None
@@ -73,7 +78,10 @@ async def get_optimization(
     )
     opt = result.scalar_one_or_none()
     if not opt:
-        raise HTTPException(status_code=404, detail="Optimization not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Optimization with trace_id '%s' not found." % trace_id,
+        )
 
     return {
         "id": opt.id,

@@ -6,9 +6,12 @@ Provides lightweight, dependency-free scoring without requiring an LLM call.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class HeuristicScorer:
@@ -175,6 +178,7 @@ class HeuristicScorer:
             import textstat
             flesch = textstat.flesch_reading_ease(prompt)
         except Exception:
+            logger.debug("textstat unavailable for clarity heuristic — using default Flesch score")
             flesch = 50.0
 
         # Map Flesch score (0-100) to our scale (1-10)
@@ -207,6 +211,7 @@ class HeuristicScorer:
             else:
                 return max(1.0, similarity * 10.0)
         except Exception:
+            logger.debug("Embedding unavailable for faithfulness heuristic — returning neutral score")
             return 5.0  # neutral default if embedding unavailable
 
     # ------------------------------------------------------------------
@@ -237,4 +242,9 @@ class HeuristicScorer:
             if dim in heuristic_scores
             and abs(llm_scores[dim] - heuristic_scores[dim]) > threshold
         ]
+        if diverged:
+            logger.info(
+                "Score divergence detected in %d dimension(s): %s (threshold=%.1f)",
+                len(diverged), diverged, threshold,
+            )
         return sorted(diverged)

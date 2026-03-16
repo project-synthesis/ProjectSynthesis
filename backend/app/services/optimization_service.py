@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -10,6 +11,8 @@ from sqlalchemy import asc, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -90,7 +93,10 @@ class OptimizationService:
             next_offset  — offset to use for the next page, or None
         """
         if sort_by not in _VALID_SORT_COLUMNS:
-            raise ValueError(f"Invalid sort column: {sort_by!r}")
+            raise ValueError(
+                "Invalid sort column: %s. Must be one of: %s"
+                % (sort_by, ", ".join(sorted(_VALID_SORT_COLUMNS)))
+            )
 
         # Build base filter predicates
         filters = []
@@ -119,6 +125,11 @@ class OptimizationService:
         count = len(rows)
         has_more = (offset + count) < total
         next_offset: int | None = (offset + count) if has_more else None
+
+        logger.debug(
+            "list_optimizations: total=%d count=%d offset=%d sort=%s/%s",
+            total, count, offset, sort_by, sort_order,
+        )
 
         return {
             "total": total,

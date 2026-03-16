@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
         async with aiosqlite.connect(str(db_path)) as db:
             await db.execute("PRAGMA journal_mode=WAL")
             await db.execute("PRAGMA busy_timeout=5000")
+        logger.info("SQLite WAL mode enabled for %s", db_path)
 
     # Detect LLM provider
     try:

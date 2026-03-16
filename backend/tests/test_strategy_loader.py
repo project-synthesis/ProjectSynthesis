@@ -29,7 +29,7 @@ class TestStrategyLoader:
 
     def test_load_unknown_strategy_raises(self, tmp_strategies):
         loader = StrategyLoader(tmp_strategies)
-        with pytest.raises(FileNotFoundError, match="Strategy not found"):
+        with pytest.raises(FileNotFoundError, match="Strategy.*not found"):
             loader.load("nonexistent")
 
     def test_format_available_strategies(self, tmp_strategies):

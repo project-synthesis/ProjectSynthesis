@@ -26,8 +26,14 @@ class StrategyLoader:
         """Load a strategy file by name (without .md extension)."""
         path = self.strategies_dir / f"{name}.md"
         if not path.exists():
-            raise FileNotFoundError(f"Strategy not found: {path}")
-        return path.read_text()
+            available = self.list_strategies()
+            raise FileNotFoundError(
+                "Strategy '%s' not found at %s. Available strategies: %s"
+                % (name, path, ", ".join(available) if available else "none")
+            )
+        content = path.read_text()
+        logger.debug("Loaded strategy %s (%d chars)", name, len(content))
+        return content
 
     def format_available(self) -> str:
         """Format available strategies as a bullet list for the analyzer prompt."""

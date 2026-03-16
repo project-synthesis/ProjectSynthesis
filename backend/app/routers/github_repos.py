@@ -1,5 +1,7 @@
 """GitHub repo listing and linking endpoints."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +10,8 @@ from app.database import get_db
 from app.models import LinkedRepo
 from app.routers.github_auth import _get_session_token
 from app.services.github_client import GitHubClient
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/github", tags=["github"])
 
@@ -37,7 +41,10 @@ async def link_repo(
 
     full_name = body.get("full_name")
     if not full_name:
-        raise HTTPException(400, "full_name is required")
+        raise HTTPException(
+            400,
+            "full_name is required. Provide the GitHub repository as 'owner/repo'.",
+        )
 
     branch = body.get("branch")
 
@@ -46,7 +53,12 @@ async def link_repo(
     try:
         repo_info = await github_client.get_repo(token, full_name)
     except Exception:
-        raise HTTPException(404, f"Repository '{full_name}' not found or not accessible")
+        logger.warning("Failed to fetch GitHub repo: %s", full_name)
+        raise HTTPException(
+            404,
+            "Repository '%s' not found or not accessible. Check the name and your permissions."
+            % full_name,
+        )
 
     default_branch = repo_info.get("default_branch", "main")
     language = repo_info.get("language")
@@ -71,6 +83,8 @@ async def link_repo(
     db.add(linked)
     await db.commit()
 
+    logger.info("Repo linked: %s branch=%s language=%s", full_name, active_branch, language)
+
     return {
         "full_name": full_name,
         "default_branch": default_branch,
@@ -91,7 +105,10 @@ async def get_linked(
     )
     linked = result.scalar_one_or_none()
     if not linked:
-        raise HTTPException(404, "No linked repository for this session")
+        raise HTTPException(
+            404,
+            "No linked repository for this session. Link a repo first via POST /api/github/repos/link.",
+        )
     return {
         "full_name": linked.full_name,
         "default_branch": linked.default_branch,

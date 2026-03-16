@@ -48,19 +48,29 @@ class WorkspaceIntelligence:
             return None
         cache_key = frozenset(str(r) for r in roots)
         if cache_key in self._cache:
+            logger.debug("Workspace profile cache hit for %d roots", len(roots))
             return self._cache[cache_key]
 
+        logger.debug("Analyzing %d workspace roots: %s", len(roots), [str(r) for r in roots])
         guidance = self._scanner.scan_roots(roots)
         stack = self._detect_stack(roots)
         profile = self._build_profile(stack, guidance)
 
         if profile:
             self._cache[cache_key] = profile
+            logger.info(
+                "Workspace profile built: %d chars, languages=%s, frameworks=%s",
+                len(profile), stack["languages"], stack["frameworks"],
+            )
+        else:
+            logger.debug("No workspace profile generated — no languages, frameworks, or guidance found")
         return profile
 
     def invalidate(self) -> None:
         """Clear the profile cache."""
+        count = len(self._cache)
         self._cache.clear()
+        logger.debug("Workspace profile cache invalidated (%d entries cleared)", count)
 
     def _detect_stack(self, roots: list[Path]) -> dict:
         """Scan manifest files across all roots."""

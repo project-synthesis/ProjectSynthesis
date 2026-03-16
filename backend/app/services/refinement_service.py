@@ -116,6 +116,10 @@ class RefinementService:
         self.db.add(turn)
         await self.db.commit()
 
+        logger.info(
+            "Initial refinement turn created: optimization_id=%s branch_id=%s",
+            optimization_id, branch.id,
+        )
         return turn
 
     async def create_refinement_turn(
@@ -162,6 +166,11 @@ class RefinementService:
         strategy_name = prev_turn.strategy_used or "auto"
 
         trace_id = str(uuid.uuid4())
+
+        logger.info(
+            "Refinement turn started: optimization_id=%s branch_id=%s prev_version=%d trace_id=%s",
+            optimization_id, branch_id, prev_turn.version, trace_id,
+        )
 
         # ---------------------------------------------------------------
         # Stage 1: Analyze
@@ -313,6 +322,11 @@ class RefinementService:
         self.db.add(new_turn)
         await self.db.commit()
 
+        logger.info(
+            "Refinement turn completed: optimization_id=%s version=%d overall=%.2f trace_id=%s",
+            optimization_id, new_turn.version, optimized_scores.overall, trace_id,
+        )
+
     async def get_versions(
         self,
         optimization_id: str,
@@ -370,6 +384,11 @@ class RefinementService:
         )
         self.db.add(new_branch)
         await self.db.commit()
+
+        logger.info(
+            "Rollback branch created: optimization_id=%s from_version=%d new_branch_id=%s",
+            optimization_id, to_version, new_branch.id,
+        )
 
         return new_branch
 
