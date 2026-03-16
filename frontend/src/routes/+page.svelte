@@ -32,8 +32,8 @@
       backendError = 'Cannot connect to backend. Check that services are running.';
     }
 
-    // Check GitHub auth (non-fatal)
-    githubStore.checkAuth().catch(() => {});
+    // GitHub auth checked lazily when user navigates to GitHub panel
+    // (avoids 401 console noise on every page load when OAuth isn't configured)
   });
 
   // Derived error states

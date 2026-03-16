@@ -92,6 +92,15 @@
     }
   });
 
+  // Lazy GitHub auth check — only when user navigates to GitHub panel
+  let githubChecked = $state(false);
+  $effect(() => {
+    if (active === 'github' && !githubChecked) {
+      githubChecked = true;
+      githubStore.checkAuth().catch(() => {});
+    }
+  });
+
   function scoreColor(score: number | null): string {
     if (score == null || score <= 0) return 'var(--color-text-dim)';
     if (score >= 7.5) return 'var(--color-neon-green)';
