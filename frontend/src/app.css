@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/* ---- Design System Tokens ---- */
+:root {
+  /* Backgrounds (6-tier dark hierarchy) */
+  --color-bg-primary: #06060c;
+  --color-bg-input: #0a0a14;
+  --color-bg-secondary: #0c0c16;
+  --color-bg-card: #11111e;
+  --color-bg-hover: #16162a;
+  --color-bg-glass: rgba(12, 12, 22, 0.7);
+
+  /* Neon Accent Colors */
+  --color-neon-cyan: #00e5ff;
+  --color-neon-purple: #a855f7;
+  --color-neon-green: #22ff88;
+  --color-neon-red: #ff3366;
+  --color-neon-yellow: #fbbf24;
+  --color-neon-orange: #ff8c00;
+  --color-neon-blue: #4d8eff;
+  --color-neon-pink: #ff6eb4;
+  --color-neon-teal: #00d4aa;
+  --color-neon-indigo: #7b61ff;
+
+  /* Text */
+  --color-text-primary: #e4e4f0;
+  --color-text-secondary: #8b8ba8;
+  --color-text-dim: #7a7a9e;
+
+  /* Borders */
+  --color-border-subtle: rgba(74, 74, 106, 0.15);
+  --color-border-accent: rgba(0, 229, 255, 0.12);
+
+  /* Fonts */
+  --font-sans: 'Space Grotesk', 'Geist', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+  --font-display: 'Syne', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ---- Base Styles ---- */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  height: 100vh;
+}
+
+::selection {
+  background: rgba(0, 229, 255, 0.2);
+  color: #fff;
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(74, 74, 106, 0.3); }
+::-webkit-scrollbar-thumb:hover { background: rgba(74, 74, 106, 0.5); }
+
+/* ---- Utility Classes ---- */
+.font-display { font-family: var(--font-display); }
+.font-mono { font-family: var(--font-mono); }
+
+.text-gradient-forge {
+  background: linear-gradient(135deg, #00e5ff 0%, #7c3aed 50%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
