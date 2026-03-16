@@ -46,6 +46,13 @@
     }
   });
 
+  // Auto-refresh history when real-time events arrive from any source
+  onMount(() => {
+    const handler = () => { historyLoaded = false; };
+    window.addEventListener('optimization-event', handler);
+    return () => window.removeEventListener('optimization-event', handler);
+  });
+
   async function handleSetApiKey() {
     if (!apiKeyInput.trim()) return;
     apiKeySaving = true;

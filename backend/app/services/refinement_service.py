@@ -322,6 +322,18 @@ class RefinementService:
         self.db.add(new_turn)
         await self.db.commit()
 
+        # Publish real-time event for cross-source notifications
+        try:
+            from app.services.event_bus import event_bus
+            event_bus.publish("refinement_turn", {
+                "optimization_id": optimization_id,
+                "version": new_turn.version,
+                "overall_score": optimized_scores.overall,
+                "branch_id": branch_id,
+            })
+        except Exception:
+            logger.debug("Event bus publish failed for refinement turn — ignoring")
+
         logger.info(
             "Refinement turn completed: optimization_id=%s version=%d overall=%.2f trace_id=%s",
             optimization_id, new_turn.version, optimized_scores.overall, trace_id,

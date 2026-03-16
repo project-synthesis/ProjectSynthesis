@@ -402,6 +402,18 @@ async def synthesis_save_result(
 
         await db.commit()
 
+        # Publish real-time event for cross-source notifications
+        from app.services.event_bus import event_bus
+        event_bus.publish("optimization_created", {
+            "id": opt_id,
+            "trace_id": trace_id,
+            "task_type": task_type or "unknown",
+            "strategy_used": strategy_used or "unknown",
+            "overall_score": overall,
+            "provider": "mcp_passthrough",
+            "status": "completed",
+        })
+
     logger.info(
         "synthesis_save_result completed: optimization_id=%s strategy_compliance=%s flags=%d",
         opt_id, strategy_compliance, len(heuristic_flags),

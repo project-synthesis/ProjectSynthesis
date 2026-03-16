@@ -417,6 +417,18 @@ class PipelineOrchestrator:
             db.add(db_opt)
             await db.commit()
 
+            # Publish real-time event for cross-source notifications
+            from app.services.event_bus import event_bus
+            event_bus.publish("optimization_created", {
+                "id": opt_id,
+                "trace_id": trace_id,
+                "task_type": analysis.task_type,
+                "strategy_used": optimization.strategy_used,
+                "overall_score": optimized_scores.overall,
+                "provider": provider.name,
+                "status": "completed",
+            })
+
             # ---------------------------------------------------------------
             # Final event
             # ---------------------------------------------------------------

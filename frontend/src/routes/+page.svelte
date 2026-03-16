@@ -3,11 +3,25 @@
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { githubStore } from '$lib/stores/github.svelte';
-  import { getHealth } from '$lib/api/client';
+  import { getHealth, connectEventStream } from '$lib/api/client';
   import type { HealthResponse } from '$lib/api/client';
 
   let health = $state<HealthResponse | null>(null);
   let backendError = $state<string | null>(null);
+  let eventSource: EventSource | null = null;
+
+  // Real-time event stream (non-async so cleanup works)
+  onMount(() => {
+    eventSource = connectEventStream((type, data) => {
+      if (type === 'optimization_created' || type === 'refinement_turn') {
+        window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
+      }
+      if (type === 'feedback_submitted') {
+        window.dispatchEvent(new CustomEvent('feedback-event', { detail: data }));
+      }
+    });
+    return () => eventSource?.close();
+  });
 
   onMount(async () => {
     // Check backend health

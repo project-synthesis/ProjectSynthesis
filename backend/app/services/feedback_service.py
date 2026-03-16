@@ -86,6 +86,17 @@ class FeedbackService:
                     optimization_id,
                 )
 
+        # Publish real-time event for cross-source notifications
+        try:
+            from app.services.event_bus import event_bus
+            event_bus.publish("feedback_submitted", {
+                "optimization_id": optimization_id,
+                "rating": rating,
+                "feedback_id": fb.id,
+            })
+        except Exception:
+            logger.debug("Event bus publish failed for feedback — ignoring")
+
         return fb
 
     # ------------------------------------------------------------------

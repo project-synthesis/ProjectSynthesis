@@ -145,4 +145,10 @@ try:
 except ImportError:
     pass
 
+try:
+    from app.routers.events import router as events_router
+    app.include_router(events_router)
+except ImportError:
+    pass
+
 asgi_app = app

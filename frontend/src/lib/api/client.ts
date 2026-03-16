@@ -331,3 +331,26 @@ export const setApiKey = (apiKey: string) =>
   });
 export const deleteApiKey = () =>
   apiFetch<ApiKeyStatus>('/provider/api-key', { method: 'DELETE' });
+
+// ---- Real-time event stream ----
+
+export type EventHandler = (type: string, data: Record<string, unknown>) => void;
+
+export function connectEventStream(onEvent: EventHandler): EventSource {
+    const es = new EventSource(`${BASE_URL.replace('/api', '')}/api/events`);
+
+    const eventTypes = ['optimization_created', 'feedback_submitted', 'refinement_turn', 'optimization_failed'];
+    for (const type of eventTypes) {
+        es.addEventListener(type, (e: MessageEvent) => {
+            try {
+                onEvent(type, JSON.parse(e.data));
+            } catch { /* malformed event */ }
+        });
+    }
+
+    es.onerror = () => {
+        // EventSource auto-reconnects — no action needed
+    };
+
+    return es;
+}
