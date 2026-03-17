@@ -4,6 +4,7 @@
   "optimize.md": {"required": ["raw_prompt", "strategy_instructions", "analysis_summary"], "optional": ["codebase_guidance", "codebase_context", "adaptation_state"]},
   "scoring.md": {"required": [], "optional": []},
   "explore.md": {"required": ["raw_prompt", "file_contents", "file_paths"], "optional": []},
+  "explore-guidance.md": {"required": [], "optional": []},
   "adaptation.md": {"required": ["task_type_affinities"], "optional": []},
   "refine.md": {"required": ["current_prompt", "refinement_request", "original_prompt", "strategy_instructions"], "optional": ["codebase_guidance", "codebase_context", "adaptation_state"]},
   "suggest.md": {"required": ["optimized_prompt", "scores", "weaknesses", "strategy_used"], "optional": []},

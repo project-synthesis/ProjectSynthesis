@@ -112,7 +112,7 @@ async def synthesis_optimize(
     strategy: str | None = None,
     repo_full_name: str | None = None,
     workspace_path: str | None = None,
-    ctx: Context = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Run the full optimization pipeline on a prompt.
 
@@ -134,9 +134,14 @@ async def synthesis_optimize(
         )
 
     start = time.monotonic()
+
+    # Resolve strategy: explicit param → user preference → auto
+    prefs = PreferencesService(DATA_DIR)
+    effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
+
     logger.info(
         "synthesis_optimize called: prompt_len=%d strategy=%s repo=%s",
-        len(prompt), strategy, repo_full_name,
+        len(prompt), effective_strategy, repo_full_name,
     )
 
     # Auto-discover workspace roots (zero-config) or fall back to workspace_path
@@ -150,7 +155,7 @@ async def synthesis_optimize(
             raw_prompt=prompt,
             provider=provider,
             db=db,
-            strategy_override=strategy,
+            strategy_override=effective_strategy if effective_strategy != "auto" else None,
             codebase_guidance=guidance,
             repo_full_name=repo_full_name,
         ):
@@ -272,7 +277,10 @@ async def synthesis_analyze(
     # --- Phase 2: Score original prompt ---
     # Send the same prompt as both A and B — scorer evaluates it on its own merits.
     scoring_system = loader.load("scoring.md")
-    scorer_msg = f"## Prompt A\n\n{prompt}\n\n## Prompt B\n\n{prompt}"
+    scorer_msg = (
+        f"<prompt-a>\n{prompt}\n</prompt-a>\n\n"
+        f"<prompt-b>\n{prompt}\n</prompt-b>"
+    )
 
     try:
         score_result: ScoreResult = await provider.complete_parsed(
@@ -413,7 +421,7 @@ async def synthesis_prepare_optimization(
     max_context_tokens: int = 128000,
     workspace_path: str | None = None,
     repo_full_name: str | None = None,
-    ctx: Context = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Assemble the full optimization prompt with context for an external LLM.
 
@@ -424,9 +432,13 @@ async def synthesis_prepare_optimization(
             "Prompt too short (%d chars). Minimum is 20 characters." % len(prompt)
         )
 
+    # Resolve strategy: explicit param → user preference → auto
+    prefs = PreferencesService(DATA_DIR)
+    effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
+
     logger.info(
         "synthesis_prepare_optimization called: prompt_len=%d strategy=%s",
-        len(prompt), strategy,
+        len(prompt), effective_strategy,
     )
 
     # Auto-discover workspace roots (zero-config) or fall back to workspace_path
@@ -435,7 +447,7 @@ async def synthesis_prepare_optimization(
     assembled, strategy_name = assemble_passthrough_prompt(
         prompts_dir=PROMPTS_DIR,
         raw_prompt=prompt,
-        strategy_name=strategy,
+        strategy_name=effective_strategy,
         codebase_guidance=guidance,
     )
 
@@ -498,13 +510,19 @@ async def synthesis_save_result(
     """
     logger.info("synthesis_save_result called: trace_id=%s model=%s", trace_id, model)
 
+    # Check scoring preference
+    prefs = PreferencesService(DATA_DIR)
+    scoring_enabled = prefs.get("pipeline.enable_scoring")
+    if scoring_enabled is None:
+        scoring_enabled = True  # default on
+
     # Determine scoring mode and compute final scores
     bias_corrected: dict[str, float] = {}
     clean_scores: dict[str, float] = {}
     heuristic_flags: list[str] = []
-    scoring_mode = "heuristic"  # default: pure heuristic
+    scoring_mode = "skipped" if not scoring_enabled else "heuristic"
 
-    if scores:
+    if scores and scoring_enabled:
         # IDE provided self-rated scores — apply bias correction
         scoring_mode = "self_rated"
         for k, v in scores.items():
@@ -537,44 +555,50 @@ async def synthesis_save_result(
         elif strategy_used:
             strategy_compliance = "matched"  # no prepare to compare against
 
-        # Always compute heuristic scores (used for divergence checks and fallback)
-        heuristic_scores = HeuristicScorer.score_prompt(
-            optimized_prompt,
-            original=opt.raw_prompt if opt and opt.raw_prompt else None,
-        )
+        # Compute scores only if scoring is enabled
+        heuristic_scores: dict[str, float] = {}
+        final_scores: dict[str, float] = {}
+        overall: float | None = None
+        original_scores: dict[str, float] | None = None
+        deltas: dict[str, float] | None = None
 
-        # Divergence check: compare IDE self-rated scores against heuristics
-        if clean_scores:
-            heuristic_flags = HeuristicScorer.detect_divergence(
-                clean_scores, heuristic_scores,
+        if scoring_enabled:
+            # Compute heuristic scores (used for divergence checks and fallback)
+            heuristic_scores = HeuristicScorer.score_prompt(
+                optimized_prompt,
+                original=opt.raw_prompt if opt and opt.raw_prompt else None,
             )
 
-        # Final scores: bias-corrected IDE scores if available, else pure heuristic
-        if bias_corrected:
-            final_scores = bias_corrected
-        else:
-            final_scores = heuristic_scores
-            scoring_mode = "heuristic"
+            # Divergence check: compare IDE self-rated scores against heuristics
+            if clean_scores:
+                heuristic_flags = HeuristicScorer.detect_divergence(
+                    clean_scores, heuristic_scores,
+                )
 
-        overall = round(
-            sum(final_scores.values()) / max(len(final_scores), 1), 2,
-        )
+            # Final scores: bias-corrected IDE scores if available, else pure heuristic
+            if bias_corrected:
+                final_scores = bias_corrected
+            else:
+                final_scores = heuristic_scores
+                scoring_mode = "heuristic"
+
+            overall = round(
+                sum(final_scores.values()) / max(len(final_scores), 1), 2,
+            )
+
+            # Compute original prompt scores + deltas when raw_prompt is available
+            if opt and opt.raw_prompt:
+                original_scores = HeuristicScorer.score_prompt(opt.raw_prompt)
+                deltas = {
+                    dim: round(final_scores[dim] - original_scores[dim], 2)
+                    for dim in final_scores
+                    if dim in original_scores
+                }
 
         # Truncate codebase context if provided
         context_snapshot = None
         if codebase_context:
             context_snapshot = codebase_context[: settings.MAX_CODEBASE_CONTEXT_CHARS]
-
-        # Compute original prompt scores + deltas when raw_prompt is available
-        original_scores: dict[str, float] | None = None
-        deltas: dict[str, float] | None = None
-        if opt and opt.raw_prompt and final_scores:
-            original_scores = HeuristicScorer.score_prompt(opt.raw_prompt)
-            deltas = {
-                dim: round(final_scores[dim] - original_scores[dim], 2)
-                for dim in final_scores
-                if dim in original_scores
-            }
 
         if opt:
             # Update existing pending record from prepare

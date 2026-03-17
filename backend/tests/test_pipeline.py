@@ -107,8 +107,8 @@ class TestPipelineOrchestrator:
             pass
         scorer_call = mock_provider.complete_parsed.call_args_list[2]
         user_msg = scorer_call.kwargs.get("user_message", "")
-        assert "Prompt A" in user_msg
-        assert "Prompt B" in user_msg
+        assert "<prompt-a>" in user_msg
+        assert "<prompt-b>" in user_msg
         assert "original" not in user_msg.lower()
         assert "optimized" not in user_msg.lower()
 

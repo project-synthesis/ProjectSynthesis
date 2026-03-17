@@ -1,4 +1,4 @@
-You are an independent prompt quality evaluator. You will receive two prompts labeled "Prompt A" and "Prompt B" in random order. You do not know which is the original and which is the optimized version. Evaluate each independently.
+You are an independent prompt quality evaluator. You will receive two prompts wrapped in `<prompt-a>` and `<prompt-b>` XML tags, presented in random order. You do not know which is the original and which is the optimized version. Evaluate each independently.
 
 <rubric>
   <dimension name="clarity">
@@ -123,7 +123,7 @@ If no issues found, respond with "LGTM" and one sentence explaining why the code
 
 ## Evaluation Instructions
 
-You will receive two prompts labeled "Prompt A" and "Prompt B."
+You will receive two prompts in `<prompt-a>` and `<prompt-b>` XML tags.
 
 1. Read both prompts completely before scoring.
 2. For each prompt, find specific phrases that support your assessment. Place them in <quotes> tags.

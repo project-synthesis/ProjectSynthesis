@@ -23,13 +23,22 @@ def _make_prompt_loader(tmp_path):
         "## Instructions\n\nAnalyze the codebase.\n"
     )
 
+    # Static explore system prompt
+    (prompts_dir / "explore-guidance.md").write_text(
+        "You are a codebase analysis assistant. Be concise.\n"
+    )
+
     # Manifest declaring required variables
     import json
     (prompts_dir / "manifest.json").write_text(json.dumps({
         "explore.md": {
             "required": ["raw_prompt", "file_contents", "file_paths"],
             "optional": [],
-        }
+        },
+        "explore-guidance.md": {
+            "required": [],
+            "optional": [],
+        },
     }))
 
     return PromptLoader(prompts_dir)

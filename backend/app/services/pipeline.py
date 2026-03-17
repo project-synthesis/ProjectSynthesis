@@ -7,7 +7,7 @@ streams status events for the frontend SSE endpoint.
 
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
 import random
 import time
@@ -18,9 +18,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import DATA_DIR
+from app.config import DATA_DIR, settings
 from app.models import Optimization
-from app.providers.base import LLMProvider
+from app.providers.base import LLMProvider, TokenUsage, call_provider_with_retry
 from app.schemas.pipeline_contracts import (
     AnalysisResult,
     DimensionScores,
@@ -28,6 +28,7 @@ from app.schemas.pipeline_contracts import (
     PipelineEvent,
     PipelineResult,
     ScoreResult,
+    SuggestionsOutput,
 )
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.preferences import PreferencesService
@@ -43,8 +44,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CONFIDENCE_GATE = 0.7
-RETRY_DELAY_SECONDS = 2
-MAX_RETRIES = 1
 
 CODING_KEYWORDS: set[str] = {
     "function", "class", "api", "code", "program",
@@ -77,8 +76,8 @@ class PipelineOrchestrator:
             self._system_prompt = self.prompt_loader.load("agent-guidance.md")
         return self._system_prompt
 
+    @staticmethod
     async def _call_provider(
-        self,
         provider: LLMProvider,
         *,
         system_prompt: str,
@@ -88,27 +87,29 @@ class PipelineOrchestrator:
         effort: str | None = None,
         max_tokens: int = 16384,
     ) -> Any:
-        """Call provider with retry logic (1 retry after 2s delay)."""
-        last_exc: Exception | None = None
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                return await provider.complete_parsed(
-                    model=model,
-                    system_prompt=system_prompt,
-                    user_message=user_message,
-                    output_format=output_format,
-                    max_tokens=max_tokens,
-                    effort=effort,
-                )
-            except Exception as exc:
-                last_exc = exc
-                if attempt < MAX_RETRIES:
-                    logger.warning(
-                        "Provider call failed (attempt %d/%d), retrying in %ds: %s",
-                        attempt + 1, MAX_RETRIES + 1, RETRY_DELAY_SECONDS, exc,
-                    )
-                    await asyncio.sleep(RETRY_DELAY_SECONDS)
-        raise last_exc  # type: ignore[misc]
+        """Call provider with smart retry logic.
+
+        Delegates to the shared ``call_provider_with_retry`` utility
+        in ``providers.base`` which handles retryable vs non-retryable
+        error classification and exponential backoff.
+        """
+        return await call_provider_with_retry(
+            provider,
+            model=model,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            output_format=output_format,
+            max_tokens=max_tokens,
+            effort=effort,
+        )
+
+    @staticmethod
+    def _get_usage(provider: LLMProvider) -> TokenUsage:
+        """Return last token usage from provider, or zeros if unavailable."""
+        usage = getattr(provider, "last_usage", None)
+        if isinstance(usage, TokenUsage):
+            return usage
+        return TokenUsage()
 
     @staticmethod
     def _semantic_check(task_type: str, raw_prompt: str, confidence: float) -> float:
@@ -159,11 +160,13 @@ class PipelineOrchestrator:
             # ---------------------------------------------------------------
             explore_enabled = prefs.get("pipeline.enable_explore", prefs_snapshot)
             if explore_enabled and repo_full_name and github_token and codebase_context is None:
+                yield PipelineEvent(event="status", data={"stage": "explore", "state": "running"})
                 try:
                     from app.services.codebase_explorer import CodebaseExplorer
                     from app.services.embedding_service import EmbeddingService
                     from app.services.github_client import GitHubClient
 
+                    phase_start = time.monotonic()
                     explorer = CodebaseExplorer(
                         prompt_loader=self.prompt_loader,
                         github_client=GitHubClient(),
@@ -177,15 +180,21 @@ class PipelineOrchestrator:
                         branch=branch,
                         token=github_token,
                     )
+
+                    explore_duration = int((time.monotonic() - phase_start) * 1000)
+                    phase_durations["explore_ms"] = explore_duration
+
                     if codebase_context:
                         logger.info(
                             "Explore context injected (%d chars) trace_id=%s",
                             len(codebase_context), trace_id,
                         )
+                    yield PipelineEvent(event="status", data={"stage": "explore", "state": "complete"})
                 except Exception as exc:
                     logger.warning(
                         "Explore failed, proceeding without codebase context: %s", exc,
                     )
+                    yield PipelineEvent(event="status", data={"stage": "explore", "state": "skipped"})
 
             # ---------------------------------------------------------------
             # Phase 1: Analyze
@@ -215,11 +224,12 @@ class PipelineOrchestrator:
             analyze_duration = int((time.monotonic() - phase_start) * 1000)
             phase_durations["analyze_ms"] = analyze_duration
 
+            usage = self._get_usage(provider)
             if self.trace_logger:
                 self.trace_logger.log_phase(
                     trace_id=trace_id, phase="analyze",
                     duration_ms=analyze_duration,
-                    tokens_in=0, tokens_out=0,
+                    tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
                     model=prefs.resolve_model("analyzer", prefs_snapshot), provider=provider.name,
                     result={"task_type": analysis.task_type, "strategy": analysis.selected_strategy},
                 )
@@ -266,7 +276,9 @@ class PipelineOrchestrator:
                 "adaptation_state": adaptation_state,
             })
 
-            dynamic_max_tokens = max(16384, len(raw_prompt) // 4 * 2)
+            # Dynamic output budget: scale with input length, cap at 65536
+            # (Opus 4.6 supports 128K but .parse() needs headroom to avoid timeouts)
+            dynamic_max_tokens = min(max(16384, len(raw_prompt) // 4 * 2), 65536)
 
             phase_start = time.monotonic()
             optimization: OptimizationResult = await self._call_provider(
@@ -284,11 +296,12 @@ class PipelineOrchestrator:
             optimize_duration = int((time.monotonic() - phase_start) * 1000)
             phase_durations["optimize_ms"] = optimize_duration
 
+            usage = self._get_usage(provider)
             if self.trace_logger:
                 self.trace_logger.log_phase(
                     trace_id=trace_id, phase="optimize",
                     duration_ms=optimize_duration,
-                    tokens_in=0, tokens_out=0,
+                    tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
                     model=prefs.resolve_model("optimizer", prefs_snapshot), provider=provider.name,
                     result={"strategy_used": effective_strategy},
                 )
@@ -321,7 +334,12 @@ class PipelineOrchestrator:
                 )
 
                 scoring_system = self.prompt_loader.load("scoring.md")
-                scorer_msg = f"## Prompt A\n\n{prompt_a}\n\n## Prompt B\n\n{prompt_b}"
+                # Use XML tags to prevent prompt content (which may contain ##
+                # headers) from corrupting the A/B boundary for the scorer.
+                scorer_msg = (
+                    f"<prompt-a>\n{prompt_a}\n</prompt-a>\n\n"
+                    f"<prompt-b>\n{prompt_b}\n</prompt-b>"
+                )
 
                 phase_start = time.monotonic()
                 scores: ScoreResult = await self._call_provider(
@@ -338,11 +356,12 @@ class PipelineOrchestrator:
                 score_duration = int((time.monotonic() - phase_start) * 1000)
                 phase_durations["score_ms"] = score_duration
 
+                usage = self._get_usage(provider)
                 if self.trace_logger:
                     self.trace_logger.log_phase(
                         trace_id=trace_id, phase="score",
                         duration_ms=score_duration,
-                        tokens_in=0, tokens_out=0,
+                        tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
                         model=prefs.resolve_model("scorer", prefs_snapshot), provider=provider.name,
                     )
 
@@ -452,6 +471,38 @@ class PipelineOrchestrator:
                 logger.info("Scoring phase skipped per user preferences. trace_id=%s", trace_id)
 
             # ---------------------------------------------------------------
+            # Phase 4: Suggest (when scoring produced results)
+            # ---------------------------------------------------------------
+            suggestions: list[dict[str, str]] = []
+            if optimized_scores and analysis.weaknesses is not None:
+                try:
+                    yield PipelineEvent(event="status", data={"stage": "suggest", "state": "running"})
+
+                    suggest_msg = self.prompt_loader.render("suggest.md", {
+                        "optimized_prompt": optimization.optimized_prompt,
+                        "scores": json.dumps(optimized_scores.model_dump(), indent=2),
+                        "weaknesses": ", ".join(analysis.weaknesses) if analysis.weaknesses else "none identified",
+                        "strategy_used": effective_strategy,
+                    })
+
+                    suggest_result: SuggestionsOutput = await self._call_provider(
+                        provider,
+                        system_prompt=self._load_system_prompt(),
+                        user_message=suggest_msg,
+                        output_format=SuggestionsOutput,
+                        model=settings.MODEL_HAIKU,
+                        max_tokens=2048,
+                    )
+                    suggestions = suggest_result.suggestions
+
+                    yield PipelineEvent(event="suggestions", data={"suggestions": suggestions})
+                    yield PipelineEvent(event="status", data={"stage": "suggest", "state": "complete"})
+
+                    logger.info("Suggestions generated: %d items. trace_id=%s", len(suggestions), trace_id)
+                except Exception as exc:
+                    logger.warning("Suggestion generation failed (non-fatal): %s", exc)
+
+            # ---------------------------------------------------------------
             # Persist to DB
             # ---------------------------------------------------------------
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -518,6 +569,7 @@ class PipelineOrchestrator:
                 scoring_mode="hybrid" if optimized_scores else "skipped",
                 duration_ms=duration_ms,
                 status="completed",
+                suggestions=suggestions,
                 context_sources=context_sources or {},
                 warnings=warnings if warnings else [],
             )

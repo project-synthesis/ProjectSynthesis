@@ -184,10 +184,11 @@ async def passthrough_save(
     body: PassthroughSaveRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Save an externally-optimized prompt result, scoring it with heuristics only.
+    """Save an externally-optimized prompt result.
 
-    Looks up the pending Optimization by trace_id, applies heuristic scoring,
-    updates the record to completed, and publishes an optimization_created event.
+    Applies heuristic scoring unless the user has disabled scoring in preferences.
+    Looks up the pending Optimization by trace_id, updates the record to completed,
+    and publishes an optimization_created event.
     """
     result = await db.execute(
         select(Optimization).where(Optimization.trace_id == body.trace_id)
@@ -196,31 +197,46 @@ async def passthrough_save(
     if not opt:
         raise HTTPException(404, "No pending optimization for this trace_id")
 
-    # Heuristic-only scoring (no LLM needed)
-    optimized_scores = HeuristicScorer.score_prompt(
-        body.optimized_prompt, original=opt.raw_prompt,
-    )
-    overall = round(sum(optimized_scores.values()) / len(optimized_scores), 2)
+    _prefs = PreferencesService(DATA_DIR)
+    scoring_enabled = _prefs.get("pipeline.enable_scoring")
+    # Default to True if preference is not set (first-run, no preferences file)
+    if scoring_enabled is None:
+        scoring_enabled = True
 
-    # Score the original prompt too so we can compute deltas
-    original_scores = HeuristicScorer.score_prompt(opt.raw_prompt)
-    deltas = {
-        dim: round(optimized_scores[dim] - original_scores[dim], 2)
-        for dim in optimized_scores
-    }
+    optimized_scores: dict[str, float] | None = None
+    original_scores: dict[str, float] | None = None
+    deltas: dict[str, float] | None = None
+    overall: float | None = None
+    scoring_mode = "skipped"
+
+    if scoring_enabled:
+        # Heuristic-only scoring (no LLM needed)
+        optimized_scores = HeuristicScorer.score_prompt(
+            body.optimized_prompt, original=opt.raw_prompt,
+        )
+        overall = round(sum(optimized_scores.values()) / len(optimized_scores), 2)
+
+        # Score the original prompt too so we can compute deltas
+        original_scores = HeuristicScorer.score_prompt(opt.raw_prompt)
+        deltas = {
+            dim: round(optimized_scores[dim] - original_scores[dim], 2)
+            for dim in optimized_scores
+        }
+        scoring_mode = "heuristic"
 
     # Update record
     opt.optimized_prompt = body.optimized_prompt
     opt.changes_summary = body.changes_summary or ""
-    opt.score_clarity = optimized_scores["clarity"]
-    opt.score_specificity = optimized_scores["specificity"]
-    opt.score_structure = optimized_scores["structure"]
-    opt.score_faithfulness = optimized_scores["faithfulness"]
-    opt.score_conciseness = optimized_scores["conciseness"]
+    if optimized_scores:
+        opt.score_clarity = optimized_scores["clarity"]
+        opt.score_specificity = optimized_scores["specificity"]
+        opt.score_structure = optimized_scores["structure"]
+        opt.score_faithfulness = optimized_scores["faithfulness"]
+        opt.score_conciseness = optimized_scores["conciseness"]
     opt.overall_score = overall
     opt.original_scores = original_scores
     opt.score_deltas = deltas
-    opt.scoring_mode = "heuristic"
+    opt.scoring_mode = scoring_mode
     opt.status = "completed"
     opt.model_used = "external"
     await db.commit()

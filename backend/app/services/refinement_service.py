@@ -15,19 +15,19 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import DATA_DIR, settings
 from app.models import Optimization, RefinementBranch, RefinementTurn
-from app.providers.base import LLMProvider
+from app.providers.base import LLMProvider, call_provider_with_retry
 from app.schemas.pipeline_contracts import (
     AnalysisResult,
     DimensionScores,
     OptimizationResult,
     PipelineEvent,
     ScoreResult,
+    SuggestionsOutput,
 )
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.preferences import PreferencesService
@@ -36,19 +36,6 @@ from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Pydantic model for structured suggestion output
-# ---------------------------------------------------------------------------
-
-
-class SuggestionsOutput(BaseModel):
-    """Structured output for the suggestion generator."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    suggestions: list[dict[str, str]]  # [{text: str, source: str}]
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +57,34 @@ class RefinementService:
         self.provider = provider
         self.prompt_loader = PromptLoader(prompts_dir)
         self.strategy_loader = StrategyLoader(prompts_dir / "strategies")
+
+    # ------------------------------------------------------------------
+    # Provider call with retry
+    # ------------------------------------------------------------------
+
+    async def _call_provider(
+        self,
+        *,
+        system_prompt: str,
+        user_message: str,
+        output_format: type,
+        model: str,
+        effort: str | None = None,
+        max_tokens: int = 16384,
+    ) -> Any:
+        """Call provider with smart retry logic.
+
+        Delegates to the shared ``call_provider_with_retry`` utility.
+        """
+        return await call_provider_with_retry(
+            self.provider,
+            model=model,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            output_format=output_format,
+            max_tokens=max_tokens,
+            effort=effort,
+        )
 
     # ------------------------------------------------------------------
     # Public methods
@@ -191,11 +206,11 @@ class RefinementService:
             "available_strategies": available_strategies,
         })
 
-        analysis: AnalysisResult = await self.provider.complete_parsed(
-            model=_prefs.resolve_model("analyzer", _prefs_snapshot),
+        analysis: AnalysisResult = await self._call_provider(
             system_prompt=system_prompt,
             user_message=analyze_msg,
             output_format=AnalysisResult,
+            model=_prefs.resolve_model("analyzer", _prefs_snapshot),
             effort="medium",
         )
 
@@ -218,12 +233,16 @@ class RefinementService:
             "adaptation_state": adaptation_state,
         })
 
-        refined: OptimizationResult = await self.provider.complete_parsed(
-            model=_prefs.resolve_model("optimizer", _prefs_snapshot),
+        # Dynamic output budget matching the main pipeline
+        dynamic_max_tokens = min(max(16384, len(current_prompt) // 4 * 2), 65536)
+
+        refined: OptimizationResult = await self._call_provider(
             system_prompt=system_prompt,
             user_message=refine_msg,
             output_format=OptimizationResult,
+            model=_prefs.resolve_model("optimizer", _prefs_snapshot),
             effort="high",
+            max_tokens=dynamic_max_tokens,
         )
 
         yield PipelineEvent(event="prompt_preview", data={
@@ -236,101 +255,122 @@ class RefinementService:
         # ---------------------------------------------------------------
         # Stage 3: Score
         # ---------------------------------------------------------------
-        yield PipelineEvent(event="status", data={"stage": "score", "state": "running"})
+        scoring_enabled = _prefs.get("pipeline.enable_scoring", _prefs_snapshot)
+        if scoring_enabled is None:
+            scoring_enabled = True
 
-        # Randomize A/B assignment to prevent position bias
-        original_first = random.choice([True, False])
-        if original_first:
-            prompt_a = original_prompt
-            prompt_b = refined.optimized_prompt
-        else:
-            prompt_a = refined.optimized_prompt
-            prompt_b = original_prompt
-
-        scoring_system = self.prompt_loader.load("scoring.md")
-        scorer_msg = f"## Prompt A\n\n{prompt_a}\n\n## Prompt B\n\n{prompt_b}"
-
-        scores: ScoreResult = await self.provider.complete_parsed(
-            model=_prefs.resolve_model("scorer", _prefs_snapshot),
-            system_prompt=scoring_system,
-            user_message=scorer_msg,
-            output_format=ScoreResult,
-            effort="medium",
-        )
-
-        # Map A/B scores back to original/optimized
-        if original_first:
-            llm_original = scores.prompt_a_scores
-            llm_optimized = scores.prompt_b_scores
-        else:
-            llm_original = scores.prompt_b_scores
-            llm_optimized = scores.prompt_a_scores
-
-        # Hybrid scoring: blend LLM + heuristic (same as main pipeline)
-        heur_original = HeuristicScorer.score_prompt(original_prompt)
-        heur_optimized = HeuristicScorer.score_prompt(
-            refined.optimized_prompt, original=original_prompt,
-        )
-
-        # Fetch historical stats for z-score normalization (non-fatal)
-        historical_stats: dict | None = None
-        try:
-            from app.services.optimization_service import OptimizationService
-            opt_svc = OptimizationService(self.db)
-            historical_stats = await opt_svc.get_score_distribution(
-                exclude_scoring_modes=["heuristic"],
-            )
-        except Exception:
-            pass
-
-        blended_original = blend_scores(llm_original, heur_original, historical_stats)
-        blended_optimized = blend_scores(llm_optimized, heur_optimized, historical_stats)
-        original_scores = blended_original.to_dimension_scores()
-        optimized_scores = blended_optimized.to_dimension_scores()
-
-        # Compute deltas (current refinement vs original)
-        deltas = DimensionScores.compute_deltas(original_scores, optimized_scores)
-
-        # Compute deltas from previous turn
+        optimized_scores = None
+        original_scores = None
+        deltas = None
         deltas_from_prev = None
-        if prev_turn.scores:
-            prev_scores = prev_turn.scores
-            deltas_from_prev = {}
-            for dim in ("clarity", "specificity", "structure", "faithfulness", "conciseness"):
-                opt_val = getattr(optimized_scores, dim)
-                prev_val = prev_scores.get(dim)
-                if prev_val is not None:
-                    deltas_from_prev[dim] = round(opt_val - prev_val, 2)
+        suggestions_list: list = []
 
-        yield PipelineEvent(event="score_card", data={
-            "original_scores": original_scores.model_dump(),
-            "scores": optimized_scores.model_dump(),
-            "deltas": deltas,
-            "overall_score": optimized_scores.overall,
-        })
+        if scoring_enabled:
+            yield PipelineEvent(event="status", data={"stage": "score", "state": "running"})
 
-        yield PipelineEvent(event="status", data={"stage": "score", "state": "complete"})
+            # Randomize A/B assignment to prevent position bias
+            original_first = random.choice([True, False])
+            if original_first:
+                prompt_a = original_prompt
+                prompt_b = refined.optimized_prompt
+            else:
+                prompt_a = refined.optimized_prompt
+                prompt_b = original_prompt
+            scoring_system = self.prompt_loader.load("scoring.md")
+            # XML tags prevent prompt content with ## headers from corrupting
+            # the A/B boundary for the scorer
+            scorer_msg = (
+                f"<prompt-a>\n{prompt_a}\n</prompt-a>\n\n"
+                f"<prompt-b>\n{prompt_b}\n</prompt-b>"
+            )
 
-        # ---------------------------------------------------------------
-        # Stage 4: Suggest
-        # ---------------------------------------------------------------
-        yield PipelineEvent(event="status", data={"stage": "suggest", "state": "running"})
+            scores: ScoreResult = await self._call_provider(
+                system_prompt=scoring_system,
+                user_message=scorer_msg,
+                output_format=ScoreResult,
+                model=_prefs.resolve_model("scorer", _prefs_snapshot),
+                effort="medium",
+            )
 
-        suggestions_list = await self._generate_suggestions(
-            optimized_prompt=refined.optimized_prompt,
-            scores=optimized_scores.model_dump(),
-            weaknesses=analysis.weaknesses,
-            strategy=refined.strategy_used,
-        )
+            # Map A/B scores back to original/optimized
+            if original_first:
+                llm_original = scores.prompt_a_scores
+                llm_optimized = scores.prompt_b_scores
+            else:
+                llm_original = scores.prompt_b_scores
+                llm_optimized = scores.prompt_a_scores
 
-        yield PipelineEvent(event="suggestions", data={"suggestions": suggestions_list})
-        yield PipelineEvent(event="status", data={"stage": "suggest", "state": "complete"})
+            # Hybrid scoring: blend LLM + heuristic (same as main pipeline)
+            heur_original = HeuristicScorer.score_prompt(original_prompt)
+            heur_optimized = HeuristicScorer.score_prompt(
+                refined.optimized_prompt, original=original_prompt,
+            )
+
+            # Fetch historical stats for z-score normalization (non-fatal)
+            historical_stats: dict | None = None
+            try:
+                from app.services.optimization_service import OptimizationService
+                opt_svc = OptimizationService(self.db)
+                historical_stats = await opt_svc.get_score_distribution(
+                    exclude_scoring_modes=["heuristic"],
+                )
+            except Exception:
+                pass
+
+            blended_original = blend_scores(llm_original, heur_original, historical_stats)
+            blended_optimized = blend_scores(llm_optimized, heur_optimized, historical_stats)
+            original_scores = blended_original.to_dimension_scores()
+            optimized_scores = blended_optimized.to_dimension_scores()
+
+            # Compute deltas (current refinement vs original)
+            deltas = DimensionScores.compute_deltas(original_scores, optimized_scores)
+
+            # Compute deltas from previous turn
+            if prev_turn.scores:
+                prev_scores = prev_turn.scores
+                deltas_from_prev = {}
+                for dim in ("clarity", "specificity", "structure", "faithfulness", "conciseness"):
+                    opt_val = getattr(optimized_scores, dim)
+                    prev_val = prev_scores.get(dim)
+                    if prev_val is not None:
+                        deltas_from_prev[dim] = round(opt_val - prev_val, 2)
+
+            yield PipelineEvent(event="score_card", data={
+                "original_scores": original_scores.model_dump(),
+                "scores": optimized_scores.model_dump(),
+                "deltas": deltas,
+                "overall_score": optimized_scores.overall,
+            })
+
+            yield PipelineEvent(event="status", data={"stage": "score", "state": "complete"})
+
+            # ---------------------------------------------------------------
+            # Stage 4: Suggest (only when scoring is enabled)
+            # ---------------------------------------------------------------
+            yield PipelineEvent(event="status", data={"stage": "suggest", "state": "running"})
+
+            suggestions_list = await self._generate_suggestions(
+                optimized_prompt=refined.optimized_prompt,
+                scores=optimized_scores.model_dump(),
+                weaknesses=analysis.weaknesses,
+                strategy=refined.strategy_used,
+            )
+
+            yield PipelineEvent(event="suggestions", data={"suggestions": suggestions_list})
+            yield PipelineEvent(event="status", data={"stage": "suggest", "state": "complete"})
+        else:
+            yield PipelineEvent(event="status", data={"stage": "score", "state": "skipped"})
+            logger.info(
+                "Scoring phase skipped per user preferences. trace_id=%s",
+                trace_id,
+            )
 
         # ---------------------------------------------------------------
         # Persist new turn
         # ---------------------------------------------------------------
-        scores_dict = optimized_scores.model_dump()
-        scores_dict["overall"] = optimized_scores.overall
+        scores_dict = optimized_scores.model_dump() if optimized_scores else None
+        if scores_dict and optimized_scores:
+            scores_dict["overall"] = optimized_scores.overall
 
         new_turn = RefinementTurn(
             id=str(uuid.uuid4()),
@@ -351,20 +391,21 @@ class RefinementService:
         await self.db.commit()
 
         # Publish real-time event for cross-source notifications
+        _overall = optimized_scores.overall if optimized_scores else None
         try:
             from app.services.event_bus import event_bus
             event_bus.publish("refinement_turn", {
                 "optimization_id": optimization_id,
                 "version": new_turn.version,
-                "overall_score": optimized_scores.overall,
+                "overall_score": _overall,
                 "branch_id": branch_id,
             })
         except Exception:
             logger.debug("Event bus publish failed for refinement turn — ignoring")
 
         logger.info(
-            "Refinement turn completed: optimization_id=%s version=%d overall=%.2f trace_id=%s",
-            optimization_id, new_turn.version, optimized_scores.overall, trace_id,
+            "Refinement turn completed: optimization_id=%s version=%d overall=%s trace_id=%s",
+            optimization_id, new_turn.version, _overall, trace_id,
         )
 
     async def get_versions(
@@ -482,11 +523,11 @@ class RefinementService:
 
         system_prompt = self.prompt_loader.load("agent-guidance.md")
 
-        result: SuggestionsOutput = await self.provider.complete_parsed(
-            model=settings.MODEL_HAIKU,
+        result: SuggestionsOutput = await self._call_provider(
             system_prompt=system_prompt,
             user_message=suggest_msg,
             output_format=SuggestionsOutput,
+            model=settings.MODEL_HAIKU,
             max_tokens=2048,
         )
 

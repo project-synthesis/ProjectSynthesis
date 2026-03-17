@@ -33,11 +33,6 @@ _CODE_EXTENSIONS = {
 # Module-level cache singleton — shared across explorer instances
 _explore_cache = ExploreCache(ttl_seconds=settings.EXPLORE_RESULT_CACHE_TTL)
 
-EXPLORE_SYSTEM_PROMPT = (
-    "You are a codebase analysis assistant. "
-    "Extract structured context from the provided repository files "
-    "that is relevant to the user's prompt. Be concise and focused."
-)
 
 
 class ExploreOutput(BaseModel):
@@ -196,7 +191,7 @@ class CodebaseExplorer:
         # 9. Single-shot synthesis via provider
         result: ExploreOutput = await self._provider.complete_parsed(
             model=settings.MODEL_HAIKU,
-            system_prompt=EXPLORE_SYSTEM_PROMPT,
+            system_prompt=self._loader.load("explore-guidance.md"),
             user_message=rendered,
             output_format=ExploreOutput,
         )

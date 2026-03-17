@@ -10,8 +10,8 @@ from app.schemas.pipeline_contracts import (
     DimensionScores,
     OptimizationResult,
     ScoreResult,
+    SuggestionsOutput,
 )
-from app.services.refinement_service import SuggestionsOutput
 
 # ---------------------------------------------------------------------------
 # Helper factories

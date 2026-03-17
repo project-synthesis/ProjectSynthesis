@@ -1,14 +1,28 @@
-"""Anthropic API provider — direct API with prompt caching."""
+"""Anthropic API provider — direct API with prompt caching.
+
+Uses ``messages.parse()`` for structured output with automatic Pydantic
+validation. System prompts are cached via ``cache_control: ephemeral``.
+Adaptive thinking for Opus/Sonnet, disabled for Haiku.
+"""
 
 from __future__ import annotations
 
 import logging
 from typing import TypeVar
 
+import anthropic
 from anthropic import AsyncAnthropic
 from pydantic import BaseModel
 
-from app.providers.base import LLMProvider
+from app.providers.base import (
+    LLMProvider,
+    ProviderAuthError,
+    ProviderBadRequestError,
+    ProviderError,
+    ProviderOverloadedError,
+    ProviderRateLimitError,
+    TokenUsage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +48,10 @@ class AnthropicAPIProvider(LLMProvider):
     ) -> T:
         """Make an LLM call and return a parsed Pydantic model.
 
-        System prompt is wrapped with cache_control: ephemeral for prompt caching.
-        Thinking is adaptive for Opus/Sonnet, disabled for Haiku.
-        Effort is only passed for non-Haiku models.
+        - System prompt cached via ``cache_control: ephemeral``
+        - Adaptive thinking for Opus/Sonnet, disabled for Haiku
+        - Effort parameter via ``output_config`` (non-Haiku only)
+        - Typed error handling mapped to ProviderError hierarchy
         """
         system = [
             {
@@ -48,8 +63,8 @@ class AnthropicAPIProvider(LLMProvider):
 
         thinking = self.thinking_config(model)
 
-        output_config: dict | None = None
         is_haiku = "haiku" in model.lower()
+        output_config: dict | None = None
         if effort is not None and not is_haiku:
             output_config = {"effort": effort}
 
@@ -64,13 +79,78 @@ class AnthropicAPIProvider(LLMProvider):
         if output_config is not None:
             kwargs["output_config"] = output_config
 
-        response = await self._client.messages.parse(**kwargs)
+        try:
+            response = await self._client.messages.parse(**kwargs)
+        except anthropic.RateLimitError as exc:
+            retry_after = _extract_retry_after(exc)
+            raise ProviderRateLimitError(
+                f"Rate limited: {exc.message}",
+                retry_after=retry_after,
+            ) from exc
+        except anthropic.AuthenticationError as exc:
+            raise ProviderAuthError(
+                f"Authentication failed: {exc.message}"
+            ) from exc
+        except anthropic.PermissionDeniedError as exc:
+            raise ProviderAuthError(
+                f"Permission denied: {exc.message}"
+            ) from exc
+        except anthropic.BadRequestError as exc:
+            raise ProviderBadRequestError(
+                f"Invalid request: {exc.message}"
+            ) from exc
+        except anthropic.APIStatusError as exc:
+            if exc.status_code == 529:
+                raise ProviderOverloadedError(
+                    f"API overloaded: {exc.message}"
+                ) from exc
+            raise ProviderError(
+                f"API error ({exc.status_code}): {exc.message}",
+                retryable=exc.status_code >= 500,
+            ) from exc
+        except anthropic.APIConnectionError as exc:
+            raise ProviderError(
+                f"Connection error: {exc}",
+                retryable=True,
+            ) from exc
 
-        logger.info(
-            "anthropic_api complete_parsed model=%s input_tokens=%s output_tokens=%s",
-            model,
-            response.usage.input_tokens,
-            response.usage.output_tokens,
+        # Track token usage including prompt cache stats
+        usage = response.usage
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+
+        self.last_usage = TokenUsage(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=cache_read,
+            cache_creation_tokens=cache_creation,
         )
 
+        # Build log message with cache and stop reason details
+        parts = [
+            f"model={model}",
+            f"in={usage.input_tokens}",
+            f"out={usage.output_tokens}",
+        ]
+        if cache_read:
+            parts.append(f"cache_read={cache_read}")
+        if cache_creation:
+            parts.append(f"cache_write={cache_creation}")
+        if response.stop_reason and response.stop_reason != "end_turn":
+            parts.append(f"stop={response.stop_reason}")
+
+        logger.info("anthropic_api complete_parsed %s", " ".join(parts))
+
         return response.parsed_output
+
+
+def _extract_retry_after(exc: anthropic.RateLimitError) -> int | None:
+    """Extract retry-after seconds from rate limit response headers."""
+    try:
+        if exc.response and exc.response.headers:
+            raw = exc.response.headers.get("retry-after")
+            if raw:
+                return int(raw)
+    except (ValueError, AttributeError):
+        pass
+    return None

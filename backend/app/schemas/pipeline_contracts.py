@@ -92,6 +92,17 @@ class ScoreResult(BaseModel):
     prompt_b_scores: DimensionScores
 
 
+class SuggestionsOutput(BaseModel):
+    """Structured output for the suggestion generator (Haiku).
+
+    Used by both the main pipeline (Phase 4) and refinement service (Stage 4).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    suggestions: list[dict[str, str]]  # [{text: str, source: str}]
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator-side input contracts — extra="forbid"
 # ---------------------------------------------------------------------------
@@ -182,6 +193,7 @@ class PipelineResult(BaseModel):
     tokens_total: int = 0
     tokens_by_phase: dict[str, int] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    suggestions: list[dict[str, str]] = Field(default_factory=list)
     repo_full_name: str | None = None
     codebase_context_snapshot: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

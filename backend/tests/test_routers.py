@@ -288,16 +288,15 @@ class TestGitHubAuth:
         settings.SECRET_KEY = secret_key
 
         try:
-            resp = await app_client.get(
-                "/api/github/auth/me",
-                cookies={"session_id": "test-session-me"},
-            )
+            app_client.cookies.set("session_id", "test-session-me")
+            resp = await app_client.get("/api/github/auth/me")
             assert resp.status_code == 200
             data = resp.json()
             assert data["login"] == "testuser"
             assert data["avatar_url"] == "https://avatars.example.com/u/12345"
             assert data["github_user_id"] == "12345"
         finally:
+            app_client.cookies.clear()
             settings.SECRET_KEY = original_secret
 
     async def test_github_logout_deletes_token(self, app_client, db_session):
@@ -324,10 +323,9 @@ class TestGitHubAuth:
         db_session.add(row)
         await db_session.commit()
 
-        resp = await app_client.post(
-            "/api/github/auth/logout",
-            cookies={"session_id": "test-session-logout"},
-        )
+        app_client.cookies.set("session_id", "test-session-logout")
+        resp = await app_client.post("/api/github/auth/logout")
+        app_client.cookies.clear()
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
 
@@ -388,12 +386,11 @@ class TestGitHubRepos:
         settings.SECRET_KEY = secret_key
 
         try:
-            resp = await app_client.get(
-                "/api/github/repos/linked",
-                cookies={"session_id": "test-session-norepo"},
-            )
+            app_client.cookies.set("session_id", "test-session-norepo")
+            resp = await app_client.get("/api/github/repos/linked")
             assert resp.status_code == 404
         finally:
+            app_client.cookies.clear()
             settings.SECRET_KEY = original_secret
 
     async def test_unlink_repo_idempotent(self, app_client, db_session):
@@ -424,13 +421,12 @@ class TestGitHubRepos:
         settings.SECRET_KEY = secret_key
 
         try:
-            resp = await app_client.delete(
-                "/api/github/repos/unlink",
-                cookies={"session_id": "test-session-unlink"},
-            )
+            app_client.cookies.set("session_id", "test-session-unlink")
+            resp = await app_client.delete("/api/github/repos/unlink")
             assert resp.status_code == 200
             assert resp.json()["ok"] is True
         finally:
+            app_client.cookies.clear()
             settings.SECRET_KEY = original_secret
 
 

@@ -153,10 +153,20 @@ class TestAnthropicAPIProvider:
 
 class TestClaudeCLIProvider:
     @pytest.mark.asyncio
-    async def test_calls_subprocess_and_parses_json(self):
-        """complete_parsed runs the claude CLI and parses stdout as JSON."""
+    async def test_parses_structured_output(self):
+        """Prefers the structured_output field from --json-schema response."""
+        import json
+
         analysis = _make_analysis_result()
-        stdout_json = analysis.model_dump_json().encode()
+        envelope = {
+            "type": "result",
+            "subtype": "success",
+            "result": "",
+            "structured_output": analysis.model_dump(),
+            "duration_ms": 1234,
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+        }
+        stdout_json = json.dumps(envelope).encode()
 
         mock_proc = MagicMock()
         mock_proc.returncode = 0
@@ -178,14 +188,34 @@ class TestClaudeCLIProvider:
         assert isinstance(result, AnalysisResult)
         assert result.task_type == "coding"
         assert result.confidence == 0.85
-        mock_exec.assert_called_once()
+
+        # Verify --json-schema and --output-format json are in the command
+        call_args = mock_exec.call_args[0]
+        assert "--json-schema" in call_args
+        assert "--output-format" in call_args
+
+        # Verify token usage was tracked
+        assert provider.last_usage is not None
+        assert provider.last_usage.input_tokens == 100
+        assert provider.last_usage.output_tokens == 50
 
     @pytest.mark.asyncio
-    async def test_raises_runtime_error_on_subprocess_failure(self):
-        """Raises RuntimeError when subprocess exits with non-zero code."""
+    async def test_falls_back_to_result_field(self):
+        """Falls back to parsing the result field for older CLI versions."""
+        import json
+
+        analysis = _make_analysis_result()
+        envelope = {
+            "type": "result",
+            "result": json.dumps(analysis.model_dump()),
+            "duration_ms": 500,
+            "usage": {},
+        }
+        stdout_json = json.dumps(envelope).encode()
+
         mock_proc = MagicMock()
-        mock_proc.returncode = 1
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"something went wrong"))
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(stdout_json, b""))
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
             mock_exec.return_value = mock_proc
@@ -193,7 +223,67 @@ class TestClaudeCLIProvider:
             from app.providers.claude_cli import ClaudeCLIProvider
 
             provider = ClaudeCLIProvider()
-            with pytest.raises(RuntimeError):
+            result = await provider.complete_parsed(
+                model="claude-haiku-4-5",
+                system_prompt="You are an analyzer.",
+                user_message="Analyze this.",
+                output_format=AnalysisResult,
+            )
+
+        assert isinstance(result, AnalysisResult)
+        assert result.task_type == "coding"
+
+    @pytest.mark.asyncio
+    async def test_passes_effort_flag(self):
+        """Passes --effort flag when effort parameter is provided."""
+        import json
+
+        analysis = _make_analysis_result()
+        envelope = {
+            "type": "result",
+            "structured_output": analysis.model_dump(),
+            "usage": {},
+        }
+        stdout_json = json.dumps(envelope).encode()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(stdout_json, b""))
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = mock_proc
+
+            from app.providers.claude_cli import ClaudeCLIProvider
+
+            provider = ClaudeCLIProvider()
+            await provider.complete_parsed(
+                model="claude-haiku-4-5",
+                system_prompt="You are an analyzer.",
+                user_message="Analyze this.",
+                output_format=AnalysisResult,
+                effort="high",
+            )
+
+        call_args = mock_exec.call_args[0]
+        assert "--effort" in call_args
+        effort_idx = list(call_args).index("--effort")
+        assert call_args[effort_idx + 1] == "high"
+
+    @pytest.mark.asyncio
+    async def test_raises_provider_error_on_subprocess_failure(self):
+        """Raises ProviderError when subprocess exits with non-zero code."""
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.communicate = AsyncMock(return_value=(b"", b"something went wrong"))
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = mock_proc
+
+            from app.providers.base import ProviderError
+            from app.providers.claude_cli import ClaudeCLIProvider
+
+            provider = ClaudeCLIProvider()
+            with pytest.raises(ProviderError):
                 await provider.complete_parsed(
                     model="claude-haiku-4-5",
                     system_prompt="You are an analyzer.",
