@@ -1,42 +1,29 @@
-# sv
+# Project Synthesis — Frontend
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+SvelteKit 2 (Svelte 5 runes) + Tailwind CSS 4. Industrial cyberpunk workbench UI.
 
-## Creating a project
+## Development
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
+```bash
+npm install
+npm run dev          # http://localhost:5199
+npx svelte-check     # type check
+npm run build        # production build (adapter-static)
 ```
 
-To recreate this project with the same configuration:
+Requires the backend running on port 8000 (`./init.sh start` from project root).
 
-```sh
-# recreate this project
-npx sv@0.12.7 create --template minimal --types ts --install npm frontend
-```
+## Architecture
 
-## Developing
+VS Code workbench layout: ActivityBar → Navigator → EditorGroups → Inspector → StatusBar.
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+| Store | Purpose |
+|-------|---------|
+| `forge.svelte.ts` | Pipeline state, SSE events, session persistence |
+| `preferences.svelte.ts` | User preferences (models, pipeline toggles) |
+| `toast.svelte.ts` | Toast notification queue |
+| `editor.svelte.ts` | Tab management |
+| `github.svelte.ts` | GitHub auth + repo state |
+| `refinement.svelte.ts` | Refinement sessions |
 
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+See `CLAUDE.md` in project root for full component inventory and brand guidelines.

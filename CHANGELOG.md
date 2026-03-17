@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+### Major features
 - Redesigned from ground up — clean-slate rebuild of prompt optimization platform
 - Added 3-phase pipeline orchestrator (analyze → optimize → score) with independent subagent context windows
 - Added scorer A/B randomization to prevent position and verbosity bias
@@ -13,7 +14,7 @@
 - Added workspace roots scanning for agent guidance files (CLAUDE.md, AGENTS.md, .cursorrules, etc.)
 - Added SHA-based explore caching with TTL and LRU eviction
 - Added startup template validation against manifest.json
-- Added MCP server with 3 tools (synthesis_optimize, synthesis_prepare_optimization, synthesis_save_result)
+- Added MCP server with 4 tools (synthesis_optimize, synthesis_analyze, synthesis_prepare_optimization, synthesis_save_result)
 - Added GitHub OAuth integration with Fernet-encrypted token storage
 - Added codebase explorer with semantic retrieval + single-shot Haiku synthesis
 - Added sentence-transformers embedding service (all-MiniLM-L6-v2, 384-dim) with async wrappers
@@ -52,3 +53,26 @@
 - Fixed Docker: added .env files to .dockerignore to prevent secret leakage into images
 - Fixed Docker: removed unused pyproject.toml COPY from Dockerfile
 - Added custom 503 error page matching project brand for nginx backend-down scenarios
+
+### Session 2 features (2026-03-16)
+- Added hybrid scoring system — blends LLM scores with model-independent heuristics via score_blender.py
+- Added z-score normalization against historical distribution to prevent score clustering
+- Added sharpened scoring rubric with calibration examples and anti-clustering directives
+- Added synthesis_analyze MCP tool — analysis + baseline scoring with actionable next steps
+- Added persistent user preferences (model selection, pipeline toggles, default strategy) via data/preferences.json
+- Added brand-compliant markdown rendering for optimized prompts with RAW/RENDER toggle
+- Added production diff viewer with unified/split modes and word-level highlighting
+- Added YAML frontmatter to strategy files (tagline, description) for adaptive discovery
+- Added inline strategy template editor with live disk save
+- Added real-time strategy file watcher using watchfiles.awatch() with toast notifications
+- Added toast notification system with chromatic action encoding (green/yellow/red)
+- Added progressive disclosure in settings panel (Models, Pipeline, Defaults always visible; Provider, System collapsible)
+- Added session persistence via localStorage — page refresh restores last optimization from DB
+- Added enriched history API with truncated optimized_prompt preview
+- Added unified data contract via forgeStore.loadFromRecord() — single loading path
+- Added StatusBar live pipeline phase display and last optimization score
+- Added Inspector feedback sync from real-time events
+- Added optimization_failed and MCP-originated toast notifications
+- Made strategy system fully file-driven — no hardcoded lists anywhere
+- Made scoring phase and explore phase optional via user preferences (lean mode)
+- Made model selection configurable per pipeline phase (analyzer/optimizer/scorer)

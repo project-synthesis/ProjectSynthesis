@@ -39,7 +39,9 @@ We follow [responsible disclosure](https://en.wikipedia.org/wiki/Responsible_dis
 ## Security Design Notes
 
 - **GitHub tokens** are Fernet-encrypted at rest in SQLite; the key is never logged
-- **JWT access tokens** are short-lived (15 min); refresh tokens are httpOnly cookies
+- **API keys** are Fernet-encrypted at rest in `data/.api_credentials`; only masked key (last 4 chars) returned by API
+- **SECRET_KEY** auto-generated on first startup and persisted to `data/.app_secrets` (0o600 permissions)
 - **MCP server** binds to `127.0.0.1` only by default; never expose it on a public interface
 - **LLM output** is treated as untrusted text; it is not eval'd or executed
-- **Bash security hook** in the autonomous builder denylists ~50 dangerous commands
+- **Strategy file paths** validated against path traversal via `.resolve()` + `.is_relative_to()` guard
+- **Workspace roots content** wrapped in `<untrusted-context>` tags with per-file caps (500 lines / 10K chars)

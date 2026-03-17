@@ -34,15 +34,21 @@ cd .. && ./init.sh start
 
 - `routers/` → `services/` → `models/` only. Services never import from routers.
 - All prompts in `prompts/` with `{{variable}}` syntax. Never hardcode prompts in code.
-- Model IDs centralized in `config.py` (`MODEL_SONNET`, `MODEL_OPUS`, `MODEL_HAIKU`).
+- Model IDs centralized in `config.py`. Use `PreferencesService.resolve_model(phase, snapshot)` — never hardcode model IDs in service code.
 - Provider detected once at startup. Never call `detect_provider()` in request handlers.
 - All list endpoints use the pagination envelope: `{total, count, offset, items, has_more, next_offset}`.
 
 ## Adding a New Strategy
 
-1. Create `prompts/strategies/your-strategy.md` with static content (no variables)
-2. It's automatically discovered by `strategy_loader.py`
-3. The analyzer will include it in `available_strategies`
+1. Create `prompts/strategies/your-strategy.md` with YAML frontmatter:
+   ```yaml
+   ---
+   tagline: one-word-tag
+   description: One-sentence description of what this strategy does.
+   ---
+   ```
+2. Add strategy content below the frontmatter (techniques, when to use, when to avoid)
+3. It's automatically discovered — appears in the UI, analyzer, and dropdown within seconds (file watcher)
 
 ## Adding a New MCP Tool
 

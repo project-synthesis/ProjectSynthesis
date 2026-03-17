@@ -14,9 +14,11 @@ Review code changes against project architecture, brand guidelines, and consiste
 - **Theme**: industrial cyberpunk, flat neon contour — dark backgrounds, sharp 1px borders, chromatic data encoding.
 
 ### Consistency
-- **Sort whitelist**: `_VALID_SORT_COLUMNS` must match across `history.py`, `optimization_service.py`, and `mcp_server.py`.
-- **Pagination envelope**: all list/search endpoints return `{total, count, offset, items, has_more, next_offset}`.
-- **Config flag pattern for betas**: feature flag in `config.py`, beta string appended in `detector.py`, kwargs built in provider method.
+- **Sort whitelist**: `_VALID_SORT_COLUMNS` in `optimization_service.py`. Add new sortable columns there before using.
+- **Pagination envelope**: all list endpoints return `{total, count, offset, items, has_more, next_offset}`.
+- **Model selection**: use `PreferencesService.resolve_model(phase, snapshot)` — never hardcode `settings.MODEL_*` in pipeline/refinement/MCP code (explore synthesis and suggestions are intentional exceptions).
+- **Strategy names**: raw filenames from disk — no title-case transformation, no hardcoded lists.
+- **Hybrid scoring**: all scoring paths (pipeline, refinement, MCP analyze) must use `blend_scores()` for consistency.
 
 ### Code Quality
 - **Type hints**: all function signatures must have complete type annotations.
