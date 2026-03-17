@@ -63,6 +63,9 @@ export interface HistoryItem {
   duration_ms: number;
   provider: string;
   raw_prompt: string;
+  optimized_prompt: string | null;
+  model_used?: string;
+  scoring_mode?: string;
 }
 
 export interface HistoryResponse {

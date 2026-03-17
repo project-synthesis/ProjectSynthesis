@@ -8,6 +8,7 @@
   import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
   import Toast from '$lib/components/shared/Toast.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
+  import { forgeStore } from '$lib/stores/forge.svelte';
 
   let { children } = $props();
 
@@ -16,6 +17,7 @@
 
   $effect(() => {
     preferencesStore.init();
+    forgeStore.restoreSession();
   });
 
   $effect(() => {

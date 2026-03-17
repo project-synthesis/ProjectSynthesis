@@ -96,6 +96,7 @@ class ForgeStore {
       if (data.original_scores) this.originalScores = data.original_scores as DimensionScores;
       if (data.score_deltas) this.scoreDeltas = data.score_deltas as Record<string, number>;
       this.status = 'complete';
+      this._saveSession();
     } else if (eventType === 'error') {
       this.error = (event.error || event.message) as string;
       this.status = 'error';
@@ -132,6 +133,21 @@ class ForgeStore {
     }
   }
 
+  loadFromRecord(opt: OptimizationResult): void {
+    this.result = opt;
+    this.prompt = opt.raw_prompt || '';
+    this.status = 'complete';
+    this.error = null;
+    this.feedback = null;
+
+    // Normalize: SSE sends optimized_scores, REST sends scores
+    const scores = opt.scores ?? (opt as any).optimized_scores ?? null;
+    if (scores) this.scores = scores;
+    this.originalScores = opt.original_scores ?? null;
+    this.scoreDeltas = opt.score_deltas ?? null;
+    this._saveSession();
+  }
+
   cancel() {
     this.controller?.abort();
     this.controller = null;
@@ -146,6 +162,27 @@ class ForgeStore {
       this.feedback = rating;
     } catch (err) {
       console.error('Feedback failed:', err);
+    }
+  }
+
+  private _saveSession(): void {
+    if (this.result?.trace_id) {
+      try {
+        localStorage.setItem('synthesis:last_trace_id', this.result.trace_id);
+      } catch { /* storage full or unavailable */ }
+    }
+  }
+
+  async restoreSession(): Promise<void> {
+    try {
+      const traceId = localStorage.getItem('synthesis:last_trace_id');
+      if (!traceId) return;
+      const { getOptimization } = await import('$lib/api/client');
+      const opt = await getOptimization(traceId);
+      this.loadFromRecord(opt);
+    } catch {
+      // No valid session to restore — start fresh
+      localStorage.removeItem('synthesis:last_trace_id');
     }
   }
 

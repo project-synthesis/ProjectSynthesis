@@ -46,6 +46,7 @@ async def get_history(
                 "duration_ms": opt.duration_ms,
                 "provider": opt.provider,
                 "raw_prompt": opt.raw_prompt[:100] if opt.raw_prompt else None,
+                "optimized_prompt": opt.optimized_prompt[:100] if opt.optimized_prompt else None,
             }
             for opt in result["items"]
         ],

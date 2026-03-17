@@ -192,24 +192,15 @@
   });
 
   async function loadHistoryItem(item: HistoryItem) {
-    // Cancel any in-flight optimization first
     if (forgeStore.status !== 'idle' && forgeStore.status !== 'complete' && forgeStore.status !== 'error') {
       forgeStore.cancel();
     }
     try {
       const opt = await getOptimization(item.trace_id);
-      forgeStore.result = opt;
-      forgeStore.status = 'complete';
-      forgeStore.prompt = opt.raw_prompt;
-      // Populate score fields so Inspector/ScoreCard render correctly
-      if (opt.scores) forgeStore.scores = opt.scores;
-      if (opt.original_scores) forgeStore.originalScores = opt.original_scores;
-      if (opt.score_deltas) forgeStore.scoreDeltas = opt.score_deltas;
+      forgeStore.loadFromRecord(opt);
       editorStore.openResult(item.id);
-      // Switch to editor activity
       window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'editor' }));
     } catch {
-      // Fallback: populate from the history item directly
       forgeStore.prompt = item.raw_prompt;
       forgeStore.status = 'idle';
       window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'editor' }));
