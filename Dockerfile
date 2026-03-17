@@ -61,9 +61,11 @@ RUN mkdir -p /usr/share/nginx/html && \
 EXPOSE 8080 8001
 VOLUME ["/app/data"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -sf http://127.0.0.1:8080/ || exit 1
+# Healthcheck hits the actual backend API, not just nginx serving the SPA
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -sf http://127.0.0.1:8080/api/health || exit 1
 
 USER synthesis
+WORKDIR /app/backend
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

@@ -34,8 +34,7 @@ trap cleanup SIGTERM SIGINT SIGQUIT
 
 echo "[entrypoint] Starting Project Synthesis..."
 
-# Run Alembic migrations
-cd /app/backend
+# Run Alembic migrations (WORKDIR is /app/backend)
 echo "[entrypoint] Running database migrations..."
 if ! python -m alembic upgrade head 2>&1; then
     echo "[entrypoint] ERROR: Database migration failed. Check alembic configuration."
@@ -63,6 +62,9 @@ for i in $(seq 1 30); do
     if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
         echo "[entrypoint] Backend ready"
         break
+    fi
+    if (( i == 30 )); then
+        echo "[entrypoint] WARNING: Backend not responding after 30s — starting nginx anyway"
     fi
     sleep 1
 done

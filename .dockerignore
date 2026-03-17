@@ -4,6 +4,7 @@ backend/__pycache__/
 backend/.pytest_cache/
 backend/.coverage
 backend/htmlcov/
+backend/tests/
 frontend/node_modules/
 frontend/.svelte-kit/
 
@@ -23,16 +24,17 @@ data/
 .git/
 .gitignore
 
-# Docs
+# Docs and specs (not needed at runtime)
 docs/
 archive/
 *.md
-!prompts/*.md
-!prompts/strategies/*.md
+!prompts/**/*.md
 
-# CI/CD
+# CI/CD and tooling
 .github/
 .claude/
+.superpowers/
+.worktrees/
 
 # Secrets
 .env
@@ -42,3 +44,8 @@ archive/
 # OS
 .DS_Store
 Thumbs.db
+
+# Builder artifacts
+*.bak.*
+*.log
+generations/
