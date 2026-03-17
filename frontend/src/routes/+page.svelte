@@ -1,6 +1,7 @@
 <script lang="ts">
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
+  import { addToast } from '$lib/stores/toast.svelte';
   import { githubStore } from '$lib/stores/github.svelte';
   import { getHealth, connectEventStream } from '$lib/api/client';
   import type { HealthResponse } from '$lib/api/client';
@@ -14,6 +15,15 @@
     eventSource = connectEventStream((type, data) => {
       if (type === 'optimization_created' || type === 'optimization_analyzed' || type === 'refinement_turn') {
         window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
+        // Toast for optimizations not from the current UI session (e.g., MCP)
+        if (type !== 'refinement_turn' && data.trace_id && data.trace_id !== forgeStore.traceId) {
+          const label = type === 'optimization_analyzed' ? 'analyzed' : 'optimized';
+          addToast('created', `Prompt ${label}`);
+        }
+      }
+      if (type === 'optimization_failed') {
+        window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
+        addToast('deleted', (data.error as string) || 'Optimization failed');
       }
       if (type === 'feedback_submitted') {
         window.dispatchEvent(new CustomEvent('feedback-event', { detail: data }));
