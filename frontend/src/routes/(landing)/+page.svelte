@@ -44,13 +44,20 @@
   ];
 
   // Simple Icons CDN — CC0 licensed brand SVGs rendered monochrome
+  // Enough items so duplicates are never visible simultaneously
   const ideLogos = [
-    { name: 'Claude Code', slug: 'claude', cdnColor: '8b8ba8' },
-    { name: 'Cursor', slug: 'cursor', cdnColor: '8b8ba8' },
-    { name: 'Windsurf', slug: 'windsurf', cdnColor: '8b8ba8' },
-    { name: 'VS Code', slug: 'vscodium', cdnColor: '8b8ba8' },
-    { name: 'Zed', slug: 'zedindustries', cdnColor: '8b8ba8' },
-    { name: 'JetBrains', slug: 'jetbrains', cdnColor: '8b8ba8' },
+    { name: 'Claude Code', slug: 'claude' },
+    { name: 'Cursor', slug: 'cursor' },
+    { name: 'Windsurf', slug: 'windsurf' },
+    { name: 'Zed', slug: 'zedindustries' },
+    { name: 'JetBrains', slug: 'jetbrains' },
+    { name: 'Neovim', slug: 'neovim' },
+    { name: 'Sublime Text', slug: 'sublimetext' },
+    { name: 'GitHub Copilot', slug: 'githubcopilot' },
+    { name: 'Eclipse', slug: 'eclipseide' },
+    { name: 'Android Studio', slug: 'androidstudio' },
+    { name: 'Vim', slug: 'vim' },
+    { name: 'Replit', slug: 'replit' },
   ];
 </script>
 
@@ -197,7 +204,7 @@
       </div>
       <div class="callout-item">
         <span class="callout-item__icon" style="color:var(--color-neon-cyan);">&#10003;</span>
-        <div class="callout-item__text"><strong>Your IDE's model does the work.</strong><br/>Cursor, Windsurf, VS Code, Zed, JetBrains — via MCP.</div>
+        <div class="callout-item__text"><strong>Your IDE's model does the work.</strong><br/>Cursor, Windsurf, Zed, JetBrains, Neovim — any MCP editor.</div>
       </div>
       <div class="callout-item">
         <span class="callout-item__icon" style="color:var(--color-neon-purple);">&#10003;</span>
@@ -329,10 +336,10 @@
                 <span class="logo-strip__badge">
                   <img
                     class="logo-strip__img"
-                    src="https://cdn.simpleicons.org/{ide.slug}/{ide.cdnColor}"
+                    src="https://cdn.simpleicons.org/{ide.slug}/8b8ba8"
                     alt=""
-                    width="16"
-                    height="16"
+                    width="14"
+                    height="14"
                     loading="lazy"
                   />
                   <span class="logo-strip__name font-mono">{ide.name}</span>
@@ -995,17 +1002,18 @@
   .logo-strip__track {
     display: flex;
     width: max-content;
-    animation: scroll-logos 30s linear infinite;
+    animation: scroll-logos 50s linear infinite;
   }
 
   .logo-strip__set {
     display: flex;
-    gap: 24px;
-    padding-right: 24px;
+    gap: 20px;
+    padding-right: 20px;
     flex-shrink: 0;
   }
 
   @keyframes scroll-logos {
+    from { transform: translateX(0); }
     to { transform: translateX(-50%); }
   }
 
