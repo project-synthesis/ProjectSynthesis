@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -9,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app._version import __version__
 from app.config import DATA_DIR, PROMPTS_DIR, settings
+from app.services.file_watcher import watch_strategy_files
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,21 @@ async def lifespan(app: FastAPI):
         # Don't prevent startup — log error but continue
         # (templates might be updated before first request)
 
+    # Start strategy file watcher
+    watcher_task = asyncio.create_task(
+        watch_strategy_files(PROMPTS_DIR / "strategies")
+    )
+    app.state.watcher_task = watcher_task
+
     yield
+
+    # Stop strategy file watcher
+    if hasattr(app.state, "watcher_task"):
+        app.state.watcher_task.cancel()
+        try:
+            await app.state.watcher_task
+        except asyncio.CancelledError:
+            pass
 
     # Shutdown: mark in-flight optimizations as interrupted
     logger.info("Shutting down — marking in-flight optimizations as interrupted")
