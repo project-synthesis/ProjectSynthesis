@@ -47,6 +47,7 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - `heuristic_scorer.py` — 5-dimension heuristics (clarity, specificity, structure, faithfulness, conciseness) + `score_prompt()` facade + passthrough bias correction
 - `score_blender.py` — hybrid scoring engine: blends LLM + heuristic scores with z-score normalization and divergence detection
 - `preferences.py` — persistent user preferences (model selection, pipeline toggles, default strategy). File-based JSON at `data/preferences.json`. Snapshot pattern for pipeline consistency.
+- `file_watcher.py` — background watchfiles.awatch() task for strategy file hot-reload. Publishes `strategy_changed` events to event bus on file add/modify/delete.
 - `refinement_service.py` — refinement sessions, version CRUD, branching/rollback, suggestion generation
 - `trace_logger.py` — per-phase JSONL traces to `data/traces/`, daily rotation
 - `embedding_service.py` — singleton sentence-transformers (`all-MiniLM-L6-v2`, 384-dim). Async wrappers via `aembed_single`/`aembed_texts`.

@@ -39,15 +39,16 @@ async def watch_strategy_files(strategies_dir: Path) -> None:
         Change.deleted: "deleted",
     }
 
-    force_polling = False
-
+    # Use polling mode — native inotify can conflict with uvicorn's
+    # own watchfiles reloader when both watch overlapping paths.
+    # Polling at 1s is imperceptible for human-initiated file edits.
     while True:
         try:
             async for changes in awatch(
                 strategies_dir,
                 debounce=500,
-                force_polling=force_polling,
-                poll_delay_ms=2000 if force_polling else 1600,
+                force_polling=True,
+                poll_delay_ms=1000,
             ):
                 for change_type, path_str in changes:
                     path = Path(path_str)
@@ -71,11 +72,5 @@ async def watch_strategy_files(strategies_dir: Path) -> None:
             logger.info("Strategy file watcher stopped")
             return
         except Exception as exc:
-            if not force_polling:
-                logger.warning(
-                    "Native file watching failed (%s), falling back to polling", exc,
-                )
-                force_polling = True
-            else:
-                logger.error("Strategy file watcher error: %s", exc)
-                await asyncio.sleep(5)
+            logger.error("Strategy file watcher error: %s", exc)
+            await asyncio.sleep(5)
