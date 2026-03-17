@@ -67,7 +67,7 @@
           <span class="text-gradient-forge">Better Prompts Out.</span>
         </h1>
         <p class="hero__subheading">
-          AI-powered prompt optimization pipeline. Analyze, rewrite, and score — with or without an API key. Self-hosted. Open source. Measurably better.
+          AI-powered prompt optimization pipeline. Analyze, rewrite, and score — completely free. No API key. No subscription. Your IDE's model does the work.
         </p>
         <div class="hero__actions">
           <a href="https://github.com/project-synthesis/ProjectSynthesis" class="btn-primary" target="_blank" rel="noopener">
@@ -192,15 +192,15 @@
     <div class="callout-bar__inner">
       <div class="callout-item">
         <span class="callout-item__icon" style="color:var(--color-neon-green);">&#10003;</span>
-        <span class="callout-item__text"><strong>100% free.</strong> No paid tier. No usage limits. No feature gates.</span>
+        <span class="callout-item__text"><strong>Completely free.</strong> No subscription. No API key. No paid tier. Zero cost — ever.</span>
       </div>
       <div class="callout-item">
         <span class="callout-item__icon" style="color:var(--color-neon-cyan);">&#10003;</span>
-        <span class="callout-item__text"><strong>No API key required.</strong> Works with Claude CLI on a Max subscription — zero marginal cost.</span>
+        <span class="callout-item__text"><strong>Your IDE's LLM does the work.</strong> Synthesis orchestrates — Cursor, Windsurf, VS Code, or any MCP-compatible editor provides the model.</span>
       </div>
       <div class="callout-item">
         <span class="callout-item__icon" style="color:var(--color-neon-purple);">&#10003;</span>
-        <span class="callout-item__text"><strong>Works in your IDE.</strong> Claude Code, Cursor, Windsurf, VS Code, Zed, JetBrains — via MCP.</span>
+        <span class="callout-item__text"><strong>Nothing to pay for.</strong> Open source. Self-hosted. The passthrough pipeline runs on your editor's existing model access.</span>
       </div>
     </div>
   </section>
@@ -287,7 +287,7 @@
   <!-- SECTION 4: WORKS EVERYWHERE                                  -->
   <!-- ============================================================ -->
   <section id="integrations" class="section" aria-labelledby="integrations-heading">
-    <h2 id="integrations-heading" class="section-heading integrations-heading">No Vendor Lock-In. No API Key Required.</h2>
+    <h2 id="integrations-heading" class="section-heading integrations-heading">Free. Forever. In Every Editor.</h2>
 
     <div class="integrations-container">
       <div class="integrations-grid">
@@ -296,8 +296,8 @@
           <div class="integration-icon" style="color:var(--color-neon-cyan);">
             <svg width="28" height="28" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M11 2L5 11h4l-2 7 8-9h-5l3-7z" stroke="currentColor" stroke-width="1.2"/></svg>
           </div>
-          <h3 class="integration-title">Zero Config</h3>
-          <p class="integration-desc">Works with Claude CLI out of the box. Max subscription means zero marginal cost per optimization. No API key, no billing, no setup.</p>
+          <h3 class="integration-title">Zero Cost</h3>
+          <p class="integration-desc">No subscription required. No API key. The MCP passthrough runs the pipeline through your IDE's existing model — you pay nothing extra.</p>
         </div>
 
         <!-- Tier 2: Your IDE, Your LLM -->
@@ -305,8 +305,8 @@
           <div class="integration-icon" style="color:var(--color-neon-purple);">
             <svg width="28" height="28" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 8l3 2.5L5 13M10 13h5" stroke="currentColor" stroke-width="1.2"/></svg>
           </div>
-          <h3 class="integration-title">Your IDE, Your LLM</h3>
-          <p class="integration-desc">Drop the pipeline into your editor. Your IDE's model does the optimization — Synthesis orchestrates the phases, scores the result, tracks the history.</p>
+          <h3 class="integration-title">Your IDE, Your Model</h3>
+          <p class="integration-desc">Drop a single config file into your workspace. Your editor's built-in model runs the optimization — Synthesis orchestrates the pipeline, scores the result, tracks everything.</p>
         </div>
 
         <!-- Tier 3: Codebase-Aware -->
