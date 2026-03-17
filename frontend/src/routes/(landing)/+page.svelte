@@ -230,18 +230,20 @@
       </div>
 
       <!-- Score comparison -->
-      <div class="score-comparison" data-reveal>
+      <div class="score-comparison" data-animate>
         <div class="score-grid">
           {#each scores as s}
             <div class="score-row">
               <span class="score-dim">{s.dim}</span>
+              <span class="score-val font-mono" style="color:var(--color-text-dim);">{s.before.toFixed(1)}</span>
               <div class="score-bar-track">
                 <div class="score-bar-before" style="width:{s.before * 10}%;"></div>
               </div>
               <div class="score-bar-track">
-                <div class="score-bar-fill" style="width:{s.after * 10}%;background:{s.color};"></div>
+                <div class="score-bar-after" style="width:{s.after * 10}%;background:{s.color};"></div>
               </div>
-              <span class="score-delta" class:score-delta--negative={s.delta < 0}>
+              <span class="score-val font-mono" style="color:{s.color};">{s.after.toFixed(1)}</span>
+              <span class="score-delta font-mono" class:score-delta--negative={s.delta < 0}>
                 {s.delta > 0 ? '+' : ''}{s.delta.toFixed(1)}
               </span>
             </div>
@@ -294,7 +296,7 @@
       <div class="logo-strip" aria-label="Supported editors">
         <div class="logo-strip__inner">
           {#each [...ideLabels, ...ideLabels] as label}
-            <span class="logo-strip__label font-mono" aria-hidden={ideLabels.indexOf(label) >= ideLabels.length ? 'true' : undefined}>{label}</span>
+            <span class="logo-strip__label font-mono">{label}</span>
           {/each}
         </div>
       </div>
@@ -579,12 +581,15 @@
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 12px;
+    align-items: stretch;
   }
 
   .pipeline-phase {
     padding: 16px;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
+    display: flex;
+    flex-direction: column;
   }
 
   .pipeline-phase__header {
@@ -614,6 +619,7 @@
     color: var(--color-text-secondary);
     line-height: 1.6;
     margin: 0 0 10px 0;
+    flex: 1;
   }
 
   .pipeline-phase__tags {
@@ -778,25 +784,36 @@
 
   .score-row {
     display: grid;
-    grid-template-columns: 70px 1fr 1fr 50px;
+    grid-template-columns: 80px 30px 1fr 1fr 30px 44px;
     align-items: center;
     gap: 6px;
+    height: 22px;
   }
 
   .score-dim {
     font-size: 10px;
     color: var(--color-text-dim);
+    text-align: right;
+  }
+
+  .score-val {
+    font-size: 9px;
+    text-align: center;
   }
 
   .score-bar-track {
-    height: 5px;
+    height: 6px;
     background: rgba(74, 74, 106, 0.15);
     overflow: hidden;
   }
 
   .score-bar-before {
     height: 100%;
-    background: rgba(74, 74, 106, 0.6);
+    background: rgba(74, 74, 106, 0.5);
+  }
+
+  .score-bar-after {
+    height: 100%;
   }
 
   .score-delta {
@@ -836,13 +853,16 @@
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
     margin-bottom: 16px;
+    align-items: stretch;
   }
 
   .integration-card {
-    padding: 12px;
+    padding: 16px;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
     transition: all var(--duration-hover) var(--ease-spring);
+    display: flex;
+    flex-direction: column;
   }
 
   .integration-card:hover {
@@ -867,6 +887,7 @@
     color: var(--color-text-secondary);
     margin: 0;
     line-height: 1.5;
+    flex: 1;
   }
 
   /* ---- Logo Strip ---- */
@@ -874,21 +895,25 @@
     overflow: hidden;
     border-top: 1px solid var(--color-border-subtle);
     border-bottom: 1px solid var(--color-border-subtle);
-    padding: 8px 0;
+    padding: 12px 0;
   }
 
   .logo-strip__inner {
     display: flex;
-    gap: 40px;
-    animation: scroll-logos 30s linear infinite;
+    gap: 48px;
+    animation: scroll-logos 25s linear infinite;
     width: max-content;
+    align-items: center;
   }
 
   .logo-strip__label {
-    font-size: 11px;
+    font-size: 13px;
+    font-weight: 500;
     color: var(--color-text-dim);
     white-space: nowrap;
     flex-shrink: 0;
+    letter-spacing: 0.03em;
+    transition: color 300ms var(--ease-spring);
   }
 
   /* ================================================================
@@ -1007,8 +1032,8 @@
     }
 
     .score-row {
-      grid-template-columns: 60px 1fr 1fr 40px;
-      gap: 4px;
+      grid-template-columns: 60px 24px 1fr 1fr 24px 36px;
+      gap: 3px;
     }
   }
 </style>
