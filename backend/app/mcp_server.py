@@ -410,24 +410,31 @@ async def synthesis_optimize(
     guidance = await _resolve_workspace_guidance(ctx, workspace_path)
 
     # ---- Force-sampling short-circuit (overrides local provider when enabled) ----
-    if prefs.get("pipeline.force_sampling") and ctx and hasattr(ctx, "session") and ctx.session:
-        logger.info("synthesis_optimize: force_sampling=True — attempting sampling pipeline")
-        try:
-            return await _run_sampling_pipeline(
-                ctx, prompt,
-                effective_strategy if effective_strategy != "auto" else None,
-                guidance,
-            )
-        except Exception as exc:
+    _sampling_already_attempted = False
+    if prefs.get("pipeline.force_sampling"):
+        if ctx and hasattr(ctx, "session") and ctx.session:
+            logger.info("synthesis_optimize: force_sampling=True — attempting sampling pipeline")
+            _sampling_already_attempted = True
+            try:
+                return await _run_sampling_pipeline(
+                    ctx, prompt,
+                    effective_strategy if effective_strategy != "auto" else None,
+                    guidance,
+                )
+            except Exception as exc:
+                logger.info(
+                    "force_sampling requested but sampling failed, falling through: %s",
+                    type(exc).__name__,
+                )
+        else:
             logger.info(
-                "force_sampling requested but sampling failed, falling through: %s",
-                type(exc).__name__,
+                "synthesis_optimize: force_sampling=True but no sampling-capable session — using normal routing"
             )
 
     # ---- No local provider: try sampling, then fall back to passthrough ----
     if not provider:
         # Try MCP sampling (3-phase pipeline via IDE's LLM)
-        if ctx and hasattr(ctx, "session") and ctx.session:
+        if not _sampling_already_attempted and ctx and hasattr(ctx, "session") and ctx.session:
             try:
                 logger.info("synthesis_optimize: no provider — attempting sampling pipeline")
                 return await _run_sampling_pipeline(
