@@ -6,8 +6,10 @@
   let mobileMenuOpen = $state(false);
 
   // On content subpages, anchor links become absolute so they navigate home
-  const isContentPage = $derived($page.url.pathname !== `${base}/landing`);
-  const anchorPrefix = $derived(isContentPage ? `${base}/landing` : '');
+  const isContentPage = $derived($page.url.pathname !== `${base}/`
+    && $page.url.pathname !== base
+    && $page.url.pathname !== `${base}`);
+  const anchorPrefix = $derived(isContentPage ? `${base}/` : '');
 
   const navLinks = $derived([
     { label: 'Features', href: `${anchorPrefix}#features` },
@@ -31,7 +33,7 @@
   class:navbar--scrolled={scrolled}
 >
   <nav class="navbar__inner" aria-label="Main navigation">
-    <a href="{base}/landing" class="navbar__logo text-gradient-forge" aria-label="Project Synthesis home">
+    <a href="{base}/" class="navbar__logo text-gradient-forge" aria-label="Project Synthesis home">
       SYNTHESIS
     </a>
 

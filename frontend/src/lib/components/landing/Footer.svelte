@@ -5,36 +5,36 @@
     {
       title: 'Product',
       links: [
-        { label: 'Pipeline', href: `${base}/landing/pipeline` },
-        { label: 'Scoring', href: `${base}/landing/scoring` },
-        { label: 'Refinement', href: `${base}/landing/refinement` },
-        { label: 'Integrations', href: `${base}/landing/integrations` },
+        { label: 'Pipeline', href: `${base}/pipeline` },
+        { label: 'Scoring', href: `${base}/scoring` },
+        { label: 'Refinement', href: `${base}/refinement` },
+        { label: 'Integrations', href: `${base}/integrations` },
       ],
     },
     {
       title: 'Resources',
       links: [
-        { label: 'Documentation', href: `${base}/landing/documentation` },
-        { label: 'API Reference', href: `${base}/landing/api-reference` },
-        { label: 'MCP Server', href: `${base}/landing/mcp-server` },
-        { label: 'Changelog', href: `${base}/landing/changelog` },
+        { label: 'Documentation', href: `${base}/documentation` },
+        { label: 'API Reference', href: `${base}/api-reference` },
+        { label: 'MCP Server', href: `${base}/mcp-server` },
+        { label: 'Changelog', href: `${base}/changelog` },
       ],
     },
     {
       title: 'Company',
       links: [
-        { label: 'About', href: `${base}/landing/about` },
-        { label: 'Blog', href: `${base}/landing/blog` },
-        { label: 'Careers', href: `${base}/landing/careers` },
-        { label: 'Contact', href: `${base}/landing/contact` },
+        { label: 'About', href: `${base}/about` },
+        { label: 'Blog', href: `${base}/blog` },
+        { label: 'Careers', href: `${base}/careers` },
+        { label: 'Contact', href: `${base}/contact` },
       ],
     },
     {
       title: 'Legal',
       links: [
-        { label: 'Privacy', href: `${base}/landing/privacy` },
-        { label: 'Terms', href: `${base}/landing/terms` },
-        { label: 'Security', href: `${base}/landing/security` },
+        { label: 'Privacy', href: `${base}/privacy` },
+        { label: 'Terms', href: `${base}/terms` },
+        { label: 'Security', href: `${base}/security` },
       ],
     },
   ]);

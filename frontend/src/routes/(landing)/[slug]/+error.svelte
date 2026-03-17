@@ -11,7 +11,7 @@
     <p class="error-page__code">404</p>
     <h1 class="error-page__heading">PAGE NOT FOUND</h1>
     <p class="error-page__sub">This route doesn't exist in the pipeline.</p>
-    <a href="{base}/landing" class="error-page__cta">Back to Home</a>
+    <a href="{base}/" class="error-page__cta">Back to Home</a>
   </div>
 </main>
 
