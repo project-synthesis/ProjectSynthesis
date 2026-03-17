@@ -38,12 +38,8 @@
     }
   });
 
-  // Derived select value: explicit strategy > default preference > '' (auto)
-  const selectValue = $derived.by(() => {
-    if (forgeStore.strategy) return forgeStore.strategy;
-    const pref = preferencesStore.defaultStrategy;
-    return pref === 'auto' ? '' : pref;
-  });
+  // Derived select value: null = auto = ''
+  const selectValue = $derived(forgeStore.strategy ?? '');
 
   function handleStrategyChange(e: Event) {
     const val = (e.target as HTMLSelectElement).value;

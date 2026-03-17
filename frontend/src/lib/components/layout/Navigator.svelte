@@ -187,7 +187,19 @@
   }
 
   function selectStrategy(id: string) {
-    forgeStore.strategy = forgeStore.strategy === id ? null : id;
+    if (id === 'auto') {
+      // "auto" = null (let analyzer decide). Toggle off → null, toggle on → null.
+      forgeStore.strategy = null;
+    } else {
+      // Toggle: click same strategy again → deselect back to auto (null)
+      forgeStore.strategy = forgeStore.strategy === id ? null : id;
+    }
+  }
+
+  // Check if a strategy row should be highlighted as active
+  function isStrategyActive(name: string): boolean {
+    if (name === 'auto') return forgeStore.strategy === null;
+    return forgeStore.strategy === name;
   }
 </script>
 
@@ -207,7 +219,7 @@
           <!-- Single-line strategy row -->
           <div
             class="strat-row"
-            class:strat-row--active={forgeStore.strategy === strat.name}
+            class:strat-row--active={isStrategyActive(strat.name)}
             role="button"
             tabindex="0"
             onclick={() => selectStrategy(strat.name)}
