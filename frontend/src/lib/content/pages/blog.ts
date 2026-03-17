@@ -15,9 +15,9 @@ export const blog: ContentPage = {
       type: 'article-list',
       articles: [
         {
-          title: 'Introducing Project Synthesis v2',
+          title: 'Introducing Project Synthesis',
           excerpt:
-            'A ground-up redesign of the prompt optimization platform. The v2 architecture separates analysis, optimization, and scoring into independent subagents — each with its own context window and output contract. Here\'s what changed, what we learned from v0.7, and why isolated context matters more than we initially expected.',
+            'A 3-phase prompt optimization pipeline — analyze, optimize, score — with independent subagent context windows. How the architecture isolates each phase to prevent cross-contamination between analyzer opinions and scorer judgments, and why that matters for scoring integrity.',
           date: '2026-03-15',
           readTime: '8 min read',
         },

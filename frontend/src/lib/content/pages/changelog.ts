@@ -14,14 +14,13 @@ export const changelog: ContentPage = {
       type: 'timeline',
       versions: [
         {
-          version: 'v2.0.0',
+          version: 'v0.1.0-dev',
           date: 'Unreleased',
           categories: [
             {
               label: 'ADDED',
               color: 'var(--color-neon-green)',
               items: [
-                'Ground-up redesign — clean-slate rebuild of prompt optimization platform',
                 '3-phase pipeline orchestrator (analyze → optimize → score) with independent subagent context windows',
                 'Hybrid scoring engine — blends LLM scores with model-independent heuristics via score_blender.py',
                 'Z-score normalization against historical distribution to prevent score clustering',

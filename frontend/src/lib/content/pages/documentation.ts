@@ -57,7 +57,7 @@ export const documentation: ContentPage = {
       type: 'code-block',
       language: 'bash',
       filename: 'terminal',
-      code: 'git clone https://github.com/your-org/PromptForge_v2.git\ncd PromptForge_v2\n./init.sh',
+      code: 'git clone https://github.com/project-synthesis/ProjectSynthesis.git\ncd ProjectSynthesis\n./init.sh',
     },
   ],
 };

@@ -59,7 +59,7 @@
 
     <div class="footer__bottom">
       <span class="footer__copyright">&copy; {year} Project Synthesis</span>
-      <span class="footer__version">v2.0</span>
+      <span class="footer__version">v0.1.0-dev</span>
     </div>
   </div>
 </footer>
