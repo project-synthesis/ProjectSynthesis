@@ -1,7 +1,6 @@
 <script lang="ts">
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
-  import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { getStrategies } from '$lib/api/client';
   import type { StrategyInfo } from '$lib/api/client';
 

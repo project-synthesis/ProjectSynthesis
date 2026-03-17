@@ -17,6 +17,8 @@
       }
       if (type === 'feedback_submitted') {
         window.dispatchEvent(new CustomEvent('feedback-event', { detail: data }));
+        // Also trigger history refresh so feedback counts update
+        window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
       }
       if (type === 'strategy_changed') {
         window.dispatchEvent(new CustomEvent('strategy-changed', { detail: data }));

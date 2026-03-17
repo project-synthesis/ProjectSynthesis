@@ -72,7 +72,7 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 
 ### Routers (`backend/app/routers/`)
 - `optimize.py` — `POST /api/optimize` (SSE), `GET /api/optimize/{trace_id}`
-- `history.py` — `GET /api/history` (sort/filter with pagination envelope)
+- `history.py` — `GET /api/history` (sort/filter with pagination envelope, includes truncated `raw_prompt` + `optimized_prompt`)
 - `feedback.py` — `POST /api/feedback`, `GET /api/feedback?optimization_id=X`
 - `refinement.py` — `POST /api/refine` (SSE), `GET /api/refine/{id}/versions`, `POST /api/refine/{id}/rollback`
 - `providers.py` — `GET /api/providers`, `GET/PATCH/DELETE /api/provider/api-key`
@@ -99,10 +99,12 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 - **Theme**: industrial cyberpunk — dark backgrounds (`#06060c`), 1px neon contours (`#00e5ff`), no rounded corners, no drop shadows, no glow effects
 
 ### Stores (`frontend/src/lib/stores/`)
-- `forge.svelte.ts` — optimization pipeline state (prompt, strategy, SSE events, result, feedback)
+- `forge.svelte.ts` — optimization pipeline state (prompt, strategy, SSE events, result, feedback). Session persistence via `localStorage` (`synthesis:last_trace_id`) — page refresh restores last optimization from DB.
 - `editor.svelte.ts` — tab management (prompt/result/diff types)
 - `github.svelte.ts` — GitHub auth + repo link state
 - `refinement.svelte.ts` — refinement sessions (turns, branches, suggestions, score progression)
+- `preferences.svelte.ts` — persistent user preferences loaded from backend
+- `toast.svelte.ts` — toast notification queue with `addToast()` API
 
 ### Component layout
 ```

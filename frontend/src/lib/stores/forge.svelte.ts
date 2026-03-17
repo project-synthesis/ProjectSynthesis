@@ -90,13 +90,7 @@ class ForgeStore {
       if (data.optimized_scores && !data.scores) {
         data.scores = data.optimized_scores;
       }
-      this.result = data as OptimizationResult;
-      // Sync top-level score fields from result
-      if (data.scores) this.scores = data.scores as DimensionScores;
-      if (data.original_scores) this.originalScores = data.original_scores as DimensionScores;
-      if (data.score_deltas) this.scoreDeltas = data.score_deltas as Record<string, number>;
-      this.status = 'complete';
-      this._saveSession();
+      this.loadFromRecord(data as OptimizationResult);
     } else if (eventType === 'error') {
       this.error = (event.error || event.message) as string;
       this.status = 'error';
