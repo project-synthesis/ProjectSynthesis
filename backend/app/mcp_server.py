@@ -555,6 +555,25 @@ async def synthesis_save_result(
     """
     logger.info("synthesis_save_result called: trace_id=%s model=%s", trace_id, model)
 
+    # Normalize strategy_used — external LLMs often return verbose rationales
+    # instead of the short identifier. Match against known strategies.
+    if strategy_used:
+        strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
+        known = strategy_loader.list_strategies()
+        if strategy_used not in known:
+            # Try to extract a known strategy name from the verbose string
+            normalized = "auto"
+            lower = strategy_used.lower()
+            for name in known:
+                if name != "auto" and name in lower:
+                    normalized = name
+                    break
+            logger.info(
+                "Strategy normalized: '%s' → '%s'",
+                strategy_used[:80], normalized,
+            )
+            strategy_used = normalized
+
     # Check scoring preference
     prefs = PreferencesService(DATA_DIR)
     scoring_enabled = prefs.get("pipeline.enable_scoring")
