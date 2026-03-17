@@ -104,16 +104,16 @@ async def test_save_result_applies_bias_correction(db_session) -> None:
         )
 
     assert "optimization_id" in result
-    assert result["scoring_mode"] == "self_rated"
+    assert result["scoring_mode"] == "hybrid_passthrough"
     assert result["strategy_compliance"] == "matched"
     assert result["overall_score"] is not None
 
-    # Scores should reflect bias correction (8.0 * 0.85 = 6.8)
+    # Hybrid blending combines bias-corrected IDE scores with heuristics
+    # Scores should be lower than raw input (bias correction + heuristic blending)
     for dim, score_value in result["scores"].items():
         assert score_value < raw_scores[dim], (
-            f"{dim}: corrected {score_value} should be < raw {raw_scores[dim]}"
+            f"{dim}: blended {score_value} should be < raw {raw_scores[dim]}"
         )
-        assert score_value == pytest.approx(6.8, abs=0.01)
 
 
 async def test_save_result_without_scores(db_session) -> None:
@@ -184,3 +184,125 @@ async def test_save_result_stores_codebase_context(db_session) -> None:
     )
     opt = row.scalar_one()
     assert opt.codebase_context_snapshot == context_text
+
+
+# ---------------------------------------------------------------------------
+# synthesis_optimize — passthrough mode (no provider)
+# ---------------------------------------------------------------------------
+
+
+async def test_optimize_passthrough_when_no_provider(db_session) -> None:
+    """When no provider is available, synthesis_optimize returns pending_external."""
+    with (
+        patch("app.mcp_server._provider", None),
+        patch("app.mcp_server.async_session_factory") as mock_factory,
+    ):
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = await synthesis_optimize(
+            prompt="Write a Python function that validates email addresses using RFC 5322 regex.",
+        )
+
+    assert result["status"] == "pending_external"
+    assert "trace_id" in result
+    assert len(result["trace_id"]) == 36  # UUID
+    assert "assembled_prompt" in result
+    assert len(result["assembled_prompt"]) > 100
+    assert "instructions" in result
+    assert "synthesis_save_result" in result["instructions"]
+    assert result["strategy_used"] == "auto"
+
+
+async def test_optimize_passthrough_includes_strategy(db_session) -> None:
+    """Passthrough mode includes the requested strategy in the assembled prompt."""
+    with (
+        patch("app.mcp_server._provider", None),
+        patch("app.mcp_server.async_session_factory") as mock_factory,
+    ):
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = await synthesis_optimize(
+            prompt="Write a Python function that validates email addresses using RFC 5322 regex.",
+            strategy="chain-of-thought",
+        )
+
+    assert result["status"] == "pending_external"
+    assert result["strategy_used"] == "chain-of-thought"
+
+
+async def test_optimize_passthrough_then_save_full_flow(db_session) -> None:
+    """Full passthrough flow: optimize (pending) → save_result (completed)."""
+    with (
+        patch("app.mcp_server._provider", None),
+        patch("app.mcp_server.async_session_factory") as mock_factory,
+    ):
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        # Step 1: Get assembled prompt
+        pending = await synthesis_optimize(
+            prompt="Write a Python function that validates email addresses using RFC 5322 regex.",
+        )
+
+    assert pending["status"] == "pending_external"
+    trace_id = pending["trace_id"]
+
+    # Step 2: Save the external LLM's result
+    with patch("app.mcp_server.async_session_factory") as mock_factory:
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        saved = await synthesis_save_result(
+            trace_id=trace_id,
+            optimized_prompt=(
+                "## Task\nValidate email addresses using RFC 5322.\n\n"
+                "## Requirements\n- Use re module\n- Return bool\n- Handle None input"
+            ),
+            changes_summary="Added structure, constraints, edge cases",
+            task_type="coding",
+            strategy_used="auto",
+            scores={
+                "clarity": 8.5,
+                "specificity": 8.0,
+                "structure": 9.0,
+                "faithfulness": 8.5,
+                "conciseness": 7.5,
+            },
+        )
+
+    assert "optimization_id" in saved
+    assert saved["scoring_mode"] == "hybrid_passthrough"
+    assert saved["overall_score"] is not None
+    assert saved["scores"]  # non-empty
+    assert saved["strategy_compliance"] == "matched"
+
+
+async def test_optimize_passthrough_save_without_scores(db_session) -> None:
+    """Passthrough save without IDE scores falls back to heuristic."""
+    with (
+        patch("app.mcp_server._provider", None),
+        patch("app.mcp_server.async_session_factory") as mock_factory,
+    ):
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        pending = await synthesis_optimize(
+            prompt="Write a Python function that validates email addresses using RFC 5322 regex.",
+        )
+
+    trace_id = pending["trace_id"]
+
+    with patch("app.mcp_server.async_session_factory") as mock_factory:
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        saved = await synthesis_save_result(
+            trace_id=trace_id,
+            optimized_prompt="A well-structured prompt without IDE scores.",
+        )
+
+    assert saved["scoring_mode"] == "heuristic"
+    assert saved["overall_score"] is not None
+    assert saved["scores"]

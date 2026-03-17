@@ -116,7 +116,9 @@ async def synthesis_optimize(
 ) -> dict:
     """Run the full optimization pipeline on a prompt.
 
-    Returns the optimized prompt with 5-dimension scores and improvement deltas.
+    If a local LLM provider is available, runs the 3-phase pipeline internally.
+    If no provider exists, returns an assembled optimization template for your
+    IDE's LLM to process — call synthesis_save_result with the output.
     """
     if len(prompt) < 20:
         raise ValueError(
@@ -128,10 +130,53 @@ async def synthesis_optimize(
         )
 
     provider = _provider
+
+    # ---- Passthrough mode: no local provider, delegate to calling agent ----
     if not provider:
-        raise ValueError(
-            "No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI."
+        logger.info(
+            "synthesis_optimize: no provider — falling back to passthrough mode"
         )
+        prefs = PreferencesService(DATA_DIR)
+        effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
+
+        guidance = await _resolve_workspace_guidance(ctx, workspace_path)
+
+        assembled, strategy_name = assemble_passthrough_prompt(
+            prompts_dir=PROMPTS_DIR,
+            raw_prompt=prompt,
+            strategy_name=effective_strategy,
+            codebase_guidance=guidance,
+        )
+
+        trace_id = str(uuid.uuid4())
+
+        # Persist pending record so synthesis_save_result can link to it
+        async with async_session_factory() as db:
+            pending = Optimization(
+                id=str(uuid.uuid4()),
+                raw_prompt=prompt,
+                status="pending",
+                trace_id=trace_id,
+                provider="mcp_passthrough",
+                strategy_used=strategy_name,
+                task_type="general",
+            )
+            db.add(pending)
+            await db.commit()
+
+        return {
+            "status": "pending_external",
+            "trace_id": trace_id,
+            "assembled_prompt": assembled,
+            "strategy_used": strategy_name,
+            "instructions": (
+                "No local LLM provider detected. Process the assembled_prompt "
+                "with your LLM, then call synthesis_save_result with the trace_id "
+                "and the optimized output. Include optimized_prompt, changes_summary, "
+                "task_type, strategy_used, and optionally scores "
+                "(clarity, specificity, structure, faithfulness, conciseness — each 1-10)."
+            ),
+        }
 
     start = time.monotonic()
 
@@ -517,20 +562,18 @@ async def synthesis_save_result(
         scoring_enabled = True  # default on
 
     # Determine scoring mode and compute final scores
-    bias_corrected: dict[str, float] = {}
     clean_scores: dict[str, float] = {}
     heuristic_flags: list[str] = []
     scoring_mode = "skipped" if not scoring_enabled else "heuristic"
 
     if scores and scoring_enabled:
-        # IDE provided self-rated scores — apply bias correction
-        scoring_mode = "self_rated"
+        # IDE provided self-rated scores — clean and validate
+        scoring_mode = "hybrid_passthrough"
         for k, v in scores.items():
             try:
                 clean_scores[k] = float(v)
             except (ValueError, TypeError):
                 clean_scores[k] = 5.0  # default
-        bias_corrected = HeuristicScorer.apply_bias_correction(clean_scores)
 
     # Persist — look up pending optimization created by prepare, or create new
     async with async_session_factory() as db:
@@ -555,7 +598,7 @@ async def synthesis_save_result(
         elif strategy_used:
             strategy_compliance = "matched"  # no prepare to compare against
 
-        # Compute scores only if scoring is enabled
+        # Compute scores — hybrid blending matching the internal pipeline
         heuristic_scores: dict[str, float] = {}
         final_scores: dict[str, float] = {}
         overall: float | None = None
@@ -563,22 +606,64 @@ async def synthesis_save_result(
         deltas: dict[str, float] | None = None
 
         if scoring_enabled:
-            # Compute heuristic scores (used for divergence checks and fallback)
+            # Compute heuristic scores for the optimized prompt
             heuristic_scores = HeuristicScorer.score_prompt(
                 optimized_prompt,
                 original=opt.raw_prompt if opt and opt.raw_prompt else None,
             )
 
-            # Divergence check: compare IDE self-rated scores against heuristics
             if clean_scores:
-                heuristic_flags = HeuristicScorer.detect_divergence(
-                    clean_scores, heuristic_scores,
-                )
+                # IDE provided scores — blend with heuristics (same as internal pipeline)
+                # Build DimensionScores from IDE's self-rated scores for blending
+                from app.schemas.pipeline_contracts import DimensionScores
+                from app.services.score_blender import blend_scores
 
-            # Final scores: bias-corrected IDE scores if available, else pure heuristic
-            if bias_corrected:
-                final_scores = bias_corrected
+                try:
+                    # Apply bias correction BEFORE blending (discount self-rating inflation)
+                    corrected = HeuristicScorer.apply_bias_correction(clean_scores)
+                    ide_scores_corrected = DimensionScores(
+                        clarity=corrected.get("clarity", 5.0),
+                        specificity=corrected.get("specificity", 5.0),
+                        structure=corrected.get("structure", 5.0),
+                        faithfulness=corrected.get("faithfulness", 5.0),
+                        conciseness=corrected.get("conciseness", 5.0),
+                    )
+
+                    # Fetch historical stats for z-score normalization (non-fatal)
+                    historical_stats: dict | None = None
+                    try:
+                        from app.services.optimization_service import OptimizationService
+                        opt_svc = OptimizationService(db)
+                        historical_stats = await opt_svc.get_score_distribution(
+                            exclude_scoring_modes=["heuristic"],
+                        )
+                    except Exception:
+                        pass
+
+                    # Hybrid blend: bias-corrected IDE scores + heuristics
+                    blended = blend_scores(
+                        ide_scores_corrected, heuristic_scores, historical_stats,
+                    )
+                    blended_dims = blended.to_dimension_scores()
+                    final_scores = {
+                        "clarity": blended_dims.clarity,
+                        "specificity": blended_dims.specificity,
+                        "structure": blended_dims.structure,
+                        "faithfulness": blended_dims.faithfulness,
+                        "conciseness": blended_dims.conciseness,
+                    }
+
+                    # Divergence flags
+                    heuristic_flags = blended.divergence_flags or []
+
+                    scoring_mode = "hybrid_passthrough"
+
+                except Exception as exc:
+                    logger.warning("Hybrid blending failed, falling back to heuristic: %s", exc)
+                    final_scores = heuristic_scores
+                    scoring_mode = "heuristic"
             else:
+                # No IDE scores — pure heuristic (same as before)
                 final_scores = heuristic_scores
                 scoring_mode = "heuristic"
 
@@ -588,7 +673,8 @@ async def synthesis_save_result(
 
             # Compute original prompt scores + deltas when raw_prompt is available
             if opt and opt.raw_prompt:
-                original_scores = HeuristicScorer.score_prompt(opt.raw_prompt)
+                original_heur = HeuristicScorer.score_prompt(opt.raw_prompt)
+                original_scores = original_heur
                 deltas = {
                     dim: round(final_scores[dim] - original_scores[dim], 2)
                     for dim in final_scores
