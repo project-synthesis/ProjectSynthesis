@@ -43,13 +43,14 @@
     { dim: 'Conciseness', before: 8.0, after: 7.2, delta: -0.8, color: 'var(--color-neon-pink)' },
   ];
 
+  // Simple Icons CDN — CC0 licensed brand SVGs rendered monochrome
   const ideLogos = [
-    { name: 'Claude Code', icon: '◆', color: 'var(--color-neon-cyan)' },
-    { name: 'Cursor', icon: '▲', color: 'var(--color-neon-purple)' },
-    { name: 'Windsurf', icon: '◈', color: 'var(--color-neon-teal)' },
-    { name: 'VS Code', icon: '⬡', color: 'var(--color-neon-blue)' },
-    { name: 'Zed', icon: '◇', color: 'var(--color-neon-yellow)' },
-    { name: 'JetBrains', icon: '■', color: 'var(--color-neon-orange)' },
+    { name: 'Claude Code', slug: 'claude', cdnColor: '8b8ba8' },
+    { name: 'Cursor', slug: 'cursor', cdnColor: '8b8ba8' },
+    { name: 'Windsurf', slug: 'windsurf', cdnColor: '8b8ba8' },
+    { name: 'VS Code', slug: 'vscodium', cdnColor: '8b8ba8' },
+    { name: 'Zed', slug: 'zedindustries', cdnColor: '8b8ba8' },
+    { name: 'JetBrains', slug: 'jetbrains', cdnColor: '8b8ba8' },
   ];
 </script>
 
@@ -319,12 +320,19 @@
         </div>
       </div>
 
-      <!-- Logo strip -->
+      <!-- Logo strip — Simple Icons CDN (CC0 licensed) -->
       <div class="logo-strip" aria-label="Supported editors">
         <div class="logo-strip__inner">
           {#each [...ideLogos, ...ideLogos] as ide}
             <span class="logo-strip__badge">
-              <span class="logo-strip__icon" style="color:{ide.color};">{ide.icon}</span>
+              <img
+                class="logo-strip__img"
+                src="https://cdn.simpleicons.org/{ide.slug}/{ide.cdnColor}"
+                alt=""
+                width="16"
+                height="16"
+                loading="lazy"
+              />
               <span class="logo-strip__name font-mono">{ide.name}</span>
             </span>
           {/each}
@@ -1003,9 +1011,13 @@
     border-color: var(--color-border-accent);
   }
 
-  .logo-strip__icon {
-    font-size: 12px;
-    line-height: 1;
+  .logo-strip__img {
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+
+  .logo-strip__badge:hover .logo-strip__img {
+    opacity: 1;
   }
 
   .logo-strip__name {
