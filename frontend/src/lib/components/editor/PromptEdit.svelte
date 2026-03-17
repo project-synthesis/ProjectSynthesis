@@ -12,12 +12,13 @@
     if (strategiesLoaded) return;
     strategiesLoaded = true;
     getStrategies().then((list: StrategyInfo[]) => {
-      // Auto first (value='' means "let analyzer decide"), rest by filename
-      const auto = list.find(s => s.name === 'auto');
       const rest = list.filter(s => s.name !== 'auto');
       strategyOptions = [
-        { value: '', label: auto ? 'auto' : 'auto' },
-        ...rest.map(s => ({ value: s.name, label: s.name })),
+        { value: '', label: 'auto' },
+        ...rest.map(s => ({
+          value: s.name,
+          label: s.tagline ? `${s.name} — ${s.tagline}` : s.name,
+        })),
       ];
     }).catch(() => {});
   });
@@ -29,7 +30,10 @@
         const rest = list.filter(s => s.name !== 'auto');
         strategyOptions = [
           { value: '', label: 'auto' },
-          ...rest.map(s => ({ value: s.name, label: s.name })),
+          ...rest.map(s => ({
+            value: s.name,
+            label: s.tagline ? `${s.name} — ${s.tagline}` : s.name,
+          })),
         ];
 
         // Reset if active strategy was deleted

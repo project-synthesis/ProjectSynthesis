@@ -451,7 +451,7 @@
                 onchange={(e) => preferencesStore.setDefaultStrategy((e.target as HTMLSelectElement).value)}
               >
                 {#each strategiesList as strat (strat.name)}
-                  <option value={strat.name}>{strat.name}</option>
+                  <option value={strat.name}>{strat.tagline ? `${strat.name} — ${strat.tagline}` : strat.name}</option>
                 {/each}
               </select>
             </div>
