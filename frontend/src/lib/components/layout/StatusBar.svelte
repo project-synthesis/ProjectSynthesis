@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getHealth } from '$lib/api/client';
   import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
+  import { forgeStore } from '$lib/stores/forge.svelte';
 
   let provider = $state<string | null>(null);
   let version = $state<string | null>(null);
@@ -13,6 +14,23 @@
       .then((h) => { provider = h.provider; version = h.version; })
       .catch(() => {});
   });
+
+  const phaseDisplay = $derived.by(() => {
+    switch (forgeStore.status) {
+      case 'analyzing': return 'analyzing';
+      case 'optimizing': return 'optimizing';
+      case 'scoring': return 'scoring';
+      default: return null;
+    }
+  });
+
+  const lastScore = $derived(
+    forgeStore.result?.overall_score
+      ? forgeStore.result.overall_score.toFixed(1)
+      : null
+  );
+
+  const lastStrategy = $derived(forgeStore.result?.strategy_used ?? null);
 </script>
 
 <div
@@ -35,6 +53,14 @@
     </svg>
     <ProviderBadge {provider} />
     <span class="status-item">{version ? `v${version}` : ''}</span>
+    {#if phaseDisplay}
+      <span class="status-phase">{phaseDisplay}...</span>
+    {:else if lastScore}
+      <span class="status-metric">{lastScore}</span>
+      {#if lastStrategy}
+        <span class="status-strategy">{lastStrategy}</span>
+      {/if}
+    {/if}
   </div>
 
   <!-- Right side: keyboard shortcut hint -->
@@ -73,6 +99,27 @@
     color: var(--color-text-dim);
     border: 1px solid var(--color-border-subtle);
     padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  .status-phase {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-neon-cyan);
+    white-space: nowrap;
+  }
+
+  .status-metric {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+  }
+
+  .status-strategy {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-dim);
     white-space: nowrap;
   }
 </style>
