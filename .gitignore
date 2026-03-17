@@ -6,10 +6,25 @@ __pycache__/
 .venv_*/
 venv/
 
-# Build
+# Build output
 dist/
 build/
 .svelte-kit/
+
+# Runtime data
+data/*
+!data/.gitignore
+backend/data/
+.pids/
+*.log
+logs/
+e2e_test.db*
+
+# Environment
+.env
+.env.docker
+!.env.example
+!.env.docker.example
 
 # Tool caches
 .mypy_cache/
@@ -19,66 +34,43 @@ build/
 .coverage
 htmlcov/
 
-# Database & runtime data
-data/*
-!data/.gitignore
-e2e_test.db*
-
-# Playwright E2E test outputs
-playwright-report/
-test-results/
-
-# Environment
-.env
-.env.docker
-!.env.example
-!.env.docker.example
-
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Claude Code — ignore session data and local overrides, but track shared config.
-# Use .claude/* (not .claude/) so negation exceptions work for tracked files.
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+playwright-report/
+test-results/
+
+# Claude Code
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
 !.claude/hooks/*
 !.claude/agents/
 !.claude/agents/*
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Batch files (generated during feature list creation)
-batch_*.json
-gen_t*.py
-
-# Claude progress
+.claude_settings.json
 claude-progress.txt
-*.bak.*
-.pids/
-backend/data/
-.worktrees/
 
-# Builder scaffolding (autonomous-coding system artifacts)
+# Builder artifacts (autonomous-coding system)
 agent_scratchpad.json
 agent_scratchpad_*.json
 app_spec.txt
-claude-progress.txt
+batch_*.json
+gen_t*.py
 feature_list*.json
 feature_list_gen.py
+*.bak.*
 .sdk_integrated
-.claude_settings.json
+.worktrees/
 generations/
-docs/marketplace-webhook.md
-# Archived v2 source (local reference only — v2 preserved in git history)
 archive/
+
+# Superpowers brainstorm sessions
 .superpowers/

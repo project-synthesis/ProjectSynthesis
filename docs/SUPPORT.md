@@ -6,7 +6,7 @@
 |---------|----------|
 | [GitHub Issues](../../issues) | Bug reports, feature requests |
 | [GitHub Discussions](../../discussions) | Questions, ideas, show-and-tell |
-| [SECURITY.md](../SECURITY.md) | Vulnerability disclosures (private) |
+| [SECURITY.md](../.github/SECURITY.md) | Vulnerability disclosures (private) |
 
 ## Before opening an issue
 
