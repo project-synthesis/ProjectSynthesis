@@ -10,6 +10,8 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+import random
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -26,7 +28,12 @@ from app.config import DATA_DIR, PROMPTS_DIR, settings
 from app.database import async_session_factory
 from app.models import Optimization
 from app.providers.detector import detect_provider
-from app.schemas.pipeline_contracts import AnalysisResult, OptimizationResult, ScoreResult
+from app.schemas.pipeline_contracts import (
+    AnalysisResult,
+    DimensionScores,
+    OptimizationResult,
+    ScoreResult,
+)
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
@@ -166,7 +173,6 @@ async def _run_sampling_pipeline(
         analysis = AnalysisResult.model_validate_json(analyze_text)
     except Exception:
         # Try extracting JSON from markdown code block
-        import re
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", analyze_text, re.DOTALL)
         if match:
             analysis = AnalysisResult.model_validate_json(match.group(1))
@@ -208,7 +214,6 @@ async def _run_sampling_pipeline(
     try:
         optimization = OptimizationResult.model_validate_json(optimize_text)
     except Exception:
-        import re
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", optimize_text, re.DOTALL)
         if match:
             optimization = OptimizationResult.model_validate_json(match.group(1))
@@ -224,7 +229,6 @@ async def _run_sampling_pipeline(
     logger.info("Sampling pipeline Phase 3: Score")
     scoring_system = loader.load("scoring.md")
 
-    import random
     original_first = random.choice([True, False])
     if original_first:
         prompt_a, prompt_b = prompt, optimization.optimized_prompt
@@ -242,7 +246,6 @@ async def _run_sampling_pipeline(
     try:
         scores = ScoreResult.model_validate_json(score_text)
     except Exception:
-        import re
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", score_text, re.DOTALL)
         if match:
             scores = ScoreResult.model_validate_json(match.group(1))
@@ -261,8 +264,6 @@ async def _run_sampling_pipeline(
     )
 
     if scores:
-        from app.schemas.pipeline_contracts import DimensionScores
-
         if original_first:
             llm_original = scores.prompt_a_scores
             llm_optimized = scores.prompt_b_scores
@@ -320,9 +321,34 @@ async def _run_sampling_pipeline(
             duration_ms=elapsed_ms,
             status="completed",
             trace_id=trace_id,
+            original_scores=original_scores.model_dump() if original_scores else None,
+            score_deltas=deltas,
         )
         db.add(db_opt)
         await db.commit()
+
+    # Notify backend event bus (MCP runs in a separate process)
+    try:
+        import httpx
+        async with httpx.AsyncClient() as http:
+            await http.post(
+                "http://127.0.0.1:8000/api/events/_publish",
+                json={
+                    "event_type": "optimization_created",
+                    "data": {
+                        "id": opt_id,
+                        "trace_id": trace_id,
+                        "task_type": analysis.task_type,
+                        "strategy_used": effective_strategy,
+                        "overall_score": optimized_scores.overall if optimized_scores else None,
+                        "provider": "mcp_sampling",
+                        "status": "completed",
+                    },
+                },
+                timeout=5.0,
+            )
+    except Exception:
+        logger.debug("Failed to notify backend event bus", exc_info=True)
 
     logger.info(
         "Sampling pipeline completed in %dms: id=%s strategy=%s overall=%s scoring=%s",
@@ -358,9 +384,10 @@ async def synthesis_optimize(
 ) -> dict:
     """Run the full optimization pipeline on a prompt.
 
-    If a local LLM provider is available, runs the 3-phase pipeline internally.
-    If no provider exists, returns an assembled optimization template for your
-    IDE's LLM to process — call synthesis_save_result with the output.
+    Three execution paths (automatic selection):
+    1. Local provider exists → full 3-phase internal pipeline
+    2. No provider + client supports MCP sampling → 3-phase pipeline via IDE's LLM
+    3. No provider + no sampling → returns assembled template for manual processing
     """
     if len(prompt) < 20:
         raise ValueError(
@@ -595,9 +622,6 @@ async def synthesis_analyze(
 
     # Both A and B are the same prompt — use prompt_a_scores as baseline
     # Apply hybrid scoring for consistency with main pipeline
-    from app.services.heuristic_scorer import HeuristicScorer
-    from app.services.score_blender import blend_scores
-
     heur_scores = HeuristicScorer.score_prompt(prompt)
     blended = blend_scores(score_result.prompt_a_scores, heur_scores)
     baseline = blended.to_dimension_scores()
@@ -886,10 +910,6 @@ async def synthesis_save_result(
 
             if clean_scores:
                 # IDE provided scores — blend with heuristics (same as internal pipeline)
-                # Build DimensionScores from IDE's self-rated scores for blending
-                from app.schemas.pipeline_contracts import DimensionScores
-                from app.services.score_blender import blend_scores
-
                 try:
                     # Apply bias correction BEFORE blending (discount self-rating inflation)
                     corrected = HeuristicScorer.apply_bias_correction(clean_scores)
