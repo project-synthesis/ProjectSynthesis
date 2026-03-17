@@ -880,6 +880,7 @@
   .example-section:last-child {
     border-bottom: none;
     padding-bottom: 0;
+    flex: 1;
   }
 
   .example-section:first-child {
@@ -910,9 +911,9 @@
     font-family: var(--font-mono);
     font-size: 9px;
     color: var(--color-text-dim);
-    min-width: 64px;
+    min-width: 60px;
     flex-shrink: 0;
-    padding-top: 2px;
+    padding-top: 1px;
   }
 
   .example-trace-val {
