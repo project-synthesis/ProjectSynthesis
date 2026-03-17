@@ -39,8 +39,9 @@ Add to `DEFAULTS["pipeline"]`:
 }
 ```
 
-- `_sanitize`: extend the boolean-type check loop to include `"force_sampling"`
-- `_validate`: extend the validation loop to include `"force_sampling"`
+- `_sanitize` (line ~165): the check iterates over a **hardcoded tuple** `("enable_explore", "enable_scoring", "enable_adaptation")` — extend it to `("enable_explore", "enable_scoring", "enable_adaptation", "force_sampling")`
+- `_validate` (line ~196): same hardcoded tuple — extend identically
+- These tuples are **not** auto-derived from `DEFAULTS`; both must be updated explicitly
 - `schema_version` stays at `1` — backwards-compatible (missing key deep-merges to default `False`)
 
 ### Frontend — `preferences.svelte.ts`
@@ -77,13 +78,22 @@ else
   → on exception: passthrough template
 ```
 
-Implementation sketch:
+**Implementation notes:**
+
+1. **Hoist `PreferencesService`** — `synthesis_optimize` currently constructs `PreferencesService(DATA_DIR)` twice (once in each branch). Do not add a third. Instead, hoist a single `prefs = PreferencesService(DATA_DIR)` to the top of the function and reuse it in all branches. `PreferencesService.load()` does a disk read + write on every call; a redundant construction on every invocation is avoidable.
+
+2. **Hoist `_resolve_workspace_guidance`** — call it once at the top (before the force-sampling check) and pass the result through to all branches. If force-sampling raises and falls through to normal routing, the existing code must reuse the already-fetched guidance rather than calling `_resolve_workspace_guidance` again. That function issues MCP `roots/list` RPCs and is not free.
+
+Implementation sketch (after hoisting):
 
 ```python
+# Hoisted — single construction and single workspace resolution
 prefs = PreferencesService(DATA_DIR)
+effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
+guidance = await _resolve_workspace_guidance(ctx, workspace_path)
+
+# Force-sampling short-circuit
 if prefs.get("pipeline.force_sampling") and ctx and hasattr(ctx, "session") and ctx.session:
-    guidance = await _resolve_workspace_guidance(ctx, workspace_path)
-    effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
     try:
         return await _run_sampling_pipeline(
             ctx, prompt,
@@ -92,20 +102,22 @@ if prefs.get("pipeline.force_sampling") and ctx and hasattr(ctx, "session") and 
         )
     except Exception as exc:
         logger.info("force_sampling requested but sampling failed, falling through: %s", type(exc).__name__)
+
+# Normal routing continues below, reusing prefs / effective_strategy / guidance
 ```
 
-`_run_sampling_pipeline` already sets `"pipeline_mode": "sampling"` in its return dict — no new result fields needed.
+`_run_sampling_pipeline` already sets `"pipeline_mode": "sampling"` in its return dict. The internal-pipeline return dict does not include `pipeline_mode`; the frontend active badge should key off `preferencesStore.pipeline.force_sampling` (client-side pref state) rather than the response field.
 
 ---
 
 ## Frontend UI
 
-**Component:** `Inspector.svelte` (pipeline settings section)
+**Component:** `Navigator.svelte` (pipeline settings section, lines ~410–438)
 
 - New toggle rendered identically to `enable_explore`, `enable_scoring`, `enable_adaptation`
 - **Label:** "Force IDE sampling"
 - **Sub-label:** "Use IDE's LLM for the 3-phase pipeline via MCP sampling"
-- **Disabled state:** greyed out with tooltip *"Requires MCP client with sampling support"* when `forgeStore.noProvider` is `true` (force_sampling is meaningless with no provider to override)
+- **Disabled state:** greyed out with tooltip *"No local provider to bypass — sampling is already the active path"* when `forgeStore.noProvider` is `true`. The toggle is disabled because there is no local provider to override, not because sampling is unavailable.
 - **Active indicator:** `sampling` badge next to the strategy selector when `force_sampling` is `true` and `!forgeStore.noProvider`
 
 ---
@@ -129,7 +141,8 @@ if prefs.get("pipeline.force_sampling") and ctx and hasattr(ctx, "session") and 
 | `backend/app/services/preferences.py` | Add `force_sampling: False` to `DEFAULTS`; extend `_sanitize` and `_validate` boolean loops |
 | `backend/app/mcp_server.py` | Add force-sampling short-circuit at top of `synthesis_optimize` |
 | `frontend/src/lib/stores/preferences.svelte.ts` | Add `force_sampling: boolean` to `PipelinePrefs` and `DEFAULTS` |
-| `frontend/src/lib/components/layout/Inspector.svelte` | Add toggle + active badge |
+| `frontend/src/lib/components/layout/Navigator.svelte` | Add toggle + active badge next to strategy selector |
+| `docs/CHANGELOG.md` | Add entry under `## Unreleased` → `Added` |
 
 ---
 
