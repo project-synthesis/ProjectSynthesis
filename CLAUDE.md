@@ -2,6 +2,29 @@
 
 Guidance for Claude Code when working in this repository.
 
+## Versioning
+
+**Single source of truth:** `/version.json` → `scripts/sync-version.sh` propagates to `backend/app/_version.py`, `frontend/package.json`. Frontend reads version via `$lib/version.ts` (JSON import). Health endpoint serves it at `/api/health`.
+
+**Semver:** `MAJOR.MINOR.PATCH[-prerelease]`
+
+| Bump | When | Example |
+|------|------|---------|
+| `MAJOR` | Breaking API/schema changes, incompatible migrations | 0.x → 1.0.0 |
+| `MINOR` | New features, new endpoints, new MCP tools | 0.1.0 → 0.2.0 |
+| `PATCH` | Bug fixes, performance, docs, dependency updates | 0.1.0 → 0.1.1 |
+| `-dev` suffix | Unreleased work on main | 0.2.0-dev |
+
+**Release workflow:**
+1. Edit `version.json` (remove `-dev` or bump)
+2. Run `./scripts/sync-version.sh`
+3. Move `docs/CHANGELOG.md` items from `## Unreleased` to `## vX.Y.Z — YYYY-MM-DD`
+4. Commit: `release: vX.Y.Z`
+5. Tag: `git tag vX.Y.Z && git push origin main --tags`
+6. Bump to next dev: edit `version.json` to next version with `-dev`, run sync, commit `chore: bump to X.Y.Z-dev`
+
+**Changelog convention:** Every user-visible change gets a line in `docs/CHANGELOG.md` under `## Unreleased`. Categories: `Added`, `Changed`, `Fixed`, `Removed`. Write in past tense, start with a verb.
+
 ## Services and ports
 
 | Service | Port | Entry point |

@@ -1,78 +1,72 @@
 # Changelog
 
+All notable changes to Project Synthesis. Format follows [Keep a Changelog](https://keepachangelog.com/).
+
 ## Unreleased
 
-### Major features
-- Redesigned from ground up — clean-slate rebuild of prompt optimization platform
-- Added 3-phase pipeline orchestrator (analyze → optimize → score) with independent subagent context windows
-- Added scorer A/B randomization to prevent position and verbosity bias
-- Added 10 Pydantic contracts for all pipeline phase boundaries
-- Added 3-tier provider layer (Claude CLI, Anthropic API, MCP passthrough) with auto-detection
-- Added prompt template system with `{{variable}}` substitution, manifest validation, and hot-reload
-- Added 6 optimization strategies (chain-of-thought, few-shot, role-playing, structured-output, meta-prompting, auto)
-- Added context resolver with per-source character caps and `<untrusted-context>` injection hardening
-- Added workspace roots scanning for agent guidance files (CLAUDE.md, AGENTS.md, .cursorrules, etc.)
-- Added SHA-based explore caching with TTL and LRU eviction
-- Added startup template validation against manifest.json
-- Added MCP server with 4 tools (synthesis_optimize, synthesis_analyze, synthesis_prepare_optimization, synthesis_save_result)
-- Added GitHub OAuth integration with Fernet-encrypted token storage
-- Added codebase explorer with semantic retrieval + single-shot Haiku synthesis
-- Added sentence-transformers embedding service (all-MiniLM-L6-v2, 384-dim) with async wrappers
-- Added background repo file indexing with SHA-based staleness detection
-- Added heuristic scorer with 5-dimension analysis (clarity, specificity, structure, faithfulness, conciseness)
-- Added passthrough bias correction (default 15% discount) for MCP self-rated scores
-- Added optimization CRUD with sort/filter, pagination envelope, and score distribution tracking
-- Added feedback CRUD with synchronous adaptation tracker update
-- Added strategy affinity tracking with degenerate pattern detection
-- Added conversational refinement with version history, branching/rollback, and 3 suggestions per turn
-- Added API key management (GET/PATCH/DELETE) with Fernet encryption at rest
-- Added health endpoint with score clustering detection, recent error counts, and per-phase duration metrics
-- Added trace logger writing per-phase JSONL to data/traces/ with daily rotation
-- Added in-memory rate limiting (optimize 10/min, refine 10/min, feedback 30/min, default 60/min)
-- Added SvelteKit 2 frontend with VS Code workbench layout and industrial cyberpunk design system
-- Added prompt editor with strategy picker, forge button, and SSE progress streaming
-- Added result viewer with copy, diff toggle, and feedback (thumbs up/down)
-- Added 5-dimension score card with deltas in inspector panel
-- Added side-by-side diff view with dimmed original
-- Added command palette (Ctrl+K) with 6 actions
-- Added refinement timeline with expandable turn cards, suggestion chips, and score sparkline
-- Added branch switcher for refinement rollback navigation
-- Added live history navigator with API data and auto-refresh on new optimization
-- Added GitHub navigator with repo browser and link management
-- Added error state banners (backend unreachable, no provider, rate limit, optimization failure)
-- Added SSE reconnection with trace_id polling fallback (30 attempts, 2s interval)
-- Added init.sh service manager with PID tracking, process group kill, preflight checks, health probes, and log rotation
-- Added Docker single-container deployment (backend + frontend + MCP + nginx)
-- Added graceful shutdown marking in-flight optimizations as interrupted
-- Fixed Docker: switched SvelteKit from adapter-auto to adapter-static for nginx static serving
-- Fixed Docker: nginx listens on unprivileged port 8080, removed NET_BIND_SERVICE capability
-- Fixed Docker: Alembic migration errors now fail hard instead of being silently ignored
-- Fixed Docker: entrypoint cleanup propagates actual exit code instead of always returning 0
-- Fixed Docker: healthcheck validates full stack via nginx (port 8080) not just backend directly
-- Fixed Docker: removed text/event-stream from nginx gzip (breaks SSE chunked encoding)
-- Fixed Docker: added .env files to .dockerignore to prevent secret leakage into images
-- Fixed Docker: removed unused pyproject.toml COPY from Dockerfile
-- Added custom 503 error page matching project brand for nginx backend-down scenarios
+### Added
+- 3-phase pipeline orchestrator (analyze → optimize → score) with independent subagent context windows
+- Hybrid scoring engine — blends LLM scores with model-independent heuristics via score_blender.py
+- Z-score normalization against historical distribution to prevent score clustering
+- Scorer A/B randomization to prevent position and verbosity bias
+- Provider error hierarchy with typed exceptions (RateLimitError, AuthError, BadRequestError, OverloadedError)
+- Shared retry utility (call_provider_with_retry) with smart retryable/non-retryable classification
+- Token usage tracking with prompt cache hit/miss stats
+- 3-tier provider layer (Claude CLI, Anthropic API, MCP passthrough) with auto-detection
+- Claude CLI provider: native --json-schema structured output, --effort flag, subprocess timeout with zombie reaping
+- Anthropic API provider: typed SDK exception mapping, prompt cache logging
+- Prompt template system with {{variable}} substitution, manifest validation, and hot-reload
+- 6 optimization strategies with YAML frontmatter (tagline, description) for adaptive discovery
+- Context resolver with per-source character caps and `<untrusted-context>` injection hardening
+- Workspace roots scanning for agent guidance files (CLAUDE.md, AGENTS.md, .cursorrules, etc.)
+- SHA-based explore caching with TTL and LRU eviction
+- Startup template validation against manifest.json
+- MCP server with 4 tools (synthesis_optimize, synthesis_analyze, synthesis_prepare_optimization, synthesis_save_result)
+- GitHub OAuth integration with Fernet-encrypted token storage
+- Codebase explorer with semantic retrieval + single-shot Haiku synthesis
+- Sentence-transformers embedding service (all-MiniLM-L6-v2, 384-dim) with async wrappers
+- Heuristic scorer with 5-dimension analysis (clarity, specificity, structure, faithfulness, conciseness)
+- Passthrough bias correction (default 15% discount) for MCP self-rated scores
+- Optimization CRUD with sort/filter, pagination envelope, and score distribution tracking
+- Feedback CRUD with synchronous adaptation tracker update
+- Strategy affinity tracking with degenerate pattern detection
+- Conversational refinement with version history, branching/rollback, and 3 suggestions per turn
+- API key management (GET/PATCH/DELETE) with Fernet encryption at rest
+- Health endpoint with score clustering detection, recent error counts, and per-phase duration metrics
+- Trace logger writing per-phase JSONL to data/traces/ with daily rotation
+- In-memory rate limiting (optimize 10/min, refine 10/min, feedback 30/min, default 60/min)
+- Real-time event bus — SSE stream with optimization, feedback, refinement, and strategy events
+- Persistent user preferences (model selection, pipeline toggles, default strategy)
+- SvelteKit 2 frontend with VS Code workbench layout and industrial cyberpunk design system
+- Prompt editor with strategy picker, forge button, and SSE progress streaming
+- Result viewer with copy, diff toggle, and feedback (thumbs up/down)
+- 5-dimension score card with deltas in inspector panel
+- Side-by-side diff view with dimmed original
+- Command palette (Ctrl+K) with 6 actions
+- Refinement timeline with expandable turn cards, suggestion chips, and score sparkline
+- Branch switcher for refinement rollback navigation
+- Live history navigator with API data and auto-refresh
+- GitHub navigator with repo browser and link management
+- Session persistence via localStorage — page refresh restores last optimization from DB
+- Toast notification system with chromatic action encoding
+- Landing page with hero, features grid, testimonials, CTA, and 15 content subpages
+- CSS scroll-driven animations (animation-timeline: view()) with progressive enhancement fallback
+- View Transitions API for cross-page navigation morphing
+- GitHub Pages deployment via Actions artifacts (zero-footprint, no gh-pages branch)
+- Docker single-container deployment (backend + frontend + MCP + nginx)
+- init.sh service manager with PID tracking, process group kill, preflight checks, and log rotation
+- Version sync system (version.json → scripts/sync-version.sh propagates everywhere)
 
-### Session 2 features (2026-03-16)
-- Added hybrid scoring system — blends LLM scores with model-independent heuristics via score_blender.py
-- Added z-score normalization against historical distribution to prevent score clustering
-- Added sharpened scoring rubric with calibration examples and anti-clustering directives
-- Added synthesis_analyze MCP tool — analysis + baseline scoring with actionable next steps
-- Added persistent user preferences (model selection, pipeline toggles, default strategy) via data/preferences.json
-- Added brand-compliant markdown rendering for optimized prompts with RAW/RENDER toggle
-- Added production diff viewer with unified/split modes and word-level highlighting
-- Added YAML frontmatter to strategy files (tagline, description) for adaptive discovery
-- Added inline strategy template editor with live disk save
-- Added real-time strategy file watcher using watchfiles.awatch() with toast notifications
-- Added toast notification system with chromatic action encoding (green/yellow/red)
-- Added progressive disclosure in settings panel (Models, Pipeline, Defaults always visible; Provider, System collapsible)
-- Added session persistence via localStorage — page refresh restores last optimization from DB
-- Added enriched history API with truncated optimized_prompt preview
-- Added unified data contract via forgeStore.loadFromRecord() — single loading path
-- Added StatusBar live pipeline phase display and last optimization score
-- Added Inspector feedback sync from real-time events
-- Added optimization_failed and MCP-originated toast notifications
-- Made strategy system fully file-driven — no hardcoded lists anywhere
-- Made scoring phase and explore phase optional via user preferences (lean mode)
-- Made model selection configurable per pipeline phase (analyzer/optimizer/scorer)
+### Fixed
+- Docker: healthcheck validates /api/health (was hitting nginx root, always 200)
+- Docker: added security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
+- Docker: text/event-stream added to nginx gzip types
+- Docker: .dockerignore correctly includes prompt templates via !prompts/**/*.md
+- Docker: Alembic migration errors fail hard instead of being silently ignored
+- Docker: entrypoint cleanup propagates actual exit code
+- CLI provider: removed invalid --max-tokens flag, uses native --json-schema instead
+- Pipeline: scorer uses XML delimiters (<prompt-a>/<prompt-b>) preventing boundary corruption
+- Pipeline: Phase 4 event keys use consistent stage/state format
+- Pipeline: refinement score events only emitted when scoring is enabled
+- Pipeline: dynamic max_tokens capped at 65536 to prevent timeout
+- Landing: route restructure — landing at /, app at /app (fixes GitHub Pages routing)
