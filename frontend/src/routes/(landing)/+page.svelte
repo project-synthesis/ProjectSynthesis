@@ -221,21 +221,83 @@
 
     <div class="example-container">
       <div class="example-panels">
-        <!-- Before panel -->
+        <!-- Pipeline trace panel -->
         <div class="example-panel example-panel--before">
-          <div class="example-prompt font-mono">Build a REST API for a todo app</div>
-          <div class="example-analyzer">
-            <span class="example-badge" style="border-color:var(--color-neon-cyan);color:var(--color-neon-cyan);">task_type: coding</span>
-            <div class="example-weaknesses">
-              <span class="example-weakness">No language specified</span>
-              <span class="example-weakness">No endpoint signatures</span>
-              <span class="example-weakness">No error handling</span>
-              <span class="example-weakness">No response format</span>
-              <span class="example-weakness">No auth requirements</span>
-              <span class="example-weakness">No validation rules</span>
+          <div class="example-section">
+            <span class="example-phase-label" style="color:var(--color-text-dim);">INPUT</span>
+            <div class="example-prompt font-mono">Build a REST API for a todo app</div>
+          </div>
+
+          <div class="example-section">
+            <span class="example-phase-label" style="color:var(--color-neon-cyan);">PHASE 1 — ANALYZE</span>
+            <div class="example-trace">
+              <div class="example-trace-row">
+                <span class="example-trace-key">task_type</span>
+                <span class="example-badge" style="border-color:var(--color-neon-cyan);color:var(--color-neon-cyan);">coding</span>
+              </div>
+              <div class="example-trace-row">
+                <span class="example-trace-key">weaknesses</span>
+                <div class="example-weaknesses">
+                  <span class="example-weakness">No language specified</span>
+                  <span class="example-weakness">No endpoint signatures</span>
+                  <span class="example-weakness">No error handling</span>
+                  <span class="example-weakness">No response format</span>
+                  <span class="example-weakness">No auth requirements</span>
+                  <span class="example-weakness">No validation rules</span>
+                </div>
+              </div>
+              <div class="example-trace-row">
+                <span class="example-trace-key">strengths</span>
+                <span class="example-trace-val">Clear task type, concise</span>
+              </div>
+              <div class="example-trace-row">
+                <span class="example-trace-key">confidence</span>
+                <span class="font-mono" style="color:var(--color-neon-green);">0.92</span>
+              </div>
             </div>
-            <span class="example-badge" style="border-color:var(--color-neon-purple);color:var(--color-neon-purple);">strategy: structured-output</span>
-            <span class="font-mono example-confidence">confidence: 0.92</span>
+          </div>
+
+          <div class="example-section">
+            <span class="example-phase-label" style="color:var(--color-neon-purple);">PHASE 2 — OPTIMIZE</span>
+            <div class="example-trace">
+              <div class="example-trace-row">
+                <span class="example-trace-key">strategy</span>
+                <span class="example-badge" style="border-color:var(--color-neon-purple);color:var(--color-neon-purple);">structured-output</span>
+              </div>
+              <div class="example-trace-row">
+                <span class="example-trace-key">rationale</span>
+                <span class="example-trace-val">Vague coding prompt with zero constraints — structured-output adds sections, types, and format specs</span>
+              </div>
+              <div class="example-trace-row">
+                <span class="example-trace-key">changes</span>
+                <div class="example-weaknesses">
+                  <span class="example-chip-added">+5 endpoints</span>
+                  <span class="example-chip-added">+type signatures</span>
+                  <span class="example-chip-added">+error handling</span>
+                  <span class="example-chip-added">+validation</span>
+                  <span class="example-chip-added">+output format</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="example-section">
+            <span class="example-phase-label" style="color:var(--color-neon-green);">PHASE 3 — SCORE</span>
+            <div class="example-trace">
+              <div class="example-trace-row">
+                <span class="example-trace-key">method</span>
+                <span class="example-trace-val">Blind A/B evaluation, randomized order</span>
+              </div>
+              <div class="example-trace-row">
+                <span class="example-trace-key">scoring</span>
+                <span class="example-trace-val">Hybrid: LLM + heuristic blend, z-score normalized</span>
+              </div>
+              <div class="example-trace-row">
+                <span class="example-trace-key">overall</span>
+                <span class="font-mono" style="color:var(--color-neon-green);font-size:12px;font-weight:600;">8.4 /10</span>
+                <span class="font-mono" style="color:var(--color-neon-green);font-size:10px;">+5.2 delta</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -807,13 +869,56 @@
     line-height: 1.5;
   }
 
-  .example-analyzer {
+  .example-section {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 8px;
-    border: 1px solid var(--color-border-subtle);
-    flex: 1;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .example-section:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .example-section:first-child {
+    padding-top: 0;
+  }
+
+  .example-phase-label {
+    font-family: var(--font-display);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .example-trace {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .example-trace-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .example-trace-key {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+    min-width: 64px;
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
+
+  .example-trace-val {
+    font-size: 10px;
+    color: var(--color-text-secondary);
+    line-height: 1.4;
   }
 
   .example-badge {
@@ -828,19 +933,21 @@
   .example-weaknesses {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 3px;
   }
 
   .example-weakness {
-    font-size: 10px;
+    font-size: 9px;
     color: var(--color-text-dim);
-    padding: 1px 6px;
+    padding: 1px 4px;
     border: 1px solid var(--color-border-subtle);
   }
 
-  .example-confidence {
-    font-size: 10px;
-    color: var(--color-text-dim);
+  .example-chip-added {
+    font-size: 9px;
+    color: var(--color-neon-green);
+    padding: 1px 4px;
+    border: 1px solid rgba(34, 255, 136, 0.2);
   }
 
   .example-optimized {
