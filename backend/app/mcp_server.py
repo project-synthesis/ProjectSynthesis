@@ -1,7 +1,13 @@
 """Standalone MCP server with 4 optimization tools.
 
+When no local LLM provider is available, synthesis_optimize uses MCP sampling
+(ctx.session.create_message) to run the full 3-phase pipeline through the IDE's
+LLM. If the client doesn't support sampling, falls back to single-shot passthrough.
+
 Copyright 2025-2026 Project Synthesis contributors.
 """
+
+from __future__ import annotations
 
 import logging
 import time
@@ -13,18 +19,20 @@ from typing import Any
 
 import aiosqlite
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import SamplingMessage, TextContent
 from sqlalchemy import select
 
 from app.config import DATA_DIR, PROMPTS_DIR, settings
 from app.database import async_session_factory
 from app.models import Optimization
 from app.providers.detector import detect_provider
-from app.schemas.pipeline_contracts import AnalysisResult, ScoreResult
+from app.schemas.pipeline_contracts import AnalysisResult, OptimizationResult, ScoreResult
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
+from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.services.workspace_intelligence import WorkspaceIntelligence
 
@@ -103,6 +111,240 @@ mcp = FastMCP(
 )
 
 
+# ---------------------------------------------------------------------------
+# Sampling-based 3-phase pipeline (uses IDE's LLM via MCP sampling)
+# ---------------------------------------------------------------------------
+
+
+async def _sampling_request(ctx: Context, system: str, user: str, max_tokens: int = 16384) -> str:
+    """Send a sampling/createMessage request to the client's LLM.
+
+    Returns the text response. Raises if the client doesn't support sampling
+    or returns non-text content.
+    """
+    result = await ctx.session.create_message(
+        messages=[SamplingMessage(role="user", content=TextContent(type="text", text=user))],
+        system_prompt=system,
+        max_tokens=max_tokens,
+    )
+    if result.content.type != "text":
+        raise ValueError(f"Expected text response, got {result.content.type}")
+    return result.content.text
+
+
+async def _run_sampling_pipeline(
+    ctx: Context,
+    prompt: str,
+    strategy_override: str | None,
+    codebase_guidance: str | None,
+) -> dict:
+    """Run the full 3-phase pipeline via MCP sampling (IDE's LLM).
+
+    Phase 1: Analyze — classify, detect weaknesses, select strategy
+    Phase 2: Optimize — rewrite using strategy
+    Phase 3: Score — blind A/B evaluation
+
+    Each phase is a separate sampling request, mirroring the internal pipeline.
+    """
+    start = time.monotonic()
+    loader = PromptLoader(PROMPTS_DIR)
+    strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
+    system_prompt = loader.load("agent-guidance.md")
+
+    # ---- Phase 1: Analyze ----
+    logger.info("Sampling pipeline Phase 1: Analyze")
+    available_strategies = strategy_loader.format_available()
+    analyze_msg = loader.render("analyze.md", {
+        "raw_prompt": prompt,
+        "available_strategies": available_strategies,
+    })
+
+    analyze_text = await _sampling_request(ctx, system_prompt, analyze_msg)
+
+    # Parse the analysis result
+    try:
+        analysis = AnalysisResult.model_validate_json(analyze_text)
+    except Exception:
+        # Try extracting JSON from markdown code block
+        import re
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", analyze_text, re.DOTALL)
+        if match:
+            analysis = AnalysisResult.model_validate_json(match.group(1))
+        else:
+            analysis = AnalysisResult(
+                task_type="general",
+                weaknesses=["Could not parse analysis"],
+                strengths=["Prompt provided"],
+                selected_strategy="auto",
+                strategy_rationale="Fallback due to parse failure",
+                confidence=0.5,
+            )
+
+    effective_strategy = strategy_override or analysis.selected_strategy
+
+    # ---- Phase 2: Optimize ----
+    logger.info("Sampling pipeline Phase 2: Optimize (strategy=%s)", effective_strategy)
+    strategy_instructions = strategy_loader.load(effective_strategy)
+    analysis_summary = (
+        f"Task type: {analysis.task_type}\n"
+        f"Weaknesses: {', '.join(analysis.weaknesses)}\n"
+        f"Strengths: {', '.join(analysis.strengths)}\n"
+        f"Strategy: {effective_strategy}\n"
+        f"Rationale: {analysis.strategy_rationale}"
+    )
+
+    optimize_msg = loader.render("optimize.md", {
+        "raw_prompt": prompt,
+        "analysis_summary": analysis_summary,
+        "strategy_instructions": strategy_instructions,
+        "codebase_guidance": codebase_guidance,
+        "codebase_context": None,
+        "adaptation_state": None,
+    })
+
+    optimize_text = await _sampling_request(ctx, system_prompt, optimize_msg)
+
+    # Parse the optimization result
+    try:
+        optimization = OptimizationResult.model_validate_json(optimize_text)
+    except Exception:
+        import re
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", optimize_text, re.DOTALL)
+        if match:
+            optimization = OptimizationResult.model_validate_json(match.group(1))
+        else:
+            # Use the raw text as the optimized prompt
+            optimization = OptimizationResult(
+                optimized_prompt=optimize_text.strip(),
+                changes_summary="Optimized via sampling (raw response)",
+                strategy_used=effective_strategy,
+            )
+
+    # ---- Phase 3: Score ----
+    logger.info("Sampling pipeline Phase 3: Score")
+    scoring_system = loader.load("scoring.md")
+
+    import random
+    original_first = random.choice([True, False])
+    if original_first:
+        prompt_a, prompt_b = prompt, optimization.optimized_prompt
+    else:
+        prompt_a, prompt_b = optimization.optimized_prompt, prompt
+
+    scorer_msg = (
+        f"<prompt-a>\n{prompt_a}\n</prompt-a>\n\n"
+        f"<prompt-b>\n{prompt_b}\n</prompt-b>"
+    )
+
+    score_text = await _sampling_request(ctx, scoring_system, scorer_msg)
+
+    # Parse scores
+    try:
+        scores = ScoreResult.model_validate_json(score_text)
+    except Exception:
+        import re
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", score_text, re.DOTALL)
+        if match:
+            scores = ScoreResult.model_validate_json(match.group(1))
+        else:
+            scores = None
+
+    # Map A/B scores back + hybrid blend
+    optimized_scores = None
+    original_scores = None
+    deltas = None
+    scoring_mode = "heuristic"
+
+    heur_original = HeuristicScorer.score_prompt(prompt)
+    heur_optimized = HeuristicScorer.score_prompt(
+        optimization.optimized_prompt, original=prompt,
+    )
+
+    if scores:
+        from app.schemas.pipeline_contracts import DimensionScores
+
+        if original_first:
+            llm_original = scores.prompt_a_scores
+            llm_optimized = scores.prompt_b_scores
+        else:
+            llm_original = scores.prompt_b_scores
+            llm_optimized = scores.prompt_a_scores
+
+        # Hybrid blend (same as internal pipeline)
+        blended_original = blend_scores(llm_original, heur_original)
+        blended_optimized = blend_scores(llm_optimized, heur_optimized)
+
+        original_scores = blended_original.to_dimension_scores()
+        optimized_scores = blended_optimized.to_dimension_scores()
+        deltas = DimensionScores.compute_deltas(original_scores, optimized_scores)
+        scoring_mode = "hybrid"
+    else:
+        scoring_mode = "heuristic"
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    # Persist
+    opt_id = str(uuid.uuid4())
+    trace_id = str(uuid.uuid4())
+
+    async with async_session_factory() as db:
+        db_opt = Optimization(
+            id=opt_id,
+            raw_prompt=prompt,
+            optimized_prompt=optimization.optimized_prompt,
+            task_type=analysis.task_type,
+            strategy_used=effective_strategy,
+            changes_summary=optimization.changes_summary,
+            score_clarity=(
+                optimized_scores.clarity if optimized_scores else heur_optimized.get("clarity")
+            ),
+            score_specificity=(
+                optimized_scores.specificity if optimized_scores else heur_optimized.get("specificity")
+            ),
+            score_structure=(
+                optimized_scores.structure if optimized_scores else heur_optimized.get("structure")
+            ),
+            score_faithfulness=(
+                optimized_scores.faithfulness if optimized_scores else heur_optimized.get("faithfulness")
+            ),
+            score_conciseness=(
+                optimized_scores.conciseness if optimized_scores else heur_optimized.get("conciseness")
+            ),
+            overall_score=(
+                optimized_scores.overall if optimized_scores
+                else round(sum(heur_optimized.values()) / max(len(heur_optimized), 1), 2)
+            ),
+            provider="mcp_sampling",
+            model_used="ide_llm",
+            scoring_mode=scoring_mode,
+            duration_ms=elapsed_ms,
+            status="completed",
+            trace_id=trace_id,
+        )
+        db.add(db_opt)
+        await db.commit()
+
+    logger.info(
+        "Sampling pipeline completed in %dms: id=%s strategy=%s overall=%s scoring=%s",
+        elapsed_ms, opt_id, effective_strategy,
+        optimized_scores.overall if optimized_scores else "heuristic",
+        scoring_mode,
+    )
+
+    return {
+        "optimization_id": opt_id,
+        "optimized_prompt": optimization.optimized_prompt,
+        "task_type": analysis.task_type,
+        "strategy_used": effective_strategy,
+        "changes_summary": optimization.changes_summary,
+        "scores": optimized_scores.model_dump() if optimized_scores else heur_optimized,
+        "original_scores": original_scores.model_dump() if original_scores else heur_original,
+        "score_deltas": deltas if deltas else {},
+        "scoring_mode": scoring_mode,
+        "pipeline_mode": "sampling",
+    }
+
+
 # ---- Tool 1: synthesis_optimize ----
 
 
@@ -131,15 +373,27 @@ async def synthesis_optimize(
 
     provider = _provider
 
-    # ---- Passthrough mode: no local provider, delegate to calling agent ----
+    # ---- No local provider: try sampling, then fall back to passthrough ----
     if not provider:
-        logger.info(
-            "synthesis_optimize: no provider — falling back to passthrough mode"
-        )
         prefs = PreferencesService(DATA_DIR)
         effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
-
         guidance = await _resolve_workspace_guidance(ctx, workspace_path)
+
+        # Try MCP sampling (3-phase pipeline via IDE's LLM)
+        if ctx and hasattr(ctx, "session") and ctx.session:
+            try:
+                logger.info("synthesis_optimize: no provider — attempting sampling pipeline")
+                return await _run_sampling_pipeline(
+                    ctx, prompt, effective_strategy if effective_strategy != "auto" else None, guidance,
+                )
+            except Exception as exc:
+                logger.info(
+                    "Sampling not supported by client, falling back to passthrough: %s",
+                    type(exc).__name__,
+                )
+
+        # Fallback: single-shot passthrough template
+        logger.info("synthesis_optimize: no provider — using passthrough template")
 
         assembled, strategy_name = assemble_passthrough_prompt(
             prompts_dir=PROMPTS_DIR,
@@ -150,7 +404,6 @@ async def synthesis_optimize(
 
         trace_id = str(uuid.uuid4())
 
-        # Persist pending record so synthesis_save_result can link to it
         async with async_session_factory() as db:
             pending = Optimization(
                 id=str(uuid.uuid4()),
