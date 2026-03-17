@@ -5,6 +5,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- Added `pipeline.force_sampling` preference toggle — forces `synthesis_optimize` through the MCP sampling pipeline (IDE's LLM) even when a local provider is detected; gracefully falls through to the local provider if sampling fails
 - 3-phase pipeline orchestrator (analyze → optimize → score) with independent subagent context windows
 - Hybrid scoring engine — blends LLM scores with model-independent heuristics via score_blender.py
 - Z-score normalization against historical distribution to prevent score clustering
