@@ -384,10 +384,14 @@ async def synthesis_optimize(
 ) -> dict:
     """Run the full optimization pipeline on a prompt.
 
-    Three execution paths (automatic selection):
-    1. Local provider exists → full 3-phase internal pipeline
-    2. No provider + client supports MCP sampling → 3-phase pipeline via IDE's LLM
-    3. No provider + no sampling → returns assembled template for manual processing
+    Four execution paths (automatic selection):
+    1. force_sampling=True + client supports sampling → 3-phase pipeline via IDE's LLM
+    2. Local provider exists → full 3-phase internal pipeline
+    3. No provider + client supports MCP sampling → 3-phase pipeline via IDE's LLM
+    4. No provider + no sampling → returns assembled template for manual processing
+
+    Set pipeline.force_sampling=True in preferences to always use path 1 regardless
+    of whether a local provider is detected.
     """
     if len(prompt) < 20:
         raise ValueError(
@@ -400,12 +404,28 @@ async def synthesis_optimize(
 
     provider = _provider
 
+    # ---- Hoist: single PreferencesService + workspace resolution for all paths ----
+    prefs = PreferencesService(DATA_DIR)
+    effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
+    guidance = await _resolve_workspace_guidance(ctx, workspace_path)
+
+    # ---- Force-sampling short-circuit (overrides local provider when enabled) ----
+    if prefs.get("pipeline.force_sampling") and ctx and hasattr(ctx, "session") and ctx.session:
+        logger.info("synthesis_optimize: force_sampling=True — attempting sampling pipeline")
+        try:
+            return await _run_sampling_pipeline(
+                ctx, prompt,
+                effective_strategy if effective_strategy != "auto" else None,
+                guidance,
+            )
+        except Exception as exc:
+            logger.info(
+                "force_sampling requested but sampling failed, falling through: %s",
+                type(exc).__name__,
+            )
+
     # ---- No local provider: try sampling, then fall back to passthrough ----
     if not provider:
-        prefs = PreferencesService(DATA_DIR)
-        effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
-        guidance = await _resolve_workspace_guidance(ctx, workspace_path)
-
         # Try MCP sampling (3-phase pipeline via IDE's LLM)
         if ctx and hasattr(ctx, "session") and ctx.session:
             try:
@@ -460,17 +480,10 @@ async def synthesis_optimize(
 
     start = time.monotonic()
 
-    # Resolve strategy: explicit param → user preference → auto
-    prefs = PreferencesService(DATA_DIR)
-    effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
-
     logger.info(
         "synthesis_optimize called: prompt_len=%d strategy=%s repo=%s",
         len(prompt), effective_strategy, repo_full_name,
     )
-
-    # Auto-discover workspace roots (zero-config) or fall back to workspace_path
-    guidance = await _resolve_workspace_guidance(ctx, workspace_path)
 
     async with async_session_factory() as db:
         orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
@@ -502,8 +515,7 @@ async def synthesis_optimize(
             elapsed_ms, result.get("id", ""), result.get("strategy_used", ""),
         )
 
-        # Notify backend event bus via HTTP (MCP runs in a separate process,
-        # so pipeline.py's own event_bus.publish goes to a dead bus here)
+        # Notify backend event bus via HTTP (MCP runs in a separate process)
         try:
             import httpx
             async with httpx.AsyncClient() as client:
