@@ -419,12 +419,9 @@
                 value={preferencesStore.defaultStrategy}
                 onchange={(e) => preferencesStore.setDefaultStrategy((e.target as HTMLSelectElement).value)}
               >
-                <option value="auto">Auto</option>
-                <option value="chain-of-thought">Chain of Thought</option>
-                <option value="few-shot">Few-Shot</option>
-                <option value="meta-prompting">Meta-Prompting</option>
-                <option value="role-playing">Role-Playing</option>
-                <option value="structured-output">Structured Output</option>
+                {#each strategiesList as strat (strat.name)}
+                  <option value={strat.name}>{stratLabel(strat.name)}</option>
+                {/each}
               </select>
             </div>
           </div>
