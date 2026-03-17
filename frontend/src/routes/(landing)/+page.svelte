@@ -25,6 +25,15 @@
     return () => observer.disconnect();
   });
 
+  // ---- Hero mockup dimension colors ----
+  const dimColors = [
+    'var(--color-neon-cyan)',
+    'var(--color-neon-purple)',
+    'var(--color-neon-green)',
+    'var(--color-neon-yellow)',
+    'var(--color-neon-pink)',
+  ];
+
   // ---- Score comparison data ----
   const scores = [
     { dim: 'Clarity', before: 3.2, after: 8.1, delta: 4.9, color: 'var(--color-neon-cyan)' },
@@ -92,9 +101,9 @@
                 <div class="mockup__mini-row">
                   <span class="mockup__mini-label">{dim}</span>
                   <div class="mockup__mini-track">
-                    <div class="mockup__mini-fill" style="width:{62 + i * 7}%;background:var(--color-neon-cyan);"></div>
+                    <div class="mockup__mini-fill" style="width:{62 + i * 7}%;background:{dimColors[i]};"></div>
                   </div>
-                  <span class="font-mono mockup__mini-val">{(6.2 + i * 0.7).toFixed(1)}</span>
+                  <span class="font-mono mockup__mini-val" style="color:{dimColors[i]};">{(6.2 + i * 0.7).toFixed(1)}</span>
                 </div>
               {/each}
             </div>
@@ -113,7 +122,7 @@
     <div class="pipeline-sticky">
       <div class="pipeline-grid">
         <!-- Phase 1: Analyze -->
-        <div class="pipeline-phase" data-reveal>
+        <div class="pipeline-phase" data-animate style="--delay:0ms;">
           <div class="pipeline-phase__header">
             <span class="font-mono pipeline-phase__number" style="color:var(--color-neon-cyan);">01</span>
             <h3 class="pipeline-phase__title" style="color:var(--color-neon-cyan);">ANALYZE</h3>
@@ -130,7 +139,7 @@
         </div>
 
         <!-- Phase 2: Optimize -->
-        <div class="pipeline-phase" data-reveal>
+        <div class="pipeline-phase" data-animate style="--delay:100ms;">
           <div class="pipeline-phase__header">
             <span class="font-mono pipeline-phase__number" style="color:var(--color-neon-purple);">02</span>
             <h3 class="pipeline-phase__title" style="color:var(--color-neon-purple);">OPTIMIZE</h3>
@@ -146,7 +155,7 @@
         </div>
 
         <!-- Phase 3: Score -->
-        <div class="pipeline-phase" data-reveal>
+        <div class="pipeline-phase" data-animate style="--delay:200ms;">
           <div class="pipeline-phase__header">
             <span class="font-mono pipeline-phase__number" style="color:var(--color-neon-green);">03</span>
             <h3 class="pipeline-phase__title" style="color:var(--color-neon-green);">SCORE</h3>
@@ -256,9 +265,7 @@
         <!-- Tier 1: Zero Config -->
         <div class="integration-card" data-animate style="--delay:0ms;">
           <div class="integration-icon" style="color:var(--color-neon-cyan);">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <path d="M10 2v6M10 12v6M6 6l4-4 4 4M6 14l4 4 4-4" stroke="currentColor" stroke-width="1.2"/>
-            </svg>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M11 2L5 11h4l-2 7 8-9h-5l3-7z" stroke="currentColor" stroke-width="1.2"/></svg>
           </div>
           <h3 class="integration-title">Zero Config</h3>
           <p class="integration-desc">Works with Claude CLI out of the box. Max subscription means zero marginal cost per optimization. No API key, no billing, no setup.</p>
@@ -267,12 +274,7 @@
         <!-- Tier 2: Your IDE, Your LLM -->
         <div class="integration-card" data-animate style="--delay:100ms;">
           <div class="integration-icon" style="color:var(--color-neon-purple);">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <circle cx="5" cy="5" r="2" stroke="currentColor" stroke-width="1.2"/>
-              <circle cx="15" cy="5" r="2" stroke="currentColor" stroke-width="1.2"/>
-              <circle cx="10" cy="15" r="2" stroke="currentColor" stroke-width="1.2"/>
-              <path d="M6.5 6.5L9 13M13.5 6.5L11 13M7 5h6" stroke="currentColor" stroke-width="1"/>
-            </svg>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 8l3 2.5L5 13M10 13h5" stroke="currentColor" stroke-width="1.2"/></svg>
           </div>
           <h3 class="integration-title">Your IDE, Your LLM</h3>
           <p class="integration-desc">Drop the pipeline into your editor. Your IDE's model does the optimization — Synthesis orchestrates the phases, scores the result, tracks the history.</p>
@@ -281,9 +283,7 @@
         <!-- Tier 3: Codebase-Aware -->
         <div class="integration-card" data-animate style="--delay:200ms;">
           <div class="integration-icon" style="color:var(--color-neon-green);">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <path d="M6 3v14M14 3v8M6 10h8M14 11l3 3-3 3" stroke="currentColor" stroke-width="1.2"/>
-            </svg>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2" stroke="currentColor" stroke-width="1.2"/><circle cx="6" cy="14" r="2" stroke="currentColor" stroke-width="1.2"/><circle cx="14" cy="10" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M6 8v4M8 6h4a2 2 0 0 1 2 2v0" stroke="currentColor" stroke-width="1.2"/></svg>
           </div>
           <h3 class="integration-title">Codebase-Aware Optimization</h3>
           <p class="integration-desc">Link a GitHub repo and the optimizer learns your conventions. Function signatures, error handling patterns, naming standards, architecture decisions — optimized prompts reference YOUR code, not generic examples.</p>
@@ -311,19 +311,19 @@
 
     <div class="trust-badges">
       <a href="{base}/security" class="trust-badge">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1L3 3.5V7c0 3.5 2.1 6.4 5 7.5 2.9-1.1 5-4 5-7.5V3.5L8 1z" stroke="currentColor" stroke-width="1.2"/><path d="M6 8l1.5 1.5L10 6" stroke="currentColor" stroke-width="1.2"/></svg>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.2"/></svg>
         <span>Encrypted at rest</span>
       </a>
       <a href="{base}/privacy" class="trust-badge">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="7" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M1 7h2.5M12.5 7H15M3 3l2 2M11 11l2 2M3 11l2-2M11 3l2 2" stroke="currentColor" stroke-width="1.2"/><path d="M2 13l12-1" stroke="currentColor" stroke-width="1.2"/></svg>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M3 13L13 3" stroke="currentColor" stroke-width="1.2"/></svg>
         <span>Zero telemetry</span>
       </a>
       <a href="{base}/terms" class="trust-badge">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2L2 8l6 6 6-6-6-6z" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1"/></svg>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 2h5l3 3v9H4V2z" stroke="currentColor" stroke-width="1.2"/><path d="M9 2v3h3M6 8h4M6 10.5h4" stroke="currentColor" stroke-width="1.2"/></svg>
         <span>Apache 2.0</span>
       </a>
       <a href="{base}/privacy" class="trust-badge">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3h10v10H3z" stroke="currentColor" stroke-width="1.2"/><path d="M6 1v2M10 1v2M6 13v2M10 13v2M1 6h2M1 10h2M13 6h2M13 10h2" stroke="currentColor" stroke-width="1"/></svg>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="2" width="12" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="10" width="12" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M2 6v4M14 6v4" stroke="currentColor" stroke-width="1.2"/><circle cx="11" cy="4" r="0.5" fill="currentColor"/><circle cx="11" cy="12" r="0.5" fill="currentColor"/></svg>
         <span>Self-hosted</span>
       </a>
     </div>
@@ -562,28 +562,20 @@
      SECTION 2: PIPELINE DEEP-DIVE
      ================================================================ */
   .pipeline-section {
-    height: 300vh;
-    position: relative;
-    padding: 0 16px;
+    padding: 40px 16px;
   }
 
   .pipeline-heading {
     text-align: center;
-    padding: 40px 0 24px;
+    padding: 0 0 24px;
   }
 
   .pipeline-sticky {
-    position: sticky;
-    top: 0;
-    height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    max-width: 1120px;
+    margin: 0 auto;
   }
 
   .pipeline-grid {
-    max-width: 1120px;
-    width: 100%;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 12px;
@@ -658,34 +650,11 @@
     height: 100%;
   }
 
-  /* Pipeline fallbacks */
+  /* Pipeline mobile layout */
   @media (max-width: 768px) {
-    .pipeline-section {
-      height: auto !important;
-      padding: 40px 16px;
-    }
-    .pipeline-sticky {
-      position: static !important;
-      height: auto !important;
-    }
     .pipeline-grid {
       grid-template-columns: 1fr;
       gap: 8px;
-    }
-  }
-
-  @supports not (animation-timeline: scroll()) {
-    .pipeline-section {
-      height: auto;
-      padding: 40px 16px;
-    }
-    .pipeline-sticky {
-      position: static;
-      height: auto;
-    }
-    .pipeline-phase {
-      opacity: 1;
-      transform: none;
     }
   }
 
@@ -820,14 +789,14 @@
   }
 
   .score-bar-track {
-    height: 4px;
+    height: 5px;
     background: rgba(74, 74, 106, 0.15);
     overflow: hidden;
   }
 
   .score-bar-before {
     height: 100%;
-    background: rgba(74, 74, 106, 0.4);
+    background: rgba(74, 74, 106, 0.6);
   }
 
   .score-delta {
