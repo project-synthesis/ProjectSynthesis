@@ -3,6 +3,7 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
+  import { addToast } from '$lib/stores/toast.svelte';
   import { getSettings, getProviders, getHistory, getOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
   import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo } from '$lib/api/client';
 
@@ -16,6 +17,7 @@
   let editContent = $state('');
   let editSaving = $state(false);
   let editDirty = $state(false);
+  let suppressedNames = $state<Set<string>>(new Set());
 
   // Load strategies from backend on mount
   let strategiesLoaded = false;
@@ -50,6 +52,14 @@
     try {
       await updateStrategy(editingStrategy, editContent);
       editDirty = false;
+
+      // Suppress watcher toast for this name (avoid double notification)
+      const savedName = editingStrategy;
+      suppressedNames = new Set([...suppressedNames, savedName!]);
+      setTimeout(() => {
+        suppressedNames = new Set([...suppressedNames].filter(n => n !== savedName));
+      }, 2000);
+
       // Refresh descriptions
       const list = await getStrategies();
       strategiesList = list;
@@ -97,6 +107,26 @@
     const handler = () => { historyLoaded = false; };
     window.addEventListener('optimization-event', handler);
     return () => window.removeEventListener('optimization-event', handler);
+  });
+
+  // React to strategy file changes (created/modified/deleted on disk)
+  $effect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail?.name) return;
+
+      // Suppress toasts for names we just saved via UI
+      if (suppressedNames.has(detail.name)) return;
+
+      addToast(detail.action, detail.name);
+
+      // Re-fetch strategies list
+      getStrategies()
+        .then((list: any[]) => { strategiesList = list; })
+        .catch(() => {});
+    };
+    window.addEventListener('strategy-changed', handler);
+    return () => window.removeEventListener('strategy-changed', handler);
   });
 
   async function handleSetApiKey() {

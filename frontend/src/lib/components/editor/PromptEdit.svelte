@@ -23,6 +23,26 @@
     }).catch(() => {});
   });
 
+  // React to strategy file changes (sync dropdown with disk state)
+  $effect(() => {
+    const handler = () => {
+      getStrategies().then((list: StrategyInfo[]) => {
+        const rest = list.filter(s => s.name !== 'auto');
+        strategyOptions = [
+          { value: '', label: 'auto' },
+          ...rest.map(s => ({ value: s.name, label: s.name })),
+        ];
+
+        // Reset if active strategy was deleted
+        if (forgeStore.strategy && !list.some(s => s.name === forgeStore.strategy)) {
+          forgeStore.strategy = null;
+        }
+      }).catch(() => {});
+    };
+    window.addEventListener('strategy-changed', handler);
+    return () => window.removeEventListener('strategy-changed', handler);
+  });
+
   const isForging = $derived(
     forgeStore.status !== 'idle' &&
     forgeStore.status !== 'complete' &&
