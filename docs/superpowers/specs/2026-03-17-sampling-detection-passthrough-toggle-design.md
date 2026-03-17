@@ -1,6 +1,6 @@
 # Design Spec: Sampling Capability Detection + Force Passthrough Toggle
 **Date:** 2026-03-17
-**Status:** Approved
+**Status:** Approved — pending implementation
 
 ---
 
@@ -11,19 +11,28 @@ Two related features:
 1. **Runtime sampling capability detection** — disable the `force_sampling` toggle when the connected MCP client does not advertise the `sampling/createMessage` capability, with live state written to a shared file and surfaced via the health endpoint.
 2. **`force_passthrough` toggle** — a new pipeline preference that forces `synthesis_optimize` to return the assembled passthrough template regardless of provider/sampling state, and makes the frontend forge enter passthrough mode.
 
-These features are governed by a three-tier priority hierarchy: sampling > internal pipeline > passthrough.
+These features form a three-tier **capability hierarchy** (sampling > internal pipeline > passthrough), with two force flags that override automatic selection. The flags are mutually exclusive. Routing always checks `force_passthrough` first (it is a deliberate manual override with highest routing precedence), then `force_sampling`, then automatic provider/sampling detection.
 
 ---
 
-## Priority Hierarchy
+## Capability Hierarchy
 
-| Tier | Condition | Pipeline path |
-|------|-----------|---------------|
-| 1 | Sampling capable | MCP sampling (IDE's LLM, full 3-phase) |
-| 2 | Provider exists | Internal pipeline |
-| 3 | Neither | Passthrough template (manual) |
+| Tier | Condition | Pipeline path | Force flag |
+|------|-----------|---------------|------------|
+| 1 | Client supports MCP sampling | Sampling pipeline (IDE's LLM) | `force_sampling` |
+| 2 | Local provider exists | Internal 3-phase pipeline | — |
+| 3 | Neither | Passthrough template (manual) | `force_passthrough` |
 
-`force_sampling` pins to Tier 1. `force_passthrough` pins to Tier 3. They are mutually exclusive — only one can be `true` at a time. When Tier 1 is confirmed working, Tier 3 is pointless and its toggle is disabled.
+`force_sampling` pins to Tier 1. `force_passthrough` pins to Tier 3. When Tier 1 is confirmed working, Tier 3 is redundant — the `force_passthrough` toggle is disabled.
+
+**Routing order in `synthesis_optimize` (highest precedence first):**
+1. `force_passthrough=True` → return passthrough template immediately
+2. `force_sampling=True` + sampling capable → sampling pipeline
+3. No provider + sampling capable → sampling pipeline
+4. Provider exists → internal pipeline
+5. No provider + no sampling → passthrough template
+
+Because the flags are mutually exclusive (enforced at save time), paths 1 and 2 cannot both be active simultaneously. The order is defensive.
 
 ---
 
@@ -33,15 +42,15 @@ These features are governed by a three-tier priority hierarchy: sampling > inter
 
 ```
 MCP tool call → check ctx.session.client_params.capabilities.sampling
-             → write data/mcp_session.json
+             → write data/mcp_session.json  (always, before routing branches)
              → FastAPI /api/health reads file
-             → frontend reads health
+             → frontend reads health on mount
              → Navigator.svelte disables force_sampling toggle
 ```
 
 ### `data/mcp_session.json` schema
 
-Written by `mcp_server.py` on every `synthesis_optimize` call:
+Written by `mcp_server.py` on **every `synthesis_optimize` call**, **before** any routing branches (including before the `force_passthrough` early-return). This ensures the file stays fresh regardless of which execution path is taken.
 
 ```json
 {
@@ -50,7 +59,7 @@ Written by `mcp_server.py` on every `synthesis_optimize` call:
 }
 ```
 
-Check: `ctx.session.client_params.capabilities.sampling is not None` — presence of the key (even as `{}`) means supported. Wrapped in `try/except` — if `ctx` is None or attribute lookup fails, file is not written.
+Detection: `ctx.session.client_params.capabilities.sampling is not None` — presence of the key (even as `{}`) means supported. Entire detection + write is wrapped in `try/except` — if `ctx` is `None` or attribute lookup fails, the file is not written for that call.
 
 ### FastAPI `/api/health` change
 
@@ -61,10 +70,18 @@ Reads `data/mcp_session.json` and appends `sampling_capable: bool | null` to the
 ### Frontend changes
 
 - `forge.svelte.ts`: new `samplingCapable = $state<boolean | null>(null)` field
-- `+page.svelte`: health already read on mount; add `forgeStore.samplingCapable = h.sampling_capable ?? null`
-- `Navigator.svelte`: `force_sampling` toggle `disabled={forgeStore.noProvider || forgeStore.samplingCapable === false}`
-  - Tooltip when disabled from lack of sampling: `"Your MCP client does not support sampling"`
-  - Tooltip when disabled from no provider: unchanged (`"No local provider to bypass — sampling is already the active path"`)
+- `frontend/src/routes/app/+page.svelte`: inside the `.then((h) => { ... })` health callback (where `h` is the health response and `forgeStore.noProvider = !h.provider` is already set), add:
+  ```ts
+  forgeStore.samplingCapable = h.sampling_capable ?? null;
+  ```
+- `Navigator.svelte`: `force_sampling` toggle disabled condition:
+  ```svelte
+  disabled={forgeStore.noProvider || forgeStore.samplingCapable === false || preferencesStore.pipeline.force_passthrough}
+  ```
+  Tooltip priority (first matching wins):
+  1. `noProvider`: `"No local provider to bypass — sampling is already the active path"`
+  2. `samplingCapable === false`: `"Your MCP client does not support sampling"`
+  3. `force_passthrough`: `"Disable Force passthrough first"`
 
 ---
 
@@ -73,6 +90,8 @@ Reads `data/mcp_session.json` and appends `sampling_capable: bool | null` to the
 `force_sampling` and `force_passthrough` cannot both be `true`.
 
 ### Server-side: `preferences.py` `_validate()`
+
+In `_validate()`, the argument is a plain dict (not a `PreferencesService` instance):
 
 ```python
 if prefs["pipeline"].get("force_sampling") and prefs["pipeline"].get("force_passthrough"):
@@ -83,7 +102,7 @@ if prefs["pipeline"].get("force_sampling") and prefs["pipeline"].get("force_pass
 
 ### Client-side: `preferences.svelte.ts` `setPipelineToggle()`
 
-When enabling one, the patch payload includes both fields:
+When enabling one, the patch payload explicitly clears the other:
 
 ```ts
 // User enables force_sampling
@@ -91,6 +110,9 @@ When enabling one, the patch payload includes both fields:
 
 // User enables force_passthrough
 // → sends: { pipeline: { force_passthrough: true, force_sampling: false } }
+
+// Disabling either
+// → sends only the targeted key (no need to clear the other — it's already false)
 ```
 
 The store never sends a payload that would trigger the server-side `422`.
@@ -102,13 +124,15 @@ The store never sends a payload that would trigger the server-side `422`.
 ### Preference
 
 `pipeline.force_passthrough: bool = False` — added to:
-- `DEFAULTS["pipeline"]`
-- `_sanitize` hardcoded tuple
-- `_validate` hardcoded tuple
+- `DEFAULTS["pipeline"]` dict
+- The tuple literal inside `for toggle in (...)` at the `_sanitize` method (line ~166 of `preferences.py`)
+- The tuple literal inside `for toggle in (...)` at the `_validate` method (line ~197 of `preferences.py`)
+
+Note: these are tuple literals inside `for toggle in` loops, not module-level constants.
 
 ### MCP routing in `synthesis_optimize`
 
-Checked **first**, before `force_sampling`:
+In `synthesis_optimize`, `prefs` is a `PreferencesService` instance. Use the dot-path accessor:
 
 ```python
 if prefs.get("pipeline.force_passthrough"):
@@ -118,12 +142,9 @@ if prefs.get("pipeline.force_passthrough"):
     return {..., "pipeline_mode": "passthrough"}
 ```
 
-Docstring updated to 5 execution paths:
-1. `force_passthrough=True` → passthrough template directly
-2. `force_sampling=True` + client supports sampling → sampling pipeline
-3. Local provider exists → internal pipeline
-4. No provider + client supports sampling → sampling pipeline
-5. No provider + no sampling → passthrough template
+This is checked **first** — immediately after writing `mcp_session.json` and before the `force_sampling` block.
+
+Docstring updated to 5 execution paths (as listed in the Capability Hierarchy routing order above).
 
 ### Frontend `forge.svelte.ts`
 
@@ -144,20 +165,32 @@ No other forge logic changes — the existing passthrough flow (assemble → dis
 New toggle in Pipeline section after `force_sampling`:
 - Label: `Force passthrough`
 - Tooltip on label: `"Bypass all pipelines — returns assembled template for manual processing"`
-- **Disabled** when `forgeStore.samplingCapable === true`
-- Disabled tooltip: `"Sampling is available — use Force IDE sampling instead"`
-- **PASSTHROUGH badge** in Defaults section: visible when `force_passthrough === true`, amber/yellow accent (`#f59e0b`) to visually distinguish from SAMPLING badge's cyan
+- Disabled condition: `forgeStore.samplingCapable === true || preferencesStore.pipeline.force_sampling`
+  - Tooltip when disabled by sampling: `"Sampling is available — use Force IDE sampling instead"`
+  - Tooltip when disabled by `force_sampling`: `"Disable Force IDE sampling first"`
+- **PASSTHROUGH badge** in Defaults section: visible when `force_passthrough === true`, amber accent (`#f59e0b` / `var(--color-warn, #f59e0b)`) to visually distinguish from SAMPLING badge's cyan
 
-### Toggle disabled state matrix
+### Toggle disabled-state matrix
 
-| `samplingCapable` | `noProvider` | `force_sampling` | `force_passthrough` |
-|-------------------|--------------|-----------------|---------------------|
-| `true` | false | Available | **Disabled** |
-| `true` | true | Available (sampling = natural path) | **Disabled** |
-| `false` | false | **Disabled** | Available |
-| `false` | true | **Disabled** | Available |
-| `null` | false | Available | Available |
-| `null` | true | Available | Available |
+`force_passthrough` available = not `(samplingCapable === true)` and not `force_sampling`
+`force_sampling` available = not `noProvider` and not `(samplingCapable === false)` and not `force_passthrough`
+
+| `samplingCapable` | `noProvider` | `force_sampling` | `force_passthrough` toggle | `force_sampling` toggle |
+|---|---|---|---|---|
+| `true` | false | false | **Disabled** (sampling works) | Available |
+| `true` | false | true | **Disabled** (sampling works + mutual excl.) | Available |
+| `true` | true | false | **Disabled** (sampling works) | Available |
+| `false` | false | false | Available | **Disabled** (client can't sample) |
+| `false` | false | true | **Disabled** (mutual excl.) | **Disabled** (client can't sample) |
+| `false` | true | false | Available | **Disabled** (noProvider + no sampling) |
+| `null` | false | false | Available | Available |
+| `null` | false | true | **Disabled** (mutual excl.) | Available |
+| `null` | false | false | Available | **Disabled** (mutual excl.) when `force_passthrough=true` |
+| `null` | true | false | Available | **Disabled** (noProvider) |
+
+*When `samplingCapable=null` (no active MCP session), both toggles are available — this is intentional. The user may be configuring preferences before connecting an MCP client.*
+
+*Edge case: when `force_passthrough=true` and `ctx` is `None` (no active MCP session), the `mcp_session.json` write is silently skipped. The health endpoint will return `sampling_capable: null` once the file goes stale (>5 min). This is correct behavior — no MCP session means no sampling capability can be determined, and `null` correctly leaves both toggles available.*
 
 ---
 
@@ -176,8 +209,8 @@ New toggle in Pipeline section after `force_sampling`:
 
 **`TestMutualExclusion`**:
 - `test_both_true_raises_value_error` — `patch({force_sampling: True, force_passthrough: True})` raises `ValueError`
-- `test_force_sampling_true_when_passthrough_already_true_raises` — set passthrough true, then try to set sampling true
-- `test_both_false_is_valid` — sanity check
+- `test_force_sampling_true_when_passthrough_already_true_raises` — save `force_passthrough=True`, then patch `force_sampling=True` (without clearing passthrough) raises `ValueError`
+- `test_both_false_is_valid`
 - `test_only_force_sampling_true_valid`
 - `test_only_force_passthrough_true_valid`
 
@@ -187,12 +220,12 @@ New toggle in Pipeline section after `force_sampling`:
 
 | File | Change |
 |------|--------|
-| `backend/app/services/preferences.py` | Add `force_passthrough` to DEFAULTS/sanitize/validate; add mutual exclusion check in `_validate()` |
-| `backend/app/mcp_server.py` | Write `mcp_session.json` in `synthesis_optimize`; add `force_passthrough` routing (first check); update force_sampling to not retry if sampling not in capabilities; update docstring to 5 paths |
-| `backend/app/routers/health.py` | Read `mcp_session.json`, add `sampling_capable` to health response |
+| `backend/app/services/preferences.py` | Add `force_passthrough` to DEFAULTS/sanitize/validate tuples; add mutual exclusion check in `_validate()` |
+| `backend/app/mcp_server.py` | Write `mcp_session.json` before routing branches; add `force_passthrough` check (first); update docstring to 5 paths |
+| `backend/app/routers/health.py` | Read `mcp_session.json`, add `sampling_capable: bool \| null` to health response |
 | `backend/tests/test_preferences.py` | Add `TestForcePassthrough` and `TestMutualExclusion` |
 | `frontend/src/lib/stores/preferences.svelte.ts` | Add `force_passthrough` to `PipelinePrefs` and DEFAULTS; update `setPipelineToggle` to send mutual-exclusion patch |
 | `frontend/src/lib/stores/forge.svelte.ts` | Add `samplingCapable` state field; update `forge()` passthrough condition |
-| `frontend/src/routes/app/+page.svelte` | Set `forgeStore.samplingCapable` from health response |
+| `frontend/src/routes/app/+page.svelte` | Set `forgeStore.samplingCapable = h.sampling_capable ?? null` in health callback |
 | `frontend/src/lib/components/layout/Navigator.svelte` | Update `force_sampling` disabled logic; add `force_passthrough` toggle + PASSTHROUGH badge |
 | `docs/CHANGELOG.md` | Add entries under Unreleased |
