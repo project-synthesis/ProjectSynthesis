@@ -8,15 +8,9 @@
 
   let { content, class: className = '' }: Props = $props();
 
-  // Configure marked for security and style
-  marked.setOptions({
-    breaks: true,
-    gfm: true,
-  });
-
   const rendered = $derived.by(() => {
     if (!content) return '';
-    return marked.parse(content, { async: false }) as string;
+    return marked.parse(content, { breaks: true, gfm: true, async: false }) as string;
   });
 </script>
 

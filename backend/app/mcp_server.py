@@ -19,7 +19,7 @@ from app.config import DATA_DIR, PROMPTS_DIR, settings
 from app.database import async_session_factory
 from app.models import Optimization
 from app.providers.detector import detect_provider
-from app.schemas.pipeline_contracts import AnalysisResult, DimensionScores, ScoreResult
+from app.schemas.pipeline_contracts import AnalysisResult, ScoreResult
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
@@ -287,7 +287,13 @@ async def synthesis_analyze(
         raise ValueError("Scoring failed: %s" % exc) from exc
 
     # Both A and B are the same prompt — use prompt_a_scores as baseline
-    baseline: DimensionScores = score_result.prompt_a_scores
+    # Apply hybrid scoring for consistency with main pipeline
+    from app.services.heuristic_scorer import HeuristicScorer
+    from app.services.score_blender import blend_scores
+
+    heur_scores = HeuristicScorer.score_prompt(prompt)
+    blended = blend_scores(score_result.prompt_a_scores, heur_scores)
+    baseline = blended.to_dimension_scores()
     overall = baseline.overall
 
     total_ms = int((time.monotonic() - start) * 1000)

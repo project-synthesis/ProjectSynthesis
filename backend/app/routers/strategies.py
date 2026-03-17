@@ -60,5 +60,10 @@ async def update_strategy(name: str, body: StrategyUpdate) -> StrategyDetail:
     path = _safe_strategy_path(name)
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
-    path.write_text(body.content, encoding="utf-8")
+    try:
+        path.write_text(body.content, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail="Failed to write strategy file: %s" % exc,
+        ) from exc
     return StrategyDetail(name=name, content=body.content)

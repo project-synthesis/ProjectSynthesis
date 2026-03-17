@@ -271,8 +271,18 @@ class RefinementService:
         heur_optimized = HeuristicScorer.score_prompt(
             refined.optimized_prompt, original=original_prompt,
         )
-        blended_original = blend_scores(llm_original, heur_original)
-        blended_optimized = blend_scores(llm_optimized, heur_optimized)
+
+        # Fetch historical stats for z-score normalization (non-fatal)
+        historical_stats: dict | None = None
+        try:
+            from app.services.optimization_service import OptimizationService
+            opt_svc = OptimizationService(self.db)
+            historical_stats = await opt_svc.get_score_distribution()
+        except Exception:
+            pass
+
+        blended_original = blend_scores(llm_original, heur_original, historical_stats)
+        blended_optimized = blend_scores(llm_optimized, heur_optimized, historical_stats)
         original_scores = blended_original.to_dimension_scores()
         optimized_scores = blended_optimized.to_dimension_scores()
 
