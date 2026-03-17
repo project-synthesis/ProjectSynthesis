@@ -185,3 +185,58 @@ class TestFileRecovery:
         assert prefs_file.exists()
         assert prefs["schema_version"] == 1
         assert prefs["models"]["analyzer"] == "sonnet"
+
+
+# ── TestForceSampling ─────────────────────────────────────────────────
+
+
+class TestForceSampling:
+    def test_default_is_false(self, svc: PreferencesService) -> None:
+        prefs = svc.load()
+        assert prefs["pipeline"]["force_sampling"] is False
+
+    def test_can_be_patched_true(self, svc: PreferencesService) -> None:
+        result = svc.patch({"pipeline": {"force_sampling": True}})
+        assert result["pipeline"]["force_sampling"] is True
+
+    def test_can_be_patched_false(self, svc: PreferencesService) -> None:
+        svc.patch({"pipeline": {"force_sampling": True}})
+        result = svc.patch({"pipeline": {"force_sampling": False}})
+        assert result["pipeline"]["force_sampling"] is False
+
+    def test_non_boolean_rejected_by_validate(self, svc: PreferencesService) -> None:
+        prefs = svc.load()
+        prefs["pipeline"]["force_sampling"] = "yes"
+        with pytest.raises(ValueError, match="force_sampling"):
+            svc.save(prefs)
+
+    def test_non_boolean_sanitized_to_default(
+        self, svc: PreferencesService, prefs_file: Path
+    ) -> None:
+        import json as _json
+        prefs_file.write_text(_json.dumps({
+            "schema_version": 1,
+            "pipeline": {"force_sampling": "yes"},
+        }))
+        prefs = svc.load()
+        assert prefs["pipeline"]["force_sampling"] is False
+
+    def test_missing_key_merges_to_false(
+        self, svc: PreferencesService, prefs_file: Path
+    ) -> None:
+        """Older preferences.json without force_sampling silently gets False."""
+        import json as _json
+        prefs_file.write_text(_json.dumps({
+            "schema_version": 1,
+            "pipeline": {
+                "enable_explore": True,
+                "enable_scoring": True,
+                "enable_adaptation": True,
+            },
+        }))
+        prefs = svc.load()
+        assert prefs["pipeline"]["force_sampling"] is False
+
+    def test_get_dot_path(self, svc: PreferencesService) -> None:
+        snap = svc.load()
+        assert svc.get("pipeline.force_sampling", snapshot=snap) is False

@@ -44,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
         "enable_explore": True,
         "enable_scoring": True,
         "enable_adaptation": True,
+        "force_sampling": False,
     },
     "defaults": {
         "strategy": "auto",
@@ -162,7 +163,7 @@ class PreferencesService:
 
         # Pipeline toggles must be boolean
         pipeline = prefs.get("pipeline", {})
-        for toggle in ("enable_explore", "enable_scoring", "enable_adaptation"):
+        for toggle in ("enable_explore", "enable_scoring", "enable_adaptation", "force_sampling"):
             val = pipeline.get(toggle)
             if not isinstance(val, bool):
                 default_val = DEFAULTS["pipeline"][toggle]
@@ -193,7 +194,7 @@ class PreferencesService:
                 )
 
         pipeline = prefs.get("pipeline", {})
-        for toggle in ("enable_explore", "enable_scoring", "enable_adaptation"):
+        for toggle in ("enable_explore", "enable_scoring", "enable_adaptation", "force_sampling"):
             val = pipeline.get(toggle)
             if val is not None and not isinstance(val, bool):
                 raise ValueError(
