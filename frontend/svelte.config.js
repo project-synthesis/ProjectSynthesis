@@ -1,6 +1,9 @@
 import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
+// GitHub Pages deploys to /ProjectSynthesis/ subpath
+const ghPages = process.env.GITHUB_PAGES === 'true';
+
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
 	kit: {
@@ -10,6 +13,9 @@ const config = {
 			fallback: 'index.html',
 			precompress: false,
 		}),
+		paths: {
+			base: ghPages ? '/ProjectSynthesis' : '',
+		},
 	},
 	preprocess: vitePreprocess(),
 	vitePlugin: {
