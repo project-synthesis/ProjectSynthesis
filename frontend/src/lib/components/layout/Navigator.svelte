@@ -399,9 +399,9 @@
                   value={preferencesStore.models[phase as keyof typeof preferencesStore.models]}
                   onchange={(e) => preferencesStore.setModel(phase, (e.target as HTMLSelectElement).value)}
                 >
-                  <option value="opus">Opus</option>
-                  <option value="sonnet">Sonnet</option>
-                  <option value="haiku">Haiku</option>
+                  <option value="opus">opus</option>
+                  <option value="sonnet">sonnet</option>
+                  <option value="haiku">haiku</option>
                 </select>
               </div>
             {/each}
@@ -413,9 +413,9 @@
           <span class="sub-heading">Pipeline</span>
           <div class="info-block">
             {#each [
-              { label: 'Codebase explore', key: 'enable_explore' },
-              { label: 'Quality scoring', key: 'enable_scoring' },
-              { label: 'Adaptation state', key: 'enable_adaptation' },
+              { label: 'Explore', key: 'enable_explore' },
+              { label: 'Scoring', key: 'enable_scoring' },
+              { label: 'Adaptation', key: 'enable_adaptation' },
             ] as { label, key }}
               <div class="info-row">
                 <span class="info-key">{label}</span>
@@ -511,11 +511,11 @@
                   onclick={handleSetApiKey}
                   disabled={apiKeySaving || !apiKeyInput.trim()}
                 >
-                  {apiKeySaving ? 'Saving...' : 'Set key'}
+                  {apiKeySaving ? 'SAVING...' : 'SET KEY'}
                 </button>
                 {#if apiKeyStatus?.configured}
                   <button class="action-btn" onclick={handleDeleteApiKey}>
-                    Remove
+                    REMOVE
                   </button>
                 {/if}
               </div>
@@ -801,7 +801,7 @@
   .info-key {
     font-size: 10px;
     color: var(--color-text-dim);
-    width: 56px;
+    width: 64px;
     flex-shrink: 0;
     text-overflow: ellipsis;
     overflow: hidden;
