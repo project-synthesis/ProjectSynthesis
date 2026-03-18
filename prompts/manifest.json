@@ -8,5 +8,6 @@
   "adaptation.md": {"required": ["task_type_affinities"], "optional": []},
   "refine.md": {"required": ["current_prompt", "refinement_request", "original_prompt", "strategy_instructions"], "optional": ["codebase_guidance", "codebase_context", "adaptation_state"]},
   "suggest.md": {"required": ["optimized_prompt", "scores", "weaknesses", "strategy_used"], "optional": []},
-  "passthrough.md": {"required": ["raw_prompt", "scoring_rubric_excerpt"], "optional": ["strategy_instructions", "codebase_guidance", "codebase_context", "adaptation_state"]}
+  "passthrough.md": {"required": ["raw_prompt", "scoring_rubric_excerpt"], "optional": ["strategy_instructions", "codebase_guidance", "codebase_context", "adaptation_state"]},
+  "extract_patterns.md": {"required": ["raw_prompt", "optimized_prompt", "intent_label", "domain", "strategy_used"], "optional": []}
 }
