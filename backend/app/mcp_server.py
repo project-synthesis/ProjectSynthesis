@@ -91,7 +91,7 @@ async def _resolve_workspace_guidance(
 def _write_mcp_session_caps(ctx: Context | None) -> None:
     """Detect sampling capability from MCP client and persist to mcp_session.json.
 
-    Called at the start of every synthesis_optimize invocation, before routing.
+    Called at the start of every MCP tool invocation so the health endpoint
     Silently skips if ctx is None or attribute lookup fails.
     """
     try:
@@ -145,6 +145,86 @@ mcp = FastMCP(
     streamable_http_path="/mcp",
     lifespan=_mcp_lifespan,
 )
+
+
+# ---------------------------------------------------------------------------
+# ASGI middleware: detect sampling capability on MCP initialize handshake
+# ---------------------------------------------------------------------------
+
+
+class _CapabilityDetectionMiddleware:
+    """Intercept the JSON-RPC ``initialize`` request to detect client capabilities.
+
+    The ``initialize`` message is the *first* thing an MCP client sends. Its
+    ``params.capabilities.sampling`` field tells us whether the client supports
+    ``sampling/createMessage``.  By peeking at the raw HTTP body we can write
+    ``mcp_session.json`` at handshake time — **before** any tool call — so the
+    frontend health poll picks up the new state within seconds.
+
+    The middleware re-assembles the request body transparently; downstream
+    handlers (FastMCP) receive the original bytes untouched.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("method", "") == "POST":
+            body_chunks: list[bytes] = []
+            body_complete = False
+
+            async def _buffered_receive():
+                nonlocal body_complete
+                message = await receive()
+                if message["type"] == "http.request":
+                    body_chunks.append(message.get("body", b""))
+                    if not message.get("more_body", False):
+                        body_complete = True
+                        self._inspect_initialize(b"".join(body_chunks))
+                return message
+
+            await self.app(scope, _buffered_receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+    @staticmethod
+    def _inspect_initialize(body: bytes) -> None:
+        """If the body is a JSON-RPC ``initialize`` request, write session caps."""
+        try:
+            data = _json.loads(body)
+            if not isinstance(data, dict) or data.get("method") != "initialize":
+                return
+            caps = data.get("params", {}).get("capabilities", {})
+            sampling = caps.get("sampling") is not None
+            path = DATA_DIR / "mcp_session.json"
+            path.write_text(
+                _json.dumps({
+                    "sampling_capable": sampling,
+                    "written_at": datetime.now(timezone.utc).isoformat(),
+                }),
+                encoding="utf-8",
+            )
+            logger.info(
+                "Capability detection middleware: sampling_capable=%s (from initialize handshake)",
+                sampling,
+            )
+        except Exception:
+            logger.debug("Capability detection middleware: could not parse initialize", exc_info=True)
+
+
+# Patch streamable_http_app to inject the capability-detection middleware.
+# FastMCP.streamable_http_app() creates a new Starlette app on each call,
+# so we wrap the method to add our middleware before the app is returned.
+_original_streamable_http_app = mcp.streamable_http_app
+
+
+def _patched_streamable_http_app(**kwargs):
+    app = _original_streamable_http_app(**kwargs)
+    app.add_middleware(_CapabilityDetectionMiddleware)
+    return app
+
+
+mcp.streamable_http_app = _patched_streamable_http_app
 
 
 # ---------------------------------------------------------------------------
@@ -641,6 +721,8 @@ async def synthesis_analyze(
     'analyzed' entry. Use the returned optimization_ready params to run
     synthesis_optimize if the analysis suggests improvement is worthwhile.
     """
+    _write_mcp_session_caps(ctx)
+
     if len(prompt) < 20:
         raise ValueError(
             "Prompt too short (%d chars). Minimum is 20 characters." % len(prompt)
@@ -837,6 +919,8 @@ async def synthesis_prepare_optimization(
 
     Call synthesis_save_result with the output.
     """
+    _write_mcp_session_caps(ctx)
+
     if len(prompt) < 20:
         raise ValueError(
             "Prompt too short (%d chars). Minimum is 20 characters." % len(prompt)
@@ -912,12 +996,14 @@ async def synthesis_save_result(
     scores: dict | None = None,
     model: str | None = None,
     codebase_context: str | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Persist an optimization result from an external LLM.
 
     Applies bias correction to self-rated scores.
     Optionally stores IDE-provided codebase context snapshot.
     """
+    _write_mcp_session_caps(ctx)
     logger.info("synthesis_save_result called: trace_id=%s model=%s", trace_id, model)
 
     # Normalize strategy_used — external LLMs often return verbose rationales

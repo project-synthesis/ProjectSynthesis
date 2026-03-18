@@ -633,3 +633,159 @@ class TestSamplingDetectionIntegration:
 
         # Step 5: Health returns null (stale)
         assert (await app_client.get("/api/health")).json()["sampling_capable"] is None
+
+
+# ---------------------------------------------------------------------------
+# _CapabilityDetectionMiddleware — ASGI middleware intercepts MCP initialize
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilityDetectionMiddleware:
+    """Test the ASGI middleware that detects sampling capability on MCP handshake."""
+
+    @pytest.fixture()
+    def mw_data_dir(self, tmp_path, monkeypatch):
+        """Point the middleware's DATA_DIR to a temp directory."""
+        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        return tmp_path
+
+    @staticmethod
+    def _make_initialize_body(capabilities: dict | None = None) -> bytes:
+        """Build a JSON-RPC initialize request body."""
+        caps = capabilities if capabilities is not None else {"sampling": {}}
+        return json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": caps,
+                "clientInfo": {"name": "test", "version": "1.0"},
+            },
+        }).encode()
+
+    @staticmethod
+    def _make_tool_call_body(tool: str = "synthesis_analyze") -> bytes:
+        """Build a JSON-RPC tool call body (non-initialize)."""
+        return json.dumps({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": {"prompt": "test"}},
+        }).encode()
+
+    def test_detects_sampling_true(self, mw_data_dir):
+        """Middleware writes sampling_capable=true when capabilities include sampling."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        body = self._make_initialize_body({"sampling": {}})
+        _CapabilityDetectionMiddleware._inspect_initialize(body)
+
+        session_path = mw_data_dir / "mcp_session.json"
+        assert session_path.exists()
+        data = json.loads(session_path.read_text())
+        assert data["sampling_capable"] is True
+        assert "written_at" in data
+
+    def test_detects_sampling_false(self, mw_data_dir):
+        """Middleware writes sampling_capable=false when capabilities lack sampling."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        body = self._make_initialize_body({"roots": {"listChanged": True}})
+        _CapabilityDetectionMiddleware._inspect_initialize(body)
+
+        data = json.loads((mw_data_dir / "mcp_session.json").read_text())
+        assert data["sampling_capable"] is False
+
+    def test_detects_sampling_with_nonempty_dict(self, mw_data_dir):
+        """Sampling with config dict is still detected as capable."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        body = self._make_initialize_body({"sampling": {"maxTokens": 8192}})
+        _CapabilityDetectionMiddleware._inspect_initialize(body)
+
+        data = json.loads((mw_data_dir / "mcp_session.json").read_text())
+        assert data["sampling_capable"] is True
+
+    def test_ignores_non_initialize_method(self, mw_data_dir):
+        """Non-initialize JSON-RPC methods do not write session file."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        body = self._make_tool_call_body()
+        _CapabilityDetectionMiddleware._inspect_initialize(body)
+
+        assert not (mw_data_dir / "mcp_session.json").exists()
+
+    def test_ignores_invalid_json(self, mw_data_dir):
+        """Invalid JSON body does not crash or write session file."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        _CapabilityDetectionMiddleware._inspect_initialize(b"not json{{{")
+        assert not (mw_data_dir / "mcp_session.json").exists()
+
+    def test_ignores_non_dict_body(self, mw_data_dir):
+        """JSON array body is silently ignored."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        _CapabilityDetectionMiddleware._inspect_initialize(b'[1,2,3]')
+        assert not (mw_data_dir / "mcp_session.json").exists()
+
+    def test_empty_capabilities(self, mw_data_dir):
+        """Empty capabilities dict → sampling_capable=false."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        body = self._make_initialize_body({})
+        _CapabilityDetectionMiddleware._inspect_initialize(body)
+
+        data = json.loads((mw_data_dir / "mcp_session.json").read_text())
+        assert data["sampling_capable"] is False
+
+    def test_missing_capabilities_key(self, mw_data_dir):
+        """Initialize without capabilities key → sampling_capable=false."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        body = json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26",
+                       "clientInfo": {"name": "t", "version": "1"}},
+        }).encode()
+        _CapabilityDetectionMiddleware._inspect_initialize(body)
+
+        data = json.loads((mw_data_dir / "mcp_session.json").read_text())
+        assert data["sampling_capable"] is False
+
+    def test_overwrites_previous_session(self, mw_data_dir):
+        """Second initialize overwrites stale session from a different client."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        # First: sampling capable
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"sampling": {}})
+        )
+        assert json.loads((mw_data_dir / "mcp_session.json").read_text())["sampling_capable"] is True
+
+        # Second: no sampling
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"roots": {}})
+        )
+        assert json.loads((mw_data_dir / "mcp_session.json").read_text())["sampling_capable"] is False
+
+    def test_written_at_is_recent_utc(self, mw_data_dir):
+        """written_at timestamp is parseable and within a few seconds of now."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"sampling": {}})
+        )
+        data = json.loads((mw_data_dir / "mcp_session.json").read_text())
+        ts = datetime.fromisoformat(data["written_at"])
+        assert abs((datetime.now(timezone.utc) - ts).total_seconds()) < 5
+
+    def test_middleware_is_attached_to_mcp_app(self):
+        """The patched streamable_http_app includes the middleware."""
+        from app.mcp_server import mcp as mcp_instance
+
+        app = mcp_instance.streamable_http_app()
+        middleware_classes = [m.cls for m in app.user_middleware]
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        assert _CapabilityDetectionMiddleware in middleware_classes

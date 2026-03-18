@@ -37,9 +37,10 @@
     return () => eventSource?.close();
   });
 
-  // Health polling — initial check + periodic refresh for sampling capability detection.
-  // Re-polls every 60s so the force_sampling toggle unlocks within a minute of
-  // connecting a sampling-capable MCP client (mcp_session.json is written on tool calls).
+  // Health polling — initial fast poll (10s) to detect MCP client connections
+  // quickly, then settles to 60s after 2 minutes. The ASGI middleware writes
+  // mcp_session.json on the MCP initialize handshake, so detection happens
+  // within one poll interval of the client connecting.
   function applyHealth(h: HealthResponse) {
     health = h;
     backendError = null;
@@ -48,14 +49,29 @@
   }
 
   $effect(() => {
+    const FAST_INTERVAL = 10_000;   // 10s during startup window
+    const SLOW_INTERVAL = 60_000;   // 60s steady-state
+    const FAST_WINDOW   = 120_000;  // 2 min fast-poll window
+    const startedAt = Date.now();
+
     const poll = () => {
       getHealth()
         .then(applyHealth)
         .catch(() => { backendError = 'Cannot connect to backend. Check that services are running.'; });
     };
     poll();
-    const interval = setInterval(poll, 60_000);
-    return () => clearInterval(interval);
+
+    // Start with fast polling, switch to slow after the fast window
+    let timer = setInterval(poll, FAST_INTERVAL);
+    const slowdown = setTimeout(() => {
+      clearInterval(timer);
+      timer = setInterval(poll, SLOW_INTERVAL);
+    }, FAST_WINDOW);
+
+    return () => {
+      clearInterval(timer);
+      clearTimeout(slowdown);
+    };
 
     // GitHub auth checked lazily when user navigates to GitHub panel
     // (avoids 401 console noise on every page load when OAuth isn't configured)

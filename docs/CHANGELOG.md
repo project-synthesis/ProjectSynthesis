@@ -6,7 +6,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ### Added
 - Added `pipeline.force_passthrough` preference toggle — forces passthrough mode (assembled template for external LLM) in both MCP and frontend, mutually exclusive with `force_sampling`
-- Added runtime MCP sampling capability detection via `data/mcp_session.json` — MCP server writes client capabilities on each `synthesis_optimize` call; health endpoint reads with 5-minute staleness window
+- Added ASGI middleware on MCP server that detects sampling capability at `initialize` handshake — writes `mcp_session.json` before any tool call, enabling instant detection when an MCP client connects
+- Added runtime MCP sampling capability detection via `data/mcp_session.json` — all 4 MCP tools refresh client capabilities on every call; health endpoint reads with 5-minute staleness window
 - Added `sampling_capable` field to `/api/health` response
 - Added PASSTHROUGH badge in Navigator Defaults section (amber warning color) when force_passthrough is active
 - Added `pipeline.force_sampling` preference toggle — forces `synthesis_optimize` through the MCP sampling pipeline (IDE's LLM) even when a local provider is detected; gracefully falls through to the local provider if sampling fails
@@ -67,6 +68,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - `force_sampling` and `force_passthrough` are mutually exclusive — enforced server-side (422) and client-side (radio toggle behavior)
 - Force IDE sampling toggle disabled when sampling is unavailable or passthrough is active
 - Force passthrough toggle disabled when sampling is available or force_sampling is active
+- Frontend health polling uses fast 10s interval for first 2 minutes, then 60s steady-state — detects MCP client connections within seconds of handshake
+- All 4 MCP tools (`synthesis_optimize`, `synthesis_analyze`, `synthesis_prepare_optimization`, `synthesis_save_result`) now write session capabilities on every invocation
 
 ### Fixed
 - Docker: healthcheck validates /api/health (was hitting nginx root, always 200)
