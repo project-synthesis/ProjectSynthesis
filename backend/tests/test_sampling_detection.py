@@ -14,7 +14,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 VALID_PROMPT = "Write a Python function that sorts a list of integers using merge sort"
 
 
