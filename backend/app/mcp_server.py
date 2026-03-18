@@ -9,11 +9,13 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import random
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -84,6 +86,33 @@ async def _resolve_workspace_guidance(
     if profile:
         logger.info("Workspace guidance resolved: %d chars from %d roots", len(profile), len(roots))
     return profile
+
+
+def _write_mcp_session_caps(ctx: Context | None) -> None:
+    """Detect sampling capability from MCP client and persist to mcp_session.json.
+
+    Called at the start of every synthesis_optimize invocation, before routing.
+    Silently skips if ctx is None or attribute lookup fails.
+    """
+    try:
+        sampling_capable = (
+            ctx is not None
+            and hasattr(ctx, "session")
+            and ctx.session is not None
+            and ctx.session.client_params is not None
+            and getattr(ctx.session.client_params.capabilities, "sampling", None) is not None
+        )
+        path = DATA_DIR / "mcp_session.json"
+        path.write_text(
+            _json.dumps({
+                "sampling_capable": sampling_capable,
+                "written_at": datetime.now(timezone.utc).isoformat(),
+            }),
+            encoding="utf-8",
+        )
+        logger.debug("mcp_session.json written: sampling_capable=%s", sampling_capable)
+    except Exception:
+        logger.debug("Could not write mcp_session.json", exc_info=True)
 
 
 @asynccontextmanager
@@ -384,14 +413,14 @@ async def synthesis_optimize(
 ) -> dict:
     """Run the full optimization pipeline on a prompt.
 
-    Four execution paths (automatic selection):
-    1. force_sampling=True + client supports sampling → 3-phase pipeline via IDE's LLM
-    2. Local provider exists → full 3-phase internal pipeline
-    3. No provider + client supports MCP sampling → 3-phase pipeline via IDE's LLM
-    4. No provider + no sampling → returns assembled template for manual processing
+    Five execution paths (checked in order):
+    1. force_passthrough=True → assembled template returned immediately (manual processing)
+    2. force_sampling=True + client supports sampling → 3-phase pipeline via IDE's LLM
+    3. Local provider exists → full 3-phase internal pipeline
+    4. No provider + client supports MCP sampling → 3-phase pipeline via IDE's LLM
+    5. No provider + no sampling → assembled template for manual processing
 
-    Set pipeline.force_sampling=True in preferences to always use path 1 regardless
-    of whether a local provider is detected.
+    pipeline.force_passthrough and pipeline.force_sampling are mutually exclusive.
     """
     if len(prompt) < 20:
         raise ValueError(
@@ -408,6 +437,45 @@ async def synthesis_optimize(
     prefs = PreferencesService(DATA_DIR)
     effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
     guidance = await _resolve_workspace_guidance(ctx, workspace_path)
+
+    # ---- Detect and persist MCP client sampling capability (before routing) ----
+    _write_mcp_session_caps(ctx)
+
+    # ---- Force-passthrough short-circuit (explicit manual override, checked first) ----
+    if prefs.get("pipeline.force_passthrough"):
+        logger.info("synthesis_optimize: force_passthrough=True — returning passthrough template directly")
+        assembled, strategy_name = assemble_passthrough_prompt(
+            prompts_dir=PROMPTS_DIR,
+            raw_prompt=prompt,
+            strategy_name=effective_strategy,
+            codebase_guidance=guidance,
+        )
+        trace_id = str(uuid.uuid4())
+        async with async_session_factory() as db:
+            pending = Optimization(
+                id=str(uuid.uuid4()),
+                raw_prompt=prompt,
+                status="pending",
+                trace_id=trace_id,
+                provider="mcp_passthrough",
+                strategy_used=strategy_name,
+                task_type="general",
+            )
+            db.add(pending)
+            await db.commit()
+        return {
+            "status": "pending_external",
+            "trace_id": trace_id,
+            "assembled_prompt": assembled,
+            "strategy_used": strategy_name,
+            "pipeline_mode": "passthrough",
+            "instructions": (
+                "force_passthrough=True. Process the assembled_prompt with your LLM, "
+                "then call synthesis_save_result with the trace_id and the optimized output. "
+                "Include optimized_prompt, changes_summary, task_type, strategy_used, and "
+                "optionally scores (clarity, specificity, structure, faithfulness, conciseness — each 1-10)."
+            ),
+        }
 
     # ---- Force-sampling short-circuit (overrides local provider when enabled) ----
     _sampling_already_attempted = False
