@@ -60,6 +60,9 @@ class Optimization(Base):
     context_sources = Column(JSON, nullable=True)
     original_scores = Column(JSON, nullable=True)
     score_deltas = Column(JSON, nullable=True)
+    intent_label = Column(String, nullable=True)
+    domain = Column(String, nullable=True)
+    embedding = Column(LargeBinary, nullable=True)
 
 
 class Feedback(Base):
@@ -82,6 +85,44 @@ class StrategyAffinity(Base):
     thumbs_down = Column(Integer, default=0, nullable=False)
     approval_rate = Column(Float, default=0.0, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
+class PatternFamily(Base):
+    __tablename__ = "pattern_families"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    intent_label = Column(String, nullable=False)
+    domain = Column(String, nullable=False, default="general")
+    task_type = Column(String, nullable=False, default="general")
+    centroid_embedding = Column(LargeBinary, nullable=False)
+    usage_count = Column(Integer, default=0, nullable=False)
+    member_count = Column(Integer, default=1, nullable=False)
+    avg_score = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
+class MetaPattern(Base):
+    __tablename__ = "meta_patterns"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    family_id = Column(String, ForeignKey("pattern_families.id"), nullable=False)
+    pattern_text = Column(Text, nullable=False)
+    embedding = Column(LargeBinary, nullable=True)
+    source_count = Column(Integer, default=1, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
+class OptimizationPattern(Base):
+    __tablename__ = "optimization_patterns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    optimization_id = Column(String, ForeignKey("optimizations.id"), nullable=False)
+    family_id = Column(String, ForeignKey("pattern_families.id"), nullable=False)
+    meta_pattern_id = Column(String, ForeignKey("meta_patterns.id"), nullable=True)
+    relationship = Column(String, nullable=False)  # "source" or "applied"
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
 
 
 # --- Ported tables (GitHub/Embedding) ---
