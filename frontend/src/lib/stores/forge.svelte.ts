@@ -33,6 +33,9 @@ class ForgeStore {
   // Initial suggestions from the pipeline (before any refinement turns exist)
   initialSuggestions = $state<Array<Record<string, string>>>([]);
 
+  // Applied pattern texts from knowledge graph paste detection
+  appliedPatterns = $state<string[] | null>(null);
+
   /** Set by +page.svelte after health check — true when health.provider is null. */
   noProvider = $state(false);
   /** Set by +page.svelte after health check — null until health is fetched. */
@@ -66,6 +69,7 @@ class ForgeStore {
     this.passthroughTraceId = null;
     this.passthroughStrategy = null;
     this.initialSuggestions = [];
+    this.appliedPatterns = null;
 
     // Passthrough mode — no provider, or force_passthrough preference enabled
     if (this.noProvider || preferencesStore.pipeline.force_passthrough) {
@@ -272,6 +276,7 @@ class ForgeStore {
     this.passthroughTraceId = null;
     this.passthroughStrategy = null;
     this.initialSuggestions = [];
+    this.appliedPatterns = null;
   }
 }
 
