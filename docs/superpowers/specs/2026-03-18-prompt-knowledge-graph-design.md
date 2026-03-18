@@ -81,7 +81,7 @@ Two new columns:
 | `relationship` | String | `source` (contributed patterns) or `applied` (used existing patterns) |
 | `created_at` | DateTime | |
 
-Composite PK: `(optimization_id, family_id, meta_pattern_id, relationship)`.
+PK: auto-increment `id` (Integer). Unique constraint on `(optimization_id, family_id, relationship)`. `meta_pattern_id` remains nullable — a record can link an optimization to a family without specifying a sub-pattern.
 
 ---
 
@@ -93,7 +93,7 @@ Extend `prompts/analyze.md` to also extract:
 - `intent_label` — concise 3-6 word intent phrase
 - `domain` — one of the 7 domain values
 
-Added to `AnalysisResult` in `pipeline_contracts.py`. Persisted to `optimizations` row alongside existing `task_type`. Same LLM call — two additional fields.
+Added to `AnalysisResult` in `pipeline_contracts.py` as **optional fields with defaults** (`intent_label: str = "general"`, `domain: str = "general"`). This ensures backward compatibility — if the LLM omits either field, the pipeline continues with safe defaults rather than aborting. The `analyze.md` prompt template must be updated atomically with the schema change to instruct the LLM to output these fields. Persisted to `optimizations` row alongside existing `task_type`. Same LLM call — two additional fields.
 
 The `domain` is orthogonal to `task_type`:
 - `task_type` = what kind of prompt (coding, writing, analysis, creative, data, system, general)
@@ -103,7 +103,7 @@ The `domain` is orthogonal to `task_type`:
 
 New service: `PatternExtractorService` (`backend/app/services/pattern_extractor.py`)
 
-Triggered as a FastAPI `BackgroundTasks` after the pipeline writes a completed optimization.
+Triggered after the pipeline completes and publishes the `optimization_created` event. Hook point: subscribe to `optimization_created` on the event bus and spawn the extraction as an `asyncio.create_task()` (not `BackgroundTasks`, since the pipeline runs inside an SSE generator that doesn't inject them).
 
 **Extraction flow:**
 
@@ -115,6 +115,7 @@ Triggered as a FastAPI `BackgroundTasks` after the pipeline writes a completed o
      → Merge into existing family
      → Update centroid as running mean: new_centroid = (old * n + new) / (n + 1)
      → Increment usage_count, recompute avg_score
+     → Update domain to majority domain of members (recount on merge)
 5. If no match above threshold:
      → Create new pattern_family with this optimization's embedding as initial centroid
 6. Haiku LLM call: extract meta_patterns from the full optimization record
@@ -223,7 +224,6 @@ Location: `backend/app/services/knowledge_graph.py`
           "source_count": 3
         }
       ],
-      "connections": ["other-family-uuid"]
     }
   ],
   "edges": [
@@ -237,7 +237,7 @@ Location: `backend/app/services/knowledge_graph.py`
 }
 ```
 
-The `edges` array captures cross-family relationships — families that share meta-patterns or have optimizations contributing to both. This gives the mindmap its interconnected quality.
+The `edges` array captures cross-family relationships. **Edge computation algorithm:** For every pair of families, compute cosine similarity between their centroid embeddings. If similarity > `EDGE_THRESHOLD` (0.55), an edge is created with `weight` = the cosine similarity. Additionally, if an optimization's embedding is within `FAMILY_MERGE_THRESHOLD` of two different family centroids (near the merge boundary), this contributes +1 to `shared_patterns` count for that pair. Edges with `weight` < 0.55 and `shared_patterns` = 0 are pruned. This is computed lazily on `GET /api/patterns/graph` and cached until the next `pattern_updated` event.
 
 ### Event Integration
 
@@ -384,6 +384,9 @@ PATTERN_MERGE_THRESHOLD = 0.82
 
 # pattern_matcher.py
 SUGGESTION_THRESHOLD = 0.72
+
+# knowledge_graph.py
+EDGE_THRESHOLD = 0.55
 
 # Frontend constants
 PASTE_CHAR_DELTA = 50
