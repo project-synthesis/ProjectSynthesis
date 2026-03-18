@@ -54,7 +54,35 @@ async def lifespan(app: FastAPI):
     )
     app.state.watcher_task = watcher_task
 
+    # Start pattern extraction subscriber
+    async def _pattern_extraction_listener():
+        """Subscribe to optimization_created events and extract patterns."""
+        try:
+            from app.services.pattern_extractor import PatternExtractorService
+            extractor = PatternExtractorService()
+            async for event in event_bus.subscribe():
+                if event.get("event") == "optimization_created":
+                    opt_id = event.get("data", {}).get("id")
+                    if opt_id:
+                        asyncio.create_task(extractor.process(opt_id))
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.error("Pattern extraction listener crashed: %s", exc, exc_info=True)
+
+    from app.services.event_bus import event_bus
+    extraction_task = asyncio.create_task(_pattern_extraction_listener())
+    app.state.extraction_task = extraction_task
+
     yield
+
+    # Stop pattern extraction listener
+    if hasattr(app.state, "extraction_task"):
+        app.state.extraction_task.cancel()
+        try:
+            await app.state.extraction_task
+        except asyncio.CancelledError:
+            pass
 
     # Stop strategy file watcher
     if hasattr(app.state, "watcher_task"):
