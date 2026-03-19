@@ -250,3 +250,180 @@ class TestEdgeCases:
         decision = resolve_route(state, ctx)
         assert decision.tier == "passthrough"
         assert decision.degraded_from is None
+
+
+# ---------------------------------------------------------------------------
+# RoutingManager integration tests
+# ---------------------------------------------------------------------------
+
+import asyncio
+import json
+from datetime import timedelta
+from pathlib import Path
+
+from app.services.event_bus import EventBus
+from app.services.routing import RoutingManager
+
+
+@pytest.fixture
+def event_bus() -> EventBus:
+    return EventBus()
+
+
+@pytest.fixture
+def manager(tmp_path: Path, event_bus: EventBus) -> RoutingManager:
+    return RoutingManager(event_bus=event_bus, data_dir=tmp_path)
+
+
+class TestManagerSetProvider:
+    def test_initial_state_no_provider(self, manager: RoutingManager) -> None:
+        assert manager.state.provider is None
+        assert manager.state.provider_name is None
+
+    def test_set_provider(self, manager: RoutingManager) -> None:
+        mock_provider = MagicMock()
+        mock_provider.name = "claude_cli"
+        manager.set_provider(mock_provider)
+        assert manager.state.provider is mock_provider
+        assert manager.state.provider_name == "claude_cli"
+
+    def test_set_provider_fires_event(self, manager: RoutingManager, event_bus: EventBus) -> None:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        event_bus._subscribers.add(queue)
+        mock_provider = MagicMock()
+        mock_provider.name = "anthropic_api"
+        manager.set_provider(mock_provider)
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["event"] == "routing_state_changed"
+        assert event["data"]["provider"] == "anthropic_api"
+
+    def test_clear_provider(self, manager: RoutingManager) -> None:
+        mock_provider = MagicMock()
+        mock_provider.name = "claude_cli"
+        manager.set_provider(mock_provider)
+        manager.set_provider(None)
+        assert manager.state.provider is None
+        assert manager.state.provider_name is None
+
+
+class TestManagerMcpInitialize:
+    def test_sampling_detected(self, manager: RoutingManager) -> None:
+        manager.on_mcp_initialize(sampling_capable=True)
+        assert manager.state.sampling_capable is True
+        assert manager.state.mcp_connected is True
+
+    def test_no_sampling(self, manager: RoutingManager) -> None:
+        manager.on_mcp_initialize(sampling_capable=False)
+        assert manager.state.sampling_capable is False
+        assert manager.state.mcp_connected is True
+
+    def test_optimistic_skip_no_downgrade(self, manager: RoutingManager) -> None:
+        """Fresh True should not be overwritten by False within staleness window."""
+        manager.on_mcp_initialize(sampling_capable=True)
+        assert manager.state.sampling_capable is True
+        manager.on_mcp_initialize(sampling_capable=False)
+        # Should still be True (optimistic strategy)
+        assert manager.state.sampling_capable is True
+
+    def test_initialize_fires_event(self, manager: RoutingManager, event_bus: EventBus) -> None:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        event_bus._subscribers.add(queue)
+        manager.on_mcp_initialize(sampling_capable=True)
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["event"] == "routing_state_changed"
+        assert event["data"]["sampling_capable"] is True
+
+
+class TestManagerActivity:
+    def test_activity_updates_timestamp(self, manager: RoutingManager) -> None:
+        manager.on_mcp_initialize(sampling_capable=True)
+        old_activity = manager.state.last_activity
+        import time
+        time.sleep(0.01)  # Ensure time advances
+        manager.on_mcp_activity()
+        assert manager.state.last_activity > old_activity  # type: ignore[operator]
+
+    def test_reconnection_detected(self, manager: RoutingManager, event_bus: EventBus) -> None:
+        manager.on_mcp_initialize(sampling_capable=True)
+        # Simulate disconnect
+        manager._update_state(mcp_connected=False)
+        assert manager.state.mcp_connected is False
+        # Activity triggers reconnection
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        event_bus._subscribers.add(queue)
+        manager.on_mcp_activity()
+        assert manager.state.mcp_connected is True
+        # Should have fired reconnection event
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["event"] == "routing_state_changed"
+        assert event["data"]["trigger"] == "mcp_reconnect"
+
+
+class TestManagerResolve:
+    def test_delegates_to_resolver(self, manager: RoutingManager) -> None:
+        mock_provider = MagicMock()
+        mock_provider.name = "claude_cli"
+        manager.set_provider(mock_provider)
+        ctx = RoutingContext(preferences={"pipeline": {}}, caller="rest")
+        decision = manager.resolve(ctx)
+        assert decision.tier == "internal"
+        assert decision.provider_name == "claude_cli"
+
+    def test_passthrough_when_nothing_available(self, manager: RoutingManager) -> None:
+        ctx = RoutingContext(preferences={"pipeline": {}}, caller="rest")
+        decision = manager.resolve(ctx)
+        assert decision.tier == "passthrough"
+
+
+class TestManagerRecovery:
+    def test_no_session_file(self, tmp_path: Path, event_bus: EventBus) -> None:
+        """No mcp_session.json — starts with safe defaults."""
+        mgr = RoutingManager(event_bus=event_bus, data_dir=tmp_path)
+        assert mgr.state.sampling_capable is None
+        assert mgr.state.mcp_connected is False
+
+    def test_fresh_session_file(self, tmp_path: Path, event_bus: EventBus) -> None:
+        """Recent mcp_session.json with sampling=True — recovers correctly."""
+        from datetime import datetime, timezone
+        session_file = tmp_path / "mcp_session.json"
+        now = datetime.now(timezone.utc).isoformat()
+        session_file.write_text(json.dumps({
+            "sampling_capable": True, "written_at": now, "last_activity": now,
+        }))
+        mgr = RoutingManager(event_bus=event_bus, data_dir=tmp_path)
+        assert mgr.state.sampling_capable is True
+        assert mgr.state.mcp_connected is True
+
+    def test_stale_session_file(self, tmp_path: Path, event_bus: EventBus) -> None:
+        """Old mcp_session.json — sampling goes to None (unknown)."""
+        from datetime import datetime, timedelta, timezone
+        session_file = tmp_path / "mcp_session.json"
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        session_file.write_text(json.dumps({
+            "sampling_capable": True, "written_at": old, "last_activity": old,
+        }))
+        mgr = RoutingManager(event_bus=event_bus, data_dir=tmp_path)
+        assert mgr.state.sampling_capable is None  # stale → unknown
+        assert mgr.state.mcp_connected is False      # activity stale
+
+
+class TestManagerAvailableTiers:
+    def test_only_passthrough_when_nothing(self, manager: RoutingManager) -> None:
+        assert manager.available_tiers == ["passthrough"]
+
+    def test_internal_and_passthrough(self, manager: RoutingManager) -> None:
+        mock_provider = MagicMock()
+        mock_provider.name = "claude_cli"
+        manager.set_provider(mock_provider)
+        assert "internal" in manager.available_tiers
+        assert "passthrough" in manager.available_tiers
+
+    def test_all_tiers(self, manager: RoutingManager) -> None:
+        mock_provider = MagicMock()
+        mock_provider.name = "claude_cli"
+        manager.set_provider(mock_provider)
+        manager.on_mcp_initialize(sampling_capable=True)
+        assert manager.available_tiers == ["internal", "sampling", "passthrough"]

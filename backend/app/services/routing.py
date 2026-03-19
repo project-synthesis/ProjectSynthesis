@@ -17,12 +17,20 @@ Priority chain (highest wins):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
+import asyncio
+import logging
+import time
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from app.providers.base import LLMProvider
+    from app.services.event_bus import EventBus
+    from app.services.mcp_session_file import MCPSessionFile
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +171,219 @@ def resolve_route(state: RoutingState, ctx: RoutingContext) -> RoutingDecision:
         reason="no internal provider or sampling available",
         degraded_from="internal",
     )
+
+
+# ---------------------------------------------------------------------------
+# RoutingManager — thin orchestration wrapper
+# ---------------------------------------------------------------------------
+
+
+class RoutingManager:
+    """Manages live routing state, disconnect detection, and event broadcasting.
+
+    Holds in-memory ``RoutingState`` as primary source of truth.
+    ``mcp_session.json`` is write-through persistence for restart recovery.
+    """
+
+    def __init__(
+        self,
+        event_bus: EventBus,
+        data_dir: Path,
+    ) -> None:
+        self._event_bus = event_bus
+        self._data_dir = data_dir
+        self._session_file: MCPSessionFile | None = None
+        self._disconnect_task: asyncio.Task[None] | None = None
+
+        # Initialize from persistence or defaults
+        self._state = self._recover_state()
+
+    @property
+    def state(self) -> RoutingState:
+        return self._state
+
+    @property
+    def available_tiers(self) -> list[str]:
+        """Which tiers are currently reachable (for frontend display)."""
+        tiers: list[str] = []
+        if self._state.provider:
+            tiers.append("internal")
+        if self._state.sampling_capable is True and self._state.mcp_connected:
+            tiers.append("sampling")
+        tiers.append("passthrough")
+        return tiers
+
+    # ── State updates ─────────────────────────────────────────────────
+
+    def set_provider(self, provider: LLMProvider | None) -> None:
+        """Called at startup and on API key hot-reload/delete."""
+        old_name = self._state.provider_name
+        new_name = provider.name if provider else None
+        self._state = replace(
+            self._state,
+            provider=provider,
+            provider_name=new_name,
+        )
+        if old_name != new_name:
+            self._broadcast_state_change("provider_changed")
+
+    def on_mcp_initialize(self, sampling_capable: bool) -> None:
+        """Called by ASGI middleware when MCP ``initialize`` is intercepted."""
+        now = datetime.now(timezone.utc)
+
+        # Optimistic strategy: False never overwrites a fresh True
+        if not sampling_capable and self._state.sampling_capable is True:
+            if self._state.last_capability_update:
+                from app.config import MCP_CAPABILITY_STALENESS_MINUTES
+                elapsed = (now - self._state.last_capability_update).total_seconds() / 60
+                if elapsed <= MCP_CAPABILITY_STALENESS_MINUTES:
+                    logger.debug("Optimistic skip: not downgrading fresh sampling_capable=True")
+                    self._update_state(mcp_connected=True, last_activity=now)
+                    self._persist()
+                    return
+
+        was_connected = self._state.mcp_connected
+        old_sampling = self._state.sampling_capable
+        self._update_state(
+            sampling_capable=sampling_capable,
+            mcp_connected=True,
+            last_capability_update=now,
+            last_activity=now,
+        )
+        self._persist()
+        if old_sampling != sampling_capable or not was_connected:
+            self._broadcast_state_change("mcp_initialize")
+
+    def on_mcp_activity(self) -> None:
+        """Called by middleware on every MCP POST (throttled to 10s by caller)."""
+        now = datetime.now(timezone.utc)
+        was_disconnected = not self._state.mcp_connected
+        self._update_state(mcp_connected=True, last_activity=now)
+        self._persist()
+        if was_disconnected:
+            self._broadcast_state_change("mcp_reconnect")
+
+    # ── Public API ────────────────────────────────────────────────────
+
+    def resolve(self, ctx: RoutingContext) -> RoutingDecision:
+        """Resolve route, log decision, return."""
+        start = time.monotonic_ns()
+        decision = resolve_route(self._state, ctx)
+        elapsed_us = (time.monotonic_ns() - start) // 1000
+        logger.info(
+            "routing.decision caller=%s tier=%s provider=%s reason=%r degraded_from=%s duration_us=%d",
+            ctx.caller,
+            decision.tier,
+            decision.provider_name,
+            decision.reason,
+            decision.degraded_from,
+            elapsed_us,
+        )
+        return decision
+
+    # ── Background disconnect checker ─────────────────────────────────
+
+    async def start_disconnect_checker(self) -> None:
+        """Start the background task that detects MCP disconnections."""
+        self._disconnect_task = asyncio.create_task(self._disconnect_loop())
+
+    async def stop(self) -> None:
+        """Cancel background tasks."""
+        if self._disconnect_task:
+            self._disconnect_task.cancel()
+            try:
+                await self._disconnect_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _disconnect_loop(self) -> None:
+        """Check every 60s if MCP activity has gone stale."""
+        from app.config import MCP_ACTIVITY_STALENESS_SECONDS
+
+        while True:
+            await asyncio.sleep(60)
+            if self._state.mcp_connected and self._state.last_activity:
+                elapsed = (
+                    datetime.now(timezone.utc) - self._state.last_activity
+                ).total_seconds()
+                if elapsed > MCP_ACTIVITY_STALENESS_SECONDS:
+                    logger.info("MCP activity stale (%.0fs) — marking disconnected", elapsed)
+                    self._update_state(mcp_connected=False)
+                    self._broadcast_state_change("disconnect")
+
+    # ── Internal helpers ──────────────────────────────────────────────
+
+    def _update_state(self, **fields: Any) -> None:
+        """Replace specific fields in the current state."""
+        self._state = replace(self._state, **fields)
+
+    def _persist(self) -> None:
+        """Write-through to ``mcp_session.json`` for restart recovery.
+
+        Only called from the MCP server process (sole writer per spec).
+        """
+        if self._session_file:
+            try:
+                self._session_file.write_session(
+                    sampling_capable=self._state.sampling_capable is True,
+                )
+            except Exception:
+                logger.debug("Failed to persist routing state", exc_info=True)
+
+    def _broadcast_state_change(self, event: str) -> None:
+        """Push routing_state_changed to all SSE subscribers."""
+        payload = {
+            "trigger": event,
+            "provider": self._state.provider_name,
+            "sampling_capable": self._state.sampling_capable,
+            "mcp_connected": self._state.mcp_connected,
+            "available_tiers": self.available_tiers,
+        }
+        self._event_bus.publish("routing_state_changed", payload)
+        logger.info(
+            "routing.state_change event=%s sampling_capable=%s mcp_connected=%s available_tiers=%s",
+            event,
+            self._state.sampling_capable,
+            self._state.mcp_connected,
+            ",".join(self.available_tiers),
+        )
+
+    def _recover_state(self) -> RoutingState:
+        """Recover state from ``mcp_session.json`` on startup."""
+        from app.services.mcp_session_file import MCPSessionFile as _MCPSessionFile
+
+        self._session_file = _MCPSessionFile(self._data_dir)
+        data = self._session_file.read()
+
+        if data is None:
+            return RoutingState(
+                provider=None,
+                provider_name=None,
+                sampling_capable=None,
+                mcp_connected=False,
+                last_capability_update=None,
+                last_activity=None,
+            )
+
+        # Apply staleness checks
+        sampling = data.get("sampling_capable", False)
+        if not self._session_file.is_capability_fresh(data):
+            sampling = None  # Stale → unknown
+
+        connected = not self._session_file.detect_disconnect(data)
+
+        last_activity = None
+        if "last_activity" in data:
+            try:
+                last_activity = datetime.fromisoformat(data["last_activity"])
+            except (ValueError, TypeError):
+                pass
+
+        return RoutingState(
+            provider=None,  # Provider set separately via set_provider()
+            provider_name=None,
+            sampling_capable=sampling if sampling is not None else None,
+            mcp_connected=connected,
+            last_capability_update=None,
+            last_activity=last_activity,
+        )
