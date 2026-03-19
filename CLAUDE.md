@@ -56,7 +56,7 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 ### Layer rules
 - `routers/` → `services/` → `models/` only. Services must never import from routers.
 - `PromptLoader.load()` for static templates (no variables: `agent-guidance.md`, `scoring.md`). `PromptLoader.render()` for templates with `{{variables}}`.
-- `AnalysisResult.task_type` is a `Literal` — valid values: `coding`, `writing`, `analysis`, `creative`, `data`, `system`, `general`. `selected_strategy` is a plain `str` — validated at runtime against files in `prompts/strategies/` (fully adaptive, no hardcoded list).
+- `AnalysisResult.task_type` is a `Literal` — valid values: `coding`, `writing`, `analysis`, `creative`, `data`, `system`, `general`. `selected_strategy` is a plain `str` — validated at runtime against files in `prompts/strategies/` (fully adaptive, no hardcoded list). `intent_label` (3-6 word phrase) and `domain` (`backend`, `frontend`, `database`, `devops`, `security`, `fullstack`, `general`) are extracted by the analyzer and default to `"general"`.
 
 ### Key services (`backend/app/services/`)
 - `pipeline.py` — orchestrates analyzer → optimizer → scorer (3-phase pipeline)
@@ -81,6 +81,9 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - `github_client.py` — raw GitHub API calls; explicit token parameter on every method
 - `event_bus.py` — in-process pub/sub for real-time cross-client notifications
 - `workspace_intelligence.py` — zero-config workspace analysis (project type, tech stack from manifest files)
+- `pattern_extractor.py` — post-completion pattern extraction: embeds prompts, clusters into families (cosine ≥0.78), extracts meta-patterns via Haiku (cosine ≥0.82 for merge). Subscribes to `optimization_created` events.
+- `pattern_matcher.py` — on-paste similarity search: matches prompt text against family centroids (cosine ≥0.72 suggestion threshold). Returns best family + meta-patterns.
+- `knowledge_graph.py` — graph building for radial mindmap: family nodes, domain grouping, cross-family edges (cosine ≥0.55), semantic search, family detail with linked optimizations.
 
 ### Model configuration
 Model IDs are centralized in `config.py` as `MODEL_SONNET`, `MODEL_OPUS`, `MODEL_HAIKU` (default: `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`). Never hardcode model IDs in service code — use `PreferencesService.resolve_model(phase, snapshot)` which maps user preferences to full model IDs.
@@ -106,6 +109,7 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 - `github_repos.py` — repo management (list, link, linked, unlink)
 - `health.py` — `GET /api/health` (status, provider, score_health, recent_errors, avg_duration_ms, sampling_capable)
 - `events.py` — `GET /api/events` (SSE event stream), `POST /api/events/_publish` (internal cross-process)
+- `patterns.py` — `GET /api/patterns/graph`, `POST /api/patterns/match`, `GET /api/patterns/families`, `GET /api/patterns/families/{id}`, `PATCH /api/patterns/families/{id}`, `GET /api/patterns/search`, `GET /api/patterns/stats`
 
 ### Sort column whitelist
 `optimization_service.py` defines `_VALID_SORT_COLUMNS`. Add new sortable columns there before using them.
@@ -113,6 +117,11 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 ### Shared utilities
 - `app/utils/sse.py` — shared `format_sse()` for SSE event formatting (used by optimize + refinement routers)
 - `app/dependencies/rate_limit.py` — in-memory rate limiting FastAPI dependency via `limits` library
+
+### Pattern knowledge graph models (`app/models.py`)
+- `PatternFamily` — cluster of related optimizations. Fields: `centroid_embedding` (running mean, bytes), `intent_label`, `domain`, `task_type`, `member_count`, `usage_count`, `avg_score`.
+- `MetaPattern` — reusable technique extracted from family members. `embedding` (bytes), `pattern_text`, `source_count`, `family_id` FK.
+- `OptimizationPattern` — join table linking `Optimization` → `PatternFamily` with similarity score.
 
 ## Frontend
 
@@ -123,21 +132,26 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 
 ### Stores (`frontend/src/lib/stores/`)
 - `forge.svelte.ts` — optimization pipeline state (prompt, strategy, SSE events, result, feedback). Session persistence via `localStorage` (`synthesis:last_trace_id`) — page refresh restores last optimization from DB.
-- `editor.svelte.ts` — tab management (prompt/result/diff types)
+- `editor.svelte.ts` — tab management (prompt/result/diff/mindmap types)
 - `github.svelte.ts` — GitHub auth + repo link state
 - `refinement.svelte.ts` — refinement sessions (turns, branches, suggestions, score progression)
 - `preferences.svelte.ts` — persistent user preferences loaded from backend
 - `toast.svelte.ts` — toast notification queue with `addToast()` API
+- `patterns.svelte.ts` — pattern knowledge graph state: paste detection (50-char delta, 300ms debounce), suggestion lifecycle (auto-dismiss 10s), graph data for mindmap, family selection for Inspector, graph invalidation via `pattern_updated` SSE
 
 ### Component layout
 ```
 src/lib/components/
-  layout/       # ActivityBar, Navigator, EditorGroups, Inspector, StatusBar
-  editor/       # PromptEdit, ForgeArtifact
+  layout/       # ActivityBar, Navigator, PatternNavigator, EditorGroups, Inspector, StatusBar
+  editor/       # PromptEdit, ForgeArtifact, PatternSuggestion
+  patterns/     # RadialMindmap
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, DiffView, MarkdownRenderer, ProviderBadge, ScoreCard, Toast
 ```
+
+### Shared frontend utilities
+- `constants/patterns.ts` — domain color map, `scoreColor()` helper (shared by Navigator, RadialMindmap, PatternNavigator, Inspector)
 
 ## Prompt templates
 
@@ -154,6 +168,7 @@ All prompts live in `prompts/`. `{{variable}}` syntax. Hot-reloaded on each call
 | `explore.md` | Codebase exploration synthesis (Haiku) |
 | `adaptation.md` | Adaptation state formatter |
 | `passthrough.md` | MCP passthrough combined template |
+| `extract_patterns.md` | Meta-pattern extraction from completed optimizations (Haiku) |
 | `strategies/*.md` | Strategy files with YAML frontmatter (`tagline`, `description`). Fully adaptive — add/remove files to change available strategies. Ships with 6: auto, chain-of-thought, few-shot, meta-prompting, role-playing, structured-output |
 
 Variable reference: `prompts/manifest.json`
@@ -243,7 +258,8 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **Feedback adaptation**: simple strategy affinity counter. Degenerate pattern detection (>90% same rating over 10+ feedbacks).
 - **Refinement**: each turn is a fresh pipeline invocation (not multi-turn accumulation). Rollback creates a branch fork. 3 suggestions generated per turn.
 - **Trace logging**: `trace_logger.py` writes per-phase JSONL traces. Daily rotation with configurable retention (`TRACE_RETENTION_DAYS`).
-- **Real-time event bus**: `event_bus.py` publishes events to all SSE subscribers. Event types: `optimization_created`, `optimization_analyzed`, `optimization_failed`, `feedback_submitted`, `refinement_turn`, `strategy_changed`. MCP server (separate process) notifies via HTTP POST to `/api/events/_publish`. Frontend auto-refreshes History on events, shows toast notifications, syncs Inspector feedback state, and updates StatusBar metrics.
+- **Real-time event bus**: `event_bus.py` publishes events to all SSE subscribers. Event types: `optimization_created`, `optimization_analyzed`, `optimization_failed`, `feedback_submitted`, `refinement_turn`, `strategy_changed`, `pattern_updated`. MCP server (separate process) notifies via HTTP POST to `/api/events/_publish`. Frontend auto-refreshes History on events, shows toast notifications, syncs Inspector feedback state, and updates StatusBar metrics.
 - **Workspace intelligence**: `workspace_intelligence.py` auto-detects project type from manifest files (package.json, requirements.txt, etc.) and injects workspace profile into MCP tool context via `roots/list`.
 - **MCP sampling detection**: two-layer detection (ASGI middleware on `initialize` + per-tool-call refresh) with optimistic write strategy (False never overwrites fresh True within 30-min window). Prevents VS Code multi-session flicker. Health endpoint surfaces `sampling_capable: bool | null`. Frontend fast-polls (10s) for 2 minutes then steady-state (60s). Toggle disabled logic uses `!currentValue &&` prefix so ON toggles are always interactive.
+- **Knowledge graph**: self-building pattern library. Post-completion background job embeds prompts, clusters into `PatternFamily` groups (cosine ≥0.78 merge), extracts meta-patterns via Haiku (cosine ≥0.82 pattern merge). On-paste detection (50-char delta, 300ms debounce) suggests matching families (cosine ≥0.72). Applied patterns injected into optimizer context. Models: `PatternFamily` (centroid running mean), `MetaPattern` (enriched on duplicate), `OptimizationPattern` (join). Cross-family edges at cosine ≥0.55. Domain color coding: backend=#a855f7, frontend=#f59e0b, database=#10b981, security=#ef4444, devops=#3b82f6, fullstack=#00e5ff, general=#6b7280. UI: PatternNavigator (search + paginated family list + domain filter), Inspector family detail (linked optimizations, rename), RadialMindmap (D3.js force-directed SVG), StatusBar pattern count. Activity type `'patterns'` in layout routing.
 - **MCP capability hierarchy**: sampling > internal pipeline > passthrough. `force_sampling` pins to sampling tier, `force_passthrough` pins to passthrough tier. Mutually exclusive — enforced server-side (422) and client-side (radio toggle). `synthesis_optimize` checks `force_passthrough` first (highest routing precedence), then `force_sampling`, then automatic detection (5 execution paths total).

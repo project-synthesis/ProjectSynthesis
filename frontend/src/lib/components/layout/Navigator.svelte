@@ -1,13 +1,15 @@
 <script lang="ts">
+  import PatternNavigator from './PatternNavigator.svelte';
   import { githubStore } from '$lib/stores/github.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
+  import { scoreColor } from '$lib/constants/patterns';
   import { getSettings, getProviders, getHistory, getOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
   import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo } from '$lib/api/client';
 
-  type Activity = 'editor' | 'history' | 'github' | 'settings';
+  type Activity = 'editor' | 'history' | 'patterns' | 'github' | 'settings';
 
   let { active }: { active: Activity } = $props();
 
@@ -189,13 +191,6 @@
     }
   });
 
-  function scoreColor(score: number | null): string {
-    if (score == null || score <= 0) return 'var(--color-text-dim)';
-    if (score >= 7.5) return 'var(--color-neon-green)';
-    if (score >= 5.0) return 'var(--color-neon-yellow)';
-    return 'var(--color-neon-red)';
-  }
-
   // Fix 7: Reset historyLoaded when a new optimization completes
   $effect(() => {
     if (forgeStore.status === 'complete') {
@@ -334,6 +329,10 @@
         {/if}
       </div>
     </div>
+
+  <!-- ============ PATTERNS PANEL ============ -->
+  {:else if active === 'patterns'}
+    <PatternNavigator />
 
   <!-- ============ GITHUB PANEL ============ -->
   {:else if active === 'github'}

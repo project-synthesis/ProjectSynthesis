@@ -10,7 +10,7 @@
 
   let { children } = $props();
 
-  type Activity = 'editor' | 'history' | 'github' | 'settings';
+  type Activity = 'editor' | 'history' | 'patterns' | 'github' | 'settings';
   let activeActivity = $state<Activity>('editor');
 
   $effect(() => {
@@ -21,7 +21,7 @@
   $effect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail === 'editor' || detail === 'history' || detail === 'github' || detail === 'settings') {
+      if (detail === 'editor' || detail === 'history' || detail === 'patterns' || detail === 'github' || detail === 'settings') {
         activeActivity = detail;
       }
     };

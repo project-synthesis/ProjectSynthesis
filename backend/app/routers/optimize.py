@@ -28,6 +28,7 @@ class OptimizeRequest(BaseModel):
     prompt: str = Field(..., min_length=20, description="The raw prompt to optimize")
     strategy: str | None = Field(None, description="Strategy override")
     workspace_path: str | None = Field(None, description="Workspace root for guidance file scanning")
+    applied_pattern_ids: list[str] | None = Field(None, description="Pattern IDs to inject into optimizer context")
 
 
 @router.post("/optimize")
@@ -65,6 +66,7 @@ async def optimize(
             raw_prompt=body.prompt, provider=provider, db=db,
             strategy_override=effective_strategy if effective_strategy != "auto" else None,
             codebase_guidance=guidance,
+            applied_pattern_ids=body.applied_pattern_ids,
         ):
             yield format_sse(event.event, event.data)
 

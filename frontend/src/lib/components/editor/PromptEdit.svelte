@@ -1,8 +1,10 @@
 <script lang="ts">
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
+  import { patternsStore } from '$lib/stores/patterns.svelte';
   import { getStrategies, getHealth } from '$lib/api/client';
   import type { StrategyInfo } from '$lib/api/client';
+  import PatternSuggestion from './PatternSuggestion.svelte';
 
   // Dynamic strategy list — fetched from disk via API
   let strategyOptions = $state<{ value: string; label: string }[]>([{ value: '', label: 'Auto' }]);
@@ -74,6 +76,11 @@
     forgeStore.strategy = val === '' ? null : val;
   }
 
+  function handleInput(e: Event) {
+    const target = e.target as HTMLTextAreaElement;
+    patternsStore.checkForPatterns(target.value);
+  }
+
   async function handleSynthesize() {
     // Re-check provider status before synthesizing — handles mid-session API key changes
     try {
@@ -105,10 +112,14 @@
 <div class="prompt-edit">
   <!-- Editor area (top — takes all available space) -->
   <div class="editor-area">
+    <PatternSuggestion onApply={(patternIds) => {
+      forgeStore.appliedPatternIds = patternIds;
+    }} />
     <textarea
       class="prompt-textarea"
       placeholder="Enter your prompt here..."
       bind:value={forgeStore.prompt}
+      oninput={handleInput}
       spellcheck="false"
       aria-label="Prompt editor"
     ></textarea>

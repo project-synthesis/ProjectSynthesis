@@ -56,8 +56,9 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 │ Bar  │            │                      │             │
 │      │ Strategies │  Prompt Editor       │  Scores     │
 │      │ History    │  Result (Markdown)   │  Deltas     │
-│      │ GitHub     │  Diff View           │  Sparkline  │
-│      │ Settings   │  Refinement Timeline │             │
+│      │ Patterns   │  Diff View           │  Sparkline  │
+│      │ GitHub     │  Refinement Timeline │  Family     │
+│      │ Settings   │  Radial Mindmap      │  Detail     │
 ├──────┴────────────┴──────────────────────┴─────────────┤
 │                      Status Bar                        │
 └────────────────────────────────────────────────────────┘
@@ -106,6 +107,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, .cursorrules for context injection
 - **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution
 - **Real-time events** — SSE-based event bus with toast notifications for file changes, MCP operations, and pipeline status
+- **Pattern knowledge graph** — self-building library of prompt patterns extracted from every optimization. Clusters into families, extracts reusable meta-patterns, and suggests matching patterns on paste. D3.js radial mindmap visualization with domain grouping and cross-family similarity edges
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation
 - **API key management** — set/update/remove via UI with Fernet encryption at rest
 
@@ -132,7 +134,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (251 tests, ~30s)
+# Backend tests (~30s)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
@@ -161,6 +163,12 @@ cd frontend && npm run build
 | `/api/settings` | GET | Read-only server config |
 | `/api/health` | GET | Health + pipeline metrics |
 | `/api/events` | GET (SSE) | Real-time event stream |
+| `/api/patterns/graph` | GET | Knowledge graph for radial mindmap |
+| `/api/patterns/match` | POST | Match prompt against known families |
+| `/api/patterns/families` | GET | List families (paginated) |
+| `/api/patterns/families/{id}` | GET/PATCH | Family detail / rename |
+| `/api/patterns/search` | GET | Semantic search across patterns |
+| `/api/patterns/stats` | GET | Pattern count + domain distribution |
 | `/api/github/auth/*` | GET/POST | GitHub OAuth flow |
 | `/api/github/repos/*` | GET/POST/DELETE | Repo management |
 

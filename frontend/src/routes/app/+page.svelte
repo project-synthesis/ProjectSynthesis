@@ -1,6 +1,7 @@
 <script lang="ts">
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
+  import { patternsStore } from '$lib/stores/patterns.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
   import { getHealth, connectEventStream } from '$lib/api/client';
   import type { HealthResponse } from '$lib/api/client';
@@ -32,6 +33,10 @@
       }
       if (type === 'strategy_changed') {
         window.dispatchEvent(new CustomEvent('strategy-changed', { detail: data }));
+      }
+      if (type === 'pattern_updated') {
+        patternsStore.invalidateGraph();
+        addToast('created', `Pattern family updated: ${(data.intent_label as string) || 'new family'}`);
       }
     });
     return () => eventSource?.close();

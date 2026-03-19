@@ -71,6 +71,8 @@ class AnalysisResult(BaseModel):
     selected_strategy: str
     strategy_rationale: str
     confidence: float = Field(ge=0.0, le=1.0)
+    intent_label: str = "general"
+    domain: str = "general"
 
 
 class OptimizationResult(BaseModel):
@@ -130,6 +132,7 @@ class OptimizerInput(BaseModel):
     codebase_guidance: str | None = None
     codebase_context: str | None = None
     adaptation_state: str | None = None
+    applied_patterns: str | None = None
 
 
 class ScorerInput(BaseModel):
@@ -212,4 +215,5 @@ __all__ = [
     "ResolvedContext",
     "ScoreResult",
     "ScorerInput",
+    "SuggestionsOutput",
 ]

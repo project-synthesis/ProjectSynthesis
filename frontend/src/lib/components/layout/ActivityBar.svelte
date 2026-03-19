@@ -1,11 +1,12 @@
 <script lang="ts">
-  type Activity = 'editor' | 'history' | 'github' | 'settings';
+  type Activity = 'editor' | 'history' | 'patterns' | 'github' | 'settings';
 
   let { active = $bindable('editor') }: { active: Activity } = $props();
 
   const activities: { id: Activity; label: string }[] = [
     { id: 'editor', label: 'Editor' },
     { id: 'history', label: 'History' },
+    { id: 'patterns', label: 'Patterns' },
     { id: 'github', label: 'GitHub' },
     { id: 'settings', label: 'Settings' },
   ];
@@ -43,6 +44,8 @@
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><path d="M13.5 2.5l2 2-9 9H4.5v-2l9-9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       {:else if act.id === 'history'}
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 5v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      {:else if act.id === 'patterns'}
+        <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="4" cy="13" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="14" cy="13" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 6.5L5 11.5M10 6.5L13 11.5M5.5 13L12.5 13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
       {:else if act.id === 'github'}
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="4.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="13.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6 6v6M12 6c0 4-6 4-6 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
       {:else if act.id === 'settings'}

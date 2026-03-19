@@ -5,6 +5,16 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- Added prompt knowledge graph — auto-extracts reusable meta-patterns from optimizations into pattern families clustered by semantic similarity
+- Added auto-suggestion banner on paste — detects similar pattern families with 1-click apply/skip (50-char delta threshold, 300ms debounce, 10s auto-dismiss)
+- Added radial mindmap visualization — interactive D3.js graph of pattern portfolio with domain-coded arcs, family nodes, edges, zoom/pan
+- Added pattern navigator compact view in ActivityBar sidebar — families grouped by domain with inline meta-pattern expansion
+- Added pattern family detail in Inspector — meta-patterns, linked optimizations, domain badge, usage stats
+- Added pattern knowledge graph API — `GET /api/patterns/graph`, `POST /api/patterns/match`, `GET /api/patterns/families`, `GET /api/patterns/search`, `GET /api/patterns/stats`, `PATCH /api/patterns/families/{id}`
+- Added `intent_label` and `domain` fields to optimization analysis (extracted by analyzer, persisted to DB)
+- Added `extract_patterns.md` Haiku prompt template for meta-pattern extraction
+- Added `applied_patterns` parameter to optimization pipeline — injects user-selected meta-patterns into optimizer context
+- Added background pattern extraction listener on event bus (`optimization_created` → async extraction)
 - Added `pipeline.force_passthrough` preference toggle — forces passthrough mode (assembled template for external LLM) in both MCP and frontend, mutually exclusive with `force_sampling`
 - Added ASGI middleware on MCP server that detects sampling capability at `initialize` handshake — writes `mcp_session.json` before any tool call, enabling instant detection when an MCP client connects
 - Added runtime MCP sampling capability detection via `data/mcp_session.json` — all 4 MCP tools refresh client capabilities on every call; health endpoint reads with 30-minute staleness window; ASGI middleware detects capabilities at `initialize` handshake (before any tool call); optimistic strategy prevents multi-session flicker (False never overwrites fresh True)

@@ -142,7 +142,7 @@ export async function tryFetch<T>(path: string, options?: RequestInit): Promise<
   }
 }
 
-async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE_URL}${path}`, {
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
@@ -218,10 +218,15 @@ export function optimizeSSE(
   onEvent: (event: SSEEvent) => void,
   onError: (err: Error) => void,
   onComplete: () => void,
+  appliedPatternIds?: string[] | null,
 ): AbortController {
   return streamSSE(
     '/optimize',
-    JSON.stringify({ prompt, strategy: strategy || undefined }),
+    JSON.stringify({
+      prompt,
+      strategy: strategy || undefined,
+      applied_pattern_ids: appliedPatternIds?.length ? appliedPatternIds : undefined,
+    }),
     onEvent,
     onError,
     onComplete,

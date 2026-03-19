@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app._version import __version__
 from app.config import DATA_DIR, PROMPTS_DIR, settings
+from app.services.event_bus import event_bus
 from app.services.file_watcher import watch_strategy_files
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,58 @@ async def lifespan(app: FastAPI):
     )
     app.state.watcher_task = watcher_task
 
+    # Start pattern extraction subscriber
+    async def _pattern_extraction_listener():
+        """Subscribe to optimization_created events and extract patterns."""
+        try:
+            from app.services.pattern_extractor import PatternExtractorService
+            extractor = PatternExtractorService(provider=app.state.provider)
+            logger.info("Pattern extraction listener started — subscribing to event bus")
+            async for event in event_bus.subscribe():
+                if event.get("event") == "optimization_created":
+                    opt_id = event.get("data", {}).get("id")
+                    if opt_id:
+                        logger.info(
+                            "Dispatching pattern extraction for optimization %s",
+                            opt_id,
+                        )
+
+                        async def _run_extraction(oid: str) -> None:
+                            """Wrapper to catch and log fire-and-forget task errors."""
+                            try:
+                                await extractor.process(oid)
+                            except Exception as task_exc:
+                                logger.error(
+                                    "Background pattern extraction task failed for %s: %s",
+                                    oid, task_exc, exc_info=True,
+                                )
+
+                        asyncio.create_task(
+                            _run_extraction(opt_id),
+                            name=f"pattern-extract-{opt_id}",
+                        )
+                    else:
+                        logger.warning(
+                            "optimization_created event missing 'id' in data: %s",
+                            event.get("data"),
+                        )
+        except asyncio.CancelledError:
+            logger.info("Pattern extraction listener shutting down")
+        except Exception as exc:
+            logger.error("Pattern extraction listener crashed: %s", exc, exc_info=True)
+
+    extraction_task = asyncio.create_task(_pattern_extraction_listener())
+    app.state.extraction_task = extraction_task
+
     yield
+
+    # Stop pattern extraction listener
+    if hasattr(app.state, "extraction_task"):
+        app.state.extraction_task.cancel()
+        try:
+            await app.state.extraction_task
+        except asyncio.CancelledError:
+            pass
 
     # Stop strategy file watcher
     if hasattr(app.state, "watcher_task"):
@@ -176,6 +228,12 @@ except ImportError:
 try:
     from app.routers.strategies import router as strategies_router
     app.include_router(strategies_router)
+except ImportError:
+    pass
+
+try:
+    from app.routers.patterns import router as patterns_router
+    app.include_router(patterns_router)
 except ImportError:
     pass
 

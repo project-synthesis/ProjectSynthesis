@@ -2,7 +2,7 @@
 
 import type { OptimizationResult } from '$lib/api/client';
 
-export type TabType = 'prompt' | 'result' | 'diff';
+export type TabType = 'prompt' | 'result' | 'diff' | 'mindmap';
 
 /** The prompt tab ID is a constant — there is always exactly one prompt tab. */
 export const PROMPT_TAB_ID = 'prompt';
@@ -129,6 +129,15 @@ class EditorStore {
       title: this._tabTitle(cached?.raw_prompt, '~'),
       type: 'diff',
       optimizationId,
+    });
+  }
+
+  /** Open (or activate) the pattern graph mindmap tab. */
+  openMindmap() {
+    this.openTab({
+      id: 'mindmap',
+      title: 'Pattern Graph',
+      type: 'mindmap',
     });
   }
 

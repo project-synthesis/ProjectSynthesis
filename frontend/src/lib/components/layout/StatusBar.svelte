@@ -1,10 +1,13 @@
 <script lang="ts">
   import { getHealth } from '$lib/api/client';
+  import { getPatternStats } from '$lib/api/patterns';
+  import { patternsStore } from '$lib/stores/patterns.svelte';
   import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
 
   let provider = $state<string | null>(null);
   let version = $state<string | null>(null);
+  let patternCount = $state<number | null>(null);
 
   let loaded = false;
   $effect(() => {
@@ -13,6 +16,21 @@
     getHealth()
       .then((h) => { provider = h.provider; version = h.version; })
       .catch(() => {});
+    getPatternStats()
+      .then((s) => { patternCount = s.total_families; })
+      .catch(() => {});
+  });
+
+  // Refresh pattern count when graph is invalidated (new patterns extracted)
+  let _lastGraphLoaded = $state(true);
+  $effect(() => {
+    const gl = patternsStore.graphLoaded;
+    if (_lastGraphLoaded && !gl) {
+      getPatternStats()
+        .then((s) => { patternCount = s.total_families; })
+        .catch(() => {});
+    }
+    _lastGraphLoaded = gl;
   });
 
   const phaseDisplay = $derived.by(() => {
@@ -64,8 +82,11 @@
     {/if}
   </div>
 
-  <!-- Right side: keyboard shortcut hint -->
+  <!-- Right side: pattern count + keyboard shortcut hint -->
   <div class="status-right">
+    {#if patternCount !== null && patternCount > 0}
+      <span class="status-patterns" title="{patternCount} pattern families">{patternCount} patterns</span>
+    {/if}
     <span class="status-kbd" aria-label="Open command palette with Ctrl+K">Ctrl+K</span>
   </div>
 </div>
@@ -122,6 +143,13 @@
   }
 
   .status-strategy {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-dim);
+    white-space: nowrap;
+  }
+
+  .status-patterns {
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-text-dim);
