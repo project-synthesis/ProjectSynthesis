@@ -63,6 +63,12 @@
     vertical-align: middle;
     cursor: pointer;
     outline: none;
+    border: none !important;
+    background: transparent !important;
+  }
+  .logo-container:hover, .logo-container:active {
+    border: none !important;
+    background: transparent !important;
   }
 
   .brand-svg {
