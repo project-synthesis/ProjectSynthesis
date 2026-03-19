@@ -46,15 +46,16 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 10px;
-    background: var(--color-bg-secondary, #0d0d1a);
-    border: 1px solid var(--color-border-accent, #00e5ff33);
+    padding: 4px 6px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border-accent);
     margin: 4px 0;
-    animation: slideIn 200ms ease-out;
+    animation: slide-up-in 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
     font-size: 11px;
+    font-family: var(--font-sans);
   }
 
-  @keyframes slideIn {
+  @keyframes slide-up-in {
     from { opacity: 0; transform: translateY(-4px); }
     to { opacity: 1; transform: translateY(0); }
   }
@@ -68,21 +69,22 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    color: var(--color-text-primary, #c8c8d0);
+    color: var(--color-text-primary);
   }
 
   .suggestion-icon {
-    color: var(--color-neon-cyan, #00e5ff);
+    color: var(--color-neon-cyan);
     font-size: 14px;
   }
 
   .suggestion-label strong {
-    color: var(--color-neon-cyan, #00e5ff);
+    color: var(--color-neon-cyan);
   }
 
   .suggestion-meta {
-    color: var(--color-text-dim, #666);
+    color: var(--color-text-dim);
     font-size: 10px;
+    font-family: var(--font-mono);
     margin-top: 2px;
     padding-left: 20px;
   }
@@ -95,34 +97,52 @@
 
   .btn-apply {
     background: transparent;
-    border: 1px solid var(--color-neon-cyan, #00e5ff);
-    color: var(--color-neon-cyan, #00e5ff);
-    padding: 2px 10px;
+    border: 1px solid var(--color-neon-cyan);
+    color: var(--color-neon-cyan);
+    padding: 0 8px;
+    height: 20px;
+    line-height: 18px;
     font-size: 10px;
-    font-family: inherit;
+    font-family: var(--font-display);
+    font-weight: 700;
     cursor: pointer;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.08em;
+    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .btn-apply:hover {
     background: rgba(0, 229, 255, 0.06);
+    transform: translateY(-1px);
+  }
+
+  .btn-apply:active {
+    transform: translateY(0);
   }
 
   .btn-skip {
     background: transparent;
-    border: 1px solid var(--color-border-subtle, #333);
-    color: var(--color-text-dim, #666);
-    padding: 2px 10px;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-dim);
+    padding: 0 8px;
+    height: 20px;
+    line-height: 18px;
     font-size: 10px;
-    font-family: inherit;
+    font-family: var(--font-display);
+    font-weight: 700;
     cursor: pointer;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.08em;
+    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .btn-skip:hover {
-    border-color: #555;
-    color: #888;
+    border-color: var(--color-border-accent);
+    color: var(--color-text-secondary);
+    background: var(--color-bg-hover);
+  }
+
+  .btn-skip:active {
+    transform: translateY(0);
   }
 </style>

@@ -18,3 +18,11 @@ export const DOMAIN_COLORS: Record<string, string> = {
 export function domainColor(domain: string): string {
   return DOMAIN_COLORS[domain] ?? DOMAIN_COLORS.general;
 }
+
+/** Score-to-color mapping using design system tokens. */
+export function scoreColor(score: number | null): string {
+  if (score == null || score <= 0) return 'var(--color-text-dim)';
+  if (score >= 7.5) return 'var(--color-neon-green)';
+  if (score >= 5.0) return 'var(--color-neon-yellow)';
+  return 'var(--color-neon-red)';
+}

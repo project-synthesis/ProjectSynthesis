@@ -4,11 +4,13 @@
   import { DOMAIN_COLORS, domainColor } from '$lib/constants/patterns';
   import type { GraphFamily, GraphEdge } from '$lib/api/patterns';
 
-  const BG_COLOR = '#06060c';
-  const NEON_CYAN = '#00e5ff';
-  const TEXT_PRIMARY = '#e0e0e0';
-  const TEXT_DIM = '#5a5a6a';
-  const FONT_MONO = "'JetBrains Mono', 'Fira Code', monospace";
+  // Design system tokens — must match :root in app.css.
+  // D3 sets SVG attributes directly, so we need raw values here.
+  const BG_COLOR = '#06060c';       // --color-bg-primary
+  const NEON_CYAN = '#00e5ff';      // --color-neon-cyan
+  const TEXT_PRIMARY = '#e4e4f0';   // --color-text-primary
+  const TEXT_DIM = '#7a7a9e';       // --color-text-dim
+  const FONT_MONO = "'Geist Mono', 'JetBrains Mono', ui-monospace, monospace";
 
   let svgEl = $state<SVGSVGElement>(undefined!);
   let containerEl = $state<HTMLDivElement>(undefined!);
@@ -299,7 +301,7 @@
   .mindmap-container {
     width: 100%;
     height: 100%;
-    background: #06060c;
+    background: var(--color-bg-primary);
     overflow: hidden;
     position: relative;
   }
@@ -320,7 +322,7 @@
 
   .mindmap-empty-label {
     font-size: 11px;
-    color: #5a5a6a;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    color: var(--color-text-dim);
+    font-family: var(--font-mono);
   }
 </style>
