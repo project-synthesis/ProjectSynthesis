@@ -72,7 +72,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2, 384-dim, CPU) |
 | LLM | Configurable per phase — Opus, Sonnet, Haiku (via Settings) |
 | Scoring | Hybrid: LLM scores blended with model-independent heuristics + z-score normalization |
-| MCP | Streamable HTTP on port 8001 |
+| MCP | Streamable HTTP on port 8001 — sampling detection via ASGI middleware |
+| Versioning | `version.json` → `scripts/sync-version.sh` propagates to backend + frontend |
 
 ## Services
 
@@ -104,12 +105,17 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **GitHub integration** — link a repo for codebase-aware optimization via semantic embedding search
 - **MCP server** — use from any MCP-compatible IDE (Claude Code, Cursor, etc.)
 - **Passthrough mode** — IDE's own LLM does the optimization; server provides context + bias correction
+- **Force sampling / passthrough toggles** — pin the MCP pipeline to use the IDE's LLM (`force_sampling`) or always assemble for external processing (`force_passthrough`). Mutually exclusive, enforced server-side and client-side
+- **Sampling capability detection** — ASGI middleware detects MCP client sampling support on `initialize` handshake. Health endpoint surfaces `sampling_capable` with 30-minute staleness window. Frontend fast-polls (10s) for the first 2 minutes, then 60s steady-state
 - **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, .cursorrules for context injection
-- **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution
+- **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution. Dimension-specific weights prevent single-model bias. Divergence flags when LLM and heuristic disagree by >2.5 points
 - **Real-time events** — SSE-based event bus with toast notifications for file changes, MCP operations, and pipeline status
-- **Pattern knowledge graph** — self-building library of prompt patterns extracted from every optimization. Clusters into families, extracts reusable meta-patterns, and suggests matching patterns on paste. D3.js radial mindmap visualization with domain grouping and cross-family similarity edges
+- **Pattern knowledge graph** — self-building library of prompt patterns extracted from every optimization. Clusters into families (cosine ≥0.78), extracts reusable meta-patterns via Haiku (cosine ≥0.82 merge), and suggests matching patterns on paste (cosine ≥0.72). D3.js radial mindmap visualization with domain grouping and cross-family similarity edges (cosine ≥0.55)
+- **Bidirectional history–patterns navigation** — history items show intent labels and domain badges. Loading an optimization auto-selects its pattern family in Inspector. Clicking a linked optimization in a family detail loads it in the editor. Live family link: background pattern extraction triggers automatic UI sync via SSE
+- **StatusBar breadcrumb** — shows `[domain] › intent_label` for the active optimization with domain color coding. Editor tabs use intent labels as titles
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation
 - **API key management** — set/update/remove via UI with Fernet encryption at rest
+- **Trace logging** — per-phase JSONL traces to `data/traces/` with daily rotation and configurable retention
 
 ## MCP Integration
 
@@ -117,12 +123,12 @@ The MCP server provides 4 tools:
 
 | Tool | Purpose |
 |------|---------|
-| `synthesis_optimize` | Full pipeline — send a prompt, get back optimized version with scores |
+| `synthesis_optimize` | Full pipeline — send a prompt, get back optimized version with scores. 5 execution paths: force_passthrough → force_sampling → provider → sampling fallback → passthrough fallback |
 | `synthesis_analyze` | Analysis + baseline scoring — task type, weaknesses, strategy recommendation, quality scores, actionable next steps |
-| `synthesis_prepare_optimization` | Assemble prompt + context for your IDE's LLM to process |
-| `synthesis_save_result` | Persist the IDE LLM's result with bias correction |
+| `synthesis_prepare_optimization` | Assemble prompt + context for your IDE's LLM to process (supports `workspace_path` for roots scanning) |
+| `synthesis_save_result` | Persist the IDE LLM's result with heuristic bias correction |
 
-Connect via `.mcp.json` (auto-loaded by Claude Code) or manually at `http://127.0.0.1:8001/mcp`.
+All 4 tools refresh MCP client sampling capabilities on every invocation. Connect via `.mcp.json` (auto-loaded by Claude Code) or manually at `http://127.0.0.1:8001/mcp`.
 
 ## Docker
 
@@ -153,7 +159,7 @@ cd frontend && npm run build
 | `/api/refine` | POST (SSE) | Run refinement turn |
 | `/api/refine/{id}/versions` | GET | List refinement versions |
 | `/api/refine/{id}/rollback` | POST | Fork from a version |
-| `/api/history` | GET | List past optimizations (with truncated prompts) |
+| `/api/history` | GET | List past optimizations (includes intent_label, domain, family_id) |
 | `/api/feedback` | POST/GET | Submit/list feedback |
 | `/api/providers` | GET | Active provider info |
 | `/api/provider/api-key` | GET/PATCH/DELETE | API key management |
