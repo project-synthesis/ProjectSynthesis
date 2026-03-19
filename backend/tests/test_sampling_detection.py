@@ -1,13 +1,13 @@
 """Tests for MCP sampling capability detection, disconnect detection, and force toggles.
 
 Covers:
-- _write_mcp_session_caps: MCP server persists client capabilities to mcp_session.json
-- Health endpoint: reads mcp_session.json and surfaces sampling_capable + mcp_disconnected
+- RoutingManager.on_mcp_initialize: MCP server tracks client capabilities in routing state
+- Health endpoint: reads RoutingManager.state and surfaces sampling_capable + mcp_disconnected
 - Preferences REST API: force_passthrough / force_sampling mutual exclusion via HTTP
 - Integration: cross-system consistency (health + preferences + passthrough endpoints)
 - _CapabilityDetectionMiddleware: ASGI middleware intercepts MCP initialize + activity tracking
 - _touch_activity: throttled activity tracking, reconnection detection
-- mcp_disconnected: dual-window staleness (30min capability + 90s activity)
+- mcp_disconnected: dual-window staleness (30min capability + 5min activity)
 """
 
 import json
@@ -38,37 +38,43 @@ def _reset_rate_limiter():
 
 
 # ---------------------------------------------------------------------------
-# _write_mcp_session_caps — MCP server writes client sampling capability
+# RoutingManager.on_mcp_initialize — MCP server tracks client capabilities
 # ---------------------------------------------------------------------------
 
 
-class TestWriteMcpSessionCaps:
-    """Unit tests for the _write_mcp_session_caps helper in mcp_server.py."""
+class TestRoutingMcpInitialize:
+    """Unit tests for MCP capability tracking via RoutingManager.
+
+    These replace the old _write_mcp_session_caps tests — capability
+    detection now goes through RoutingManager.on_mcp_initialize() which
+    updates in-memory state and persists to mcp_session.json as write-through.
+    """
 
     @staticmethod
-    def _make_ctx(
-        *,
-        has_session: bool = True,
-        has_client_params: bool = True,
-        sampling_capability: object | None = None,
-    ) -> SimpleNamespace | None:
-        """Build a mock MCP Context with configurable capability chain."""
-        if not has_session:
-            return SimpleNamespace(session=None)
-        if not has_client_params:
-            return SimpleNamespace(session=SimpleNamespace(client_params=None))
-        capabilities = SimpleNamespace(sampling=sampling_capability)
-        client_params = SimpleNamespace(capabilities=capabilities)
-        session = SimpleNamespace(client_params=client_params)
-        return SimpleNamespace(session=session)
+    def _make_routing(tmp_path):
+        """Create a RoutingManager for testing."""
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+        return RoutingManager(event_bus=EventBus(), data_dir=tmp_path)
 
-    def test_writes_true_when_sampling_capability_present(self, tmp_path, monkeypatch):
-        """Sampling capability object present (even empty dict) → sampling_capable=true."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
+    def test_sampling_true_updates_state(self, tmp_path):
+        """on_mcp_initialize(True) sets sampling_capable=True and mcp_connected=True."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.sampling_capable is True
+        assert routing.state.mcp_connected is True
 
-        ctx = self._make_ctx(sampling_capability={})
-        _write_mcp_session_caps(ctx)
+    def test_sampling_false_updates_state(self, tmp_path):
+        """on_mcp_initialize(False) sets sampling_capable=False and mcp_connected=True."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=False)
+        assert routing.state.sampling_capable is False
+        assert routing.state.mcp_connected is True
+
+    def test_persists_to_session_file(self, tmp_path):
+        """on_mcp_initialize write-through persists to mcp_session.json."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
 
         path = tmp_path / "mcp_session.json"
         assert path.exists()
@@ -76,113 +82,53 @@ class TestWriteMcpSessionCaps:
         assert data["sampling_capable"] is True
         assert "written_at" in data
 
-    def test_writes_true_when_sampling_is_nonempty_dict(self, tmp_path, monkeypatch):
-        """Non-empty sampling capability dict also counts as capable."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
+    def test_optimistic_does_not_downgrade_fresh_true(self, tmp_path):
+        """A False initialize does NOT downgrade a fresh True (optimistic strategy)."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        routing.on_mcp_initialize(sampling_capable=False)
+        # Optimistic: should still be True
+        assert routing.state.sampling_capable is True
 
-        ctx = self._make_ctx(sampling_capability={"maxTokens": 16384})
-        _write_mcp_session_caps(ctx)
+    def test_overwrites_with_sequential_calls(self, tmp_path):
+        """False → True updates correctly."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=False)
+        assert routing.state.sampling_capable is False
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.sampling_capable is True
 
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is True
+    def test_last_capability_update_set(self, tmp_path):
+        """on_mcp_initialize sets last_capability_update timestamp."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.last_capability_update is not None
+        assert (datetime.now(timezone.utc) - routing.state.last_capability_update).total_seconds() < 5
 
-    def test_writes_false_when_sampling_is_none(self, tmp_path, monkeypatch):
-        """Sampling attribute is None → client does not support sampling."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
+    def test_last_activity_set(self, tmp_path):
+        """on_mcp_initialize sets last_activity timestamp."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.last_activity is not None
+        assert (datetime.now(timezone.utc) - routing.state.last_activity).total_seconds() < 5
 
-        ctx = self._make_ctx(sampling_capability=None)
-        _write_mcp_session_caps(ctx)
+    def test_available_tiers_includes_sampling(self, tmp_path):
+        """After sampling_capable=True, available_tiers includes sampling."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert "sampling" in routing.available_tiers
 
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
+    def test_available_tiers_without_sampling(self, tmp_path):
+        """Without sampling, available_tiers is just passthrough."""
+        routing = self._make_routing(tmp_path)
+        assert routing.available_tiers == ["passthrough"]
 
-    def test_writes_false_when_ctx_is_none(self, tmp_path, monkeypatch):
-        """Null context (e.g., non-MCP invocation) → sampling_capable=false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        _write_mcp_session_caps(None)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
-
-    def test_writes_false_when_session_is_none(self, tmp_path, monkeypatch):
-        """Context exists but session is None → sampling_capable=false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        ctx = self._make_ctx(has_session=False)
-        _write_mcp_session_caps(ctx)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
-
-    def test_writes_false_when_client_params_is_none(self, tmp_path, monkeypatch):
-        """Session exists but client_params is None → sampling_capable=false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        ctx = self._make_ctx(has_client_params=False)
-        _write_mcp_session_caps(ctx)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
-
-    def test_writes_false_when_ctx_has_no_session_attr(self, tmp_path, monkeypatch):
-        """Context object missing 'session' attribute entirely → false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        ctx = object()  # no session attribute
-        _write_mcp_session_caps(ctx)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
-
-    def test_written_at_is_utc_iso_timestamp(self, tmp_path, monkeypatch):
-        """written_at is a timezone-aware UTC ISO 8601 string."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        _write_mcp_session_caps(None)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        ts = datetime.fromisoformat(data["written_at"])
-        assert ts.tzinfo is not None  # timezone-aware
-        assert (datetime.now(timezone.utc) - ts).total_seconds() < 5
-
-    def test_overwrites_previous_file(self, tmp_path, monkeypatch):
-        """Subsequent calls overwrite the file, updating the value."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        # Write false
-        _write_mcp_session_caps(self._make_ctx(sampling_capability=None))
-        assert json.loads((tmp_path / "mcp_session.json").read_text())["sampling_capable"] is False
-
-        # Overwrite with true
-        _write_mcp_session_caps(self._make_ctx(sampling_capability={}))
-        assert json.loads((tmp_path / "mcp_session.json").read_text())["sampling_capable"] is True
-
-    def test_silent_on_write_error(self, monkeypatch):
-        """Does not raise when DATA_DIR is not writable."""
-        _patch_mcp_data_dir(monkeypatch, Path("/nonexistent/path"))
-        from app.mcp_server import _write_mcp_session_caps
-
-        # Should not raise
-        _write_mcp_session_caps(None)
-
-    def test_file_is_valid_json_with_expected_keys(self, tmp_path, monkeypatch):
-        """Output file has sampling_capable, written_at, and last_activity."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        _write_mcp_session_caps(self._make_ctx(sampling_capability={}))
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert set(data.keys()) == {"sampling_capable", "written_at", "last_activity"}
+    def test_set_provider_adds_internal_tier(self, tmp_path):
+        """set_provider adds internal tier to available_tiers."""
+        routing = self._make_routing(tmp_path)
+        mock_provider = SimpleNamespace(name="mock-provider")
+        routing.set_provider(mock_provider)
+        assert "internal" in routing.available_tiers
 
 
 # ---------------------------------------------------------------------------
@@ -542,12 +488,21 @@ class TestSamplingDetectionIntegration:
 
 
 class TestCapabilityDetectionMiddleware:
-    """Test the ASGI middleware that detects sampling capability on MCP handshake."""
+    """Test the ASGI middleware that detects sampling capability on MCP handshake.
+
+    These tests set ``_routing = None`` so the middleware falls through to the
+    legacy session-file path.  The new routing-based path is tested via
+    ``TestCapabilityDetectionMiddlewareWithRouting`` below.
+    """
 
     @pytest.fixture()
     def mw_data_dir(self, tmp_path, monkeypatch):
-        """Point the middleware's DATA_DIR to a temp directory."""
+        """Point the middleware's DATA_DIR to a temp directory.
+
+        Sets ``_routing = None`` so middleware uses the fallback file-write path.
+        """
         _patch_mcp_data_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr("app.mcp_server._routing", None)
         return tmp_path
 
     @staticmethod
@@ -786,12 +741,138 @@ class TestCapabilityDetectionMiddleware:
 
 
 # ---------------------------------------------------------------------------
+# _inspect_initialize with RoutingManager — primary path
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilityDetectionMiddlewareWithRouting:
+    """Test _inspect_initialize when RoutingManager is active (primary path)."""
+
+    @pytest.fixture()
+    def routing(self, tmp_path, monkeypatch):
+        """Set up a RoutingManager and wire it into mcp_server._routing."""
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+        rm = RoutingManager(event_bus=EventBus(), data_dir=tmp_path)
+        monkeypatch.setattr("app.mcp_server._routing", rm)
+        return rm
+
+    @staticmethod
+    def _make_initialize_body(capabilities: dict | None = None) -> bytes:
+        caps = capabilities if capabilities is not None else {"sampling": {}}
+        return json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": caps,
+                "clientInfo": {"name": "test", "version": "1.0"},
+            },
+        }).encode()
+
+    def test_updates_routing_state_sampling_true(self, routing):
+        """Initialize with sampling → routing state sampling_capable=True."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"sampling": {}})
+        )
+        assert routing.state.sampling_capable is True
+        assert routing.state.mcp_connected is True
+
+    def test_updates_routing_state_sampling_false(self, routing):
+        """Initialize without sampling → routing state sampling_capable=False."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"roots": {}})
+        )
+        assert routing.state.sampling_capable is False
+        assert routing.state.mcp_connected is True
+
+    def test_returns_result_dict(self, routing):
+        """_inspect_initialize returns sampling_capable dict via routing path."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        result = _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"sampling": {}})
+        )
+        assert result == {"sampling_capable": True}
+
+    def test_optimistic_via_routing(self, routing):
+        """Routing's optimistic strategy prevents downgrade."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"sampling": {}})
+        )
+        assert routing.state.sampling_capable is True
+
+        # Second: no sampling — routing's optimistic strategy keeps True
+        result = _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"roots": {}})
+        )
+        # Result still returned (routing always returns a result now)
+        assert result == {"sampling_capable": False}
+        # But routing state should still be True (optimistic)
+        assert routing.state.sampling_capable is True
+
+
+# ---------------------------------------------------------------------------
+# _touch_activity with RoutingManager — primary path
+# ---------------------------------------------------------------------------
+
+
+class TestTouchActivityWithRouting:
+    """Test _touch_activity when RoutingManager is active."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_throttle(self):
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        _CapabilityDetectionMiddleware._last_activity_write = 0.0
+        yield
+        _CapabilityDetectionMiddleware._last_activity_write = 0.0
+
+    @pytest.fixture()
+    def routing(self, tmp_path, monkeypatch):
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+        rm = RoutingManager(event_bus=EventBus(), data_dir=tmp_path)
+        monkeypatch.setattr("app.mcp_server._routing", rm)
+        return rm
+
+    def test_touch_calls_routing_on_mcp_activity(self, routing):
+        """_touch_activity calls routing.on_mcp_activity(), not file I/O."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        routing.on_mcp_initialize(sampling_capable=True)
+
+        result = _CapabilityDetectionMiddleware._touch_activity()
+        # Not a reconnect since mcp_connected was already True
+        assert result is False
+        assert routing.state.mcp_connected is True
+        assert routing.state.last_activity is not None
+
+    def test_touch_detects_reconnection_via_routing(self, routing):
+        """_touch_activity returns True when routing transitions from disconnected."""
+        from dataclasses import replace as _replace
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        routing.on_mcp_initialize(sampling_capable=True)
+        # Simulate disconnect
+        routing._state = _replace(routing._state, mcp_connected=False)
+
+        result = _CapabilityDetectionMiddleware._touch_activity()
+        assert result is True
+        assert routing.state.mcp_connected is True
+
+
+# ---------------------------------------------------------------------------
 # _touch_activity — throttled activity tracking on every MCP POST
 # ---------------------------------------------------------------------------
 
 
 class TestTouchActivity:
-    """Tests for the _touch_activity classmethod in the middleware."""
+    """Tests for the _touch_activity classmethod in the middleware (fallback path).
+
+    Sets ``_routing = None`` so middleware uses the legacy file-write path.
+    """
 
     @pytest.fixture(autouse=True)
     def _reset_throttle(self):
@@ -804,6 +885,7 @@ class TestTouchActivity:
     @pytest.fixture()
     def data_dir(self, tmp_path, monkeypatch):
         _patch_mcp_data_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr("app.mcp_server._routing", None)
         return tmp_path
 
     @staticmethod

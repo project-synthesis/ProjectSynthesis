@@ -349,21 +349,30 @@ class RoutingManager:
         )
 
     def _recover_state(self) -> RoutingState:
-        """Recover state from ``mcp_session.json`` on startup."""
-        from app.services.mcp_session_file import MCPSessionFile as _MCPSessionFile
+        """Recover state from ``mcp_session.json`` on startup.
 
-        self._session_file = _MCPSessionFile(self._data_dir)
-        data = self._session_file.read()
+        Returns safe defaults if the file is missing, corrupt, or
+        unreadable.  Never raises — constructor must always succeed.
+        """
+        _defaults = RoutingState(
+            provider=None,
+            provider_name=None,
+            sampling_capable=None,
+            mcp_connected=False,
+            last_capability_update=None,
+            last_activity=None,
+        )
+        try:
+            from app.services.mcp_session_file import MCPSessionFile as _MCPSessionFile
+
+            self._session_file = _MCPSessionFile(self._data_dir)
+            data = self._session_file.read()
+        except Exception:
+            logger.debug("Failed to initialize MCPSessionFile for recovery", exc_info=True)
+            return _defaults
 
         if data is None:
-            return RoutingState(
-                provider=None,
-                provider_name=None,
-                sampling_capable=None,
-                mcp_connected=False,
-                last_capability_update=None,
-                last_activity=None,
-            )
+            return _defaults
 
         # Apply staleness checks
         sampling = data.get("sampling_capable", False)
@@ -382,7 +391,7 @@ class RoutingManager:
         return RoutingState(
             provider=None,  # Provider set separately via set_provider()
             provider_name=None,
-            sampling_capable=sampling if sampling is not None else None,
+            sampling_capable=sampling,
             mcp_connected=connected,
             last_capability_update=None,
             last_activity=last_activity,
