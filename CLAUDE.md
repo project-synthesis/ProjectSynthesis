@@ -118,6 +118,11 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 - `app/utils/sse.py` — shared `format_sse()` for SSE event formatting (used by optimize + refinement routers)
 - `app/dependencies/rate_limit.py` — in-memory rate limiting FastAPI dependency via `limits` library
 
+### Pattern knowledge graph models (`app/models.py`)
+- `PatternFamily` — cluster of related optimizations. Fields: `centroid_embedding` (running mean, bytes), `intent_label`, `domain`, `task_type`, `member_count`, `usage_count`, `avg_score`.
+- `MetaPattern` — reusable technique extracted from family members. `embedding` (bytes), `pattern_text`, `source_count`, `family_id` FK.
+- `OptimizationPattern` — join table linking `Optimization` → `PatternFamily` with similarity score.
+
 ## Frontend
 
 - **Framework**: SvelteKit 2 (Svelte 5 runes) + Tailwind CSS 4
@@ -132,7 +137,7 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 - `refinement.svelte.ts` — refinement sessions (turns, branches, suggestions, score progression)
 - `preferences.svelte.ts` — persistent user preferences loaded from backend
 - `toast.svelte.ts` — toast notification queue with `addToast()` API
-- `patterns.svelte.ts` — pattern knowledge graph state: paste detection (50-char delta, 300ms debounce), suggestion lifecycle (auto-dismiss 10s), graph data for mindmap, family selection for Inspector
+- `patterns.svelte.ts` — pattern knowledge graph state: paste detection (50-char delta, 300ms debounce), suggestion lifecycle (auto-dismiss 10s), graph data for mindmap, family selection for Inspector, graph invalidation via `pattern_updated` SSE
 
 ### Component layout
 ```
@@ -144,6 +149,9 @@ src/lib/components/
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, DiffView, MarkdownRenderer, ProviderBadge, ScoreCard, Toast
 ```
+
+### Shared frontend utilities
+- `constants/patterns.ts` — domain color map, `scoreColor()` helper (shared by Navigator, RadialMindmap, PatternNavigator, Inspector)
 
 ## Prompt templates
 
@@ -253,5 +261,5 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **Real-time event bus**: `event_bus.py` publishes events to all SSE subscribers. Event types: `optimization_created`, `optimization_analyzed`, `optimization_failed`, `feedback_submitted`, `refinement_turn`, `strategy_changed`, `pattern_updated`. MCP server (separate process) notifies via HTTP POST to `/api/events/_publish`. Frontend auto-refreshes History on events, shows toast notifications, syncs Inspector feedback state, and updates StatusBar metrics.
 - **Workspace intelligence**: `workspace_intelligence.py` auto-detects project type from manifest files (package.json, requirements.txt, etc.) and injects workspace profile into MCP tool context via `roots/list`.
 - **MCP sampling detection**: two-layer detection (ASGI middleware on `initialize` + per-tool-call refresh) with optimistic write strategy (False never overwrites fresh True within 30-min window). Prevents VS Code multi-session flicker. Health endpoint surfaces `sampling_capable: bool | null`. Frontend fast-polls (10s) for 2 minutes then steady-state (60s). Toggle disabled logic uses `!currentValue &&` prefix so ON toggles are always interactive.
-- **Knowledge graph**: self-building pattern library. Post-completion background job embeds prompts, clusters into `PatternFamily` groups (cosine ≥0.78 merge), extracts meta-patterns via Haiku (cosine ≥0.82 pattern merge). On-paste detection (50-char delta, 300ms debounce) suggests matching families (cosine ≥0.72). Applied patterns injected into optimizer context. Models: `PatternFamily` (centroid running mean), `MetaPattern` (enriched on duplicate), `OptimizationPattern` (join). Cross-family edges at cosine ≥0.55. Domain color coding: backend=#a855f7, frontend=#f59e0b, database=#10b981, security=#ef4444, devops=#3b82f6, fullstack=#00e5ff, general=#6b7280.
+- **Knowledge graph**: self-building pattern library. Post-completion background job embeds prompts, clusters into `PatternFamily` groups (cosine ≥0.78 merge), extracts meta-patterns via Haiku (cosine ≥0.82 pattern merge). On-paste detection (50-char delta, 300ms debounce) suggests matching families (cosine ≥0.72). Applied patterns injected into optimizer context. Models: `PatternFamily` (centroid running mean), `MetaPattern` (enriched on duplicate), `OptimizationPattern` (join). Cross-family edges at cosine ≥0.55. Domain color coding: backend=#a855f7, frontend=#f59e0b, database=#10b981, security=#ef4444, devops=#3b82f6, fullstack=#00e5ff, general=#6b7280. UI: PatternNavigator (search + paginated family list + domain filter), Inspector family detail (linked optimizations, rename), RadialMindmap (D3.js force-directed SVG), StatusBar pattern count. Activity type `'patterns'` in layout routing.
 - **MCP capability hierarchy**: sampling > internal pipeline > passthrough. `force_sampling` pins to sampling tier, `force_passthrough` pins to passthrough tier. Mutually exclusive — enforced server-side (422) and client-side (radio toggle). `synthesis_optimize` checks `force_passthrough` first (highest routing precedence), then `force_sampling`, then automatic detection (5 execution paths total).
