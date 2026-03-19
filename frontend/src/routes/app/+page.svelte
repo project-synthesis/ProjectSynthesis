@@ -60,10 +60,16 @@
   // mcp_session.json on the MCP initialize handshake, so detection happens
   // within one poll interval of the client connecting.
   function applyHealth(h: HealthResponse) {
+    const prevSampling = forgeStore.samplingCapable;
     health = h;
     backendError = null;
     forgeStore.noProvider = !h.provider;
     forgeStore.samplingCapable = h.sampling_capable ?? null;
+
+    // Toast when sampling capability transitions to detected
+    if (prevSampling !== true && h.sampling_capable === true) {
+      addToast('created', 'MCP client connected with sampling capability');
+    }
   }
 
   $effect(() => {

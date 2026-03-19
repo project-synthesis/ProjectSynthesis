@@ -215,9 +215,21 @@ class _CapabilityDetectionMiddleware:
             data = _json.loads(body)
             if not isinstance(data, dict) or data.get("method") != "initialize":
                 return
-            caps = data.get("params", {}).get("capabilities", {})
+            params = data.get("params", {})
+            caps = params.get("capabilities", {})
+            client_info = params.get("clientInfo", {})
             sampling = caps.get("sampling") is not None
             path = DATA_DIR / "mcp_session.json"
+
+            logger.info(
+                "Capability detection middleware: initialize from %s/%s — "
+                "caps=%s, sampling=%s, protocolVersion=%s",
+                client_info.get("name", "unknown"),
+                client_info.get("version", "?"),
+                list(caps.keys()),
+                sampling,
+                params.get("protocolVersion", "?"),
+            )
 
             # Optimistic: never downgrade a fresh True to False
             if not sampling and path.exists():
@@ -226,10 +238,11 @@ class _CapabilityDetectionMiddleware:
                     if existing.get("sampling_capable") is True:
                         written = datetime.fromisoformat(existing["written_at"])
                         if datetime.now(timezone.utc) - written <= timedelta(minutes=30):
-                            logger.debug(
+                            logger.info(
                                 "Capability detection middleware: ignoring False — "
-                                "fresh True already on file (caps=%s)",
-                                caps,
+                                "fresh True already on file (age=%ds, client=%s)",
+                                (datetime.now(timezone.utc) - written).total_seconds(),
+                                client_info.get("name", "unknown"),
                             )
                             return
                 except Exception:
@@ -243,9 +256,10 @@ class _CapabilityDetectionMiddleware:
                 encoding="utf-8",
             )
             logger.info(
-                "Capability detection middleware: sampling_capable=%s (from initialize handshake, caps=%s)",
+                "Capability detection middleware: wrote sampling_capable=%s (client=%s/%s)",
                 sampling,
-                list(caps.keys()),
+                client_info.get("name", "unknown"),
+                client_info.get("version", "?"),
             )
         except Exception:
             logger.debug("Capability detection middleware: could not parse initialize", exc_info=True)
