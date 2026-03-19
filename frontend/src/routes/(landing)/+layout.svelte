@@ -39,6 +39,8 @@
   :global(html),
   :global(body) {
     overflow-x: hidden;
+    overflow-y: auto;
+    height: auto;
     width: 100%;
     margin: 0;
     padding: 0;
