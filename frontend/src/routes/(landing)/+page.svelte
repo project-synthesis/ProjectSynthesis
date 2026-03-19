@@ -71,9 +71,6 @@
   <section id="hero" class="hero" aria-labelledby="hero-heading">
     <div class="hero__container">
       <div class="hero__content" data-animate style="--delay:200ms;">
-        <div style="margin-bottom: 32px; display: flex; justify-content: center;">
-          <Logo size={80} variant="mark" />
-        </div>
         <h1 id="hero-heading" class="hero__headline">
           Prompts In.<br/>
           <span style="color: var(--color-neon-cyan);">Better Prompts Out.</span>
@@ -280,6 +277,113 @@
         <p class="score-caption">
           Five dimensions. Hybrid LLM + heuristic scoring. Blind A/B evaluation with randomized presentation order.
         </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- SECTION 3.5: KNOWLEDGE GRAPH                                 -->
+  <!-- ============================================================ -->
+  <section id="knowledge-graph" class="section" aria-labelledby="kg-heading">
+    <h2 id="kg-heading" class="section-heading example-heading">Self-Building Pattern Library</h2>
+    <p class="trust-mission" style="margin-bottom: 32px; max-width: 720px;">
+      Every optimization continuously teaches the system. Prompts are embedded, clustered, and mapped into a dense semantic knowledge graph. When you start a new prompt, the highest-scoring meta-patterns from similar past requests are matched and injected automatically.
+    </p>
+
+    <div class="example-container">
+      <div class="example-panels">
+        <!-- Visualization Panel -->
+        <div class="example-panel" data-animate style="--delay:100ms; align-items: center; justify-content: center; background: var(--color-bg-primary);">
+          <!-- Mini Knowledge Graph SVG Base -->
+          <svg width="100%" height="100%" viewBox="0 0 300 260" style="max-height: 240px; overflow: visible;">
+            <!-- Domain arcs (Inner ring) -->
+            <!-- Frontend (Amber) -->
+            <path d="M150,50 A80,80 0 0 1 220,90" fill="none" stroke="#f59e0b" stroke-width="1" opacity="0.3" />
+            <!-- Database (Green) -->
+            <path d="M220,90 A80,80 0 0 1 190,212" fill="none" stroke="#10b981" stroke-width="1" opacity="0.3" />
+            <!-- Backend (Purple, Active) -->
+            <path d="M190,212 A80,80 0 0 1 80,90" fill="none" stroke="#a855f7" stroke-width="2" opacity="0.8" />
+            <!-- Other (Gray) -->
+            <path d="M80,90 A80,80 0 0 1 150,50" fill="none" stroke="#6b7280" stroke-width="1" opacity="0.3" />
+
+            <!-- Labels -->
+            <text x="60" y="190" fill="#a855f7" font-size="8" font-family="var(--font-mono)" opacity="0.9">BACKEND</text>
+            <text x="235" y="100" fill="#f59e0b" font-size="8" font-family="var(--font-mono)" opacity="0.5">FRONTEND</text>
+            <text x="210" y="210" fill="#10b981" font-size="8" font-family="var(--font-mono)" opacity="0.5">DATABASE</text>
+
+            <!-- Center Origin -->
+            <circle cx="150" cy="130" r="16" fill="none" stroke="#00e5ff" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
+            <circle cx="150" cy="130" r="10" fill="#06060c" stroke="#00e5ff" stroke-width="1" />
+            <text x="150" y="133" text-anchor="middle" fill="#00e5ff" font-size="8" font-family="var(--font-mono)">KG</text>
+
+            <!-- Edges -->
+            <!-- Curved path to active node -->
+            <path d="M150,130 Q120,180 85,200" fill="none" stroke="#00e5ff" stroke-width="1.5" opacity="0.6" />
+            <!-- Secondary paths -->
+            <path d="M150,130 Q160,160 195,190" fill="none" stroke="#00e5ff" stroke-width="0.5" opacity="0.2" />
+            <path d="M150,130 Q190,140 230,140" fill="none" stroke="#00e5ff" stroke-width="0.5" opacity="0.2" />
+            <path d="M150,130 Q130,90 100,70" fill="none" stroke="#00e5ff" stroke-width="0.5" opacity="0.2" />
+            
+            <!-- Targeted Active Node (Focus without glow) -->
+            <circle cx="85" cy="200" r="16" fill="none" stroke="#a855f7" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
+            <circle cx="85" cy="200" r="12" fill="#06060c" stroke="#a855f7" stroke-width="2" />
+            <circle cx="85" cy="200" r="4" fill="#a855f7" />
+            <text x="85" y="226" text-anchor="middle" fill="#e4e4f0" font-size="9" font-family="var(--font-mono)">REST API Todo</text>
+
+            <!-- Neighbor Nodes -->
+            <circle cx="195" cy="190" r="6" fill="#06060c" stroke="#a855f7" stroke-width="1" />
+            <circle cx="230" cy="140" r="8" fill="#06060c" stroke="#10b981" stroke-width="1" />
+            <circle cx="100" cy="70" r="5" fill="#06060c" stroke="#f59e0b" stroke-width="1" />
+          </svg>
+        </div>
+
+        <!-- Pattern Entry Panel -->
+        <div class="example-panel example-panel--after" data-animate style="--delay:200ms;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+            <div>
+              <div class="example-phase-label" style="color: var(--color-neon-purple); margin-bottom: 4px;">Pattern Family Matched</div>
+              <h3 style="font-family: var(--font-sans); font-size: 14px; font-weight: 600; color: var(--color-text-primary); margin: 0; text-transform: capitalize;">REST API For Todo Application</h3>
+            </div>
+            <div class="pipeline-chip" style="color: var(--color-neon-purple); border-color: var(--color-neon-purple);">SIM 0.92</div>
+          </div>
+          
+          <div class="pipeline-phase__tags" style="margin-bottom: 16px;">
+            <span class="pipeline-tag" style="color: var(--color-neon-purple); border-color: rgba(168, 85, 247, 0.3);">BACKEND</span>
+            <span class="pipeline-tag" style="color: var(--color-text-dim); border-color: var(--color-border-subtle);">CODING</span>
+            <span class="pipeline-tag" style="color: var(--color-neon-green); border-color: rgba(0, 229, 255, 0.3);">AVG 8.4</span>
+            <span class="pipeline-tag" style="color: var(--color-text-dim); border-color: var(--color-border-subtle);">USAGE 42</span>
+          </div>
+
+          <p class="example-line" style="margin-bottom: 12px; color: var(--color-text-secondary);">
+            Extracting highest utility meta-patterns from related past optimizations...
+          </p>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="padding: 8px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 8px; align-items: flex-start;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 2px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
+              <div>
+                <p class="example-line" style="color: var(--color-text-primary);">Explicit Endpoint Schemas</p>
+                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim);">Defines exact constraints for HTTP verbs, error states, and strict Pydantic payload models.</p>
+              </div>
+            </div>
+            
+            <div style="padding: 8px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 8px; align-items: flex-start;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 2px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
+              <div>
+                <p class="example-line" style="color: var(--color-text-primary);">Stateless UUID Generation</p>
+                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim);">Always constrain database or dict ID keys to UUID structure for predictable system context.</p>
+              </div>
+            </div>
+
+            <div style="padding: 8px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 8px; align-items: flex-start;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 2px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
+              <div>
+                <p class="example-line" style="color: var(--color-text-primary);">Enforced Type Definitions</p>
+                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim);">Strict PEP 484 type hints + verbose response docstrings required on all generated targets.</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
