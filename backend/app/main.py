@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
         """Subscribe to optimization_created events and extract patterns."""
         try:
             from app.services.pattern_extractor import PatternExtractorService
-            extractor = PatternExtractorService()
+            extractor = PatternExtractorService(provider=app.state.provider)
             logger.info("Pattern extraction listener started — subscribing to event bus")
             async for event in event_bus.subscribe():
                 if event.get("event") == "optimization_created":
@@ -81,7 +81,10 @@ async def lifespan(app: FastAPI):
                                     oid, task_exc, exc_info=True,
                                 )
 
-                        asyncio.create_task(_run_extraction(opt_id))
+                        asyncio.create_task(
+                            _run_extraction(opt_id),
+                            name=f"pattern-extract-{opt_id}",
+                        )
                     else:
                         logger.warning(
                             "optimization_created event missing 'id' in data: %s",

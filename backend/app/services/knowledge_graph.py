@@ -136,7 +136,6 @@ class KnowledgeGraphService:
                     edges.append({
                         "from": valid_families[i].id,
                         "to": valid_families[j].id,
-                        "shared_patterns": 0,
                         "weight": round(sim, 3),
                     })
 

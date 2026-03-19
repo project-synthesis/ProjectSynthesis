@@ -29,7 +29,6 @@ export interface PatternMatch {
 export interface GraphEdge {
   from: string;
   to: string;
-  shared_patterns: number;
   weight: number;
 }
 
@@ -56,14 +55,14 @@ export const matchPattern = (prompt_text: string) =>
   });
 
 export const getPatternGraph = (familyId?: string) => {
-  const qs = familyId ? `?family_id=${familyId}` : '';
+  const qs = familyId ? `?family_id=${encodeURIComponent(familyId)}` : '';
   return apiFetch<PatternGraph>(`/patterns/graph${qs}`);
 };
 
 export const listFamilies = (params?: { offset?: number; limit?: number; domain?: string }) => {
   const search = new URLSearchParams();
-  if (params?.offset) search.set('offset', String(params.offset));
-  if (params?.limit) search.set('limit', String(params.limit));
+  if (params?.offset != null) search.set('offset', String(params.offset));
+  if (params?.limit != null) search.set('limit', String(params.limit));
   if (params?.domain) search.set('domain', params.domain);
   const qs = search.toString();
   return apiFetch<{ total: number; count: number; offset: number; has_more: boolean; next_offset: number | null; items: PatternFamily[] }>(

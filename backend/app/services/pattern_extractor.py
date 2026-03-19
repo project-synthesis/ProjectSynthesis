@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import PROMPTS_DIR, settings
 from app.database import async_session_factory
 from app.models import MetaPattern, Optimization, OptimizationPattern, PatternFamily
+from app.providers.base import LLMProvider
 from app.services.embedding_service import EmbeddingService
 from app.services.event_bus import event_bus
 from app.services.prompt_loader import PromptLoader
@@ -31,8 +32,13 @@ PATTERN_MERGE_THRESHOLD = 0.82
 class PatternExtractorService:
     """Extracts and clusters prompt patterns from completed optimizations."""
 
-    def __init__(self, embedding_service: EmbeddingService | None = None) -> None:
+    def __init__(
+        self,
+        embedding_service: EmbeddingService | None = None,
+        provider: LLMProvider | None = None,
+    ) -> None:
         self._embedding = embedding_service or EmbeddingService()
+        self._provider = provider
         self._prompt_loader = PromptLoader(PROMPTS_DIR)
 
     async def process(self, optimization_id: str) -> None:
@@ -91,7 +97,7 @@ class PatternExtractorService:
                     db,
                     embedding=embedding,
                     intent_label=opt.intent_label or "general",
-                    domain=getattr(opt, "domain", "general") or "general",
+                    domain=opt.domain or "general",
                     task_type=opt.task_type or "general",
                     overall_score=opt.overall_score,
                 )
@@ -264,15 +270,13 @@ class PatternExtractorService:
     async def _extract_meta_patterns(self, opt: Optimization) -> list[str]:
         """Call Haiku to extract meta-patterns from a completed optimization."""
         try:
-            from app.providers.detector import detect_provider
-
             template = self._prompt_loader.render(
                 "extract_patterns.md",
                 {
                     "raw_prompt": opt.raw_prompt[:2000],  # cap input size
                     "optimized_prompt": (opt.optimized_prompt or "")[:2000],
                     "intent_label": opt.intent_label or "general",
-                    "domain": getattr(opt, "domain", "general") or "general",
+                    "domain": opt.domain or "general",
                     "strategy_used": opt.strategy_used or "auto",
                 },
             )
@@ -283,16 +287,15 @@ class PatternExtractorService:
                 model_config = {"extra": "forbid"}
                 patterns: list[str]
 
-            provider = detect_provider()
-            if not provider:
+            if not self._provider:
                 logger.warning("No LLM provider available for meta-pattern extraction")
                 return []
 
             logger.debug(
                 "Calling %s for meta-pattern extraction (opt=%s, model=%s)",
-                provider.name, opt.id, settings.MODEL_HAIKU,
+                self._provider.name, opt.id, settings.MODEL_HAIKU,
             )
-            response = await provider.complete_parsed(
+            response = await self._provider.complete_parsed(
                 model=settings.MODEL_HAIKU,
                 system_prompt="You are a prompt engineering analyst. Extract reusable meta-patterns.",
                 user_message=template,
