@@ -77,32 +77,79 @@ async def optimize(
     db: AsyncSession = Depends(get_db),
     _rate: None = Depends(RateLimit(lambda: settings.OPTIMIZE_RATE_LIMIT)),
 ):
-    provider = getattr(request.app.state, "provider", None)
-    if not provider:
-        raise HTTPException(
-            status_code=503,
-            detail="No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI.",
-        )
+    from app.services.routing import RoutingContext
 
-    logger.info("POST /api/optimize: prompt_len=%d strategy=%s", len(body.prompt), body.strategy)
+    routing = getattr(request.app.state, "routing", None)
+    if not routing:
+        raise HTTPException(status_code=503, detail="Routing service not initialized.")
+
+    _prefs = PreferencesService(DATA_DIR)
+    prefs_snapshot = _prefs.load()
+
+    ctx = RoutingContext(preferences=prefs_snapshot, caller="rest")
+    decision = routing.resolve(ctx)
+
+    logger.info(
+        "POST /api/optimize: prompt_len=%d strategy=%s tier=%s",
+        len(body.prompt), body.strategy, decision.tier,
+    )
 
     # Scan workspace for guidance files
     guidance = None
     if body.workspace_path:
-        from pathlib import Path
+        from pathlib import Path as _Path
 
         from app.services.roots_scanner import RootsScanner
         scanner = RootsScanner()
-        guidance = scanner.scan(Path(body.workspace_path))
+        guidance = scanner.scan(_Path(body.workspace_path))
 
-    orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
-
-    _prefs = PreferencesService(DATA_DIR)
     effective_strategy = body.strategy or _prefs.get("defaults.strategy") or "auto"
 
+    if decision.tier == "passthrough":
+        # Inline passthrough — stream assembled template via SSE
+        assembled, strategy_name = assemble_passthrough_prompt(
+            prompts_dir=PROMPTS_DIR,
+            raw_prompt=body.prompt,
+            strategy_name=effective_strategy,
+            codebase_guidance=guidance,
+        )
+
+        trace_id = str(uuid.uuid4())
+        opt_id = str(uuid.uuid4())
+        pending = Optimization(
+            id=opt_id, raw_prompt=body.prompt, status="pending",
+            trace_id=trace_id, provider="web_passthrough",
+            strategy_used=strategy_name, task_type="general",
+        )
+        db.add(pending)
+        await db.commit()
+
+        async def passthrough_stream():
+            yield format_sse("routing", {
+                "tier": decision.tier, "provider": decision.provider_name,
+                "reason": decision.reason, "degraded_from": decision.degraded_from,
+            })
+            yield format_sse("passthrough", {
+                "assembled_prompt": assembled, "strategy": strategy_name,
+                "trace_id": trace_id, "optimization_id": opt_id,
+            })
+
+        return StreamingResponse(
+            passthrough_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Internal pipeline (decision.tier == "internal")
+    orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
+
     async def event_stream():
+        yield format_sse("routing", {
+            "tier": decision.tier, "provider": decision.provider_name,
+            "reason": decision.reason, "degraded_from": decision.degraded_from,
+        })
         async for event in orchestrator.run(
-            raw_prompt=body.prompt, provider=provider, db=db,
+            raw_prompt=body.prompt, provider=decision.provider, db=db,
             strategy_override=effective_strategy if effective_strategy != "auto" else None,
             codebase_guidance=guidance,
             applied_pattern_ids=body.applied_pattern_ids,

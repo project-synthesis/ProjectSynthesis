@@ -28,9 +28,13 @@ class ApiKeyStatus(BaseModel):
 
 @router.get("/providers")
 async def get_providers(request: Request) -> ProviderInfo:
-    provider = getattr(request.app.state, "provider", None)
+    routing = getattr(request.app.state, "routing", None)
+    provider_name = routing.state.provider_name if routing else None
+    if not provider_name:
+        provider = getattr(request.app.state, "provider", None)
+        provider_name = provider.name if provider else None
     return ProviderInfo(
-        active_provider=provider.name if provider else None,
+        active_provider=provider_name,
         available=["claude_cli", "anthropic_api", "mcp_passthrough"],
     )
 
@@ -62,25 +66,35 @@ async def set_api_key(body: ApiKeyRequest, request: Request) -> ApiKeyStatus:
     _write_api_key(key)
     logger.info("API key updated (last 4: ...%s)", key[-4:])
 
-    # Hot-reload: update the provider if we now have an API key
-    if not getattr(request.app.state, "provider", None):
-        try:
-            from app.providers.anthropic_api import AnthropicAPIProvider
-            request.app.state.provider = AnthropicAPIProvider(api_key=key)
-            logger.info("Provider hot-reloaded: anthropic_api")
-        except Exception:
-            logger.warning("Could not hot-reload provider after API key set")
+    # Hot-reload: create provider and update routing
+    try:
+        from app.providers.anthropic_api import AnthropicAPIProvider
+        new_provider = AnthropicAPIProvider(api_key=key)
+        routing = getattr(request.app.state, "routing", None)
+        if routing:
+            routing.set_provider(new_provider)
+        request.app.state.provider = new_provider  # backward compat
+        logger.info("Provider hot-reloaded: anthropic_api")
+    except Exception:
+        logger.warning("Could not hot-reload provider after API key set")
 
     return ApiKeyStatus(configured=True, masked_key=f"sk-...{key[-4:]}")
 
 
 @router.delete("/provider/api-key")
-async def delete_api_key() -> ApiKeyStatus:
+async def delete_api_key(request: Request) -> ApiKeyStatus:
     """Remove the stored API key."""
     cred_file = DATA_DIR / ".api_credentials"
     if cred_file.exists():
         cred_file.unlink()
         logger.info("API key credentials file deleted")
+
+    # Clear provider from routing service
+    routing = getattr(request.app.state, "routing", None)
+    if routing:
+        routing.set_provider(None)
+    request.app.state.provider = None  # backward compat
+
     return ApiKeyStatus(configured=False, masked_key=None)
 
 

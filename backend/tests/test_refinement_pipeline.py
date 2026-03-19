@@ -140,8 +140,9 @@ class TestRefineSSE:
         assert resp.status_code == 404
 
     async def test_refine_no_provider(self, app_client, sample_opt):
-        """POST /api/refine without a provider → 503."""
+        """POST /api/refine without a provider → 503 (passthrough not supported for refinement)."""
         app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
         resp = await app_client.post(
             "/api/refine",
             json={

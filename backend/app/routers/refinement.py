@@ -50,12 +50,26 @@ async def refine(
     db: AsyncSession = Depends(get_db),
 ):
     """Run a single refinement turn and stream SSE events."""
-    provider = getattr(request.app.state, "provider", None)
-    if not provider:
+    from app.config import DATA_DIR
+    from app.services.preferences import PreferencesService
+    from app.services.routing import RoutingContext
+
+    routing = getattr(request.app.state, "routing", None)
+    if not routing:
+        raise HTTPException(status_code=503, detail="Routing service not initialized.")
+
+    _prefs = PreferencesService(DATA_DIR)
+    prefs_snapshot = _prefs.load()
+    ctx = RoutingContext(preferences=prefs_snapshot, caller="rest")
+    decision = routing.resolve(ctx)
+
+    # Refinement still requires a provider (passthrough refinement UX not designed yet)
+    if decision.tier == "passthrough":
         raise HTTPException(
             status_code=503,
-            detail="No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI.",
+            detail="Refinement requires a local provider. Configure an API key or install the Claude CLI.",
         )
+    provider = decision.provider
 
     from app.services.optimization_service import OptimizationService
     from app.services.refinement_service import RefinementService
