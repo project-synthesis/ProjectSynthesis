@@ -28,5 +28,8 @@ async def notify_event_bus(event_type: str, data: dict) -> None:
                 json={"event_type": event_type, "data": data},
                 timeout=5.0,
             )
-    except Exception:
+    except BaseException:
+        # Catch BaseException (not just Exception) to handle
+        # asyncio.CancelledError — this can be raised when the caller
+        # is in a finally block during ASGI task cancellation.
         logger.debug("Failed to notify backend event bus", exc_info=True)

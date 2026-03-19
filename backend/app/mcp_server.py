@@ -384,14 +384,27 @@ class _CapabilityDetectionMiddleware:
                     _CapabilityDetectionMiddleware._flush_sse_streams()
                     if _CapabilityDetectionMiddleware._active_sse_streams == 0:
                         logger.info("Last SSE stream closed — client disconnected")
+                        # Use asyncio.shield to protect the HTTP POST from
+                        # task cancellation (uvicorn cancels the handler
+                        # when the client disconnects, and CancelledError
+                        # is BaseException, not Exception).
                         try:
-                            await notify_event_bus("mcp_session_changed", {
-                                "sampling_capable": True,
-                                "reconnected": False,
-                                "disconnected": True,
-                            })
-                        except Exception:
-                            pass
+                            import asyncio
+
+                            await asyncio.shield(notify_event_bus(
+                                "mcp_session_changed",
+                                {
+                                    "sampling_capable": True,
+                                    "reconnected": False,
+                                    "disconnected": True,
+                                },
+                            ))
+                            logger.info("Disconnect event published to backend")
+                        except BaseException:
+                            logger.warning(
+                                "Failed to publish disconnect event",
+                                exc_info=True,
+                            )
         else:
             await self.app(scope, receive, send)
 

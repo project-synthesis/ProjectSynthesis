@@ -1165,14 +1165,24 @@ class TestHealthMcpDisconnected:
         assert resp.json()["mcp_disconnected"] is False
 
     async def test_false_when_fresh_activity(self, app_client, tmp_path, monkeypatch):
-        """Fresh activity (< 5 min) → mcp_disconnected is false."""
+        """Fresh activity (< 5 min) with active SSE stream → mcp_disconnected is false."""
         monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, activity_age_seconds=60)
+        self._write_session(tmp_path, sampling_capable=True, activity_age_seconds=60, sse_streams=1)
 
         resp = await app_client.get("/api/health")
         data = resp.json()
         assert data["sampling_capable"] is True
         assert data["mcp_disconnected"] is False
+
+    async def test_true_when_sse_streams_zero(self, app_client, tmp_path, monkeypatch):
+        """sse_streams=0 with fresh activity → immediate disconnect (stream just closed)."""
+        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
+        self._write_session(tmp_path, sampling_capable=True, activity_age_seconds=10, sse_streams=0)
+
+        resp = await app_client.get("/api/health")
+        data = resp.json()
+        assert data["sampling_capable"] is True
+        assert data["mcp_disconnected"] is True
 
     async def test_true_when_stale_activity(self, app_client, tmp_path, monkeypatch):
         """Stale activity (> 5 min) with fresh capability → mcp_disconnected is true."""
