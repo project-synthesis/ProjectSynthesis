@@ -293,7 +293,7 @@
     <div class="example-container">
       <div class="example-panels">
         <!-- Visualization Panel -->
-        <div class="example-panel" data-animate style="--delay:100ms; align-items: center; justify-content: center; background: var(--color-bg-primary);">
+        <div class="example-panel example-panel--before" data-animate style="--delay:100ms; align-items: center; justify-content: center;">
           <!-- Mini Knowledge Graph SVG Base -->
           <svg width="100%" height="100%" viewBox="0 0 300 260" style="max-height: 240px; overflow: visible;">
             <!-- Domain arcs (Inner ring) -->
@@ -307,9 +307,9 @@
             <path d="M80,90 A80,80 0 0 1 150,50" fill="none" stroke="#6b7280" stroke-width="1" opacity="0.3" />
 
             <!-- Labels -->
-            <text x="60" y="190" fill="#a855f7" font-size="8" font-family="var(--font-mono)" opacity="0.9">BACKEND</text>
-            <text x="235" y="100" fill="#f59e0b" font-size="8" font-family="var(--font-mono)" opacity="0.5">FRONTEND</text>
-            <text x="210" y="210" fill="#10b981" font-size="8" font-family="var(--font-mono)" opacity="0.5">DATABASE</text>
+            <text x="50" y="160" fill="#a855f7" font-size="8" font-family="var(--font-mono)" font-weight="600" opacity="0.9">BACKEND</text>
+            <text x="240" y="100" fill="#f59e0b" font-size="8" font-family="var(--font-mono)" opacity="0.5">FRONTEND</text>
+            <text x="210" y="225" fill="#10b981" font-size="8" font-family="var(--font-mono)" opacity="0.5">DATABASE</text>
 
             <!-- Center Origin -->
             <circle cx="150" cy="130" r="16" fill="none" stroke="#00e5ff" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
@@ -341,10 +341,10 @@
         <div class="example-panel example-panel--after" data-animate style="--delay:200ms;">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
             <div>
-              <div class="example-phase-label" style="color: var(--color-neon-purple); margin-bottom: 4px;">Pattern Family Matched</div>
-              <h3 style="font-family: var(--font-sans); font-size: 14px; font-weight: 600; color: var(--color-text-primary); margin: 0; text-transform: capitalize;">REST API For Todo Application</h3>
+              <div class="example-phase-label" style="color: var(--color-neon-purple); margin-bottom: 4px;">PATTERN FAMILY MATCHED</div>
+              <h3 style="font-family: var(--font-sans); font-size: 14px; font-weight: 600; color: var(--color-text-primary); margin: 0;">REST API for Todo App</h3>
             </div>
-            <div class="pipeline-chip" style="color: var(--color-neon-purple); border-color: var(--color-neon-purple);">SIM 0.92</div>
+            <span class="pipeline-tag" style="color: var(--color-neon-purple); border-color: rgba(168, 85, 247, 0.4); font-weight: 600;">SIM 0.92</span>
           </div>
           
           <div class="pipeline-phase__tags" style="margin-bottom: 16px;">
@@ -359,27 +359,27 @@
           </p>
 
           <div style="display: flex; flex-direction: column; gap: 8px;">
-            <div style="padding: 8px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 8px; align-items: flex-start;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 2px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
+            <div style="padding: 10px 12px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 10px; align-items: flex-start;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 1px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
               <div>
-                <p class="example-line" style="color: var(--color-text-primary);">Explicit Endpoint Schemas</p>
-                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim);">Defines exact constraints for HTTP verbs, error states, and strict Pydantic payload models.</p>
+                <p class="example-line" style="color: var(--color-text-primary); font-weight: 500; font-size: 11px; margin-bottom: 2px;">Explicit Endpoint Schemas</p>
+                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim); line-height: 1.4;">Defines exact constraints for HTTP verbs, error states, and strict Pydantic payload models.</p>
               </div>
             </div>
             
-            <div style="padding: 8px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 8px; align-items: flex-start;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 2px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
+            <div style="padding: 10px 12px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 10px; align-items: flex-start;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 1px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
               <div>
-                <p class="example-line" style="color: var(--color-text-primary);">Stateless UUID Generation</p>
-                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim);">Always constrain database or dict ID keys to UUID structure for predictable system context.</p>
+                <p class="example-line" style="color: var(--color-text-primary); font-weight: 500; font-size: 11px; margin-bottom: 2px;">Stateless UUID Generation</p>
+                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim); line-height: 1.4;">Always constrain database or dict ID keys to UUID structure for predictable system context.</p>
               </div>
             </div>
 
-            <div style="padding: 8px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 8px; align-items: flex-start;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 2px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
+            <div style="padding: 10px 12px; border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); display: flex; gap: 10px; align-items: flex-start;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="color: var(--color-neon-cyan); margin-top: 1px; flex-shrink: 0;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"/></svg>
               <div>
-                <p class="example-line" style="color: var(--color-text-primary);">Enforced Type Definitions</p>
-                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim);">Strict PEP 484 type hints + verbose response docstrings required on all generated targets.</p>
+                <p class="example-line" style="color: var(--color-text-primary); font-weight: 500; font-size: 11px; margin-bottom: 2px;">Enforced Type Definitions</p>
+                <p class="example-line" style="font-size: 10px; color: var(--color-text-dim); line-height: 1.4;">Strict PEP 484 type hints + verbose response docstrings required on all generated targets.</p>
               </div>
             </div>
           </div>
