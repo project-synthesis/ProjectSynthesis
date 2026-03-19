@@ -6,6 +6,7 @@ Provides the data structure for the radial mindmap frontend visualization.
 from __future__ import annotations
 
 import logging
+import time
 
 import numpy as np
 from sqlalchemy import func, select
@@ -27,6 +28,8 @@ class KnowledgeGraphService:
 
     async def get_graph(self, db: AsyncSession, family_id: str | None = None) -> dict:
         """Build the full graph structure for the radial mindmap."""
+        t0 = time.monotonic()
+
         # Load families
         query = select(PatternFamily)
         if family_id:
@@ -35,6 +38,7 @@ class KnowledgeGraphService:
         families = result.scalars().all()
 
         if not families:
+            logger.debug("Graph requested — no families found")
             return {"center": {"total_families": 0, "total_patterns": 0, "total_optimizations": 0}, "families": [], "edges": []}
 
         # Load meta-patterns for all families
@@ -76,6 +80,17 @@ class KnowledgeGraphService:
         # Compute edges
         edges = self._compute_edges(families) if len(families) > 1 else []
 
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(
+            "Graph built in %.0fms: families=%d meta_patterns=%d edges=%d optimizations=%d%s",
+            elapsed_ms,
+            len(families),
+            len(all_meta),
+            len(edges),
+            total_optimizations,
+            f" (filtered to family_id={family_id})" if family_id else "",
+        )
+
         return {
             "center": {
                 "total_families": len(families),
@@ -89,12 +104,28 @@ class KnowledgeGraphService:
     def _compute_edges(self, families: list[PatternFamily]) -> list[dict]:
         """Compute cross-family edges based on centroid similarity."""
         edges = []
+        valid_families = []
         centroids = []
-        for f in families:
-            centroids.append(np.frombuffer(f.centroid_embedding, dtype=np.float32))
 
-        for i in range(len(families)):
-            for j in range(i + 1, len(families)):
+        for f in families:
+            try:
+                centroid = np.frombuffer(f.centroid_embedding, dtype=np.float32)
+                centroids.append(centroid)
+                valid_families.append(f)
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "Skipping family '%s' in edge computation — corrupt centroid: %s",
+                    f.intent_label, exc,
+                )
+                continue
+
+        if len(valid_families) < 2:
+            return []
+
+        comparisons = 0
+        for i in range(len(valid_families)):
+            for j in range(i + 1, len(valid_families)):
+                comparisons += 1
                 # Cosine similarity
                 norm_i = np.linalg.norm(centroids[i]) + 1e-9
                 norm_j = np.linalg.norm(centroids[j]) + 1e-9
@@ -102,18 +133,24 @@ class KnowledgeGraphService:
 
                 if sim >= EDGE_THRESHOLD:
                     edges.append({
-                        "from": families[i].id,
-                        "to": families[j].id,
+                        "from": valid_families[i].id,
+                        "to": valid_families[j].id,
                         "shared_patterns": 0,
                         "weight": round(sim, 3),
                     })
 
+        logger.debug(
+            "Edge computation: %d comparisons across %d families → %d edges (threshold=%.2f)",
+            comparisons, len(valid_families), len(edges), EDGE_THRESHOLD,
+        )
         return edges
 
     async def search_patterns(
         self, db: AsyncSession, query: str, top_k: int = 5
     ) -> list[dict]:
         """Semantic search across all families and meta-patterns."""
+        t0 = time.monotonic()
+
         try:
             query_embedding = await self._embedding.aembed_single(query)
         except Exception as exc:
@@ -125,25 +162,34 @@ class KnowledgeGraphService:
         families = result.scalars().all()
 
         if not families:
+            logger.debug("Pattern search — no families to search")
             return []
 
-        centroids = [np.frombuffer(f.centroid_embedding, dtype=np.float32) for f in families]
-        matches = EmbeddingService.cosine_search(query_embedding, centroids, top_k=top_k)
+        centroids = []
+        valid_families = []
+        for f in families:
+            try:
+                centroids.append(np.frombuffer(f.centroid_embedding, dtype=np.float32))
+                valid_families.append(f)
+            except (ValueError, TypeError):
+                continue
+
+        results = []
+        if centroids:
+            matches = EmbeddingService.cosine_search(query_embedding, centroids, top_k=top_k)
+            for idx, score in matches:
+                f = valid_families[idx]
+                results.append({
+                    "type": "family",
+                    "id": f.id,
+                    "label": f.intent_label,
+                    "domain": f.domain,
+                    "score": round(score, 3),
+                })
 
         # Also search meta-patterns
         meta_result = await db.execute(select(MetaPattern).where(MetaPattern.embedding.isnot(None)))
         all_meta = meta_result.scalars().all()
-
-        results = []
-        for idx, score in matches:
-            f = families[idx]
-            results.append({
-                "type": "family",
-                "id": f.id,
-                "label": f.intent_label,
-                "domain": f.domain,
-                "score": round(score, 3),
-            })
 
         if all_meta:
             meta_embeddings = [np.frombuffer(mp.embedding, dtype=np.float32) for mp in all_meta]
@@ -160,7 +206,18 @@ class KnowledgeGraphService:
 
         # Sort by score, return top_k
         results.sort(key=lambda r: r["score"], reverse=True)
-        return results[:top_k]
+        results = results[:top_k]
+
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(
+            "Pattern search completed in %.0fms: query='%s' results=%d (families=%d, meta=%d)",
+            elapsed_ms,
+            query[:50],
+            len(results),
+            len(valid_families),
+            len(all_meta),
+        )
+        return results
 
     async def get_family_detail(self, db: AsyncSession, family_id: str) -> dict | None:
         """Get detailed view of a single family."""
@@ -169,6 +226,7 @@ class KnowledgeGraphService:
         )
         family = result.scalar_one_or_none()
         if not family:
+            logger.debug("Family detail requested for unknown id=%s", family_id)
             return None
 
         # Meta-patterns
@@ -188,6 +246,11 @@ class KnowledgeGraphService:
             .limit(20)
         )
         optimizations = opt_result.scalars().all()
+
+        logger.debug(
+            "Family detail loaded: id=%s label='%s' meta_patterns=%d optimizations=%d",
+            family_id, family.intent_label, len(meta_patterns), len(optimizations),
+        )
 
         return {
             "id": family.id,
@@ -229,6 +292,11 @@ class KnowledgeGraphService:
             .group_by(PatternFamily.domain)
         )
         domain_dist = {row[0]: row[1] for row in domain_result}
+
+        logger.debug(
+            "Stats: families=%d patterns=%d optimizations=%d domains=%s",
+            fam_count, meta_count, opt_count, list(domain_dist.keys()),
+        )
 
         return {
             "total_families": fam_count,

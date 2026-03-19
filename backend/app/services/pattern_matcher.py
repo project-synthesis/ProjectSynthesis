@@ -6,6 +6,7 @@ Returns the best matching family + meta-patterns if above the suggestion thresho
 from __future__ import annotations
 
 import logging
+import time
 
 import numpy as np
 from sqlalchemy import select
@@ -31,11 +32,14 @@ class PatternMatcherService:
         Returns None if no family matches above SUGGESTION_THRESHOLD.
         Returns dict with family, meta_patterns, and similarity score.
         """
+        t0 = time.monotonic()
+
         # Load all families
         result = await db.execute(select(PatternFamily))
         families = result.scalars().all()
 
         if not families:
+            logger.debug("Pattern match — no families exist yet")
             return None
 
         # Embed the input prompt
@@ -45,15 +49,39 @@ class PatternMatcherService:
             logger.warning("Embedding failed for pattern match (non-fatal): %s", exc)
             return None
 
-        # Cosine search against centroids
-        centroids = [np.frombuffer(f.centroid_embedding, dtype=np.float32) for f in families]
+        # Cosine search against centroids — skip corrupt entries
+        valid_families = []
+        centroids = []
+        for f in families:
+            try:
+                centroid = np.frombuffer(f.centroid_embedding, dtype=np.float32)
+                centroids.append(centroid)
+                valid_families.append(f)
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "Skipping family '%s' in match — corrupt centroid: %s",
+                    f.intent_label, exc,
+                )
+                continue
+
+        if not centroids:
+            logger.debug("Pattern match — no valid centroids to match against")
+            return None
+
         matches = EmbeddingService.cosine_search(prompt_embedding, centroids, top_k=1)
 
         if not matches or matches[0][1] < SUGGESTION_THRESHOLD:
+            best_score = matches[0][1] if matches else 0.0
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.debug(
+                "Pattern match miss in %.0fms: best_score=%.3f threshold=%.2f families=%d prompt='%s'",
+                elapsed_ms, best_score, SUGGESTION_THRESHOLD,
+                len(valid_families), prompt_text[:40],
+            )
             return None
 
         idx, similarity = matches[0]
-        family = families[idx]
+        family = valid_families[idx]
 
         # Load meta-patterns for this family
         meta_result = await db.execute(
@@ -62,6 +90,17 @@ class PatternMatcherService:
             .order_by(MetaPattern.source_count.desc())
         )
         meta_patterns = meta_result.scalars().all()
+
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(
+            "Pattern match hit in %.0fms: family='%s' similarity=%.3f "
+            "meta_patterns=%d prompt='%s'",
+            elapsed_ms,
+            family.intent_label,
+            similarity,
+            len(meta_patterns),
+            prompt_text[:40],
+        )
 
         return {
             "family": {

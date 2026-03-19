@@ -33,7 +33,11 @@ async def get_graph(
     db: AsyncSession = Depends(get_db),
 ):
     """Full mindmap graph data or subtree for a specific family."""
-    return await _graph_service.get_graph(db, family_id=family_id)
+    try:
+        return await _graph_service.get_graph(db, family_id=family_id)
+    except Exception as exc:
+        logger.error("Failed to build graph: %s", exc, exc_info=True)
+        raise HTTPException(500, "Failed to build knowledge graph") from exc
 
 
 @router.post("/match")
@@ -42,10 +46,14 @@ async def match_pattern(
     db: AsyncSession = Depends(get_db),
 ):
     """Similarity check for auto-suggestion on paste."""
-    result = await _matcher_service.match(db, body.prompt_text)
-    if result is None:
-        return {"match": None}
-    return {"match": result}
+    try:
+        result = await _matcher_service.match(db, body.prompt_text)
+        if result is None:
+            return {"match": None}
+        return {"match": result}
+    except Exception as exc:
+        logger.error("Pattern match failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Pattern matching failed") from exc
 
 
 @router.get("/families")
@@ -55,9 +63,10 @@ async def list_families(
     domain: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    """List all pattern families with pagination."""
     offset = max(offset, 0)
     limit = min(max(limit, 1), 500)
-    """List all pattern families with pagination."""
+
     from sqlalchemy import func, select
 
     query = select(PatternFamily).order_by(PatternFamily.usage_count.desc())
@@ -70,6 +79,11 @@ async def list_families(
     total = (await db.execute(count_query)).scalar() or 0
     result = await db.execute(query.offset(offset).limit(limit))
     families = result.scalars().all()
+
+    logger.debug(
+        "Listed families: total=%d returned=%d offset=%d domain=%s",
+        total, len(families), offset, domain,
+    )
 
     return {
         "total": total,
@@ -99,7 +113,11 @@ async def get_family(
     db: AsyncSession = Depends(get_db),
 ):
     """Family detail with meta-patterns and linked optimizations."""
-    detail = await _graph_service.get_family_detail(db, family_id)
+    try:
+        detail = await _graph_service.get_family_detail(db, family_id)
+    except Exception as exc:
+        logger.error("Failed to load family detail id=%s: %s", family_id, exc, exc_info=True)
+        raise HTTPException(500, "Failed to load family detail") from exc
     if not detail:
         raise HTTPException(404, "Pattern family not found")
     return detail
@@ -121,8 +139,14 @@ async def rename_family(
     if not family:
         raise HTTPException(404, "Pattern family not found")
 
+    old_label = family.intent_label
     family.intent_label = body.intent_label
     await db.commit()
+
+    logger.info(
+        "Family renamed: id=%s '%s' → '%s'",
+        family_id, old_label, body.intent_label,
+    )
     return {"id": family.id, "intent_label": family.intent_label}
 
 
@@ -135,10 +159,18 @@ async def search_patterns(
     """Semantic search across families and meta-patterns."""
     if not q.strip():
         raise HTTPException(400, "Query cannot be empty")
-    return await _graph_service.search_patterns(db, q, top_k=min(top_k, 20))
+    try:
+        return await _graph_service.search_patterns(db, q, top_k=min(top_k, 20))
+    except Exception as exc:
+        logger.error("Pattern search failed for q='%s': %s", q[:50], exc, exc_info=True)
+        raise HTTPException(500, "Pattern search failed") from exc
 
 
 @router.get("/stats")
 async def get_stats(db: AsyncSession = Depends(get_db)):
     """Summary statistics for the knowledge graph."""
-    return await _graph_service.get_stats(db)
+    try:
+        return await _graph_service.get_stats(db)
+    except Exception as exc:
+        logger.error("Failed to get pattern stats: %s", exc, exc_info=True)
+        raise HTTPException(500, "Failed to load pattern statistics") from exc

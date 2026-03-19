@@ -61,13 +61,34 @@ async def lifespan(app: FastAPI):
         try:
             from app.services.pattern_extractor import PatternExtractorService
             extractor = PatternExtractorService()
+            logger.info("Pattern extraction listener started — subscribing to event bus")
             async for event in event_bus.subscribe():
                 if event.get("event") == "optimization_created":
                     opt_id = event.get("data", {}).get("id")
                     if opt_id:
-                        asyncio.create_task(extractor.process(opt_id))
+                        logger.info(
+                            "Dispatching pattern extraction for optimization %s",
+                            opt_id,
+                        )
+
+                        async def _run_extraction(oid: str) -> None:
+                            """Wrapper to catch and log fire-and-forget task errors."""
+                            try:
+                                await extractor.process(oid)
+                            except Exception as task_exc:
+                                logger.error(
+                                    "Background pattern extraction task failed for %s: %s",
+                                    oid, task_exc, exc_info=True,
+                                )
+
+                        asyncio.create_task(_run_extraction(opt_id))
+                    else:
+                        logger.warning(
+                            "optimization_created event missing 'id' in data: %s",
+                            event.get("data"),
+                        )
         except asyncio.CancelledError:
-            pass
+            logger.info("Pattern extraction listener shutting down")
         except Exception as exc:
             logger.error("Pattern extraction listener crashed: %s", exc, exc_info=True)
 
