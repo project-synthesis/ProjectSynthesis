@@ -378,8 +378,45 @@ class _CapabilityDetectionMiddleware:
                     _CapabilityDetectionMiddleware._active_sse_streams = max(
                         0, _CapabilityDetectionMiddleware._active_sse_streams - 1,
                     )
+                    # Write updated count to disk so health sees sse_streams=0.
+                    # When the last stream closes, also fire a disconnect event
+                    # so the frontend reacts immediately.
+                    _CapabilityDetectionMiddleware._flush_sse_streams()
+                    if _CapabilityDetectionMiddleware._active_sse_streams == 0:
+                        logger.info("Last SSE stream closed — client disconnected")
+                        try:
+                            await notify_event_bus("mcp_session_changed", {
+                                "sampling_capable": True,
+                                "reconnected": False,
+                                "disconnected": True,
+                            })
+                        except Exception:
+                            pass
         else:
             await self.app(scope, receive, send)
+
+    @classmethod
+    def _flush_sse_streams(cls) -> None:
+        """Write current ``_active_sse_streams`` count to ``mcp_session.json``.
+
+        Called when an SSE stream closes so the health endpoint immediately
+        sees the updated count.  When the last stream closes (count → 0),
+        we do NOT update ``last_activity`` — letting it go stale so the
+        health endpoint detects the disconnect via the normal staleness check.
+        """
+        try:
+            path = DATA_DIR / "mcp_session.json"
+            if not path.exists():
+                return
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            data["sse_streams"] = cls._active_sse_streams
+            # Only refresh activity if streams are still active; otherwise
+            # let staleness detection handle the disconnect.
+            if cls._active_sse_streams > 0:
+                data["last_activity"] = datetime.now(timezone.utc).isoformat()
+            path.write_text(_json.dumps(data), encoding="utf-8")
+        except Exception:
+            logger.debug("_flush_sse_streams: could not update mcp_session.json", exc_info=True)
 
     @classmethod
     def _write_optimistic_session(cls) -> None:

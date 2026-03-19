@@ -53,8 +53,18 @@
         }
       }
       if (type === 'mcp_session_changed') {
-        // MCP client reconnected — trigger immediate health poll for instant detection
-        getHealth().then(applyHealth).catch(() => {});
+        if (data.disconnected) {
+          // SSE stream closed — client disconnected. Apply immediately
+          // without waiting for the next health poll.
+          forgeStore.mcpDisconnected = true;
+          if (!preferencesStore.pipeline.force_passthrough) {
+            preferencesStore.update({ pipeline: { force_passthrough: true, auto_passthrough: true } });
+            addToast('deleted', 'MCP client disconnected — switched to passthrough mode');
+          }
+        } else {
+          // MCP client connected/reconnected — trigger immediate health poll
+          getHealth().then(applyHealth).catch(() => {});
+        }
       }
     });
     return () => eventSource?.close();
