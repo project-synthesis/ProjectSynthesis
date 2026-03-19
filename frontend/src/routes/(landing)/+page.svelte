@@ -27,6 +27,17 @@
     return () => observer.disconnect();
   });
 
+  // ---- Knowledge Graph State ----
+  let isSynthesizing = $state(false);
+
+  function triggerSynthesis() {
+    if (isSynthesizing) return;
+    isSynthesizing = true;
+    setTimeout(() => {
+      isSynthesizing = false;
+    }, 2000);
+  }
+
   // ---- Hero mockup dimension colors ----
   const dimColors = [
     'var(--color-neon-cyan)',
@@ -294,14 +305,20 @@
     <div class="example-container">
       <div class="example-panels">
         <!-- Visualization Panel -->
-        <div class="example-panel example-panel--before" data-animate style="--delay:100ms; align-items: center; justify-content: center;">
+        <div class="example-panel example-panel--before kg-interactive" class:kg-synthesizing={isSynthesizing} data-animate style="--delay:100ms; align-items: center; justify-content: center;" onclick={triggerSynthesis} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') triggerSynthesis() }} role="button" tabindex="0" aria-label="Trigger synthesis animation">
           <!-- Mini Knowledge Graph SVG Base -->
           <svg width="100%" height="100%" viewBox="0 0 300 260" style="max-height: 240px; overflow: visible;">
-            <!-- Edges (Straight, Exact Connections) -->
+                        <!-- Edges (Straight, Exact Connections) -->
             <path d="M150,130 L206.5,73.5" fill="none" stroke="#00e5ff" stroke-width="0.5" opacity="0.3" />
             <path d="M150,130 L206.5,186.5" fill="none" stroke="#00e5ff" stroke-width="0.5" opacity="0.3" />
             <path d="M150,130 L81,90" fill="none" stroke="#00e5ff" stroke-width="0.5" opacity="0.3" />
             <path d="M150,130 L81,170" fill="none" stroke="#00e5ff" stroke-width="1.5" opacity="0.7" />
+
+            <!-- Data Flow Packets (Hidden until synthesizing) -->
+            <path class="kg-data-flow kg-data-flow-1" d="M206.5,73.5 L150,130" fill="none" stroke="#00e5ff" stroke-width="2" />
+            <path class="kg-data-flow kg-data-flow-2" d="M206.5,186.5 L150,130" fill="none" stroke="#00e5ff" stroke-width="2" />
+            <path class="kg-data-flow kg-data-flow-3" d="M81,90 L150,130" fill="none" stroke="#00e5ff" stroke-width="2" />
+            <path class="kg-data-flow kg-data-flow-4" d="M81,170 L150,130" fill="none" stroke="#00e5ff" stroke-width="3" />
 
             <!-- Domain arcs (Perfect Mathematical Circle R=80) -->
             <!-- Frontend (Amber) -->
@@ -316,9 +333,10 @@
             <text x="240" y="70" fill="#f59e0b" font-size="8" font-family="var(--font-mono)" opacity="0.5">FRONTEND</text>
             <text x="240" y="200" fill="#10b981" font-size="8" font-family="var(--font-mono)" opacity="0.5">DATABASE</text>
 
-            <!-- Center Origin Node -->
+                        <!-- Center Origin Node -->
+            <circle class="kg-shockwave" cx="150" cy="130" r="10" fill="none" stroke="#00e5ff" stroke-width="2" opacity="0" />
             <circle cx="150" cy="130" r="16" fill="none" stroke="#00e5ff" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
-            <circle cx="150" cy="130" r="10" fill="#06060c" stroke="#00e5ff" stroke-width="1" />
+            <circle class="kg-center-node" cx="150" cy="130" r="10" fill="#06060c" stroke="#00e5ff" stroke-width="1" />
             <text x="150" y="133" text-anchor="middle" fill="#00e5ff" font-size="8" font-family="var(--font-mono)">KG</text>
 
             <!-- Active Backend Node -->
@@ -1004,6 +1022,81 @@
     color: var(--color-text-dim);
     text-align: center;
     margin: 12px 0 0 0;
+  }
+
+  
+  /* ================================================================
+     KNOWLEDGE GRAPH INTERACTIVITY
+     ================================================================ */
+  .kg-interactive {
+    cursor: pointer;
+    transition: transform var(--duration-hover) var(--ease-spring), border-color var(--duration-hover) var(--ease-spring);
+  }
+  .kg-interactive:hover {
+    transform: scale(1.02);
+    border-color: var(--color-neon-cyan);
+  }
+  .kg-interactive:active {
+    transform: scale(0.99);
+  }
+  .kg-interactive:hover :global(.kg-center-node) {
+    fill: rgba(0, 229, 255, 0.15);
+  }
+
+  /* Data Flow Packets */
+  :global(.kg-data-flow) {
+    stroke-dasharray: 30 150;
+    stroke-dashoffset: 150;
+    opacity: 0;
+  }
+  :global(.kg-synthesizing .kg-data-flow) {
+    animation: flow-packet 0.7s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  }
+  :global(.kg-synthesizing .kg-data-flow-1) { animation-delay: 0.1s; }
+  :global(.kg-synthesizing .kg-data-flow-2) { animation-delay: 0.25s; }
+  :global(.kg-synthesizing .kg-data-flow-3) { animation-delay: 0.15s; }
+  :global(.kg-synthesizing .kg-data-flow-4) { animation-delay: 0.3s; }
+
+  @keyframes flow-packet {
+    0% {
+      stroke-dashoffset: 150;
+      opacity: 0;
+    }
+    15% { opacity: 1; }
+    80% { opacity: 1; }
+    100% {
+      stroke-dashoffset: 30;
+      opacity: 0;
+    }
+  }
+
+  /* Center Node Pulse / Shockwave */
+  :global(.kg-center-node) {
+    transform-origin: 150px 130px;
+    transition: fill var(--duration-hover) var(--ease-spring);
+  }
+  :global(.kg-synthesizing .kg-center-node) {
+    animation: kg-center-pop 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: 0.8s;
+  }
+
+  @keyframes kg-center-pop {
+    0% { transform: scale(1); fill: #06060c; }
+    30% { transform: scale(1.4); fill: rgba(0, 229, 255, 0.5); stroke-width: 2px; }
+    100% { transform: scale(1); fill: #06060c; stroke-width: 1px; }
+  }
+
+  :global(.kg-shockwave) {
+    transform-origin: 150px 130px;
+  }
+  :global(.kg-synthesizing .kg-shockwave) {
+    animation: kg-shockwave-out 1.2s ease-out forwards;
+    animation-delay: 0.8s;
+  }
+
+  @keyframes kg-shockwave-out {
+    0% { transform: scale(1); opacity: 0.8; stroke-width: 3px; }
+    100% { transform: scale(3.8); opacity: 0; stroke-width: 0px; }
   }
 
   /* ================================================================
