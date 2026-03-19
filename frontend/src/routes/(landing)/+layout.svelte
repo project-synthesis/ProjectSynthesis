@@ -28,15 +28,19 @@
 <style>
   .landing-root {
     min-height: 100vh;
+    width: 100%;
+    max-width: 100vw;
     overflow-y: auto;
     overflow-x: hidden;
+    position: relative;
     background: var(--color-bg-primary);
   }
 
-  :global(html:has(.landing-root)),
-  :global(body:has(.landing-root)) {
-    overflow-y: auto;
+  :global(html),
+  :global(body) {
     overflow-x: hidden;
-    height: auto;
+    width: 100%;
+    margin: 0;
+    padding: 0;
   }
 </style>
