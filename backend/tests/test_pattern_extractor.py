@@ -29,6 +29,7 @@ class TestFamilyCreation:
         """Cold start: first optimization creates a new family."""
 
         mock_db = AsyncMock()
+        mock_db.add = MagicMock()  # db.add() is synchronous
         empty_scalars = MagicMock(all=MagicMock(return_value=[]))
         mock_db.execute = AsyncMock(
             return_value=MagicMock(scalars=MagicMock(return_value=empty_scalars))
