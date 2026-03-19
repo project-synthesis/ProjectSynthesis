@@ -232,6 +232,9 @@ class _CapabilityDetectionMiddleware:
     # Throttle activity writes: at most once per 10 seconds
     _last_activity_write: float = 0.0
     _ACTIVITY_WRITE_THROTTLE: float = 10.0
+    # Track active SSE streams — proof that a client is connected even
+    # when no POSTs are happening (idle SSE has no body chunks).
+    _active_sse_streams: int = 0
 
     def __init__(self, app):
         self.app = app
@@ -324,8 +327,10 @@ class _CapabilityDetectionMiddleware:
             # we see the response status, not after the await returns.
             get_handled = False
 
+            get_is_sse = False  # set True once we confirm a 200 SSE stream
+
             async def _capture_get_send(message):
-                nonlocal get_handled
+                nonlocal get_handled, get_is_sse
                 if message["type"] == "http.response.start" and not get_handled:
                     get_handled = True
                     status = message.get("status", 0)
@@ -339,27 +344,45 @@ class _CapabilityDetectionMiddleware:
                                 })
                             except Exception:
                                 pass
-                    elif status == 200 and not has_session_id:
-                        # Successful session-less GET = client reconnecting
-                        # after server restart.  Optimistically assume
-                        # sampling-capable (the client was previously
-                        # connected and is re-establishing its SSE stream).
-                        _CapabilityDetectionMiddleware._write_optimistic_session()
-                        try:
-                            await notify_event_bus("mcp_session_changed", {
-                                "sampling_capable": True,
-                                "reconnected": True,
-                            })
-                        except Exception:
-                            pass
+                    elif status == 200:
+                        get_is_sse = True
+                        _CapabilityDetectionMiddleware._active_sse_streams += 1
+                        if not has_session_id:
+                            # Successful session-less GET = client reconnecting
+                            # after server restart.  Optimistically assume
+                            # sampling-capable (the client was previously
+                            # connected and is re-establishing its SSE stream).
+                            _CapabilityDetectionMiddleware._write_optimistic_session()
+                            try:
+                                await notify_event_bus("mcp_session_changed", {
+                                    "sampling_capable": True,
+                                    "reconnected": True,
+                                })
+                            except Exception:
+                                pass
+                elif message["type"] == "http.response.body" and get_is_sse:
+                    # SSE stream is alive — keep last_activity fresh so the
+                    # health endpoint doesn't report a false disconnect.
+                    # _touch_activity is throttled (10s) so this is cheap.
+                    _CapabilityDetectionMiddleware._touch_activity()
                 await send(message)
 
-            await self.app(scope, receive, _capture_get_send)
+            # Track the SSE stream lifetime. get_is_sse is set to True
+            # inside _capture_get_send when we see a 200 response start.
+            # We increment _after_ the response starts (inside the wrapper)
+            # and decrement when the stream ends (self.app returns).
+            try:
+                await self.app(scope, receive, _capture_get_send)
+            finally:
+                if get_is_sse:
+                    _CapabilityDetectionMiddleware._active_sse_streams = max(
+                        0, _CapabilityDetectionMiddleware._active_sse_streams - 1,
+                    )
         else:
             await self.app(scope, receive, send)
 
-    @staticmethod
-    def _write_optimistic_session() -> None:
+    @classmethod
+    def _write_optimistic_session(cls) -> None:
         """Write ``mcp_session.json`` with ``sampling_capable=True`` optimistically.
 
         Called when a session-less GET succeeds (200) — the client is reconnecting
@@ -375,6 +398,7 @@ class _CapabilityDetectionMiddleware:
                     "sampling_capable": True,
                     "written_at": now,
                     "last_activity": now,
+                    "sse_streams": cls._active_sse_streams,
                 }),
                 encoding="utf-8",
             )
@@ -414,6 +438,9 @@ class _CapabilityDetectionMiddleware:
     def _touch_activity(cls) -> bool:
         """Update ``last_activity`` in mcp_session.json (throttled to avoid I/O spam).
 
+        Also writes the ``sse_streams`` count so the health endpoint can see
+        that a client is connected even when the SSE stream is idle (no POSTs).
+
         Returns ``True`` if this write represents a reconnection (previous
         activity was older than the staleness window).
         """
@@ -443,6 +470,7 @@ class _CapabilityDetectionMiddleware:
                     )
 
             data["last_activity"] = now_utc.isoformat()
+            data["sse_streams"] = cls._active_sse_streams
             path.write_text(_json.dumps(data), encoding="utf-8")
             return reconnected
         except Exception:

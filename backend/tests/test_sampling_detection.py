@@ -1145,6 +1145,7 @@ class TestHealthMcpDisconnected:
         sampling_capable: bool = True,
         capability_age_minutes: float = 0,
         activity_age_seconds: float = 0,
+        sse_streams: int = 0,
     ):
         """Write a mcp_session.json with both staleness dimensions."""
         now = datetime.now(timezone.utc)
@@ -1154,6 +1155,7 @@ class TestHealthMcpDisconnected:
             "sampling_capable": sampling_capable,
             "written_at": written_at,
             "last_activity": last_activity,
+            "sse_streams": sse_streams,
         }))
 
     async def test_false_when_no_file(self, app_client, tmp_path, monkeypatch):
@@ -1181,6 +1183,18 @@ class TestHealthMcpDisconnected:
         data = resp.json()
         assert data["sampling_capable"] is True
         assert data["mcp_disconnected"] is True
+
+    async def test_false_when_sse_stream_active(self, app_client, tmp_path, monkeypatch):
+        """Stale activity but active SSE stream → mcp_disconnected is false."""
+        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
+        self._write_session(
+            tmp_path, sampling_capable=True, activity_age_seconds=400, sse_streams=1,
+        )
+
+        resp = await app_client.get("/api/health")
+        data = resp.json()
+        assert data["sampling_capable"] is True
+        assert data["mcp_disconnected"] is False
 
     async def test_false_when_not_sampling_capable(self, app_client, tmp_path, monkeypatch):
         """Not sampling capable → mcp_disconnected is always false."""

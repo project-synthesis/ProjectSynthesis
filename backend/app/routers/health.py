@@ -120,20 +120,24 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)) -> 
             if now - written_at <= timedelta(minutes=MCP_CAPABILITY_STALENESS_MINUTES):
                 sampling_capable = bool(raw["sampling_capable"])
 
-            # Activity staleness — disconnect detection
-            last_activity_str = raw.get("last_activity")
-            if sampling_capable and last_activity_str:
-                last_activity = datetime.fromisoformat(last_activity_str)
-                activity_age = (now - last_activity).total_seconds()
-                if activity_age > MCP_ACTIVITY_STALENESS_SECONDS:
-                    mcp_disconnected = True
-                    logger.info(
-                        "MCP client appears disconnected: last_activity %ds ago "
-                        "(threshold %.0fs), sampling_capable=%s",
-                        int(activity_age),
-                        MCP_ACTIVITY_STALENESS_SECONDS,
-                        sampling_capable,
-                    )
+            # Activity staleness — disconnect detection.
+            # An active SSE stream (sse_streams > 0) proves the client is
+            # connected even when no POSTs are happening (idle stream).
+            sse_streams = raw.get("sse_streams", 0)
+            if sampling_capable and sse_streams <= 0:
+                last_activity_str = raw.get("last_activity")
+                if last_activity_str:
+                    last_activity = datetime.fromisoformat(last_activity_str)
+                    activity_age = (now - last_activity).total_seconds()
+                    if activity_age > MCP_ACTIVITY_STALENESS_SECONDS:
+                        mcp_disconnected = True
+                        logger.info(
+                            "MCP client appears disconnected: last_activity %ds ago "
+                            "(threshold %.0fs), sampling_capable=%s",
+                            int(activity_age),
+                            MCP_ACTIVITY_STALENESS_SECONDS,
+                            sampling_capable,
+                        )
     except Exception:
         logger.debug("Could not read mcp_session.json", exc_info=True)
 
