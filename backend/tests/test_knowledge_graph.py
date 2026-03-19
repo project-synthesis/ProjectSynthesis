@@ -1,10 +1,11 @@
 """Tests for KnowledgeGraphService — graph building, edge computation, search."""
 
-import numpy as np
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.services.knowledge_graph import KnowledgeGraphService, EDGE_THRESHOLD
+import numpy as np
+import pytest
+
+from app.services.knowledge_graph import EDGE_THRESHOLD, KnowledgeGraphService
 
 
 @pytest.fixture

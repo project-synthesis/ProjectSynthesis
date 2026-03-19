@@ -1,7 +1,7 @@
 """Tests for patterns router — endpoints, error cases."""
 
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestPatternsGraphEndpoint:

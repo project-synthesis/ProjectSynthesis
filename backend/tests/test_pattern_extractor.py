@@ -1,13 +1,12 @@
 """Tests for PatternExtractorService — family creation, merging, meta-pattern extraction."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import numpy as np
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.pattern_extractor import (
     PatternExtractorService,
-    FAMILY_MERGE_THRESHOLD,
-    PATTERN_MERGE_THRESHOLD,
 )
 
 
@@ -28,10 +27,12 @@ class TestFamilyCreation:
     @pytest.mark.asyncio
     async def test_creates_new_family_when_no_families_exist(self, extractor):
         """Cold start: first optimization creates a new family."""
-        from app.models import PatternFamily
 
         mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))))
+        empty_scalars = MagicMock(all=MagicMock(return_value=[]))
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(scalars=MagicMock(return_value=empty_scalars))
+        )
 
         family = await extractor._find_or_create_family(
             mock_db,

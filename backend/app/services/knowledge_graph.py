@@ -39,7 +39,8 @@ class KnowledgeGraphService:
 
         if not families:
             logger.debug("Graph requested — no families found")
-            return {"center": {"total_families": 0, "total_patterns": 0, "total_optimizations": 0}, "families": [], "edges": []}
+            empty = {"total_families": 0, "total_patterns": 0, "total_optimizations": 0}
+            return {"center": empty, "families": [], "edges": []}
 
         # Load meta-patterns for all families
         family_ids = [f.id for f in families]

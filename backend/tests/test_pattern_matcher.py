@@ -1,10 +1,11 @@
 """Tests for PatternMatcherService — similarity search, cold start, suggestion threshold."""
 
-import numpy as np
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.services.pattern_matcher import PatternMatcherService, SUGGESTION_THRESHOLD
+import numpy as np
+import pytest
+
+from app.services.pattern_matcher import SUGGESTION_THRESHOLD, PatternMatcherService
 
 
 @pytest.fixture
@@ -43,7 +44,7 @@ class TestResponseShape:
     @pytest.mark.asyncio
     async def test_match_returns_correct_shape(self, matcher, embedding_service):
         """When a match is found, response has family + meta_patterns + similarity."""
-        from app.models import PatternFamily, MetaPattern
+        from app.models import MetaPattern, PatternFamily
 
         vec = np.ones(384, dtype=np.float32)
         family = PatternFamily(
