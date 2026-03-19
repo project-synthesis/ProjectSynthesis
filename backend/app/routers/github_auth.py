@@ -5,6 +5,7 @@ import secrets
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +18,20 @@ from app.services.github_service import GitHubService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/github", tags=["github"])
+
+
+class LoginUrlResponse(BaseModel):
+    url: str = Field(description="GitHub OAuth authorization URL to redirect the user to.")
+
+
+class GitHubUserResponse(BaseModel):
+    login: str = Field(description="GitHub username.")
+    avatar_url: str | None = Field(default=None, description="GitHub avatar image URL.")
+    github_user_id: str | None = Field(default=None, description="GitHub numeric user ID as string.")
+
+
+class OkResponse(BaseModel):
+    ok: bool = Field(default=True, description="Operation success indicator.")
 
 
 async def _get_session_token(request: Request, db: AsyncSession) -> tuple[str, str]:
@@ -35,7 +50,7 @@ async def _get_session_token(request: Request, db: AsyncSession) -> tuple[str, s
 
 
 @router.get("/auth/login")
-async def github_login(response: Response):
+async def github_login(response: Response) -> LoginUrlResponse:
     """Generate OAuth URL, set state cookie, return URL."""
     state = secrets.token_urlsafe(32)
     response.set_cookie("github_oauth_state", state, httponly=True, max_age=600)
@@ -44,7 +59,7 @@ async def github_login(response: Response):
         client_id=settings.GITHUB_OAUTH_CLIENT_ID,
     )
     url = github_svc.build_oauth_url(state=state)
-    return {"url": url}
+    return LoginUrlResponse(url=url)
 
 
 @router.get("/auth/callback")
@@ -54,7 +69,7 @@ async def github_callback(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
-):
+) -> GitHubUserResponse:
     """Exchange code for token, encrypt, store in DB."""
     cookie_state = request.cookies.get("github_oauth_state")
     if not cookie_state or cookie_state != state:
@@ -114,14 +129,14 @@ async def github_callback(
 
     response.set_cookie("session_id", session_id, httponly=True, max_age=86400 * 30)
     logger.info("GitHub OAuth callback completed: user=%s", user.get("login"))
-    return {"login": user.get("login"), "avatar_url": user.get("avatar_url")}
+    return GitHubUserResponse(login=user.get("login"), avatar_url=user.get("avatar_url"))
 
 
 @router.get("/auth/me")
 async def github_me(
     request: Request,
     db: AsyncSession = Depends(get_db),
-):
+) -> GitHubUserResponse:
     """Return current user info from stored token."""
     session_id = request.cookies.get("session_id")
     if not session_id:
@@ -132,11 +147,11 @@ async def github_me(
     token_row = result.scalar_one_or_none()
     if not token_row:
         raise HTTPException(401, "Not authenticated")
-    return {
-        "login": token_row.github_login,
-        "avatar_url": token_row.avatar_url,
-        "github_user_id": token_row.github_user_id,
-    }
+    return GitHubUserResponse(
+        login=token_row.github_login,
+        avatar_url=token_row.avatar_url,
+        github_user_id=token_row.github_user_id,
+    )
 
 
 @router.post("/auth/logout")
@@ -144,7 +159,7 @@ async def github_logout(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
-):
+) -> OkResponse:
     """Delete token from DB and clear session cookie."""
     session_id = request.cookies.get("session_id")
     if session_id:
@@ -156,4 +171,4 @@ async def github_logout(
             await db.delete(token_row)
             await db.commit()
     response.delete_cookie("session_id")
-    return {"ok": True}
+    return OkResponse()

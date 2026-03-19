@@ -2,7 +2,8 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,37 +17,60 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/github", tags=["github"])
 
 
+class LinkRepoRequest(BaseModel):
+    full_name: str = Field(description="GitHub repo in 'owner/repo' format.")
+    branch: str | None = Field(default=None, description="Branch to use (defaults to repo default branch).")
+
+
+class RepoListResponse(BaseModel):
+    repos: list[dict] = Field(description="List of GitHub repository objects from the API.")
+    count: int = Field(description="Number of repos returned in this page.")
+
+
+class LinkRepoResponse(BaseModel):
+    full_name: str = Field(description="GitHub repo in 'owner/repo' format.")
+    default_branch: str = Field(description="Repository default branch name.")
+    branch: str = Field(description="Active branch for this link.")
+    language: str | None = Field(default=None, description="Primary programming language.")
+
+
+class LinkedRepoResponse(BaseModel):
+    full_name: str = Field(description="GitHub repo in 'owner/repo' format.")
+    default_branch: str = Field(description="Repository default branch name.")
+    branch: str = Field(description="Active branch for this link.")
+    language: str | None = Field(default=None, description="Primary programming language.")
+    linked_at: str | None = Field(default=None, description="ISO 8601 timestamp when the repo was linked.")
+
+
+class OkResponse(BaseModel):
+    ok: bool = Field(default=True, description="Operation success indicator.")
+
+
 @router.get("/repos")
 async def list_repos(
     request: Request,
-    per_page: int = 30,
-    page: int = 1,
+    per_page: int = Query(30, ge=1, le=100, description="Results per page."),
+    page: int = Query(1, ge=1, description="Page number."),
     db: AsyncSession = Depends(get_db),
-):
+) -> RepoListResponse:
     """List GitHub repos for the authenticated user."""
     _session_id, token = await _get_session_token(request, db)
     github_client = GitHubClient()
     repos = await github_client.list_repos(token, per_page=per_page, page=page)
-    return {"repos": repos, "count": len(repos)}
+    return RepoListResponse(repos=repos, count=len(repos))
 
 
 @router.post("/repos/link")
 async def link_repo(
-    body: dict,
+    body: LinkRepoRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-):
+) -> LinkRepoResponse:
     """Store a linked repo in DB for the session. Triggers background index (wired later)."""
     session_id, token = await _get_session_token(request, db)
 
-    full_name = body.get("full_name")
-    if not full_name:
-        raise HTTPException(
-            400,
-            "full_name is required. Provide the GitHub repository as 'owner/repo'.",
-        )
-
-    branch = body.get("branch")
+    full_name = body.full_name
+    branch = body.branch
 
     # Fetch repo info to get default branch and language
     github_client = GitHubClient()
@@ -85,19 +109,19 @@ async def link_repo(
 
     logger.info("Repo linked: %s branch=%s language=%s", full_name, active_branch, language)
 
-    return {
-        "full_name": full_name,
-        "default_branch": default_branch,
-        "branch": active_branch,
-        "language": language,
-    }
+    return LinkRepoResponse(
+        full_name=full_name,
+        default_branch=default_branch,
+        branch=active_branch,
+        language=language,
+    )
 
 
 @router.get("/repos/linked")
 async def get_linked(
     request: Request,
     db: AsyncSession = Depends(get_db),
-):
+) -> LinkedRepoResponse:
     """Return the linked repo for the current session."""
     session_id, _token = await _get_session_token(request, db)
     result = await db.execute(
@@ -109,20 +133,20 @@ async def get_linked(
             404,
             "No linked repository for this session. Link a repo first via POST /api/github/repos/link.",
         )
-    return {
-        "full_name": linked.full_name,
-        "default_branch": linked.default_branch,
-        "branch": linked.branch,
-        "language": linked.language,
-        "linked_at": linked.linked_at.isoformat() if linked.linked_at else None,
-    }
+    return LinkedRepoResponse(
+        full_name=linked.full_name,
+        default_branch=linked.default_branch,
+        branch=linked.branch,
+        language=linked.language,
+        linked_at=linked.linked_at.isoformat() if linked.linked_at else None,
+    )
 
 
 @router.delete("/repos/unlink")
 async def unlink_repo(
     request: Request,
     db: AsyncSession = Depends(get_db),
-):
+) -> OkResponse:
     """Remove the linked repo for the current session."""
     session_id, _token = await _get_session_token(request, db)
     result = await db.execute(
@@ -132,4 +156,4 @@ async def unlink_repo(
     if linked:
         await db.delete(linked)
         await db.commit()
-    return {"ok": True}
+    return OkResponse()

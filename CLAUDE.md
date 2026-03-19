@@ -60,6 +60,7 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 
 ### Key services (`backend/app/services/`)
 - `pipeline.py` — orchestrates analyzer → optimizer → scorer (3-phase pipeline)
+- `sampling_pipeline.py` — MCP sampling-based pipeline (extracted from `mcp_server.py`). Full feature parity with internal pipeline via `run_sampling_pipeline()` and `run_sampling_analyze()`. Uses structured output via tool calling in sampling, model preferences per phase, `SamplingLLMAdapter` for explore phase. Falls back to text parsing when client doesn't support tools in sampling.
 - `prompt_loader.py` — template loading + variable substitution from `prompts/`. Validates all templates at startup.
 - `strategy_loader.py` — strategy file discovery from `prompts/strategies/` with YAML frontmatter parsing (tagline, description). Warns if empty at startup (does not crash). `load()` strips frontmatter before injection. Fully adaptive — adding/removing `.md` files changes available strategies.
 - `context_resolver.py` — per-source character caps, untrusted-context wrapping, workspace roots scanning
@@ -175,11 +176,11 @@ Variable reference: `prompts/manifest.json`
 
 ## MCP server
 
-4 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`):
-- `synthesis_optimize` — full pipeline execution
-- `synthesis_analyze` — analysis + baseline scoring (task type, weaknesses, strengths, strategy, original scores, actionable next steps)
-- `synthesis_prepare_optimization` — assemble prompt + context for external LLM (supports `workspace_path` for roots scanning)
-- `synthesis_save_result` — persist result with bias correction
+4 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`). All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients):
+- `synthesis_optimize` — full pipeline execution. Params: `prompt`, `strategy`, `repo_full_name`, `workspace_path`, `applied_pattern_ids` (list of meta-pattern IDs to inject into optimizer context). Returns `OptimizeOutput`.
+- `synthesis_analyze` — analysis + baseline scoring. Falls back to MCP sampling when no local provider. Returns `AnalyzeOutput`.
+- `synthesis_prepare_optimization` — assemble prompt + context for external LLM. Returns `PrepareOutput`.
+- `synthesis_save_result` — persist result with bias correction. Returns `SaveResultOutput`.
 
 ### Sampling capability detection
 
@@ -196,11 +197,20 @@ The MCP server detects whether the connected client supports `sampling/createMes
 
 **Toggle safety**: disabled conditions are prefixed with `!currentValue &&` so a toggle that's already ON is always interactive (user can turn it OFF even if preconditions change).
 
+### Sampling pipeline
+
+When no local provider is available (or `force_sampling=True`), the full pipeline runs via MCP `sampling/createMessage`. Implemented in `services/sampling_pipeline.py`:
+
+- **Structured output via tool calling**: sends Pydantic-derived `Tool` schemas via `tools` + `tool_choice` on `create_message()`. Falls back to text parsing if client doesn't support tools in sampling.
+- **Model preferences per phase**: `ModelPreferences` with `ModelHint` steer the IDE's model selection (analyze=Sonnet, optimize=Opus, score=Sonnet, suggest=Haiku). Overridable via user preferences.
+- **Full feature parity**: explore (via `SamplingLLMAdapter`), applied patterns, adaptation state, suggest phase, intent drift detection, z-score normalization — all features from the internal pipeline.
+- **Model ID capture**: `result.model` from each sampling response is collected per phase and persisted to DB (replaces hardcoded `"ide_llm"`).
+
 ### Adding a tool
-1. Add a `@mcp.tool(name="synthesis_...", ...)` function in `mcp_server.py`
+1. Add a `@mcp.tool(structured_output=True)` function in `mcp_server.py`
 2. Use the `synthesis_` prefix for all tool names
 3. Call `_write_mcp_session_caps(ctx)` at the start of the tool handler
-4. Return a Pydantic model for structured output; raise `ValueError` for errors
+4. Return a Pydantic model (define in `schemas/mcp_models.py`); raise `ValueError` for errors
 
 ## Common tasks
 
@@ -261,5 +271,6 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **Real-time event bus**: `event_bus.py` publishes events to all SSE subscribers. Event types: `optimization_created`, `optimization_analyzed`, `optimization_failed`, `feedback_submitted`, `refinement_turn`, `strategy_changed`, `pattern_updated`. MCP server (separate process) notifies via HTTP POST to `/api/events/_publish`. Frontend auto-refreshes History on events, shows toast notifications, syncs Inspector feedback state, and updates StatusBar metrics.
 - **Workspace intelligence**: `workspace_intelligence.py` auto-detects project type from manifest files (package.json, requirements.txt, etc.) and injects workspace profile into MCP tool context via `roots/list`.
 - **MCP sampling detection**: two-layer detection (ASGI middleware on `initialize` + per-tool-call refresh) with optimistic write strategy (False never overwrites fresh True within 30-min window). Prevents VS Code multi-session flicker. Health endpoint surfaces `sampling_capable: bool | null`. Frontend fast-polls (10s) for 2 minutes then steady-state (60s). Toggle disabled logic uses `!currentValue &&` prefix so ON toggles are always interactive.
+- **MCP sampling pipeline**: full feature parity with internal pipeline — extracted into `services/sampling_pipeline.py`. Uses structured output via tool calling (`tools` + `tool_choice` on `create_message()`), `ModelPreferences` per phase, `SamplingLLMAdapter` for explore, and captures `result.model` for DB persistence. All 4 MCP tools use `structured_output=True` (return Pydantic models, expose `outputSchema`). `synthesis_analyze` falls back to sampling when no local provider.
 - **Knowledge graph**: self-building pattern library. Post-completion background job embeds prompts, clusters into `PatternFamily` groups (cosine ≥0.78 merge), extracts meta-patterns via Haiku (cosine ≥0.82 pattern merge). On-paste detection (50-char delta, 300ms debounce) suggests matching families (cosine ≥0.72). Applied patterns injected into optimizer context. Models: `PatternFamily` (centroid running mean), `MetaPattern` (enriched on duplicate), `OptimizationPattern` (join). Cross-family edges at cosine ≥0.55. Domain color coding: backend=#a855f7, frontend=#f59e0b, database=#10b981, security=#ef4444, devops=#3b82f6, fullstack=#00e5ff, general=#6b7280. UI: PatternNavigator (search + paginated family list + domain filter), Inspector family detail (linked optimizations, rename), RadialMindmap (D3.js force-directed SVG), StatusBar pattern count. Activity type `'patterns'` in layout routing.
 - **MCP capability hierarchy**: sampling > internal pipeline > passthrough. `force_sampling` pins to sampling tier, `force_passthrough` pins to passthrough tier. Mutually exclusive — enforced server-side (422) and client-side (radio toggle). `synthesis_optimize` checks `force_passthrough` first (highest routing precedence), then `force_sampling`, then automatic detection (5 execution paths total).

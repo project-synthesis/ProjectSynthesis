@@ -9,7 +9,8 @@ export interface HealthResponse {
   version: string;
   provider: string | null;
   score_health: { last_n_mean: number; last_n_stddev: number; count: number; clustering_warning: boolean } | null;
-  avg_duration_ms: number | Record<string, number> | null;
+  avg_duration_ms: number | null;
+  phase_durations: Record<string, number>;
   recent_errors: { last_hour: number; last_24h: number };
   sampling_capable?: boolean | null;
 }
@@ -101,6 +102,20 @@ export interface SettingsResponse {
 export interface GitHubUser {
   login: string;
   avatar_url: string;
+  github_user_id?: string;
+}
+
+export interface GitHubRepository {
+  id: number;
+  name: string;
+  full_name: string;
+  description: string | null;
+  default_branch: string;
+  language: string | null;
+  private: boolean;
+  stargazers_count: number;
+  updated_at: string;
+  owner: { login: string; avatar_url: string };
 }
 
 export interface LinkedRepo {
@@ -306,7 +321,7 @@ export const getSettings = () => apiFetch<SettingsResponse>('/settings');
 export const githubLogin = () => apiFetch<{ url: string }>('/github/auth/login');
 export const githubMe = () => apiFetch<GitHubUser>('/github/auth/me');
 export const githubLogout = () => apiFetch<void>('/github/auth/logout', { method: 'POST' });
-export const githubRepos = (page = 1) => apiFetch<{ repos: any[]; count: number }>(`/github/repos?page=${page}`);
+export const githubRepos = (page = 1) => apiFetch<{ repos: GitHubRepository[]; count: number }>(`/github/repos?page=${page}`);
 export const githubLink = (fullName: string) =>
   apiFetch<LinkedRepo>('/github/repos/link', {
     method: 'POST',
@@ -418,8 +433,14 @@ export const getStrategies = () => apiFetch<StrategyInfo[]>('/strategies');
 
 export const getStrategy = (name: string) => apiFetch<StrategyDetail>(`/strategies/${name}`);
 
+export interface StrategyUpdateResponse {
+  name: string;
+  content: string;
+  warnings: string[];
+}
+
 export const updateStrategy = (name: string, content: string) =>
-  apiFetch<StrategyDetail>(`/strategies/${name}`, {
+  apiFetch<StrategyUpdateResponse>(`/strategies/${name}`, {
     method: 'PUT',
     body: JSON.stringify({ content }),
   });

@@ -38,17 +38,17 @@ ZSCORE_SPREAD = 1.5           # Map 1 stddev to ±1.5 on the 1-10 scale
 class BlendedScores:
     """Result of hybrid score blending."""
 
-    clarity: float
-    specificity: float
-    structure: float
-    faithfulness: float
-    conciseness: float
-    overall: float
-    scoring_mode: str = "hybrid"
-    divergence_flags: list[str] = field(default_factory=list)
-    raw_llm: dict[str, float] = field(default_factory=dict)
-    raw_heuristic: dict[str, float] = field(default_factory=dict)
-    normalization_applied: bool = False
+    clarity: float  # Blended clarity score (1.0-10.0)
+    specificity: float  # Blended specificity score (1.0-10.0)
+    structure: float  # Blended structure score (1.0-10.0)
+    faithfulness: float  # Blended faithfulness score (1.0-10.0)
+    conciseness: float  # Blended conciseness score (1.0-10.0)
+    overall: float  # Weighted overall score (1.0-10.0)
+    scoring_mode: str = "hybrid"  # Scoring method: 'hybrid', 'llm_only', or 'heuristic_only'
+    divergence_flags: list[str] = field(default_factory=list)  # Dimensions where LLM and heuristic disagree by >2.5
+    raw_llm: dict[str, float] = field(default_factory=dict)  # Raw LLM scores before blending
+    raw_heuristic: dict[str, float] = field(default_factory=dict)  # Raw heuristic scores before blending
+    normalization_applied: bool = False  # Whether z-score normalization was applied
 
     def to_dimension_scores(self) -> DimensionScores:
         """Convert to pipeline-compatible DimensionScores model."""

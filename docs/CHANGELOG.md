@@ -81,7 +81,20 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Added init.sh service manager with PID tracking, process group kill, preflight checks, and log rotation
 - Added version sync system (version.json → scripts/sync-version.sh propagates everywhere)
 
+### Added (Sampling Pipeline Parity)
+- Added structured output via tool calling in MCP sampling pipeline — sends Pydantic-derived `Tool` schemas via `tools` + `tool_choice` on `create_message()`, falls back to text parsing when client doesn't support tools
+- Added model preferences per sampling phase (analyze=Sonnet, optimize=Opus, score=Sonnet, suggest=Haiku) via `ModelPreferences` + `ModelHint`
+- Added sampling fallback to `synthesis_analyze` — no longer requires a local LLM provider
+- Added explore, suggest, applied patterns, adaptation state, intent drift detection, and z-score normalization to the sampling pipeline (full feature parity with internal CLI/API pipeline)
+- Added `structured_output=True` to all 4 MCP tool definitions — tools return Pydantic models and expose `outputSchema` to MCP clients
+- Added `applied_pattern_ids` parameter to `synthesis_optimize` MCP tool — injects selected meta-patterns into optimizer context (mirrors REST API)
+- Added `SamplingLLMAdapter` — minimal `LLMProvider` wrapper for `CodebaseExplorer` to use MCP sampling as its LLM backend
+- Extracted `sampling_pipeline.py` service module from `mcp_server.py` (was 1305 lines, over 800-line guideline)
+
 ### Changed
+- Changed `model_used` in sampling pipeline from hardcoded `"ide_llm"` to actual model ID captured from `result.model` on each sampling response
+- Changed all 4 MCP tool return types from `dict` to typed Pydantic models (`OptimizeOutput`, `AnalyzeOutput`, `PrepareOutput`, `SaveResultOutput`)
+- Changed `synthesis_optimize` internal pipeline path to pass `applied_pattern_ids` through to `orchestrator.run()` (was previously omitted)
 - Changed `synthesis_optimize` MCP tool to 5 execution paths: force_passthrough → force_sampling → provider → sampling fallback → passthrough fallback
 - Enforced `force_sampling` and `force_passthrough` as mutually exclusive — server-side (422) and client-side (radio toggle behavior)
 - Disabled Force IDE sampling toggle when sampling is unavailable or passthrough is active
@@ -92,6 +105,11 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Added `intent_label` and `domain` to `_VALID_SORT_COLUMNS` in optimization service
 
 ### Fixed
+- Fixed sampling pipeline missing confidence gate and semantic check — low-confidence strategy selections were applied without the safety override to "auto" (parity with internal pipeline)
+- Fixed sampling pipeline model hint presets using short names (`claude-sonnet`) instead of full model IDs from `settings` — could cause model resolution mismatches
+- Fixed sampling pipeline `run_sampling_pipeline()` not returning `trace_id` in result dict — downstream `OptimizeOutput` had null `trace_id` for sampling path
+- Fixed sampling pipeline `run_sampling_analyze()` computing `heur_scores` twice (once in try, once in except) — now computed once before the try/except
+- Fixed internal pipeline path in `synthesis_optimize` not including `trace_id` in `OptimizeOutput` for completed results
 - Fixed `pattern_updated` SSE event type missing from `connectEventStream` event types array — handler in +page.svelte was dead code
 - Fixed Inspector linked optimizations using `id` instead of `trace_id` for API fetch — would always 404
 - Fixed `PipelineResult` schema missing `intent_label` and `domain` — SSE `optimization_complete` events now include analyzer output

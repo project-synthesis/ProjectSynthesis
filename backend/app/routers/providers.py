@@ -5,7 +5,7 @@ import hashlib
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import DATA_DIR, settings
 
@@ -13,31 +13,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["providers"])
 
 
+class ProviderInfo(BaseModel):
+    active_provider: str | None = Field(description="Name of the active LLM provider, or null if none detected.")
+    available: list[str] = Field(description="List of supported provider identifiers.")
+
+
+class ApiKeyStatus(BaseModel):
+    configured: bool = Field(description="Whether an API key is currently configured.")
+    masked_key: str | None = Field(
+        default=None,
+        description="Masked API key showing last 4 characters (e.g. 'sk-...abcd').",
+    )
+
+
 @router.get("/providers")
-async def get_providers(request: Request):
+async def get_providers(request: Request) -> ProviderInfo:
     provider = getattr(request.app.state, "provider", None)
-    return {
-        "active_provider": provider.name if provider else None,
-        "available": ["claude_cli", "anthropic_api", "mcp_passthrough"],
-    }
+    return ProviderInfo(
+        active_provider=provider.name if provider else None,
+        available=["claude_cli", "anthropic_api", "mcp_passthrough"],
+    )
 
 
 @router.get("/provider/api-key")
-async def get_api_key():
+async def get_api_key() -> ApiKeyStatus:
     """Return masked API key (last 4 chars only)."""
     key = _read_api_key()
     if not key:
-        return {"configured": False, "masked_key": None}
+        return ApiKeyStatus(configured=False, masked_key=None)
     masked = f"sk-...{key[-4:]}" if len(key) > 4 else "****"
-    return {"configured": True, "masked_key": masked}
+    return ApiKeyStatus(configured=True, masked_key=masked)
 
 
 class ApiKeyRequest(BaseModel):
-    api_key: str
+    api_key: str = Field(description="Anthropic API key (must start with 'sk-').")
 
 
 @router.patch("/provider/api-key")
-async def set_api_key(body: ApiKeyRequest, request: Request):
+async def set_api_key(body: ApiKeyRequest, request: Request) -> ApiKeyStatus:
     """Set or update the Anthropic API key. Persists encrypted to disk."""
     key = body.api_key.strip()
     if not key.startswith("sk-"):
@@ -58,17 +71,17 @@ async def set_api_key(body: ApiKeyRequest, request: Request):
         except Exception:
             logger.warning("Could not hot-reload provider after API key set")
 
-    return {"configured": True, "masked_key": f"sk-...{key[-4:]}"}
+    return ApiKeyStatus(configured=True, masked_key=f"sk-...{key[-4:]}")
 
 
 @router.delete("/provider/api-key")
-async def delete_api_key():
+async def delete_api_key() -> ApiKeyStatus:
     """Remove the stored API key."""
     cred_file = DATA_DIR / ".api_credentials"
     if cred_file.exists():
         cred_file.unlink()
         logger.info("API key credentials file deleted")
-    return {"configured": False, "masked_key": None}
+    return ApiKeyStatus(configured=False, masked_key=None)
 
 
 def _read_api_key() -> str | None:

@@ -32,6 +32,7 @@ from app.schemas.pipeline_contracts import (
     SuggestionsOutput,
 )
 from app.services.heuristic_scorer import HeuristicScorer
+from app.services.pipeline_constants import CODING_KEYWORDS, CONFIDENCE_GATE
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
@@ -39,18 +40,6 @@ from app.services.strategy_loader import StrategyLoader
 from app.services.trace_logger import TraceLogger
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-CONFIDENCE_GATE = 0.7
-
-CODING_KEYWORDS: set[str] = {
-    "function", "class", "api", "code", "program",
-    "script", "endpoint", "database", "module", "import",
-}
-
 
 
 class PipelineOrchestrator:

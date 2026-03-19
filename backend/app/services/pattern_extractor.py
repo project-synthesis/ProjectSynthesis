@@ -282,10 +282,13 @@ class PatternExtractorService:
             )
 
             from pydantic import BaseModel as PydanticBaseModel
+            from pydantic import Field as PydanticField
 
             class ExtractedPatterns(PydanticBaseModel):
                 model_config = {"extra": "forbid"}
-                patterns: list[str]
+                patterns: list[str] = PydanticField(
+                    description="List of reusable meta-pattern descriptions extracted from the optimization (max 5).",
+                )
 
             if not self._provider:
                 logger.warning("No LLM provider available for meta-pattern extraction")

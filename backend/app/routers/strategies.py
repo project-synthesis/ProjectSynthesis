@@ -22,8 +22,21 @@ _loader = StrategyLoader(_strategies_dir)
 
 
 class StrategyDetail(BaseModel):
-    name: str
-    content: str
+    name: str = Field(description="Strategy file name (without .md extension).")
+    content: str = Field(description="Full Markdown content including YAML frontmatter.")
+
+
+class StrategyMetadata(BaseModel):
+    name: str = Field(description="Strategy file name (without .md extension).")
+    tagline: str | None = Field(default=None, description="Short tagline from YAML frontmatter.")
+    description: str | None = Field(default=None, description="One-sentence description from YAML frontmatter.")
+    warnings: list[str] = Field(default_factory=list, description="Validation warnings for missing frontmatter fields.")
+
+
+class StrategyUpdateResponse(BaseModel):
+    name: str = Field(description="Strategy file name that was updated.")
+    content: str = Field(description="Saved Markdown content including YAML frontmatter.")
+    warnings: list[str] = Field(default_factory=list, description="Validation warnings for frontmatter issues.")
 
 
 class StrategyUpdate(BaseModel):
@@ -39,13 +52,14 @@ def _safe_strategy_path(name: str):
 
 
 @router.get("/strategies")
-async def list_strategies() -> list[dict]:
+async def list_strategies() -> list[StrategyMetadata]:
     """List all available strategies with frontmatter metadata.
 
     Returns name, tagline, description, and validation warnings.
     Auto-discovers: adding/removing .md files changes this list.
     """
-    return _loader.list_with_metadata()
+    raw = _loader.list_with_metadata()
+    return [StrategyMetadata(**item) for item in raw]
 
 
 @router.get("/strategies/{name}")
@@ -64,7 +78,7 @@ async def get_strategy(name: str) -> StrategyDetail:
 
 
 @router.put("/strategies/{name}")
-async def update_strategy(name: str, body: StrategyUpdate) -> dict:
+async def update_strategy(name: str, body: StrategyUpdate) -> StrategyUpdateResponse:
     """Update a strategy .md file on disk.
 
     Validates frontmatter before saving. Returns the saved content
@@ -103,8 +117,8 @@ async def update_strategy(name: str, body: StrategyUpdate) -> dict:
             status_code=500, detail="Failed to write strategy file: %s" % exc,
         ) from exc
 
-    return {
-        "name": name,
-        "content": body.content,
-        "warnings": fm_warnings,
-    }
+    return StrategyUpdateResponse(
+        name=name,
+        content=body.content,
+        warnings=fm_warnings,
+    )

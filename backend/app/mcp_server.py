@@ -1,8 +1,9 @@
 """Standalone MCP server with 4 optimization tools.
 
 When no local LLM provider is available, synthesis_optimize uses MCP sampling
-(ctx.session.create_message) to run the full 3-phase pipeline through the IDE's
-LLM. If the client doesn't support sampling, falls back to single-shot passthrough.
+(ctx.session.create_message) to run the full pipeline through the IDE's
+LLM via ``sampling_pipeline.py``.  If the client doesn't support sampling,
+falls back to single-shot passthrough.
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
@@ -11,36 +12,41 @@ from __future__ import annotations
 
 import json as _json
 import logging
-import random
-import re
 import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Annotated
 
 import aiosqlite
 from mcp.server.fastmcp import Context, FastMCP
-from mcp.types import SamplingMessage, TextContent
+from pydantic import Field
 from sqlalchemy import select
 
 from app.config import DATA_DIR, PROMPTS_DIR, settings
 from app.database import async_session_factory
 from app.models import Optimization
 from app.providers.detector import detect_provider
+from app.schemas.mcp_models import (
+    AnalyzeOutput,
+    OptimizeOutput,
+    PrepareOutput,
+    SaveResultOutput,
+)
 from app.schemas.pipeline_contracts import (
     AnalysisResult,
     DimensionScores,
-    OptimizationResult,
     ScoreResult,
 )
+from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
+from app.services.sampling_pipeline import run_sampling_analyze, run_sampling_pipeline
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.services.workspace_intelligence import WorkspaceIntelligence
@@ -279,277 +285,35 @@ def _patched_streamable_http_app(**kwargs):
 mcp.streamable_http_app = _patched_streamable_http_app
 
 
-# ---------------------------------------------------------------------------
-# Sampling-based 3-phase pipeline (uses IDE's LLM via MCP sampling)
-# ---------------------------------------------------------------------------
-
-
-async def _sampling_request(ctx: Context, system: str, user: str, max_tokens: int = 16384) -> str:
-    """Send a sampling/createMessage request to the client's LLM.
-
-    Returns the text response. Raises if the client doesn't support sampling
-    or returns non-text content.
-    """
-    result = await ctx.session.create_message(
-        messages=[SamplingMessage(role="user", content=TextContent(type="text", text=user))],
-        system_prompt=system,
-        max_tokens=max_tokens,
-    )
-    if result.content.type != "text":
-        raise ValueError(f"Expected text response, got {result.content.type}")
-    return result.content.text
-
-
-async def _run_sampling_pipeline(
-    ctx: Context,
-    prompt: str,
-    strategy_override: str | None,
-    codebase_guidance: str | None,
-) -> dict:
-    """Run the full 3-phase pipeline via MCP sampling (IDE's LLM).
-
-    Phase 1: Analyze — classify, detect weaknesses, select strategy
-    Phase 2: Optimize — rewrite using strategy
-    Phase 3: Score — blind A/B evaluation
-
-    Each phase is a separate sampling request, mirroring the internal pipeline.
-    """
-    start = time.monotonic()
-    loader = PromptLoader(PROMPTS_DIR)
-    strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
-    system_prompt = loader.load("agent-guidance.md")
-
-    # ---- Phase 1: Analyze ----
-    logger.info("Sampling pipeline Phase 1: Analyze")
-    available_strategies = strategy_loader.format_available()
-    analyze_msg = loader.render("analyze.md", {
-        "raw_prompt": prompt,
-        "available_strategies": available_strategies,
-    })
-
-    analyze_text = await _sampling_request(ctx, system_prompt, analyze_msg)
-
-    # Parse the analysis result
-    try:
-        analysis = AnalysisResult.model_validate_json(analyze_text)
-    except Exception:
-        # Try extracting JSON from markdown code block
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", analyze_text, re.DOTALL)
-        if match:
-            analysis = AnalysisResult.model_validate_json(match.group(1))
-        else:
-            analysis = AnalysisResult(
-                task_type="general",
-                weaknesses=["Could not parse analysis"],
-                strengths=["Prompt provided"],
-                selected_strategy="auto",
-                strategy_rationale="Fallback due to parse failure",
-                confidence=0.5,
-            )
-
-    effective_strategy = strategy_override or analysis.selected_strategy
-
-    # ---- Phase 2: Optimize ----
-    logger.info("Sampling pipeline Phase 2: Optimize (strategy=%s)", effective_strategy)
-    strategy_instructions = strategy_loader.load(effective_strategy)
-    analysis_summary = (
-        f"Task type: {analysis.task_type}\n"
-        f"Weaknesses: {', '.join(analysis.weaknesses)}\n"
-        f"Strengths: {', '.join(analysis.strengths)}\n"
-        f"Strategy: {effective_strategy}\n"
-        f"Rationale: {analysis.strategy_rationale}"
-    )
-
-    optimize_msg = loader.render("optimize.md", {
-        "raw_prompt": prompt,
-        "analysis_summary": analysis_summary,
-        "strategy_instructions": strategy_instructions,
-        "codebase_guidance": codebase_guidance,
-        "codebase_context": None,
-        "adaptation_state": None,
-    })
-
-    optimize_text = await _sampling_request(ctx, system_prompt, optimize_msg)
-
-    # Parse the optimization result
-    try:
-        optimization = OptimizationResult.model_validate_json(optimize_text)
-    except Exception:
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", optimize_text, re.DOTALL)
-        if match:
-            optimization = OptimizationResult.model_validate_json(match.group(1))
-        else:
-            # Use the raw text as the optimized prompt
-            optimization = OptimizationResult(
-                optimized_prompt=optimize_text.strip(),
-                changes_summary="Optimized via sampling (raw response)",
-                strategy_used=effective_strategy,
-            )
-
-    # ---- Phase 3: Score ----
-    logger.info("Sampling pipeline Phase 3: Score")
-    scoring_system = loader.load("scoring.md")
-
-    original_first = random.choice([True, False])
-    if original_first:
-        prompt_a, prompt_b = prompt, optimization.optimized_prompt
-    else:
-        prompt_a, prompt_b = optimization.optimized_prompt, prompt
-
-    scorer_msg = (
-        f"<prompt-a>\n{prompt_a}\n</prompt-a>\n\n"
-        f"<prompt-b>\n{prompt_b}\n</prompt-b>"
-    )
-
-    score_text = await _sampling_request(ctx, scoring_system, scorer_msg)
-
-    # Parse scores
-    try:
-        scores = ScoreResult.model_validate_json(score_text)
-    except Exception:
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", score_text, re.DOTALL)
-        if match:
-            scores = ScoreResult.model_validate_json(match.group(1))
-        else:
-            scores = None
-
-    # Map A/B scores back + hybrid blend
-    optimized_scores = None
-    original_scores = None
-    deltas = None
-    scoring_mode = "heuristic"
-
-    heur_original = HeuristicScorer.score_prompt(prompt)
-    heur_optimized = HeuristicScorer.score_prompt(
-        optimization.optimized_prompt, original=prompt,
-    )
-
-    if scores:
-        if original_first:
-            llm_original = scores.prompt_a_scores
-            llm_optimized = scores.prompt_b_scores
-        else:
-            llm_original = scores.prompt_b_scores
-            llm_optimized = scores.prompt_a_scores
-
-        # Hybrid blend (same as internal pipeline)
-        blended_original = blend_scores(llm_original, heur_original)
-        blended_optimized = blend_scores(llm_optimized, heur_optimized)
-
-        original_scores = blended_original.to_dimension_scores()
-        optimized_scores = blended_optimized.to_dimension_scores()
-        deltas = DimensionScores.compute_deltas(original_scores, optimized_scores)
-        scoring_mode = "hybrid"
-    else:
-        scoring_mode = "heuristic"
-
-    elapsed_ms = int((time.monotonic() - start) * 1000)
-
-    # Persist
-    opt_id = str(uuid.uuid4())
-    trace_id = str(uuid.uuid4())
-
-    async with async_session_factory() as db:
-        db_opt = Optimization(
-            id=opt_id,
-            raw_prompt=prompt,
-            optimized_prompt=optimization.optimized_prompt,
-            task_type=analysis.task_type,
-            strategy_used=effective_strategy,
-            changes_summary=optimization.changes_summary,
-            score_clarity=(
-                optimized_scores.clarity if optimized_scores else heur_optimized.get("clarity")
-            ),
-            score_specificity=(
-                optimized_scores.specificity if optimized_scores else heur_optimized.get("specificity")
-            ),
-            score_structure=(
-                optimized_scores.structure if optimized_scores else heur_optimized.get("structure")
-            ),
-            score_faithfulness=(
-                optimized_scores.faithfulness if optimized_scores else heur_optimized.get("faithfulness")
-            ),
-            score_conciseness=(
-                optimized_scores.conciseness if optimized_scores else heur_optimized.get("conciseness")
-            ),
-            overall_score=(
-                optimized_scores.overall if optimized_scores
-                else round(sum(heur_optimized.values()) / max(len(heur_optimized), 1), 2)
-            ),
-            provider="mcp_sampling",
-            model_used="ide_llm",
-            scoring_mode=scoring_mode,
-            duration_ms=elapsed_ms,
-            status="completed",
-            trace_id=trace_id,
-            original_scores=original_scores.model_dump() if original_scores else None,
-            score_deltas=deltas,
-        )
-        db.add(db_opt)
-        await db.commit()
-
-    # Notify backend event bus (MCP runs in a separate process)
-    try:
-        import httpx
-        async with httpx.AsyncClient() as http:
-            await http.post(
-                "http://127.0.0.1:8000/api/events/_publish",
-                json={
-                    "event_type": "optimization_created",
-                    "data": {
-                        "id": opt_id,
-                        "trace_id": trace_id,
-                        "task_type": analysis.task_type,
-                        "strategy_used": effective_strategy,
-                        "overall_score": optimized_scores.overall if optimized_scores else None,
-                        "provider": "mcp_sampling",
-                        "status": "completed",
-                    },
-                },
-                timeout=5.0,
-            )
-    except Exception:
-        logger.debug("Failed to notify backend event bus", exc_info=True)
-
-    logger.info(
-        "Sampling pipeline completed in %dms: id=%s strategy=%s overall=%s scoring=%s",
-        elapsed_ms, opt_id, effective_strategy,
-        optimized_scores.overall if optimized_scores else "heuristic",
-        scoring_mode,
-    )
-
-    return {
-        "optimization_id": opt_id,
-        "optimized_prompt": optimization.optimized_prompt,
-        "task_type": analysis.task_type,
-        "strategy_used": effective_strategy,
-        "changes_summary": optimization.changes_summary,
-        "scores": optimized_scores.model_dump() if optimized_scores else heur_optimized,
-        "original_scores": original_scores.model_dump() if original_scores else heur_original,
-        "score_deltas": deltas if deltas else {},
-        "scoring_mode": scoring_mode,
-        "pipeline_mode": "sampling",
-    }
-
-
 # ---- Tool 1: synthesis_optimize ----
 
 
-@mcp.tool()
+@mcp.tool(structured_output=True)
 async def synthesis_optimize(
-    prompt: str,
-    strategy: str | None = None,
-    repo_full_name: str | None = None,
-    workspace_path: str | None = None,
+    prompt: Annotated[str, Field(description="The raw prompt text to optimize (20–200k chars).")],
+    strategy: Annotated[str | None, Field(
+        default=None,
+        description="Optimization strategy name (e.g. 'auto', 'chain-of-thought', 'few-shot', "
+        "'meta-prompting', 'role-playing', 'structured-output'). Defaults to user preference or 'auto'.",
+    )] = None,
+    repo_full_name: Annotated[str | None, Field(
+        default=None, description="GitHub repo in 'owner/repo' format for codebase-aware optimization.",
+    )] = None,
+    workspace_path: Annotated[str | None, Field(
+        default=None, description="Absolute path to the workspace root for context injection.",
+    )] = None,
+    applied_pattern_ids: Annotated[list[str] | None, Field(
+        default=None, description="List of MetaPattern IDs to inject into the optimizer context.",
+    )] = None,
     ctx: Context | None = None,
-) -> dict:
+) -> OptimizeOutput:
     """Run the full optimization pipeline on a prompt.
 
     Five execution paths (checked in order):
     1. force_passthrough=True → assembled template returned immediately (manual processing)
-    2. force_sampling=True + client supports sampling → 3-phase pipeline via IDE's LLM
-    3. Local provider exists → full 3-phase internal pipeline
-    4. No provider + client supports MCP sampling → 3-phase pipeline via IDE's LLM
+    2. force_sampling=True + client supports sampling → full pipeline via IDE's LLM
+    3. Local provider exists → full internal pipeline
+    4. No provider + client supports MCP sampling → full pipeline via IDE's LLM
     5. No provider + no sampling → assembled template for manual processing
 
     pipeline.force_passthrough and pipeline.force_sampling are mutually exclusive.
@@ -595,19 +359,19 @@ async def synthesis_optimize(
             )
             db.add(pending)
             await db.commit()
-        return {
-            "status": "pending_external",
-            "trace_id": trace_id,
-            "assembled_prompt": assembled,
-            "strategy_used": strategy_name,
-            "pipeline_mode": "passthrough",
-            "instructions": (
+        return OptimizeOutput(
+            status="pending_external",
+            pipeline_mode="passthrough",
+            strategy_used=strategy_name,
+            trace_id=trace_id,
+            assembled_prompt=assembled,
+            instructions=(
                 "force_passthrough=True. Process the assembled_prompt with your LLM, "
                 "then call synthesis_save_result with the trace_id and the optimized output. "
                 "Include optimized_prompt, changes_summary, task_type, strategy_used, and "
                 "optionally scores (clarity, specificity, structure, faithfulness, conciseness — each 1-10)."
             ),
-        }
+        )
 
     # ---- Force-sampling short-circuit (overrides local provider when enabled) ----
     _sampling_already_attempted = False
@@ -616,11 +380,14 @@ async def synthesis_optimize(
             logger.info("synthesis_optimize: force_sampling=True — attempting sampling pipeline")
             _sampling_already_attempted = True
             try:
-                return await _run_sampling_pipeline(
+                result = await run_sampling_pipeline(
                     ctx, prompt,
                     effective_strategy if effective_strategy != "auto" else None,
                     guidance,
+                    repo_full_name=repo_full_name,
+                    applied_pattern_ids=applied_pattern_ids,
                 )
+                return _sampling_result_to_output(result)
             except Exception as exc:
                 logger.info(
                     "force_sampling requested but sampling failed, falling through: %s",
@@ -633,13 +400,18 @@ async def synthesis_optimize(
 
     # ---- No local provider: try sampling, then fall back to passthrough ----
     if not provider:
-        # Try MCP sampling (3-phase pipeline via IDE's LLM)
+        # Try MCP sampling (full pipeline via IDE's LLM)
         if not _sampling_already_attempted and ctx and hasattr(ctx, "session") and ctx.session:
             try:
                 logger.info("synthesis_optimize: no provider — attempting sampling pipeline")
-                return await _run_sampling_pipeline(
-                    ctx, prompt, effective_strategy if effective_strategy != "auto" else None, guidance,
+                result = await run_sampling_pipeline(
+                    ctx, prompt,
+                    effective_strategy if effective_strategy != "auto" else None,
+                    guidance,
+                    repo_full_name=repo_full_name,
+                    applied_pattern_ids=applied_pattern_ids,
                 )
+                return _sampling_result_to_output(result)
             except Exception as exc:
                 logger.info(
                     "Sampling not supported by client, falling back to passthrough: %s",
@@ -671,20 +443,20 @@ async def synthesis_optimize(
             db.add(pending)
             await db.commit()
 
-        return {
-            "status": "pending_external",
-            "trace_id": trace_id,
-            "assembled_prompt": assembled,
-            "strategy_used": strategy_name,
-            "pipeline_mode": "passthrough",
-            "instructions": (
+        return OptimizeOutput(
+            status="pending_external",
+            pipeline_mode="passthrough",
+            strategy_used=strategy_name,
+            trace_id=trace_id,
+            assembled_prompt=assembled,
+            instructions=(
                 "No local LLM provider detected. Process the assembled_prompt "
                 "with your LLM, then call synthesis_save_result with the trace_id "
                 "and the optimized output. Include optimized_prompt, changes_summary, "
                 "task_type, strategy_used, and optionally scores "
                 "(clarity, specificity, structure, faithfulness, conciseness — each 1-10)."
             ),
-        }
+        )
 
     start = time.monotonic()
 
@@ -704,6 +476,7 @@ async def synthesis_optimize(
             strategy_override=effective_strategy if effective_strategy != "auto" else None,
             codebase_guidance=guidance,
             repo_full_name=repo_full_name,
+            applied_pattern_ids=applied_pattern_ids,
         ):
             if event.event == "optimization_complete":
                 result = event.data
@@ -723,55 +496,77 @@ async def synthesis_optimize(
             elapsed_ms, result.get("id", ""), result.get("strategy_used", ""),
         )
 
-        # Notify backend event bus via HTTP (MCP runs in a separate process)
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    "http://127.0.0.1:8000/api/events/_publish",
-                    json={
-                        "event_type": "optimization_created",
-                        "data": {
-                            "id": result.get("id", ""),
-                            "task_type": result.get("task_type", ""),
-                            "strategy_used": result.get("strategy_used", ""),
-                            "overall_score": result.get("overall_score"),
-                            "provider": provider.name,
-                            "status": "completed",
-                        },
-                    },
-                    timeout=5.0,
-                )
-        except Exception:
-            logger.debug("Failed to notify backend event bus", exc_info=True)
-
-        return {
-            "optimization_id": result.get("id", ""),
-            "optimized_prompt": result.get("optimized_prompt", ""),
+        # Notify backend event bus (MCP runs in a separate process)
+        await notify_event_bus("optimization_created", {
+            "id": result.get("id", ""),
             "task_type": result.get("task_type", ""),
             "strategy_used": result.get("strategy_used", ""),
-            "changes_summary": result.get("changes_summary", ""),
-            "scores": result.get("optimized_scores", result.get("scores", {})),
-            "original_scores": result.get("original_scores", {}),
-            "score_deltas": result.get("score_deltas", {}),
-            "scoring_mode": "independent",
-        }
+            "overall_score": result.get("overall_score"),
+            "provider": provider.name,
+            "status": "completed",
+        })
+
+        return OptimizeOutput(
+            status="completed",
+            pipeline_mode="internal",
+            optimization_id=result.get("id", ""),
+            optimized_prompt=result.get("optimized_prompt", ""),
+            task_type=result.get("task_type", ""),
+            strategy_used=result.get("strategy_used", ""),
+            changes_summary=result.get("changes_summary", ""),
+            scores=result.get("optimized_scores", result.get("scores", {})),
+            original_scores=result.get("original_scores", {}),
+            score_deltas=result.get("score_deltas", {}),
+            scoring_mode=result.get("scoring_mode", "independent"),
+            suggestions=result.get("suggestions", []),
+            warnings=result.get("warnings", []),
+            model_used=result.get("model_used"),
+            intent_label=result.get("intent_label"),
+            domain=result.get("domain"),
+            trace_id=result.get("trace_id"),
+        )
+
+
+def _sampling_result_to_output(result: dict) -> OptimizeOutput:
+    """Convert a sampling pipeline result dict to OptimizeOutput."""
+    return OptimizeOutput(
+        status="completed",
+        pipeline_mode="sampling",
+        optimization_id=result.get("optimization_id", ""),
+        optimized_prompt=result.get("optimized_prompt", ""),
+        task_type=result.get("task_type", ""),
+        strategy_used=result.get("strategy_used", ""),
+        changes_summary=result.get("changes_summary", ""),
+        scores=result.get("scores", {}),
+        original_scores=result.get("original_scores", {}),
+        score_deltas=result.get("score_deltas", {}),
+        scoring_mode=result.get("scoring_mode", ""),
+        suggestions=result.get("suggestions", []),
+        warnings=result.get("warnings", []),
+        model_used=result.get("model_used"),
+        intent_label=result.get("intent_label"),
+        domain=result.get("domain"),
+        trace_id=result.get("trace_id"),
+    )
 
 
 # ---- Tool 2: synthesis_analyze ----
 
 
-@mcp.tool()
+@mcp.tool(structured_output=True)
 async def synthesis_analyze(
-    prompt: str,
+    prompt: Annotated[str, Field(description="The raw prompt text to analyze (min 20 chars).")],
     ctx: Context | None = None,
-) -> dict[str, Any]:
+) -> AnalyzeOutput:
     """Analyze a prompt and score it.
 
     Returns task type, weaknesses, strengths, strategy recommendation,
     and baseline quality scores (5 dimensions). Persists to history as an
     'analyzed' entry. Use the returned optimization_ready params to run
     synthesis_optimize if the analysis suggests improvement is worthwhile.
+
+    When no local LLM provider is available but the client supports MCP
+    sampling, runs analysis via the IDE's LLM.
     """
     _write_mcp_session_caps(ctx)
 
@@ -781,7 +576,18 @@ async def synthesis_analyze(
         )
 
     provider = _provider
+
+    # ---- Sampling fallback: no local provider but client supports sampling ----
     if not provider:
+        if ctx and hasattr(ctx, "session") and ctx.session:
+            try:
+                result = await run_sampling_analyze(ctx, prompt)
+                return AnalyzeOutput(**result)
+            except Exception as exc:
+                logger.info(
+                    "Sampling analyze failed, no fallback available: %s",
+                    type(exc).__name__,
+                )
         raise ValueError(
             "No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI."
         )
@@ -865,6 +671,8 @@ async def synthesis_analyze(
             raw_prompt=prompt,
             optimized_prompt="",
             task_type=analysis.task_type,
+            intent_label=getattr(analysis, "intent_label", None) or "general",
+            domain=getattr(analysis, "domain", None) or "general",
             strategy_used=analysis.selected_strategy,
             changes_summary="",
             score_clarity=baseline.clarity,
@@ -889,27 +697,15 @@ async def synthesis_analyze(
     )
 
     # --- Notify event bus ---
-    try:
-        import httpx
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                "http://127.0.0.1:8000/api/events/_publish",
-                json={
-                    "event_type": "optimization_analyzed",
-                    "data": {
-                        "id": opt_id,
-                        "trace_id": trace_id,
-                        "task_type": analysis.task_type,
-                        "strategy": analysis.selected_strategy,
-                        "overall_score": overall,
-                        "provider": provider.name,
-                        "status": "analyzed",
-                    },
-                },
-                timeout=5.0,
-            )
-    except Exception:
-        logger.debug("Failed to notify backend event bus", exc_info=True)
+    await notify_event_bus("optimization_analyzed", {
+        "id": opt_id,
+        "trace_id": trace_id,
+        "task_type": analysis.task_type,
+        "strategy": analysis.selected_strategy,
+        "overall_score": overall,
+        "provider": provider.name,
+        "status": "analyzed",
+    })
 
     # --- Build actionable next steps ---
     next_steps = [
@@ -936,37 +732,51 @@ async def synthesis_analyze(
             % (weakest_dim, weakest_val)
         )
 
-    return {
-        "optimization_id": opt_id,
-        "task_type": analysis.task_type,
-        "weaknesses": analysis.weaknesses,
-        "strengths": analysis.strengths,
-        "selected_strategy": analysis.selected_strategy,
-        "strategy_rationale": analysis.strategy_rationale,
-        "confidence": analysis.confidence,
-        "baseline_scores": dim_scores,
-        "overall_score": overall,
-        "duration_ms": total_ms,
-        "next_steps": next_steps,
-        "optimization_ready": {
+    return AnalyzeOutput(
+        optimization_id=opt_id,
+        task_type=analysis.task_type,
+        weaknesses=analysis.weaknesses,
+        strengths=analysis.strengths,
+        selected_strategy=analysis.selected_strategy,
+        strategy_rationale=analysis.strategy_rationale,
+        confidence=analysis.confidence,
+        baseline_scores=dim_scores,
+        overall_score=overall,
+        duration_ms=total_ms,
+        next_steps=next_steps,
+        optimization_ready={
             "prompt": prompt,
             "strategy": analysis.selected_strategy,
         },
-    }
+        intent_label=getattr(analysis, "intent_label", None) or "general",
+        domain=getattr(analysis, "domain", None) or "general",
+    )
 
 
 # ---- Tool 3: synthesis_prepare_optimization ----
 
 
-@mcp.tool()
+@mcp.tool(structured_output=True)
 async def synthesis_prepare_optimization(
-    prompt: str,
-    strategy: str | None = None,
-    max_context_tokens: int = 128000,
-    workspace_path: str | None = None,
-    repo_full_name: str | None = None,
+    prompt: Annotated[str, Field(
+        description="The raw prompt text to prepare for external optimization (min 20 chars).",
+    )],
+    strategy: Annotated[str | None, Field(
+        default=None,
+        description="Optimization strategy name (e.g. 'auto', 'chain-of-thought', 'few-shot', "
+        "'meta-prompting', 'role-playing', 'structured-output'). Defaults to user preference or 'auto'.",
+    )] = None,
+    max_context_tokens: Annotated[int, Field(
+        default=128000, description="Maximum context window budget in tokens. Assembled prompt is truncated to fit.",
+    )] = 128000,
+    workspace_path: Annotated[str | None, Field(
+        default=None, description="Absolute path to the workspace root for context injection.",
+    )] = None,
+    repo_full_name: Annotated[str | None, Field(
+        default=None, description="GitHub repo in 'owner/repo' format for codebase-aware optimization.",
+    )] = None,
     ctx: Context | None = None,
-) -> dict:
+) -> PrepareOutput:
     """Assemble the full optimization prompt with context for an external LLM.
 
     Call synthesis_save_result with the output.
@@ -1027,29 +837,45 @@ async def synthesis_prepare_optimization(
         trace_id, strategy_name, context_size_tokens,
     )
 
-    return {
-        "trace_id": trace_id,
-        "assembled_prompt": assembled,
-        "context_size_tokens": context_size_tokens,
-        "strategy_requested": strategy_name,
-    }
+    return PrepareOutput(
+        trace_id=trace_id,
+        assembled_prompt=assembled,
+        context_size_tokens=context_size_tokens,
+        strategy_requested=strategy_name,
+    )
 
 
 # ---- Tool 4: synthesis_save_result ----
 
 
-@mcp.tool()
+@mcp.tool(structured_output=True)
 async def synthesis_save_result(
-    trace_id: str,
-    optimized_prompt: str,
-    changes_summary: str | None = None,
-    task_type: str | None = None,
-    strategy_used: str | None = None,
-    scores: dict | None = None,
-    model: str | None = None,
-    codebase_context: str | None = None,
+    trace_id: Annotated[str, Field(description="Trace ID from synthesis_prepare_optimization to link this result.")],
+    optimized_prompt: Annotated[str, Field(description="The optimized prompt text produced by the external LLM.")],
+    changes_summary: Annotated[str | None, Field(
+        default=None, description="Brief summary of changes made during optimization.",
+    )] = None,
+    task_type: Annotated[str | None, Field(
+        default=None,
+        description="Task classification: 'coding', 'writing', 'analysis', 'creative', 'data', 'system', or 'general'.",
+    )] = None,
+    strategy_used: Annotated[str | None, Field(
+        default=None,
+        description="Strategy name used (e.g. 'auto', 'chain-of-thought'). Normalized to known strategies if verbose.",
+    )] = None,
+    scores: Annotated[dict | None, Field(
+        default=None,
+        description="Self-rated scores dict with keys: clarity, specificity, structure, "
+        "faithfulness, conciseness (0-10 float).",
+    )] = None,
+    model: Annotated[str | None, Field(
+        default=None, description="Model ID that produced the optimization (e.g. 'claude-sonnet-4-6').",
+    )] = None,
+    codebase_context: Annotated[str | None, Field(
+        default=None, description="IDE-provided codebase context snapshot to store alongside the result.",
+    )] = None,
     ctx: Context | None = None,
-) -> dict:
+) -> SaveResultOutput:
     """Persist an optimization result from an external LLM.
 
     Applies bias correction to self-rated scores.
@@ -1252,44 +1078,32 @@ async def synthesis_save_result(
 
         await db.commit()
 
-        # Notify backend event bus via HTTP (MCP runs in a separate process)
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    "http://127.0.0.1:8000/api/events/_publish",
-                    json={
-                        "event_type": "optimization_created",
-                        "data": {
-                            "id": opt_id,
-                            "trace_id": trace_id,
-                            "task_type": opt.task_type,
-                            "strategy_used": opt.strategy_used,
-                            "overall_score": overall,
-                            "provider": opt.provider,
-                            "status": "completed",
-                        },
-                    },
-                    timeout=5.0,
-                )
-        except Exception:
-            logger.debug("Failed to notify backend event bus", exc_info=True)
+        # Notify backend event bus (MCP runs in a separate process)
+        await notify_event_bus("optimization_created", {
+            "id": opt_id,
+            "trace_id": trace_id,
+            "task_type": opt.task_type,
+            "strategy_used": opt.strategy_used,
+            "overall_score": overall,
+            "provider": opt.provider,
+            "status": "completed",
+        })
 
     logger.info(
         "synthesis_save_result completed: optimization_id=%s strategy_compliance=%s flags=%d",
         opt_id, strategy_compliance, len(heuristic_flags),
     )
 
-    return {
-        "optimization_id": opt_id,
-        "scoring_mode": scoring_mode,
-        "scores": {k: round(v, 2) for k, v in final_scores.items()} if final_scores else {},
-        "original_scores": original_scores,
-        "score_deltas": deltas,
-        "overall_score": overall,
-        "strategy_compliance": strategy_compliance,
-        "heuristic_flags": heuristic_flags,
-    }
+    return SaveResultOutput(
+        optimization_id=opt_id,
+        scoring_mode=scoring_mode,
+        scores={k: round(v, 2) for k, v in final_scores.items()} if final_scores else {},
+        original_scores=original_scores,
+        score_deltas=deltas,
+        overall_score=overall,
+        strategy_compliance=strategy_compliance,
+        heuristic_flags=heuristic_flags,
+    )
 
 
 # ---- Entry point ----

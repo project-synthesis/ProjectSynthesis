@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,16 +16,46 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["history"])
 
 
+class HistoryItem(BaseModel):
+    id: str = Field(description="Unique optimization ID.")
+    trace_id: str | None = Field(default=None, description="Trace ID for pipeline correlation.")
+    created_at: str | None = Field(default=None, description="ISO 8601 creation timestamp.")
+    task_type: str | None = Field(default=None, description="Classified task type.")
+    strategy_used: str | None = Field(default=None, description="Strategy used for optimization.")
+    overall_score: float | None = Field(default=None, description="Weighted overall quality score.")
+    status: str = Field(description="Optimization status.")
+    duration_ms: int | None = Field(default=None, description="Pipeline duration in milliseconds.")
+    provider: str | None = Field(default=None, description="LLM provider used.")
+    raw_prompt: str | None = Field(default=None, description="Truncated original prompt (first 100 chars).")
+    optimized_prompt: str | None = Field(default=None, description="Truncated optimized prompt (first 100 chars).")
+    intent_label: str | None = Field(default=None, description="Short intent classification label.")
+    domain: str | None = Field(default=None, description="Domain category.")
+    family_id: str | None = Field(default=None, description="Pattern family ID.")
+
+
+class HistoryResponse(BaseModel):
+    total: int = Field(description="Total number of matching optimizations.")
+    count: int = Field(description="Number of items in this page.")
+    offset: int = Field(description="Current pagination offset.")
+    has_more: bool = Field(description="Whether more pages exist.")
+    next_offset: int | None = Field(default=None, description="Offset for the next page, or null if no more.")
+    items: list[HistoryItem] = Field(description="Optimization items for this page.")
+
+
 @router.get("/history")
 async def get_history(
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
-    sort_by: str = Query("created_at"),
-    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
-    task_type: str | None = Query(None),
-    status: str | None = Query(None),
+    offset: int = Query(0, ge=0, description="Pagination offset (items to skip)."),
+    limit: int = Query(50, ge=1, le=100, description="Items per page (1-100)."),
+    sort_by: str = Query(
+        "created_at",
+        description="Sort column: 'created_at', 'task_type', 'strategy_used', "
+        "'overall_score', 'duration_ms', 'provider', or 'status'.",
+    ),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="Sort direction: 'asc' or 'desc'."),
+    task_type: str | None = Query(None, description="Filter by task type (optional)."),
+    status: str | None = Query(None, description="Filter by status (optional)."),
     db: AsyncSession = Depends(get_db),
-):
+) -> HistoryResponse:
     svc = OptimizationService(db)
     result = await svc.list_optimizations(
         offset=offset, limit=limit, sort_by=sort_by, sort_order=sort_order,
@@ -50,29 +81,29 @@ async def get_history(
         ).all()
         family_map = {row.optimization_id: row.family_id for row in family_rows}
 
-    return {
-        "total": result["total"],
-        "count": result["count"],
-        "offset": result["offset"],
-        "has_more": result["has_more"],
-        "next_offset": result["next_offset"],
-        "items": [
-            {
-                "id": opt.id,
-                "trace_id": opt.trace_id,
-                "created_at": opt.created_at.isoformat() if opt.created_at else None,
-                "task_type": opt.task_type,
-                "strategy_used": opt.strategy_used,
-                "overall_score": opt.overall_score,
-                "status": opt.status,
-                "duration_ms": opt.duration_ms,
-                "provider": opt.provider,
-                "raw_prompt": opt.raw_prompt[:100] if opt.raw_prompt else None,
-                "optimized_prompt": opt.optimized_prompt[:100] if opt.optimized_prompt else None,
-                "intent_label": opt.intent_label,
-                "domain": opt.domain,
-                "family_id": family_map.get(opt.id),
-            }
+    return HistoryResponse(
+        total=result["total"],
+        count=result["count"],
+        offset=result["offset"],
+        has_more=result["has_more"],
+        next_offset=result["next_offset"],
+        items=[
+            HistoryItem(
+                id=opt.id,
+                trace_id=opt.trace_id,
+                created_at=opt.created_at.isoformat() if opt.created_at else None,
+                task_type=opt.task_type,
+                strategy_used=opt.strategy_used,
+                overall_score=opt.overall_score,
+                status=opt.status,
+                duration_ms=opt.duration_ms,
+                provider=opt.provider,
+                raw_prompt=opt.raw_prompt[:100] if opt.raw_prompt else None,
+                optimized_prompt=opt.optimized_prompt[:100] if opt.optimized_prompt else None,
+                intent_label=opt.intent_label,
+                domain=opt.domain,
+                family_id=family_map.get(opt.id),
+            )
             for opt in items
         ],
-    }
+    )

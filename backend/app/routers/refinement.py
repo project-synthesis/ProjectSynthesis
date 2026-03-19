@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,13 +22,20 @@ router = APIRouter(prefix="/api", tags=["refinement"])
 
 
 class RefineRequest(BaseModel):
-    optimization_id: str
-    refinement_request: str = Field(..., min_length=1)
-    branch_id: str | None = None
+    optimization_id: str = Field(description="ID of the optimization to refine.")
+    refinement_request: str = Field(
+        ..., min_length=1,
+        description="User's refinement request or feedback for the next iteration.",
+    )
+    branch_id: str | None = Field(
+        default=None, description="Branch ID to refine on (latest if omitted).",
+    )
 
 
 class RollbackRequest(BaseModel):
-    to_version: int = Field(..., ge=1)
+    to_version: int = Field(
+        ..., ge=1, description="Version number to roll back to.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +112,7 @@ async def refine(
 @router.get("/refine/{optimization_id}/versions")
 async def get_versions(
     optimization_id: str,
-    branch_id: str | None = None,
+    branch_id: str | None = Query(default=None, description="Filter by branch ID."),
     db: AsyncSession = Depends(get_db),
 ):
     """Return all refinement turns for an optimization, optionally filtered by branch."""

@@ -24,6 +24,45 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["optimize"])
 
 
+class OptimizationDetail(BaseModel):
+    id: str = Field(description="Unique optimization ID.")
+    trace_id: str = Field(description="Trace ID for pipeline correlation.")
+    raw_prompt: str = Field(description="Original user prompt text.")
+    optimized_prompt: str | None = Field(default=None, description="Optimized prompt text.")
+    task_type: str | None = Field(default=None, description="Classified task type.")
+    strategy_used: str | None = Field(default=None, description="Strategy used for optimization.")
+    changes_summary: str | None = Field(default=None, description="Summary of changes made during optimization.")
+    scores: dict[str, float | None] = Field(
+        default_factory=dict,
+        description="Per-dimension quality scores (clarity, specificity, structure, faithfulness, conciseness).",
+    )
+    original_scores: dict[str, float] | None = Field(
+        default=None, description="Baseline scores of the original prompt.",
+    )
+    score_deltas: dict[str, float] | None = Field(default=None, description="Score changes from original to optimized.")
+    overall_score: float | None = Field(default=None, description="Weighted overall quality score (1.0-10.0).")
+    provider: str | None = Field(default=None, description="LLM provider used (e.g. 'claude_cli', 'anthropic_api').")
+    model_used: str | None = Field(default=None, description="Model ID used for optimization.")
+    scoring_mode: str | None = Field(default=None, description="Scoring method: 'hybrid', 'heuristic', or 'skipped'.")
+    duration_ms: int | None = Field(default=None, description="Total pipeline duration in milliseconds.")
+    status: str = Field(description="Optimization status: 'completed', 'pending', or 'failed'.")
+    context_sources: dict[str, bool] | None = Field(
+        default=None,
+        description="Which context sources were available (guidance, codebase, adaptation).",
+    )
+    created_at: str | None = Field(default=None, description="ISO 8601 creation timestamp.")
+    intent_label: str | None = Field(default=None, description="Short intent classification label (3-6 words).")
+    domain: str | None = Field(default=None, description="Domain category (backend, frontend, database, etc.).")
+    family_id: str | None = Field(default=None, description="Pattern family ID this optimization belongs to.")
+
+
+class PassthroughPrepareResponse(BaseModel):
+    trace_id: str = Field(description="Trace ID to reference when saving the result.")
+    optimization_id: str = Field(description="Created optimization record ID.")
+    assembled_prompt: str = Field(description="Fully assembled prompt to send to an external LLM.")
+    strategy_requested: str = Field(description="Strategy name used for prompt assembly.")
+
+
 class OptimizeRequest(BaseModel):
     prompt: str = Field(..., min_length=20, description="The raw prompt to optimize")
     strategy: str | None = Field(None, description="Strategy override")
@@ -81,7 +120,7 @@ async def optimize(
 async def get_optimization(
     trace_id: str,
     db: AsyncSession = Depends(get_db),
-):
+) -> OptimizationDetail:
     result = await db.execute(
         select(Optimization).where(Optimization.trace_id == trace_id)
     )
@@ -110,37 +149,37 @@ async def _get_family_id(db: AsyncSession, optimization_id: str) -> str | None:
     return row
 
 
-def _serialize_optimization(opt: Optimization, *, family_id: str | None = None) -> dict:
+def _serialize_optimization(opt: Optimization, *, family_id: str | None = None) -> OptimizationDetail:
     """Serialize an Optimization record to the standard API shape."""
-    return {
-        "id": opt.id,
-        "trace_id": opt.trace_id,
-        "raw_prompt": opt.raw_prompt,
-        "optimized_prompt": opt.optimized_prompt,
-        "task_type": opt.task_type,
-        "strategy_used": opt.strategy_used,
-        "changes_summary": opt.changes_summary,
-        "scores": {
+    return OptimizationDetail(
+        id=opt.id,
+        trace_id=opt.trace_id,
+        raw_prompt=opt.raw_prompt,
+        optimized_prompt=opt.optimized_prompt,
+        task_type=opt.task_type,
+        strategy_used=opt.strategy_used,
+        changes_summary=opt.changes_summary,
+        scores={
             "clarity": opt.score_clarity,
             "specificity": opt.score_specificity,
             "structure": opt.score_structure,
             "faithfulness": opt.score_faithfulness,
             "conciseness": opt.score_conciseness,
         },
-        "original_scores": opt.original_scores,
-        "score_deltas": opt.score_deltas,
-        "overall_score": opt.overall_score,
-        "provider": opt.provider,
-        "model_used": opt.model_used,
-        "scoring_mode": opt.scoring_mode,
-        "duration_ms": opt.duration_ms,
-        "status": opt.status,
-        "context_sources": opt.context_sources,
-        "created_at": opt.created_at.isoformat() if opt.created_at else None,
-        "intent_label": opt.intent_label,
-        "domain": opt.domain,
-        "family_id": family_id,
-    }
+        original_scores=opt.original_scores,
+        score_deltas=opt.score_deltas,
+        overall_score=opt.overall_score,
+        provider=opt.provider,
+        model_used=opt.model_used,
+        scoring_mode=opt.scoring_mode,
+        duration_ms=opt.duration_ms,
+        status=opt.status,
+        context_sources=opt.context_sources,
+        created_at=opt.created_at.isoformat() if opt.created_at else None,
+        intent_label=opt.intent_label,
+        domain=opt.domain,
+        family_id=family_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +198,7 @@ async def passthrough_prepare(
     body: OptimizeRequest,
     db: AsyncSession = Depends(get_db),
     _rate: None = Depends(RateLimit(lambda: settings.OPTIMIZE_RATE_LIMIT)),
-):
+) -> PassthroughPrepareResponse:
     """Assemble an optimization prompt for manual passthrough to an external LLM.
 
     Does NOT require a configured provider. Creates a pending Optimization record
@@ -191,19 +230,19 @@ async def passthrough_prepare(
     db.add(pending)
     await db.commit()
 
-    return {
-        "trace_id": trace_id,
-        "optimization_id": opt_id,
-        "assembled_prompt": assembled,
-        "strategy_requested": strategy_name,
-    }
+    return PassthroughPrepareResponse(
+        trace_id=trace_id,
+        optimization_id=opt_id,
+        assembled_prompt=assembled,
+        strategy_requested=strategy_name,
+    )
 
 
 @router.post("/optimize/passthrough/save")
 async def passthrough_save(
     body: PassthroughSaveRequest,
     db: AsyncSession = Depends(get_db),
-):
+) -> OptimizationDetail:
     """Save an externally-optimized prompt result.
 
     Applies heuristic scoring unless the user has disabled scoring in preferences.

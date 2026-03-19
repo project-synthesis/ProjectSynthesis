@@ -1,11 +1,11 @@
 // frontend/src/lib/stores/github.svelte.ts
 import { githubMe, githubLogin, githubLogout, githubRepos, githubLink, githubLinked, githubUnlink } from '$lib/api/client';
-import type { GitHubUser, LinkedRepo } from '$lib/api/client';
+import type { GitHubUser, LinkedRepo, GitHubRepository } from '$lib/api/client';
 
 class GitHubStore {
   user = $state<GitHubUser | null>(null);
   linkedRepo = $state<LinkedRepo | null>(null);
-  repos = $state<any[]>([]);
+  repos = $state<GitHubRepository[]>([]);
   loading = $state(false);
   error = $state<string | null>(null);
 

@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.event_bus import event_bus
 
@@ -15,19 +15,23 @@ router = APIRouter(prefix="/api", tags=["events"])
 
 
 class InternalEventRequest(BaseModel):
-    event_type: str
-    data: dict
+    event_type: str = Field(description="Event type identifier (e.g. 'optimization_created').")
+    data: dict = Field(description="Event payload data dictionary.")
+
+
+class OkResponse(BaseModel):
+    ok: bool = Field(default=True, description="Operation success indicator.")
 
 
 @router.post("/events/_publish")
-async def publish_event(body: InternalEventRequest):
+async def publish_event(body: InternalEventRequest) -> OkResponse:
     """Internal endpoint for cross-process event publishing (used by MCP server)."""
     event_bus.publish(body.event_type, body.data)
-    return {"ok": True}
+    return OkResponse()
 
 
 @router.get("/events")
-async def event_stream():
+async def event_stream() -> StreamingResponse:
     """SSE endpoint -- streams real-time events with periodic keepalive."""
     logger.info("New SSE event stream connection")
 

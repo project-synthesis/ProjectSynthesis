@@ -11,13 +11,13 @@ _svc = PreferencesService(DATA_DIR)
 
 
 @router.get("/preferences")
-async def get_preferences():
+async def get_preferences() -> dict:
     """Return full preferences (merged with defaults)."""
     return _svc.load()
 
 
 @router.patch("/preferences")
-async def patch_preferences(body: dict):
+async def patch_preferences(body: dict) -> dict:
     """Deep-merge updates into preferences. Validates before saving."""
     try:
         return _svc.patch(body)

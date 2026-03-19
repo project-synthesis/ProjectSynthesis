@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app._version import __version__
@@ -17,15 +18,52 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["health"])
 
 
+class ScoreHealth(BaseModel):
+    last_n_mean: float = Field(description="Mean overall score across recent optimizations.")
+    last_n_stddev: float = Field(description="Standard deviation of recent overall scores.")
+    count: int = Field(description="Number of optimizations in the sample.")
+    clustering_warning: bool = Field(
+        description="True if scores cluster suspiciously (low stddev with enough samples).",
+    )
+
+
+class RecentErrors(BaseModel):
+    last_hour: int = Field(default=0, description="Number of failed optimizations in the last hour.")
+    last_24h: int = Field(default=0, description="Number of failed optimizations in the last 24 hours.")
+
+
+class HealthResponse(BaseModel):
+    status: str = Field(description="'healthy' if a provider is available, 'degraded' otherwise.")
+    version: str = Field(description="Application version from version.json.")
+    provider: str | None = Field(description="Active LLM provider name, or null if none detected.")
+    score_health: ScoreHealth | None = Field(
+        default=None, description="Score distribution health metrics, or null if no data.",
+    )
+    avg_duration_ms: int | None = Field(
+        default=None, description="Average pipeline duration in ms across recent optimizations.",
+    )
+    phase_durations: dict[str, int] = Field(
+        default_factory=dict, description="Average duration per pipeline phase in ms.",
+    )
+    recent_errors: RecentErrors = Field(
+        default_factory=RecentErrors, description="Error counts for recent time windows.",
+    )
+    sampling_capable: bool | None = Field(
+        default=None,
+        description="Whether the MCP client supports sampling/createMessage. "
+        "Null if no MCP session or stale (>30 min).",
+    )
+
+
 @router.get("/health")
-async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
+async def health_check(request: Request, db: AsyncSession = Depends(get_db)) -> HealthResponse:
     """Liveness check with provider, version, and pipeline health metrics."""
     provider = getattr(request.app.state, "provider", None)
 
     # Pipeline metrics
-    score_health = None
-    avg_duration_ms = None
-    recent_errors = {"last_hour": 0, "last_24h": 0}
+    score_health: ScoreHealth | None = None
+    avg_duration_ms: int | None = None
+    recent_errors = RecentErrors()
     phase_durations: dict[str, int] = {}
     try:
         svc = OptimizationService(db)
@@ -37,12 +75,12 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
             ) or (
                 overall["count"] >= 50 and overall["stddev"] < 0.5
             )
-            score_health = {
-                "last_n_mean": overall["mean"],
-                "last_n_stddev": overall["stddev"],
-                "count": overall["count"],
-                "clustering_warning": clustering_warning,
-            }
+            score_health = ScoreHealth(
+                last_n_mean=overall["mean"],
+                last_n_stddev=overall["stddev"],
+                count=overall["count"],
+                clustering_warning=clustering_warning,
+            )
 
         # Average duration from recent optimizations
         result = await svc.list_optimizations(limit=50, sort_by="created_at", sort_order="desc")
@@ -51,7 +89,8 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
             avg_duration_ms = round(sum(durations) / len(durations))
 
         # Recent error counts
-        recent_errors = await svc.get_recent_error_counts()
+        error_counts = await svc.get_recent_error_counts()
+        recent_errors = RecentErrors(**error_counts)
 
         # Per-phase average durations
         phase_durations = await svc.get_avg_duration_by_phase()
@@ -73,12 +112,13 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         logger.debug("Could not read mcp_session.json", exc_info=True)
 
-    return {
-        "status": "healthy" if provider else "degraded",
-        "version": __version__,
-        "provider": provider.name if provider else None,
-        "score_health": score_health,
-        "avg_duration_ms": phase_durations if phase_durations else avg_duration_ms,
-        "recent_errors": recent_errors,
-        "sampling_capable": sampling_capable,
-    }
+    return HealthResponse(
+        status="healthy" if provider else "degraded",
+        version=__version__,
+        provider=provider.name if provider else None,
+        score_health=score_health,
+        avg_duration_ms=avg_duration_ms,
+        phase_durations=phase_durations,
+        recent_errors=recent_errors,
+        sampling_capable=sampling_capable,
+    )

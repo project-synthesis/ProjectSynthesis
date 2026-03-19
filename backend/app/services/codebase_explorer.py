@@ -9,7 +9,7 @@ import asyncio
 import logging
 from pathlib import PurePosixPath
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.providers.base import LLMProvider
@@ -39,7 +39,7 @@ class ExploreOutput(BaseModel):
     """Structured output from the explore synthesis LLM call."""
 
     model_config = ConfigDict(extra="forbid")
-    context: str
+    context: str = Field(description="Synthesized codebase context summary for injection into the optimizer.")
 
 
 class CodebaseExplorer:

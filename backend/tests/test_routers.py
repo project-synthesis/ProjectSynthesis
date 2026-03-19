@@ -501,12 +501,16 @@ class TestHealthMetrics:
 
         resp = await app_client.get("/api/health")
         data = resp.json()
-        avg = data["avg_duration_ms"]
-        assert isinstance(avg, dict)
-        assert avg["analyze_ms"] == 1500
-        assert avg["optimize_ms"] == 3500
-        assert avg["score_ms"] == 1000
-        assert avg["total"] == 6000
+        # avg_duration_ms is now a simple int (overall average)
+        assert isinstance(data["avg_duration_ms"], int)
+        assert data["avg_duration_ms"] == 6000
+        # phase_durations is a separate dict
+        phases = data["phase_durations"]
+        assert isinstance(phases, dict)
+        assert phases["analyze_ms"] == 1500
+        assert phases["optimize_ms"] == 3500
+        assert phases["score_ms"] == 1000
+        assert phases["total"] == 6000
 
 
 class TestApiKeyManagement:
