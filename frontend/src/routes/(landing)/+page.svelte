@@ -11,7 +11,8 @@
         for (const entry of entries) {
           if (entry.isIntersecting) {
             (entry.target as HTMLElement).classList.add('in-view');
-            observer.unobserve(entry.target);
+          } else {
+            (entry.target as HTMLElement).classList.remove('in-view');
           }
         }
       },
