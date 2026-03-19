@@ -269,6 +269,7 @@ export interface PassthroughPrepareResult {
   strategy_requested: string;
 }
 
+/** @deprecated Use unified POST /api/optimize — backend routes to passthrough via SSE */
 export const preparePassthrough = (prompt: string, strategy: string | null) =>
   apiFetch<PassthroughPrepareResult>('/optimize/passthrough', {
     method: 'POST',
@@ -457,7 +458,7 @@ export function connectEventStream(onEvent: EventHandler): EventSource {
         'optimization_created', 'optimization_analyzed',
         'feedback_submitted', 'refinement_turn',
         'optimization_failed', 'strategy_changed',
-        'pattern_updated',
+        'pattern_updated', 'routing_state_changed',
     ];
     for (const type of eventTypes) {
         es.addEventListener(type, (e: MessageEvent) => {

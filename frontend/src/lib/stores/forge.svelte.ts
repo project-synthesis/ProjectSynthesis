@@ -1,11 +1,10 @@
 // frontend/src/lib/stores/forge.svelte.ts
 import {
   optimizeSSE, getOptimization, submitFeedback as apiFeedback,
-  preparePassthrough, savePassthrough,
+  savePassthrough,
 } from '$lib/api/client';
 import type { OptimizationResult, DimensionScores, SSEEvent } from '$lib/api/client';
 import { editorStore } from '$lib/stores/editor.svelte';
-import { preferencesStore } from '$lib/stores/preferences.svelte';
 import { patternsStore } from '$lib/stores/patterns.svelte';
 
 export type ForgeStatus = 'idle' | 'analyzing' | 'optimizing' | 'scoring' | 'complete' | 'error' | 'passthrough';
@@ -40,8 +39,9 @@ class ForgeStore {
   // Family link from knowledge graph (set when optimization is linked to a pattern family)
   familyId = $state<string | null>(null);
 
-  /** Set by +page.svelte after health check — true when health.provider is null. */
-  noProvider = $state(false);
+  /** Routing decision from the backend's first SSE event per optimize stream. */
+  routingDecision = $state<{ tier: string; provider: string | null; reason: string; degraded_from: string | null } | null>(null);
+
   /** Set by +page.svelte after health check — null until health is fetched. */
   samplingCapable = $state<boolean | null>(null);
   /** Set by +page.svelte — true when health reports MCP activity gap (disconnected). */
@@ -83,22 +83,7 @@ class ForgeStore {
     this.initialSuggestions = [];
     this.appliedPatternIds = null;
     this.familyId = null;
-
-    // Passthrough mode — no provider, or force_passthrough preference enabled
-    if (this.noProvider || preferencesStore.pipeline.force_passthrough) {
-      this.status = 'passthrough';
-      preparePassthrough(this.prompt, this.strategy)
-        .then((res) => {
-          this.assembledPrompt = res.assembled_prompt;
-          this.passthroughTraceId = res.trace_id;
-          this.passthroughStrategy = res.strategy_requested;
-        })
-        .catch((err) => {
-          this.error = err.message;
-          this.status = 'error';
-        });
-      return;
-    }
+    this.routingDecision = null;
 
     this.status = 'analyzing';
 
@@ -137,6 +122,23 @@ class ForgeStore {
 
   private handleEvent(event: SSEEvent) {
     const eventType = event.event as string;
+
+    if (eventType === 'routing') {
+      this.routingDecision = {
+        tier: event.tier as string,
+        provider: (event.provider ?? null) as string | null,
+        reason: event.reason as string,
+        degraded_from: (event.degraded_from ?? null) as string | null,
+      };
+      return;
+    }
+    if (eventType === 'passthrough') {
+      this.assembledPrompt = event.assembled_prompt as string;
+      this.passthroughTraceId = event.trace_id as string;
+      this.passthroughStrategy = event.strategy as string;
+      this.status = 'passthrough';
+      return;
+    }
 
     if (eventType === 'optimization_start') {
       this.traceId = event.trace_id as string;
@@ -244,6 +246,7 @@ class ForgeStore {
     this.passthroughTraceId = null;
     this.passthroughStrategy = null;
     this.familyId = null;
+    this.routingDecision = null;
     this.status = 'idle';
   }
 
@@ -299,6 +302,7 @@ class ForgeStore {
     this.initialSuggestions = [];
     this.appliedPatternIds = null;
     this.familyId = null;
+    this.routingDecision = null;
     patternsStore.resetTracking();
   }
 }

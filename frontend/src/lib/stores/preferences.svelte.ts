@@ -12,7 +12,6 @@ export interface PipelinePrefs {
   enable_adaptation: boolean;
   force_sampling: boolean;
   force_passthrough: boolean;
-  auto_passthrough: boolean;
 }
 
 export interface Preferences {
@@ -25,7 +24,7 @@ export interface Preferences {
 const DEFAULTS: Preferences = {
   schema_version: 1,
   models: { analyzer: 'sonnet', optimizer: 'opus', scorer: 'sonnet' },
-  pipeline: { enable_explore: true, enable_scoring: true, enable_adaptation: true, force_sampling: false, force_passthrough: false, auto_passthrough: false },
+  pipeline: { enable_explore: true, enable_scoring: true, enable_adaptation: true, force_sampling: false, force_passthrough: false },
   defaults: { strategy: 'auto' },
 };
 

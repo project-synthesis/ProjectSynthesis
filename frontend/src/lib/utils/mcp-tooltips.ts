@@ -15,7 +15,6 @@ import { preferencesStore } from '$lib/stores/preferences.svelte';
 export function forceSamplingTooltip(disabled: boolean): string | undefined {
   if (!disabled) return undefined;
   if (forgeStore.mcpDisconnected) return 'MCP client disconnected';
-  if (forgeStore.noProvider) return 'No local provider to bypass — sampling is already the active path';
   if (forgeStore.samplingCapable === null) return 'No sampling-capable MCP client detected';
   if (forgeStore.samplingCapable === false) return 'Your MCP client does not support sampling';
   if (preferencesStore.pipeline.force_passthrough) return 'Disable Force passthrough first';

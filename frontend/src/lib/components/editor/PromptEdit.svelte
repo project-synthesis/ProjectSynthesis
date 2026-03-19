@@ -2,7 +2,7 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { patternsStore } from '$lib/stores/patterns.svelte';
-  import { getStrategies, getHealth } from '$lib/api/client';
+  import { getStrategies } from '$lib/api/client';
   import PatternSuggestion from './PatternSuggestion.svelte';
   import { getPhaseLabel } from '$lib/utils/dimensions';
   import { strategyListToOptions, type StrategyOption } from '$lib/utils/strategies';
@@ -42,7 +42,7 @@
     forgeStore.status !== 'passthrough'
   );
 
-  const isPassthroughMode = $derived(forgeStore.noProvider);
+  const isPassthroughMode = $derived(forgeStore.status === 'passthrough');
 
   const buttonLabel = $derived(isPassthroughMode ? 'PREPARE' : 'SYNTHESIZE');
 
@@ -65,12 +65,6 @@
   }
 
   async function handleSynthesize() {
-    // Re-check provider status before synthesizing — handles mid-session API key changes
-    try {
-      const h = await getHealth();
-      forgeStore.noProvider = !h.provider;
-    } catch { /* backend unreachable — forge() will fail with its own error */ }
-
     forgeStore.forge();
 
     // Passthrough mode stays on the prompt tab (which renders PassthroughView)
