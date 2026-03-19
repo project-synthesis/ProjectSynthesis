@@ -1,16 +1,15 @@
 """Health check endpoint with pipeline metrics."""
 
-import json as _json
 import logging
-from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app._version import __version__
-from app.config import DATA_DIR, MCP_ACTIVITY_STALENESS_SECONDS, MCP_CAPABILITY_STALENESS_MINUTES
+from app.config import DATA_DIR
 from app.database import get_db
+from app.services.mcp_session_file import MCPSessionFile
 from app.services.optimization_service import OptimizationService
 
 logger = logging.getLogger(__name__)
@@ -106,38 +105,17 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)) -> 
     # and by the ASGI capability-detection middleware on initialize handshake).
     # Dual-window staleness:
     #   - 30-minute capability window: was the client recently sampling-capable?
-    #   - 90-second activity window: has the client gone silent (disconnected)?
+    #   - Activity window: has the client gone silent (disconnected)?
     sampling_capable: bool | None = None
     mcp_disconnected: bool = False
-    mcp_session_path = DATA_DIR / "mcp_session.json"
     try:
-        if mcp_session_path.exists():
-            raw = _json.loads(mcp_session_path.read_text(encoding="utf-8"))
-            written_at = datetime.fromisoformat(raw["written_at"])
-            now = datetime.now(timezone.utc)
-
-            # Capability staleness
-            if now - written_at <= timedelta(minutes=MCP_CAPABILITY_STALENESS_MINUTES):
+        sf = MCPSessionFile(DATA_DIR)
+        raw = sf.read()
+        if raw is not None:
+            if sf.is_capability_fresh(raw) and "sampling_capable" in raw:
                 sampling_capable = bool(raw["sampling_capable"])
-
-            # Activity staleness — disconnect detection.
-            # An active SSE stream (sse_streams > 0) proves the client is
-            # connected even when no POSTs are happening (idle stream).
-            # When sse_streams is explicitly 0 (field present), the last
-            # stream closed — the client disconnected.
-            sse_streams = raw.get("sse_streams")
-            if sampling_capable and (sse_streams is None or sse_streams <= 0):
-                if sse_streams == 0:
-                    # Stream count dropped to 0 — client just disconnected.
-                    mcp_disconnected = True
-                else:
-                    # Legacy file without sse_streams — fall back to activity staleness.
-                    last_activity_str = raw.get("last_activity")
-                    if last_activity_str:
-                        last_activity = datetime.fromisoformat(last_activity_str)
-                        activity_age = (now - last_activity).total_seconds()
-                        if activity_age > MCP_ACTIVITY_STALENESS_SECONDS:
-                            mcp_disconnected = True
+            if sampling_capable:
+                mcp_disconnected = sf.detect_disconnect(raw)
     except Exception:
         logger.debug("Could not read mcp_session.json", exc_info=True)
 

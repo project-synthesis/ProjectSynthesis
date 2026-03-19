@@ -17,7 +17,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.services.mcp_session_file import MCPSessionFile
+
 VALID_PROMPT = "Write a Python function that sorts a list of integers using merge sort"
+
+
+def _patch_mcp_data_dir(monkeypatch, tmp_path: Path) -> None:
+    """Patch DATA_DIR in mcp_server and replace _session_file with one using tmp_path."""
+    monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+    monkeypatch.setattr("app.mcp_server._session_file", MCPSessionFile(tmp_path))
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +64,7 @@ class TestWriteMcpSessionCaps:
 
     def test_writes_true_when_sampling_capability_present(self, tmp_path, monkeypatch):
         """Sampling capability object present (even empty dict) → sampling_capable=true."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         ctx = self._make_ctx(sampling_capability={})
@@ -70,7 +78,7 @@ class TestWriteMcpSessionCaps:
 
     def test_writes_true_when_sampling_is_nonempty_dict(self, tmp_path, monkeypatch):
         """Non-empty sampling capability dict also counts as capable."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         ctx = self._make_ctx(sampling_capability={"maxTokens": 16384})
@@ -81,7 +89,7 @@ class TestWriteMcpSessionCaps:
 
     def test_writes_false_when_sampling_is_none(self, tmp_path, monkeypatch):
         """Sampling attribute is None → client does not support sampling."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         ctx = self._make_ctx(sampling_capability=None)
@@ -92,7 +100,7 @@ class TestWriteMcpSessionCaps:
 
     def test_writes_false_when_ctx_is_none(self, tmp_path, monkeypatch):
         """Null context (e.g., non-MCP invocation) → sampling_capable=false."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         _write_mcp_session_caps(None)
@@ -102,7 +110,7 @@ class TestWriteMcpSessionCaps:
 
     def test_writes_false_when_session_is_none(self, tmp_path, monkeypatch):
         """Context exists but session is None → sampling_capable=false."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         ctx = self._make_ctx(has_session=False)
@@ -113,7 +121,7 @@ class TestWriteMcpSessionCaps:
 
     def test_writes_false_when_client_params_is_none(self, tmp_path, monkeypatch):
         """Session exists but client_params is None → sampling_capable=false."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         ctx = self._make_ctx(has_client_params=False)
@@ -124,7 +132,7 @@ class TestWriteMcpSessionCaps:
 
     def test_writes_false_when_ctx_has_no_session_attr(self, tmp_path, monkeypatch):
         """Context object missing 'session' attribute entirely → false."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         ctx = object()  # no session attribute
@@ -135,7 +143,7 @@ class TestWriteMcpSessionCaps:
 
     def test_written_at_is_utc_iso_timestamp(self, tmp_path, monkeypatch):
         """written_at is a timezone-aware UTC ISO 8601 string."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         _write_mcp_session_caps(None)
@@ -147,7 +155,7 @@ class TestWriteMcpSessionCaps:
 
     def test_overwrites_previous_file(self, tmp_path, monkeypatch):
         """Subsequent calls overwrite the file, updating the value."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         # Write false
@@ -160,7 +168,7 @@ class TestWriteMcpSessionCaps:
 
     def test_silent_on_write_error(self, monkeypatch):
         """Does not raise when DATA_DIR is not writable."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", Path("/nonexistent/path"))
+        _patch_mcp_data_dir(monkeypatch, Path("/nonexistent/path"))
         from app.mcp_server import _write_mcp_session_caps
 
         # Should not raise
@@ -168,7 +176,7 @@ class TestWriteMcpSessionCaps:
 
     def test_file_is_valid_json_with_expected_keys(self, tmp_path, monkeypatch):
         """Output file has sampling_capable, written_at, and last_activity."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         from app.mcp_server import _write_mcp_session_caps
 
         _write_mcp_session_caps(self._make_ctx(sampling_capability={}))
@@ -548,7 +556,7 @@ class TestSamplingDetectionIntegration:
 
     async def test_write_then_health_roundtrip(self, app_client, tmp_path, monkeypatch):
         """Write mcp_session.json via _write_mcp_session_caps, then read via health."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
 
         from app.mcp_server import _write_mcp_session_caps
@@ -569,7 +577,7 @@ class TestSamplingDetectionIntegration:
         self, app_client, tmp_path, monkeypatch,
     ):
         """Write mcp_session.json without sampling, verify health returns false."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
 
         from app.mcp_server import _write_mcp_session_caps
@@ -589,7 +597,7 @@ class TestSamplingDetectionIntegration:
         self, app_client, tmp_path, monkeypatch,
     ):
         """Manually age mcp_session.json after writing — health returns null."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
 
         from app.mcp_server import _write_mcp_session_caps
@@ -609,7 +617,7 @@ class TestSamplingDetectionIntegration:
 
     async def test_full_lifecycle(self, app_client, tmp_path, monkeypatch):
         """Full lifecycle: no file → write capable → health true → stale → null."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
 
         from app.mcp_server import _write_mcp_session_caps
@@ -649,7 +657,7 @@ class TestCapabilityDetectionMiddleware:
     @pytest.fixture()
     def mw_data_dir(self, tmp_path, monkeypatch):
         """Point the middleware's DATA_DIR to a temp directory."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         return tmp_path
 
     @staticmethod
@@ -905,7 +913,7 @@ class TestTouchActivity:
 
     @pytest.fixture()
     def data_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         return tmp_path
 
     @staticmethod
@@ -1017,7 +1025,7 @@ class TestInvalidateStaleSession:
 
     @pytest.fixture()
     def data_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         return tmp_path
 
     def test_removes_existing_file(self, data_dir):
@@ -1064,7 +1072,7 @@ class TestWriteOptimisticSession:
 
     @pytest.fixture()
     def data_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
         return tmp_path
 
     def test_writes_sampling_capable_true(self, data_dir):
@@ -1111,7 +1119,7 @@ class TestClearStaleSession:
 
     def test_removes_existing_session_file(self, tmp_path, monkeypatch):
         """mcp_session.json is removed on startup."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
 
         path = tmp_path / "mcp_session.json"
         path.write_text(json.dumps({
@@ -1125,7 +1133,7 @@ class TestClearStaleSession:
 
     def test_no_crash_when_no_file(self, tmp_path, monkeypatch):
         """Doesn't crash when mcp_session.json doesn't exist."""
-        monkeypatch.setattr("app.mcp_server.DATA_DIR", tmp_path)
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
 
         from app.mcp_server import _clear_stale_session
         _clear_stale_session()  # no crash

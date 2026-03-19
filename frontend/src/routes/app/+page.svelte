@@ -11,6 +11,23 @@
   let backendError = $state<string | null>(null);
   let eventSource: EventSource | null = null;
 
+  // ---- Shared disconnect/reconnect handlers ----
+
+  function handleMcpDisconnect() {
+    forgeStore.mcpDisconnected = true;
+    if (!preferencesStore.pipeline.force_passthrough) {
+      preferencesStore.update({ pipeline: { force_passthrough: true, auto_passthrough: true } });
+      addToast('deleted', 'MCP client disconnected — switched to passthrough mode');
+    }
+  }
+
+  function handleMcpReconnect() {
+    if (preferencesStore.pipeline.auto_passthrough) {
+      preferencesStore.update({ pipeline: { force_passthrough: false, auto_passthrough: false } });
+      addToast('created', 'MCP client reconnected — restored sampling mode');
+    }
+  }
+
   // Real-time event stream
   $effect(() => {
     eventSource = connectEventStream((type, data) => {
@@ -54,13 +71,7 @@
       }
       if (type === 'mcp_session_changed') {
         if (data.disconnected) {
-          // SSE stream closed — client disconnected. Apply immediately
-          // without waiting for the next health poll.
-          forgeStore.mcpDisconnected = true;
-          if (!preferencesStore.pipeline.force_passthrough) {
-            preferencesStore.update({ pipeline: { force_passthrough: true, auto_passthrough: true } });
-            addToast('deleted', 'MCP client disconnected — switched to passthrough mode');
-          }
+          handleMcpDisconnect();
         } else {
           // MCP client connected/reconnected — trigger immediate health poll
           getHealth().then(applyHealth).catch(() => {});
@@ -70,10 +81,18 @@
     return () => eventSource?.close();
   });
 
-  // Health polling — initial fast poll (10s) to detect MCP client connections
-  // quickly, then settles to 60s after 2 minutes. The ASGI middleware writes
-  // mcp_session.json on the MCP initialize handshake, so detection happens
-  // within one poll interval of the client connecting.
+  // ---- Health polling ----
+
+  const FAST_INTERVAL = 10_000;
+  const SLOW_INTERVAL = 60_000;
+  const FAST_WINDOW   = 120_000;
+
+  function healthPoll() {
+    getHealth()
+      .then(applyHealth)
+      .catch(() => { backendError = 'Cannot connect to backend. Check that services are running.'; });
+  }
+
   function applyHealth(h: HealthResponse) {
     const prevSampling = forgeStore.samplingCapable;
     const prevDisconnected = forgeStore.mcpDisconnected;
@@ -84,17 +103,12 @@
     forgeStore.mcpDisconnected = h.mcp_disconnected ?? false;
 
     // Guard: clear stale force_sampling when no sampling client is available.
-    // This catches the cold-start case where preferences persist force_sampling=true
-    // from a previous session but the IDE is no longer connected.
     if (preferencesStore.pipeline.force_sampling && h.sampling_capable !== true) {
       preferencesStore.setPipelineToggle('force_sampling', false);
       addToast('deleted', 'No sampling-capable MCP client — force sampling disabled');
     }
 
     // Guard: clear stale auto_passthrough when no sampling client exists.
-    // On cold start after a server restart, mcp_session.json is cleared so
-    // sampling_capable=null. If auto_passthrough persists from a previous
-    // disconnect, clear both flags so the system defaults to internal pipeline.
     if (preferencesStore.pipeline.auto_passthrough && h.sampling_capable === null) {
       preferencesStore.update({ pipeline: { force_passthrough: false, auto_passthrough: false } });
       forgeStore.mcpDisconnected = false;
@@ -107,66 +121,38 @@
     }
 
     // Auto-switch to passthrough on MCP disconnect
-    if (!prevDisconnected && h.mcp_disconnected === true && !preferencesStore.pipeline.force_passthrough) {
-      preferencesStore.update({ pipeline: { force_passthrough: true, auto_passthrough: true } });
-      addToast('deleted', 'MCP client disconnected — switched to passthrough mode');
+    if (!prevDisconnected && h.mcp_disconnected === true) {
+      handleMcpDisconnect();
     }
 
     // Auto-restore from passthrough on MCP reconnect
-    if (prevDisconnected && !h.mcp_disconnected && h.sampling_capable === true && preferencesStore.pipeline.auto_passthrough) {
-      preferencesStore.update({ pipeline: { force_passthrough: false, auto_passthrough: false } });
-      addToast('created', 'MCP client reconnected — restored sampling mode');
+    if (prevDisconnected && !h.mcp_disconnected && h.sampling_capable === true) {
+      handleMcpReconnect();
     }
   }
 
-  // Health polling — fast 10s during startup + whenever a sampling client is
-  // connected (for disconnect detection), then 60s steady-state otherwise.
-  let healthTimer: ReturnType<typeof setInterval> | null = null;
-  let healthSlowdown: ReturnType<typeof setTimeout> | null = null;
-  const FAST_INTERVAL = 10_000;
-  const SLOW_INTERVAL = 60_000;
-  const FAST_WINDOW   = 120_000;
+  // Consolidated health polling: fast 10s during startup window or when a
+  // sampling-capable client is connected, 60s steady-state otherwise.
+  let fastWindowElapsed = $state(false);
 
-  function healthPoll() {
-    getHealth()
-      .then(applyHealth)
-      .catch(() => { backendError = 'Cannot connect to backend. Check that services are running.'; });
-  }
-
-  function setHealthInterval(ms: number) {
-    if (healthTimer !== null) clearInterval(healthTimer);
-    healthTimer = setInterval(healthPoll, ms);
-  }
-
+  // One-time: initial poll + fast window timer
   $effect(() => {
     healthPoll();
-
-    // Start with fast polling, switch to slow after the fast window
-    setHealthInterval(FAST_INTERVAL);
-    healthSlowdown = setTimeout(() => {
-      // Only slow down if no sampling client is active — keep fast for disconnect detection
-      if (forgeStore.samplingCapable !== true) {
-        setHealthInterval(SLOW_INTERVAL);
-      }
-    }, FAST_WINDOW);
-
-    return () => {
-      if (healthTimer !== null) clearInterval(healthTimer);
-      if (healthSlowdown !== null) clearTimeout(healthSlowdown);
-    };
+    const timer = setTimeout(() => { fastWindowElapsed = true; }, FAST_WINDOW);
+    return () => clearTimeout(timer);
   });
 
-  // Keep fast polling while a sampling-capable client is connected (for disconnect detection).
-  // When sampling goes away, switch to slow polling.
-  let prevSamplingForPoll = $state<boolean | null>(null);
+  // Reactive interval: re-runs when samplingCapable or fastWindowElapsed changes
+  let pollInterval = $derived(
+    !fastWindowElapsed || forgeStore.samplingCapable === true
+      ? FAST_INTERVAL
+      : SLOW_INTERVAL
+  );
+
   $effect(() => {
-    const current = forgeStore.samplingCapable;
-    if (prevSamplingForPoll !== true && current === true) {
-      setHealthInterval(FAST_INTERVAL);
-    } else if (prevSamplingForPoll === true && current !== true) {
-      setHealthInterval(SLOW_INTERVAL);
-    }
-    prevSamplingForPoll = current;
+    const interval = pollInterval;
+    const timer = setInterval(healthPoll, interval);
+    return () => clearInterval(timer);
   });
 
   // Derived error states

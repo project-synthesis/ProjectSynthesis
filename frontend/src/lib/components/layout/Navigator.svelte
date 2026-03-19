@@ -4,9 +4,10 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
-  import { addToast } from '$lib/stores/toast.svelte';
+  import { addToast, type ToastAction } from '$lib/stores/toast.svelte';
   import { scoreColor, domainColor } from '$lib/constants/patterns';
   import { formatScore } from '$lib/utils/formatting';
+  import { forceSamplingTooltip, forcePassthroughTooltip } from '$lib/utils/mcp-tooltips';
   import { getSettings, getProviders, getHistory, getOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
   import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo } from '$lib/api/client';
 
@@ -133,7 +134,8 @@
       // Suppress toasts for names we just saved via UI
       if (suppressedNames.has(detail.name)) return;
 
-      addToast(detail.action, detail.name);
+      const verb = detail.action === 'created' ? 'added' : detail.action === 'deleted' ? 'removed' : 'updated';
+      addToast(detail.action as ToastAction, `Strategy ${verb}: ${detail.name}`);
 
       // Re-fetch strategies list
       getStrategies()
@@ -461,21 +463,7 @@
                 aria-checked={preferencesStore.pipeline.force_sampling}
                 aria-label="Toggle Force IDE sampling"
                 disabled={forceSamplingDisabled}
-                title={
-                  forceSamplingDisabled
-                    ? forgeStore.mcpDisconnected
-                      ? 'MCP client disconnected'
-                      : forgeStore.noProvider
-                        ? 'No local provider to bypass — sampling is already the active path'
-                        : forgeStore.samplingCapable === null
-                          ? 'No sampling-capable MCP client detected'
-                          : forgeStore.samplingCapable === false
-                            ? 'Your MCP client does not support sampling'
-                            : preferencesStore.pipeline.force_passthrough
-                              ? 'Disable Force passthrough first'
-                              : undefined
-                    : undefined
-                }
+                title={forceSamplingTooltip(forceSamplingDisabled)}
                 style={forceSamplingDisabled ? 'opacity: 0.4; cursor: not-allowed;' : undefined}
               >
                 <span class="toggle-thumb"></span>
@@ -492,15 +480,7 @@
                 aria-checked={preferencesStore.pipeline.force_passthrough}
                 aria-label="Toggle Force passthrough"
                 disabled={forcePassthroughDisabled}
-                title={
-                  forcePassthroughDisabled
-                    ? preferencesStore.pipeline.force_sampling
-                      ? 'Disable Force IDE sampling first'
-                      : forgeStore.samplingCapable === true && !forgeStore.mcpDisconnected
-                        ? 'Sampling is available — use Force IDE sampling instead'
-                        : undefined
-                    : undefined
-                }
+                title={forcePassthroughTooltip(forcePassthroughDisabled)}
                 style={forcePassthroughDisabled ? 'opacity: 0.4; cursor: not-allowed;' : undefined}
               >
                 <span class="toggle-thumb"></span>

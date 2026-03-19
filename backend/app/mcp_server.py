@@ -10,13 +10,14 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -28,7 +29,6 @@ from sqlalchemy import select
 from app.config import (
     DATA_DIR,
     MCP_ACTIVITY_STALENESS_SECONDS,
-    MCP_CAPABILITY_STALENESS_MINUTES,
     PROMPTS_DIR,
     settings,
 )
@@ -48,6 +48,7 @@ from app.schemas.pipeline_contracts import (
 )
 from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
+from app.services.mcp_session_file import MCPSessionFile
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
@@ -58,6 +59,9 @@ from app.services.strategy_loader import StrategyLoader
 from app.services.workspace_intelligence import WorkspaceIntelligence
 
 logger = logging.getLogger(__name__)
+
+# Module-level session file helper — used by middleware, tools, and entry point.
+_session_file = MCPSessionFile(DATA_DIR)
 
 # ---------------------------------------------------------------------------
 # Monkey-patch: allow session-less GETs for SSE reconnection after restart.
@@ -151,29 +155,13 @@ def _write_mcp_session_caps(ctx: Context | None) -> None:
             and ctx.session.client_params is not None
             and getattr(ctx.session.client_params.capabilities, "sampling", None) is not None
         )
-        path = DATA_DIR / "mcp_session.json"
 
         # Optimistic: never downgrade a fresh True to False
-        if not sampling_capable and path.exists():
-            try:
-                existing = _json.loads(path.read_text(encoding="utf-8"))
-                if existing.get("sampling_capable") is True:
-                    written = datetime.fromisoformat(existing["written_at"])
-                    if datetime.now(timezone.utc) - written <= timedelta(minutes=MCP_CAPABILITY_STALENESS_MINUTES):
-                        logger.debug("_write_mcp_session_caps: skipping False — fresh True on file")
-                        return
-            except Exception:
-                pass
+        if not sampling_capable and _session_file.should_skip_downgrade():
+            logger.debug("_write_mcp_session_caps: skipping False — fresh True on file")
+            return
 
-        now = datetime.now(timezone.utc).isoformat()
-        path.write_text(
-            _json.dumps({
-                "sampling_capable": sampling_capable,
-                "written_at": now,
-                "last_activity": now,
-            }),
-            encoding="utf-8",
-        )
+        _session_file.write_session(sampling_capable)
         logger.debug("mcp_session.json written: sampling_capable=%s", sampling_capable)
     except Exception:
         logger.debug("Could not write mcp_session.json", exc_info=True)
@@ -183,6 +171,9 @@ def _write_mcp_session_caps(ctx: Context | None) -> None:
 async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Detect the LLM provider once at startup and expose it to tools."""
     global _provider
+    # Clear stale session from previous run (belt-and-suspenders with __main__ call)
+    _clear_stale_session()
+
     # Enable WAL mode for SQLite (same as main.py)
     db_path = DATA_DIR / "synthesis.db"
     if db_path.exists():
@@ -227,6 +218,10 @@ class _CapabilityDetectionMiddleware:
 
     The middleware re-assembles the request body transparently; downstream
     handlers (FastMCP) receive the original bytes untouched.
+
+    Event payloads sent via ``_notify_session_changed`` always contain
+    ``sampling_capable`` and ``reconnected``.  The optional ``disconnected``
+    key is only set when the last SSE stream closes.
     """
 
     # Throttle activity writes: at most once per 10 seconds
@@ -246,167 +241,138 @@ class _CapabilityDetectionMiddleware:
 
         method = scope.get("method", "")
         if method == "POST":
-            reconnected = self._touch_activity()  # throttled last_activity update
-            body_chunks: list[bytes] = []
-            body_complete = False
-            initialize_result: dict | None = None  # set by _inspect_initialize
-            response_status: int = 0
-
-            async def _buffered_receive():
-                nonlocal body_complete, initialize_result
-                message = await receive()
-                if message["type"] == "http.request":
-                    body_chunks.append(message.get("body", b""))
-                    if not message.get("more_body", False):
-                        body_complete = True
-                        initialize_result = self._inspect_initialize(b"".join(body_chunks))
-                return message
-
-            async def _capture_send(message):
-                nonlocal response_status
-                if message["type"] == "http.response.start":
-                    response_status = message.get("status", 0)
-                await send(message)
-
-            await self.app(scope, _buffered_receive, _capture_send)
-
-            # Detect failed reconnection: client sent a POST that got 404
-            # (stale Mcp-Session-Id) or 400 (missing session ID after restart).
-            # Invalidate stale mcp_session.json so health stops claiming a
-            # client is connected.
-            if response_status in (400, 404) and initialize_result is None:
-                invalidated = self._invalidate_stale_session()
-                if invalidated:
-                    try:
-                        await notify_event_bus("mcp_session_changed", {
-                            "sampling_capable": False,
-                            "reconnected": False,
-                        })
-                    except Exception:
-                        pass
-                    return  # skip normal event logic
-
-            # Fire SSE events *after* the request completes so we don't block it.
-            # Two triggers: reconnection (activity gap) or fresh initialize handshake.
-            event_payload: dict | None = None
-            if initialize_result is not None:
-                event_payload = {
-                    "sampling_capable": initialize_result["sampling_capable"],
-                    "reconnected": False,
-                }
-            if reconnected:
-                event_payload = {
-                    "sampling_capable": True,
-                    "reconnected": True,
-                }
-            if event_payload is not None:
-                try:
-                    await notify_event_bus("mcp_session_changed", event_payload)
-                except Exception:
-                    pass  # best-effort — backend SSE may not be reachable
-
+            await self._handle_post(scope, receive, send)
         elif method == "GET":
-            # GET /mcp establishes the SSE stream.  After a server restart all
-            # sessions are lost; VS Code retries with a session-less GET.  The
-            # monkey-patch above lets this through so the client gets a fresh
-            # SSE stream with a new Mcp-Session-Id in the response headers.
-            headers = dict(
-                (k.decode() if isinstance(k, bytes) else k, v.decode() if isinstance(v, bytes) else v)
-                for k, v in scope.get("headers", [])
-            )
-            has_session_id = "mcp-session-id" in headers
-
-            if not has_session_id:
-                logger.info(
-                    "GET /mcp without Mcp-Session-Id — allowing SSE stream "
-                    "for seamless reconnection after server restart",
-                )
-
-            # Note: for SSE streams, ``await self.app()`` blocks until the
-            # client disconnects.  We must react in the send wrapper when
-            # we see the response status, not after the await returns.
-            get_handled = False
-
-            get_is_sse = False  # set True once we confirm a 200 SSE stream
-
-            async def _capture_get_send(message):
-                nonlocal get_handled, get_is_sse
-                if message["type"] == "http.response.start" and not get_handled:
-                    get_handled = True
-                    status = message.get("status", 0)
-                    if status in (400, 404):
-                        invalidated = _CapabilityDetectionMiddleware._invalidate_stale_session()
-                        if invalidated:
-                            try:
-                                await notify_event_bus("mcp_session_changed", {
-                                    "sampling_capable": False,
-                                    "reconnected": False,
-                                })
-                            except Exception:
-                                pass
-                    elif status == 200:
-                        get_is_sse = True
-                        _CapabilityDetectionMiddleware._active_sse_streams += 1
-                        if not has_session_id:
-                            # Successful session-less GET = client reconnecting
-                            # after server restart.  Optimistically assume
-                            # sampling-capable (the client was previously
-                            # connected and is re-establishing its SSE stream).
-                            _CapabilityDetectionMiddleware._write_optimistic_session()
-                            try:
-                                await notify_event_bus("mcp_session_changed", {
-                                    "sampling_capable": True,
-                                    "reconnected": True,
-                                })
-                            except Exception:
-                                pass
-                elif message["type"] == "http.response.body" and get_is_sse:
-                    # SSE stream is alive — keep last_activity fresh so the
-                    # health endpoint doesn't report a false disconnect.
-                    # _touch_activity is throttled (10s) so this is cheap.
-                    _CapabilityDetectionMiddleware._touch_activity()
-                await send(message)
-
-            # Track the SSE stream lifetime. get_is_sse is set to True
-            # inside _capture_get_send when we see a 200 response start.
-            # We increment _after_ the response starts (inside the wrapper)
-            # and decrement when the stream ends (self.app returns).
-            try:
-                await self.app(scope, receive, _capture_get_send)
-            finally:
-                if get_is_sse:
-                    _CapabilityDetectionMiddleware._active_sse_streams = max(
-                        0, _CapabilityDetectionMiddleware._active_sse_streams - 1,
-                    )
-                    # Write updated count to disk so health sees sse_streams=0.
-                    # When the last stream closes, also fire a disconnect event
-                    # so the frontend reacts immediately.
-                    _CapabilityDetectionMiddleware._flush_sse_streams()
-                    if _CapabilityDetectionMiddleware._active_sse_streams == 0:
-                        logger.info("Last SSE stream closed — client disconnected")
-                        # Use asyncio.shield to protect the HTTP POST from
-                        # task cancellation (uvicorn cancels the handler
-                        # when the client disconnects, and CancelledError
-                        # is BaseException, not Exception).
-                        try:
-                            import asyncio
-
-                            await asyncio.shield(notify_event_bus(
-                                "mcp_session_changed",
-                                {
-                                    "sampling_capable": True,
-                                    "reconnected": False,
-                                    "disconnected": True,
-                                },
-                            ))
-                            logger.info("Disconnect event published to backend")
-                        except BaseException:
-                            logger.warning(
-                                "Failed to publish disconnect event",
-                                exc_info=True,
-                            )
+            await self._handle_get(scope, receive, send)
         else:
             await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _notify_session_changed(
+        sampling_capable: bool,
+        *,
+        reconnected: bool = False,
+        disconnected: bool = False,
+    ) -> None:
+        """Best-effort SSE notification to the frontend via the backend event bus."""
+        payload: dict = {
+            "sampling_capable": sampling_capable,
+            "reconnected": reconnected,
+        }
+        if disconnected:
+            payload["disconnected"] = True
+        await notify_event_bus("mcp_session_changed", payload)
+
+    async def _handle_post(self, scope, receive, send):
+        """Buffer POST body, inspect for ``initialize``, track activity."""
+        reconnected = self._touch_activity()  # throttled last_activity update
+        body_chunks: list[bytes] = []
+        initialize_result: dict | None = None  # set by _inspect_initialize
+        response_status: int = 0
+
+        async def _buffered_receive():
+            nonlocal initialize_result
+            message = await receive()
+            if message["type"] == "http.request":
+                body_chunks.append(message.get("body", b""))
+                if not message.get("more_body", False):
+                    initialize_result = self._inspect_initialize(b"".join(body_chunks))
+            return message
+
+        async def _capture_send(message):
+            nonlocal response_status
+            if message["type"] == "http.response.start":
+                response_status = message.get("status", 0)
+            await send(message)
+
+        await self.app(scope, _buffered_receive, _capture_send)
+
+        # Detect failed reconnection: client sent a POST that got 404
+        # (stale Mcp-Session-Id) or 400 (missing session ID after restart).
+        if response_status in (400, 404) and initialize_result is None:
+            if self._invalidate_stale_session():
+                await self._notify_session_changed(False)
+            return  # skip normal event logic
+
+        # Fire SSE events *after* the request completes so we don't block it.
+        # Two triggers: reconnection (activity gap) or fresh initialize handshake.
+        if reconnected:
+            await self._notify_session_changed(True, reconnected=True)
+        elif initialize_result is not None:
+            await self._notify_session_changed(initialize_result["sampling_capable"])
+
+    async def _handle_get(self, scope, receive, send):
+        """Track SSE stream lifecycle, handle session-less reconnection."""
+        # GET /mcp establishes the SSE stream.  After a server restart all
+        # sessions are lost; VS Code retries with a session-less GET.  The
+        # monkey-patch above lets this through so the client gets a fresh
+        # SSE stream with a new Mcp-Session-Id in the response headers.
+        headers = dict(
+            (k.decode() if isinstance(k, bytes) else k, v.decode() if isinstance(v, bytes) else v)
+            for k, v in scope.get("headers", [])
+        )
+        has_session_id = "mcp-session-id" in headers
+
+        if not has_session_id:
+            logger.info(
+                "GET /mcp without Mcp-Session-Id — allowing SSE stream "
+                "for seamless reconnection after server restart",
+            )
+
+        # Note: for SSE streams, ``await self.app()`` blocks until the
+        # client disconnects.  We must react in the send wrapper when
+        # we see the response status, not after the await returns.
+        get_handled = False
+        get_is_sse = False  # set True once we confirm a 200 SSE stream
+
+        cls = _CapabilityDetectionMiddleware
+
+        async def _capture_get_send(message):
+            nonlocal get_handled, get_is_sse
+            if message["type"] == "http.response.start" and not get_handled:
+                get_handled = True
+                status = message.get("status", 0)
+                if status in (400, 404):
+                    if cls._invalidate_stale_session():
+                        await self._notify_session_changed(False)
+                elif status == 200:
+                    get_is_sse = True
+                    cls._active_sse_streams += 1
+                    if not has_session_id:
+                        # Successful session-less GET = client reconnecting
+                        # after server restart.  Optimistically assume
+                        # sampling-capable (the client was previously
+                        # connected and is re-establishing its SSE stream).
+                        cls._write_optimistic_session()
+                        await self._notify_session_changed(True, reconnected=True)
+            elif message["type"] == "http.response.body" and get_is_sse:
+                # SSE stream is alive — keep last_activity fresh so the
+                # health endpoint doesn't report a false disconnect.
+                cls._touch_activity()
+            await send(message)
+
+        # Track the SSE stream lifetime. get_is_sse is set to True
+        # inside _capture_get_send when we see a 200 response start.
+        # We increment _after_ the response starts (inside the wrapper)
+        # and decrement when the stream ends (self.app returns).
+        try:
+            await self.app(scope, receive, _capture_get_send)
+        finally:
+            if get_is_sse:
+                cls._active_sse_streams = max(0, cls._active_sse_streams - 1)
+                cls._flush_sse_streams()
+                if cls._active_sse_streams == 0:
+                    logger.info("Last SSE stream closed — client disconnected")
+                    # asyncio.shield protects from task cancellation
+                    # (uvicorn cancels the handler when the client
+                    # disconnects, CancelledError is BaseException).
+                    try:
+                        await asyncio.shield(
+                            self._notify_session_changed(True, disconnected=True),
+                        )
+                        logger.info("Disconnect event published to backend")
+                    except BaseException:
+                        logger.warning("Failed to publish disconnect event", exc_info=True)
 
     @classmethod
     def _flush_sse_streams(cls) -> None:
@@ -418,16 +384,12 @@ class _CapabilityDetectionMiddleware:
         health endpoint detects the disconnect via the normal staleness check.
         """
         try:
-            path = DATA_DIR / "mcp_session.json"
-            if not path.exists():
-                return
-            data = _json.loads(path.read_text(encoding="utf-8"))
-            data["sse_streams"] = cls._active_sse_streams
+            fields: dict = {"sse_streams": cls._active_sse_streams}
             # Only refresh activity if streams are still active; otherwise
             # let staleness detection handle the disconnect.
             if cls._active_sse_streams > 0:
-                data["last_activity"] = datetime.now(timezone.utc).isoformat()
-            path.write_text(_json.dumps(data), encoding="utf-8")
+                fields["last_activity"] = datetime.now(timezone.utc).isoformat()
+            _session_file.update(**fields)
         except Exception:
             logger.debug("_flush_sse_streams: could not update mcp_session.json", exc_info=True)
 
@@ -441,17 +403,7 @@ class _CapabilityDetectionMiddleware:
         POST ``initialize`` the middleware will overwrite with the actual value.
         """
         try:
-            path = DATA_DIR / "mcp_session.json"
-            now = datetime.now(timezone.utc).isoformat()
-            path.write_text(
-                _json.dumps({
-                    "sampling_capable": True,
-                    "written_at": now,
-                    "last_activity": now,
-                    "sse_streams": cls._active_sse_streams,
-                }),
-                encoding="utf-8",
-            )
+            _session_file.write_session(True, sse_streams=cls._active_sse_streams)
             logger.info(
                 "Optimistic session write: sampling_capable=True "
                 "(session-less GET succeeded — client reconnecting)",
@@ -470,19 +422,13 @@ class _CapabilityDetectionMiddleware:
 
         Returns ``True`` if a file was actually removed.
         """
-        path = DATA_DIR / "mcp_session.json"
-        if not path.exists():
-            return False
-        try:
-            path.unlink()
+        removed = _session_file.delete()
+        if removed:
             logger.info(
                 "Stale session cleanup: removed mcp_session.json after failed "
                 "client reconnection (400/404)",
             )
-            return True
-        except Exception:
-            logger.debug("Could not remove stale mcp_session.json", exc_info=True)
-            return False
+        return removed
 
     @classmethod
     def _touch_activity(cls) -> bool:
@@ -499,29 +445,24 @@ class _CapabilityDetectionMiddleware:
             return False
         cls._last_activity_write = now_mono
         try:
-            path = DATA_DIR / "mcp_session.json"
-            if not path.exists():
+            data = _session_file.read()
+            if data is None:
                 return False
-            data = _json.loads(path.read_text(encoding="utf-8"))
-            now_utc = datetime.now(timezone.utc)
 
             # Detect reconnection: previous activity was stale AND session was sampling-capable
-            reconnected = False
-            prev_activity_str = data.get("last_activity")
-            if prev_activity_str and data.get("sampling_capable") is True:
-                prev_activity = datetime.fromisoformat(prev_activity_str)
-                gap = (now_utc - prev_activity).total_seconds()
-                if gap > MCP_ACTIVITY_STALENESS_SECONDS:
-                    reconnected = True
-                    logger.info(
-                        "MCP client reconnected after %ds inactivity (threshold %.0fs)",
-                        int(gap),
-                        MCP_ACTIVITY_STALENESS_SECONDS,
-                    )
+            reconnected = (
+                data.get("sampling_capable") is True
+                and MCPSessionFile.is_activity_stale(data)
+            )
+            if reconnected:
+                logger.info(
+                    "MCP client reconnected after activity staleness (threshold %.0fs)",
+                    MCP_ACTIVITY_STALENESS_SECONDS,
+                )
 
-            data["last_activity"] = now_utc.isoformat()
+            data["last_activity"] = datetime.now(timezone.utc).isoformat()
             data["sse_streams"] = cls._active_sse_streams
-            path.write_text(_json.dumps(data), encoding="utf-8")
+            _session_file.write(data)
             return reconnected
         except Exception:
             logger.debug("_touch_activity: could not update mcp_session.json", exc_info=True)
@@ -549,7 +490,6 @@ class _CapabilityDetectionMiddleware:
             caps = params.get("capabilities", {})
             client_info = params.get("clientInfo", {})
             sampling = caps.get("sampling") is not None
-            path = DATA_DIR / "mcp_session.json"
 
             logger.info(
                 "Capability detection middleware: initialize from %s/%s — "
@@ -562,31 +502,15 @@ class _CapabilityDetectionMiddleware:
             )
 
             # Optimistic: never downgrade a fresh True to False
-            if not sampling and path.exists():
-                try:
-                    existing = _json.loads(path.read_text(encoding="utf-8"))
-                    if existing.get("sampling_capable") is True:
-                        written = datetime.fromisoformat(existing["written_at"])
-                        if datetime.now(timezone.utc) - written <= timedelta(minutes=MCP_CAPABILITY_STALENESS_MINUTES):
-                            logger.info(
-                                "Capability detection middleware: ignoring False — "
-                                "fresh True already on file (age=%ds, client=%s)",
-                                (datetime.now(timezone.utc) - written).total_seconds(),
-                                client_info.get("name", "unknown"),
-                            )
-                            return None
-                except Exception:
-                    pass  # corrupt file — overwrite it
+            if not sampling and _session_file.should_skip_downgrade():
+                logger.info(
+                    "Capability detection middleware: ignoring False — "
+                    "fresh True already on file (client=%s)",
+                    client_info.get("name", "unknown"),
+                )
+                return None
 
-            now = datetime.now(timezone.utc).isoformat()
-            path.write_text(
-                _json.dumps({
-                    "sampling_capable": sampling,
-                    "written_at": now,
-                    "last_activity": now,
-                }),
-                encoding="utf-8",
-            )
+            _session_file.write_session(sampling)
             logger.info(
                 "Capability detection middleware: wrote sampling_capable=%s (client=%s/%s)",
                 sampling,
@@ -1489,13 +1413,8 @@ def _clear_stale_session() -> None:
     ``sampling_capable=true`` from the old session until the 30-minute
     staleness window expires.
     """
-    mcp_session_path = DATA_DIR / "mcp_session.json"
-    if mcp_session_path.exists():
-        try:
-            mcp_session_path.unlink()
-            logger.info("Startup: cleared stale mcp_session.json")
-        except Exception:
-            logger.debug("Startup: could not remove mcp_session.json", exc_info=True)
+    if _session_file.delete():
+        logger.info("Startup: cleared stale mcp_session.json")
 
 
 if __name__ == "__main__":
