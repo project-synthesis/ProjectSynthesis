@@ -8,6 +8,7 @@ export default defineConfig({
 		port: 5199,
 	},
 	test: {
+		globals: true,
 		environment: 'jsdom',
 		setupFiles: ['./src/lib/test-setup.ts'],
 		include: ['src/**/*.test.ts'],
