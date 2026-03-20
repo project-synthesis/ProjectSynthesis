@@ -543,7 +543,7 @@ analyze --> domain_mapping --> optimize --> score
         (synchronous)                  (background task)
 ```
 
-Warm-path triggered every `warm_path_interval` (default 10) optimizations, plus a 5-minute background timer. Both triggers are deduplicated via `_warm_path_running` flag (see Section 2.6).
+Warm-path triggered every `warm_path_interval` (default 10) optimizations, plus a 5-minute background timer. Both triggers are deduplicated via `_warm_path_lock.locked()` check (see Section 2.6).
 
 **`process_optimization()` responsibilities (replaces `PatternExtractorService.process()`):**
 
@@ -1040,7 +1040,7 @@ The full lifecycle with all gaps bridged:
 
 ## 8. 3D Visualization Engine
 
-### 7.1 Component Architecture
+### 8.1 Component Architecture
 
 ```
 SemanticTopology.svelte (orchestrator)
@@ -1054,7 +1054,7 @@ SemanticTopology.svelte (orchestrator)
 
 Replaces `RadialMindmap.svelte`. Same editor tab slot (`activity_type: 'patterns'`), renders `<canvas>` instead of `<svg>`.
 
-### 7.2 Scene Graph Layers
+### 8.2 Scene Graph Layers
 
 | Layer | Content | Material | Performance |
 |-------|---------|----------|-------------|
@@ -1063,7 +1063,7 @@ Replaces `RadialMindmap.svelte`. Same editor tab slot (`activity_type: 'patterns
 | **Edges** | `LineSegments` | `LineBasicMaterial` | Hierarchical: always visible. Similarity (>=0.55): mid/near LOD only. |
 | **Labels** | `Sprite` with canvas textures | `SpriteMaterial` | Near LOD only. 64px monospace on power-of-2 canvas. |
 
-### 7.3 Semantic Zoom
+### 8.3 Semantic Zoom
 
 Zooming is hierarchy navigation, not magnification:
 
@@ -1073,7 +1073,7 @@ Zooming is hierarchy navigation, not magnification:
 
 `persistence` visibility threshold scales linearly with camera distance.
 
-### 7.4 Navigation
+### 8.4 Navigation
 
 | Action | Input | Behavior |
 |---|---|---|
@@ -1084,7 +1084,7 @@ Zooming is hierarchy navigation, not magnification:
 | Ascend | Click volume / Escape | Up one level. Focus parent. |
 | Search | Ctrl+F | Highlight matches, animate to best. |
 
-### 7.5 UMAP Projection
+### 8.5 UMAP Projection
 
 Backend: `umap.UMAP(n_components=3, metric="cosine", low_memory=True, random_state=42)`. Runs in thread pool executor. Incremental `transform()` for new points (O(k), not O(n) refit). Positions cached on `TaxonomyNode.umap_x/y/z`.
 
@@ -1092,7 +1092,7 @@ Backend: `umap.UMAP(n_components=3, metric="cosine", low_memory=True, random_sta
 
 Frontend: Web Worker applies 50-iteration force settling for local collision resolution. Scene renders immediately with UMAP positions, then animates to settled positions (~50-100ms for 500 nodes).
 
-### 7.6 Generative Color System
+### 8.6 Generative Color System
 
 Colors derived from 3D UMAP position in OKLab perceptual space:
 
@@ -1135,7 +1135,7 @@ Properties:
 - Dark-background optimized (L=0.72 guarantees WCAG AA contrast against `#06060c`)
 - Neon register alignment (a/b ranges favor cyan/magenta/amber)
 
-### 7.7 Performance Budget
+### 8.7 Performance Budget
 
 Target: 60fps on integrated graphics with up to 2000 nodes in the taxonomy tree, with up to 500 visible at any given zoom level (semantic zoom culls by persistence).
 
@@ -1150,7 +1150,7 @@ Target: 60fps on integrated graphics with up to 2000 nodes in the taxonomy tree,
 
 Progressive fallback: if frame time > 20ms consistently, reduce LOD thresholds -> disable similarity edges -> reduce volume tessellation -> cap visible nodes at 500.
 
-### 7.8 Animated Transitions
+### 8.8 Animated Transitions
 
 | Event | Animation |
 |---|---|
@@ -1534,7 +1534,6 @@ Auto-trigger cold-path when `Q_system < 0.4`.
 - `backend/app/services/pipeline.py` (add domain mapping step)
 - `backend/app/services/sampling_pipeline.py` (free-text domain, mapping)
 - `backend/app/services/knowledge_graph.py` (trim domain logic, read from taxonomy)
-- `backend/app/services/pattern_matcher.py` (taxonomy_node_id instead of domain string)
 - `backend/app/routers/patterns.py` (taxonomy-based filtering, modified endpoints)
 - `backend/app/models.py` (new TaxonomyNode/TaxonomySnapshot models, modify PatternFamily/Optimization)
 - `backend/app/main.py` (TaxonomyEngine startup, event subscriptions)
@@ -1631,17 +1630,17 @@ Issues identified by spec review and resolved in this document:
 | C1 | Critical | Non-regression invariant can deadlock | Epsilon tolerance + compound ops + deadlock breaker (Section 2.5) |
 | C2 | Critical | Warm/hot path race condition | asyncio.Lock + centroid snapshot + stale reassignment (Section 2.6) |
 | C3 | Critical | DBCV weight ramp creates Q_system discontinuity | Constant-sum weight normalization (Section 2.5) |
-| I1 | Important | LTTB triangle area uses wrong x-coordinate | Fixed to use next-bucket midpoint (Section 9.1) |
-| I2 | Important | OKLab gamut insufficient for 30+ clusters | Extended to +/-0.20, added deltaE enforcement (Section 7.6) |
-| I3 | Important | Missing warm-path deduplication | _warm_path_running flag (Section 2.6) |
+| I1 | Important | LTTB triangle area uses wrong x-coordinate | Fixed to use next-bucket midpoint (Section 10.1) |
+| I2 | Important | OKLab gamut insufficient for 30+ clusters | Extended to +/-0.20, added deltaE enforcement (Section 8.6) |
+| I3 | Important | Missing warm-path deduplication | Lock.locked() check (Section 2.6) |
 | I4 | Important | Retire threshold too aggressive for low-activity | Adaptive: max(20, 3*age_days), 7-day minimum age (Section 3.4) |
-| I5 | Important | Cold-path UMAP refit destroys spatial model | Procrustes alignment (Section 7.5) |
+| I5 | Important | Cold-path UMAP refit destroys spatial model | Procrustes alignment (Section 8.5) |
 | I6 | Important | PatternMatcher response schema unspecified | Explicit schema with breadcrumb (Section 6.8) |
-| S1 | Suggestion | Performance "2000 nodes" misleading | Clarified: 2000 in data, 500 visible (Section 7.7) |
+| S1 | Suggestion | Performance "2000 nodes" misleading | Clarified: 2000 in data, 500 visible (Section 8.7) |
 | S2 | Suggestion | Unbounded snapshot growth | Retention policy: 24h/daily/weekly pruning (Section 5.2) |
 | S4 | Suggestion | MCP server integration unspecified | Hot-path-only engine instance (Section 6.7) |
 | S5 | Suggestion | process_optimization() responsibilities unclear | Explicit 6-step list (Section 6.4) |
-| S6 | Suggestion | Trend normalization clusters near 0 | Percentage-of-mean normalization (Section 9.1) |
+| S6 | Suggestion | Trend normalization clusters near 0 | Percentage-of-mean normalization (Section 10.1) |
 
 **Second-pass findings (all addressed):**
 
@@ -1650,4 +1649,4 @@ Issues identified by spec review and resolved in this document:
 | N4 | Important | MCP server centroid cache never refreshed | Explicit invalidation via taxonomy_changed SSE (Section 6.7) |
 | N3 | Suggestion | Deadlock breaker scheduling mechanism unspecified | asyncio.create_task after lock release (Section 2.5) |
 | N5 | Suggestion | _warm_path_running redundant with Lock.locked() | Eliminated separate boolean (Section 2.6) |
-| I5+ | Suggestion | scipy.spatial.procrustes returns standardized matrices | Use scipy.linalg.orthogonal_procrustes for direct R matrix (Section 7.5) |
+| I5+ | Suggestion | scipy.spatial.procrustes returns standardized matrices | Use scipy.linalg.orthogonal_procrustes for direct R matrix (Section 8.5) |
