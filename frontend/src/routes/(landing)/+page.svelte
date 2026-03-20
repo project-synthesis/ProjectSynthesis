@@ -1261,7 +1261,7 @@
      SECTION 5: GET STARTED + TRUST
      ================================================================ */
   .trust-section {
-    padding: 140px 16px;
+    padding: 60px 16px;
     background: var(--color-bg-secondary);
     border-top: 1px solid var(--color-neon-cyan);
     display: flex;
