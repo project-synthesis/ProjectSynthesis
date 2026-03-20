@@ -16,7 +16,7 @@
           }
         }
       },
-      { threshold: 0.25, rootMargin: '0px 0px -10% 0px' }
+      { threshold: 0.25, rootMargin: '0px 0px -100px 0px' }
     );
 
     requestAnimationFrame(() => {
@@ -1246,7 +1246,7 @@
   .trust-section {
     padding: 140px 16px;
     background: var(--color-bg-secondary);
-    border-top: 1px solid; border-color: var(--color-neon-cyan);
+    border-top: 1px solid var(--color-neon-cyan);
     min-height: 85vh;
     display: flex;
     flex-direction: column;
