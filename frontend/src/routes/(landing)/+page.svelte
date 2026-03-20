@@ -16,7 +16,7 @@
           }
         }
       },
-      { threshold: 0.15, rootMargin: '0px 0px -40px 0px' }
+      { threshold: 0.25, rootMargin: '0px 0px -10% 0px' }
     );
 
     requestAnimationFrame(() => {
@@ -76,7 +76,8 @@
 
 <Navbar />
 
-<main id="main-content">
+<main id="main-content" style="position: relative;">
+  <div class="journey-spine"></div>
   <!-- ============================================================ -->
   <!-- SECTION 1: HERO                                              -->
   <!-- ============================================================ -->
@@ -579,8 +580,25 @@
   /* ================================================================
      SECTION 1: HERO
      ================================================================ */
+  .journey-spine {
+    position: absolute;
+    left: 50%;
+    top: 50vh;
+    bottom: 15vh;
+    width: 1px;
+    background: linear-gradient(to bottom, var(--color-bg-primary) 0%, rgba(0, 229, 255, 0.3) 10%, rgba(168, 85, 247, 0.3) 90%, var(--color-bg-primary) 100%);
+    transform: translateX(-50%);
+    z-index: -1;
+    pointer-events: none;
+  }
+
   .hero {
-    padding: 64px 16px 32px;
+    padding: 140px 16px 40px;
+    min-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
   }
 
   .hero__container {
@@ -731,7 +749,12 @@
      SECTION 2: PIPELINE DEEP-DIVE
      ================================================================ */
   .pipeline-section {
-    padding: 40px 16px;
+    padding: 140px 16px;
+    min-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
   }
 
   .pipeline-heading {
@@ -835,7 +858,12 @@
      SECTION 3: LIVE EXAMPLE
      ================================================================ */
   .section {
-    padding: 40px 16px;
+    padding: 140px 16px;
+    min-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
   }
 
   .example-heading {
@@ -1216,9 +1244,15 @@
      SECTION 5: GET STARTED + TRUST
      ================================================================ */
   .trust-section {
-    padding: 40px 16px;
+    padding: 140px 16px;
     background: var(--color-bg-secondary);
     border-top: 1px solid; border-color: var(--color-neon-cyan);
+    min-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    position: relative;
   }
 
   .trust-mission {
