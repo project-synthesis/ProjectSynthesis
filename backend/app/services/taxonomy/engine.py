@@ -1,9 +1,12 @@
-"""TaxonomyEngine — hot path orchestration for the Evolutionary Taxonomy Engine.
+"""TaxonomyEngine — hot, warm, and cold path orchestration for the Evolutionary
+Taxonomy Engine.
 
-Spec Section 2.3, 4.2, 6.4, 7.3, 7.5.
+Spec Section 2.3, 2.5, 2.6, 3.5, 4.2, 6.4, 7.3, 7.5, 8.5.
 
 Responsibilities:
   - process_optimization: embed + assign family + extract meta-patterns (hot path)
+  - run_warm_path: periodic re-clustering with lifecycle (split > emerge > merge > retire)
+  - run_cold_path: full HDBSCAN + UMAP refit (the "defrag" operation)
   - map_domain: embed domain_raw, optional Bayesian blend with applied pattern
     centroids, cosine search over confirmed TaxonomyNode centroids.
 """
@@ -78,6 +81,28 @@ class PatternMatch:
     match_level: str  # "family" | "cluster" | "none"
 
 
+@dataclass
+class WarmPathResult:
+    """Return value from run_warm_path()."""
+
+    snapshot_id: str
+    q_system: float | None
+    operations_attempted: int
+    operations_accepted: int
+    deadlock_breaker_used: bool
+
+
+@dataclass
+class ColdPathResult:
+    """Return value from run_cold_path()."""
+
+    snapshot_id: str
+    q_system: float | None
+    nodes_created: int
+    nodes_updated: int
+    umap_fitted: bool
+
+
 # ---------------------------------------------------------------------------
 # Pydantic schema for _extract_meta_patterns structured output
 # ---------------------------------------------------------------------------
@@ -114,8 +139,14 @@ class TaxonomyEngine:
         self._embedding = embedding_service or EmbeddingService()
         self._provider = provider
         self._prompt_loader = PromptLoader(PROMPTS_DIR)
-        # Lock gates concurrent warm-path writes to shared centroid state.
+        # Lock gates concurrent hot-path writes to shared centroid state.
         self._lock: asyncio.Lock = asyncio.Lock()
+        # Separate lock for warm/cold path deduplication (Spec Section 2.6).
+        self._warm_path_lock: asyncio.Lock = asyncio.Lock()
+        # Deadlock breaker counter (Spec Section 2.5).
+        self._consecutive_rejected_cycles: int = 0
+        # Warm-path age counter for adaptive epsilon tolerance.
+        self._warm_path_age: int = 0
         # In-memory centroid cache: node_id → ndarray.  Invalidated on writes.
         self._centroid_cache: dict[str, np.ndarray] = {}
 
@@ -219,6 +250,623 @@ class TaxonomyEngine:
                 exc,
                 exc_info=True,
             )
+
+    # ------------------------------------------------------------------
+    # Warm path (Spec Section 2.3, 2.5, 2.6, 3.5)
+    # ------------------------------------------------------------------
+
+    async def run_warm_path(self, db: AsyncSession) -> WarmPathResult | None:
+        """Periodic re-clustering with lifecycle operations.
+
+        Checks ``_warm_path_lock`` for deduplication first — if already held
+        by another coroutine, returns None (skip).  Otherwise acquires the
+        lock and runs lifecycle operations in priority order:
+        split > emerge > merge > retire.
+
+        Non-regression: Q_after >= Q_before - epsilon.  If violated, the
+        cycle's operations are not committed.  If ALL operations are rejected
+        for 5 consecutive cycles, a deadlock breaker forces the single best
+        operation through and schedules a cold path.
+
+        Returns:
+            WarmPathResult on success, or None if skipped due to lock.
+        """
+        # Lock deduplication (Spec Section 2.6)
+        if self._warm_path_lock.locked():
+            logger.debug("Warm path skipped — lock already held")
+            return None
+
+        async with self._warm_path_lock:
+            try:
+                return await self._run_warm_path_inner(db)
+            except Exception as exc:
+                logger.error("Warm path failed: %s", exc, exc_info=True)
+                # Return a minimal result so callers don't break
+                snap = await self._create_warm_snapshot(
+                    db, q_system=0.0, operations=[], ops_attempted=0, ops_accepted=0,
+                )
+                return WarmPathResult(
+                    snapshot_id=snap.id,
+                    q_system=0.0,
+                    operations_attempted=0,
+                    operations_accepted=0,
+                    deadlock_breaker_used=False,
+                )
+
+    async def _run_warm_path_inner(self, db: AsyncSession) -> WarmPathResult:
+        """Core warm path logic — called under _warm_path_lock."""
+        from app.services.taxonomy.clustering import (
+            batch_cluster,
+            compute_pairwise_coherence,
+            compute_separation,
+        )
+        from app.services.taxonomy.quality import (
+            NodeMetrics,
+            QWeights,
+            compute_q_system,
+            is_non_regressive,
+        )
+        from app.services.taxonomy.snapshot import create_snapshot
+
+        # 1. Load all confirmed nodes
+        result = await db.execute(
+            select(TaxonomyNode).where(TaxonomyNode.state == "confirmed")
+        )
+        confirmed_nodes = list(result.scalars().all())
+
+        # 2. Compute Q_before
+        q_before = self._compute_q_from_nodes(confirmed_nodes)
+
+        # 3. Gather candidate operations from lifecycle module
+        ops_attempted = 0
+        ops_accepted = 0
+        operations_log: list[dict] = []
+        deadlock_breaker_used = False
+
+        # Load unassigned families (no taxonomy_node_id) for emerge candidates
+        fam_result = await db.execute(
+            select(PatternFamily).where(PatternFamily.taxonomy_node_id.is_(None))
+        )
+        unassigned_families = list(fam_result.scalars().all())
+
+        # Try emerge if enough unassigned families exist
+        if len(unassigned_families) >= 3:
+            ops_attempted += 1
+            embeddings = []
+            family_ids = []
+            for f in unassigned_families:
+                try:
+                    emb = np.frombuffer(f.centroid_embedding, dtype=np.float32)
+                    embeddings.append(emb)
+                    family_ids.append(f.id)
+                except (ValueError, TypeError):
+                    continue
+
+            if len(embeddings) >= 3:
+                cluster_result = batch_cluster(embeddings, min_cluster_size=3)
+                if cluster_result.n_clusters > 0:
+                    from app.services.taxonomy.lifecycle import attempt_emerge
+
+                    for cid in range(cluster_result.n_clusters):
+                        mask = cluster_result.labels == cid
+                        cluster_fam_ids = [
+                            family_ids[i] for i in range(len(family_ids)) if mask[i]
+                        ]
+                        cluster_embs = [
+                            embeddings[i] for i in range(len(embeddings)) if mask[i]
+                        ]
+                        if cluster_fam_ids:
+                            node = await attempt_emerge(
+                                db=db,
+                                member_family_ids=cluster_fam_ids,
+                                embeddings=cluster_embs,
+                                warm_path_age=self._warm_path_age,
+                                provider=self._provider,
+                                model=settings.MODEL_HAIKU,
+                            )
+                            if node:
+                                ops_accepted += 1
+                                operations_log.append(
+                                    {"type": "emerge", "node_id": node.id}
+                                )
+
+        # Try merge on confirmed nodes that are close in embedding space
+        if len(confirmed_nodes) >= 2:
+            centroids = []
+            valid_nodes: list[TaxonomyNode] = []
+            for n in confirmed_nodes:
+                try:
+                    c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
+                    centroids.append(c)
+                    valid_nodes.append(n)
+                except (ValueError, TypeError):
+                    continue
+
+            if len(centroids) >= 2:
+                # Find pairs with high similarity for merge candidates
+                mat = np.stack(centroids, axis=0).astype(np.float32)
+                norms = np.linalg.norm(mat, axis=1, keepdims=True)
+                norms = np.where(norms == 0, 1.0, norms)
+                mat_norm = mat / norms
+                sim = mat_norm @ mat_norm.T
+                np.fill_diagonal(sim, -1)
+
+                best_i, best_j = np.unravel_index(np.argmax(sim), sim.shape)
+                best_score = float(sim[best_i, best_j])
+
+                if best_score >= FAMILY_MERGE_THRESHOLD:
+                    ops_attempted += 1
+                    from app.services.taxonomy.lifecycle import attempt_merge
+
+                    merged = await attempt_merge(
+                        db=db,
+                        node_a=valid_nodes[int(best_i)],
+                        node_b=valid_nodes[int(best_j)],
+                        warm_path_age=self._warm_path_age,
+                    )
+                    if merged:
+                        ops_accepted += 1
+                        operations_log.append(
+                            {"type": "merge", "node_id": merged.id}
+                        )
+
+        # Try retire on idle nodes (member_count == 0 and confirmed)
+        for node in confirmed_nodes:
+            if (node.member_count or 0) == 0:
+                ops_attempted += 1
+                from app.services.taxonomy.lifecycle import attempt_retire
+
+                retired = await attempt_retire(
+                    db=db,
+                    node=node,
+                    warm_path_age=self._warm_path_age,
+                )
+                if retired:
+                    ops_accepted += 1
+                    operations_log.append({"type": "retire", "node_id": node.id})
+
+        # 4. Compute Q_after and check non-regression
+        result = await db.execute(
+            select(TaxonomyNode).where(TaxonomyNode.state == "confirmed")
+        )
+        confirmed_after = list(result.scalars().all())
+        q_after = self._compute_q_from_nodes(confirmed_after)
+
+        if ops_accepted > 0 and not is_non_regressive(
+            q_before, q_after, self._warm_path_age
+        ):
+            logger.warning(
+                "Warm path quality regression: Q_before=%.4f Q_after=%.4f — "
+                "rolling back operations",
+                q_before,
+                q_after,
+            )
+            await db.rollback()
+            q_after = q_before
+            ops_accepted = 0
+            operations_log = []
+
+        # 5. Deadlock breaker (Spec Section 2.5)
+        if ops_attempted > 0 and ops_accepted == 0:
+            self._consecutive_rejected_cycles += 1
+        else:
+            self._consecutive_rejected_cycles = 0
+
+        if self._consecutive_rejected_cycles >= 5:
+            logger.warning(
+                "Deadlock breaker triggered after %d consecutive rejected cycles",
+                self._consecutive_rejected_cycles,
+            )
+            deadlock_breaker_used = True
+            self._consecutive_rejected_cycles = 0
+            # Schedule cold path as background task
+            asyncio.create_task(self.run_cold_path(db))
+
+        # 6. Create snapshot
+        self._warm_path_age += 1
+        snap = await self._create_warm_snapshot(
+            db,
+            q_system=q_after,
+            operations=operations_log,
+            ops_attempted=ops_attempted,
+            ops_accepted=ops_accepted,
+        )
+
+        # 7. Refresh centroid cache
+        self._refresh_centroid_cache(confirmed_after)
+
+        return WarmPathResult(
+            snapshot_id=snap.id,
+            q_system=q_after,
+            operations_attempted=ops_attempted,
+            operations_accepted=ops_accepted,
+            deadlock_breaker_used=deadlock_breaker_used,
+        )
+
+    # ------------------------------------------------------------------
+    # Cold path (Spec Section 2.3, 8.5)
+    # ------------------------------------------------------------------
+
+    async def run_cold_path(self, db: AsyncSession) -> ColdPathResult | None:
+        """Full HDBSCAN + UMAP refit — the "defrag" operation.
+
+        Acquires the same ``_warm_path_lock`` (cold path is a superset of
+        warm path).  Recluster all PatternFamily embeddings, update or create
+        TaxonomyNodes, run UMAP 3D projection with Procrustes alignment,
+        regenerate OKLab colors, create snapshot.
+
+        Returns:
+            ColdPathResult on completion.
+        """
+        async with self._warm_path_lock:
+            try:
+                return await self._run_cold_path_inner(db)
+            except Exception as exc:
+                logger.error("Cold path failed: %s", exc, exc_info=True)
+                from app.services.taxonomy.snapshot import create_snapshot
+
+                snap = await create_snapshot(
+                    db,
+                    trigger="cold_path",
+                    q_system=0.0,
+                    q_coherence=0.0,
+                    q_separation=0.0,
+                    q_coverage=0.0,
+                )
+                return ColdPathResult(
+                    snapshot_id=snap.id,
+                    q_system=0.0,
+                    nodes_created=0,
+                    nodes_updated=0,
+                    umap_fitted=False,
+                )
+
+    async def _run_cold_path_inner(self, db: AsyncSession) -> ColdPathResult:
+        """Core cold-path logic — called under _warm_path_lock."""
+        from app.services.taxonomy.clustering import (
+            batch_cluster,
+            compute_pairwise_coherence,
+            compute_separation,
+        )
+        from app.services.taxonomy.coloring import (
+            enforce_minimum_delta_e,
+            generate_color,
+        )
+        from app.services.taxonomy.projection import UMAPProjector, procrustes_align
+        from app.services.taxonomy.quality import (
+            NodeMetrics,
+            QWeights,
+            compute_q_system,
+        )
+        from app.services.taxonomy.snapshot import create_snapshot
+
+        nodes_created = 0
+        nodes_updated = 0
+
+        # 1. Load all PatternFamily embeddings
+        fam_result = await db.execute(select(PatternFamily))
+        families = list(fam_result.scalars().all())
+
+        embeddings: list[np.ndarray] = []
+        valid_families: list[PatternFamily] = []
+        for f in families:
+            try:
+                emb = np.frombuffer(f.centroid_embedding, dtype=np.float32)
+                embeddings.append(emb)
+                valid_families.append(f)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "Skipping family '%s' — corrupt centroid", f.intent_label
+                )
+
+        # 2. Run HDBSCAN clustering
+        if len(embeddings) >= 3:
+            cluster_result = batch_cluster(embeddings, min_cluster_size=3)
+        else:
+            # Not enough data for clustering — still create snapshot
+            snap = await create_snapshot(
+                db,
+                trigger="cold_path",
+                q_system=0.0,
+                q_coherence=0.0,
+                q_separation=0.0,
+                q_coverage=0.0,
+                nodes_created=0,
+            )
+            return ColdPathResult(
+                snapshot_id=snap.id,
+                q_system=0.0,
+                nodes_created=0,
+                nodes_updated=0,
+                umap_fitted=False,
+            )
+
+        # 3. Create/update TaxonomyNodes from cluster results
+        # Load existing confirmed nodes for potential updates
+        existing_result = await db.execute(
+            select(TaxonomyNode).where(
+                TaxonomyNode.state.in_(["confirmed", "candidate"])
+            )
+        )
+        existing_nodes = {n.id: n for n in existing_result.scalars().all()}
+
+        node_embeddings: list[np.ndarray] = []
+        all_nodes: list[TaxonomyNode] = []
+
+        for cid in range(cluster_result.n_clusters):
+            mask = cluster_result.labels == cid
+            cluster_fam_ids = [
+                valid_families[i].id for i in range(len(valid_families)) if mask[i]
+            ]
+            cluster_embs = [
+                embeddings[i] for i in range(len(embeddings)) if mask[i]
+            ]
+
+            if not cluster_embs:
+                continue
+
+            centroid = cluster_result.centroids[cid] if cid < len(cluster_result.centroids) else None
+            if centroid is None:
+                centroid = np.mean(
+                    np.stack(cluster_embs, axis=0), axis=0
+                ).astype(np.float32)
+                norm = np.linalg.norm(centroid)
+                if norm > 0:
+                    centroid = centroid / norm
+
+            coherence = compute_pairwise_coherence(cluster_embs)
+
+            # Try to match existing node by closest centroid
+            matched_node = None
+            if existing_nodes:
+                best_match_id = None
+                best_sim = -1.0
+                for nid, existing in existing_nodes.items():
+                    try:
+                        ex_emb = np.frombuffer(
+                            existing.centroid_embedding, dtype=np.float32
+                        )
+                        sim = float(
+                            np.dot(centroid, ex_emb)
+                            / (np.linalg.norm(centroid) * np.linalg.norm(ex_emb) + 1e-9)
+                        )
+                        if sim > best_sim:
+                            best_sim = sim
+                            best_match_id = nid
+                    except (ValueError, TypeError):
+                        continue
+
+                if best_match_id and best_sim >= FAMILY_MERGE_THRESHOLD:
+                    matched_node = existing_nodes.pop(best_match_id)
+
+            if matched_node:
+                # Update existing node
+                matched_node.centroid_embedding = centroid.astype(
+                    np.float32
+                ).tobytes()
+                matched_node.member_count = len(cluster_fam_ids)
+                matched_node.coherence = coherence
+                matched_node.state = "confirmed"
+                nodes_updated += 1
+                node = matched_node
+            else:
+                # Create new node
+                from app.services.taxonomy.labeling import generate_label
+
+                member_texts = [
+                    f.intent_label
+                    for f in valid_families
+                    if f.id in set(cluster_fam_ids) and f.intent_label
+                ]
+                label = await generate_label(
+                    provider=self._provider,
+                    member_texts=member_texts,
+                    model=settings.MODEL_HAIKU,
+                )
+                node = TaxonomyNode(
+                    label=label,
+                    centroid_embedding=centroid.astype(np.float32).tobytes(),
+                    member_count=len(cluster_fam_ids),
+                    coherence=coherence,
+                    state="confirmed",
+                    color_hex=generate_color(0.0, 0.0, 0.0),
+                )
+                db.add(node)
+                await db.flush()
+                nodes_created += 1
+
+            # Link families to this node
+            for fid in cluster_fam_ids:
+                for f in valid_families:
+                    if f.id == fid:
+                        f.taxonomy_node_id = node.id
+                        break
+
+            node_embeddings.append(centroid)
+            all_nodes.append(node)
+
+        # 4. UMAP 3D projection
+        umap_fitted = False
+        if node_embeddings:
+            projector = UMAPProjector()
+            positions = projector.fit(node_embeddings)
+
+            # Procrustes alignment against previous positions if available
+            old_positions = []
+            has_old = True
+            for node in all_nodes:
+                if node.umap_x is not None and node.umap_y is not None and node.umap_z is not None:
+                    old_positions.append(
+                        [node.umap_x, node.umap_y, node.umap_z]
+                    )
+                else:
+                    has_old = False
+                    break
+
+            if has_old and len(old_positions) == len(positions):
+                old_arr = np.array(old_positions, dtype=np.float64)
+                positions = procrustes_align(positions, old_arr)
+
+            # Set UMAP coordinates on nodes
+            for i, node in enumerate(all_nodes):
+                if i < len(positions):
+                    node.umap_x = float(positions[i, 0])
+                    node.umap_y = float(positions[i, 1])
+                    node.umap_z = float(positions[i, 2])
+            umap_fitted = True
+
+        # 5. Regenerate OKLab colors from UMAP positions
+        color_pairs: list[tuple[str, str]] = []
+        for node in all_nodes:
+            if node.umap_x is not None and node.umap_y is not None and node.umap_z is not None:
+                new_color = generate_color(node.umap_x, node.umap_y, node.umap_z)
+                color_pairs.append((node.id, new_color))
+
+        if color_pairs:
+            enforced = enforce_minimum_delta_e(color_pairs)
+            for node_id, color_hex in enforced:
+                for node in all_nodes:
+                    if node.id == node_id:
+                        node.color_hex = color_hex
+                        break
+
+        # 6. Compute final Q_system
+        result = await db.execute(
+            select(TaxonomyNode).where(TaxonomyNode.state == "confirmed")
+        )
+        confirmed_after = list(result.scalars().all())
+        q_system = self._compute_q_from_nodes(confirmed_after)
+
+        # 7. Compute separation for snapshot
+        node_centroids = []
+        for n in confirmed_after:
+            try:
+                c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
+                node_centroids.append(c)
+            except (ValueError, TypeError):
+                continue
+
+        separation = compute_separation(node_centroids) if len(node_centroids) >= 2 else 0.0
+        coherences = [n.coherence for n in confirmed_after if n.coherence is not None]
+        mean_coherence = float(np.mean(coherences)) if coherences else 0.0
+
+        await db.commit()
+
+        # 8. Create snapshot
+        snap = await create_snapshot(
+            db,
+            trigger="cold_path",
+            q_system=q_system,
+            q_coherence=mean_coherence,
+            q_separation=separation,
+            q_coverage=1.0,
+            nodes_created=nodes_created,
+        )
+
+        # 9. Refresh centroid cache
+        self._refresh_centroid_cache(confirmed_after)
+
+        return ColdPathResult(
+            snapshot_id=snap.id,
+            q_system=q_system,
+            nodes_created=nodes_created,
+            nodes_updated=nodes_updated,
+            umap_fitted=umap_fitted,
+        )
+
+    # ------------------------------------------------------------------
+    # Warm/cold path helpers
+    # ------------------------------------------------------------------
+
+    def _compute_q_from_nodes(self, nodes: list[TaxonomyNode]) -> float:
+        """Compute Q_system from a list of TaxonomyNode rows."""
+        from app.services.taxonomy.quality import (
+            NodeMetrics,
+            QWeights,
+            compute_q_system,
+        )
+
+        if not nodes:
+            return 0.0
+
+        metrics = []
+        for n in nodes:
+            metrics.append(
+                NodeMetrics(
+                    coherence=n.coherence if n.coherence is not None else 0.0,
+                    separation=n.separation if n.separation is not None else 1.0,
+                    state=n.state or "confirmed",
+                )
+            )
+
+        # DBCV ramp: 0 if < 5 confirmed nodes
+        confirmed_count = sum(1 for m in metrics if m.state == "confirmed")
+        ramp = min(1.0, max(0.0, (confirmed_count - 5) / 20.0)) if confirmed_count >= 5 else 0.0
+        weights = QWeights.from_ramp(ramp)
+
+        return compute_q_system(metrics, weights)
+
+    def _refresh_centroid_cache(self, nodes: list[TaxonomyNode]) -> None:
+        """Rebuild in-memory centroid cache from node list."""
+        self._centroid_cache.clear()
+        for n in nodes:
+            try:
+                c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
+                self._centroid_cache[n.id] = c
+            except (ValueError, TypeError):
+                continue
+
+    async def _create_warm_snapshot(
+        self,
+        db: AsyncSession,
+        *,
+        q_system: float,
+        operations: list[dict],
+        ops_attempted: int,
+        ops_accepted: int,
+    ):
+        """Create a warm-path snapshot with current metrics."""
+        from app.services.taxonomy.clustering import compute_separation
+        from app.services.taxonomy.snapshot import create_snapshot
+
+        # Load confirmed nodes for metrics
+        result = await db.execute(
+            select(TaxonomyNode).where(TaxonomyNode.state == "confirmed")
+        )
+        confirmed = list(result.scalars().all())
+
+        # Compute coherence and separation
+        coherences = [n.coherence for n in confirmed if n.coherence is not None]
+        mean_coherence = float(np.mean(coherences)) if coherences else 0.0
+
+        centroids = []
+        for n in confirmed:
+            try:
+                c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
+                centroids.append(c)
+            except (ValueError, TypeError):
+                continue
+
+        separation = compute_separation(centroids) if len(centroids) >= 2 else 0.0
+
+        nodes_created = sum(1 for op in operations if op.get("type") == "emerge")
+        nodes_merged = sum(1 for op in operations if op.get("type") == "merge")
+        nodes_retired = sum(1 for op in operations if op.get("type") == "retire")
+        nodes_split = sum(1 for op in operations if op.get("type") == "split")
+
+        return await create_snapshot(
+            db,
+            trigger="warm_path",
+            q_system=q_system,
+            q_coherence=mean_coherence,
+            q_separation=separation,
+            q_coverage=1.0,
+            operations=operations,
+            nodes_created=nodes_created,
+            nodes_retired=nodes_retired,
+            nodes_merged=nodes_merged,
+            nodes_split=nodes_split,
+        )
 
     # ------------------------------------------------------------------
     # Domain mapping

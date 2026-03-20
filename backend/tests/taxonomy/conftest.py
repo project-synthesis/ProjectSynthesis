@@ -56,9 +56,21 @@ def mock_embedding() -> EmbeddingService:
 
 @pytest.fixture
 def mock_provider() -> LLMProvider:
-    """Mock LLM provider for Haiku label generation and pattern extraction."""
+    """Mock LLM provider for Haiku label generation and pattern extraction.
+
+    Configures complete_parsed to return objects with the attributes expected
+    by label generation (.label) and pattern extraction (.patterns).
+    """
     provider = AsyncMock(spec=LLMProvider)
     provider.name = "mock"
+
+    # Return a result object that has both .label and .patterns attributes
+    # so generate_label() and _extract_meta_patterns() work correctly.
+    mock_result = MagicMock()
+    mock_result.label = "Mock Cluster Label"
+    mock_result.patterns = ["pattern-a", "pattern-b"]
+    provider.complete_parsed.return_value = mock_result
+
     return provider
 
 
