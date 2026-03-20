@@ -44,6 +44,11 @@ FAMILY_MERGE_THRESHOLD = 0.78
 PATTERN_MERGE_THRESHOLD = 0.82
 DOMAIN_ALIGNMENT_FLOOR = 0.35
 
+# Pattern matching thresholds (Spec Section 7.2, 7.4)
+FAMILY_MATCH_THRESHOLD = 0.72
+CLUSTER_MATCH_THRESHOLD = 0.60
+CANDIDATE_THRESHOLD = 0.80
+
 # Valid domain values — must match DomainType in pipeline_contracts.py
 _VALID_DOMAINS = frozenset(
     {"backend", "frontend", "database", "devops", "security", "fullstack", "general"}
@@ -252,6 +257,259 @@ class TaxonomyEngine:
                 exc,
                 exc_info=True,
             )
+
+    # ------------------------------------------------------------------
+    # Pattern matching (Spec Section 7.2, 7.4, 7.7, 7.9)
+    # ------------------------------------------------------------------
+
+    async def match_prompt(
+        self, prompt_text: str, db: AsyncSession,
+    ) -> PatternMatch | None:
+        """Hierarchical pattern matching for on-paste suggestion.
+
+        Reference: Spec Section 7.2, 7.4, 7.7, 7.9
+
+        Cascade search:
+        1. Embed prompt
+        2. Search leaf families -- if cosine >= family_threshold -> family match
+        3. If no leaf match, search parent clusters -- if cosine >= cluster_threshold -> cluster match
+        4. No match at any level -> return None
+
+        Cold-start: candidate families use strict 0.80 threshold (Spec 7.4).
+        Thresholds adapt per-cluster coherence (Spec 7.9).
+        """
+        from app.services.taxonomy.quality import suggestion_threshold
+
+        # 1. Embed the prompt text
+        query_emb = await self._embedding.aembed_single(prompt_text)
+
+        # ------------------------------------------------------------------
+        # Level 1: Family-level search
+        # ------------------------------------------------------------------
+        result = await db.execute(
+            select(PatternFamily).where(
+                PatternFamily.taxonomy_node_id.isnot(None)
+            )
+        )
+        families = list(result.scalars().all())
+
+        if families:
+            # Build family centroids and load their parent nodes
+            valid_families: list[PatternFamily] = []
+            centroids: list[np.ndarray] = []
+            node_ids: set[str] = set()
+
+            for f in families:
+                try:
+                    c = np.frombuffer(f.centroid_embedding, dtype=np.float32)
+                    if c.shape[0] != query_emb.shape[0]:
+                        continue
+                    centroids.append(c)
+                    valid_families.append(f)
+                    if f.taxonomy_node_id:
+                        node_ids.add(f.taxonomy_node_id)
+                except (ValueError, TypeError):
+                    continue
+
+            # Pre-load all referenced taxonomy nodes
+            node_map: dict[str, TaxonomyNode] = {}
+            if node_ids:
+                node_result = await db.execute(
+                    select(TaxonomyNode).where(TaxonomyNode.id.in_(list(node_ids)))
+                )
+                for n in node_result.scalars().all():
+                    node_map[n.id] = n
+
+            if centroids:
+                # Search all family centroids
+                matches = EmbeddingService.cosine_search(
+                    query_emb, centroids, top_k=len(centroids)
+                )
+
+                for idx, score in matches:
+                    family = valid_families[idx]
+                    node = node_map.get(family.taxonomy_node_id) if family.taxonomy_node_id else None
+
+                    # Determine threshold based on node state (Spec 7.4)
+                    if node and node.state == "candidate":
+                        threshold = CANDIDATE_THRESHOLD
+                    elif node:
+                        coherence = node.coherence if node.coherence is not None else 0.0
+                        threshold = suggestion_threshold(
+                            base=FAMILY_MATCH_THRESHOLD, coherence=coherence
+                        )
+                    else:
+                        threshold = FAMILY_MATCH_THRESHOLD
+
+                    if score >= threshold:
+                        # Load meta-patterns for this family
+                        mp_result = await db.execute(
+                            select(MetaPattern).where(
+                                MetaPattern.family_id == family.id
+                            )
+                        )
+                        meta_patterns = list(mp_result.scalars().all())
+
+                        return PatternMatch(
+                            family=family,
+                            taxonomy_node=node,
+                            meta_patterns=meta_patterns,
+                            similarity=score,
+                            match_level="family",
+                        )
+
+        # ------------------------------------------------------------------
+        # Level 2: Cluster-level fallback
+        # ------------------------------------------------------------------
+        node_result = await db.execute(
+            select(TaxonomyNode).where(
+                TaxonomyNode.state.in_(["confirmed", "candidate"])
+            )
+        )
+        all_nodes = list(node_result.scalars().all())
+
+        if all_nodes:
+            valid_nodes: list[TaxonomyNode] = []
+            node_centroids: list[np.ndarray] = []
+
+            for n in all_nodes:
+                try:
+                    c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
+                    if c.shape[0] != query_emb.shape[0]:
+                        continue
+                    node_centroids.append(c)
+                    valid_nodes.append(n)
+                except (ValueError, TypeError):
+                    continue
+
+            if node_centroids:
+                matches = EmbeddingService.cosine_search(
+                    query_emb, node_centroids, top_k=len(node_centroids)
+                )
+
+                for idx, score in matches:
+                    node = valid_nodes[idx]
+                    coherence = node.coherence if node.coherence is not None else 0.0
+                    threshold = suggestion_threshold(
+                        base=CLUSTER_MATCH_THRESHOLD, coherence=coherence
+                    )
+
+                    if score >= threshold:
+                        # Aggregate meta-patterns from top-3 child families
+                        # by member_count (Spec 7.7)
+                        child_fam_result = await db.execute(
+                            select(PatternFamily)
+                            .where(PatternFamily.taxonomy_node_id == node.id)
+                            .order_by(PatternFamily.member_count.desc())
+                            .limit(3)
+                        )
+                        top_families = list(child_fam_result.scalars().all())
+
+                        # Also include families from child nodes
+                        child_node_result = await db.execute(
+                            select(TaxonomyNode).where(
+                                TaxonomyNode.parent_id == node.id
+                            )
+                        )
+                        child_nodes = list(child_node_result.scalars().all())
+                        child_node_ids = [cn.id for cn in child_nodes]
+
+                        if child_node_ids:
+                            child_child_fam_result = await db.execute(
+                                select(PatternFamily)
+                                .where(
+                                    PatternFamily.taxonomy_node_id.in_(child_node_ids)
+                                )
+                                .order_by(PatternFamily.member_count.desc())
+                                .limit(3)
+                            )
+                            child_child_families = list(
+                                child_child_fam_result.scalars().all()
+                            )
+                            # Combine and take top-3 by member_count
+                            all_candidate_families = top_families + child_child_families
+                            all_candidate_families.sort(
+                                key=lambda f: f.member_count or 0, reverse=True
+                            )
+                            top_families = all_candidate_families[:3]
+
+                        # Gather meta-patterns from these families
+                        family_ids = [f.id for f in top_families]
+                        if family_ids:
+                            mp_result = await db.execute(
+                                select(MetaPattern).where(
+                                    MetaPattern.family_id.in_(family_ids)
+                                )
+                            )
+                            all_meta_patterns = list(mp_result.scalars().all())
+                        else:
+                            all_meta_patterns = []
+
+                        # Deduplicate at cosine 0.82
+                        deduped = self._deduplicate_meta_patterns(all_meta_patterns)
+
+                        return PatternMatch(
+                            family=None,
+                            taxonomy_node=node,
+                            meta_patterns=deduped,
+                            similarity=score,
+                            match_level="cluster",
+                        )
+
+        # ------------------------------------------------------------------
+        # No match at any level
+        # ------------------------------------------------------------------
+        return PatternMatch(
+            family=None,
+            taxonomy_node=None,
+            meta_patterns=[],
+            similarity=0.0,
+            match_level="none",
+        )
+
+    def _deduplicate_meta_patterns(
+        self, patterns: list[MetaPattern]
+    ) -> list[MetaPattern]:
+        """Deduplicate meta-patterns by cosine similarity at PATTERN_MERGE_THRESHOLD.
+
+        Keeps the first occurrence (by order) and drops near-duplicates.
+        Patterns without embeddings are always kept.
+        """
+        if len(patterns) <= 1:
+            return patterns
+
+        deduped: list[MetaPattern] = []
+        deduped_embeddings: list[np.ndarray] = []
+
+        for mp in patterns:
+            if not mp.embedding:
+                deduped.append(mp)
+                continue
+
+            try:
+                emb = np.frombuffer(mp.embedding, dtype=np.float32)
+            except (ValueError, TypeError):
+                deduped.append(mp)
+                continue
+
+            # Check against already-kept patterns
+            is_duplicate = False
+            for kept_emb in deduped_embeddings:
+                if emb.shape != kept_emb.shape:
+                    continue
+                norm_a = np.linalg.norm(emb)
+                norm_b = np.linalg.norm(kept_emb)
+                if norm_a > 0 and norm_b > 0:
+                    sim = float(np.dot(emb, kept_emb) / (norm_a * norm_b))
+                    if sim >= PATTERN_MERGE_THRESHOLD:
+                        is_duplicate = True
+                        break
+
+            if not is_duplicate:
+                deduped.append(mp)
+                deduped_embeddings.append(emb)
+
+        return deduped
 
     # ------------------------------------------------------------------
     # Warm path (Spec Section 2.3, 2.5, 2.6, 3.5)
