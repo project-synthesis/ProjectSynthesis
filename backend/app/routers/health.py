@@ -70,7 +70,13 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)) -> 
         provider = routing.state.provider
         provider_name = routing.state.provider_name
         sampling_capable: bool | None = routing.state.sampling_capable
-        mcp_disconnected = not routing.state.mcp_connected if routing.state.sampling_capable is True else False
+        # Report disconnected when sampling was known AND client is gone.
+        # Use `is not None` instead of `is True` so a stale/null
+        # sampling_capable after disconnect doesn't mask the state.
+        mcp_disconnected = (
+            not routing.state.mcp_connected
+            and routing.state.sampling_capable is not None
+        )
         available_tiers = routing.available_tiers
     else:
         provider = None

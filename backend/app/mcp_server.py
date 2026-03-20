@@ -155,11 +155,25 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             await db.execute("PRAGMA busy_timeout=5000")
         logger.info("MCP lifespan: SQLite WAL mode enabled")
 
-    # Initialize routing service
+    # Initialize routing service with cross-process notification bridge.
+    # The callback schedules an async task to POST the event to the backend's
+    # /api/events/_publish endpoint, which relays it to frontend SSE subscribers.
     from app.services.event_bus import EventBus as _EventBus
 
+    def _cross_process_notifier(event_type: str, payload: dict) -> None:
+        """Bridge: schedule cross-process HTTP POST from sync context."""
+        try:
+            asyncio.create_task(notify_event_bus(event_type, payload))
+        except RuntimeError:
+            pass  # No running event loop (shutdown)
+
     _mcp_event_bus = _EventBus()
-    _routing = RoutingManager(event_bus=_mcp_event_bus, data_dir=DATA_DIR, is_mcp_process=True)
+    _routing = RoutingManager(
+        event_bus=_mcp_event_bus,
+        data_dir=DATA_DIR,
+        is_mcp_process=True,
+        cross_process_notify=_cross_process_notifier,
+    )
 
     _detected_provider = detect_provider()
     if _detected_provider:
@@ -190,19 +204,6 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 
 
-def _routing_payload(trigger: str) -> dict:
-    """Build routing_state_changed SSE payload from current routing state."""
-    if not _routing:
-        return {}
-    return {
-        "trigger": trigger,
-        "provider": _routing.state.provider_name,
-        "sampling_capable": _routing.state.sampling_capable,
-        "mcp_connected": _routing.state.mcp_connected,
-        "available_tiers": _routing.available_tiers,
-    }
-
-
 class _CapabilityDetectionMiddleware:
     """Intercept the JSON-RPC ``initialize`` request to detect client capabilities.
 
@@ -215,7 +216,8 @@ class _CapabilityDetectionMiddleware:
     The middleware re-assembles the request body transparently; downstream
     handlers (FastMCP) receive the original bytes untouched.
 
-    All event payloads are dispatched via ``notify_event_bus("routing_state_changed", ...)``.
+    All routing state changes are dispatched via ``RoutingManager``'s
+    ``cross_process_notify`` callback (set in the MCP lifespan).
     """
 
     # Throttle activity writes: at most once per 10 seconds
@@ -242,19 +244,21 @@ class _CapabilityDetectionMiddleware:
             await self.app(scope, receive, send)
 
     async def _handle_post(self, scope, receive, send):
-        """Buffer POST body, inspect for ``initialize``, track activity."""
-        reconnected = self._touch_activity()  # throttled last_activity update
+        """Buffer POST body, inspect for ``initialize``, track activity.
+
+        Cross-process notification is handled by RoutingManager's callback —
+        no manual ``notify_event_bus`` calls needed here.
+        """
+        self._touch_activity()  # throttled last_activity update
         body_chunks: list[bytes] = []
-        initialize_result: dict | None = None  # set by _inspect_initialize
         response_status: int = 0
 
         async def _buffered_receive():
-            nonlocal initialize_result
             message = await receive()
             if message["type"] == "http.request":
                 body_chunks.append(message.get("body", b""))
                 if not message.get("more_body", False):
-                    initialize_result = self._inspect_initialize(b"".join(body_chunks))
+                    self._inspect_initialize(b"".join(body_chunks))
             return message
 
         async def _capture_send(message):
@@ -267,35 +271,14 @@ class _CapabilityDetectionMiddleware:
 
         # Detect failed reconnection: client sent a POST that got 404
         # (stale Mcp-Session-Id) or 400 (missing session ID after restart).
-        if response_status in (400, 404) and initialize_result is None:
-            if self._invalidate_stale_session():
-                payload = _routing_payload("mcp_stale_session") if _routing else {"sampling_capable": False}
-                await notify_event_bus("routing_state_changed", payload)
-            return  # skip normal event logic
-
-        # Fire SSE events *after* the request completes so we don't block it.
-        # Two triggers: reconnection (activity gap) or fresh initialize handshake.
-        if reconnected:
-            payload = (
-                _routing_payload("mcp_reconnect")
-                if _routing
-                else {"sampling_capable": True, "reconnected": True}
-            )
-            await notify_event_bus("routing_state_changed", payload)
-        elif initialize_result is not None:
-            payload = (
-                _routing_payload("mcp_initialize")
-                if _routing
-                else {"sampling_capable": initialize_result["sampling_capable"]}
-            )
-            await notify_event_bus("routing_state_changed", payload)
+        if response_status in (400, 404):
+            self._invalidate_stale_session()
 
     async def _handle_get(self, scope, receive, send):
-        """Track SSE stream lifecycle, handle session-less reconnection."""
-        # GET /mcp establishes the SSE stream.  After a server restart all
-        # sessions are lost; VS Code retries with a session-less GET.  The
-        # monkey-patch above lets this through so the client gets a fresh
-        # SSE stream with a new Mcp-Session-Id in the response headers.
+        """Track SSE stream lifecycle, handle session-less reconnection.
+
+        Cross-process notification is handled by RoutingManager's callback.
+        """
         headers = dict(
             (k.decode() if isinstance(k, bytes) else k, v.decode() if isinstance(v, bytes) else v)
             for k, v in scope.get("headers", [])
@@ -308,11 +291,8 @@ class _CapabilityDetectionMiddleware:
                 "for seamless reconnection after server restart",
             )
 
-        # Note: for SSE streams, ``await self.app()`` blocks until the
-        # client disconnects.  We must react in the send wrapper when
-        # we see the response status, not after the await returns.
         get_handled = False
-        get_is_sse = False  # set True once we confirm a 200 SSE stream
+        get_is_sse = False
 
         cls = _CapabilityDetectionMiddleware
 
@@ -322,34 +302,20 @@ class _CapabilityDetectionMiddleware:
                 get_handled = True
                 status = message.get("status", 0)
                 if status in (400, 404):
-                    if cls._invalidate_stale_session():
-                        payload = _routing_payload("mcp_stale_session") if _routing else {"sampling_capable": False}
-                        await notify_event_bus("routing_state_changed", payload)
+                    cls._invalidate_stale_session()
                 elif status == 200:
                     get_is_sse = True
                     cls._active_sse_streams += 1
                     if not has_session_id:
-                        # Successful session-less GET = client reconnecting
-                        # after server restart.  Optimistically assume
-                        # sampling-capable (the client was previously
-                        # connected and is re-establishing its SSE stream).
+                        # Session-less GET = client reconnecting after
+                        # server restart.  Optimistically assume sampling.
+                        # RoutingManager.on_mcp_initialize fires the
+                        # cross-process event automatically.
                         cls._write_optimistic_session()
-                        payload = (
-                            _routing_payload("mcp_reconnect")
-                            if _routing
-                            else {"sampling_capable": True, "reconnected": True}
-                        )
-                        await notify_event_bus("routing_state_changed", payload)
             elif message["type"] == "http.response.body" and get_is_sse:
-                # SSE stream is alive — keep last_activity fresh so the
-                # health endpoint doesn't report a false disconnect.
                 cls._touch_activity()
             await send(message)
 
-        # Track the SSE stream lifetime. get_is_sse is set to True
-        # inside _capture_get_send when we see a 200 response start.
-        # We increment _after_ the response starts (inside the wrapper)
-        # and decrement when the stream ends (self.app returns).
         try:
             await self.app(scope, receive, _capture_get_send)
         finally:
@@ -358,21 +324,12 @@ class _CapabilityDetectionMiddleware:
                 cls._flush_sse_streams()
                 if cls._active_sse_streams == 0:
                     logger.info("Last SSE stream closed — client disconnected")
-                    # asyncio.shield protects from task cancellation
-                    # (uvicorn cancels the handler when the client
-                    # disconnects, CancelledError is BaseException).
-                    try:
-                        payload = (
-                            _routing_payload("mcp_sse_closed")
-                            if _routing
-                            else {"sampling_capable": True, "disconnected": True}
-                        )
-                        await asyncio.shield(
-                            notify_event_bus("routing_state_changed", payload),
-                        )
-                        logger.info("Disconnect event published to backend")
-                    except BaseException:
-                        logger.warning("Failed to publish disconnect event", exc_info=True)
+                    # Immediately update routing state BEFORE any notification.
+                    # on_mcp_disconnect() fires the cross-process callback
+                    # internally, so the frontend gets the event with the
+                    # correct mcp_connected=False state.
+                    if _routing:
+                        _routing.on_mcp_disconnect()
 
     @classmethod
     def _flush_sse_streams(cls) -> None:
@@ -420,74 +377,57 @@ class _CapabilityDetectionMiddleware:
             logger.debug("Could not write optimistic mcp_session.json", exc_info=True)
 
     @staticmethod
-    def _invalidate_stale_session() -> bool:
-        """Remove ``mcp_session.json`` if it exists (failed reconnection cleanup).
+    def _invalidate_stale_session() -> None:
+        """Remove ``mcp_session.json`` and update routing (failed reconnection).
 
         Called when a client receives a 400/404 from the MCP transport layer,
-        indicating a stale or missing session ID.  Removing the file ensures
-        the health endpoint immediately reports ``sampling_capable=null`` instead
-        of keeping stale ``True`` until the 30-minute window expires.
-
-        Returns ``True`` if a file was actually removed.
+        indicating a stale or missing session ID.  The routing state update
+        triggers the cross-process callback automatically.
         """
         removed = _session_file.delete()
         if removed:
             if _routing:
-                _routing._update_state(
-                    sampling_capable=None, mcp_connected=False,
-                )
-                _routing._broadcast_state_change("session_invalidated")
+                _routing.on_session_invalidated()
             logger.info(
                 "Stale session cleanup: removed mcp_session.json after failed "
                 "client reconnection (400/404)",
             )
-        return removed
 
     @classmethod
-    def _touch_activity(cls) -> bool:
+    def _touch_activity(cls) -> None:
         """Update activity tracking (throttled to avoid spam).
 
-        Returns ``True`` if this represents a reconnection.
+        RoutingManager handles reconnection detection and cross-process
+        notification internally via ``on_mcp_activity()``.
         """
         now_mono = time.monotonic()
         if now_mono - cls._last_activity_write < cls._ACTIVITY_WRITE_THROTTLE:
-            return False
+            return
         cls._last_activity_write = now_mono
 
-        reconnected = False
         if _routing:
-            was_disconnected = not _routing.state.mcp_connected
             _routing.on_mcp_activity()
-            reconnected = was_disconnected and _routing.state.mcp_connected
         else:
             # Fallback: write directly to session file
             try:
                 data = _session_file.read()
                 if data is not None:
-                    reconnected = (
-                        data.get("sampling_capable") is True
-                        and MCPSessionFile.is_activity_stale(data)
-                    )
                     data["last_activity"] = datetime.now(timezone.utc).isoformat()
                     data["sse_streams"] = cls._active_sse_streams
                     _session_file.write(data)
             except Exception:
                 logger.debug("_touch_activity: could not update mcp_session.json", exc_info=True)
 
-        return reconnected
-
     @staticmethod
-    def _inspect_initialize(body: bytes) -> dict | None:
+    def _inspect_initialize(body: bytes) -> None:
         """If the body is a JSON-RPC ``initialize`` request, update routing state.
 
-        Returns a ``{"sampling_capable": bool}`` dict when state was updated
-        (caller uses this to fire cross-process SSE events), or ``None`` if
-        the body was not an ``initialize`` request or no update occurred.
+        RoutingManager handles cross-process notification via its callback.
         """
         try:
             data = _json.loads(body)
             if not isinstance(data, dict) or data.get("method") != "initialize":
-                return None
+                return
             params = data.get("params", {})
             caps = params.get("capabilities", {})
             client_info = params.get("clientInfo", {})
@@ -508,13 +448,10 @@ class _CapabilityDetectionMiddleware:
             else:
                 # Fallback: write session file directly (routing not yet initialized)
                 if not sampling and _session_file.should_skip_downgrade():
-                    return None
+                    return
                 _session_file.write_session(sampling)
-
-            return {"sampling_capable": sampling}
         except Exception:
             logger.debug("Capability detection middleware: could not parse initialize", exc_info=True)
-            return None
 
 
 # Patch streamable_http_app to inject the capability-detection middleware.

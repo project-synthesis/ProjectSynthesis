@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,11 @@ if TYPE_CHECKING:
     from app.providers.base import LLMProvider
     from app.services.event_bus import EventBus
     from app.services.mcp_session_file import MCPSessionFile
+
+# Type alias for the cross-process notification callback.
+# Signature: (event_type: str, payload: dict) -> None
+# The callback is responsible for scheduling async work if needed.
+CrossProcessNotify = Callable[[str, dict], None]
 
 logger = logging.getLogger(__name__)
 
@@ -191,10 +197,12 @@ class RoutingManager:
         data_dir: Path,
         *,
         is_mcp_process: bool = False,
+        cross_process_notify: CrossProcessNotify | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._data_dir = data_dir
         self._is_mcp_process = is_mcp_process
+        self._cross_process_notify = cross_process_notify
         self._session_file: MCPSessionFile | None = None
         self._disconnect_task: asyncio.Task[None] | None = None
 
@@ -274,6 +282,79 @@ class RoutingManager:
         if was_disconnected:
             self._broadcast_state_change("mcp_reconnect")
 
+    def on_mcp_disconnect(self) -> None:
+        """Called when the last MCP SSE stream closes — client disconnected.
+
+        Sets ``mcp_connected=False`` immediately.  Does NOT clear
+        ``sampling_capable`` — the value is preserved so a quick
+        reconnection (e.g. VS Code restart) can resume without a fresh
+        ``initialize`` handshake during the optimistic window.
+        """
+        if not self._state.mcp_connected:
+            return  # Already disconnected — avoid duplicate events
+        self._update_state(mcp_connected=False)
+        self._persist()
+        logger.info(
+            "routing.disconnect trigger=sse_closed sampling_capable=%s",
+            self._state.sampling_capable,
+        )
+        self._broadcast_state_change("mcp_disconnect")
+
+    def on_session_invalidated(self) -> None:
+        """Called when a stale MCP session is detected (400/404 from transport).
+
+        Clears both ``sampling_capable`` and ``mcp_connected`` since the
+        session no longer exists.
+        """
+        self._update_state(sampling_capable=None, mcp_connected=False)
+        self._persist()
+        logger.info("routing.session_invalidated")
+        self._broadcast_state_change("session_invalidated")
+
+    def sync_from_event(self, data: dict) -> None:
+        """Update state from a cross-process ``routing_state_changed`` event.
+
+        Used by the FastAPI backend to keep its own RoutingManager in sync
+        with the MCP server's state without reading ``mcp_session.json``.
+        Only updates MCP-related fields (never touches provider).
+
+        Uses a sentinel to distinguish "key missing" from ``None`` — the
+        ``sampling_capable`` field is legitimately ``None`` after session
+        invalidation, and we must sync that.
+        """
+        _missing = object()
+        mcp_connected = data.get("mcp_connected", _missing)
+        sampling_capable = data.get("sampling_capable", _missing)
+        if mcp_connected is _missing and sampling_capable is _missing:
+            return  # Nothing to sync
+
+        fields: dict[str, Any] = {}
+        if mcp_connected is not _missing:
+            fields["mcp_connected"] = bool(mcp_connected) if mcp_connected is not None else False
+        if sampling_capable is not _missing:
+            fields["sampling_capable"] = sampling_capable  # May be None, True, or False
+        if mcp_connected and mcp_connected is not _missing:
+            fields["last_activity"] = datetime.now(timezone.utc)
+
+        old_connected = self._state.mcp_connected
+        old_sampling = self._state.sampling_capable
+        self._update_state(**fields)
+
+        # Only broadcast if something actually changed
+        new_connected = self._state.mcp_connected
+        new_sampling = self._state.sampling_capable
+        if old_connected != new_connected or old_sampling != new_sampling:
+            # Local broadcast only — do NOT fire cross_process_notify
+            # (this IS the receiving end of a cross-process notification)
+            payload = {
+                "trigger": data.get("trigger", "sync"),
+                "provider": self._state.provider_name,
+                "sampling_capable": self._state.sampling_capable,
+                "mcp_connected": self._state.mcp_connected,
+                "available_tiers": self.available_tiers,
+            }
+            self._event_bus.publish("routing_state_changed", payload)
+
     # ── Public API ────────────────────────────────────────────────────
 
     def resolve(self, ctx: RoutingContext) -> RoutingDecision:
@@ -324,6 +405,7 @@ class RoutingManager:
                             elapsed, MCP_ACTIVITY_STALENESS_SECONDS,
                         )
                         self._update_state(mcp_connected=False)
+                        self._persist()
                         self._broadcast_state_change("disconnect")
             except asyncio.CancelledError:
                 raise
@@ -336,7 +418,8 @@ class RoutingManager:
         """Replace specific fields in the current state.
 
         Thread-safety note: all callers (``set_provider``, ``on_mcp_initialize``,
-        ``on_mcp_activity``, ``_disconnect_loop``) are synchronous between
+        ``on_mcp_activity``, ``on_mcp_disconnect``, ``on_session_invalidated``,
+        ``sync_from_event``, ``_disconnect_loop``) are synchronous between
         their read of ``self._state`` and this write — no ``await`` between
         read and replace.  This is safe under asyncio's cooperative scheduling.
         Do not add ``await`` calls between state reads and this method.
@@ -358,7 +441,7 @@ class RoutingManager:
                 logger.warning("Failed to persist routing state to mcp_session.json", exc_info=True)
 
     def _broadcast_state_change(self, event: str) -> None:
-        """Push routing_state_changed to all SSE subscribers."""
+        """Push routing_state_changed to local event bus and cross-process."""
         payload = {
             "trigger": event,
             "provider": self._state.provider_name,
@@ -374,6 +457,17 @@ class RoutingManager:
             self._state.mcp_connected,
             ",".join(self.available_tiers),
         )
+
+        # Cross-process notification (MCP → backend event bus → frontend SSE).
+        # Fire-and-forget: the callback schedules an async task internally.
+        if self._cross_process_notify:
+            try:
+                self._cross_process_notify("routing_state_changed", payload)
+            except Exception:
+                logger.debug(
+                    "Cross-process notification failed for event=%s", event,
+                    exc_info=True,
+                )
 
     def _recover_state(self) -> RoutingState:
         """Recover state from ``mcp_session.json`` on startup.

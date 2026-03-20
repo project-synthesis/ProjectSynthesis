@@ -689,53 +689,51 @@ class TestCapabilityDetectionMiddleware:
         ts = datetime.fromisoformat(data["last_activity"])
         assert abs((datetime.now(timezone.utc) - ts).total_seconds()) < 5
 
-    def test_returns_result_on_initialize_write(self, mw_data_dir):
-        """_inspect_initialize returns sampling_capable dict when a file is written."""
+    def test_writes_session_on_initialize(self, mw_data_dir):
+        """_inspect_initialize writes session file on initialize (no routing)."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
-        result = _CapabilityDetectionMiddleware._inspect_initialize(
+        _CapabilityDetectionMiddleware._inspect_initialize(
             self._make_initialize_body({"sampling": {}})
         )
-        assert result == {"sampling_capable": True}
 
-        # Non-sampling initialize also returns a result
-        result2 = _CapabilityDetectionMiddleware._inspect_initialize(
-            self._make_initialize_body({"roots": {}})
-        )
-        # Second call: fresh True on file, so False is suppressed → returns None
-        assert result2 is None
+        data = json.loads((mw_data_dir / "mcp_session.json").read_text())
+        assert data["sampling_capable"] is True
 
-    def test_returns_none_for_non_initialize(self, mw_data_dir):
-        """_inspect_initialize returns None for non-initialize messages."""
+    def test_no_side_effect_for_non_initialize(self, mw_data_dir):
+        """_inspect_initialize does nothing for non-initialize messages."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
-        result = _CapabilityDetectionMiddleware._inspect_initialize(
+        _CapabilityDetectionMiddleware._inspect_initialize(
             self._make_tool_call_body()
         )
-        assert result is None
+        # No session file should be written
+        assert not (mw_data_dir / "mcp_session.json").exists()
 
-    def test_returns_none_for_invalid_json(self, mw_data_dir):
-        """_inspect_initialize returns None for unparseable body."""
+    def test_no_crash_for_invalid_json(self, mw_data_dir):
+        """_inspect_initialize handles unparseable body gracefully."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
-        result = _CapabilityDetectionMiddleware._inspect_initialize(b"not json{{{")
-        assert result is None
+        # Should not raise
+        _CapabilityDetectionMiddleware._inspect_initialize(b"not json{{{")
 
-    def test_returns_false_capable_when_stale_true_overwritten(self, mw_data_dir):
-        """_inspect_initialize returns sampling_capable=False when overwriting stale True."""
+    def test_middleware_overwrites_stale_true_with_false(self, mw_data_dir):
+        """_inspect_initialize overwrites stale sampling_capable=True with False."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
-        # Write a stale True
+        # Write a stale True (beyond 30-min window)
         path = mw_data_dir / "mcp_session.json"
         path.write_text(json.dumps({
             "sampling_capable": True,
             "written_at": (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat(),
         }))
 
-        result = _CapabilityDetectionMiddleware._inspect_initialize(
+        _CapabilityDetectionMiddleware._inspect_initialize(
             self._make_initialize_body({"roots": {}})
         )
-        assert result == {"sampling_capable": False}
+
+        data = json.loads(path.read_text())
+        assert data["sampling_capable"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -786,13 +784,14 @@ class TestCapabilityDetectionMiddlewareWithRouting:
         assert routing.state.sampling_capable is False
         assert routing.state.mcp_connected is True
 
-    def test_returns_result_dict(self, routing):
-        """_inspect_initialize returns sampling_capable dict via routing path."""
+    def test_updates_routing_state(self, routing):
+        """_inspect_initialize updates routing state via on_mcp_initialize."""
         from app.mcp_server import _CapabilityDetectionMiddleware
-        result = _CapabilityDetectionMiddleware._inspect_initialize(
+        _CapabilityDetectionMiddleware._inspect_initialize(
             self._make_initialize_body({"sampling": {}})
         )
-        assert result == {"sampling_capable": True}
+        assert routing.state.sampling_capable is True
+        assert routing.state.mcp_connected is True
 
     def test_optimistic_via_routing(self, routing):
         """Routing's optimistic strategy prevents downgrade."""
@@ -803,13 +802,93 @@ class TestCapabilityDetectionMiddlewareWithRouting:
         assert routing.state.sampling_capable is True
 
         # Second: no sampling — routing's optimistic strategy keeps True
-        result = _CapabilityDetectionMiddleware._inspect_initialize(
+        _CapabilityDetectionMiddleware._inspect_initialize(
             self._make_initialize_body({"roots": {}})
         )
-        # Result still returned (routing always returns a result now)
-        assert result == {"sampling_capable": False}
-        # But routing state should still be True (optimistic)
+        # Routing state should still be True (optimistic)
         assert routing.state.sampling_capable is True
+
+
+# ---------------------------------------------------------------------------
+# RoutingManager lifecycle methods — disconnect, invalidation, sync
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingManagerDisconnect:
+    """Test on_mcp_disconnect, on_session_invalidated, and sync_from_event."""
+
+    @pytest.fixture()
+    def routing(self, tmp_path):
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+        return RoutingManager(event_bus=EventBus(), data_dir=tmp_path, is_mcp_process=True)
+
+    def test_on_mcp_disconnect_sets_connected_false(self, routing):
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.mcp_connected is True
+        routing.on_mcp_disconnect()
+        assert routing.state.mcp_connected is False
+        # Preserves sampling_capable for quick reconnection
+        assert routing.state.sampling_capable is True
+
+    def test_on_mcp_disconnect_idempotent(self, routing):
+        """Calling on_mcp_disconnect twice does not fire duplicate events."""
+        routing.on_mcp_initialize(sampling_capable=True)
+        routing.on_mcp_disconnect()
+        assert routing.state.mcp_connected is False
+        # Second call is a no-op (already disconnected)
+        routing.on_mcp_disconnect()
+        assert routing.state.mcp_connected is False
+
+    def test_on_session_invalidated_clears_both(self, routing):
+        routing.on_mcp_initialize(sampling_capable=True)
+        routing.on_session_invalidated()
+        assert routing.state.sampling_capable is None
+        assert routing.state.mcp_connected is False
+
+    def test_sync_from_event_basic(self, routing):
+        """sync_from_event updates mcp_connected and sampling_capable."""
+        assert routing.state.mcp_connected is False
+        routing.sync_from_event({
+            "mcp_connected": True,
+            "sampling_capable": True,
+            "trigger": "mcp_initialize",
+        })
+        assert routing.state.mcp_connected is True
+        assert routing.state.sampling_capable is True
+
+    def test_sync_from_event_none_sampling(self, routing):
+        """sync_from_event must propagate sampling_capable=None (sentinel fix)."""
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.sampling_capable is True
+        # Simulate session_invalidated event with sampling_capable=None
+        routing.sync_from_event({
+            "mcp_connected": False,
+            "sampling_capable": None,
+            "trigger": "session_invalidated",
+        })
+        assert routing.state.sampling_capable is None
+        assert routing.state.mcp_connected is False
+
+    def test_sync_from_event_missing_keys_noop(self, routing):
+        """sync_from_event ignores events with no MCP fields."""
+        routing.on_mcp_initialize(sampling_capable=True)
+        routing.sync_from_event({"trigger": "provider_changed"})
+        # State unchanged
+        assert routing.state.sampling_capable is True
+        assert routing.state.mcp_connected is True
+
+    def test_sync_from_event_no_duplicate_broadcast(self, routing):
+        """sync_from_event doesn't broadcast if state didn't change."""
+        routing.on_mcp_initialize(sampling_capable=True)
+        events_published = []
+        routing._event_bus.publish = lambda t, d: events_published.append((t, d))
+        # Sync same state — no publish expected
+        routing.sync_from_event({
+            "mcp_connected": True,
+            "sampling_capable": True,
+        })
+        assert len(events_published) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -841,14 +920,12 @@ class TestTouchActivityWithRouting:
         from app.mcp_server import _CapabilityDetectionMiddleware
         routing.on_mcp_initialize(sampling_capable=True)
 
-        result = _CapabilityDetectionMiddleware._touch_activity()
-        # Not a reconnect since mcp_connected was already True
-        assert result is False
+        _CapabilityDetectionMiddleware._touch_activity()
         assert routing.state.mcp_connected is True
         assert routing.state.last_activity is not None
 
-    def test_touch_detects_reconnection_via_routing(self, routing):
-        """_touch_activity returns True when routing transitions from disconnected."""
+    def test_touch_reconnects_via_routing(self, routing):
+        """_touch_activity triggers reconnection when routing was disconnected."""
         from dataclasses import replace as _replace
 
         from app.mcp_server import _CapabilityDetectionMiddleware
@@ -857,8 +934,7 @@ class TestTouchActivityWithRouting:
         # Simulate disconnect
         routing._state = _replace(routing._state, mcp_connected=False)
 
-        result = _CapabilityDetectionMiddleware._touch_activity()
-        assert result is True
+        _CapabilityDetectionMiddleware._touch_activity()
         assert routing.state.mcp_connected is True
 
 
@@ -933,57 +1009,50 @@ class TestTouchActivity:
         _CapabilityDetectionMiddleware._touch_activity()
         first = json.loads((data_dir / "mcp_session.json").read_text())["last_activity"]
 
-        # Second call — should be throttled (returns False, doesn't write)
-        result = _CapabilityDetectionMiddleware._touch_activity()
+        # Second call — should be throttled (doesn't write)
+        _CapabilityDetectionMiddleware._touch_activity()
         second = json.loads((data_dir / "mcp_session.json").read_text())["last_activity"]
 
-        assert result is False
         assert first == second
 
-    def test_returns_false_when_no_file(self, data_dir):
-        """Returns False when mcp_session.json doesn't exist."""
+    def test_no_crash_when_no_file(self, data_dir):
+        """No crash when mcp_session.json doesn't exist."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
-        result = _CapabilityDetectionMiddleware._touch_activity()
-        assert result is False
+        _CapabilityDetectionMiddleware._touch_activity()
+        # No assertion needed — no crash = success
 
-    def test_detects_reconnection(self, data_dir):
-        """Returns True when previous activity is older than staleness window."""
+    def test_updates_activity_on_stale_session(self, data_dir):
+        """Updates last_activity even when previous activity is older than staleness window."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         # Write session with activity 400s ago (> 300s threshold)
         self._write_session(data_dir, sampling_capable=True, activity_age_seconds=400)
 
-        result = _CapabilityDetectionMiddleware._touch_activity()
-        assert result is True
+        _CapabilityDetectionMiddleware._touch_activity()
+        after = json.loads((data_dir / "mcp_session.json").read_text())
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(after["last_activity"])).total_seconds()
+        assert age < 5  # Activity was refreshed
 
-    def test_no_reconnection_for_fresh_activity(self, data_dir):
-        """Returns False when previous activity is within staleness window."""
+    def test_updates_activity_on_fresh_session(self, data_dir):
+        """Updates last_activity when previous activity is within staleness window."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         # Write session with activity 60s ago (< 300s threshold)
         self._write_session(data_dir, sampling_capable=True, activity_age_seconds=60)
 
-        result = _CapabilityDetectionMiddleware._touch_activity()
-        assert result is False
-
-    def test_no_reconnection_when_not_sampling_capable(self, data_dir):
-        """No reconnection event when session was not sampling-capable."""
-        from app.mcp_server import _CapabilityDetectionMiddleware
-
-        # Write session with stale activity but sampling_capable=false
-        self._write_session(data_dir, sampling_capable=False, activity_age_seconds=400)
-
-        result = _CapabilityDetectionMiddleware._touch_activity()
-        assert result is False
+        _CapabilityDetectionMiddleware._touch_activity()
+        after = json.loads((data_dir / "mcp_session.json").read_text())
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(after["last_activity"])).total_seconds()
+        assert age < 5  # Activity was refreshed
 
     def test_handles_corrupt_file(self, data_dir):
-        """Returns False on corrupt JSON (no crash)."""
+        """No crash on corrupt JSON."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         (data_dir / "mcp_session.json").write_text("not json!")
-        result = _CapabilityDetectionMiddleware._touch_activity()
-        assert result is False
+        _CapabilityDetectionMiddleware._touch_activity()
+        # No crash = success
 
 
 # ---------------------------------------------------------------------------
@@ -1000,26 +1069,25 @@ class TestInvalidateStaleSession:
         return tmp_path
 
     def test_removes_existing_file(self, data_dir):
-        """Removes mcp_session.json and returns True."""
+        """Removes mcp_session.json on invalidation."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         path = data_dir / "mcp_session.json"
         path.write_text(json.dumps({"sampling_capable": True, "written_at": "x"}))
         assert path.exists()
 
-        result = _CapabilityDetectionMiddleware._invalidate_stale_session()
-        assert result is True
+        _CapabilityDetectionMiddleware._invalidate_stale_session()
         assert not path.exists()
 
-    def test_returns_false_when_no_file(self, data_dir):
-        """Returns False when no file to remove."""
+    def test_no_crash_when_no_file(self, data_dir):
+        """No crash when no file to remove."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
-        result = _CapabilityDetectionMiddleware._invalidate_stale_session()
-        assert result is False
+        _CapabilityDetectionMiddleware._invalidate_stale_session()
+        # No assertion needed — no crash = success
 
-    def test_returns_false_on_permission_error(self, data_dir, monkeypatch):
-        """Returns False on unlink failure (no crash)."""
+    def test_no_crash_on_permission_error(self, data_dir, monkeypatch):
+        """No crash on unlink failure."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         path = data_dir / "mcp_session.json"
@@ -1029,8 +1097,8 @@ class TestInvalidateStaleSession:
             raise PermissionError("denied")
 
         monkeypatch.setattr(Path, "unlink", _raise)
-        result = _CapabilityDetectionMiddleware._invalidate_stale_session()
-        assert result is False
+        _CapabilityDetectionMiddleware._invalidate_stale_session()
+        # No crash = success
 
 
 # ---------------------------------------------------------------------------
@@ -1153,18 +1221,22 @@ class TestHealthMcpDisconnected:
         assert data["sampling_capable"] is True
         assert data["mcp_disconnected"] is True
 
-    async def test_false_when_not_sampling_capable(self, app_client):
-        """sampling_capable=False → mcp_disconnected is always false."""
+    async def test_true_when_not_sampling_capable_but_was_connected(self, app_client):
+        """sampling_capable=False + disconnected → mcp_disconnected=True.
+
+        If we ever detected the client (even without sampling), disconnection
+        should be reported so the frontend can show the correct state.
+        """
         routing = app_client._transport.app.state.routing
         routing.on_mcp_initialize(sampling_capable=False)
         self._set_routing_state(app_client, mcp_connected=False)
 
         data = (await app_client.get("/api/health")).json()
         assert data["sampling_capable"] is False
-        assert data["mcp_disconnected"] is False
+        assert data["mcp_disconnected"] is True
 
     async def test_false_when_sampling_none(self, app_client):
-        """sampling_capable=None → mcp_disconnected is false."""
+        """sampling_capable=None (never detected) → mcp_disconnected=False."""
         data = (await app_client.get("/api/health")).json()
         assert data["sampling_capable"] is None
         assert data["mcp_disconnected"] is False

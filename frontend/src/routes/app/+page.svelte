@@ -56,14 +56,17 @@
         const wasDisconnected = forgeStore.mcpDisconnected;
         const prevSampling = forgeStore.samplingCapable;
         forgeStore.samplingCapable = d.sampling_capable;
-        forgeStore.mcpDisconnected = !d.mcp_connected;
+        // Match health endpoint logic: disconnected = not connected AND capability was known.
+        // When sampling_capable is null (session invalidated / never connected), this is
+        // "unknown" — not a disconnect from a known client.
+        forgeStore.mcpDisconnected = !d.mcp_connected && d.sampling_capable !== null;
         if (d.mcp_connected && wasDisconnected) {
           addToast('created', 'MCP client reconnected');
         }
         if (prevSampling !== true && d.sampling_capable === true) {
           addToast('created', 'MCP client connected with sampling capability');
         }
-        if (!d.mcp_connected && !wasDisconnected) {
+        if (!d.mcp_connected && d.sampling_capable !== null && !wasDisconnected) {
           addToast('deleted', 'MCP client disconnected');
         }
       }
