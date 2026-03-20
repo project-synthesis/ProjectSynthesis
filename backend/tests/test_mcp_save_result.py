@@ -4,8 +4,9 @@ Comprehensive save_result tests (with real DB) live in test_mcp_tools.py.
 These tests verify specific mocking scenarios.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.mcp_server import synthesis_save_result
 

@@ -1,10 +1,7 @@
 import asyncio
-import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
-from httpx import AsyncClient
 
 from app.main import app, lifespan
 
@@ -23,10 +20,10 @@ async def test_lifespan_startup_and_shutdown():
 
     with patch("app.main.aiosqlite.connect") as mock_connect, \
          patch("app.providers.detector.detect_provider") as mock_detect_provider, \
-         patch("app.services.prompt_loader.PromptLoader") as mock_prompt_loader, \
-         patch("app.services.strategy_loader.StrategyLoader") as mock_strategy_loader, \
-         patch("app.main.watch_strategy_files", new_callable=MagicMock) as mock_watch, \
-         patch("app.main.logger") as mock_logger:
+         patch("app.services.prompt_loader.PromptLoader"), \
+         patch("app.services.strategy_loader.StrategyLoader"), \
+         patch("app.main.watch_strategy_files", new_callable=MagicMock), \
+         patch("app.main.logger"):
 
         with patch("app.database.async_session_factory") as mock_session_factory, \
              patch("app.services.trace_logger.TraceLogger") as mock_trace_logger, \
@@ -86,7 +83,7 @@ async def test_lifespan_startup_and_shutdown():
                                 pass
                     return _inner().__await__()
 
-            with patch("app.main.asyncio.create_task", side_effect=DummyTask) as mock_create_task:
+            with patch("app.main.asyncio.create_task", side_effect=DummyTask):
                 async with lifespan(app):
                     assert app.state.routing is not None
                     mock_routing.set_provider.assert_called_once_with(mock_provider)
@@ -106,15 +103,15 @@ async def test_lifespan_startup_handler_errors_do_not_crash():
     mock_routing.state.provider_name = None
     mock_routing.available_tiers = ["passthrough"]
 
-    with patch("app.main.aiosqlite.connect") as mock_connect, \
+    with patch("app.main.aiosqlite.connect"), \
          patch("app.providers.detector.detect_provider", side_effect=ImportError("No provider")), \
          patch("app.services.prompt_loader.PromptLoader") as mock_prompt_loader, \
-         patch("app.services.strategy_loader.StrategyLoader") as mock_strategy_loader, \
+         patch("app.services.strategy_loader.StrategyLoader"), \
          patch("app.main.watch_strategy_files", new_callable=MagicMock):
 
         with patch("app.database.async_session_factory") as mock_session_factory, \
              patch("app.services.trace_logger.TraceLogger") as mock_trace_logger, \
-             patch("app.main.DATA_DIR") as mock_data_dir, \
+             patch("app.main.DATA_DIR"), \
              patch("app.services.routing.RoutingManager", return_value=mock_routing):
 
             mock_prompt_loader.return_value.validate_all.side_effect = RuntimeError("Bad template")
@@ -142,11 +139,20 @@ async def test_main_router_imports():
 async def test_lazy_imports_exception_handling():
     import sys
     from importlib import reload
+
     import app.main
-    
+
     # We will hide a module so that ImportError is triggered
-    with patch.dict(sys.modules, {"app.routers.health": None, "app.routers.optimize": None, "app.routers.history": None, "app.routers.feedback": None, "app.routers.providers": None, "app.routers.settings": None, "app.routers.github_auth": None, "app.routers.github_repos": None, "app.routers.refinement": None, "app.routers.events": None, "app.routers.preferences": None, "app.routers.strategies": None, "app.routers.patterns": None}):
+    with patch.dict(sys.modules, {
+        "app.routers.health": None, "app.routers.optimize": None,
+        "app.routers.history": None, "app.routers.feedback": None,
+        "app.routers.providers": None, "app.routers.settings": None,
+        "app.routers.github_auth": None, "app.routers.github_repos": None,
+        "app.routers.refinement": None, "app.routers.events": None,
+        "app.routers.preferences": None, "app.routers.strategies": None,
+        "app.routers.patterns": None,
+    }):
         reload(app.main)
-        
+
     # Put it back to normal
     reload(app.main)

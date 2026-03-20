@@ -1,6 +1,9 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from app.services.github_client import GitHubClient
+
 
 def make_mock_response(status_code=200, json_data=None):
     mock_resp = MagicMock()
@@ -44,13 +47,18 @@ async def test_get_branch_and_sha(github_client, mock_httpx_client):
     mock_httpx_client.get.return_value = make_mock_response(200, {"commit": {"sha": "1234abcd"}})
     res = await github_client.get_branch("fake_token", "user/repo1", "main")
     assert res == {"commit": {"sha": "1234abcd"}}
-    
+
     sha = await github_client.get_branch_head_sha("fake_token", "user/repo1", "main")
     assert sha == "1234abcd"
 
 @pytest.mark.asyncio
 async def test_get_tree(github_client, mock_httpx_client):
-    mock_httpx_client.get.return_value = make_mock_response(200, {"tree": [{"type": "blob", "path": "file1"}, {"type": "tree", "path": "dir1"}]})
+    mock_httpx_client.get.return_value = make_mock_response(200, {
+        "tree": [
+            {"type": "blob", "path": "file1"},
+            {"type": "tree", "path": "dir1"},
+        ]
+    })
     res = await github_client.get_tree("fake_token", "user/repo1", "main")
     assert res == [{"type": "blob", "path": "file1"}]
 

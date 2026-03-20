@@ -121,13 +121,13 @@ class TestProcessOpt:
                 m.scalar_one_or_none.return_value = None
                 m.scalars.return_value.all.return_value = []
             return m
-        
+
         mock_db.execute.side_effect = mock_execute_side_effect
 
         mock_family = MagicMock(id="fam1")
         extractor._find_or_create_family = AsyncMock(return_value=mock_family)
         extractor._extract_meta_patterns = AsyncMock(return_value=["pattern1"])
-        
+
         # We need to mock _merge_meta_patterns
         extractor._merge_meta_pattern = AsyncMock()
 
@@ -139,7 +139,7 @@ class TestProcessOpt:
             session_factory.return_value = session_mock
 
             await extractor.process("opt1")
-            
+
             assert mock_opt.raw_prompt is not None
             extractor._find_or_create_family.assert_called_once()
             extractor._extract_meta_patterns.assert_called_once()
@@ -151,9 +151,12 @@ class TestProcessOpt:
         mock_provider = AsyncMock()
         mock_provider.complete_parsed.return_value = MagicMock(patterns=["pattern1", "pattern2"])
         extractor._provider = mock_provider
-        
+
         from app.models import Optimization
-        opt_mock = Optimization(id='opt1', raw_prompt='r', optimized_prompt='o', intent_label='test', domain='backend', task_type='coding')
+        opt_mock = Optimization(
+            id='opt1', raw_prompt='r', optimized_prompt='o',
+            intent_label='test', domain='backend', task_type='coding',
+        )
         patterns = await extractor._extract_meta_patterns(opt_mock)
         assert patterns == ["pattern1", "pattern2"]
 
@@ -165,7 +168,7 @@ class TestProcessOpt:
         mock_existing.embedding = np.ones(384, dtype=np.float32).tobytes()
         mock_existing.pattern_text = "patternold"
         mock_existing.source_count = 1
-        
+
         m_exec = MagicMock()
         m_exec.scalars.return_value.all.return_value = [mock_existing]
         mock_db.execute.return_value = m_exec

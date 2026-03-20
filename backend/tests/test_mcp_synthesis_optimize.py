@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.mcp_server import synthesis_optimize
 from app.schemas.mcp_models import OptimizeOutput
@@ -27,7 +28,9 @@ async def test_synthesis_optimize_with_provider():
     mock_provider.name = "mock_provider"
 
     with (
-        patch("app.mcp_server._routing", _mock_routing("internal", provider=mock_provider, provider_name="mock_provider")),
+        patch("app.mcp_server._routing", _mock_routing(
+            "internal", provider=mock_provider, provider_name="mock_provider",
+        )),
         patch("app.mcp_server.async_session_factory") as mock_session_factory,
         patch("app.mcp_server.PipelineOrchestrator") as mock_orchestrator,
         patch("app.mcp_server.notify_event_bus", new_callable=AsyncMock) as mock_notify,
@@ -96,7 +99,7 @@ async def test_synthesis_optimize_no_provider_but_sampling():
     with (
         patch("app.mcp_server._routing", _mock_routing("sampling")),
         patch("app.mcp_server.run_sampling_pipeline", new_callable=AsyncMock) as mock_sampling,
-        patch("app.mcp_server.notify_event_bus", new_callable=AsyncMock) as mock_notify,
+        patch("app.mcp_server.notify_event_bus", new_callable=AsyncMock),
         patch("app.mcp_server.PreferencesService") as mock_prefs_service,
         patch("app.mcp_server._resolve_workspace_guidance", new_callable=AsyncMock, return_value=""),
     ):
@@ -126,7 +129,9 @@ async def test_synthesis_optimize_pipeline_error():
     mock_provider.name = "mock_provider"
 
     with (
-        patch("app.mcp_server._routing", _mock_routing("internal", provider=mock_provider, provider_name="mock_provider")),
+        patch("app.mcp_server._routing", _mock_routing(
+            "internal", provider=mock_provider, provider_name="mock_provider",
+        )),
         patch("app.mcp_server.async_session_factory") as mock_session_factory,
         patch("app.mcp_server.PipelineOrchestrator") as mock_orchestrator,
         patch("app.mcp_server._resolve_workspace_guidance", new_callable=AsyncMock, return_value=""),

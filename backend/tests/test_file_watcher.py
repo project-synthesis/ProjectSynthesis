@@ -1,11 +1,12 @@
 import asyncio
-import time
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from watchfiles import Change
 
 from app.services.file_watcher import watch_strategy_files
+
 
 @pytest.mark.asyncio
 async def test_watch_strategy_files_dir_not_exist(caplog):
@@ -41,7 +42,7 @@ async def test_watch_strategy_files_exception(caplog):
     with patch("app.services.file_watcher.Path.is_dir", return_value=True), \
          patch("app.services.file_watcher.awatch", side_effect=mock_awatch), \
          patch("app.services.file_watcher.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        
+
         await watch_strategy_files(Path("/fake/path"))
         assert "Strategy file watcher error: Test Exception" in caplog.text
         mock_sleep.assert_called_once_with(5)
@@ -66,19 +67,19 @@ async def test_watch_strategy_files_successful_events():
          patch("app.services.file_watcher.awatch", side_effect=mock_awatch), \
          patch("app.services.file_watcher.time.time", return_value=12345.6), \
          patch("app.services.event_bus.event_bus", mock_bus):
-        
+
         await watch_strategy_files(Path("/fake/path"))
-        
+
         # Verify event was published for .md file only for supported actions
         assert mock_bus.publish.call_count == 2
-        
+
         # Call 1
         args, kwargs = mock_bus.publish.call_args_list[0]
         assert args[0] == "strategy_changed"
         assert args[1]["action"] == "created"
         assert args[1]["name"] == "test_strategy"
         assert args[1]["timestamp"] == 12345.6
-        
+
         # Call 2
         args, kwargs = mock_bus.publish.call_args_list[1]
         assert args[0] == "strategy_changed"

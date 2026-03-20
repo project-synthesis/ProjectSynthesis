@@ -1,7 +1,9 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+
 from app.models import PatternFamily
-from datetime import datetime
+
 
 class TestPatternsEndpoints:
     @pytest.mark.asyncio
@@ -19,7 +21,7 @@ class TestPatternsEndpoints:
             resp = await app_client.post("/api/patterns/match", json={"prompt_text": "this is a test prompt text"})
             assert resp.status_code == 200
             assert resp.json() == {"match": {"family_id": "fam1", "score": 0.85}}
-            
+
     @pytest.mark.asyncio
     async def test_match_endpoint_no_match(self, app_client):
         with patch("app.routers.patterns._matcher_service.match", new_callable=AsyncMock) as mock_match:
@@ -77,7 +79,7 @@ class TestPatternsEndpoints:
             resp = await app_client.get("/api/patterns/search?q=test")
             assert resp.status_code == 200
             assert resp.json() == {"results": []}
-            
+
     @pytest.mark.asyncio
     async def test_get_stats(self, app_client):
         with patch("app.routers.patterns._graph_service.get_stats", new_callable=AsyncMock) as mock_stats:

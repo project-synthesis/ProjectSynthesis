@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.mcp_server import synthesis_analyze
 from app.schemas.pipeline_contracts import (
@@ -59,7 +60,9 @@ async def test_synthesis_analyze_with_provider():
     mock_provider.complete_parsed.side_effect = side_effect
 
     with (
-        patch("app.mcp_server._routing", _mock_routing("internal", provider=mock_provider, provider_name="mock_provider")),
+        patch("app.mcp_server._routing", _mock_routing(
+            "internal", provider=mock_provider, provider_name="mock_provider",
+        )),
         patch("app.mcp_server.async_session_factory") as mock_session_factory,
         patch("app.mcp_server.blend_scores") as mock_blend,
         patch("app.mcp_server.PreferencesService") as mock_prefs_service,

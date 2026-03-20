@@ -1,8 +1,10 @@
+import asyncio
+
 import pytest
 from httpx import AsyncClient
-import asyncio
+
 from app.services.event_bus import event_bus
-from app.routers.events import InternalEventRequest
+
 
 @pytest.fixture
 def mock_event_bus():
@@ -20,14 +22,14 @@ async def test_publish_event(app_client: AsyncClient, mock_event_bus):
 @pytest.mark.asyncio
 async def test_event_stream_timeout_and_disconnect(app_client: AsyncClient, mock_event_bus, monkeypatch):
     from asyncio.exceptions import TimeoutError
-    
+
     original_queue = asyncio.Queue
 
     class MockQueue(original_queue):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.call_count = 0
-            
+
         async def get(self):
             self.call_count += 1
             if self.call_count == 1:
@@ -37,7 +39,7 @@ async def test_event_stream_timeout_and_disconnect(app_client: AsyncClient, mock
 
     monkeypatch.setattr(asyncio, "Queue", MockQueue)
     # also we need to avoid wait_for raising another timeout
-    
+
     async def mock_wait_for(coro, timeout):
         return await coro
 
@@ -64,7 +66,7 @@ async def test_event_stream_yield_event(app_client: AsyncClient, mock_event_bus,
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.call_count = 0
-            
+
         async def get(self):
             self.call_count += 1
             if self.call_count == 1:
@@ -73,7 +75,7 @@ async def test_event_stream_yield_event(app_client: AsyncClient, mock_event_bus,
                 raise Exception("Stop stream")
 
     monkeypatch.setattr(asyncio, "Queue", MockQueue)
-    
+
     async def mock_wait_for(coro, timeout):
         return await coro
 
@@ -87,8 +89,8 @@ async def test_event_stream_yield_event(app_client: AsyncClient, mock_event_bus,
                 lines.append(line)
                 if len(lines) >= 2:
                     break
-        assert any("event: test_type" in l for l in lines)
-        assert any('data: {"hello": "world"}' in l for l in lines)
+        assert any("event: test_type" in line for line in lines)
+        assert any('data: {"hello": "world"}' in line for line in lines)
     except Exception as e:
         if str(e) == "Stop stream":
             pass
