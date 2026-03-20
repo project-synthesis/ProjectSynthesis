@@ -130,6 +130,8 @@ async def test_match_prompt_cluster_level_fallback(db, mock_embedding, mock_prov
 
     # Query that matches parent but not child leaf
     result = await engine.match_prompt("API related topics", db=db)
-    # Should match at cluster level since parent centroid matches
-    if result is not None and result.match_level == "cluster":
+    # Should match — either at cluster level (parent centroid) or family level
+    assert result is not None
+    assert result.match_level in ("family", "cluster")
+    if result.match_level == "cluster":
         assert result.taxonomy_node is not None

@@ -390,6 +390,9 @@ class TaxonomyEngine:
                 for idx, score in matches:
                     node = valid_nodes[idx]
                     coherence = node.coherence if node.coherence is not None else 0.0
+                    # Spec 7.4 strict CANDIDATE_THRESHOLD applies only at family
+                    # level. Cluster-level uses adaptive threshold for all node
+                    # states — the match is more general (parent cluster context).
                     threshold = suggestion_threshold(
                         base=CLUSTER_MATCH_THRESHOLD, coherence=coherence
                     )
