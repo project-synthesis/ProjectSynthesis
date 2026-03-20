@@ -147,7 +147,7 @@ Strict `Q_after >= Q_before` can deadlock the system when embedding distribution
 
 2. **Compound operation batching:** Within a single warm-path cycle, all operations of the same priority level are evaluated as a batch: `Q_before` is measured once before the first operation, `Q_after` once after the last. A split that temporarily dips Q (by creating small fragments) followed by an emerge (consolidating fragments) can pass as a unit even if neither would pass individually.
 
-3. **Deadlock breaker:** If 5 consecutive warm-path cycles reject ALL attempted operations (system is stuck), force the highest-confidence single operation through regardless of Q_system impact, log a warning, and schedule a cold-path recomputation. This prevents permanent stagnation.
+3. **Deadlock breaker:** If 5 consecutive warm-path cycles reject ALL attempted operations (system is stuck), force the operation with the largest positive delta on any single quality dimension through regardless of composite Q_system impact, log a warning, and schedule a cold-path recomputation via `asyncio.create_task(self.run_cold_path())` (deferred to the next event loop iteration, after the current warm-path releases its lock). This prevents permanent stagnation.
 
 **Edge case hardening for Q_system computation:**
 
@@ -200,13 +200,12 @@ The hot path (per-optimization) and warm path (periodic) can run concurrently. T
 
 ```python
 class TaxonomyEngine:
-    _warm_path_lock: asyncio.Lock   # Serializes warm-path execution
-    _warm_path_running: bool        # Deduplication flag
+    _warm_path_lock: asyncio.Lock   # Serializes warm/cold-path execution
 ```
 
 **Hot path:** Lock-free. Does nearest-centroid assignment using a read-consistent snapshot of cluster centroids (cached in memory, refreshed after each warm-path cycle). If the hot path assigns an optimization to a cluster that the concurrent warm-path retires mid-flight, the optimization's `taxonomy_node_id` becomes stale. On the next warm-path cycle, stale assignments are detected (node is retired) and re-assigned.
 
-**Warm path:** Acquires `_warm_path_lock` before starting. If the lock is held (another warm-path is running), the invocation is skipped and logged. This prevents both the timer trigger and the optimization-count trigger from running concurrently.
+**Warm path:** Checks `_warm_path_lock.locked()` first as a fast-path deduplication check — if the lock is already held, the invocation is skipped and logged (no separate boolean needed, since `asyncio.Lock.locked()` is atomic in the single-threaded event loop). If not held, acquires the lock before starting. This prevents both the timer trigger and the optimization-count trigger from running concurrently.
 
 **Cold path:** Acquires `_warm_path_lock` (same lock — cold path is a superset of warm path). Blocks warm-path invocations for the duration. Hot-path continues with stale cached centroids; refreshed when cold-path completes.
 
@@ -583,6 +582,8 @@ The MCP server (`mcp_server.py`) runs as a separate process. It needs taxonomy c
 
 The MCP server instantiates its own `TaxonomyEngine` (same pattern as its own `RoutingManager`). The engine reads/writes the same SQLite database. Warm-path and cold-path timers run only in the FastAPI process (the MCP server's engine operates in hot-path-only mode to avoid conflicting warm-path cycles). The MCP server publishes `taxonomy_changed` events via HTTP POST to `/api/events/_publish` (same cross-process notification pattern used for other events).
 
+**Centroid cache invalidation:** The MCP server's hot-path-only engine maintains a cached centroid snapshot for nearest-centroid assignment. This cache must refresh when the FastAPI process completes warm-path cycles that modify the taxonomy. The MCP server subscribes to `taxonomy_changed` SSE events from the FastAPI process (via its existing event polling mechanism). On receiving `taxonomy_changed`, the engine reloads confirmed node centroids from the database into its in-memory cache. Between invalidation events, hot-path assignments use the cached snapshot (identical to the FastAPI engine's behavior between warm-path cycles).
+
 ### 6.8 PatternMatcher Response Schema
 
 The `/api/patterns/match` endpoint currently returns `family.domain` as a string. After migration:
@@ -686,7 +687,7 @@ Zooming is hierarchy navigation, not magnification:
 
 Backend: `umap.UMAP(n_components=3, metric="cosine", low_memory=True, random_state=42)`. Runs in thread pool executor. Incremental `transform()` for new points (O(k), not O(n) refit). Positions cached on `TaxonomyNode.umap_x/y/z`.
 
-**Cold-path projection stability (Procrustes alignment):** A full UMAP refit on a changed dataset produces a completely different projection, destroying the user's spatial mental model. After every cold-path refit, apply Procrustes analysis (scipy.spatial.procrustes) between old and new projections of confirmed nodes. This finds the optimal rotation + scaling + translation that minimizes displacement of stable nodes. The aligned positions preserve the user's spatial memory ("security stuff is upper-left") while allowing the global structure to evolve. Implementation: `scipy.spatial.procrustes(old_positions[confirmed], new_positions[confirmed])` -> apply the same transform to all new positions including candidates.
+**Cold-path projection stability (Procrustes alignment):** A full UMAP refit on a changed dataset produces a completely different projection, destroying the user's spatial mental model. After every cold-path refit, apply Procrustes analysis (scipy.spatial.procrustes) between old and new projections of confirmed nodes. This finds the optimal rotation + scaling + translation that minimizes displacement of stable nodes. The aligned positions preserve the user's spatial memory ("security stuff is upper-left") while allowing the global structure to evolve. Implementation: use `scipy.linalg.orthogonal_procrustes(new_confirmed_centered, old_confirmed_centered)` which returns the rotation matrix `R` directly (rather than `scipy.spatial.procrustes` which returns standardized matrices). Center both point sets, compute `R`, then apply `new_all_centered @ R + old_mean` to all new positions including candidates. This preserves relative positions since Procrustes alignment is a rigid transformation.
 
 Frontend: Web Worker applies 50-iteration force settling for local collision resolution. Scene renders immediately with UMAP positions, then animates to settled positions (~50-100ms for 500 nodes).
 
@@ -1238,3 +1239,12 @@ Issues identified by spec review and resolved in this document:
 | S4 | Suggestion | MCP server integration unspecified | Hot-path-only engine instance (Section 6.7) |
 | S5 | Suggestion | process_optimization() responsibilities unclear | Explicit 6-step list (Section 6.4) |
 | S6 | Suggestion | Trend normalization clusters near 0 | Percentage-of-mean normalization (Section 9.1) |
+
+**Second-pass findings (all addressed):**
+
+| ID | Severity | Issue | Resolution |
+|---|---|---|---|
+| N4 | Important | MCP server centroid cache never refreshed | Explicit invalidation via taxonomy_changed SSE (Section 6.7) |
+| N3 | Suggestion | Deadlock breaker scheduling mechanism unspecified | asyncio.create_task after lock release (Section 2.5) |
+| N5 | Suggestion | _warm_path_running redundant with Lock.locked() | Eliminated separate boolean (Section 2.6) |
+| I5+ | Suggestion | scipy.spatial.procrustes returns standardized matrices | Use scipy.linalg.orthogonal_procrustes for direct R matrix (Section 7.5) |
