@@ -8,6 +8,9 @@ from app.services.taxonomy.quality import (
     QWeights,
     adaptive_threshold,
     compute_q_system,
+    epsilon_tolerance,
+    is_non_regressive,
+    suggestion_threshold,
 )
 
 
@@ -105,3 +108,53 @@ class TestAdaptiveThreshold:
     def test_zero_population(self):
         t = adaptive_threshold(base=0.78, population=0)
         assert t == pytest.approx(0.78)  # base value exactly
+
+
+class TestEpsilonTolerance:
+    """Spec Section 2.5 — non-regression epsilon decays with age."""
+
+    def test_young_taxonomy_larger_epsilon(self):
+        eps = epsilon_tolerance(warm_path_age=0)
+        assert eps == pytest.approx(0.01)
+
+    def test_mature_taxonomy_smaller_epsilon(self):
+        eps_young = epsilon_tolerance(warm_path_age=10)
+        eps_old = epsilon_tolerance(warm_path_age=100)
+        assert eps_old < eps_young
+
+    def test_minimum_floor(self):
+        eps = epsilon_tolerance(warm_path_age=10000)
+        assert eps >= 0.001
+
+
+class TestIsNonRegressive:
+    """Spec Section 2.5 — Q_after >= Q_before - epsilon."""
+
+    def test_improvement_passes(self):
+        assert is_non_regressive(q_before=0.8, q_after=0.85, warm_path_age=10)
+
+    def test_equal_passes(self):
+        assert is_non_regressive(q_before=0.8, q_after=0.8, warm_path_age=10)
+
+    def test_small_regression_within_tolerance(self):
+        # Young taxonomy has ~0.01 epsilon
+        assert is_non_regressive(q_before=0.8, q_after=0.795, warm_path_age=0)
+
+    def test_large_regression_fails(self):
+        assert not is_non_regressive(q_before=0.8, q_after=0.7, warm_path_age=50)
+
+
+class TestSuggestionThreshold:
+    """Spec Section 7.9 — adaptive threshold based on coherence."""
+
+    def test_high_coherence_near_base(self):
+        t = suggestion_threshold(base=0.72, coherence=1.0)
+        assert t == pytest.approx(0.72)
+
+    def test_low_coherence_higher_threshold(self):
+        t = suggestion_threshold(base=0.72, coherence=0.0)
+        assert t == pytest.approx(0.72 + 0.15)
+
+    def test_mid_coherence(self):
+        t = suggestion_threshold(base=0.72, coherence=0.5)
+        assert t == pytest.approx(0.72 + 0.15 * 0.5)
