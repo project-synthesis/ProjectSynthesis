@@ -219,7 +219,7 @@ describe('RefinementStore', () => {
 
   describe('cancel', () => {
     it('sets status to idle and aborts controller', () => {
-      (refinementStore as any).status = 'refining';
+      refinementStore.status = 'refining';
       refinementStore.cancel();
       expect(refinementStore.status).toBe('idle');
     });
@@ -230,7 +230,7 @@ describe('RefinementStore', () => {
       refinementStore.optimizationId = 'opt-1';
       refinementStore.turns = [mockRefinementTurn() as any];
       refinementStore.error = 'some error';
-      (refinementStore as any).status = 'error';
+      refinementStore.status = 'error';
       refinementStore.reset();
       expect(refinementStore.optimizationId).toBeNull();
       expect(refinementStore.turns).toHaveLength(0);

@@ -328,7 +328,7 @@ describe('ForgeStore', () => {
     it('clears all state', () => {
       forgeStore.prompt = 'Some prompt';
       forgeStore.result = mockOptimizationResult() as any;
-      (forgeStore as any).status = 'complete';
+      forgeStore.status = 'complete';
       forgeStore.error = 'some error';
       forgeStore.scores = mockDimensionScores() as any;
       forgeStore.reset();
