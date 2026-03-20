@@ -12,38 +12,48 @@ pytestmark = pytest.mark.asyncio
 
 async def test_lifespan_startup_and_shutdown():
     # Mocking different components to ensure lifespan runs properly without hanging
+    # Mock RoutingManager to prevent real background tasks
+    mock_routing = MagicMock()
+    mock_routing.set_provider = MagicMock()
+    mock_routing.start_disconnect_checker = AsyncMock()
+    mock_routing.stop = AsyncMock()
+    mock_routing.state.provider_name = "mock_provider"
+    mock_routing.available_tiers = ["internal", "passthrough"]
+    mock_routing_cls = MagicMock(return_value=mock_routing)
+
     with patch("app.main.aiosqlite.connect") as mock_connect, \
          patch("app.providers.detector.detect_provider") as mock_detect_provider, \
          patch("app.services.prompt_loader.PromptLoader") as mock_prompt_loader, \
          patch("app.services.strategy_loader.StrategyLoader") as mock_strategy_loader, \
          patch("app.main.watch_strategy_files", new_callable=MagicMock) as mock_watch, \
          patch("app.main.logger") as mock_logger:
-            
+
         with patch("app.database.async_session_factory") as mock_session_factory, \
              patch("app.services.trace_logger.TraceLogger") as mock_trace_logger, \
              patch("app.main.DATA_DIR") as mock_data_dir, \
              patch("app.main.event_bus") as mock_event_bus, \
-             patch("app.services.pattern_extractor.PatternExtractorService") as mock_pattern_extractor:
-        
+             patch("app.services.pattern_extractor.PatternExtractorService") as mock_pattern_extractor, \
+             patch("app.services.routing.RoutingManager", mock_routing_cls):
+
             # Setup mocks
             mock_db_path = MagicMock()
             mock_db_path.exists.return_value = True
             mock_data_dir.__truediv__.return_value = mock_db_path
-            
+
             mock_db = AsyncMock()
             mock_connect.return_value.__aenter__.return_value = mock_db
-            
+
             mock_provider = MagicMock()
             mock_provider.name = "mock_provider"
             mock_detect_provider.return_value = mock_provider
-            
+
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__.return_value = mock_session
-            
+
             mock_trace_logger_instance = MagicMock()
             mock_trace_logger_instance.rotate.return_value = 5
             mock_trace_logger.return_value = mock_trace_logger_instance
-            
+
             # Subscribed events loop test
             # We want the listener to process an event
             async def mock_subscribe():
@@ -52,13 +62,13 @@ async def test_lifespan_startup_and_shutdown():
                 yield {"event": "other_event", "data": {"id": "123"}}
                 # Then we simulate a cancel or exception to break the loop
                 raise asyncio.CancelledError()
-                
+
             mock_event_bus.subscribe = mock_subscribe
-            
+
             # Make sure extractor processes correctly
             mock_extractor_instance = AsyncMock()
             mock_pattern_extractor.return_value = mock_extractor_instance
-            
+
             # Since we want to test the inner listener, let's capture the tasks
             class DummyTask:
                 def __init__(self, coro=None, name=None, *args, **kwargs):
@@ -75,33 +85,42 @@ async def test_lifespan_startup_and_shutdown():
                             except Exception:
                                 pass
                     return _inner().__await__()
-            
+
             with patch("app.main.asyncio.create_task", side_effect=DummyTask) as mock_create_task:
                 async with lifespan(app):
-                    assert app.state.provider == mock_provider
-                    
+                    assert app.state.routing is not None
+                    mock_routing.set_provider.assert_called_once_with(mock_provider)
+
                     # We have a task for listener. Let's await it to simulate the background work
                     if hasattr(app.state, "extraction_task") and app.state.extraction_task:
                         await app.state.extraction_task
-                
+
                 mock_session.execute.assert_called_once()
 
 
 async def test_lifespan_startup_handler_errors_do_not_crash():
+    mock_routing = MagicMock()
+    mock_routing.set_provider = MagicMock()
+    mock_routing.start_disconnect_checker = AsyncMock()
+    mock_routing.stop = AsyncMock()
+    mock_routing.state.provider_name = None
+    mock_routing.available_tiers = ["passthrough"]
+
     with patch("app.main.aiosqlite.connect") as mock_connect, \
          patch("app.providers.detector.detect_provider", side_effect=ImportError("No provider")), \
          patch("app.services.prompt_loader.PromptLoader") as mock_prompt_loader, \
          patch("app.services.strategy_loader.StrategyLoader") as mock_strategy_loader, \
          patch("app.main.watch_strategy_files", new_callable=MagicMock):
-        
+
         with patch("app.database.async_session_factory") as mock_session_factory, \
              patch("app.services.trace_logger.TraceLogger") as mock_trace_logger, \
-             patch("app.main.DATA_DIR") as mock_data_dir:
-            
+             patch("app.main.DATA_DIR") as mock_data_dir, \
+             patch("app.services.routing.RoutingManager", return_value=mock_routing):
+
             mock_prompt_loader.return_value.validate_all.side_effect = RuntimeError("Bad template")
             mock_trace_logger.side_effect = Exception("Rotate Failed")
             mock_session_factory.return_value.__aenter__.side_effect = Exception("DB error")
-            
+
             class DummyTask:
                 def __init__(self, *args, **kwargs):
                     pass
@@ -110,7 +129,7 @@ async def test_lifespan_startup_handler_errors_do_not_crash():
                 def __await__(self):
                     async def _inner(): raise asyncio.CancelledError()
                     return _inner().__await__()
-                    
+
             with patch("app.main.asyncio.create_task", side_effect=DummyTask):
                 async with lifespan(app):
                     pass
