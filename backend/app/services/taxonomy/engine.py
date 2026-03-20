@@ -75,7 +75,7 @@ class PatternMatch:
     taxonomy_node: TaxonomyNode | None
     meta_patterns: list[MetaPattern]
     similarity: float
-    match_level: str  # "taxonomy" | "family" | "none"
+    match_level: str  # "family" | "cluster" | "none"
 
 
 # ---------------------------------------------------------------------------
@@ -143,73 +143,82 @@ class TaxonomyEngine:
             optimization_id: PK of the Optimization row to process.
             db: Async SQLAlchemy session.
         """
-        result = await db.execute(
-            select(Optimization).where(Optimization.id == optimization_id)
-        )
-        opt = result.scalar_one_or_none()
+        try:
+            result = await db.execute(
+                select(Optimization).where(Optimization.id == optimization_id)
+            )
+            opt = result.scalar_one_or_none()
 
-        if not opt or opt.status != "completed":
+            if not opt or opt.status != "completed":
+                logger.debug(
+                    "Skipping taxonomy extraction for %s (status=%s)",
+                    optimization_id,
+                    opt.status if opt else "not_found",
+                )
+                return
+
+            # Idempotency: skip if a 'source' OptimizationPattern already exists
+            existing = await db.execute(
+                select(OptimizationPattern).where(
+                    OptimizationPattern.optimization_id == optimization_id,
+                    OptimizationPattern.relationship == "source",
+                )
+            )
+            if existing.scalar_one_or_none():
+                logger.debug(
+                    "Skipping taxonomy extraction for %s (already processed)",
+                    optimization_id,
+                )
+                return
+
+            # 1. Embed raw_prompt
+            embedding = await self._embedding.aembed_single(opt.raw_prompt)
+            opt.embedding = embedding.astype(np.float32).tobytes()
+
+            # 2. Find or create PatternFamily
+            # Use the structured `domain` field (already validated by the pipeline)
+            # as the canonical domain for family assignment.  `domain_raw` is freeform
+            # text that may not map to a valid domain value.
+            async with self._lock:
+                family = await self._assign_family(
+                    db=db,
+                    embedding=embedding,
+                    intent_label=opt.intent_label or "general",
+                    domain=_sanitize_domain(opt.domain or "general"),
+                    task_type=opt.task_type or "general",
+                    overall_score=opt.overall_score,
+                )
+
+            # 3. Extract meta-patterns
+            meta_texts = await self._extract_meta_patterns(opt)
+
+            # 4. Merge meta-patterns
+            for text in meta_texts:
+                await self._merge_meta_pattern(db, family.id, text)
+
+            # 5. Write join record
+            join = OptimizationPattern(
+                optimization_id=opt.id,
+                family_id=family.id,
+                relationship="source",
+            )
+            db.add(join)
+
+            await db.commit()
             logger.debug(
-                "Skipping taxonomy extraction for %s (status=%s)",
+                "Taxonomy extraction complete: opt=%s family='%s' meta_patterns=%d",
                 optimization_id,
-                opt.status if opt else "not_found",
+                family.intent_label,
+                len(meta_texts),
             )
-            return
 
-        # Idempotency: skip if a 'source' OptimizationPattern already exists
-        existing = await db.execute(
-            select(OptimizationPattern).where(
-                OptimizationPattern.optimization_id == optimization_id,
-                OptimizationPattern.relationship == "source",
-            )
-        )
-        if existing.scalar_one_or_none():
-            logger.debug(
-                "Skipping taxonomy extraction for %s (already processed)",
+        except Exception as exc:
+            logger.error(
+                "Taxonomy process_optimization failed for %s: %s",
                 optimization_id,
+                exc,
+                exc_info=True,
             )
-            return
-
-        # 1. Embed raw_prompt
-        embedding = await self._embedding.aembed_single(opt.raw_prompt)
-        opt.embedding = embedding.astype(np.float32).tobytes()
-
-        # 2. Find or create PatternFamily
-        # Use the structured `domain` field (already validated by the pipeline)
-        # as the canonical domain for family assignment.  `domain_raw` is freeform
-        # text that may not map to a valid domain value.
-        async with self._lock:
-            family = await self._assign_family(
-                db=db,
-                embedding=embedding,
-                intent_label=opt.intent_label or "general",
-                domain=_sanitize_domain(opt.domain or "general"),
-                task_type=opt.task_type or "general",
-                overall_score=opt.overall_score,
-            )
-
-        # 3. Extract meta-patterns
-        meta_texts = await self._extract_meta_patterns(opt)
-
-        # 4. Merge meta-patterns
-        for text in meta_texts:
-            await self._merge_meta_pattern(db, family.id, text)
-
-        # 5. Write join record
-        join = OptimizationPattern(
-            optimization_id=opt.id,
-            family_id=family.id,
-            relationship="source",
-        )
-        db.add(join)
-
-        await db.commit()
-        logger.debug(
-            "Taxonomy extraction complete: opt=%s family='%s' meta_patterns=%d",
-            optimization_id,
-            family.intent_label,
-            len(meta_texts),
-        )
 
     # ------------------------------------------------------------------
     # Domain mapping
@@ -413,6 +422,11 @@ class TaxonomyEngine:
                         ).tobytes()
                         family.member_count += 1
 
+                        # avg_score tracks the running mean over members that
+                        # have a score.  Members with overall_score=None are
+                        # excluded intentionally — we cannot average with None.
+                        # When the first scored member arrives, avg_score is
+                        # seeded with that single score.
                         if overall_score is not None and family.avg_score is not None:
                             family.avg_score = round(
                                 (

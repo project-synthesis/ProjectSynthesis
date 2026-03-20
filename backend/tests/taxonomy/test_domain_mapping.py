@@ -41,55 +41,75 @@ async def test_map_domain_finds_match(db, mock_embedding, mock_provider):
 
 @pytest.mark.asyncio
 async def test_map_domain_bayesian_blend(db, mock_embedding, mock_provider):
-    """Applied pattern IDs should bias domain mapping (70/30 blend)."""
+    """Applied pattern IDs should bias domain mapping via 70/30 blend.
+
+    We construct explicit vectors so that the query alone has cosine < 0.35
+    to the API node (unmapped), but after blending 30% of the API-linked
+    pattern centroid, cosine crosses DOMAIN_ALIGNMENT_FLOOR (0.35).
+    """
+    from unittest.mock import AsyncMock
+    from app.models import MetaPattern
+
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
-    # Create two distinct nodes
-    emb_api = mock_embedding.embed_single("REST API design")
-    emb_db = mock_embedding.embed_single("SQL database schema")
+    # Construct controlled geometry:
+    #   api_vec along dim 0, query_vec tilted ~80° away (cosine ~0.17)
+    #   After 70/30 blend with api_vec, cosine to api_vec ≈ 0.47 > 0.35
+    api_vec = np.zeros(384, dtype=np.float32)
+    api_vec[0] = 1.0
+
+    query_vec = np.zeros(384, dtype=np.float32)
+    query_vec[0] = 0.17  # small component along api
+    query_vec[1] = 0.98
+    query_vec /= np.linalg.norm(query_vec)
 
     node_api = TaxonomyNode(
         label="API Architecture",
-        centroid_embedding=emb_api.astype(np.float32).tobytes(),
+        centroid_embedding=api_vec.tobytes(),
         state="confirmed",
         member_count=5,
         coherence=0.85,
         color_hex="#a855f7",
     )
-    node_db = TaxonomyNode(
-        label="Database Design",
-        centroid_embedding=emb_db.astype(np.float32).tobytes(),
-        state="confirmed",
-        member_count=5,
-        coherence=0.85,
-        color_hex="#00d4aa",
-    )
-    db.add_all([node_api, node_db])
+    db.add(node_api)
     await db.flush()
 
-    # Create a family linked to API node
+    # Family linked to API node
     family = PatternFamily(
         intent_label="API patterns",
         domain="backend",
-        centroid_embedding=emb_api.astype(np.float32).tobytes(),
+        centroid_embedding=api_vec.tobytes(),
         taxonomy_node_id=node_api.id,
     )
     db.add(family)
-    await db.commit()
+    await db.flush()
 
-    # Map with applied pattern from API family — should bias toward API
-    from app.models import MetaPattern
-    mp = MetaPattern(family_id=family.id, pattern_text="use RESTful conventions")
+    mp = MetaPattern(
+        family_id=family.id,
+        pattern_text="use RESTful conventions",
+        embedding=api_vec.tobytes(),
+    )
     db.add(mp)
     await db.commit()
 
-    result = await engine.map_domain(
-        "general programming task",
-        db=db,
-        applied_pattern_ids=[mp.id],
+    # Override aembed_single to return our controlled query vector
+    original_side_effect = mock_embedding.aembed_single.side_effect
+    mock_embedding.aembed_single = AsyncMock(side_effect=lambda text: query_vec)
+
+    # Without blend: cosine(query_vec, api_vec) ≈ 0.17 < 0.35 → unmapped
+    result_no_blend = await engine.map_domain(
+        "ambiguous task", db=db, applied_pattern_ids=None,
     )
-    # With the blend, should lean toward API node
-    assert result is not None
+    assert result_no_blend.taxonomy_node_id is None  # below floor
+
+    # With blend: 70% query + 30% api centroid → cosine to api ≈ 0.47 > 0.35
+    result_blended = await engine.map_domain(
+        "ambiguous task", db=db, applied_pattern_ids=[mp.id],
+    )
+    assert result_blended.taxonomy_node_id == node_api.id  # blend pushed above floor
+
+    # Restore original mock
+    mock_embedding.aembed_single = AsyncMock(side_effect=original_side_effect)
 
 
 @pytest.mark.asyncio
@@ -162,12 +182,13 @@ async def test_map_domain_returns_breadcrumb(db, mock_embedding, mock_provider):
     """TaxonomyMapping should include a breadcrumb for the matched node."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
-    emb = mock_embedding.embed_single("frontend UI development")
+    emb_child = mock_embedding.embed_single("frontend UI development")
+    emb_parent = mock_embedding.embed_single("general software engineering concepts")
 
-    # Parent node
+    # Parent node — distinct embedding so it won't be the top match
     parent = TaxonomyNode(
         label="Software Engineering",
-        centroid_embedding=emb.astype(np.float32).tobytes(),
+        centroid_embedding=emb_parent.astype(np.float32).tobytes(),
         state="confirmed",
         member_count=10,
         coherence=0.9,
@@ -176,10 +197,10 @@ async def test_map_domain_returns_breadcrumb(db, mock_embedding, mock_provider):
     db.add(parent)
     await db.flush()
 
-    # Child node (same embedding for easy matching)
+    # Child node — same text as query for guaranteed top match
     child = TaxonomyNode(
         label="Frontend Development",
-        centroid_embedding=emb.astype(np.float32).tobytes(),
+        centroid_embedding=emb_child.astype(np.float32).tobytes(),
         state="confirmed",
         member_count=5,
         coherence=0.85,
@@ -191,11 +212,10 @@ async def test_map_domain_returns_breadcrumb(db, mock_embedding, mock_provider):
 
     result = await engine.map_domain("frontend UI development", db=db)
 
-    # Should have matched (high cosine for same text)
-    assert result.taxonomy_node_id is not None
-    # Breadcrumb should be a non-empty list
-    assert isinstance(result.taxonomy_breadcrumb, list)
-    assert len(result.taxonomy_breadcrumb) >= 1
+    # Should match child node specifically (identical embedding)
+    assert result.taxonomy_node_id == child.id
+    # Breadcrumb should be [parent, child] — length 2
+    assert result.taxonomy_breadcrumb == ["Software Engineering", "Frontend Development"]
 
 
 @pytest.mark.asyncio
