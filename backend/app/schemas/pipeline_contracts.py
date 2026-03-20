@@ -104,8 +104,9 @@ class AnalysisResult(BaseModel):
     )
     domain: str = Field(
         default="general",
-        description="Domain category: 'backend', 'frontend', 'database', "
-        "'devops', 'security', 'fullstack', or 'general'.",
+        description="Development domain in 1-3 words. Be specific — "
+        "'REST API design' is better than 'backend'. Use 'general' only for "
+        "non-development prompts.",
     )
 
 

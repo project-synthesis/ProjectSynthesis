@@ -53,16 +53,21 @@ class FamilyListResponse(BaseModel):
     items: list[FamilyItem] = Field(description="Pattern family items for this page.")
 
 
-class RenameRequest(BaseModel):
-    intent_label: str = Field(
-        ..., min_length=1, max_length=100,
+class UpdateFamilyRequest(BaseModel):
+    intent_label: str | None = Field(
+        default=None, min_length=1, max_length=100,
         description="New intent label for the pattern family.",
+    )
+    domain: str | None = Field(
+        default=None,
+        description="New domain for the pattern family (free-text).",
     )
 
 
-class RenameResponse(BaseModel):
+class UpdateFamilyResponse(BaseModel):
     id: str = Field(description="Pattern family ID.")
-    intent_label: str = Field(description="Updated intent label.")
+    intent_label: str = Field(description="Current intent label.")
+    domain: str = Field(description="Current domain category.")
 
 
 @router.get("/graph")
@@ -164,13 +169,16 @@ async def get_family(
 
 
 @router.patch("/families/{family_id}")
-async def rename_family(
+async def update_family(
     family_id: str,
-    body: RenameRequest,
+    body: UpdateFamilyRequest,
     db: AsyncSession = Depends(get_db),
-) -> RenameResponse:
-    """Rename a pattern family (user label override)."""
+) -> UpdateFamilyResponse:
+    """Update a pattern family (intent label and/or domain)."""
     from sqlalchemy import select
+
+    if body.intent_label is None and body.domain is None:
+        raise HTTPException(422, "At least one of 'intent_label' or 'domain' must be provided")
 
     result = await db.execute(
         select(PatternFamily).where(PatternFamily.id == family_id)
@@ -179,15 +187,25 @@ async def rename_family(
     if not family:
         raise HTTPException(404, "Pattern family not found")
 
-    old_label = family.intent_label
-    family.intent_label = body.intent_label
+    if body.intent_label is not None:
+        old_label = family.intent_label
+        family.intent_label = body.intent_label
+        logger.info(
+            "Family renamed: id=%s '%s' → '%s'",
+            family_id, old_label, body.intent_label,
+        )
+
+    if body.domain is not None:
+        old_domain = family.domain
+        family.domain = body.domain
+        logger.info(
+            "Family domain changed: id=%s '%s' → '%s'",
+            family_id, old_domain, body.domain,
+        )
+
     await db.commit()
 
-    logger.info(
-        "Family renamed: id=%s '%s' → '%s'",
-        family_id, old_label, body.intent_label,
-    )
-    return RenameResponse(id=family.id, intent_label=family.intent_label)
+    return UpdateFamilyResponse(id=family.id, intent_label=family.intent_label, domain=family.domain)
 
 
 @router.get("/search")
