@@ -48,14 +48,12 @@ class MockEventSource {
 Object.assign(globalThis, { EventSource: MockEventSource });
 
 // ── Clipboard mock ───────────────────────────────────────────────
-if (!navigator.clipboard) {
-  Object.defineProperty(navigator, 'clipboard', {
-    value: { writeText: vi.fn().mockResolvedValue(undefined) },
-    writable: true,
-  });
-} else {
-  vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-}
+// configurable: true is required so @testing-library/user-event can override it per-test
+Object.defineProperty(navigator, 'clipboard', {
+  value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  writable: true,
+  configurable: true,
+});
 
 // ── SVG API mocks (for D3 components in jsdom) ──────────────────
 if (typeof SVGElement !== 'undefined') {
