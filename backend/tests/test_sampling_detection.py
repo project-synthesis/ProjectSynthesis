@@ -890,6 +890,59 @@ class TestRoutingManagerDisconnect:
         })
         assert len(events_published) == 0
 
+    def test_on_session_invalidated_idempotent(self, routing):
+        """Calling on_session_invalidated twice does not fire duplicate events."""
+        routing.on_mcp_initialize(sampling_capable=True)
+        events_published = []
+        routing._event_bus.publish = lambda t, d: events_published.append((t, d))
+        routing.on_session_invalidated()
+        assert len(events_published) == 1
+        assert routing.state.sampling_capable is None
+        # Second call is a no-op (already invalidated)
+        routing.on_session_invalidated()
+        assert len(events_published) == 1
+
+    def test_cross_process_notify_called_on_disconnect(self, tmp_path):
+        """cross_process_notify callback fires on state changes."""
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+
+        calls = []
+        rm = RoutingManager(
+            event_bus=EventBus(),
+            data_dir=tmp_path,
+            cross_process_notify=lambda t, d: calls.append((t, d)),
+        )
+        rm.on_mcp_initialize(sampling_capable=True)
+        assert len(calls) == 1
+        assert calls[0][0] == "routing_state_changed"
+        assert calls[0][1]["trigger"] == "mcp_initialize"
+        assert calls[0][1]["mcp_connected"] is True
+
+        rm.on_mcp_disconnect()
+        assert len(calls) == 2
+        assert calls[1][1]["trigger"] == "mcp_disconnect"
+        assert calls[1][1]["mcp_connected"] is False
+
+    def test_cross_process_notify_called_on_invalidation(self, tmp_path):
+        """cross_process_notify fires on session invalidation."""
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+
+        calls = []
+        rm = RoutingManager(
+            event_bus=EventBus(),
+            data_dir=tmp_path,
+            cross_process_notify=lambda t, d: calls.append((t, d)),
+        )
+        rm.on_mcp_initialize(sampling_capable=True)
+        calls.clear()
+        rm.on_session_invalidated()
+        assert len(calls) == 1
+        assert calls[0][1]["trigger"] == "session_invalidated"
+        assert calls[0][1]["sampling_capable"] is None
+        assert calls[0][1]["mcp_connected"] is False
+
 
 # ---------------------------------------------------------------------------
 # _touch_activity with RoutingManager — primary path

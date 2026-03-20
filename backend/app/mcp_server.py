@@ -165,7 +165,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         try:
             asyncio.create_task(notify_event_bus(event_type, payload))
         except RuntimeError:
-            pass  # No running event loop (shutdown)
+            logger.debug("Cross-process notifier: no running event loop (shutdown)")
 
     _mcp_event_bus = _EventBus()
     _routing = RoutingManager(

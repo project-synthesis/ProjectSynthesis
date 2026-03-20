@@ -304,8 +304,11 @@ class RoutingManager:
         """Called when a stale MCP session is detected (400/404 from transport).
 
         Clears both ``sampling_capable`` and ``mcp_connected`` since the
-        session no longer exists.
+        session no longer exists.  Idempotent — multiple 400/404 responses
+        in quick succession won't generate duplicate events.
         """
+        if self._state.sampling_capable is None and not self._state.mcp_connected:
+            return  # Already invalidated — avoid duplicate events
         self._update_state(sampling_capable=None, mcp_connected=False)
         self._persist()
         logger.info("routing.session_invalidated")
