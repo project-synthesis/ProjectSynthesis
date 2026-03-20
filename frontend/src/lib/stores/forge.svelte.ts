@@ -281,6 +281,32 @@ class ForgeStore {
     }
   }
 
+  /** @internal Test-only: restore initial state */
+  _reset() {
+    this.cancel();
+    this.prompt = '';
+    this.strategy = null;
+    this.status = 'idle';
+    this.result = null;
+    this.traceId = null;
+    this.error = null;
+    this.feedback = null;
+    this.currentPhase = null;
+    this.previewPrompt = null;
+    this.scores = null;
+    this.originalScores = null;
+    this.scoreDeltas = null;
+    this.assembledPrompt = null;
+    this.passthroughTraceId = null;
+    this.passthroughStrategy = null;
+    this.initialSuggestions = [];
+    this.appliedPatternIds = null;
+    this.familyId = null;
+    this.routingDecision = null;
+    this.samplingCapable = null;
+    this.mcpDisconnected = false;
+  }
+
   reset() {
     this.controller?.abort();
     this.controller = null;

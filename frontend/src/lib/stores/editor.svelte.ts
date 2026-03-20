@@ -151,6 +151,13 @@ class EditorStore {
     this._resultCache = {};
     this.activeTabId = PROMPT_TAB_ID;
   }
+
+  /** @internal Test-only: restore initial state */
+  _reset() {
+    this.tabs = [{ id: PROMPT_TAB_ID, title: 'Prompt', type: 'prompt', pinned: true }];
+    this.activeTabId = PROMPT_TAB_ID;
+    this._resultCache = {};
+  }
 }
 
 export const editorStore = new EditorStore();

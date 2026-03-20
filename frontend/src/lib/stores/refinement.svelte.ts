@@ -121,6 +121,19 @@ class RefinementStore {
     this.status = 'idle';
   }
 
+  /** @internal Test-only: restore initial state */
+  _reset() {
+    this.cancel();
+    this.optimizationId = null;
+    this.turns = [];
+    this.branches = [];
+    this.activeBranchId = null;
+    this.suggestions = [];
+    this.selectedVersion = null;
+    this.status = 'idle';
+    this.error = null;
+  }
+
   reset() {
     this.controller?.abort();
     this.controller = null;

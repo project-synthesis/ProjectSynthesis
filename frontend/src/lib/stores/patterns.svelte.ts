@@ -136,6 +136,24 @@ class PatternStore {
     this._lastLength = 0;
   }
 
+  /** @internal Test-only: restore initial state */
+  _reset() {
+    this.suggestion = null;
+    this.suggestionVisible = false;
+    this.graph = null;
+    this.graphLoaded = false;
+    this.graphError = null;
+    this.selectedFamilyId = null;
+    this.familyDetail = null;
+    this.familyDetailLoading = false;
+    this.familyDetailError = null;
+    if (this._debounceTimer) clearTimeout(this._debounceTimer);
+    if (this._dismissTimer) clearTimeout(this._dismissTimer);
+    this._debounceTimer = null;
+    this._dismissTimer = null;
+    this._lastLength = 0;
+  }
+
   private _startDismissTimer(): void {
     if (this._dismissTimer) clearTimeout(this._dismissTimer);
     this._dismissTimer = setTimeout(() => {

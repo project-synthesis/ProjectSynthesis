@@ -81,6 +81,13 @@ class PreferencesStore {
   async setDefaultStrategy(strategy: string): Promise<void> {
     await this.update({ defaults: { strategy } });
   }
+
+  /** @internal Test-only: restore initial state */
+  _reset() {
+    this.prefs = structuredClone(DEFAULTS);
+    this.loading = false;
+    this.error = null;
+  }
 }
 
 export const preferencesStore = new PreferencesStore();

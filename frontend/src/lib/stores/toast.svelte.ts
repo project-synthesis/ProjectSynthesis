@@ -49,6 +49,13 @@ class ToastStore {
       this._timers.delete(id);
     }
   }
+
+  /** @internal Test-only: restore initial state */
+  _reset() {
+    this.toasts = [];
+    for (const timer of this._timers.values()) clearTimeout(timer);
+    this._timers.clear();
+  }
 }
 
 export const toastStore = new ToastStore();

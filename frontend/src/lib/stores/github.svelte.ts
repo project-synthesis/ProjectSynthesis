@@ -81,6 +81,15 @@ class GitHubStore {
       this.error = err instanceof Error ? err.message : 'Operation failed';
     }
   }
+
+  /** @internal Test-only: restore initial state */
+  _reset() {
+    this.user = null;
+    this.linkedRepo = null;
+    this.repos = [];
+    this.loading = false;
+    this.error = null;
+  }
 }
 
 export const githubStore = new GitHubStore();
