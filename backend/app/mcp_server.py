@@ -548,8 +548,6 @@ async def synthesis_optimize(
             "Prompt too long (%d chars). Maximum is 200,000 characters." % len(prompt)
         )
 
-    provider = _provider
-
     # ---- Hoist: single PreferencesService + workspace resolution for all paths ----
     prefs = PreferencesService(DATA_DIR)
     effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
@@ -796,8 +794,7 @@ async def synthesis_analyze(
     start = time.monotonic()
     logger.info("synthesis_analyze called: prompt_len=%d", len(prompt))
 
-    prefs = PreferencesService(DATA_DIR)
-    prefs_snapshot = prefs.load()
+    prefs_snapshot = _prefs.load()
 
     loader = PromptLoader(PROMPTS_DIR)
     strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
@@ -811,7 +808,7 @@ async def synthesis_analyze(
 
     try:
         analysis: AnalysisResult = await provider.complete_parsed(
-            model=prefs.resolve_model("analyzer", prefs_snapshot),
+            model=_prefs.resolve_model("analyzer", prefs_snapshot),
             system_prompt=system_prompt,
             user_message=analyze_msg,
             output_format=AnalysisResult,
@@ -838,7 +835,7 @@ async def synthesis_analyze(
 
     try:
         score_result: ScoreResult = await provider.complete_parsed(
-            model=prefs.resolve_model("scorer", prefs_snapshot),
+            model=_prefs.resolve_model("scorer", prefs_snapshot),
             system_prompt=scoring_system,
             user_message=scorer_msg,
             output_format=ScoreResult,
@@ -883,7 +880,7 @@ async def synthesis_analyze(
             score_conciseness=baseline.conciseness,
             overall_score=overall,
             provider=provider.name,
-            model_used=prefs.resolve_model("analyzer", prefs_snapshot),
+            model_used=_prefs.resolve_model("analyzer", prefs_snapshot),
             scoring_mode="baseline",
             status="analyzed",
             trace_id=trace_id,

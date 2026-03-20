@@ -185,20 +185,16 @@ Variable reference: `prompts/manifest.json`
 
 ### Sampling capability detection
 
-The MCP server detects whether the connected client supports `sampling/createMessage` (IDE-driven LLM calls) and persists this to `data/mcp_session.json`. Two detection layers:
+Sampling capability is detected via `RoutingManager` (in-memory primary, `mcp_session.json` write-through for restart recovery). Two detection layers:
 
-1. **ASGI middleware** (`_CapabilityDetectionMiddleware`) — intercepts `initialize` JSON-RPC messages at the HTTP level, extracting `params.capabilities.sampling`. Detects capability instantly on connection, before any tool call.
-2. **Per-tool-call detection** — all 4 tools call `_write_mcp_session_caps(ctx)` to refresh the file from `ctx.session.client_params.capabilities.sampling`.
+1. **ASGI middleware** (`_CapabilityDetectionMiddleware`) — intercepts `initialize` JSON-RPC messages, calls `RoutingManager.on_mcp_initialize(sampling_capable)`. Detects capability instantly on connection, before any tool call.
+2. **Activity tracking** — middleware calls `RoutingManager.on_mcp_activity()` on every POST (throttled to 10s). Background disconnect checker (60s poll, 300s staleness) marks `mcp_connected=False` when activity goes stale.
 
-**Optimistic strategy**: `False` never overwrites a fresh `True` within the 30-minute staleness window. This prevents VS Code multi-session flicker (VS Code sends multiple `initialize` messages, some without sampling capability).
+**Optimistic strategy**: `False` never overwrites a fresh `True` within the 30-minute staleness window (`MCP_CAPABILITY_STALENESS_MINUTES` in `config.py`). Prevents VS Code multi-session flicker.
 
-**Health endpoint**: reads `mcp_session.json` with dual-window staleness. Returns `sampling_capable: bool | null` (`null` = no file or stale) and `mcp_disconnected: bool` (activity gap detected).
+**Health endpoint**: reads live state from `app.state.routing` (not file). Returns `sampling_capable: bool | null`, `mcp_disconnected: bool`, and `available_tiers: list[str]`.
 
-**Disconnect detection**: activity-based (MCP Streamable HTTP is stateless, no persistent connection). The middleware tracks `last_activity` on every POST (throttled to 10s). Two staleness windows in `config.py`: `MCP_CAPABILITY_STALENESS_MINUTES` (30 min — was the client recently sampling-capable?) and `MCP_ACTIVITY_STALENESS_SECONDS` (300s / 5 min — has the client gone silent?). `mcp_disconnected=true` when capability is fresh but activity is stale. Detection latency: ~310s (5-min window + 10s poll). Reconnection latency: <5s (middleware fires `mcp_session_changed` SSE event on first POST after gap).
-
-**Auto-passthrough**: frontend `applyHealth()` auto-enables `force_passthrough` on disconnect and auto-restores on reconnect (tracked via `forgeStore.autoPassthrough` flag — only auto-restores passthrough that was auto-enabled, not manual). Startup guard clears stale `force_sampling` when no sampling client is available.
-
-**Frontend polling**: adaptive — fast 10s while a sampling-capable client is connected (for disconnect detection), 60s otherwise. Initial fast window of 2 minutes on page load for connection detection.
+**Frontend**: purely reactive — receives `routing_state_changed` SSE events for tier availability changes. Fixed 60s health polling for display only (no routing decisions). Shows toasts on MCP connect/disconnect/sampling capability changes.
 
 **Toggle safety**: disabled conditions are prefixed with `!currentValue &&` so a toggle that's already ON is always interactive (user can turn it OFF even if preconditions change).
 
@@ -214,7 +210,7 @@ When no local provider is available (or `force_sampling=True`), the full pipelin
 ### Adding a tool
 1. Add a `@mcp.tool(structured_output=True)` function in `mcp_server.py`
 2. Use the `synthesis_` prefix for all tool names
-3. Call `_write_mcp_session_caps(ctx)` at the start of the tool handler
+3. The tool handler automatically participates in routing via `_routing.resolve()` — no manual capability writes needed
 4. Return a Pydantic model (define in `schemas/mcp_models.py`); raise `ValueError` for errors
 
 ## Common tasks
