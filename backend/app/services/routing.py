@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 if TYPE_CHECKING:
     from app.providers.base import LLMProvider
@@ -35,6 +35,21 @@ if TYPE_CHECKING:
 # Signature: (event_type: str, payload: dict) -> None
 # The callback is responsible for scheduling async work if needed.
 CrossProcessNotify = Callable[[str, dict], None]
+
+
+class RoutingStatePayload(TypedDict):
+    """Shape of ``routing_state_changed`` event payloads.
+
+    Used in ``_broadcast_state_change`` and ``sync_from_event`` to ensure
+    consistent structure across SSE events and cross-process messages.
+    """
+
+    trigger: str
+    provider: str | None
+    sampling_capable: bool | None
+    mcp_connected: bool
+    available_tiers: list[str]
+
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +348,8 @@ class RoutingManager:
 
         fields: dict[str, Any] = {}
         if mcp_connected is not _missing:
+            if mcp_connected is None:
+                logger.debug("sync_from_event: coercing mcp_connected=None to False")
             fields["mcp_connected"] = bool(mcp_connected) if mcp_connected is not None else False
         if sampling_capable is not _missing:
             fields["sampling_capable"] = sampling_capable  # May be None, True, or False
@@ -349,7 +366,7 @@ class RoutingManager:
         if old_connected != new_connected or old_sampling != new_sampling:
             # Local broadcast only — do NOT fire cross_process_notify
             # (this IS the receiving end of a cross-process notification)
-            payload = {
+            payload: RoutingStatePayload = {
                 "trigger": data.get("trigger", "sync"),
                 "provider": self._state.provider_name,
                 "sampling_capable": self._state.sampling_capable,
@@ -445,7 +462,7 @@ class RoutingManager:
 
     def _broadcast_state_change(self, event: str) -> None:
         """Push routing_state_changed to local event bus and cross-process."""
-        payload = {
+        payload: RoutingStatePayload = {
             "trigger": event,
             "provider": self._state.provider_name,
             "sampling_capable": self._state.sampling_capable,
