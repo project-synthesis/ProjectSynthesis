@@ -4,6 +4,30 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added (Intelligent Routing)
+- Added centralized intelligent routing service (`routing.py`) with pure 5-tier priority chain: force_passthrough > force_sampling > internal provider > auto sampling > passthrough fallback
+- Added `routing` SSE event as first event in every optimize stream (tier, provider, reason, degraded_from)
+- Added `routing_state_changed` ambient SSE event for real-time tier availability changes
+- Added `available_tiers` field to `/api/health` response
+- Added `RoutingManager` with in-memory live state, disconnect detection, MCP session file write-through for restart recovery, and SSE event broadcasting
+
+### Changed (Intelligent Routing)
+- Changed `POST /api/optimize` to handle passthrough inline via SSE (no more 503 dead end when no provider)
+- Changed frontend to be purely reactive for routing — backend owns all routing decisions via SSE events
+- Changed health endpoint to read live routing state from `RoutingManager` instead of `mcp_session.json` file reads
+- Changed provider set/delete endpoints to update `RoutingManager` state
+- Changed refinement endpoint to use routing service (rejects passthrough tier with 503)
+- Changed MCP server to use `RoutingManager` for all routing decisions (replaced 200-line if/elif chain)
+- Changed `mcp_session_changed` SSE event to `routing_state_changed`
+- Changed frontend health polling from adaptive (10s/60s) to fixed 60s interval (display only)
+
+### Removed (Intelligent Routing)
+- Removed `auto_passthrough` preference toggle and frontend auto-passthrough logic (backend owns degradation)
+- Removed `_write_mcp_session_caps()` function from MCP server (replaced by `RoutingManager.on_mcp_initialize()`)
+- Removed `noProvider` state from forge store (replaced by routing SSE events)
+- Removed `preparePassthrough()` method from forge store (passthrough now handled by backend)
+- Removed `handleMcpDisconnect()` and `handleMcpReconnect()` from frontend (backend owns via SSE)
+
 ### Added
 - Added prompt knowledge graph — auto-extracts reusable meta-patterns from optimizations into pattern families clustered by semantic similarity
 - Added auto-suggestion banner on paste — detects similar pattern families with 1-click apply/skip (50-char delta threshold, 300ms debounce, 10s auto-dismiss)

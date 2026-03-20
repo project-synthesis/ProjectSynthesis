@@ -100,7 +100,7 @@
   // The disabled condition only prevents turning a toggle ON.
   let forceSamplingDisabled = $derived(
     !preferencesStore.pipeline.force_sampling &&
-    (forgeStore.noProvider || forgeStore.samplingCapable !== true || forgeStore.mcpDisconnected || preferencesStore.pipeline.force_passthrough)
+    (forgeStore.samplingCapable !== true || forgeStore.mcpDisconnected || preferencesStore.pipeline.force_passthrough)
   );
   let forcePassthroughDisabled = $derived(
     !preferencesStore.pipeline.force_passthrough &&
@@ -505,7 +505,7 @@
                 {/each}
               </select>
             </div>
-            {#if preferencesStore.pipeline.force_sampling && !forgeStore.noProvider && forgeStore.samplingCapable === true}
+            {#if preferencesStore.pipeline.force_sampling && forgeStore.samplingCapable === true}
               <div class="data-row">
                 <span
                   class="badge-neon"

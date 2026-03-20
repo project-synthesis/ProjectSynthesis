@@ -18,7 +18,7 @@ class TestHealthRouter:
         assert "provider" in data
 
     async def test_health_no_provider(self, app_client):
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
         resp = await app_client.get("/api/health")
         data = resp.json()
         assert data["status"] == "degraded"
@@ -88,13 +88,15 @@ class TestOptimizeRouter:
         resp = await app_client.get("/api/optimize/nonexistent-trace")
         assert resp.status_code == 404
 
-    async def test_no_provider_returns_503(self, app_client):
-        app_client._transport.app.state.provider = None
+    async def test_no_provider_returns_passthrough(self, app_client):
+        app_client._transport.app.state.routing.set_provider(None)
         resp = await app_client.post(
             "/api/optimize",
             json={"prompt": "This is a test prompt that is long enough to pass validation"},
         )
-        assert resp.status_code == 503
+        # With routing, no provider degrades to passthrough tier instead of 503
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
 
 
 class TestHistoryRouter:

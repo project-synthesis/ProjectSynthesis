@@ -46,7 +46,6 @@ DEFAULTS: dict[str, Any] = {
         "enable_adaptation": True,
         "force_sampling": False,
         "force_passthrough": False,
-        "auto_passthrough": False,
     },
     "defaults": {
         "strategy": "auto",
@@ -55,7 +54,7 @@ DEFAULTS: dict[str, Any] = {
 
 _PIPELINE_TOGGLES = (
     "enable_explore", "enable_scoring", "enable_adaptation",
-    "force_sampling", "force_passthrough", "auto_passthrough",
+    "force_sampling", "force_passthrough",
 )
 
 _MODEL_MAP = {

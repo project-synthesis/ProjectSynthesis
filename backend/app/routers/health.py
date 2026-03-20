@@ -7,9 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app._version import __version__
-from app.config import DATA_DIR
 from app.database import get_db
-from app.services.mcp_session_file import MCPSessionFile
 from app.services.optimization_service import OptimizationService
 
 logger = logging.getLogger(__name__)
@@ -57,12 +55,29 @@ class HealthResponse(BaseModel):
         description="True when the MCP client appears to have disconnected "
         "(no MCP POST activity within the 5-minute window, but capability was recently detected).",
     )
+    available_tiers: list[str] = Field(
+        default_factory=lambda: ["passthrough"],
+        description="Currently reachable routing tiers.",
+    )
 
 
 @router.get("/health")
 async def health_check(request: Request, db: AsyncSession = Depends(get_db)) -> HealthResponse:
     """Liveness check with provider, version, and pipeline health metrics."""
-    provider = getattr(request.app.state, "provider", None)
+    # Provider and routing state (live in-memory)
+    routing = getattr(request.app.state, "routing", None)
+    if routing:
+        provider = routing.state.provider
+        provider_name = routing.state.provider_name
+        sampling_capable: bool | None = routing.state.sampling_capable
+        mcp_disconnected = not routing.state.mcp_connected if routing.state.sampling_capable is True else False
+        available_tiers = routing.available_tiers
+    else:
+        provider = None
+        provider_name = None
+        sampling_capable = None
+        mcp_disconnected = False
+        available_tiers = ["passthrough"]
 
     # Pipeline metrics
     score_health: ScoreHealth | None = None
@@ -101,32 +116,15 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)) -> 
     except Exception:
         logger.debug("Health check metrics collection failed", exc_info=True)
 
-    # MCP session sampling capability (written by mcp_server.py on tool calls
-    # and by the ASGI capability-detection middleware on initialize handshake).
-    # Dual-window staleness:
-    #   - 30-minute capability window: was the client recently sampling-capable?
-    #   - Activity window: has the client gone silent (disconnected)?
-    sampling_capable: bool | None = None
-    mcp_disconnected: bool = False
-    try:
-        sf = MCPSessionFile(DATA_DIR)
-        raw = sf.read()
-        if raw is not None:
-            if sf.is_capability_fresh(raw) and "sampling_capable" in raw:
-                sampling_capable = bool(raw["sampling_capable"])
-            if sampling_capable:
-                mcp_disconnected = sf.detect_disconnect(raw)
-    except Exception:
-        logger.debug("Could not read mcp_session.json", exc_info=True)
-
     return HealthResponse(
         status="healthy" if provider else "degraded",
         version=__version__,
-        provider=provider.name if provider else None,
+        provider=provider_name,
         score_health=score_health,
         avg_duration_ms=avg_duration_ms,
         phase_durations=phase_durations,
         recent_errors=recent_errors,
         sampling_capable=sampling_capable,
         mcp_disconnected=mcp_disconnected,
+        available_tiers=available_tiers,
     )

@@ -50,12 +50,34 @@ async def refine(
     db: AsyncSession = Depends(get_db),
 ):
     """Run a single refinement turn and stream SSE events."""
-    provider = getattr(request.app.state, "provider", None)
-    if not provider:
+    from app.config import DATA_DIR
+    from app.services.preferences import PreferencesService
+    from app.services.routing import RoutingContext
+
+    routing = getattr(request.app.state, "routing", None)
+    if not routing:
+        raise HTTPException(status_code=503, detail="Routing service not initialized.")
+
+    _prefs = PreferencesService(DATA_DIR)
+    prefs_snapshot = _prefs.load()
+    ctx = RoutingContext(preferences=prefs_snapshot, caller="rest")
+    decision = routing.resolve(ctx)
+
+    # Refinement still requires a provider (passthrough refinement UX not designed yet).
+    if decision.tier == "passthrough":
+        logger.warning(
+            "POST /api/refine rejected: tier=passthrough optimization_id=%s",
+            body.optimization_id,
+        )
         raise HTTPException(
             status_code=503,
-            detail="No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI.",
+            detail="Refinement requires a local provider. Configure an API key or install the Claude CLI.",
         )
+    provider = decision.provider
+    logger.info(
+        "POST /api/refine: tier=%s provider=%s optimization_id=%s",
+        decision.tier, decision.provider_name, body.optimization_id,
+    )
 
     from app.services.optimization_service import OptimizationService
     from app.services.refinement_service import RefinementService
@@ -93,10 +115,18 @@ async def refine(
         branch_id = body.branch_id or versions[-1].branch_id
 
     async def event_stream():
-        async for event in ref_svc.create_refinement_turn(
-            body.optimization_id, branch_id, body.refinement_request,
-        ):
-            yield format_sse(event.event, event.data)
+        yield format_sse("routing", {
+            "tier": decision.tier, "provider": decision.provider_name,
+            "reason": decision.reason, "degraded_from": decision.degraded_from,
+        })
+        try:
+            async for event in ref_svc.create_refinement_turn(
+                body.optimization_id, branch_id, body.refinement_request,
+            ):
+                yield format_sse(event.event, event.data)
+        except Exception as exc:
+            logger.error("Refinement SSE stream error: %s", exc, exc_info=True)
+            yield format_sse("error", {"error": str(exc)})
 
     return StreamingResponse(
         event_stream(),

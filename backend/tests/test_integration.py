@@ -233,7 +233,7 @@ class TestPassthroughEndToEnd:
         self, app_client, db_session,
     ):
         # ── Zero-provider baseline ──────────────────────────────────────
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
 
         resp = await app_client.get("/api/health")
         assert resp.status_code == 200
@@ -241,12 +241,13 @@ class TestPassthroughEndToEnd:
         assert health["provider"] is None
         assert health["status"] == "degraded"
 
-        # Normal optimize is blocked
+        # Normal optimize degrades to passthrough tier (no longer 503)
         resp = await app_client.post(
             "/api/optimize",
             json={"prompt": PASSTHROUGH_RAW},
         )
-        assert resp.status_code == 503
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
 
         # ── Step 1: Prepare ─────────────────────────────────────────────
         resp = await app_client.post(
@@ -430,7 +431,7 @@ class TestPassthroughEndToEnd:
         self, app_client, db_session,
     ):
         """Multiple independent passthrough cycles produce distinct records."""
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
 
         prompts = [
             "Write a Python decorator that retries failed function calls up to 3 times",
@@ -491,7 +492,7 @@ class TestPassthroughEndToEnd:
     ):
         """Passthrough and normal optimizations coexist cleanly in the system."""
         # ── Passthrough (no provider) ───────────────────────────────────
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
 
         resp = await app_client.post(
             "/api/optimize/passthrough",
@@ -511,7 +512,7 @@ class TestPassthroughEndToEnd:
         assert resp.json()["status"] == "completed"
 
         # ── Normal optimize (with provider) ─────────────────────────────
-        app_client._transport.app.state.provider = mock_provider
+        app_client._transport.app.state.routing.set_provider(mock_provider)
         mock_provider.complete_parsed.side_effect = [
             AnalysisResult(
                 task_type="coding", weaknesses=["vague"], strengths=["concise"],
@@ -591,7 +592,7 @@ class TestPassthroughEndToEnd:
         self, app_client, db_session,
     ):
         """Event bus correctly emits and receives passthrough events."""
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
 
         from app.services.event_bus import event_bus
 
@@ -653,7 +654,7 @@ class TestPassthroughEndToEnd:
         self, app_client, db_session,
     ):
         """Re-saving a passthrough with a better prompt updates scores."""
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
 
         resp = await app_client.post(
             "/api/optimize/passthrough",

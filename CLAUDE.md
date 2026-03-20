@@ -85,6 +85,7 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - `pattern_extractor.py` — post-completion pattern extraction: embeds prompts, clusters into families (cosine ≥0.78), extracts meta-patterns via Haiku (cosine ≥0.82 for merge). Subscribes to `optimization_created` events.
 - `pattern_matcher.py` — on-paste similarity search: matches prompt text against family centroids (cosine ≥0.72 suggestion threshold). Returns best family + meta-patterns.
 - `knowledge_graph.py` — graph building for radial mindmap: family nodes, domain grouping, cross-family edges (cosine ≥0.55), semantic search, family detail with linked optimizations.
+- `routing.py` — intelligent routing service: `RoutingState` (immutable capabilities snapshot), `RoutingContext` (per-request), `RoutingDecision` (tier + reason), `resolve_route()` (pure 5-tier decision function), `RoutingManager` (state lifecycle, SSE events, disconnect detection, persistence recovery)
 
 ### Model configuration
 Model IDs are centralized in `config.py` as `MODEL_SONNET`, `MODEL_OPUS`, `MODEL_HAIKU` (default: `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`). Never hardcode model IDs in service code — use `PreferencesService.resolve_model(phase, snapshot)` which maps user preferences to full model IDs.
@@ -95,7 +96,7 @@ Model IDs are centralized in `config.py` as `MODEL_SONNET`, `MODEL_OPUS`, `MODEL
 - `anthropic_api.py` — direct API via `anthropic` SDK with prompt caching (`cache_control: ephemeral`)
 - `base.py` — `LLMProvider` abstract base with `complete_parsed()` and `thinking_config()`
 
-Provider is detected **once at startup** and stored in `app.state.provider`. Never call `detect_provider()` inside a request handler.
+Provider is detected **once at startup** and stored on `app.state.routing` (a `RoutingManager` instance that wraps the provider and MCP state). Never call `detect_provider()` inside a request handler.
 
 ### Routers (`backend/app/routers/`)
 - `optimize.py` — `POST /api/optimize` (SSE), `GET /api/optimize/{trace_id}`
@@ -108,7 +109,7 @@ Provider is detected **once at startup** and stored in `app.state.provider`. Nev
 - `settings.py` — `GET /api/settings` (read-only server config)
 - `github_auth.py` — OAuth flow (login, callback, me, logout)
 - `github_repos.py` — repo management (list, link, linked, unlink)
-- `health.py` — `GET /api/health` (status, provider, score_health, recent_errors, avg_duration_ms, sampling_capable)
+- `health.py` — `GET /api/health` (status, provider, score_health, recent_errors, avg_duration_ms, sampling_capable, mcp_disconnected, available_tiers)
 - `events.py` — `GET /api/events` (SSE event stream), `POST /api/events/_publish` (internal cross-process)
 - `patterns.py` — `GET /api/patterns/graph`, `POST /api/patterns/match`, `GET /api/patterns/families`, `GET /api/patterns/families/{id}`, `PATCH /api/patterns/families/{id}`, `GET /api/patterns/search`, `GET /api/patterns/stats`
 
@@ -184,20 +185,16 @@ Variable reference: `prompts/manifest.json`
 
 ### Sampling capability detection
 
-The MCP server detects whether the connected client supports `sampling/createMessage` (IDE-driven LLM calls) and persists this to `data/mcp_session.json`. Two detection layers:
+Sampling capability is detected via `RoutingManager` (in-memory primary, `mcp_session.json` write-through for restart recovery). Two detection layers:
 
-1. **ASGI middleware** (`_CapabilityDetectionMiddleware`) — intercepts `initialize` JSON-RPC messages at the HTTP level, extracting `params.capabilities.sampling`. Detects capability instantly on connection, before any tool call.
-2. **Per-tool-call detection** — all 4 tools call `_write_mcp_session_caps(ctx)` to refresh the file from `ctx.session.client_params.capabilities.sampling`.
+1. **ASGI middleware** (`_CapabilityDetectionMiddleware`) — intercepts `initialize` JSON-RPC messages, calls `RoutingManager.on_mcp_initialize(sampling_capable)`. Detects capability instantly on connection, before any tool call.
+2. **Activity tracking** — middleware calls `RoutingManager.on_mcp_activity()` on every POST (throttled to 10s). Background disconnect checker (60s poll, 300s staleness) marks `mcp_connected=False` when activity goes stale.
 
-**Optimistic strategy**: `False` never overwrites a fresh `True` within the 30-minute staleness window. This prevents VS Code multi-session flicker (VS Code sends multiple `initialize` messages, some without sampling capability).
+**Optimistic strategy**: `False` never overwrites a fresh `True` within the 30-minute staleness window (`MCP_CAPABILITY_STALENESS_MINUTES` in `config.py`). Prevents VS Code multi-session flicker.
 
-**Health endpoint**: reads `mcp_session.json` with dual-window staleness. Returns `sampling_capable: bool | null` (`null` = no file or stale) and `mcp_disconnected: bool` (activity gap detected).
+**Health endpoint**: reads live state from `app.state.routing` (not file). Returns `sampling_capable: bool | null`, `mcp_disconnected: bool`, and `available_tiers: list[str]`.
 
-**Disconnect detection**: activity-based (MCP Streamable HTTP is stateless, no persistent connection). The middleware tracks `last_activity` on every POST (throttled to 10s). Two staleness windows in `config.py`: `MCP_CAPABILITY_STALENESS_MINUTES` (30 min — was the client recently sampling-capable?) and `MCP_ACTIVITY_STALENESS_SECONDS` (300s / 5 min — has the client gone silent?). `mcp_disconnected=true` when capability is fresh but activity is stale. Detection latency: ~310s (5-min window + 10s poll). Reconnection latency: <5s (middleware fires `mcp_session_changed` SSE event on first POST after gap).
-
-**Auto-passthrough**: frontend `applyHealth()` auto-enables `force_passthrough` on disconnect and auto-restores on reconnect (tracked via `forgeStore.autoPassthrough` flag — only auto-restores passthrough that was auto-enabled, not manual). Startup guard clears stale `force_sampling` when no sampling client is available.
-
-**Frontend polling**: adaptive — fast 10s while a sampling-capable client is connected (for disconnect detection), 60s otherwise. Initial fast window of 2 minutes on page load for connection detection.
+**Frontend**: purely reactive — receives `routing_state_changed` SSE events for tier availability changes. Fixed 60s health polling for display only (no routing decisions). Shows toasts on MCP connect/disconnect/sampling capability changes.
 
 **Toggle safety**: disabled conditions are prefixed with `!currentValue &&` so a toggle that's already ON is always interactive (user can turn it OFF even if preconditions change).
 
@@ -213,7 +210,7 @@ When no local provider is available (or `force_sampling=True`), the full pipelin
 ### Adding a tool
 1. Add a `@mcp.tool(structured_output=True)` function in `mcp_server.py`
 2. Use the `synthesis_` prefix for all tool names
-3. Call `_write_mcp_session_caps(ctx)` at the start of the tool handler
+3. The tool handler automatically participates in routing via `_routing.resolve()` — no manual capability writes needed
 4. Return a Pydantic model (define in `schemas/mcp_models.py`); raise `ValueError` for errors
 
 ## Common tasks
@@ -259,7 +256,7 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 ## Key architectural decisions
 
 - **Pipeline**: 3 subagent phases (analyze → optimize → score) orchestrated by `pipeline.py`. Each phase is an independent LLM call with a fresh context window. Explore phase runs when a GitHub repo is linked AND `enable_explore` preference is true. Scoring phase skippable via `enable_scoring` preference (lean mode = 2 LLM calls only).
-- **Provider injection**: detected once at startup, injected via `app.state.provider` and MCP lifespan context.
+- **Provider injection**: detected once at startup, injected via `app.state.routing` (RoutingManager) and MCP lifespan context. All routers call `routing.resolve()` to get the active provider.
 - **Prompt templates**: all prompts live in `prompts/` with `{{variable}}` substitution. Validated at startup. Hot-reloaded on every call. Never hardcode prompts in application code.
 - **Scorer bias mitigation**: A/B randomized presentation order + **hybrid scoring** (LLM scores blended with model-independent heuristics via `score_blender.py`). Dimension-specific weights: structure 50% heuristic, conciseness/specificity 40%, clarity 30%, faithfulness 20%. Z-score normalization applied when ≥10 historical samples exist. Divergence flags when LLM and heuristic disagree by >2.5 points.
 - **User preferences**: file-based JSON (`data/preferences.json`), loaded as frozen snapshot per pipeline run. Model selection per phase (analyzer/optimizer/scorer), pipeline toggles (explore/scoring/adaptation), default strategy. Non-configurable: explore synthesis and suggestions always use Haiku. Lean mode = explore+scoring off = 2 LLM calls only.
@@ -272,9 +269,9 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **Feedback adaptation**: simple strategy affinity counter. Degenerate pattern detection (>90% same rating over 10+ feedbacks).
 - **Refinement**: each turn is a fresh pipeline invocation (not multi-turn accumulation). Rollback creates a branch fork. 3 suggestions generated per turn.
 - **Trace logging**: `trace_logger.py` writes per-phase JSONL traces. Daily rotation with configurable retention (`TRACE_RETENTION_DAYS`).
-- **Real-time event bus**: `event_bus.py` publishes events to all SSE subscribers. Event types: `optimization_created`, `optimization_analyzed`, `optimization_failed`, `feedback_submitted`, `refinement_turn`, `strategy_changed`, `pattern_updated`. MCP server (separate process) notifies via HTTP POST to `/api/events/_publish`. Frontend auto-refreshes History on events, shows toast notifications, syncs Inspector feedback state, and updates StatusBar metrics.
+- **Real-time event bus**: `event_bus.py` publishes events to all SSE subscribers. Event types: `optimization_created`, `optimization_analyzed`, `optimization_failed`, `feedback_submitted`, `refinement_turn`, `strategy_changed`, `pattern_updated`, `routing_state_changed`. MCP server (separate process) notifies via HTTP POST to `/api/events/_publish`. Frontend auto-refreshes History on events, shows toast notifications, syncs Inspector feedback state, and updates StatusBar metrics.
 - **Workspace intelligence**: `workspace_intelligence.py` auto-detects project type from manifest files (package.json, requirements.txt, etc.) and injects workspace profile into MCP tool context via `roots/list`.
-- **MCP sampling detection**: two-layer detection (ASGI middleware on `initialize` + per-tool-call refresh) with optimistic write strategy (False never overwrites fresh True within 30-min window). Prevents VS Code multi-session flicker. `mcp_session.json` stores `sampling_capable`, `written_at`, and `last_activity`. Health endpoint surfaces `sampling_capable: bool | null` and `mcp_disconnected: bool`. Dual-window staleness: 30-min capability window (`MCP_CAPABILITY_STALENESS_MINUTES`) + 5-min activity window (`MCP_ACTIVITY_STALENESS_SECONDS`) in `config.py`. Middleware `_touch_activity()` updates `last_activity` on every POST (10s throttle), fires `mcp_session_changed` SSE on reconnection. Frontend adaptive polling: fast 10s while sampling client connected, 60s otherwise. Auto-passthrough on disconnect, auto-restore on reconnect (tracked via `forgeStore.autoPassthrough`). Startup guard clears stale `force_sampling`. Toggle disabled logic uses `!currentValue &&` prefix so ON toggles are always interactive.
+- **MCP sampling detection**: ASGI middleware on `initialize` calls `RoutingManager.on_mcp_initialize()` (in-memory state primary, `mcp_session.json` write-through for restart recovery). Optimistic strategy prevents VS Code multi-session flicker (False never overwrites fresh True within 30-min window). `RoutingManager` owns in-memory `sampling_capable`, `mcp_connected`, timestamps. Health endpoint reads live state from `app.state.routing`. Background disconnect checker (60s poll, 300s staleness window). Dual staleness windows in `config.py`: `MCP_CAPABILITY_STALENESS_MINUTES` (30 min), `MCP_ACTIVITY_STALENESS_SECONDS` (300s). MCP server is sole writer to `mcp_session.json`. Frontend receives `routing_state_changed` SSE events — no longer makes routing decisions. Fixed 60s health polling for display only.
 - **MCP sampling pipeline**: full feature parity with internal pipeline — extracted into `services/sampling_pipeline.py`. Uses structured output via tool calling (`tools` + `tool_choice` on `create_message()`), `ModelPreferences` per phase, `SamplingLLMAdapter` for explore, and captures `result.model` for DB persistence. All 4 MCP tools use `structured_output=True` (return Pydantic models, expose `outputSchema`). `synthesis_analyze` falls back to sampling when no local provider.
 - **Knowledge graph**: self-building pattern library. Post-completion background job embeds prompts, clusters into `PatternFamily` groups (cosine ≥0.78 merge), extracts meta-patterns via Haiku (cosine ≥0.82 pattern merge). On-paste detection (50-char delta, 300ms debounce) suggests matching families (cosine ≥0.72). Applied patterns injected into optimizer context. Models: `PatternFamily` (centroid running mean), `MetaPattern` (enriched on duplicate), `OptimizationPattern` (join). Cross-family edges at cosine ≥0.55. Domain color coding: backend=#a855f7, frontend=#f59e0b, database=#10b981, security=#ef4444, devops=#3b82f6, fullstack=#00e5ff, general=#6b7280. UI: PatternNavigator (search + paginated family list + domain filter), Inspector family detail (linked optimizations, rename), RadialMindmap (D3.js force-directed SVG), StatusBar pattern count. Activity type `'patterns'` in layout routing.
-- **MCP capability hierarchy**: sampling > internal pipeline > passthrough. `force_sampling` pins to sampling tier, `force_passthrough` pins to passthrough tier. Mutually exclusive — enforced server-side (422) and client-side (radio toggle). `synthesis_optimize` checks `force_passthrough` first (highest routing precedence), then `force_sampling`, then automatic detection (5 execution paths total).
+- **Intelligent routing**: centralized 5-tier priority chain in `services/routing.py`: force_passthrough > force_sampling > internal provider > auto sampling > passthrough fallback. Pure `resolve_route()` function (deterministic, no I/O) + thin `RoutingManager` wrapper (state lifecycle, SSE events, persistence, disconnect detection). Both FastAPI and MCP server own their own `RoutingManager` instance. `routing` SSE event emitted as first event in every optimize stream. `routing_state_changed` ambient SSE for tier availability changes. Frontend is purely reactive — never makes routing decisions. `caller` field gates sampling (REST callers never reach sampling tiers). Unified `POST /api/optimize` handles passthrough inline via SSE (no more 503).

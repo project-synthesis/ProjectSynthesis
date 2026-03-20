@@ -122,7 +122,7 @@ class TestPassthroughPrepare:
 
     async def test_prepare_works_without_provider(self, app_client):
         """Passthrough prepare does NOT require a configured provider."""
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
         resp = await app_client.post(
             "/api/optimize/passthrough",
             json={"prompt": VALID_PROMPT},
@@ -422,7 +422,7 @@ class TestPassthroughSave:
     async def test_save_works_without_provider(self, app_client):
         """Save does NOT require a configured provider."""
         prep = await self._prepare(app_client)
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
         resp = await app_client.post(
             "/api/optimize/passthrough/save",
             json={
@@ -722,7 +722,7 @@ class TestPassthroughEndToEnd:
 
     async def test_full_passthrough_flow_no_provider(self, app_client, db_session):
         """Complete passthrough flow with provider set to None throughout."""
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
 
         # Step 1: Prepare
         resp = await app_client.post(
@@ -770,19 +770,20 @@ class TestPassthroughEndToEnd:
         })
         assert resp.status_code == 200
 
-        # Step 6: Normal optimize still returns 503 (no provider)
+        # Step 6: Normal optimize degrades to passthrough tier (no longer 503)
         resp = await app_client.post(
             "/api/optimize",
             json={"prompt": VALID_PROMPT},
         )
-        assert resp.status_code == 503
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
 
     async def test_passthrough_then_normal_after_provider_set(
         self, app_client, mock_provider, db_session,
     ):
         """After completing passthrough, setting a provider enables normal optimize."""
         # Passthrough while no provider
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
         resp = await app_client.post(
             "/api/optimize/passthrough", json={"prompt": VALID_PROMPT},
         )
@@ -804,7 +805,7 @@ class TestPassthroughEndToEnd:
             OptimizationResult as PipelineOptResult,
         )
 
-        app_client._transport.app.state.provider = mock_provider
+        app_client._transport.app.state.routing.set_provider(mock_provider)
         mock_provider.complete_parsed.side_effect = [
             AnalysisResult(
                 task_type="coding", weaknesses=["vague"], strengths=["concise"],

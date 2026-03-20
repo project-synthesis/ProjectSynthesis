@@ -1,7 +1,6 @@
 <script lang="ts">
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
-  import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { patternsStore } from '$lib/stores/patterns.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
   import { getHealth, getOptimization, connectEventStream } from '$lib/api/client';
@@ -10,23 +9,6 @@
   let health = $state<HealthResponse | null>(null);
   let backendError = $state<string | null>(null);
   let eventSource: EventSource | null = null;
-
-  // ---- Shared disconnect/reconnect handlers ----
-
-  function handleMcpDisconnect() {
-    forgeStore.mcpDisconnected = true;
-    if (!preferencesStore.pipeline.force_passthrough) {
-      preferencesStore.update({ pipeline: { force_passthrough: true, auto_passthrough: true } });
-      addToast('deleted', 'MCP client disconnected — switched to passthrough mode');
-    }
-  }
-
-  function handleMcpReconnect() {
-    if (preferencesStore.pipeline.auto_passthrough) {
-      preferencesStore.update({ pipeline: { force_passthrough: false, auto_passthrough: false } });
-      addToast('created', 'MCP client reconnected — restored sampling mode');
-    }
-  }
 
   // Real-time event stream
   $effect(() => {
@@ -69,23 +51,29 @@
             .catch(() => { /* best-effort refresh */ });
         }
       }
-      if (type === 'mcp_session_changed') {
-        if (data.disconnected) {
-          handleMcpDisconnect();
-        } else {
-          // MCP client connected/reconnected — trigger immediate health poll
-          getHealth().then(applyHealth).catch(() => {});
+      if (type === 'routing_state_changed') {
+        const d = data as { provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
+        const wasDisconnected = forgeStore.mcpDisconnected;
+        const prevSampling = forgeStore.samplingCapable;
+        forgeStore.samplingCapable = d.sampling_capable;
+        forgeStore.mcpDisconnected = !d.mcp_connected;
+        if (d.mcp_connected && wasDisconnected) {
+          addToast('created', 'MCP client reconnected');
+        }
+        if (prevSampling !== true && d.sampling_capable === true) {
+          addToast('created', 'MCP client connected with sampling capability');
+        }
+        if (!d.mcp_connected && !wasDisconnected) {
+          addToast('deleted', 'MCP client disconnected');
         }
       }
     });
     return () => eventSource?.close();
   });
 
-  // ---- Health polling ----
+  // ---- Health polling (fixed 60s interval) ----
 
-  const FAST_INTERVAL = 10_000;
-  const SLOW_INTERVAL = 60_000;
-  const FAST_WINDOW   = 120_000;
+  const POLL_INTERVAL = 60_000;
 
   function healthPoll() {
     getHealth()
@@ -95,63 +83,21 @@
 
   function applyHealth(h: HealthResponse) {
     const prevSampling = forgeStore.samplingCapable;
-    const prevDisconnected = forgeStore.mcpDisconnected;
     health = h;
     backendError = null;
-    forgeStore.noProvider = !h.provider;
     forgeStore.samplingCapable = h.sampling_capable ?? null;
     forgeStore.mcpDisconnected = h.mcp_disconnected ?? false;
-
-    // Guard: clear stale force_sampling when no sampling client is available.
-    if (preferencesStore.pipeline.force_sampling && h.sampling_capable !== true) {
-      preferencesStore.setPipelineToggle('force_sampling', false);
-      addToast('deleted', 'No sampling-capable MCP client — force sampling disabled');
-    }
-
-    // Guard: clear stale auto_passthrough when no sampling client exists.
-    if (preferencesStore.pipeline.auto_passthrough && h.sampling_capable === null) {
-      preferencesStore.update({ pipeline: { force_passthrough: false, auto_passthrough: false } });
-      forgeStore.mcpDisconnected = false;
-      addToast('created', 'Auto-passthrough cleared — no MCP client session');
-    }
 
     // Toast when sampling capability first detected
     if (prevSampling !== true && h.sampling_capable === true) {
       addToast('created', 'MCP client connected with sampling capability');
     }
-
-    // Auto-switch to passthrough on MCP disconnect
-    if (!prevDisconnected && h.mcp_disconnected === true) {
-      handleMcpDisconnect();
-    }
-
-    // Auto-restore from passthrough on MCP reconnect
-    if (prevDisconnected && !h.mcp_disconnected && h.sampling_capable === true) {
-      handleMcpReconnect();
-    }
   }
 
-  // Consolidated health polling: fast 10s during startup window or when a
-  // sampling-capable client is connected, 60s steady-state otherwise.
-  let fastWindowElapsed = $state(false);
-
-  // One-time: initial poll + fast window timer
+  // Initial poll + fixed interval
   $effect(() => {
     healthPoll();
-    const timer = setTimeout(() => { fastWindowElapsed = true; }, FAST_WINDOW);
-    return () => clearTimeout(timer);
-  });
-
-  // Reactive interval: re-runs when samplingCapable or fastWindowElapsed changes
-  let pollInterval = $derived(
-    !fastWindowElapsed || forgeStore.samplingCapable === true
-      ? FAST_INTERVAL
-      : SLOW_INTERVAL
-  );
-
-  $effect(() => {
-    const interval = pollInterval;
-    const timer = setInterval(healthPoll, interval);
+    const timer = setInterval(healthPoll, POLL_INTERVAL);
     return () => clearInterval(timer);
   });
 

@@ -1,19 +1,35 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-# We need to import the function
 from app.mcp_server import synthesis_analyze
-from app.schemas.pipeline_contracts import AnalysisResult, ScoreResult
+from app.schemas.pipeline_contracts import (
+    AnalysisResult,
+    DimensionScores,
+    ScoreResult,
+)
+from app.services.routing import RoutingDecision
 
 pytestmark = pytest.mark.asyncio
 
-async def test_synthesis_analyze_with_provider():
-    # Context Mock
-    ctx = MagicMock()
-    ctx.session.client_params.capabilities.sampling = None
 
+def _mock_routing(tier="passthrough", provider=None, provider_name=None):
+    """Create a mock RoutingManager that always resolves to the given tier."""
+    decision = RoutingDecision(
+        tier=tier,
+        provider=provider,
+        provider_name=provider_name or (provider.name if provider else None),
+        reason=f"test → {tier}",
+    )
+    rm = MagicMock()
+    rm.resolve.return_value = decision
+    return rm
+
+
+async def test_synthesis_analyze_with_provider():
+    """Internal tier: uses local provider for analysis + scoring."""
     mock_provider = AsyncMock()
-    # Need to return an AnalysisResult then a ScoreResult
+    mock_provider.name = "mock_provider"
+
     def side_effect(*args, **kwargs):
         if "output_format" in kwargs:
             if kwargs["output_format"] == AnalysisResult:
@@ -25,86 +41,123 @@ async def test_synthesis_analyze_with_provider():
                     strengths=["clear"],
                     selected_strategy="auto",
                     strategy_rationale="testing",
-                    confidence=0.9
+                    confidence=0.9,
                 )
             if kwargs["output_format"] == ScoreResult:
                 return ScoreResult(
-                    a_scores={"clarity": 5.0, "specificity": 5.0, "structure": 5.0, "faithfulness": 5.0, "conciseness": 5.0},
-                    b_scores={"clarity": 5.0, "specificity": 5.0, "structure": 5.0, "faithfulness": 5.0, "conciseness": 5.0},
-                    a_reasoning="Good",
-                    b_reasoning="Good",
-                    preference="A"
+                    prompt_a_scores=DimensionScores(
+                        clarity=5.0, specificity=5.0, structure=5.0,
+                        faithfulness=5.0, conciseness=5.0,
+                    ),
+                    prompt_b_scores=DimensionScores(
+                        clarity=5.0, specificity=5.0, structure=5.0,
+                        faithfulness=5.0, conciseness=5.0,
+                    ),
                 )
         return MagicMock()
 
     mock_provider.complete_parsed.side_effect = side_effect
 
-    with patch("app.mcp_server._provider", mock_provider), \
-         patch("app.mcp_server.async_session_factory") as mock_session_factory, \
-         patch("app.mcp_server.blend_scores") as mock_blend, \
-         patch("app.mcp_server.PreferencesService"), \
-         patch("app.mcp_server.HeuristicScorer"):
-             
-        mock_blend.return_value = {
-            "clarity": 5.0,
-            "specificity": 5.0,
-            "structure": 5.0,
-            "faithfulness": 5.0,
-            "conciseness": 5.0,
-            "composite": 5.0
+    with (
+        patch("app.mcp_server._routing", _mock_routing("internal", provider=mock_provider, provider_name="mock_provider")),
+        patch("app.mcp_server.async_session_factory") as mock_session_factory,
+        patch("app.mcp_server.blend_scores") as mock_blend,
+        patch("app.mcp_server.PreferencesService") as mock_prefs_service,
+        patch("app.mcp_server.HeuristicScorer") as mock_heuristic,
+    ):
+        mock_blend_result = MagicMock()
+        mock_blend_result.to_dimension_scores.return_value = DimensionScores(
+            clarity=5.0, specificity=5.0, structure=5.0,
+            faithfulness=5.0, conciseness=5.0,
+        )
+        mock_blend_result.divergence_flags = []
+        mock_blend.return_value = mock_blend_result
+
+        mock_heuristic.score_prompt.return_value = {
+            "clarity": 5.0, "specificity": 5.0, "structure": 5.0,
+            "faithfulness": 5.0, "conciseness": 5.0,
         }
 
-        mock_session = AsyncMock()
-        mock_session_factory.return_value.__aenter__.return_value = mock_session
+        mock_prefs = MagicMock()
+        mock_prefs.load.return_value = {}
+        mock_prefs_service.return_value = mock_prefs
 
-        result = await synthesis_analyze("This is a prompt that is long enough to pass validation.", ctx)
-        
+        mock_session = AsyncMock()
+        mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = await synthesis_analyze(
+            "This is a prompt that is long enough to pass validation.",
+        )
+
         assert result.task_type == "coding"
-        assert result.scores["clarity"] == 5.0
+        assert result.baseline_scores["clarity"] == 5.0
         assert mock_provider.complete_parsed.call_count == 2
 
 
 async def test_synthesis_analyze_no_provider_but_sampling():
+    """Sampling tier: falls back to MCP sampling."""
     ctx = MagicMock()
-    ctx.session.client_params.capabilities.sampling = True
-    
-    with patch("app.mcp_server.run_sampling_analyze", new_callable=AsyncMock) as mock_sampling, \
-         patch("app.mcp_server._provider", None):
+    ctx.session = MagicMock()
+    ctx.session.create_message = AsyncMock()
+    ctx.session.client_params = None
+
+    with (
+        patch("app.mcp_server._routing", _mock_routing("sampling")),
+        patch("app.mcp_server.run_sampling_analyze", new_callable=AsyncMock) as mock_sampling,
+        patch("app.mcp_server.PreferencesService") as mock_prefs_service,
+    ):
+        mock_prefs = MagicMock()
+        mock_prefs.load.return_value = {}
+        mock_prefs_service.return_value = mock_prefs
+
+        # Return dict that matches AnalyzeOutput schema
         mock_sampling.return_value = {
+            "optimization_id": "opt_123",
             "task_type": "writing",
             "intent_label": "Draft email",
             "domain": "general",
             "weaknesses": ["Vague"],
             "strengths": ["Friendly"],
-            "strategy": "few-shot",
-            "scores": {
-                "clarity": 8.0,
-                "specificity": 7.0,
-                "structure": 6.0,
-                "faithfulness": 5.0,
-                "conciseness": 9.0,
+            "selected_strategy": "few-shot",
+            "strategy_rationale": "Good for creative tasks",
+            "confidence": 0.85,
+            "baseline_scores": {
+                "clarity": 8.0, "specificity": 7.0, "structure": 6.0,
+                "faithfulness": 5.0, "conciseness": 9.0,
             },
-            "suggested_next_steps": "Improve",
+            "overall_score": 7.0,
+            "duration_ms": 1200,
+            "next_steps": ["Improve specificity"],
+            "scores": {
+                "clarity": 8.0, "specificity": 7.0, "structure": 6.0,
+                "faithfulness": 5.0, "conciseness": 9.0,
+            },
             "optimization_ready": {
                 "prompt": "Test",
                 "strategy": "few-shot",
-                "repo_full_name": None,
-                "workspace_path": None,
-                "applied_pattern_ids": None
-            }
+            },
         }
-        
-        result = await synthesis_analyze("This is a prompt that is long enough to pass validation.", ctx)
+
+        result = await synthesis_analyze(
+            "This is a prompt that is long enough to pass validation.",
+            ctx,
+        )
         assert result.task_type == "writing"
-        assert result.scores["clarity"] == 8.0
+        assert result.baseline_scores["clarity"] == 8.0
 
 
 async def test_synthesis_analyze_no_provider_no_sampling():
-    ctx = MagicMock()
-    ctx.session = MagicMock()
-    ctx.session.client_params.capabilities.sampling = None
-    
-    with patch("app.mcp_server._provider", None):
-        with pytest.raises(ValueError, match="No LLM provider available"):
-            await synthesis_analyze("This is a prompt that is long enough to pass validation.", ctx)
+    """Passthrough tier: analysis rejected (requires a provider)."""
+    with (
+        patch("app.mcp_server._routing", _mock_routing("passthrough")),
+        patch("app.mcp_server.PreferencesService") as mock_prefs_service,
+    ):
+        mock_prefs = MagicMock()
+        mock_prefs.load.return_value = {}
+        mock_prefs_service.return_value = mock_prefs
 
+        with pytest.raises(ValueError, match="requires a local provider"):
+            await synthesis_analyze(
+                "This is a prompt that is long enough to pass validation.",
+            )

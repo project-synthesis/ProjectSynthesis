@@ -1,13 +1,13 @@
 """Tests for MCP sampling capability detection, disconnect detection, and force toggles.
 
 Covers:
-- _write_mcp_session_caps: MCP server persists client capabilities to mcp_session.json
-- Health endpoint: reads mcp_session.json and surfaces sampling_capable + mcp_disconnected
+- RoutingManager.on_mcp_initialize: MCP server tracks client capabilities in routing state
+- Health endpoint: reads RoutingManager.state and surfaces sampling_capable + mcp_disconnected
 - Preferences REST API: force_passthrough / force_sampling mutual exclusion via HTTP
 - Integration: cross-system consistency (health + preferences + passthrough endpoints)
 - _CapabilityDetectionMiddleware: ASGI middleware intercepts MCP initialize + activity tracking
 - _touch_activity: throttled activity tracking, reconnection detection
-- mcp_disconnected: dual-window staleness (30min capability + 90s activity)
+- mcp_disconnected: dual-window staleness (30min capability + 5min activity)
 """
 
 import json
@@ -38,37 +38,43 @@ def _reset_rate_limiter():
 
 
 # ---------------------------------------------------------------------------
-# _write_mcp_session_caps — MCP server writes client sampling capability
+# RoutingManager.on_mcp_initialize — MCP server tracks client capabilities
 # ---------------------------------------------------------------------------
 
 
-class TestWriteMcpSessionCaps:
-    """Unit tests for the _write_mcp_session_caps helper in mcp_server.py."""
+class TestRoutingMcpInitialize:
+    """Unit tests for MCP capability tracking via RoutingManager.
+
+    These replace the old _write_mcp_session_caps tests — capability
+    detection now goes through RoutingManager.on_mcp_initialize() which
+    updates in-memory state and persists to mcp_session.json as write-through.
+    """
 
     @staticmethod
-    def _make_ctx(
-        *,
-        has_session: bool = True,
-        has_client_params: bool = True,
-        sampling_capability: object | None = None,
-    ) -> SimpleNamespace | None:
-        """Build a mock MCP Context with configurable capability chain."""
-        if not has_session:
-            return SimpleNamespace(session=None)
-        if not has_client_params:
-            return SimpleNamespace(session=SimpleNamespace(client_params=None))
-        capabilities = SimpleNamespace(sampling=sampling_capability)
-        client_params = SimpleNamespace(capabilities=capabilities)
-        session = SimpleNamespace(client_params=client_params)
-        return SimpleNamespace(session=session)
+    def _make_routing(tmp_path, *, is_mcp_process: bool = True):
+        """Create a RoutingManager for testing (defaults to MCP process)."""
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+        return RoutingManager(event_bus=EventBus(), data_dir=tmp_path, is_mcp_process=is_mcp_process)
 
-    def test_writes_true_when_sampling_capability_present(self, tmp_path, monkeypatch):
-        """Sampling capability object present (even empty dict) → sampling_capable=true."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
+    def test_sampling_true_updates_state(self, tmp_path):
+        """on_mcp_initialize(True) sets sampling_capable=True and mcp_connected=True."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.sampling_capable is True
+        assert routing.state.mcp_connected is True
 
-        ctx = self._make_ctx(sampling_capability={})
-        _write_mcp_session_caps(ctx)
+    def test_sampling_false_updates_state(self, tmp_path):
+        """on_mcp_initialize(False) sets sampling_capable=False and mcp_connected=True."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=False)
+        assert routing.state.sampling_capable is False
+        assert routing.state.mcp_connected is True
+
+    def test_persists_to_session_file(self, tmp_path):
+        """on_mcp_initialize write-through persists to mcp_session.json."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
 
         path = tmp_path / "mcp_session.json"
         assert path.exists()
@@ -76,113 +82,53 @@ class TestWriteMcpSessionCaps:
         assert data["sampling_capable"] is True
         assert "written_at" in data
 
-    def test_writes_true_when_sampling_is_nonempty_dict(self, tmp_path, monkeypatch):
-        """Non-empty sampling capability dict also counts as capable."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
+    def test_optimistic_does_not_downgrade_fresh_true(self, tmp_path):
+        """A False initialize does NOT downgrade a fresh True (optimistic strategy)."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        routing.on_mcp_initialize(sampling_capable=False)
+        # Optimistic: should still be True
+        assert routing.state.sampling_capable is True
 
-        ctx = self._make_ctx(sampling_capability={"maxTokens": 16384})
-        _write_mcp_session_caps(ctx)
+    def test_overwrites_with_sequential_calls(self, tmp_path):
+        """False → True updates correctly."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=False)
+        assert routing.state.sampling_capable is False
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.sampling_capable is True
 
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is True
+    def test_last_capability_update_set(self, tmp_path):
+        """on_mcp_initialize sets last_capability_update timestamp."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.last_capability_update is not None
+        assert (datetime.now(timezone.utc) - routing.state.last_capability_update).total_seconds() < 5
 
-    def test_writes_false_when_sampling_is_none(self, tmp_path, monkeypatch):
-        """Sampling attribute is None → client does not support sampling."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
+    def test_last_activity_set(self, tmp_path):
+        """on_mcp_initialize sets last_activity timestamp."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert routing.state.last_activity is not None
+        assert (datetime.now(timezone.utc) - routing.state.last_activity).total_seconds() < 5
 
-        ctx = self._make_ctx(sampling_capability=None)
-        _write_mcp_session_caps(ctx)
+    def test_available_tiers_includes_sampling(self, tmp_path):
+        """After sampling_capable=True, available_tiers includes sampling."""
+        routing = self._make_routing(tmp_path)
+        routing.on_mcp_initialize(sampling_capable=True)
+        assert "sampling" in routing.available_tiers
 
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
+    def test_available_tiers_without_sampling(self, tmp_path):
+        """Without sampling, available_tiers is just passthrough."""
+        routing = self._make_routing(tmp_path)
+        assert routing.available_tiers == ["passthrough"]
 
-    def test_writes_false_when_ctx_is_none(self, tmp_path, monkeypatch):
-        """Null context (e.g., non-MCP invocation) → sampling_capable=false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        _write_mcp_session_caps(None)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
-
-    def test_writes_false_when_session_is_none(self, tmp_path, monkeypatch):
-        """Context exists but session is None → sampling_capable=false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        ctx = self._make_ctx(has_session=False)
-        _write_mcp_session_caps(ctx)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
-
-    def test_writes_false_when_client_params_is_none(self, tmp_path, monkeypatch):
-        """Session exists but client_params is None → sampling_capable=false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        ctx = self._make_ctx(has_client_params=False)
-        _write_mcp_session_caps(ctx)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
-
-    def test_writes_false_when_ctx_has_no_session_attr(self, tmp_path, monkeypatch):
-        """Context object missing 'session' attribute entirely → false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        ctx = object()  # no session attribute
-        _write_mcp_session_caps(ctx)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert data["sampling_capable"] is False
-
-    def test_written_at_is_utc_iso_timestamp(self, tmp_path, monkeypatch):
-        """written_at is a timezone-aware UTC ISO 8601 string."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        _write_mcp_session_caps(None)
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        ts = datetime.fromisoformat(data["written_at"])
-        assert ts.tzinfo is not None  # timezone-aware
-        assert (datetime.now(timezone.utc) - ts).total_seconds() < 5
-
-    def test_overwrites_previous_file(self, tmp_path, monkeypatch):
-        """Subsequent calls overwrite the file, updating the value."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        # Write false
-        _write_mcp_session_caps(self._make_ctx(sampling_capability=None))
-        assert json.loads((tmp_path / "mcp_session.json").read_text())["sampling_capable"] is False
-
-        # Overwrite with true
-        _write_mcp_session_caps(self._make_ctx(sampling_capability={}))
-        assert json.loads((tmp_path / "mcp_session.json").read_text())["sampling_capable"] is True
-
-    def test_silent_on_write_error(self, monkeypatch):
-        """Does not raise when DATA_DIR is not writable."""
-        _patch_mcp_data_dir(monkeypatch, Path("/nonexistent/path"))
-        from app.mcp_server import _write_mcp_session_caps
-
-        # Should not raise
-        _write_mcp_session_caps(None)
-
-    def test_file_is_valid_json_with_expected_keys(self, tmp_path, monkeypatch):
-        """Output file has sampling_capable, written_at, and last_activity."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        from app.mcp_server import _write_mcp_session_caps
-
-        _write_mcp_session_caps(self._make_ctx(sampling_capability={}))
-
-        data = json.loads((tmp_path / "mcp_session.json").read_text())
-        assert set(data.keys()) == {"sampling_capable", "written_at", "last_activity"}
+    def test_set_provider_adds_internal_tier(self, tmp_path):
+        """set_provider adds internal tier to available_tiers."""
+        routing = self._make_routing(tmp_path)
+        mock_provider = SimpleNamespace(name="mock-provider")
+        routing.set_provider(mock_provider)
+        assert "internal" in routing.available_tiers
 
 
 # ---------------------------------------------------------------------------
@@ -191,152 +137,89 @@ class TestWriteMcpSessionCaps:
 
 
 class TestHealthSamplingCapable:
-    """Integration tests for the sampling_capable field in GET /api/health."""
+    """Integration tests for the sampling_capable field in GET /api/health.
+
+    Health now reads from RoutingManager.state instead of mcp_session.json.
+    """
 
     @staticmethod
-    def _write_session(data_dir: Path, sampling_capable: bool, age_minutes: float = 0):
-        """Write a mcp_session.json with the given capability and age."""
-        written_at = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
-        (data_dir / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": sampling_capable,
-            "written_at": written_at.isoformat(),
-        }))
+    def _set_routing_state(app_client, **kwargs):
+        """Update routing state fields for testing."""
+        from dataclasses import replace as _replace
+        routing = app_client._transport.app.state.routing
+        routing._state = _replace(routing._state, **kwargs)
 
-    async def test_null_when_no_file(self, app_client, tmp_path, monkeypatch):
-        """No mcp_session.json → sampling_capable is null."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
+    async def test_null_when_no_mcp_session(self, app_client):
+        """Default routing state → sampling_capable is null."""
         resp = await app_client.get("/api/health")
         assert resp.status_code == 200
         assert resp.json()["sampling_capable"] is None
 
-    async def test_true_when_fresh_and_capable(self, app_client, tmp_path, monkeypatch):
-        """Fresh file with sampling_capable=true → returns true."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, age_minutes=0)
+    async def test_true_when_sampling_capable(self, app_client):
+        """Routing state with sampling_capable=True → returns true."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
 
         resp = await app_client.get("/api/health")
         assert resp.json()["sampling_capable"] is True
 
-    async def test_false_when_fresh_and_not_capable(self, app_client, tmp_path, monkeypatch):
-        """Fresh file with sampling_capable=false → returns false."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=False, age_minutes=0)
+    async def test_false_when_not_sampling_capable(self, app_client):
+        """Routing state with sampling_capable=False → returns false."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=False)
 
         resp = await app_client.get("/api/health")
         assert resp.json()["sampling_capable"] is False
 
-    async def test_null_when_stale_31_minutes(self, app_client, tmp_path, monkeypatch):
-        """File older than 30 minutes is stale → returns null."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, age_minutes=31)
+    async def test_mcp_disconnected_when_connected_false(self, app_client):
+        """sampling_capable set but mcp_connected=False → mcp_disconnected=True."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
+        self._set_routing_state(app_client, mcp_connected=False)
 
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is None
+        data = (await app_client.get("/api/health")).json()
+        assert data["sampling_capable"] is True
+        assert data["mcp_disconnected"] is True
 
-    async def test_true_when_20_minutes_old(self, app_client, tmp_path, monkeypatch):
-        """File 20 minutes old is within the 30-minute window → returns value."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, age_minutes=20)
+    async def test_mcp_not_disconnected_when_connected(self, app_client):
+        """sampling_capable and mcp_connected → mcp_disconnected=False."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
 
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is True
+        data = (await app_client.get("/api/health")).json()
+        assert data["sampling_capable"] is True
+        assert data["mcp_disconnected"] is False
 
-    async def test_null_when_60_minutes_old(self, app_client, tmp_path, monkeypatch):
-        """File 60 minutes old is well past staleness → returns null."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, age_minutes=60)
+    async def test_available_tiers_with_provider(self, app_client):
+        """With provider, available_tiers includes internal and passthrough."""
+        data = (await app_client.get("/api/health")).json()
+        assert "internal" in data["available_tiers"]
+        assert "passthrough" in data["available_tiers"]
 
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is None
+    async def test_available_tiers_without_provider(self, app_client):
+        """Without provider, available_tiers is passthrough only."""
+        app_client._transport.app.state.routing.set_provider(None)
 
-    async def test_null_on_invalid_json(self, app_client, tmp_path, monkeypatch):
-        """Corrupt JSON file → returns null (exception caught)."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        (tmp_path / "mcp_session.json").write_text("not valid json!!")
+        data = (await app_client.get("/api/health")).json()
+        assert data["available_tiers"] == ["passthrough"]
 
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is None
+    async def test_available_tiers_with_sampling(self, app_client):
+        """With sampling capable, available_tiers includes sampling."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
 
-    async def test_null_on_missing_written_at_key(self, app_client, tmp_path, monkeypatch):
-        """File missing written_at key → KeyError caught → null."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        (tmp_path / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": True,
-        }))
+        data = (await app_client.get("/api/health")).json()
+        assert "sampling" in data["available_tiers"]
 
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is None
-
-    async def test_null_on_missing_sampling_capable_key(self, app_client, tmp_path, monkeypatch):
-        """File missing sampling_capable key → KeyError caught → null."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        (tmp_path / "mcp_session.json").write_text(json.dumps({
-            "written_at": datetime.now(timezone.utc).isoformat(),
-        }))
-
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is None
-
-    async def test_null_on_unparseable_written_at(self, app_client, tmp_path, monkeypatch):
-        """written_at that can't be parsed as datetime → exception caught → null."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        (tmp_path / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": True,
-            "written_at": "not-a-timestamp",
-        }))
-
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is None
-
-    async def test_null_on_naive_datetime_written_at(self, app_client, tmp_path, monkeypatch):
-        """Naive (no-timezone) written_at → comparison with UTC now raises TypeError → null."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        (tmp_path / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": True,
-            "written_at": "2024-01-15T10:30:00",  # no timezone
-        }))
-
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is None
-
-    async def test_null_on_empty_file(self, app_client, tmp_path, monkeypatch):
-        """Empty file → JSON parse error → null."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        (tmp_path / "mcp_session.json").write_text("")
-
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is None
-
-    async def test_coerces_truthy_sampling_capable(self, app_client, tmp_path, monkeypatch):
-        """Non-boolean truthy value for sampling_capable is coerced via bool()."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        (tmp_path / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": "yes",  # truthy string
-            "written_at": datetime.now(timezone.utc).isoformat(),
-        }))
-
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is True
-
-    async def test_coerces_falsy_sampling_capable(self, app_client, tmp_path, monkeypatch):
-        """Falsy value (0, empty string) for sampling_capable is coerced to false."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        (tmp_path / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": 0,
-            "written_at": datetime.now(timezone.utc).isoformat(),
-        }))
-
-        resp = await app_client.get("/api/health")
-        assert resp.json()["sampling_capable"] is False
-
-    async def test_does_not_break_other_health_fields(self, app_client, tmp_path, monkeypatch):
+    async def test_does_not_break_other_health_fields(self, app_client):
         """sampling_capable field doesn't interfere with standard health response."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True)
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
 
         data = (await app_client.get("/api/health")).json()
         for key in ("status", "version", "provider", "score_health",
-                    "avg_duration_ms", "recent_errors", "sampling_capable"):
+                    "avg_duration_ms", "recent_errors", "sampling_capable",
+                    "available_tiers"):
             assert key in data
 
 
@@ -479,18 +362,15 @@ class TestSamplingDetectionIntegration:
         self, app_client, tmp_path, monkeypatch,
     ):
         """Health sampling_capable and preferences force toggles are independent systems."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
         from app.services.preferences import PreferencesService
         monkeypatch.setattr(
             "app.routers.preferences._svc",
             PreferencesService(data_dir=tmp_path),
         )
 
-        # Write sampling_capable=false to mcp_session.json
-        (tmp_path / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": False,
-            "written_at": datetime.now(timezone.utc).isoformat(),
-        }))
+        # Set routing state to sampling_capable=False
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=False)
 
         # Enable force_passthrough in preferences
         await app_client.patch(
@@ -528,13 +408,13 @@ class TestSamplingDetectionIntegration:
         assert resp.status_code == 200
         assert "assembled_prompt" in resp.json()
 
-    async def test_normal_optimize_requires_provider_regardless_of_force_passthrough(
+    async def test_force_passthrough_routes_to_passthrough_tier(
         self, app_client, tmp_path, monkeypatch,
     ):
-        """POST /api/optimize still requires a provider even with force_passthrough on.
+        """POST /api/optimize with force_passthrough routes to passthrough tier.
 
-        force_passthrough is consumed by the frontend and MCP tool, not by the
-        REST optimize endpoint (which always needs a provider for SSE streaming).
+        The routing manager reads force_passthrough from preferences and returns
+        passthrough tier regardless of provider availability.
         """
         from app.services.preferences import PreferencesService
         monkeypatch.setattr(
@@ -546,104 +426,58 @@ class TestSamplingDetectionIntegration:
             "/api/preferences",
             json={"pipeline": {"force_passthrough": True}},
         )
-        app_client._transport.app.state.provider = None
+        app_client._transport.app.state.routing.set_provider(None)
 
         resp = await app_client.post(
             "/api/optimize",
             json={"prompt": VALID_PROMPT},
         )
-        assert resp.status_code == 503
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
 
-    async def test_write_then_health_roundtrip(self, app_client, tmp_path, monkeypatch):
-        """Write mcp_session.json via _write_mcp_session_caps, then read via health."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
+    async def test_routing_sampling_reflected_in_health(self, app_client):
+        """RoutingManager sampling state is reflected in health endpoint."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
 
-        from app.mcp_server import _write_mcp_session_caps
-
-        # Simulate an MCP client with sampling
-        capabilities = SimpleNamespace(sampling={})
-        client_params = SimpleNamespace(capabilities=capabilities)
-        session = SimpleNamespace(client_params=client_params)
-        ctx = SimpleNamespace(session=session)
-
-        _write_mcp_session_caps(ctx)
-
-        # Health should now report sampling_capable=true
         data = (await app_client.get("/api/health")).json()
         assert data["sampling_capable"] is True
 
-    async def test_write_no_sampling_then_health_roundtrip(
-        self, app_client, tmp_path, monkeypatch,
-    ):
-        """Write mcp_session.json without sampling, verify health returns false."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-
-        from app.mcp_server import _write_mcp_session_caps
-
-        # Simulate an MCP client WITHOUT sampling
-        capabilities = SimpleNamespace(sampling=None)
-        client_params = SimpleNamespace(capabilities=capabilities)
-        session = SimpleNamespace(client_params=client_params)
-        ctx = SimpleNamespace(session=session)
-
-        _write_mcp_session_caps(ctx)
+    async def test_routing_no_sampling_reflected_in_health(self, app_client):
+        """RoutingManager with sampling_capable=False is reflected in health."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=False)
 
         data = (await app_client.get("/api/health")).json()
         assert data["sampling_capable"] is False
 
-    async def test_stale_after_write_then_health(
-        self, app_client, tmp_path, monkeypatch,
-    ):
-        """Manually age mcp_session.json after writing — health returns null."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
+    async def test_routing_no_mcp_session_health_returns_none(self, app_client):
+        """When no MCP session has been established, health returns sampling_capable=None."""
+        # Default routing state has sampling_capable=None
+        data = (await app_client.get("/api/health")).json()
+        assert data["sampling_capable"] is None
 
-        from app.mcp_server import _write_mcp_session_caps
+    async def test_routing_lifecycle_via_health(self, app_client):
+        """Full lifecycle: no session → MCP initialize → health reflects state."""
+        routing = app_client._transport.app.state.routing
 
-        _write_mcp_session_caps(None)
-
-        # Manually backdate the written_at to 31 minutes ago (past 30-min window)
-        path = tmp_path / "mcp_session.json"
-        data = json.loads(path.read_text())
-        data["written_at"] = (
-            datetime.now(timezone.utc) - timedelta(minutes=31)
-        ).isoformat()
-        path.write_text(json.dumps(data))
-
-        health = (await app_client.get("/api/health")).json()
-        assert health["sampling_capable"] is None
-
-    async def test_full_lifecycle(self, app_client, tmp_path, monkeypatch):
-        """Full lifecycle: no file → write capable → health true → stale → null."""
-        _patch_mcp_data_dir(monkeypatch, tmp_path)
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-
-        from app.mcp_server import _write_mcp_session_caps
-
-        # Step 1: No file → null
+        # Step 1: No MCP session → null
         assert (await app_client.get("/api/health")).json()["sampling_capable"] is None
 
-        # Step 2: Write capable
-        capabilities = SimpleNamespace(sampling={})
-        client_params = SimpleNamespace(capabilities=capabilities)
-        session = SimpleNamespace(client_params=client_params)
-        _write_mcp_session_caps(SimpleNamespace(session=session))
+        # Step 2: MCP client connects with sampling
+        routing.on_mcp_initialize(sampling_capable=True)
 
         # Step 3: Health returns true
         assert (await app_client.get("/api/health")).json()["sampling_capable"] is True
 
-        # Step 4: Manually age the file
-        path = tmp_path / "mcp_session.json"
-        data = json.loads(path.read_text())
-        data["written_at"] = (
-            datetime.now(timezone.utc) - timedelta(minutes=31)
-        ).isoformat()
-        path.write_text(json.dumps(data))
+        # Step 4: MCP client disconnects (simulate by marking disconnected)
+        from dataclasses import replace as _replace
+        routing._state = _replace(routing._state, mcp_connected=False)
 
-        # Step 5: Health returns null (stale)
-        assert (await app_client.get("/api/health")).json()["sampling_capable"] is None
+        # Step 5: Health still returns sampling_capable (the value), but mcp_disconnected=True
+        health = (await app_client.get("/api/health")).json()
+        assert health["sampling_capable"] is True
+        assert health["mcp_disconnected"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -652,12 +486,21 @@ class TestSamplingDetectionIntegration:
 
 
 class TestCapabilityDetectionMiddleware:
-    """Test the ASGI middleware that detects sampling capability on MCP handshake."""
+    """Test the ASGI middleware that detects sampling capability on MCP handshake.
+
+    These tests set ``_routing = None`` so the middleware falls through to the
+    legacy session-file path.  The new routing-based path is tested via
+    ``TestCapabilityDetectionMiddlewareWithRouting`` below.
+    """
 
     @pytest.fixture()
     def mw_data_dir(self, tmp_path, monkeypatch):
-        """Point the middleware's DATA_DIR to a temp directory."""
+        """Point the middleware's DATA_DIR to a temp directory.
+
+        Sets ``_routing = None`` so middleware uses the fallback file-write path.
+        """
         _patch_mcp_data_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr("app.mcp_server._routing", None)
         return tmp_path
 
     @staticmethod
@@ -896,12 +739,139 @@ class TestCapabilityDetectionMiddleware:
 
 
 # ---------------------------------------------------------------------------
+# _inspect_initialize with RoutingManager — primary path
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilityDetectionMiddlewareWithRouting:
+    """Test _inspect_initialize when RoutingManager is active (primary path)."""
+
+    @pytest.fixture()
+    def routing(self, tmp_path, monkeypatch):
+        """Set up a RoutingManager and wire it into mcp_server._routing."""
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+        rm = RoutingManager(event_bus=EventBus(), data_dir=tmp_path)
+        monkeypatch.setattr("app.mcp_server._routing", rm)
+        return rm
+
+    @staticmethod
+    def _make_initialize_body(capabilities: dict | None = None) -> bytes:
+        caps = capabilities if capabilities is not None else {"sampling": {}}
+        return json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": caps,
+                "clientInfo": {"name": "test", "version": "1.0"},
+            },
+        }).encode()
+
+    def test_updates_routing_state_sampling_true(self, routing):
+        """Initialize with sampling → routing state sampling_capable=True."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"sampling": {}})
+        )
+        assert routing.state.sampling_capable is True
+        assert routing.state.mcp_connected is True
+
+    def test_updates_routing_state_sampling_false(self, routing):
+        """Initialize without sampling → routing state sampling_capable=False."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"roots": {}})
+        )
+        assert routing.state.sampling_capable is False
+        assert routing.state.mcp_connected is True
+
+    def test_returns_result_dict(self, routing):
+        """_inspect_initialize returns sampling_capable dict via routing path."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        result = _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"sampling": {}})
+        )
+        assert result == {"sampling_capable": True}
+
+    def test_optimistic_via_routing(self, routing):
+        """Routing's optimistic strategy prevents downgrade."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"sampling": {}})
+        )
+        assert routing.state.sampling_capable is True
+
+        # Second: no sampling — routing's optimistic strategy keeps True
+        result = _CapabilityDetectionMiddleware._inspect_initialize(
+            self._make_initialize_body({"roots": {}})
+        )
+        # Result still returned (routing always returns a result now)
+        assert result == {"sampling_capable": False}
+        # But routing state should still be True (optimistic)
+        assert routing.state.sampling_capable is True
+
+
+# ---------------------------------------------------------------------------
+# _touch_activity with RoutingManager — primary path
+# ---------------------------------------------------------------------------
+
+
+class TestTouchActivityWithRouting:
+    """Test _touch_activity when RoutingManager is active."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_throttle(self):
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        _CapabilityDetectionMiddleware._last_activity_write = 0.0
+        yield
+        _CapabilityDetectionMiddleware._last_activity_write = 0.0
+
+    @pytest.fixture()
+    def routing(self, tmp_path, monkeypatch):
+        _patch_mcp_data_dir(monkeypatch, tmp_path)
+        from app.services.event_bus import EventBus
+        from app.services.routing import RoutingManager
+        rm = RoutingManager(event_bus=EventBus(), data_dir=tmp_path)
+        monkeypatch.setattr("app.mcp_server._routing", rm)
+        return rm
+
+    def test_touch_calls_routing_on_mcp_activity(self, routing):
+        """_touch_activity calls routing.on_mcp_activity(), not file I/O."""
+        from app.mcp_server import _CapabilityDetectionMiddleware
+        routing.on_mcp_initialize(sampling_capable=True)
+
+        result = _CapabilityDetectionMiddleware._touch_activity()
+        # Not a reconnect since mcp_connected was already True
+        assert result is False
+        assert routing.state.mcp_connected is True
+        assert routing.state.last_activity is not None
+
+    def test_touch_detects_reconnection_via_routing(self, routing):
+        """_touch_activity returns True when routing transitions from disconnected."""
+        from dataclasses import replace as _replace
+
+        from app.mcp_server import _CapabilityDetectionMiddleware
+
+        routing.on_mcp_initialize(sampling_capable=True)
+        # Simulate disconnect
+        routing._state = _replace(routing._state, mcp_connected=False)
+
+        result = _CapabilityDetectionMiddleware._touch_activity()
+        assert result is True
+        assert routing.state.mcp_connected is True
+
+
+# ---------------------------------------------------------------------------
 # _touch_activity — throttled activity tracking on every MCP POST
 # ---------------------------------------------------------------------------
 
 
 class TestTouchActivity:
-    """Tests for the _touch_activity classmethod in the middleware."""
+    """Tests for the _touch_activity classmethod in the middleware (fallback path).
+
+    Sets ``_routing = None`` so middleware uses the legacy file-write path.
+    """
 
     @pytest.fixture(autouse=True)
     def _reset_throttle(self):
@@ -914,6 +884,7 @@ class TestTouchActivity:
     @pytest.fixture()
     def data_dir(self, tmp_path, monkeypatch):
         _patch_mcp_data_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr("app.mcp_server._routing", None)
         return tmp_path
 
     @staticmethod
@@ -1145,119 +1116,72 @@ class TestClearStaleSession:
 
 
 class TestHealthMcpDisconnected:
-    """Tests for the mcp_disconnected field in the health endpoint."""
+    """Tests for the mcp_disconnected field in the health endpoint.
+
+    Health now reads from RoutingManager.state instead of mcp_session.json.
+    Disconnect detection is managed by RoutingManager._disconnect_loop().
+    """
 
     @staticmethod
-    def _write_session(
-        data_dir: Path,
-        sampling_capable: bool = True,
-        capability_age_minutes: float = 0,
-        activity_age_seconds: float = 0,
-        sse_streams: int = 0,
-    ):
-        """Write a mcp_session.json with both staleness dimensions."""
-        now = datetime.now(timezone.utc)
-        written_at = (now - timedelta(minutes=capability_age_minutes)).isoformat()
-        last_activity = (now - timedelta(seconds=activity_age_seconds)).isoformat()
-        (data_dir / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": sampling_capable,
-            "written_at": written_at,
-            "last_activity": last_activity,
-            "sse_streams": sse_streams,
-        }))
+    def _set_routing_state(app_client, **kwargs):
+        """Update routing state fields for testing."""
+        from dataclasses import replace as _replace
+        routing = app_client._transport.app.state.routing
+        routing._state = _replace(routing._state, **kwargs)
 
-    async def test_false_when_no_file(self, app_client, tmp_path, monkeypatch):
-        """No mcp_session.json → mcp_disconnected is false."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
+    async def test_false_when_no_mcp_session(self, app_client):
+        """Default routing state → mcp_disconnected is false."""
         resp = await app_client.get("/api/health")
         assert resp.json()["mcp_disconnected"] is False
 
-    async def test_false_when_fresh_activity(self, app_client, tmp_path, monkeypatch):
-        """Fresh activity (< 5 min) with active SSE stream → mcp_disconnected is false."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, activity_age_seconds=60, sse_streams=1)
+    async def test_false_when_connected(self, app_client):
+        """sampling_capable=True + mcp_connected=True → mcp_disconnected=False."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
 
-        resp = await app_client.get("/api/health")
-        data = resp.json()
+        data = (await app_client.get("/api/health")).json()
         assert data["sampling_capable"] is True
         assert data["mcp_disconnected"] is False
 
-    async def test_true_when_sse_streams_zero(self, app_client, tmp_path, monkeypatch):
-        """sse_streams=0 with fresh activity → immediate disconnect (stream just closed)."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, activity_age_seconds=10, sse_streams=0)
+    async def test_true_when_disconnected(self, app_client):
+        """sampling_capable=True + mcp_connected=False → mcp_disconnected=True."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
+        self._set_routing_state(app_client, mcp_connected=False)
 
-        resp = await app_client.get("/api/health")
-        data = resp.json()
+        data = (await app_client.get("/api/health")).json()
         assert data["sampling_capable"] is True
         assert data["mcp_disconnected"] is True
 
-    async def test_true_when_stale_activity(self, app_client, tmp_path, monkeypatch):
-        """Stale activity (> 5 min) with fresh capability → mcp_disconnected is true."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, activity_age_seconds=400)
+    async def test_false_when_not_sampling_capable(self, app_client):
+        """sampling_capable=False → mcp_disconnected is always false."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=False)
+        self._set_routing_state(app_client, mcp_connected=False)
 
-        resp = await app_client.get("/api/health")
-        data = resp.json()
-        assert data["sampling_capable"] is True
-        assert data["mcp_disconnected"] is True
-
-    async def test_false_when_sse_stream_active(self, app_client, tmp_path, monkeypatch):
-        """Stale activity but active SSE stream → mcp_disconnected is false."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(
-            tmp_path, sampling_capable=True, activity_age_seconds=400, sse_streams=1,
-        )
-
-        resp = await app_client.get("/api/health")
-        data = resp.json()
-        assert data["sampling_capable"] is True
-        assert data["mcp_disconnected"] is False
-
-    async def test_false_when_not_sampling_capable(self, app_client, tmp_path, monkeypatch):
-        """Not sampling capable → mcp_disconnected is always false."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=False, activity_age_seconds=400)
-
-        resp = await app_client.get("/api/health")
-        data = resp.json()
+        data = (await app_client.get("/api/health")).json()
         assert data["sampling_capable"] is False
         assert data["mcp_disconnected"] is False
 
-    async def test_false_when_capability_stale(self, app_client, tmp_path, monkeypatch):
-        """Capability stale (> 30 min) → both null/false regardless of activity."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(
-            tmp_path, sampling_capable=True,
-            capability_age_minutes=35, activity_age_seconds=400,
-        )
-
-        resp = await app_client.get("/api/health")
-        data = resp.json()
+    async def test_false_when_sampling_none(self, app_client):
+        """sampling_capable=None → mcp_disconnected is false."""
+        data = (await app_client.get("/api/health")).json()
         assert data["sampling_capable"] is None
         assert data["mcp_disconnected"] is False
 
-    async def test_false_when_no_last_activity_field(self, app_client, tmp_path, monkeypatch):
-        """Legacy session file without last_activity → mcp_disconnected is false."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        # Write a session file without last_activity (legacy format)
-        (tmp_path / "mcp_session.json").write_text(json.dumps({
-            "sampling_capable": True,
-            "written_at": datetime.now(timezone.utc).isoformat(),
-        }))
+    async def test_reconnect_clears_disconnected(self, app_client):
+        """MCP reconnect clears mcp_disconnected."""
+        routing = app_client._transport.app.state.routing
+        routing.on_mcp_initialize(sampling_capable=True)
+        self._set_routing_state(app_client, mcp_connected=False)
 
-        resp = await app_client.get("/api/health")
-        data = resp.json()
-        assert data["sampling_capable"] is True
+        # Verify disconnected
+        data = (await app_client.get("/api/health")).json()
+        assert data["mcp_disconnected"] is True
+
+        # Reconnect
+        routing.on_mcp_activity()
+
+        # Should be connected again
+        data = (await app_client.get("/api/health")).json()
         assert data["mcp_disconnected"] is False
-
-    async def test_boundary_exactly_at_threshold(self, app_client, tmp_path, monkeypatch):
-        """Activity exactly at 300s → not yet disconnected (boundary: > not >=)."""
-        monkeypatch.setattr("app.routers.health.DATA_DIR", tmp_path)
-        self._write_session(tmp_path, sampling_capable=True, activity_age_seconds=300)
-
-        resp = await app_client.get("/api/health")
-        data = resp.json()
-        # Boundary: > 300, not >=, so exactly 300 should be false
-        # (but timing variance may push it slightly over, so we just verify the field exists)
-        assert "mcp_disconnected" in data

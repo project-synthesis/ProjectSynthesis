@@ -28,7 +28,6 @@ from sqlalchemy import select
 
 from app.config import (
     DATA_DIR,
-    MCP_ACTIVITY_STALENESS_SECONDS,
     PROMPTS_DIR,
     settings,
 )
@@ -53,6 +52,7 @@ from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
+from app.services.routing import RoutingContext, RoutingManager
 from app.services.sampling_pipeline import run_sampling_analyze, run_sampling_pipeline
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
@@ -99,8 +99,8 @@ try:
 except Exception:
     logger.warning("Could not patch StreamableHTTPServerTransport — SSE reconnection may not work", exc_info=True)
 
-# Module-level provider cache — set once by the lifespan, read by tools.
-_provider = None
+# Module-level routing manager — set once by the lifespan, read by tools and middleware.
+_routing: RoutingManager | None = None
 
 # Shared workspace intelligence instance — caches profiles by root set.
 _workspace_intel = WorkspaceIntelligence()
@@ -140,37 +140,10 @@ async def _resolve_workspace_guidance(
     return profile
 
 
-def _write_mcp_session_caps(ctx: Context | None) -> None:
-    """Detect sampling capability from MCP client and persist to mcp_session.json.
-
-    Called at the start of every MCP tool invocation so the health endpoint
-    reflects the latest client state.  Uses the same optimistic strategy as the
-    ASGI middleware: never downgrades a fresh ``True`` to ``False``.
-    """
-    try:
-        sampling_capable = (
-            ctx is not None
-            and hasattr(ctx, "session")
-            and ctx.session is not None
-            and ctx.session.client_params is not None
-            and getattr(ctx.session.client_params.capabilities, "sampling", None) is not None
-        )
-
-        # Optimistic: never downgrade a fresh True to False
-        if not sampling_capable and _session_file.should_skip_downgrade():
-            logger.debug("_write_mcp_session_caps: skipping False — fresh True on file")
-            return
-
-        _session_file.write_session(sampling_capable)
-        logger.debug("mcp_session.json written: sampling_capable=%s", sampling_capable)
-    except Exception:
-        logger.debug("Could not write mcp_session.json", exc_info=True)
-
-
 @asynccontextmanager
 async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
-    """Detect the LLM provider once at startup and expose it to tools."""
-    global _provider
+    """Detect the LLM provider and initialize routing at startup."""
+    global _routing
     # Clear stale session from previous run (belt-and-suspenders with __main__ call)
     _clear_stale_session()
 
@@ -182,15 +155,25 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             await db.execute("PRAGMA busy_timeout=5000")
         logger.info("MCP lifespan: SQLite WAL mode enabled")
 
-    _provider = detect_provider()
-    if _provider:
-        logger.info("MCP lifespan: provider detected — %s", _provider.name)
+    # Initialize routing service
+    from app.services.event_bus import EventBus as _EventBus
+
+    _mcp_event_bus = _EventBus()
+    _routing = RoutingManager(event_bus=_mcp_event_bus, data_dir=DATA_DIR, is_mcp_process=True)
+
+    _detected_provider = detect_provider()
+    if _detected_provider:
+        _routing.set_provider(_detected_provider)
+        logger.info("MCP routing: provider=%s tiers=%s", _detected_provider.name, _routing.available_tiers)
     else:
-        logger.warning("MCP lifespan: no LLM provider available")
+        logger.warning("MCP routing: no provider, tiers=%s", _routing.available_tiers)
 
-    yield {"provider": _provider}
+    await _routing.start_disconnect_checker()
 
-    _provider = None
+    yield {}
+
+    await _routing.stop()
+    _routing = None
 
 
 mcp = FastMCP(
@@ -207,6 +190,19 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 
 
+def _routing_payload(trigger: str) -> dict:
+    """Build routing_state_changed SSE payload from current routing state."""
+    if not _routing:
+        return {}
+    return {
+        "trigger": trigger,
+        "provider": _routing.state.provider_name,
+        "sampling_capable": _routing.state.sampling_capable,
+        "mcp_connected": _routing.state.mcp_connected,
+        "available_tiers": _routing.available_tiers,
+    }
+
+
 class _CapabilityDetectionMiddleware:
     """Intercept the JSON-RPC ``initialize`` request to detect client capabilities.
 
@@ -219,9 +215,7 @@ class _CapabilityDetectionMiddleware:
     The middleware re-assembles the request body transparently; downstream
     handlers (FastMCP) receive the original bytes untouched.
 
-    Event payloads sent via ``_notify_session_changed`` always contain
-    ``sampling_capable`` and ``reconnected``.  The optional ``disconnected``
-    key is only set when the last SSE stream closes.
+    All event payloads are dispatched via ``notify_event_bus("routing_state_changed", ...)``.
     """
 
     # Throttle activity writes: at most once per 10 seconds
@@ -246,22 +240,6 @@ class _CapabilityDetectionMiddleware:
             await self._handle_get(scope, receive, send)
         else:
             await self.app(scope, receive, send)
-
-    @staticmethod
-    async def _notify_session_changed(
-        sampling_capable: bool,
-        *,
-        reconnected: bool = False,
-        disconnected: bool = False,
-    ) -> None:
-        """Best-effort SSE notification to the frontend via the backend event bus."""
-        payload: dict = {
-            "sampling_capable": sampling_capable,
-            "reconnected": reconnected,
-        }
-        if disconnected:
-            payload["disconnected"] = True
-        await notify_event_bus("mcp_session_changed", payload)
 
     async def _handle_post(self, scope, receive, send):
         """Buffer POST body, inspect for ``initialize``, track activity."""
@@ -291,15 +269,26 @@ class _CapabilityDetectionMiddleware:
         # (stale Mcp-Session-Id) or 400 (missing session ID after restart).
         if response_status in (400, 404) and initialize_result is None:
             if self._invalidate_stale_session():
-                await self._notify_session_changed(False)
+                payload = _routing_payload("mcp_stale_session") if _routing else {"sampling_capable": False}
+                await notify_event_bus("routing_state_changed", payload)
             return  # skip normal event logic
 
         # Fire SSE events *after* the request completes so we don't block it.
         # Two triggers: reconnection (activity gap) or fresh initialize handshake.
         if reconnected:
-            await self._notify_session_changed(True, reconnected=True)
+            payload = (
+                _routing_payload("mcp_reconnect")
+                if _routing
+                else {"sampling_capable": True, "reconnected": True}
+            )
+            await notify_event_bus("routing_state_changed", payload)
         elif initialize_result is not None:
-            await self._notify_session_changed(initialize_result["sampling_capable"])
+            payload = (
+                _routing_payload("mcp_initialize")
+                if _routing
+                else {"sampling_capable": initialize_result["sampling_capable"]}
+            )
+            await notify_event_bus("routing_state_changed", payload)
 
     async def _handle_get(self, scope, receive, send):
         """Track SSE stream lifecycle, handle session-less reconnection."""
@@ -334,7 +323,8 @@ class _CapabilityDetectionMiddleware:
                 status = message.get("status", 0)
                 if status in (400, 404):
                     if cls._invalidate_stale_session():
-                        await self._notify_session_changed(False)
+                        payload = _routing_payload("mcp_stale_session") if _routing else {"sampling_capable": False}
+                        await notify_event_bus("routing_state_changed", payload)
                 elif status == 200:
                     get_is_sse = True
                     cls._active_sse_streams += 1
@@ -344,7 +334,12 @@ class _CapabilityDetectionMiddleware:
                         # sampling-capable (the client was previously
                         # connected and is re-establishing its SSE stream).
                         cls._write_optimistic_session()
-                        await self._notify_session_changed(True, reconnected=True)
+                        payload = (
+                            _routing_payload("mcp_reconnect")
+                            if _routing
+                            else {"sampling_capable": True, "reconnected": True}
+                        )
+                        await notify_event_bus("routing_state_changed", payload)
             elif message["type"] == "http.response.body" and get_is_sse:
                 # SSE stream is alive — keep last_activity fresh so the
                 # health endpoint doesn't report a false disconnect.
@@ -367,8 +362,13 @@ class _CapabilityDetectionMiddleware:
                     # (uvicorn cancels the handler when the client
                     # disconnects, CancelledError is BaseException).
                     try:
+                        payload = (
+                            _routing_payload("mcp_sse_closed")
+                            if _routing
+                            else {"sampling_capable": True, "disconnected": True}
+                        )
                         await asyncio.shield(
-                            self._notify_session_changed(True, disconnected=True),
+                            notify_event_bus("routing_state_changed", payload),
                         )
                         logger.info("Disconnect event published to backend")
                     except BaseException:
@@ -382,6 +382,9 @@ class _CapabilityDetectionMiddleware:
         sees the updated count.  When the last stream closes (count → 0),
         we do NOT update ``last_activity`` — letting it go stale so the
         health endpoint detects the disconnect via the normal staleness check.
+
+        When ``_routing`` is available, also refreshes its in-memory activity
+        timestamp to keep the on-disk file and RoutingManager in sync.
         """
         try:
             fields: dict = {"sse_streams": cls._active_sse_streams}
@@ -389,6 +392,9 @@ class _CapabilityDetectionMiddleware:
             # let staleness detection handle the disconnect.
             if cls._active_sse_streams > 0:
                 fields["last_activity"] = datetime.now(timezone.utc).isoformat()
+                # Keep RoutingManager in sync with file activity
+                if _routing:
+                    _routing.on_mcp_activity()
             _session_file.update(**fields)
         except Exception:
             logger.debug("_flush_sse_streams: could not update mcp_session.json", exc_info=True)
@@ -403,6 +409,8 @@ class _CapabilityDetectionMiddleware:
         POST ``initialize`` the middleware will overwrite with the actual value.
         """
         try:
+            if _routing:
+                _routing.on_mcp_initialize(sampling_capable=True)
             _session_file.write_session(True, sse_streams=cls._active_sse_streams)
             logger.info(
                 "Optimistic session write: sampling_capable=True "
@@ -424,6 +432,11 @@ class _CapabilityDetectionMiddleware:
         """
         removed = _session_file.delete()
         if removed:
+            if _routing:
+                _routing._update_state(
+                    sampling_capable=None, mcp_connected=False,
+                )
+                _routing._broadcast_state_change("session_invalidated")
             logger.info(
                 "Stale session cleanup: removed mcp_session.json after failed "
                 "client reconnection (400/404)",
@@ -432,55 +445,44 @@ class _CapabilityDetectionMiddleware:
 
     @classmethod
     def _touch_activity(cls) -> bool:
-        """Update ``last_activity`` in mcp_session.json (throttled to avoid I/O spam).
+        """Update activity tracking (throttled to avoid spam).
 
-        Also writes the ``sse_streams`` count so the health endpoint can see
-        that a client is connected even when the SSE stream is idle (no POSTs).
-
-        Returns ``True`` if this write represents a reconnection (previous
-        activity was older than the staleness window).
+        Returns ``True`` if this represents a reconnection.
         """
         now_mono = time.monotonic()
         if now_mono - cls._last_activity_write < cls._ACTIVITY_WRITE_THROTTLE:
             return False
         cls._last_activity_write = now_mono
-        try:
-            data = _session_file.read()
-            if data is None:
-                return False
 
-            # Detect reconnection: previous activity was stale AND session was sampling-capable
-            reconnected = (
-                data.get("sampling_capable") is True
-                and MCPSessionFile.is_activity_stale(data)
-            )
-            if reconnected:
-                logger.info(
-                    "MCP client reconnected after activity staleness (threshold %.0fs)",
-                    MCP_ACTIVITY_STALENESS_SECONDS,
-                )
+        reconnected = False
+        if _routing:
+            was_disconnected = not _routing.state.mcp_connected
+            _routing.on_mcp_activity()
+            reconnected = was_disconnected and _routing.state.mcp_connected
+        else:
+            # Fallback: write directly to session file
+            try:
+                data = _session_file.read()
+                if data is not None:
+                    reconnected = (
+                        data.get("sampling_capable") is True
+                        and MCPSessionFile.is_activity_stale(data)
+                    )
+                    data["last_activity"] = datetime.now(timezone.utc).isoformat()
+                    data["sse_streams"] = cls._active_sse_streams
+                    _session_file.write(data)
+            except Exception:
+                logger.debug("_touch_activity: could not update mcp_session.json", exc_info=True)
 
-            data["last_activity"] = datetime.now(timezone.utc).isoformat()
-            data["sse_streams"] = cls._active_sse_streams
-            _session_file.write(data)
-            return reconnected
-        except Exception:
-            logger.debug("_touch_activity: could not update mcp_session.json", exc_info=True)
-            return False
+        return reconnected
 
     @staticmethod
     def _inspect_initialize(body: bytes) -> dict | None:
-        """If the body is a JSON-RPC ``initialize`` request, write session caps.
+        """If the body is a JSON-RPC ``initialize`` request, update routing state.
 
-        Uses an **optimistic** strategy: a ``True`` detection is always written
-        immediately.  A ``False`` detection only writes if the file doesn't
-        already contain a fresh ``True`` value (within the staleness window).
-        This prevents multi-session clients like VS Code from downgrading the
-        detection when one of their internal sessions lacks sampling capability.
-
-        Returns a ``{"sampling_capable": bool}`` dict when a file was written
-        (caller uses this to fire an SSE event for instant frontend detection),
-        or ``None`` if the body was not an ``initialize`` request or no write occurred.
+        Returns a ``{"sampling_capable": bool}`` dict when state was updated
+        (caller uses this to fire cross-process SSE events), or ``None`` if
+        the body was not an ``initialize`` request or no update occurred.
         """
         try:
             data = _json.loads(body)
@@ -501,22 +503,14 @@ class _CapabilityDetectionMiddleware:
                 params.get("protocolVersion", "?"),
             )
 
-            # Optimistic: never downgrade a fresh True to False
-            if not sampling and _session_file.should_skip_downgrade():
-                logger.info(
-                    "Capability detection middleware: ignoring False — "
-                    "fresh True already on file (client=%s)",
-                    client_info.get("name", "unknown"),
-                )
-                return None
+            if _routing:
+                _routing.on_mcp_initialize(sampling_capable=sampling)
+            else:
+                # Fallback: write session file directly (routing not yet initialized)
+                if not sampling and _session_file.should_skip_downgrade():
+                    return None
+                _session_file.write_session(sampling)
 
-            _session_file.write_session(sampling)
-            logger.info(
-                "Capability detection middleware: wrote sampling_capable=%s (client=%s/%s)",
-                sampling,
-                client_info.get("name", "unknown"),
-                client_info.get("version", "?"),
-            )
             return {"sampling_capable": sampling}
         except Exception:
             logger.debug("Capability detection middleware: could not parse initialize", exc_info=True)
@@ -579,19 +573,22 @@ async def synthesis_optimize(
             "Prompt too long (%d chars). Maximum is 200,000 characters." % len(prompt)
         )
 
-    provider = _provider
-
-    # ---- Hoist: single PreferencesService + workspace resolution for all paths ----
+    # ---- Hoist: single PreferencesService + snapshot for all paths ----
     prefs = PreferencesService(DATA_DIR)
-    effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
+    prefs_snapshot = prefs.load()
+    effective_strategy = strategy or prefs.get("defaults.strategy", prefs_snapshot) or "auto"
     guidance = await _resolve_workspace_guidance(ctx, workspace_path)
 
-    # ---- Detect and persist MCP client sampling capability (before routing) ----
-    _write_mcp_session_caps(ctx)
+    # ---- Routing decision ----
+    ctx_routing = RoutingContext(preferences=prefs_snapshot, caller="mcp")
+    decision = _routing.resolve(ctx_routing) if _routing else None
 
-    # ---- Force-passthrough short-circuit (explicit manual override, checked first) ----
-    if prefs.get("pipeline.force_passthrough"):
-        logger.info("synthesis_optimize: force_passthrough=True — returning passthrough template directly")
+    if decision is None:
+        raise ValueError("Routing service not initialized")
+
+    if decision.tier == "passthrough":
+        # Passthrough: assemble template for external LLM processing
+        logger.info("synthesis_optimize: tier=passthrough reason=%r", decision.reason)
         assembled, strategy_name = assemble_passthrough_prompt(
             prompts_dir=PROMPTS_DIR,
             raw_prompt=prompt,
@@ -611,98 +608,6 @@ async def synthesis_optimize(
             )
             db.add(pending)
             await db.commit()
-        return OptimizeOutput(
-            status="pending_external",
-            pipeline_mode="passthrough",
-            strategy_used=strategy_name,
-            trace_id=trace_id,
-            assembled_prompt=assembled,
-            instructions=(
-                "force_passthrough=True. Process the assembled_prompt with your LLM, "
-                "then call synthesis_save_result with the trace_id and the optimized output. "
-                "Include optimized_prompt, changes_summary, task_type, strategy_used, and "
-                "optionally scores (clarity, specificity, structure, faithfulness, conciseness — each 1-10)."
-            ),
-        )
-
-    # ---- Force-sampling short-circuit (overrides local provider when enabled) ----
-    _sampling_already_attempted = False
-    if prefs.get("pipeline.force_sampling"):
-        if ctx and hasattr(ctx, "session") and ctx.session:
-            logger.info("synthesis_optimize: force_sampling=True — attempting sampling pipeline")
-            _sampling_already_attempted = True
-            try:
-                result = await run_sampling_pipeline(
-                    ctx, prompt,
-                    effective_strategy if effective_strategy != "auto" else None,
-                    guidance,
-                    repo_full_name=repo_full_name,
-                    applied_pattern_ids=applied_pattern_ids,
-                )
-                return _sampling_result_to_output(result)
-            except Exception as exc:
-                logger.error(
-                    "force_sampling requested but sampling failed: %s",
-                    exc, exc_info=True,
-                )
-                error_msg = await _persist_sampling_failure(prompt, effective_strategy, exc)
-                return OptimizeOutput(
-                    status="error",
-                    pipeline_mode="sampling",
-                    strategy_used=effective_strategy,
-                    warnings=[error_msg],
-                )
-        else:
-            logger.info(
-                "synthesis_optimize: force_sampling=True but no sampling-capable session — using normal routing"
-            )
-
-    # ---- No local provider: try sampling, then fall back to passthrough ----
-    if not provider:
-        # Try MCP sampling (full pipeline via IDE's LLM)
-        if not _sampling_already_attempted and ctx and hasattr(ctx, "session") and ctx.session:
-            try:
-                logger.info("synthesis_optimize: no provider — attempting sampling pipeline")
-                result = await run_sampling_pipeline(
-                    ctx, prompt,
-                    effective_strategy if effective_strategy != "auto" else None,
-                    guidance,
-                    repo_full_name=repo_full_name,
-                    applied_pattern_ids=applied_pattern_ids,
-                )
-                return _sampling_result_to_output(result)
-            except Exception as exc:
-                logger.error(
-                    "Sampling failed, falling back to passthrough: %s",
-                    exc, exc_info=True,
-                )
-                await _persist_sampling_failure(prompt, effective_strategy, exc)
-
-        # Fallback: single-shot passthrough template
-        logger.info("synthesis_optimize: no provider — using passthrough template")
-
-        assembled, strategy_name = assemble_passthrough_prompt(
-            prompts_dir=PROMPTS_DIR,
-            raw_prompt=prompt,
-            strategy_name=effective_strategy,
-            codebase_guidance=guidance,
-        )
-
-        trace_id = str(uuid.uuid4())
-
-        async with async_session_factory() as db:
-            pending = Optimization(
-                id=str(uuid.uuid4()),
-                raw_prompt=prompt,
-                status="pending",
-                trace_id=trace_id,
-                provider="mcp_passthrough",
-                strategy_used=strategy_name,
-                task_type="general",
-            )
-            db.add(pending)
-            await db.commit()
-
         return OptimizeOutput(
             status="pending_external",
             pipeline_mode="passthrough",
@@ -718,6 +623,33 @@ async def synthesis_optimize(
             ),
         )
 
+    if decision.tier == "sampling":
+        # Sampling pipeline: run via IDE's LLM
+        logger.info("synthesis_optimize: tier=sampling reason=%r", decision.reason)
+        if not ctx or not hasattr(ctx, "session") or not ctx.session:
+            raise ValueError("Sampling tier selected but no MCP session available")
+        try:
+            result = await run_sampling_pipeline(
+                ctx, prompt,
+                effective_strategy if effective_strategy != "auto" else None,
+                guidance,
+                repo_full_name=repo_full_name,
+                applied_pattern_ids=applied_pattern_ids,
+            )
+            return _sampling_result_to_output(result)
+        except Exception as exc:
+            logger.error("Sampling pipeline failed: %s", exc, exc_info=True)
+            error_msg = await _persist_sampling_failure(prompt, effective_strategy, exc)
+            return OptimizeOutput(
+                status="error",
+                pipeline_mode="sampling",
+                strategy_used=effective_strategy,
+                warnings=[error_msg],
+            )
+
+    # Internal pipeline (decision.tier == "internal")
+    logger.info("synthesis_optimize: tier=internal provider=%s reason=%r", decision.provider_name, decision.reason)
+
     start = time.monotonic()
 
     logger.info(
@@ -731,7 +663,7 @@ async def synthesis_optimize(
         result = None
         async for event in orchestrator.run(
             raw_prompt=prompt,
-            provider=provider,
+            provider=decision.provider,
             db=db,
             strategy_override=effective_strategy if effective_strategy != "auto" else None,
             codebase_guidance=guidance,
@@ -762,7 +694,7 @@ async def synthesis_optimize(
             "task_type": result.get("task_type", ""),
             "strategy_used": result.get("strategy_used", ""),
             "overall_score": result.get("overall_score"),
-            "provider": provider.name,
+            "provider": decision.provider_name,
             "status": "completed",
         })
 
@@ -859,35 +791,40 @@ async def synthesis_analyze(
     When no local LLM provider is available but the client supports MCP
     sampling, runs analysis via the IDE's LLM.
     """
-    _write_mcp_session_caps(ctx)
-
     if len(prompt) < 20:
         raise ValueError(
             "Prompt too short (%d chars). Minimum is 20 characters." % len(prompt)
         )
 
-    provider = _provider
+    _prefs = PreferencesService(DATA_DIR)
+    prefs_snapshot = _prefs.load()
+    ctx_routing = RoutingContext(preferences=prefs_snapshot, caller="mcp")
+    decision = _routing.resolve(ctx_routing) if _routing else None
 
-    # ---- Sampling fallback: no local provider but client supports sampling ----
-    if not provider:
+    if decision is None:
+        raise ValueError("Routing service not initialized")
+
+    provider = decision.provider
+
+    if decision.tier == "sampling":
+        logger.info("synthesis_analyze: tier=sampling prompt_len=%d reason=%r", len(prompt), decision.reason)
         if ctx and hasattr(ctx, "session") and ctx.session:
             try:
                 result = await run_sampling_analyze(ctx, prompt)
                 return AnalyzeOutput(**result)
             except Exception as exc:
-                logger.info(
-                    "Sampling analyze failed, no fallback available: %s",
-                    type(exc).__name__,
-                )
-        raise ValueError(
-            "No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI."
-        )
+                logger.warning("Sampling analyze failed: %s: %s", type(exc).__name__, exc)
+        raise ValueError("No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI.")
+
+    if decision.tier == "passthrough":
+        logger.info("synthesis_analyze: tier=passthrough — rejecting (analysis requires provider)")
+        raise ValueError("Analysis requires a local provider or MCP sampling capability.")
 
     start = time.monotonic()
-    logger.info("synthesis_analyze called: prompt_len=%d", len(prompt))
-
-    prefs = PreferencesService(DATA_DIR)
-    prefs_snapshot = prefs.load()
+    logger.info(
+        "synthesis_analyze: tier=internal provider=%s prompt_len=%d",
+        decision.provider_name, len(prompt),
+    )
 
     loader = PromptLoader(PROMPTS_DIR)
     strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
@@ -901,7 +838,7 @@ async def synthesis_analyze(
 
     try:
         analysis: AnalysisResult = await provider.complete_parsed(
-            model=prefs.resolve_model("analyzer", prefs_snapshot),
+            model=_prefs.resolve_model("analyzer", prefs_snapshot),
             system_prompt=system_prompt,
             user_message=analyze_msg,
             output_format=AnalysisResult,
@@ -928,7 +865,7 @@ async def synthesis_analyze(
 
     try:
         score_result: ScoreResult = await provider.complete_parsed(
-            model=prefs.resolve_model("scorer", prefs_snapshot),
+            model=_prefs.resolve_model("scorer", prefs_snapshot),
             system_prompt=scoring_system,
             user_message=scorer_msg,
             output_format=ScoreResult,
@@ -973,7 +910,7 @@ async def synthesis_analyze(
             score_conciseness=baseline.conciseness,
             overall_score=overall,
             provider=provider.name,
-            model_used=prefs.resolve_model("analyzer", prefs_snapshot),
+            model_used=_prefs.resolve_model("analyzer", prefs_snapshot),
             scoring_mode="baseline",
             status="analyzed",
             trace_id=trace_id,
@@ -1072,8 +1009,6 @@ async def synthesis_prepare_optimization(
 
     Call synthesis_save_result with the output.
     """
-    _write_mcp_session_caps(ctx)
-
     if len(prompt) < 20:
         raise ValueError(
             "Prompt too short (%d chars). Minimum is 20 characters." % len(prompt)
@@ -1172,7 +1107,6 @@ async def synthesis_save_result(
     Applies bias correction to self-rated scores.
     Optionally stores IDE-provided codebase context snapshot.
     """
-    _write_mcp_session_caps(ctx)
     logger.info("synthesis_save_result called: trace_id=%s model=%s", trace_id, model)
 
     # Normalize strategy_used — external LLMs often return verbose rationales

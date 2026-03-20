@@ -28,14 +28,26 @@ async def lifespan(app: FastAPI):
             await db.execute("PRAGMA busy_timeout=5000")
         logger.info("SQLite WAL mode enabled for %s", db_path)
 
-    # Detect LLM provider
+    # Initialize routing service
+    from app.providers.detector import detect_provider
+    from app.services.routing import RoutingManager
+
+    routing = RoutingManager(event_bus=event_bus, data_dir=DATA_DIR)
     try:
-        from app.providers.detector import detect_provider
         provider = detect_provider()
-    except ImportError:
+    except Exception as exc:
+        logger.warning("Provider detection failed: %s — starting without provider", exc)
         provider = None
-    app.state.provider = provider
-    logger.info("Provider detected: %s", provider.name if provider else "none")
+    routing.set_provider(provider)
+    app.state.routing = routing
+    logger.info(
+        "Routing initialized: provider=%s available_tiers=%s",
+        routing.state.provider_name or "none",
+        routing.available_tiers,
+    )
+
+    # Start background disconnect checker
+    await routing.start_disconnect_checker()
 
     # Validate prompt templates at startup
     from app.services.prompt_loader import PromptLoader
@@ -60,7 +72,7 @@ async def lifespan(app: FastAPI):
         """Subscribe to optimization_created events and extract patterns."""
         try:
             from app.services.pattern_extractor import PatternExtractorService
-            extractor = PatternExtractorService(provider=app.state.provider)
+            extractor = PatternExtractorService(provider=app.state.routing.state.provider)
             logger.info("Pattern extraction listener started — subscribing to event bus")
             async for event in event_bus.subscribe():
                 if event.get("event") == "optimization_created":
@@ -99,6 +111,10 @@ async def lifespan(app: FastAPI):
     app.state.extraction_task = extraction_task
 
     yield
+
+    # Stop routing disconnect checker
+    if hasattr(app.state, "routing"):
+        await app.state.routing.stop()
 
     # Stop pattern extraction listener
     if hasattr(app.state, "extraction_task"):
