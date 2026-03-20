@@ -2,8 +2,6 @@
 
 import re
 
-import pytest
-
 from app.services.taxonomy.coloring import (
     enforce_minimum_delta_e,
     generate_color,

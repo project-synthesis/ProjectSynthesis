@@ -1,14 +1,12 @@
 """Tests for TaxonomyEngine warm path — periodic re-clustering with lifecycle."""
 
-import asyncio
 
 import numpy as np
 import pytest
 
-from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
-
-from app.models import Optimization, PatternFamily, TaxonomyNode
+from app.models import PatternFamily, TaxonomyNode
 from app.services.taxonomy.engine import TaxonomyEngine
+from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
 
 
 @pytest.mark.asyncio
@@ -146,5 +144,5 @@ async def test_warm_path_lock_released_on_error(db, mock_embedding, mock_provide
     await db.commit()
 
     # Should not raise, and lock should be released
-    result = await engine.run_warm_path(db)
+    await engine.run_warm_path(db)
     assert not engine._warm_path_lock.locked()

@@ -3,10 +3,9 @@
 import numpy as np
 import pytest
 
-from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
-
 from app.models import PatternFamily, TaxonomyNode
 from app.services.taxonomy.engine import TaxonomyEngine
+from tests.taxonomy.conftest import EMBEDDING_DIM
 
 
 @pytest.mark.asyncio
@@ -43,7 +42,7 @@ async def test_cold_path_acquires_warm_lock(db, mock_embedding, mock_provider):
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
     # Run cold path — it should acquire the warm lock
-    result = await engine.run_cold_path(db)
+    await engine.run_cold_path(db)
     # After completion, lock should be released
     assert not engine._warm_path_lock.locked()
 
@@ -128,7 +127,7 @@ async def test_cold_path_lock_released_on_error(db, mock_embedding, mock_provide
     await db.commit()
 
     # Should not raise, and lock should be released
-    result = await engine.run_cold_path(db)
+    await engine.run_cold_path(db)
     assert not engine._warm_path_lock.locked()
 
 

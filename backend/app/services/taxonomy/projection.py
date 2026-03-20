@@ -3,6 +3,8 @@
 Spec Section 8.5.
 """
 
+# ruff: noqa: N803, N806 — mathematical notation (X, U, S, R, X_centered)
+
 from __future__ import annotations
 
 import numpy as np

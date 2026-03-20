@@ -6,11 +6,12 @@ UMAP 3D position. Uses OKLab color space for perceptual uniformity.
 Spec Section 8.6.
 """
 
+# ruff: noqa: N803, N806, E741 — mathematical notation (L, dL, l/m/s for LMS)
+
 from __future__ import annotations
 
 import math
 from typing import Sequence
-
 
 # ---------------------------------------------------------------------------
 # Core OKLab ↔ sRGB conversion

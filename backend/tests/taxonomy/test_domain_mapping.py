@@ -48,6 +48,7 @@ async def test_map_domain_bayesian_blend(db, mock_embedding, mock_provider):
     pattern centroid, cosine crosses DOMAIN_ALIGNMENT_FLOOR (0.35).
     """
     from unittest.mock import AsyncMock
+
     from app.models import MetaPattern
 
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)

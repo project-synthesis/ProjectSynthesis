@@ -3,16 +3,14 @@
 import numpy as np
 import pytest
 
-from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
-
-from app.models import MetaPattern, PatternFamily, TaxonomyNode
+from app.models import PatternFamily, TaxonomyNode
 from app.services.taxonomy.lifecycle import (
     attempt_emerge,
     attempt_merge,
     attempt_retire,
-    attempt_split,
     prioritize_operations,
 )
+from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
 
 
 @pytest.mark.asyncio

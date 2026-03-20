@@ -3,8 +3,6 @@
 import numpy as np
 import pytest
 
-from tests.taxonomy.conftest import EMBEDDING_DIM
-
 from app.models import MetaPattern, PatternFamily, TaxonomyNode
 from app.services.taxonomy.engine import TaxonomyEngine
 

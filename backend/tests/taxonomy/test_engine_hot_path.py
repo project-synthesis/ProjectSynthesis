@@ -1,9 +1,8 @@
 """Tests for TaxonomyEngine hot path — process_optimization."""
 
-import numpy as np
 import pytest
 
-from app.models import Optimization, PatternFamily, TaxonomyNode
+from app.models import Optimization, PatternFamily
 from app.services.taxonomy.engine import TaxonomyEngine
 
 
@@ -67,7 +66,6 @@ async def test_process_optimization_idempotent(db, mock_embedding, mock_provider
 async def test_process_optimization_creates_family(db, mock_embedding, mock_provider):
     """process_optimization should create a PatternFamily for the optimization."""
     from sqlalchemy import select
-    from app.models import PatternFamily
 
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
@@ -97,7 +95,6 @@ async def test_process_optimization_merges_into_existing_family(
 ):
     """Second optimization with similar embedding should merge into existing family."""
     from sqlalchemy import select
-    from app.models import PatternFamily
 
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
@@ -139,6 +136,7 @@ async def test_process_optimization_merges_into_existing_family(
 async def test_process_optimization_writes_join_record(db, mock_embedding, mock_provider):
     """A 'source' OptimizationPattern record should be created on success."""
     from sqlalchemy import select
+
     from app.models import OptimizationPattern
 
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
@@ -180,7 +178,6 @@ async def test_process_optimization_cross_domain_creates_new_family(
 ):
     """Same embedding but different domain should create a new family (not merge)."""
     from sqlalchemy import select
-    from app.models import PatternFamily
 
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 

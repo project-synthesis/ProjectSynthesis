@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel
+from pydantic import Field as PydanticField
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -560,16 +561,10 @@ class TaxonomyEngine:
         """Core warm path logic — called under _warm_path_lock."""
         from app.services.taxonomy.clustering import (
             batch_cluster,
-            compute_pairwise_coherence,
-            compute_separation,
         )
         from app.services.taxonomy.quality import (
-            NodeMetrics,
-            QWeights,
-            compute_q_system,
             is_non_regressive,
         )
-        from app.services.taxonomy.snapshot import create_snapshot
 
         # 1. Load all confirmed nodes
         result = await db.execute(
@@ -936,11 +931,6 @@ class TaxonomyEngine:
             generate_color,
         )
         from app.services.taxonomy.projection import UMAPProjector, procrustes_align
-        from app.services.taxonomy.quality import (
-            NodeMetrics,
-            QWeights,
-            compute_q_system,
-        )
         from app.services.taxonomy.snapshot import create_snapshot
 
         nodes_created = 0

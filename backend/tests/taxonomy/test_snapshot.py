@@ -1,6 +1,5 @@
 """Tests for taxonomy snapshot CRUD and retention policy."""
 
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest

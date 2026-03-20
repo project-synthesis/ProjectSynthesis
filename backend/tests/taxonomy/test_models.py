@@ -3,16 +3,16 @@
 import numpy as np
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import select
 
 from app.models import (
     Base,
+    Optimization,
+    PatternFamily,
     TaxonomyNode,
     TaxonomySnapshot,
-    PatternFamily,
-    Optimization,
 )
 
 

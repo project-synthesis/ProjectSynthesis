@@ -3,13 +3,12 @@
 import numpy as np
 import pytest
 
-from tests.taxonomy.conftest import make_cluster_distribution
-
 from app.services.taxonomy.clustering import (
     ClusterResult,
     batch_cluster,
     nearest_centroid,
 )
+from tests.taxonomy.conftest import make_cluster_distribution
 
 
 class TestNearestCentroid:
