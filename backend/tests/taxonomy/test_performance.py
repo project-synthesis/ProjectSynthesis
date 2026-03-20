@@ -15,7 +15,10 @@ from tests.taxonomy.conftest import EMBEDDING_DIM
 
 @pytest.mark.asyncio
 async def test_hot_path_under_500ms(db, mock_embedding, mock_provider):
-    """process_optimization should complete in < 500ms."""
+    """process_optimization should complete in < 500ms.
+
+    Budget is wide to absorb cold-start overhead (SQLAlchemy init, first async I/O).
+    """
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
     opt = Optimization(
@@ -41,8 +44,9 @@ async def test_match_prompt_under_100ms(db, mock_embedding, mock_provider):
 
     # Create taxonomy nodes and families so the matching code exercises
     # the full search path (match_prompt filters on taxonomy_node_id IS NOT NULL).
+    rng = np.random.RandomState(0)
     for i in range(10):
-        centroid = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+        centroid = rng.randn(EMBEDDING_DIM).astype(np.float32)
         centroid /= np.linalg.norm(centroid) + 1e-9
 
         node = TaxonomyNode(
