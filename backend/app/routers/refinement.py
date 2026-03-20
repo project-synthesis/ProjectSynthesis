@@ -64,8 +64,6 @@ async def refine(
     decision = routing.resolve(ctx)
 
     # Refinement still requires a provider (passthrough refinement UX not designed yet).
-    # TODO: when passthrough refinement is added, emit a `routing` SSE event as
-    # the first event in the stream (matching the optimize endpoint pattern).
     if decision.tier == "passthrough":
         logger.warning(
             "POST /api/refine rejected: tier=passthrough optimization_id=%s",
@@ -117,10 +115,18 @@ async def refine(
         branch_id = body.branch_id or versions[-1].branch_id
 
     async def event_stream():
-        async for event in ref_svc.create_refinement_turn(
-            body.optimization_id, branch_id, body.refinement_request,
-        ):
-            yield format_sse(event.event, event.data)
+        yield format_sse("routing", {
+            "tier": decision.tier, "provider": decision.provider_name,
+            "reason": decision.reason, "degraded_from": decision.degraded_from,
+        })
+        try:
+            async for event in ref_svc.create_refinement_turn(
+                body.optimization_id, branch_id, body.refinement_request,
+            ):
+                yield format_sse(event.event, event.data)
+        except Exception as exc:
+            logger.error("Refinement SSE stream error: %s", exc, exc_info=True)
+            yield format_sse("error", {"error": str(exc)})
 
     return StreamingResponse(
         event_stream(),

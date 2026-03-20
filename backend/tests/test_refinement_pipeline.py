@@ -122,11 +122,46 @@ class TestRefineSSE:
             if line.startswith("data: "):
                 events.append(json.loads(line[6:]))
 
+        # First event must be 'routing' (matching optimize endpoint pattern)
+        assert events[0]["event"] == "routing"
+        assert events[0]["tier"] == "internal"
+        assert events[0]["reason"]
+
         event_types = {e["event"] for e in events}
         assert "status" in event_types
         assert "prompt_preview" in event_types
         assert "score_card" in event_types
         assert "suggestions" in event_types
+
+    async def test_refine_emits_routing_event_first(self, app_client, mock_provider, sample_opt):
+        """POST /api/refine emits a 'routing' SSE event as the very first event."""
+        mock_provider.complete_parsed.side_effect = [
+            _make_analysis(),
+            _make_optimization(),
+            _make_scores(),
+            _make_suggestions(),
+        ]
+
+        resp = await app_client.post(
+            "/api/refine",
+            json={
+                "optimization_id": "refine-opt-1",
+                "refinement_request": "Add error handling",
+            },
+        )
+
+        assert resp.status_code == 200
+        events = []
+        for line in resp.text.split("\n"):
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+
+        routing_event = events[0]
+        assert routing_event["event"] == "routing"
+        assert routing_event["tier"] == "internal"
+        assert routing_event["provider"] == "mock"
+        assert "reason" in routing_event
+        assert "degraded_from" in routing_event
 
     async def test_refine_not_found(self, app_client):
         """POST /api/refine with unknown optimization_id → 404."""
