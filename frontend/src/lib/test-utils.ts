@@ -110,6 +110,11 @@ export function mockPatternMatch(overrides: Record<string, unknown> = {}) {
     family: mockPatternFamily(),
     meta_patterns: [mockMetaPattern()],
     similarity: 0.85,
+    match_level: 'family' as const,
+    taxonomy_node_id: 'node-1',
+    taxonomy_label: 'Test Node',
+    taxonomy_color: '#00e5ff',
+    taxonomy_breadcrumb: ['Root', 'Test Node'],
     ...overrides,
   };
 }

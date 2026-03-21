@@ -139,11 +139,9 @@ describe('PatternStore', () => {
     it('returns meta-pattern IDs from suggestion', () => {
       const mp1 = mockMetaPattern({ id: 'mp-1' });
       const mp2 = mockMetaPattern({ id: 'mp-2' });
-      patternsStore.suggestion = {
-        family: mockPatternFamily() as any,
+      patternsStore.suggestion = mockPatternMatch({
         meta_patterns: [mp1 as any, mp2 as any],
-        similarity: 0.85,
-      };
+      }) as any;
       const ids = patternsStore.applySuggestion();
       expect(ids).toEqual(['mp-1', 'mp-2']);
     });

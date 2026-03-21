@@ -28,9 +28,10 @@ class TestTaxonomyEndpoints:
         resp = await app_client.get("/api/taxonomy/stats")
         assert resp.status_code == 200
         data = resp.json()
-        assert "confirmed_nodes" in data
-        assert "candidate_nodes" in data
-        assert "total_families" in data
+        assert "nodes" in data
+        assert "confirmed" in data["nodes"]
+        assert "candidate" in data["nodes"]
+        assert "q_system" in data
 
     @pytest.mark.asyncio
     async def test_get_node_not_found(self, app_client, db_session):

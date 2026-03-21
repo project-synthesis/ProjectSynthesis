@@ -1,8 +1,7 @@
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.models import MetaPattern, Optimization, OptimizationPattern, PatternFamily
+from app.models import PatternFamily
 
 
 class TestPatternsEndpoints:
