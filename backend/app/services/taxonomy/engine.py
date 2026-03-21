@@ -52,6 +52,10 @@ FAMILY_MATCH_THRESHOLD = 0.72
 CLUSTER_MATCH_THRESHOLD = 0.60
 CANDIDATE_THRESHOLD = 0.80
 
+# Warm path operational limits
+DEADLOCK_BREAKER_THRESHOLD = 5  # consecutive rejected cycles before forcing
+MAX_META_PATTERNS_PER_EXTRACTION = 5  # max patterns per LLM extraction
+
 # ---------------------------------------------------------------------------
 # Public data-transfer objects
 # ---------------------------------------------------------------------------
@@ -551,7 +555,9 @@ class TaxonomyEngine:
         Returns:
             WarmPathResult on success, or None if skipped due to lock.
         """
-        # Lock deduplication (Spec Section 2.6)
+        # Lock deduplication (Spec Section 2.6).
+        # In asyncio single-thread model, locked() + acquire is safe —
+        # no preemption between check and context manager entry.
         if self._warm_path_lock.locked():
             logger.debug("Warm path skipped — lock already held")
             return None
@@ -804,7 +810,7 @@ class TaxonomyEngine:
         else:
             self._consecutive_rejected_cycles = 0
 
-        if self._consecutive_rejected_cycles >= 5:
+        if self._consecutive_rejected_cycles >= DEADLOCK_BREAKER_THRESHOLD:
             logger.warning(
                 "Deadlock breaker triggered after %d consecutive rejected cycles "
                 "— forcing best single-dimension operation and scheduling cold path",
@@ -1530,13 +1536,19 @@ class TaxonomyEngine:
                         )
                         # Fall through to creation
                     else:
-                        # Merge: update centroid as running mean
+                        # Merge: update centroid as running mean, re-normalize
                         old_centroid = np.frombuffer(
                             family.centroid_embedding, dtype=np.float32
                         )
                         new_centroid = (old_centroid * family.member_count + embedding) / (
                             family.member_count + 1
                         )
+                        # Re-normalize to unit norm — running mean drifts
+                        # from unit sphere without this (critical for cosine
+                        # similarity accuracy on subsequent merges).
+                        c_norm = np.linalg.norm(new_centroid)
+                        if c_norm > 0:
+                            new_centroid = new_centroid / c_norm
                         family.centroid_embedding = new_centroid.astype(
                             np.float32
                         ).tobytes()
@@ -1649,7 +1661,7 @@ class TaxonomyEngine:
 
             patterns = [
                 str(p) for p in response.patterns if isinstance(p, str)
-            ][:5]
+            ][:MAX_META_PATTERNS_PER_EXTRACTION]
             logger.debug(
                 "Haiku returned %d meta-patterns for opt=%s", len(patterns), opt.id
             )

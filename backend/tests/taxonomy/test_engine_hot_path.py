@@ -1,5 +1,6 @@
 """Tests for TaxonomyEngine hot path — process_optimization."""
 
+import numpy as np
 import pytest
 
 from app.models import Optimization, PatternFamily
@@ -213,3 +214,46 @@ async def test_process_optimization_cross_domain_creates_new_family(
     families = result.scalars().all()
     # Cross-domain merge prevention → 2 families
     assert len(families) == 2
+
+
+@pytest.mark.asyncio
+async def test_centroid_stays_normalized_after_multiple_merges(
+    db, mock_embedding, mock_provider
+):
+    """Centroid running mean must remain unit-norm after repeated merges.
+
+    Without re-normalization, the running mean formula (old*n + new)/(n+1)
+    produces vectors with norm < 1.0, degrading cosine similarity accuracy.
+    This test verifies the fix in _assign_family.
+    """
+    from sqlalchemy import select
+
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+    identical_prompt = "Build a FastAPI REST service with CRUD endpoints"
+
+    # Create 5 optimizations with the same prompt to force repeated merges
+    for i in range(5):
+        opt = Optimization(
+            raw_prompt=identical_prompt,
+            optimized_prompt="...",
+            status="completed",
+            intent_label="REST API",
+            domain="backend",
+            domain_raw="REST API",
+        )
+        db.add(opt)
+        await db.commit()
+        await engine.process_optimization(opt.id, db)
+
+    result = await db.execute(select(PatternFamily))
+    families = result.scalars().all()
+    assert len(families) == 1
+
+    family = families[0]
+    centroid = np.frombuffer(family.centroid_embedding, dtype=np.float32)
+    norm = np.linalg.norm(centroid)
+    # After 5 merges, centroid must still be unit-norm (within float32 tolerance)
+    assert norm == pytest.approx(1.0, abs=1e-5), (
+        f"Centroid norm drifted to {norm} after {family.member_count} merges"
+    )

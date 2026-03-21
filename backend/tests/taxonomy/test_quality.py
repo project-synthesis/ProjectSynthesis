@@ -109,6 +109,11 @@ class TestAdaptiveThreshold:
         t = adaptive_threshold(base=0.78, population=0)
         assert t == pytest.approx(0.78)  # base value exactly
 
+    def test_clamped_at_one(self):
+        """Very large populations must not push threshold above 1.0."""
+        t = adaptive_threshold(base=0.78, population=1_000_000)
+        assert t == 1.0
+
 
 class TestEpsilonTolerance:
     """Spec Section 2.5 — non-regression epsilon decays with age."""

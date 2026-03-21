@@ -132,8 +132,11 @@ def adaptive_threshold(
 
     Small populations get lenient thresholds (let clusters form).
     Large populations get strict thresholds (well-defined by now).
+
+    Clamped to 1.0 — cosine similarity cannot exceed 1.0, so the
+    threshold should never exceed that.
     """
-    return base * (1 + alpha * math.log(1 + population))
+    return min(base * (1 + alpha * math.log(1 + population)), 1.0)
 
 
 def epsilon_tolerance(warm_path_age: int) -> float:

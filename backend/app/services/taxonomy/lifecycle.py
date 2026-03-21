@@ -165,6 +165,11 @@ async def attempt_merge(
         The survivor TaxonomyNode, or None on failure.
     """
     try:
+        # Guard: self-merge is a no-op that would double member_count
+        if node_a.id == node_b.id:
+            logger.warning("attempt_merge: self-merge rejected (id=%s)", node_a.id)
+            return None
+
         count_a = node_a.member_count or 0
         count_b = node_b.member_count or 0
         total = count_a + count_b
@@ -339,6 +344,15 @@ async def attempt_retire(
         True if the node was retired, False if skipped (no siblings).
     """
     try:
+        # Guard: root nodes (parent_id=None) must never be retired
+        if node.parent_id is None:
+            logger.info(
+                "retire: root node '%s' (id=%s) cannot be retired",
+                node.label,
+                node.id,
+            )
+            return False
+
         # Find confirmed siblings.
         result = await db.execute(
             select(TaxonomyNode).where(

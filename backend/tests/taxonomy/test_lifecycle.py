@@ -136,6 +136,74 @@ async def test_retire_redistributes_members(db, mock_embedding):
     assert target.retired_at is not None
 
 
+@pytest.mark.asyncio
+async def test_merge_self_merge_rejected(db, mock_embedding):
+    """Merging a node with itself should return None (guard against self-merge)."""
+    emb = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+
+    node = TaxonomyNode(
+        label="Solo Node",
+        centroid_embedding=emb.tobytes(),
+        member_count=3,
+        coherence=0.85,
+        state="confirmed",
+        color_hex="#a855f7",
+    )
+    db.add(node)
+    await db.flush()
+
+    result = await attempt_merge(
+        db=db,
+        node_a=node,
+        node_b=node,  # same node — should be rejected
+        warm_path_age=10,
+    )
+
+    assert result is None
+    # Member count must NOT have been doubled
+    assert node.member_count == 3
+    assert node.state == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_retire_root_node_rejected(db, mock_embedding):
+    """Root nodes (parent_id=None) must never be retired."""
+    root = TaxonomyNode(
+        label="Root",
+        parent_id=None,
+        centroid_embedding=np.zeros(EMBEDDING_DIM, dtype=np.float32).tobytes(),
+        member_count=10,
+        state="confirmed",
+        color_hex="#00e5ff",
+    )
+    db.add(root)
+    await db.flush()
+
+    result = await attempt_retire(
+        db=db,
+        node=root,
+        warm_path_age=25,
+    )
+
+    assert result is False
+    assert root.state == "confirmed"
+    assert root.retired_at is None
+
+
+@pytest.mark.asyncio
+async def test_emerge_empty_inputs_returns_none(db, mock_embedding):
+    """Emerge with empty member_family_ids should return None."""
+    result = await attempt_emerge(
+        db=db,
+        member_family_ids=[],
+        embeddings=[],
+        warm_path_age=5,
+        provider=None,
+        model="claude-haiku-4-5",
+    )
+    assert result is None
+
+
 def test_prioritize_operations():
     """Operations should execute in order: split > emerge > merge > retire."""
     ops = [
