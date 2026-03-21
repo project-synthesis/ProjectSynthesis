@@ -10,6 +10,7 @@ Reference: Spec Section 5.2
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -186,7 +187,7 @@ def _week_key(snap: TaxonomySnapshot) -> str:
 
 def _keep_best_per_group(
     snapshots: list[TaxonomySnapshot],
-    key_fn: Any,
+    key_fn: Callable[[TaxonomySnapshot], str],
 ) -> set[str]:
     """Return IDs of snapshots to delete, keeping highest q_system per group.
 

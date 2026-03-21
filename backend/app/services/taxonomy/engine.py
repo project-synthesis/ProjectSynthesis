@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
-from sqlalchemy import desc, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import PROMPTS_DIR, settings
@@ -55,6 +55,9 @@ CANDIDATE_THRESHOLD = 0.80
 # Warm path operational limits
 DEADLOCK_BREAKER_THRESHOLD = 5  # consecutive rejected cycles before forcing
 MAX_META_PATTERNS_PER_EXTRACTION = 5  # max patterns per LLM extraction
+SPLIT_COHERENCE_FLOOR = 0.5  # below this coherence, node is a split candidate
+SPLIT_MIN_MEMBERS = 6  # minimum members before a node can be split
+PROMPT_TRUNCATION_LIMIT = 2000  # max chars for prompts sent to LLM extraction
 
 # ---------------------------------------------------------------------------
 # Public data-transfer objects
@@ -150,8 +153,6 @@ class TaxonomyEngine:
         self._warm_path_age: int = 0
         # Set by deadlock breaker — caller should schedule cold path.
         self._cold_path_needed: bool = False
-        # In-memory centroid cache: node_id → ndarray.  Invalidated on writes.
-        self._centroid_cache: dict[str, np.ndarray] = {}
 
     # ------------------------------------------------------------------
     # Public hot-path entry point
@@ -608,7 +609,7 @@ class TaxonomyEngine:
         # members to produce viable child clusters.
         for node in confirmed_nodes:
             coherence = node.coherence if node.coherence is not None else 1.0
-            if coherence < 0.5 and (node.member_count or 0) >= 6:
+            if coherence < SPLIT_COHERENCE_FLOOR and (node.member_count or 0) >= SPLIT_MIN_MEMBERS:
                 ops_attempted += 1
                 # Gather families assigned to this node
                 fam_q = await db.execute(
@@ -617,7 +618,7 @@ class TaxonomyEngine:
                     )
                 )
                 node_families = list(fam_q.scalars().all())
-                if len(node_families) >= 6:
+                if len(node_families) >= SPLIT_MIN_MEMBERS:
                     child_embs = []
                     child_fam_ids = []
                     for f in node_families:
@@ -892,9 +893,6 @@ class TaxonomyEngine:
             ops_attempted=ops_attempted,
             ops_accepted=ops_accepted,
         )
-
-        # 7. Refresh centroid cache
-        self._refresh_centroid_cache(confirmed_after)
 
         result = WarmPathResult(
             snapshot_id=snap.id,
@@ -1196,8 +1194,8 @@ class TaxonomyEngine:
             nodes_created=nodes_created,
         )
 
-        # 10. Refresh centroid cache
-        self._refresh_centroid_cache(confirmed_after)
+        # 10. Reset deadlock breaker flag (cold path has run)
+        self._cold_path_needed = False
 
         return ColdPathResult(
             snapshot_id=snap.id,
@@ -1242,16 +1240,6 @@ class TaxonomyEngine:
         weights = QWeights.from_ramp(ramp)
 
         return compute_q_system(metrics, weights)
-
-    def _refresh_centroid_cache(self, nodes: list[TaxonomyNode]) -> None:
-        """Rebuild in-memory centroid cache from node list."""
-        self._centroid_cache.clear()
-        for n in nodes:
-            try:
-                c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
-                self._centroid_cache[n.id] = c
-            except (ValueError, TypeError):
-                continue
 
     @staticmethod
     def _update_per_node_separation(nodes: list[TaxonomyNode]) -> None:
@@ -1302,7 +1290,7 @@ class TaxonomyEngine:
         operations: list[dict],
         ops_attempted: int,
         ops_accepted: int,
-    ):
+    ) -> TaxonomySnapshot:
         """Create a warm-path snapshot with current metrics."""
         from app.services.taxonomy.clustering import compute_separation
         from app.services.taxonomy.snapshot import create_snapshot
@@ -1640,8 +1628,8 @@ class TaxonomyEngine:
             template = self._prompt_loader.render(
                 "extract_patterns.md",
                 {
-                    "raw_prompt": opt.raw_prompt[:2000],
-                    "optimized_prompt": (opt.optimized_prompt or "")[:2000],
+                    "raw_prompt": opt.raw_prompt[:PROMPT_TRUNCATION_LIMIT],
+                    "optimized_prompt": (opt.optimized_prompt or "")[:PROMPT_TRUNCATION_LIMIT],
                     "intent_label": opt.intent_label or "general",
                     "domain_raw": opt.domain_raw or opt.domain or "general",
                     "strategy_used": opt.strategy_used or "auto",
@@ -1915,13 +1903,17 @@ class TaxonomyEngine:
         candidate = sum(1 for n in all_nodes if n.state == "candidate")
         retired = sum(1 for n in all_nodes if n.state == "retired")
 
-        # max_depth: walk parent_id chains
+        # max_depth: walk parent_id chains (with cycle guard)
         id_to_node = {n.id: n for n in all_nodes}
         max_depth = 0
         for node in all_nodes:
             depth = 0
             current = node
+            visited: set[str] = set()
             while current.parent_id and current.parent_id in id_to_node:
+                if current.parent_id in visited:
+                    break  # cycle detected — stop walking
+                visited.add(current.parent_id)
                 depth += 1
                 current = id_to_node[current.parent_id]
             if depth > max_depth:
@@ -1933,12 +1925,10 @@ class TaxonomyEngine:
         leaf_count = sum(1 for nid in active_ids if nid not in parent_ids)
 
         # Recent snapshots (last 30, ascending chronological)
-        snap_result = await db.execute(
-            select(TaxonomySnapshot)
-            .order_by(desc(TaxonomySnapshot.created_at))
-            .limit(30)
-        )
-        snapshots = list(reversed(snap_result.scalars().all()))
+        from app.services.taxonomy.snapshot import get_snapshot_history
+
+        recent = await get_snapshot_history(db, limit=30)
+        snapshots = list(reversed(recent))  # newest-first → oldest-first
 
         # Latest snapshot metrics
         latest = snapshots[-1] if snapshots else None

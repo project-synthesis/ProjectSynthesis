@@ -8,6 +8,7 @@ from app.services.taxonomy.lifecycle import (
     attempt_emerge,
     attempt_merge,
     attempt_retire,
+    attempt_split,
     prioritize_operations,
 )
 from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
@@ -202,6 +203,91 @@ async def test_emerge_empty_inputs_returns_none(db, mock_embedding):
         model="claude-haiku-4-5",
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_split_creates_child_nodes(db, mock_embedding):
+    """Split should create child candidate nodes under the parent."""
+    rng = np.random.RandomState(42)
+
+    parent = TaxonomyNode(
+        label="Mixed Cluster",
+        centroid_embedding=np.zeros(EMBEDDING_DIM, dtype=np.float32).tobytes(),
+        member_count=10,
+        coherence=0.4,
+        state="confirmed",
+        color_hex="#a855f7",
+    )
+    db.add(parent)
+    await db.flush()
+
+    # Create two distinct sub-clusters of families
+    cluster_a = make_cluster_distribution("REST API", 5, spread=0.03, rng=rng)
+    cluster_b = make_cluster_distribution("SQL queries", 5, spread=0.03, rng=rng)
+
+    families_a, families_b = [], []
+    for i, emb in enumerate(cluster_a):
+        f = PatternFamily(
+            intent_label=f"api-{i}", domain="backend",
+            centroid_embedding=emb.astype(np.float32).tobytes(),
+            taxonomy_node_id=parent.id,
+        )
+        db.add(f)
+        families_a.append(f)
+    for i, emb in enumerate(cluster_b):
+        f = PatternFamily(
+            intent_label=f"sql-{i}", domain="database",
+            centroid_embedding=emb.astype(np.float32).tobytes(),
+            taxonomy_node_id=parent.id,
+        )
+        db.add(f)
+        families_b.append(f)
+    await db.flush()
+
+    child_clusters = [
+        ([f.id for f in families_a], cluster_a),
+        ([f.id for f in families_b], cluster_b),
+    ]
+
+    children = await attempt_split(
+        db=db,
+        parent_node=parent,
+        child_clusters=child_clusters,
+        warm_path_age=10,
+        provider=None,
+        model="claude-haiku-4-5",
+    )
+
+    assert len(children) == 2
+    assert all(c.state == "candidate" for c in children)
+    assert all(c.parent_id == parent.id for c in children)
+    # Parent member count should have been reduced
+    assert parent.member_count == 0
+
+
+@pytest.mark.asyncio
+async def test_split_empty_clusters_returns_empty(db, mock_embedding):
+    """Split with no child_clusters should return empty list."""
+    parent = TaxonomyNode(
+        label="Parent",
+        centroid_embedding=np.zeros(EMBEDDING_DIM, dtype=np.float32).tobytes(),
+        member_count=5,
+        state="confirmed",
+        color_hex="#00e5ff",
+    )
+    db.add(parent)
+    await db.flush()
+
+    children = await attempt_split(
+        db=db,
+        parent_node=parent,
+        child_clusters=[],
+        warm_path_age=10,
+        provider=None,
+        model="claude-haiku-4-5",
+    )
+    assert children == []
+    assert parent.member_count == 5  # unchanged
 
 
 def test_prioritize_operations():

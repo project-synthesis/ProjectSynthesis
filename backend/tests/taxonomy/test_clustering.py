@@ -6,9 +6,12 @@ import pytest
 from app.services.taxonomy.clustering import (
     ClusterResult,
     batch_cluster,
+    compute_pairwise_coherence,
+    compute_separation,
+    l2_normalize_1d,
     nearest_centroid,
 )
-from tests.taxonomy.conftest import make_cluster_distribution
+from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
 
 
 class TestNearestCentroid:
@@ -72,3 +75,66 @@ class TestBatchCluster:
         if result.n_clusters > 0:
             assert len(result.persistences) == result.n_clusters
             assert all(p >= 0 for p in result.persistences)
+
+
+class TestComputePairwiseCoherence:
+    """Tests for mean intra-cluster cosine similarity."""
+
+    def test_empty_returns_zero(self):
+        assert compute_pairwise_coherence([]) == 0.0
+
+    def test_single_returns_one(self):
+        vec = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+        assert compute_pairwise_coherence([vec]) == 1.0
+
+    def test_identical_vectors_high_coherence(self):
+        vec = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+        vec = vec / np.linalg.norm(vec)
+        result = compute_pairwise_coherence([vec, vec, vec])
+        assert result == pytest.approx(1.0, abs=1e-5)
+
+    def test_orthogonal_vectors_low_coherence(self):
+        """Orthogonal vectors should have ~0 coherence."""
+        # Construct two vectors that are nearly orthogonal in high-dim space
+        rng = np.random.RandomState(42)
+        a = rng.randn(EMBEDDING_DIM).astype(np.float32)
+        b = rng.randn(EMBEDDING_DIM).astype(np.float32)
+        # In 384-dim, random vectors are nearly orthogonal
+        result = compute_pairwise_coherence([a, b])
+        assert abs(result) < 0.2
+
+
+class TestComputeSeparation:
+    """Tests for minimum inter-cluster cosine distance."""
+
+    def test_fewer_than_two_returns_one(self):
+        vec = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+        assert compute_separation([]) == 1.0
+        assert compute_separation([vec]) == 1.0
+
+    def test_identical_centroids_zero_separation(self):
+        vec = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+        vec = vec / np.linalg.norm(vec)
+        result = compute_separation([vec, vec])
+        assert result == pytest.approx(0.0, abs=1e-5)
+
+    def test_distant_centroids_high_separation(self):
+        """Random high-dim vectors should have distance close to 1.0."""
+        rng = np.random.RandomState(42)
+        centroids = [rng.randn(EMBEDDING_DIM).astype(np.float32) for _ in range(3)]
+        result = compute_separation(centroids)
+        assert result > 0.5  # high-dim random vectors are far apart
+
+
+class TestL2Normalize1d:
+    """Tests for public L2 normalization helper."""
+
+    def test_unit_norm_output(self):
+        vec = np.array([3.0, 4.0, 0.0], dtype=np.float32)
+        result = l2_normalize_1d(vec)
+        assert np.linalg.norm(result) == pytest.approx(1.0, abs=1e-6)
+
+    def test_zero_vector_unchanged(self):
+        vec = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        result = l2_normalize_1d(vec)
+        assert np.allclose(result, vec)
