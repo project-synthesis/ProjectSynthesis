@@ -41,8 +41,9 @@ class TestTaxonomyEndpoints:
     @pytest.mark.asyncio
     async def test_get_node_found(self, app_client, db_session):
         """GET /api/taxonomy/node/{id} returns node data when it exists."""
-        from app.models import TaxonomyNode
         import numpy as np
+
+        from app.models import TaxonomyNode
 
         embedding = np.zeros(384, dtype=np.float32).tobytes()
         node = TaxonomyNode(
@@ -69,7 +70,6 @@ class TestTaxonomyEndpoints:
     @pytest.mark.asyncio
     async def test_recluster_lock_held(self, app_client, db_session):
         """POST /api/taxonomy/recluster returns skipped when lock held."""
-        from app.routers.taxonomy import _get_engine
 
         mock_engine = AsyncMock()
         mock_engine.run_cold_path.return_value = None
@@ -86,7 +86,6 @@ class TestTaxonomyEndpoints:
         """POST /api/taxonomy/recluster returns result on success."""
         from dataclasses import dataclass
 
-        from app.routers.taxonomy import _get_engine
 
         @dataclass
         class FakeColdPathResult:
@@ -112,7 +111,6 @@ class TestTaxonomyEndpoints:
     @pytest.mark.asyncio
     async def test_recluster_error_returns_500(self, app_client, db_session):
         """POST /api/taxonomy/recluster returns 500 when engine raises."""
-        from app.routers.taxonomy import _get_engine
 
         mock_engine = AsyncMock()
         mock_engine.run_cold_path.side_effect = RuntimeError("HDBSCAN failed")

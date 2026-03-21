@@ -62,7 +62,20 @@ async def test_synthesis_optimize_with_provider():
         )
 
         assert getattr(result, "optimized_prompt", None) == "Hello"
-        mock_notify.assert_called_once()
+        # optimization_created + taxonomy_changed
+        assert mock_notify.call_count == 2
+        mock_notify.assert_any_call("optimization_created", {
+            "id": "opt_123",
+            "task_type": "",
+            "strategy_used": "auto",
+            "overall_score": None,
+            "provider": "mock_provider",
+            "status": "completed",
+        })
+        mock_notify.assert_any_call("taxonomy_changed", {
+            "optimization_id": "opt_123",
+            "source": "mcp_server",
+        })
 
 
 async def test_synthesis_optimize_force_passthrough():

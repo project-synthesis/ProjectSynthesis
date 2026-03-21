@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-from sqlalchemy import select
 
 from app.models import PatternFamily, TaxonomyNode
 from app.services.taxonomy.engine import TaxonomyEngine

@@ -17,9 +17,11 @@ class TestPatternsEndpoints:
     @pytest.mark.asyncio
     async def test_match_endpoint(self, app_client):
         """POST /api/patterns/match returns taxonomy-enriched match."""
-        from app.services.taxonomy.engine import PatternMatch
-        from unittest.mock import MagicMock, AsyncMock as _AsyncMock
+        from unittest.mock import AsyncMock as _AsyncMock
+        from unittest.mock import MagicMock
+
         from app.main import app
+        from app.services.taxonomy.engine import PatternMatch
 
         mock_family = MagicMock()
         mock_family.id = "fam1"
@@ -53,7 +55,9 @@ class TestPatternsEndpoints:
     @pytest.mark.asyncio
     async def test_match_endpoint_no_match(self, app_client):
         """POST /api/patterns/match returns empty on no match."""
-        from unittest.mock import MagicMock, AsyncMock as _AsyncMock
+        from unittest.mock import AsyncMock as _AsyncMock
+        from unittest.mock import MagicMock
+
         from app.main import app
 
         mock_engine = MagicMock()

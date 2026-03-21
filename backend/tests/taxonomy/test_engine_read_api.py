@@ -2,9 +2,8 @@
 
 import numpy as np
 import pytest
-from sqlalchemy import select
 
-from app.models import TaxonomyNode, TaxonomySnapshot
+from app.models import TaxonomyNode
 from app.services.taxonomy.engine import TaxonomyEngine
 from tests.taxonomy.conftest import EMBEDDING_DIM
 

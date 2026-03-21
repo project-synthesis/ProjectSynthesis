@@ -313,7 +313,7 @@ class PipelineOrchestrator:
             applied_patterns_text: str | None = None
             if applied_pattern_ids:
                 try:
-                    from app.models import MetaPattern, PatternFamily
+                    from app.models import MetaPattern
 
                     result = await db.execute(
                         select(MetaPattern).where(MetaPattern.id.in_(applied_pattern_ids))
@@ -330,8 +330,8 @@ class PipelineOrchestrator:
                         )
 
                         logger.info(
-                            "Injecting %d applied patterns from %d families into optimizer context. trace_id=%s",
-                            len(patterns), len(family_ids), trace_id,
+                            "Injecting %d applied patterns into optimizer context. trace_id=%s",
+                            len(patterns), trace_id,
                         )
                 except Exception as exc:
                     logger.warning("Failed to resolve applied patterns: %s", exc)
