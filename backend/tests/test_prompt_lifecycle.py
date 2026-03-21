@@ -432,6 +432,48 @@ class TestBackfillOrphans:
         count = await svc.backfill_orphans(db, mock_index)
         assert count == 0
 
+    async def test_backfill_with_real_embedding_index(self, db: AsyncSession, svc: PromptLifecycleService):
+        """Integration test: orphan linked via real EmbeddingIndex search."""
+        from app.services.taxonomy.embedding_index import EmbeddingIndex
+
+        # Create a cluster with centroid embedding
+        centroid = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+        centroid /= np.linalg.norm(centroid)
+
+        cluster = PromptCluster(
+            label="integration-test-cluster",
+            state="active",
+            centroid_embedding=centroid.tobytes(),
+        )
+        db.add(cluster)
+        await db.flush()
+
+        # Build a real EmbeddingIndex and upsert the cluster
+        index = EmbeddingIndex(dim=EMBEDDING_DIM)
+        await index.upsert(cluster.id, centroid)
+
+        # Create an orphan optimization
+        orphan = Optimization(
+            raw_prompt="Test prompt for integration",
+            status="completed",
+            cluster_id=None,
+        )
+        db.add(orphan)
+        await db.flush()
+
+        # Mock only the embedding service (to return a vector similar to the centroid)
+        mock_embed = MagicMock()
+        # Return a vector very close to the centroid so it will match
+        similar = centroid + np.random.randn(EMBEDDING_DIM).astype(np.float32) * 0.01
+        similar /= np.linalg.norm(similar)
+        mock_embed.aembed_single = AsyncMock(return_value=similar)
+
+        count = await svc.backfill_orphans(db, index, embedding_svc=mock_embed)
+
+        assert count == 1
+        await db.refresh(orphan)
+        assert orphan.cluster_id == cluster.id
+
 
 # =========================================================================
 # decay_usage tests
