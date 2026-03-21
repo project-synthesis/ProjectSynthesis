@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from app.models import MetaPattern, PromptCluster, PromptCluster
+from app.models import MetaPattern, PromptCluster
 from app.services.taxonomy.engine import TaxonomyEngine
 
 

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from app.models import PromptCluster, PromptCluster
+from app.models import PromptCluster
 from app.services.taxonomy.lifecycle import (
     attempt_emerge,
     attempt_merge,

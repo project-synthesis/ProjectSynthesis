@@ -8,7 +8,7 @@ import time
 import numpy as np
 import pytest
 
-from app.models import Optimization, PromptCluster, PromptCluster
+from app.models import Optimization, PromptCluster
 from app.services.taxonomy.engine import TaxonomyEngine
 from tests.taxonomy.conftest import EMBEDDING_DIM
 

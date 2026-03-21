@@ -4,7 +4,7 @@
 import numpy as np
 import pytest
 
-from app.models import PromptCluster, PromptCluster
+from app.models import PromptCluster
 from app.services.taxonomy.engine import TaxonomyEngine
 from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
 
