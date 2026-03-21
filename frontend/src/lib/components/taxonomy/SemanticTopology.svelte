@@ -58,7 +58,11 @@
     for (const node of data.nodes) {
       if (!node.visible) continue;
 
-      const material = new THREE.MeshBasicMaterial({ color: node.color });
+      const material = new THREE.MeshBasicMaterial({
+        color: node.color,
+        transparent: node.opacity < 1,
+        opacity: node.opacity,
+      });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(...node.position);
       mesh.scale.setScalar(node.size);
@@ -90,14 +94,22 @@
       renderer.scene.add(lines);
     }
 
-    // Labels (near LOD only)
+    // Labels (near LOD only, but template labels always visible)
     if (labels) {
+      const templateSprites: import('three').Sprite[] = [];
       for (const node of data.nodes) {
         if (!node.visible) continue;
         const sprite = labels.getOrCreate(node.id, node.label, node.color);
         sprite.position.set(node.position[0], node.position[1] + node.size + 0.5, node.position[2]);
+        if (node.state === 'template') {
+          templateSprites.push(sprite);
+        }
       }
       labels.setVisible(lodTier === 'near');
+      // Template nodes: labels always visible regardless of LOD
+      for (const sprite of templateSprites) {
+        sprite.visible = true;
+      }
       renderer.scene.add(labels.group);
     }
   }

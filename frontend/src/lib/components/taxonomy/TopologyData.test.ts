@@ -91,8 +91,8 @@ describe('buildSceneData', () => {
 describe('assignLodVisibility', () => {
   it('hides low-persistence nodes at far LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, persistence: 0.9, state: 'confirmed', label: 'A', visible: true },
-      { id: 'b', position: [1,1,1], color: '#fff', size: 1, persistence: 0.2, state: 'confirmed', label: 'B', visible: true },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.9, state: 'confirmed', label: 'A', visible: true },
+      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.2, state: 'confirmed', label: 'B', visible: true },
     ];
     assignLodVisibility(nodes, 'far');
     expect(nodes[0].visible).toBe(true);
@@ -101,7 +101,7 @@ describe('assignLodVisibility', () => {
 
   it('shows all nodes at near LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, persistence: 0.1, state: 'confirmed', label: 'A', visible: false },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'confirmed', label: 'A', visible: false },
     ];
     assignLodVisibility(nodes, 'near');
     expect(nodes[0].visible).toBe(true);
@@ -109,11 +109,65 @@ describe('assignLodVisibility', () => {
 
   it('shows nodes with threshold-level persistence at mid LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, persistence: 0.3, state: 'confirmed', label: 'A', visible: false },
-      { id: 'b', position: [1,1,1], color: '#fff', size: 1, persistence: 0.2, state: 'confirmed', label: 'B', visible: false },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.3, state: 'confirmed', label: 'A', visible: false },
+      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.2, state: 'confirmed', label: 'B', visible: false },
     ];
     assignLodVisibility(nodes, 'mid');
     expect(nodes[0].visible).toBe(true);   // 0.3 >= 0.3
     expect(nodes[1].visible).toBe(false);  // 0.2 < 0.3
+  });
+});
+
+describe('buildSceneData — state-based visual encoding', () => {
+  it('template state nodes get size multiplied by 1.5', () => {
+    const baseNode = makeNode({ id: 'base', state: 'active', member_count: 4, usage_count: 2 });
+    const templateNode = makeNode({ id: 'tmpl', state: 'template', member_count: 4, usage_count: 2 });
+
+    const { nodes } = buildSceneData([baseNode, templateNode]);
+    const base = nodes.find(n => n.id === 'base')!;
+    const template = nodes.find(n => n.id === 'tmpl')!;
+
+    expect(template.size).toBeCloseTo(base.size * 1.5, 5);
+  });
+
+  it('mature state nodes get size multiplied by 1.2', () => {
+    const baseNode = makeNode({ id: 'base', state: 'active', member_count: 4, usage_count: 2 });
+    const matureNode = makeNode({ id: 'mat', state: 'mature', member_count: 4, usage_count: 2 });
+
+    const { nodes } = buildSceneData([baseNode, matureNode]);
+    const base = nodes.find(n => n.id === 'base')!;
+    const mature = nodes.find(n => n.id === 'mat')!;
+
+    expect(mature.size).toBeCloseTo(base.size * 1.2, 5);
+  });
+
+  it('candidate state nodes get opacity 0.4', () => {
+    const { nodes } = buildSceneData([makeNode({ state: 'candidate' })]);
+    expect(nodes[0].opacity).toBe(0.4);
+  });
+
+  it('active state nodes get opacity 1.0', () => {
+    const { nodes } = buildSceneData([makeNode({ state: 'active' })]);
+    expect(nodes[0].opacity).toBe(1.0);
+  });
+
+  it('confirmed state nodes get opacity 1.0', () => {
+    const { nodes } = buildSceneData([makeNode({ state: 'confirmed' })]);
+    expect(nodes[0].opacity).toBe(1.0);
+  });
+
+  it('template state nodes get color #00e5ff regardless of color_hex', () => {
+    const withHex = makeNode({ id: 'a', state: 'template', color_hex: '#a855f7' });
+    const withNull = makeNode({ id: 'b', state: 'template', color_hex: null });
+
+    const { nodes } = buildSceneData([withHex, withNull]);
+    expect(nodes.find(n => n.id === 'a')!.color).toBe('#00e5ff');
+    expect(nodes.find(n => n.id === 'b')!.color).toBe('#00e5ff');
+  });
+
+  it('SceneNode always has an opacity field', () => {
+    const { nodes } = buildSceneData([makeNode()]);
+    expect(nodes[0]).toHaveProperty('opacity');
+    expect(typeof nodes[0].opacity).toBe('number');
   });
 });

@@ -13,11 +13,30 @@ export interface SceneNode {
   position: [number, number, number];
   color: string;
   size: number;
+  opacity: number;
   persistence: number;
   state: string;
   label: string;
   visible: boolean;
   parentId?: string;
+}
+
+/** Opacity by lifecycle state — candidates are translucent. */
+function stateOpacity(state: string): number {
+  return state === 'candidate' ? 0.4 : 1.0;
+}
+
+/** Size multiplier by lifecycle state — templates and mature nodes are larger. */
+function stateSizeMultiplier(state: string): number {
+  if (state === 'template') return 1.5;
+  if (state === 'mature') return 1.2;
+  return 1.0;
+}
+
+/** Color by lifecycle state — templates use neon-cyan override. */
+function stateNodeColor(state: string, oklabColor: string | null): string {
+  if (state === 'template') return '#00e5ff'; // neon-cyan override for templates
+  return taxonomyColor(oklabColor); // existing logic handles hex/domain/null
 }
 
 export interface SceneEdge {
@@ -59,8 +78,9 @@ export function buildSceneData(flatNodes: ClusterNode[]): SceneData {
     nodes.push({
       id: node.id,
       position: [x, y, z],
-      color: taxonomyColor(node.color_hex),
-      size,
+      color: stateNodeColor(node.state, node.color_hex),
+      size: size * stateSizeMultiplier(node.state),
+      opacity: stateOpacity(node.state),
       persistence: node.persistence ?? 0.5,
       state: node.state,
       label: node.label ?? '',
