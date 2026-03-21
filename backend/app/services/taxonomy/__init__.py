@@ -32,6 +32,7 @@ __all__ = [
     "TaxonomyMapping",
     "compute_sparkline_data",
     "get_engine",
+    "reset_engine",
     "set_engine",
 ]
 
@@ -75,3 +76,9 @@ def set_engine(engine: TaxonomyEngine) -> None:
     """Register the canonical TaxonomyEngine (called from main.py lifespan)."""
     global _process_engine
     _process_engine = engine
+
+
+def reset_engine() -> None:
+    """Clear the process singleton (test teardown only)."""
+    global _process_engine
+    _process_engine = None
