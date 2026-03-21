@@ -2081,6 +2081,8 @@ class TaxonomyEngine:
             "label": node.label,
             "parent_id": node.parent_id,
             "state": node.state,
+            "domain": node.domain,
+            "task_type": node.task_type,
             "member_count": node.member_count or 0,
             "coherence": node.coherence,
             "separation": node.separation,
@@ -2091,5 +2093,7 @@ class TaxonomyEngine:
             "umap_y": node.umap_y,
             "umap_z": node.umap_z,
             "usage_count": node.usage_count or 0,
+            "avg_score": node.avg_score,
+            "preferred_strategy": node.preferred_strategy,
             "created_at": node.created_at.isoformat() if node.created_at else None,
         }

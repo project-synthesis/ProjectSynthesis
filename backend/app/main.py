@@ -323,6 +323,12 @@ except ImportError:
     pass
 
 try:
+    from app.routers.clusters import router as clusters_router
+    app.include_router(clusters_router)
+except ImportError:
+    pass
+
+try:
     from app.routers.patterns import router as patterns_router
     app.include_router(patterns_router)
 except ImportError:

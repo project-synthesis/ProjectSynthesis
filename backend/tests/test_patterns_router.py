@@ -1,3 +1,8 @@
+"""Tests for /api/patterns/ endpoints (legacy — redirected to /api/clusters/).
+
+These tests verify backward compatibility through 301/307 redirects.
+The canonical endpoints are tested in test_clusters_router.py.
+"""
 
 import pytest
 
@@ -7,7 +12,7 @@ from app.models import PromptCluster
 class TestPatternsEndpoints:
     @pytest.mark.asyncio
     async def test_match_endpoint(self, app_client):
-        """POST /api/patterns/match returns taxonomy-enriched match."""
+        """POST /api/patterns/match redirects to /api/clusters/match."""
         from unittest.mock import AsyncMock as _AsyncMock
         from unittest.mock import MagicMock
 
@@ -33,19 +38,23 @@ class TestPatternsEndpoints:
         app.state.taxonomy_engine = mock_engine
 
         try:
-            resp = await app_client.post("/api/patterns/match", json={"prompt_text": "this is a test prompt text"})
+            # Legacy endpoint now redirects — verify redirect, then follow
+            resp = await app_client.post(
+                "/api/patterns/match",
+                json={"prompt_text": "this is a test prompt text"},
+                follow_redirects=True,
+            )
         finally:
             del app.state.taxonomy_engine
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["match_level"] == "family"
-        assert data["similarity"] == 0.85
+        assert data["match"] is not None
         assert data["match"]["cluster"]["id"] == "fam1"
 
     @pytest.mark.asyncio
     async def test_match_endpoint_no_match(self, app_client):
-        """POST /api/patterns/match returns empty on no match."""
+        """POST /api/patterns/match returns empty on no match (via redirect)."""
         from unittest.mock import AsyncMock as _AsyncMock
         from unittest.mock import MagicMock
 
@@ -56,18 +65,21 @@ class TestPatternsEndpoints:
         app.state.taxonomy_engine = mock_engine
 
         try:
-            resp = await app_client.post("/api/patterns/match", json={"prompt_text": "this is a test prompt text"})
+            resp = await app_client.post(
+                "/api/patterns/match",
+                json={"prompt_text": "this is a test prompt text"},
+                follow_redirects=True,
+            )
         finally:
             del app.state.taxonomy_engine
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["match"] is None
-        assert data["match_level"] == "none"
 
     @pytest.mark.asyncio
     async def test_families_endpoint(self, app_client, db_session):
-        # Insert a family to db
+        """GET /api/patterns/families redirects to /api/clusters (via redirect)."""
         family = PromptCluster(
             id="fam1", label="test", domain="backend", task_type="coding",
             usage_count=5, member_count=2, avg_score=8.0, centroid_embedding=b'\x00' * 384
@@ -75,14 +87,13 @@ class TestPatternsEndpoints:
         db_session.add(family)
         await db_session.commit()
 
-        resp = await app_client.get("/api/patterns/families?domain=backend")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] == 1
-        assert data["items"][0]["id"] == "fam1"
+        # Legacy redirect — verify it redirects with 301
+        resp_redir = await app_client.get("/api/patterns/families?domain=backend", follow_redirects=False)
+        assert resp_redir.status_code == 301
 
     @pytest.mark.asyncio
     async def test_get_family(self, app_client, db_session):
+        """GET /api/patterns/families/{id} redirects to /api/clusters/{id}."""
         family = PromptCluster(
             id="fam1", label="test", domain="backend", task_type="coding",
             usage_count=5, member_count=2, avg_score=8.0, centroid_embedding=b'\x00' * 384
@@ -90,17 +101,17 @@ class TestPatternsEndpoints:
         db_session.add(family)
         await db_session.commit()
 
-        resp = await app_client.get("/api/patterns/families/fam1")
+        resp = await app_client.get("/api/patterns/families/fam1", follow_redirects=True)
         assert resp.status_code == 200
         data = resp.json()
         assert data["id"] == "fam1"
-        assert data["intent_label"] == "test"
+        assert data["label"] == "test"
         assert "meta_patterns" in data
         assert "optimizations" in data
 
     @pytest.mark.asyncio
     async def test_rename_family(self, app_client, db_session):
-        # Insert a family to db
+        """PATCH /api/patterns/families/{id} redirects and updates."""
         family = PromptCluster(
             id="fam2", label="old", domain="backend", task_type="coding",
             usage_count=5, member_count=2, avg_score=8.0, centroid_embedding=b'\x00' * 384
@@ -108,17 +119,21 @@ class TestPatternsEndpoints:
         db_session.add(family)
         await db_session.commit()
 
-        resp = await app_client.patch("/api/patterns/families/fam2", json={"intent_label": "new_label"})
+        resp = await app_client.patch(
+            "/api/patterns/families/fam2",
+            json={"intent_label": "new_label"},
+            follow_redirects=True,
+        )
         assert resp.status_code == 200
-        assert resp.json() == {"id": "fam2", "intent_label": "new_label", "domain": "backend"}
+        data = resp.json()
+        assert data["intent_label"] == "new_label"
 
-        # Validate db is updated
         await db_session.refresh(family)
         assert family.label == "new_label"
 
     @pytest.mark.asyncio
     async def test_update_family_domain(self, app_client, db_session):
-        """PATCH with domain only updates the domain."""
+        """PATCH with domain only updates the domain (via redirect)."""
         family = PromptCluster(
             id="fam3", label="test", domain="backend", task_type="coding",
             usage_count=5, member_count=2, avg_score=8.0, centroid_embedding=b'\x00' * 384
@@ -126,18 +141,22 @@ class TestPatternsEndpoints:
         db_session.add(family)
         await db_session.commit()
 
-        resp = await app_client.patch("/api/patterns/families/fam3", json={"domain": "frontend"})
+        resp = await app_client.patch(
+            "/api/patterns/families/fam3",
+            json={"domain": "frontend"},
+            follow_redirects=True,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["domain"] == "frontend"
-        assert data["intent_label"] == "test"  # unchanged
+        assert data["intent_label"] == "test"
 
         await db_session.refresh(family)
         assert family.domain == "frontend"
 
     @pytest.mark.asyncio
     async def test_update_family_both_fields(self, app_client, db_session):
-        """PATCH with both intent_label and domain updates both."""
+        """PATCH with both intent_label and domain updates both (via redirect)."""
         family = PromptCluster(
             id="fam4", label="old", domain="backend", task_type="coding",
             usage_count=5, member_count=2, avg_score=8.0, centroid_embedding=b'\x00' * 384
@@ -145,7 +164,11 @@ class TestPatternsEndpoints:
         db_session.add(family)
         await db_session.commit()
 
-        resp = await app_client.patch("/api/patterns/families/fam4", json={"intent_label": "new", "domain": "security"})
+        resp = await app_client.patch(
+            "/api/patterns/families/fam4",
+            json={"intent_label": "new", "domain": "security"},
+            follow_redirects=True,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["intent_label"] == "new"
@@ -153,7 +176,7 @@ class TestPatternsEndpoints:
 
     @pytest.mark.asyncio
     async def test_update_family_freetext_domain(self, app_client, db_session):
-        """PATCH with any string domain succeeds (free-text domains)."""
+        """PATCH with any string domain succeeds (via redirect)."""
         family = PromptCluster(
             id="fam5", label="test", domain="backend", task_type="coding",
             usage_count=5, member_count=2, avg_score=8.0, centroid_embedding=b'\x00' * 384
@@ -161,13 +184,17 @@ class TestPatternsEndpoints:
         db_session.add(family)
         await db_session.commit()
 
-        resp = await app_client.patch("/api/patterns/families/fam5", json={"domain": "web_api"})
+        resp = await app_client.patch(
+            "/api/patterns/families/fam5",
+            json={"domain": "web_api"},
+            follow_redirects=True,
+        )
         assert resp.status_code == 200
         assert resp.json()["domain"] == "web_api"
 
     @pytest.mark.asyncio
     async def test_update_family_empty_body_422(self, app_client, db_session):
-        """PATCH with empty body (no fields) returns 422."""
+        """PATCH with empty body returns 422 (via redirect)."""
         family = PromptCluster(
             id="fam6", label="test", domain="backend", task_type="coding",
             usage_count=5, member_count=2, avg_score=8.0, centroid_embedding=b'\x00' * 384
@@ -175,12 +202,20 @@ class TestPatternsEndpoints:
         db_session.add(family)
         await db_session.commit()
 
-        resp = await app_client.patch("/api/patterns/families/fam6", json={})
+        resp = await app_client.patch(
+            "/api/patterns/families/fam6",
+            json={},
+            follow_redirects=True,
+        )
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
     async def test_get_family_not_found(self, app_client):
-        resp = await app_client.get("/api/patterns/families/nonexistent")
+        """GET /api/patterns/families/{id} returns 404 via redirect."""
+        resp = await app_client.get(
+            "/api/patterns/families/nonexistent",
+            follow_redirects=True,
+        )
         assert resp.status_code == 404
 
 
