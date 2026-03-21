@@ -10,7 +10,6 @@ import {
   getClusterTemplates,
   type ClusterMatchResponse, type ClusterDetail, type ClusterNode, type ClusterStats,
 } from '$lib/api/clusters';
-import { addToast } from '$lib/stores/toast.svelte';
 
 const PASTE_CHAR_DELTA = 50;
 const PASTE_DEBOUNCE_MS = 300;
