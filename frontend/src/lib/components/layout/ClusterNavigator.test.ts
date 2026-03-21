@@ -804,7 +804,7 @@ describe('ClusterNavigator', () => {
 
   it('clicking "Use" button calls clustersStore.spawnTemplate with cluster id', async () => {
     const user = userEvent.setup();
-    const spawnSpy = vi.spyOn(patternsStore, 'spawnTemplate').mockImplementation(() => {});
+    const spawnSpy = vi.spyOn(patternsStore, 'spawnTemplate').mockResolvedValue(null);
 
     const nodes = [
       mockClusterNode({ id: 'tmpl-42', label: 'My template', state: 'template', domain: 'general' }),

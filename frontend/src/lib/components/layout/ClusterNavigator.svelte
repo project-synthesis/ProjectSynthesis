@@ -1,7 +1,9 @@
 <script lang="ts">
   import { listFamilies, type ClusterNode } from '$lib/api/clusters';
   import { clustersStore } from '$lib/stores/clusters.svelte';
-  import { editorStore } from '$lib/stores/editor.svelte';
+  import { editorStore, PROMPT_TAB_ID } from '$lib/stores/editor.svelte';
+  import { forgeStore } from '$lib/stores/forge.svelte';
+  import { addToast } from '$lib/stores/toast.svelte';
   import { scoreColor, taxonomyColor } from '$lib/utils/colors';
   import { formatScore } from '$lib/utils/formatting';
 
@@ -159,6 +161,18 @@
   function setStateFilter(f: StateFilter) {
     stateFilter = f;
   }
+
+  async function useTemplate(clusterId: string) {
+    const result = await clustersStore.spawnTemplate(clusterId);
+    if (result) {
+      forgeStore.prompt = result.prompt;
+      if (result.strategy) forgeStore.strategy = result.strategy;
+      editorStore.activeTabId = PROMPT_TAB_ID;
+      addToast('created', `Template loaded: ${result.label}`);
+    } else {
+      addToast('deleted', 'Failed to load template');
+    }
+  }
 </script>
 
 <div class="panel">
@@ -254,7 +268,7 @@
               </div>
               <button
                 class="use-template-btn"
-                onclick={() => clustersStore.spawnTemplate(cluster.id)}
+                onclick={() => useTemplate(cluster.id)}
                 title="Use this template"
               >Use</button>
             </div>

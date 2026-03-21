@@ -187,6 +187,9 @@ class ForgeStore {
         this.initialSuggestions = data.suggestions;
       }
       this.loadFromRecord(data as OptimizationResult);
+    } else if (eventType === 'context_injected') {
+      const d = event as unknown as { patterns?: number };
+      addToast('created', `${d.patterns ?? 0} patterns auto-injected`);
     } else if (eventType === 'error') {
       this.error = (event.error || event.message) as string;
       this.status = 'error';

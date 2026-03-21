@@ -10,6 +10,7 @@ import {
   getClusterTemplates,
   type ClusterMatchResponse, type ClusterDetail, type ClusterNode, type ClusterStats,
 } from '$lib/api/clusters';
+import { addToast } from '$lib/stores/toast.svelte';
 
 const PASTE_CHAR_DELTA = 50;
 const PASTE_DEBOUNCE_MS = 300;
@@ -173,10 +174,29 @@ class ClusterStore {
     }
   }
 
-  /** Spawn a new optimization from a template cluster (skeleton — completed in Task 5.2). */
-  spawnTemplate(_clusterId: string): void {
-    // TODO: Task 5.2 — pre-fill prompt editor with template context
-    console.info('spawnTemplate placeholder:', _clusterId);
+  /** Spawn a new optimization from a template cluster.
+   *  Returns the prompt, strategy, and label so the caller (ClusterNavigator)
+   *  can write them to forgeStore/editorStore without a circular import.
+   *  Returns null on empty optimizations or API failure. */
+  async spawnTemplate(clusterId: string): Promise<{ prompt: string; strategy: string | null; label: string } | null> {
+    try {
+      const detail = await getClusterDetail(clusterId);
+      if (!detail?.optimizations?.length) return null;
+
+      // Find highest-scoring member
+      const best = detail.optimizations.reduce((a, b) =>
+        (b.overall_score ?? 0) > (a.overall_score ?? 0) ? b : a
+      );
+
+      return {
+        prompt: best.raw_prompt ?? '',
+        strategy: detail.preferred_strategy ?? null,
+        label: detail.label,
+      };
+    } catch (err) {
+      console.warn('spawnTemplate failed:', err);
+      return null;
+    }
   }
 
   /**

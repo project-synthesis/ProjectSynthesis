@@ -224,6 +224,68 @@ describe('ClusterStore', () => {
     });
   });
 
+  describe('spawnTemplate', () => {
+    function makeDetail(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'tmpl-1',
+        parent_id: null,
+        label: 'API Design Patterns',
+        state: 'template',
+        domain: 'backend',
+        task_type: 'coding',
+        member_count: 3,
+        usage_count: 10,
+        avg_score: 8.2,
+        coherence: null,
+        separation: null,
+        preferred_strategy: 'chain-of-thought',
+        promoted_at: null,
+        meta_patterns: [],
+        children: null,
+        breadcrumb: null,
+        optimizations: [
+          { id: 'opt-1', raw_prompt: 'low score prompt', overall_score: 5.0, created_at: '2026-01-01T00:00:00Z', strategy_used: null },
+          { id: 'opt-2', raw_prompt: 'high score prompt', overall_score: 9.0, created_at: '2026-01-02T00:00:00Z', strategy_used: null },
+        ],
+        ...overrides,
+      };
+    }
+
+    it('happy path: returns prompt from highest-scoring optimization', async () => {
+      mockFetch([{ match: '/clusters/tmpl-1', response: makeDetail() }]);
+      const result = await clustersStore.spawnTemplate('tmpl-1');
+      expect(result).not.toBeNull();
+      expect(result?.prompt).toBe('high score prompt');
+    });
+
+    it('happy path: returns strategy and label', async () => {
+      mockFetch([{ match: '/clusters/tmpl-1', response: makeDetail() }]);
+      const result = await clustersStore.spawnTemplate('tmpl-1');
+      expect(result?.strategy).toBe('chain-of-thought');
+      expect(result?.label).toBe('API Design Patterns');
+    });
+
+    it('returns null strategy when preferred_strategy is null', async () => {
+      mockFetch([{ match: '/clusters/tmpl-1', response: makeDetail({ preferred_strategy: null }) }]);
+      const result = await clustersStore.spawnTemplate('tmpl-1');
+      expect(result?.strategy).toBeNull();
+    });
+
+    it('returns null when optimizations array is empty', async () => {
+      mockFetch([{ match: '/clusters/tmpl-1', response: makeDetail({ optimizations: [] }) }]);
+      const result = await clustersStore.spawnTemplate('tmpl-1');
+      expect(result).toBeNull();
+    });
+
+    it('returns null and logs warning on API failure', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockFetch([{ match: '/clusters/tmpl-1', response: { detail: 'Not found' }, status: 404 }]);
+      const result = await clustersStore.spawnTemplate('tmpl-1');
+      expect(result).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith('spawnTemplate failed:', expect.anything());
+    });
+  });
+
   describe('selectCluster', () => {
     it('sets selectedClusterId and loads cluster detail', async () => {
       const detail = {
