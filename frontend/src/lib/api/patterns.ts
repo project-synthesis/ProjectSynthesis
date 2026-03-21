@@ -1,5 +1,5 @@
 /**
- * Pattern knowledge graph API client.
+ * Pattern API client — families, match, detail, update.
  */
 import { apiFetch } from './client';
 
@@ -32,22 +32,6 @@ export interface PatternMatch {
   taxonomy_breadcrumb: string[] | null;
 }
 
-export interface GraphEdge {
-  from: string;
-  to: string;
-  weight: number;
-}
-
-export interface GraphFamily extends PatternFamily {
-  meta_patterns: MetaPatternItem[];
-}
-
-export interface PatternGraph {
-  center: { total_families: number; total_patterns: number; total_optimizations: number };
-  families: GraphFamily[];
-  edges: GraphEdge[];
-}
-
 export interface FamilyDetail extends PatternFamily {
   updated_at: string | null;
   meta_patterns: MetaPatternItem[];
@@ -59,11 +43,6 @@ export const matchPattern = (prompt_text: string) =>
     method: 'POST',
     body: JSON.stringify({ prompt_text }),
   });
-
-export const getPatternGraph = (familyId?: string) => {
-  const qs = familyId ? `?family_id=${encodeURIComponent(familyId)}` : '';
-  return apiFetch<PatternGraph>(`/patterns/graph${qs}`);
-};
 
 export const listFamilies = (params?: { offset?: number; limit?: number; domain?: string }) => {
   const search = new URLSearchParams();
@@ -88,22 +67,3 @@ export const updateFamily = (familyId: string, updates: { intent_label?: string;
 /** @deprecated Use updateFamily instead */
 export const renameFamily = (familyId: string, intent_label: string) =>
   updateFamily(familyId, { intent_label });
-
-export interface SearchResult {
-  type: string;
-  id: string;
-  label: string;
-  score: number;
-  domain?: string;
-  family_id?: string;
-}
-
-export const searchPatterns = (q: string, topK = 5) =>
-  apiFetch<SearchResult[]>(
-    `/patterns/search?q=${encodeURIComponent(q)}&top_k=${topK}`
-  );
-
-export const getPatternStats = () =>
-  apiFetch<{ total_families: number; total_patterns: number; total_optimizations: number; domain_distribution: Record<string, number> }>(
-    '/patterns/stats'
-  );

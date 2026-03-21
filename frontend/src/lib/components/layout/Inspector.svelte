@@ -66,7 +66,7 @@
       await updateFamily(id, { intent_label: trimmed });
       // Refresh the detail to reflect the new name
       patternsStore.selectFamily(id);
-      patternsStore.invalidateGraph();
+      patternsStore.invalidateTaxonomy();
       renaming = false;
     } catch {
       // keep rename input open on error
@@ -89,7 +89,7 @@
     try {
       await updateFamily(id, { domain: newDomain });
       patternsStore.selectFamily(id);
-      patternsStore.invalidateGraph();
+      patternsStore.invalidateTaxonomy();
       domainPickerOpen = false;
     } catch {
       // keep picker open on error

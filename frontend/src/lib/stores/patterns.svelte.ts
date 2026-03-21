@@ -4,7 +4,7 @@
  * Manages auto-suggestion on paste and pattern graph data for the mindmap.
  */
 
-import { matchPattern, getPatternGraph, getFamilyDetail, type PatternMatch, type PatternGraph, type FamilyDetail } from '$lib/api/patterns';
+import { matchPattern, getFamilyDetail, type PatternMatch, type FamilyDetail } from '$lib/api/patterns';
 import { getTaxonomyTree, getTaxonomyStats, type TaxonomyNode, type TaxonomyStats } from '$lib/api/taxonomy';
 
 const PASTE_CHAR_DELTA = 50;
@@ -15,11 +15,6 @@ class PatternStore {
   // Suggestion state
   suggestion = $state<PatternMatch | null>(null);
   suggestionVisible = $state(false);
-
-  // Graph data
-  graph = $state<PatternGraph | null>(null);
-  graphLoaded = $state(false);
-  graphError = $state<string | null>(null);
 
   // Family detail (Inspector)
   selectedFamilyId = $state<string | null>(null);
@@ -89,27 +84,6 @@ class PatternStore {
     }
   }
 
-  /**
-   * Load graph data for the mindmap.
-   */
-  async loadGraph(familyId?: string): Promise<void> {
-    try {
-      this.graphError = null;
-      this.graph = await getPatternGraph(familyId);
-      this.graphLoaded = true;
-    } catch (err) {
-      this.graphError = err instanceof Error ? err.message : 'Failed to load graph';
-      console.error('Graph load failed:', err);
-    }
-  }
-
-  /**
-   * Refresh graph data (called via invalidateTaxonomy on taxonomy_changed events).
-   */
-  invalidateGraph(): void {
-    this.graphLoaded = false;
-  }
-
   async loadTree(): Promise<void> {
     this.taxonomyLoading = true;
     this.taxonomyError = null;
@@ -126,8 +100,7 @@ class PatternStore {
 
   /** Called by SSE handler when taxonomy_changed fires. */
   invalidateTaxonomy(): void {
-    this.graphLoaded = false; // Existing graph invalidation
-    this.loadTree(); // Reload tree data
+    this.loadTree();
   }
 
   /**
@@ -167,9 +140,6 @@ class PatternStore {
   _reset() {
     this.suggestion = null;
     this.suggestionVisible = false;
-    this.graph = null;
-    this.graphLoaded = false;
-    this.graphError = null;
     this.selectedFamilyId = null;
     this.familyDetail = null;
     this.familyDetailLoading = false;

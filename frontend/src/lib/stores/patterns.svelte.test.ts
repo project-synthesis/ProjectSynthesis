@@ -26,11 +26,9 @@ describe('PatternStore', () => {
     vi.restoreAllMocks();
   });
 
-  it('starts with no suggestion and graph not loaded', () => {
+  it('starts with no suggestion and no selected family', () => {
     expect(patternsStore.suggestion).toBeNull();
     expect(patternsStore.suggestionVisible).toBe(false);
-    expect(patternsStore.graph).toBeNull();
-    expect(patternsStore.graphLoaded).toBe(false);
     expect(patternsStore.selectedFamilyId).toBeNull();
   });
 
@@ -188,49 +186,6 @@ describe('PatternStore', () => {
       // Advance past the dismiss timer — should not cause any side effects
       vi.advanceTimersByTime(10_000);
       expect(patternsStore.suggestion).toBeNull();
-    });
-  });
-
-  describe('loadGraph', () => {
-    it('sets graph data and marks graphLoaded', async () => {
-      const graphData = {
-        center: { total_families: 2, total_patterns: 5, total_optimizations: 10 },
-        families: [],
-        edges: [],
-      };
-      mockFetch([
-        { match: '/patterns/graph', response: graphData },
-      ]);
-      await patternsStore.loadGraph();
-      expect(patternsStore.graph).not.toBeNull();
-      expect(patternsStore.graphLoaded).toBe(true);
-      expect(patternsStore.graphError).toBeNull();
-    });
-
-    it('sets graphError on failure', async () => {
-      mockFetch([
-        { match: '/patterns/graph', response: { detail: 'Server error' }, status: 500 },
-      ]);
-      await patternsStore.loadGraph();
-      expect(patternsStore.graphError).toBeTruthy();
-      expect(patternsStore.graphLoaded).toBe(false);
-    });
-
-    it('passes familyId as query param', async () => {
-      const fetchMock = mockFetch([
-        { match: '/patterns/graph', response: { center: { total_families: 0, total_patterns: 0, total_optimizations: 0 }, families: [], edges: [] } },
-      ]);
-      await patternsStore.loadGraph('fam-1');
-      const url = fetchMock.mock.calls[0][0].toString();
-      expect(url).toContain('family_id=fam-1');
-    });
-  });
-
-  describe('invalidateGraph', () => {
-    it('sets graphLoaded to false', () => {
-      patternsStore.graphLoaded = true;
-      patternsStore.invalidateGraph();
-      expect(patternsStore.graphLoaded).toBe(false);
     });
   });
 

@@ -1,20 +1,18 @@
-"""Pattern knowledge graph endpoints — graph, families, match, search."""
+"""Pattern endpoints — families, match, family detail, family update."""
 
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import PatternFamily
-from app.services.knowledge_graph import KnowledgeGraphService
+from app.models import MetaPattern, Optimization, OptimizationPattern, PatternFamily
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/patterns", tags=["patterns"])
-
-_graph_service = KnowledgeGraphService()
 
 
 class MatchRequest(BaseModel):
@@ -92,19 +90,6 @@ class UpdateFamilyResponse(BaseModel):
     domain: str = Field(description="Current domain category.")
 
 
-@router.get("/graph")
-async def get_graph(
-    family_id: str | None = Query(default=None, description="Optional family ID to show subtree."),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Full mindmap graph data or subtree for a specific family."""
-    try:
-        return await _graph_service.get_graph(db, family_id=family_id)
-    except Exception as exc:
-        logger.error("Failed to build graph: %s", exc, exc_info=True)
-        raise HTTPException(500, "Failed to build knowledge graph") from exc
-
-
 @router.post("/match")
 async def match_pattern(
     request: Request,
@@ -171,7 +156,7 @@ async def list_families(
     offset = max(offset, 0)
     limit = min(max(limit, 1), 500)
 
-    from sqlalchemy import func, select
+    from sqlalchemy import func
 
     query = select(PatternFamily).order_by(PatternFamily.usage_count.desc())
     count_query = select(func.count(PatternFamily.id))
@@ -219,14 +204,58 @@ async def get_family(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Family detail with meta-patterns and linked optimizations."""
-    try:
-        detail = await _graph_service.get_family_detail(db, family_id)
-    except Exception as exc:
-        logger.error("Failed to load family detail id=%s: %s", family_id, exc, exc_info=True)
-        raise HTTPException(500, "Failed to load family detail") from exc
-    if not detail:
+    result = await db.execute(
+        select(PatternFamily).where(PatternFamily.id == family_id)
+    )
+    family = result.scalar_one_or_none()
+    if not family:
         raise HTTPException(404, "Pattern family not found")
-    return detail
+
+    # Meta-patterns
+    meta_result = await db.execute(
+        select(MetaPattern)
+        .where(MetaPattern.family_id == family_id)
+        .order_by(MetaPattern.source_count.desc())
+    )
+    meta_patterns = meta_result.scalars().all()
+
+    # Linked optimizations (most recent 20)
+    opt_result = await db.execute(
+        select(Optimization)
+        .join(OptimizationPattern, OptimizationPattern.optimization_id == Optimization.id)
+        .where(OptimizationPattern.family_id == family_id)
+        .order_by(Optimization.created_at.desc())
+        .limit(20)
+    )
+    optimizations = opt_result.scalars().all()
+
+    return {
+        "id": family.id,
+        "intent_label": family.intent_label,
+        "domain": family.domain,
+        "task_type": family.task_type,
+        "usage_count": family.usage_count,
+        "member_count": family.member_count,
+        "avg_score": family.avg_score,
+        "created_at": family.created_at.isoformat() if family.created_at else None,
+        "updated_at": family.updated_at.isoformat() if family.updated_at else None,
+        "meta_patterns": [
+            {"id": mp.id, "pattern_text": mp.pattern_text, "source_count": mp.source_count}
+            for mp in meta_patterns
+        ],
+        "optimizations": [
+            {
+                "id": o.id,
+                "trace_id": o.trace_id,
+                "raw_prompt": (o.raw_prompt or "")[:100],
+                "intent_label": o.intent_label,
+                "overall_score": o.overall_score,
+                "strategy_used": o.strategy_used,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+            for o in optimizations
+        ],
+    }
 
 
 @router.patch("/families/{family_id}")
@@ -236,8 +265,6 @@ async def update_family(
     db: AsyncSession = Depends(get_db),
 ) -> UpdateFamilyResponse:
     """Update a pattern family (intent label and/or domain)."""
-    from sqlalchemy import select
-
     if body.intent_label is None and body.domain is None:
         raise HTTPException(422, "At least one of 'intent_label' or 'domain' must be provided")
 
@@ -269,27 +296,3 @@ async def update_family(
     return UpdateFamilyResponse(id=family.id, intent_label=family.intent_label, domain=family.domain)
 
 
-@router.get("/search")
-async def search_patterns(
-    q: str = Query(description="Semantic search query."),
-    top_k: int = Query(5, ge=1, le=20, description="Maximum results to return (1-20)."),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Semantic search across families and meta-patterns."""
-    if not q.strip():
-        raise HTTPException(400, "Query cannot be empty")
-    try:
-        return await _graph_service.search_patterns(db, q, top_k=min(top_k, 20))
-    except Exception as exc:
-        logger.error("Pattern search failed for q='%s': %s", q[:50], exc, exc_info=True)
-        raise HTTPException(500, "Pattern search failed") from exc
-
-
-@router.get("/stats")
-async def get_stats(db: AsyncSession = Depends(get_db)) -> dict:
-    """Summary statistics for the knowledge graph."""
-    try:
-        return await _graph_service.get_stats(db)
-    except Exception as exc:
-        logger.error("Failed to get pattern stats: %s", exc, exc_info=True)
-        raise HTTPException(500, "Failed to load pattern statistics") from exc
