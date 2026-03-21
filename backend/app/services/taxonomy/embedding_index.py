@@ -1,0 +1,131 @@
+"""In-memory numpy cosine search index for PromptCluster centroids.
+
+Thread-safe: mutations gated by asyncio.Lock. Reads operate on immutable
+snapshots (copy-on-write). At 2000 clusters (384-dim), search is ~3ms.
+"""
+
+import asyncio
+import logging
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class EmbeddingIndex:
+    """In-memory embedding search index for PromptCluster centroids."""
+
+    def __init__(self, dim: int = 384):
+        self._dim = dim
+        self._lock = asyncio.Lock()
+        # Immutable snapshots — replaced atomically on mutation
+        self._matrix: np.ndarray = np.empty((0, dim), dtype=np.float32)
+        self._ids: list[str] = []
+
+    @property
+    def size(self) -> int:
+        return len(self._ids)
+
+    def search(
+        self, embedding: np.ndarray, k: int = 5, threshold: float = 0.72
+    ) -> list[tuple[str, float]]:
+        """Top-k cosine search. Lock-free — reads current snapshot.
+
+        Returns list of (cluster_id, cosine_similarity) sorted descending.
+        """
+        matrix = self._matrix  # snapshot reference
+        ids = self._ids
+        if len(ids) == 0:
+            return []
+
+        # Normalize query
+        query = embedding.astype(np.float32).ravel()
+        norm = np.linalg.norm(query)
+        if norm < 1e-9:
+            return []
+        query = query / norm
+
+        # Cosine similarity via matmul (matrix rows are L2-normalized)
+        scores = matrix @ query  # (n,)
+
+        # Filter by threshold
+        mask = scores >= threshold
+        if not mask.any():
+            return []
+
+        # Top-k via argpartition
+        valid_indices = np.where(mask)[0]
+        valid_scores = scores[valid_indices]
+
+        if len(valid_indices) <= k:
+            top_indices = valid_indices[np.argsort(-valid_scores)]
+        else:
+            partition_idx = np.argpartition(-valid_scores, k)[:k]
+            top_indices = valid_indices[partition_idx]
+            top_scores = scores[top_indices]
+            top_indices = top_indices[np.argsort(-top_scores)]
+
+        return [(ids[i], float(scores[i])) for i in top_indices]
+
+    async def upsert(self, cluster_id: str, embedding: np.ndarray) -> None:
+        """Insert or update a single centroid. Creates new snapshot."""
+        emb = embedding.astype(np.float32).ravel()
+        norm = np.linalg.norm(emb)
+        if norm < 1e-9:
+            return
+        emb = emb / norm
+
+        async with self._lock:
+            ids = list(self._ids)
+            if cluster_id in ids:
+                idx = ids.index(cluster_id)
+                matrix = self._matrix.copy()
+                matrix[idx] = emb
+            else:
+                ids.append(cluster_id)
+                if self._matrix.shape[0] == 0:
+                    matrix = emb.reshape(1, -1)
+                else:
+                    matrix = np.vstack([self._matrix, emb.reshape(1, -1)])
+
+            # Atomic swap
+            self._matrix = matrix
+            self._ids = ids
+
+    async def remove(self, cluster_id: str) -> None:
+        """Remove a centroid from the index. Creates new snapshot."""
+        async with self._lock:
+            if cluster_id not in self._ids:
+                return
+            ids = list(self._ids)
+            idx = ids.index(cluster_id)
+            ids.pop(idx)
+            matrix = np.delete(self._matrix, idx, axis=0)
+
+            self._matrix = matrix
+            self._ids = ids
+
+    async def rebuild(self, centroids: dict[str, np.ndarray]) -> None:
+        """Full rebuild from scratch (cold path). Acquires lock."""
+        if not centroids:
+            async with self._lock:
+                self._matrix = np.empty((0, self._dim), dtype=np.float32)
+                self._ids = []
+            return
+
+        ids = list(centroids.keys())
+        rows = []
+        for cid in ids:
+            emb = centroids[cid].astype(np.float32).ravel()
+            norm = np.linalg.norm(emb)
+            if norm > 1e-9:
+                rows.append(emb / norm)
+            else:
+                rows.append(np.zeros(self._dim, dtype=np.float32))
+
+        matrix = np.vstack(rows)
+
+        async with self._lock:
+            self._matrix = matrix
+            self._ids = ids
+
+        logger.info("EmbeddingIndex rebuilt: %d centroids", len(ids))
