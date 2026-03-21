@@ -66,6 +66,11 @@ async def test_q_system_non_regressive_over_100_optimizations(
         if result and result.q_system is not None:
             q_checkpoints.append(result.q_system)
 
+    # Must have at least 2 checkpoints to verify non-regression
+    assert len(q_checkpoints) >= 2, (
+        f"Expected at least 2 Q checkpoints but got {len(q_checkpoints)}"
+    )
+
     # Verify non-regression (within tolerance)
     for i in range(1, len(q_checkpoints)):
         assert q_checkpoints[i] >= q_checkpoints[i - 1] - 0.05, (

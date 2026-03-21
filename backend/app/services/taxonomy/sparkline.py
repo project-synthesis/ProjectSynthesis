@@ -78,6 +78,9 @@ def lttb_downsample(values: list[float], target: int) -> list[float]:
     n = len(values)
     if n <= target:
         return values[:]
+    if target < 3:
+        # target=2 → first+last, target=1 → first only, target=0 → empty
+        return [values[0], values[-1]][:target]
 
     result = [values[0]]
     bucket_size = (n - 2) / (target - 2)

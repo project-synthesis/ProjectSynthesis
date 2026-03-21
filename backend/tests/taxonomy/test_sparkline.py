@@ -25,6 +25,16 @@ class TestLTTB:
         result = lttb_downsample(values, 5)
         assert 1.0 in result
 
+    def test_target_two_returns_first_and_last(self):
+        values = [0.1, 0.5, 0.9, 0.3, 0.7]
+        result = lttb_downsample(values, 2)
+        assert result == [0.1, 0.7]
+
+    def test_exact_boundary_no_downsampling(self):
+        values = [0.1, 0.2, 0.3]
+        result = lttb_downsample(values, 3)
+        assert result == values
+
 
 class TestComputeSparklineData:
     def test_empty_returns_empty(self):
