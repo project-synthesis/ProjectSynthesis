@@ -47,6 +47,7 @@
       editDirty = false;
     } catch {
       editingStrategy = null;
+      addToast('deleted', 'Failed to load strategy template');
     }
   }
 
@@ -67,7 +68,7 @@
       // Refresh descriptions
       const list = await getStrategies();
       strategiesList = list;
-    } catch { /* save failed */ }
+    } catch { addToast('deleted', 'Strategy save failed'); }
     editSaving = false;
   }
 
@@ -509,7 +510,7 @@
               <div class="data-row">
                 <span
                   class="badge-neon"
-                  style="color: {forgeStore.mcpDisconnected ? 'var(--color-text-dim)' : 'var(--color-accent, #00e5ff)'}; border-color: {forgeStore.mcpDisconnected ? 'var(--color-border-subtle)' : 'var(--color-accent, #00e5ff)'}; {forgeStore.mcpDisconnected ? 'opacity: 0.4;' : ''}"
+                  style="color: {forgeStore.mcpDisconnected ? 'var(--color-text-dim)' : 'var(--color-neon-cyan)'}; border-color: {forgeStore.mcpDisconnected ? 'var(--color-border-subtle)' : 'var(--color-neon-cyan)'}; {forgeStore.mcpDisconnected ? 'opacity: 0.4;' : ''}"
                 >{forgeStore.mcpDisconnected ? 'SAMPLING (disconnected)' : 'SAMPLING'}</span>
               </div>
             {/if}

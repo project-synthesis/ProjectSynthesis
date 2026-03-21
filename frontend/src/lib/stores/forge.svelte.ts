@@ -6,6 +6,7 @@ import {
 import type { OptimizationResult, DimensionScores, SSEEvent } from '$lib/api/client';
 import { editorStore } from '$lib/stores/editor.svelte';
 import { patternsStore } from '$lib/stores/patterns.svelte';
+import { addToast } from '$lib/stores/toast.svelte';
 
 export type ForgeStatus = 'idle' | 'analyzing' | 'optimizing' | 'scoring' | 'complete' | 'error' | 'passthrough';
 
@@ -46,6 +47,22 @@ class ForgeStore {
   samplingCapable = $state<boolean | null>(null);
   /** Set by +page.svelte — true when health reports MCP activity gap (disconnected). */
   mcpDisconnected = $state(false);
+
+  /** Canonical routing state updater — both SSE and health poll MUST use this. */
+  updateRoutingState(input: {
+    sampling_capable: boolean | null;
+    mcp_disconnected: boolean;
+  }): { samplingChanged: boolean; reconnected: boolean; disconnected: boolean } {
+    const prev = this.samplingCapable;
+    const wasDc = this.mcpDisconnected;
+    this.samplingCapable = input.sampling_capable;
+    this.mcpDisconnected = input.mcp_disconnected;
+    return {
+      samplingChanged: prev !== true && input.sampling_capable === true,
+      reconnected: wasDc && !input.mcp_disconnected,
+      disconnected: !wasDc && input.mcp_disconnected,
+    };
+  }
 
   private controller: AbortController | null = null;
 
@@ -257,6 +274,7 @@ class ForgeStore {
       this.feedback = rating;
     } catch (err) {
       console.error('Feedback failed:', err);
+      addToast('deleted', 'Feedback could not be saved');
     }
   }
 

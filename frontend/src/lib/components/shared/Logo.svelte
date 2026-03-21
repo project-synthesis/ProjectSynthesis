@@ -73,19 +73,18 @@
 
   .brand-svg {
     flex-shrink: 0;
-    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), filter 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .logo-container:hover .brand-svg {
     transform: scale(1.08);
-    filter: drop-shadow(0 0 4px rgba(0, 229, 255, 0.3));
   }
   .logo-container:active .brand-svg {
     transform: scale(0.95);
   }
 
   .logo-container:hover .center-node {
-    fill: #ffffff;
+    fill: var(--color-text-primary);
     transform-origin: 16px 16px;
     transform: scale(1.2);
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -107,7 +106,7 @@
   .brand-packet {
     stroke-dasharray: 12 80;
     stroke-dashoffset: 80; /* Hidden initially */
-    stroke: #ffffff;
+    stroke: var(--color-text-primary);
     stroke-width: 2.2;
     stroke-linecap: round;
     opacity: 0;
@@ -152,7 +151,7 @@
 
   @keyframes center-pulse {
     0% { transform: scale(1); fill: var(--color-neon-cyan); }
-    40% { transform: scale(1.8); fill: #ffffff; }
+    40% { transform: scale(1.8); fill: var(--color-text-primary); }
     100% { transform: scale(1); fill: var(--color-neon-cyan); }
   }
 

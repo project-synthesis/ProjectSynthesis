@@ -9,6 +9,7 @@
   import TopologyControls from './TopologyControls.svelte';
   import * as THREE from 'three';
   import { triggerRecluster } from '$lib/api/taxonomy';
+  import { addToast } from '$lib/stores/toast.svelte';
 
   let canvas: HTMLCanvasElement;
   let container: HTMLDivElement;
@@ -152,6 +153,7 @@
     } catch (err) {
       // Recluster failed — tree stays as-is
       console.error('Recluster failed:', err);
+      addToast('deleted', 'Recluster failed');
     }
   }
 

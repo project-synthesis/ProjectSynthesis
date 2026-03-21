@@ -40,22 +40,13 @@
       }
       if (type === 'routing_state_changed') {
         const d = data as { provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
-        const wasDisconnected = forgeStore.mcpDisconnected;
-        const prevSampling = forgeStore.samplingCapable;
-        forgeStore.samplingCapable = d.sampling_capable;
-        // Match health endpoint logic: disconnected = not connected AND capability was known.
-        // When sampling_capable is null (session invalidated / never connected), this is
-        // "unknown" — not a disconnect from a known client.
-        forgeStore.mcpDisconnected = !d.mcp_connected && d.sampling_capable !== null;
-        if (d.mcp_connected && wasDisconnected) {
-          addToast('created', 'MCP client reconnected');
-        }
-        if (prevSampling !== true && d.sampling_capable === true) {
-          addToast('created', 'MCP client connected with sampling capability');
-        }
-        if (!d.mcp_connected && d.sampling_capable !== null && !wasDisconnected) {
-          addToast('deleted', 'MCP client disconnected');
-        }
+        const delta = forgeStore.updateRoutingState({
+          sampling_capable: d.sampling_capable,
+          mcp_disconnected: !d.mcp_connected && d.sampling_capable !== null,
+        });
+        if (delta.reconnected) addToast('created', 'MCP client reconnected');
+        if (delta.samplingChanged) addToast('created', 'MCP client connected with sampling capability');
+        if (delta.disconnected) addToast('deleted', 'MCP client disconnected');
       }
     });
     return () => eventSource?.close();
@@ -72,16 +63,13 @@
   }
 
   function applyHealth(h: HealthResponse) {
-    const prevSampling = forgeStore.samplingCapable;
     health = h;
     backendError = null;
-    forgeStore.samplingCapable = h.sampling_capable ?? null;
-    forgeStore.mcpDisconnected = h.mcp_disconnected ?? false;
-
-    // Toast when sampling capability first detected
-    if (prevSampling !== true && h.sampling_capable === true) {
-      addToast('created', 'MCP client connected with sampling capability');
-    }
+    const delta = forgeStore.updateRoutingState({
+      sampling_capable: h.sampling_capable ?? null,
+      mcp_disconnected: h.mcp_disconnected ?? false,
+    });
+    if (delta.samplingChanged) addToast('created', 'MCP client connected with sampling capability');
   }
 
   // Initial poll + fixed interval

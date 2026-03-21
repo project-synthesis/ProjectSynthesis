@@ -40,7 +40,7 @@
     font-size: 13px;
     font-weight: 500;
     letter-spacing: 0.12em;
-    color: var(--color-accent);
+    color: var(--color-neon-cyan);
     text-transform: uppercase;
     margin: 0;
   }
@@ -73,13 +73,13 @@
     text-transform: uppercase;
     text-decoration: none;
     color: var(--color-text-primary);
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-subtle);
     background: transparent;
     transition: border-color 200ms, color 200ms;
   }
 
   .error-page__cta:hover {
-    border-color: var(--color-accent);
-    color: var(--color-accent);
+    border-color: var(--color-neon-cyan);
+    color: var(--color-neon-cyan);
   }
 </style>

@@ -388,7 +388,6 @@
   .domain-dot {
     width: 6px;
     height: 6px;
-    border-radius: 50%;
     flex-shrink: 0;
   }
 
