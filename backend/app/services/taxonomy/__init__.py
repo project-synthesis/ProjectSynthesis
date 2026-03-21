@@ -13,6 +13,7 @@ Public API:
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from app.services.taxonomy.engine import (
@@ -39,6 +40,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 _process_engine: TaxonomyEngine | None = None
+_engine_lock = threading.Lock()
 
 
 def get_engine(app: Any | None = None) -> TaxonomyEngine:
@@ -48,6 +50,9 @@ def get_engine(app: Any | None = None) -> TaxonomyEngine:
       1. ``app.state.taxonomy_engine`` (FastAPI request path)
       2. Module-level ``_process_engine`` (set by lifespan or lazy-init)
       3. Lazy-create a fallback instance (read-only paths, tests)
+
+    Thread-safe: lazy creation is guarded by a lock to prevent
+    duplicate instances from concurrent callers.
     """
     global _process_engine
     if app is not None:
@@ -56,10 +61,14 @@ def get_engine(app: Any | None = None) -> TaxonomyEngine:
             return engine
     if _process_engine is not None:
         return _process_engine
-    from app.services.embedding_service import EmbeddingService
+    # Double-checked locking for thread-safe lazy creation
+    with _engine_lock:
+        if _process_engine is not None:
+            return _process_engine
+        from app.services.embedding_service import EmbeddingService
 
-    _process_engine = TaxonomyEngine(embedding_service=EmbeddingService())
-    return _process_engine
+        _process_engine = TaxonomyEngine(embedding_service=EmbeddingService())
+        return _process_engine
 
 
 def set_engine(engine: TaxonomyEngine) -> None:

@@ -45,8 +45,8 @@ export interface TaxonomyStats {
   last_cold_path: string | null;
   warm_path_age: number | null;
   q_history: Array<{
-    timestamp: string;
-    q_system: number;
+    timestamp: string | null;
+    q_system: number | null;
     operations: number;
   }>;
   q_sparkline: number[];

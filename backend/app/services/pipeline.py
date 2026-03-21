@@ -634,14 +634,18 @@ class PipelineOrchestrator:
             await db.commit()
 
             # Propagate usage counts AFTER successful commit (Spec 7.8)
+            # Use a fresh session — the original db session may be expired post-commit
             if applied_family_ids and taxonomy_engine:
                 try:
-                    for fid in applied_family_ids:
-                        try:
-                            await taxonomy_engine.increment_usage(fid, db)
-                        except Exception as usage_exc:
-                            logger.warning("Usage propagation failed for %s: %s", fid, usage_exc)
-                    await db.commit()
+                    from app.database import async_session_factory
+
+                    async with async_session_factory() as usage_db:
+                        for fid in applied_family_ids:
+                            try:
+                                await taxonomy_engine.increment_usage(fid, usage_db)
+                            except Exception as usage_exc:
+                                logger.warning("Usage propagation failed for %s: %s", fid, usage_exc)
+                        await usage_db.commit()
                 except Exception as exc:
                     logger.warning("Post-commit usage propagation failed: %s", exc)
 

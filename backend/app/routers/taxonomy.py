@@ -17,6 +17,7 @@ from app.schemas.taxonomy import (
 )
 from app.services.taxonomy import TaxonomyEngine
 from app.services.taxonomy import get_engine as get_taxonomy_engine
+from app.services.taxonomy.sparkline import SparklineData
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,10 @@ async def get_node(
     node = await engine.get_node(node_id, db)
     if node is None:
         raise HTTPException(status_code=404, detail="Taxonomy node not found")
-    # Children are nested dicts — convert recursively
-    children_raw = node.pop("children", None)
-    resp = TaxonomyNodeResponse(**node)
+    # Children are nested dicts — extract without mutating the engine dict
+    children_raw = node.get("children")
+    node_data = {k: v for k, v in node.items() if k != "children"}
+    resp = TaxonomyNodeResponse(**node_data)
     if children_raw is not None:
         resp.children = [TaxonomyNodeResponse(**c) for c in children_raw]
     return resp
@@ -69,7 +71,7 @@ async def get_stats(
     data = await engine.get_stats(db)
     # Engine returns SparklineData object for q_sparkline — extract .normalized
     sparkline = data.get("q_sparkline")
-    if sparkline is not None and hasattr(sparkline, "normalized"):
+    if isinstance(sparkline, SparklineData):
         data["q_sparkline"] = sparkline.normalized
     return TaxonomyStatsResponse(**data)
 

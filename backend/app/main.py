@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI):
     app.state.watcher_task = watcher_task
 
     # Track in-flight extraction tasks for graceful shutdown
-    extraction_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
+    extraction_tasks: set[asyncio.Task[None]] = set()
 
     # Start taxonomy engine subscriber (replaces PatternExtractorService)
     async def _taxonomy_extraction_listener():
@@ -167,12 +167,19 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    # Cancel in-flight extraction tasks
-    if extraction_tasks:
-        logger.info("Cancelling %d in-flight extraction tasks", len(extraction_tasks))
-        for t in extraction_tasks:
+    # Cancel in-flight extraction tasks (snapshot to avoid set-modified-during-iteration)
+    pending = list(extraction_tasks)
+    if pending:
+        logger.info("Cancelling %d in-flight extraction tasks", len(pending))
+        for t in pending:
             t.cancel()
-        await asyncio.gather(*extraction_tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Timed out waiting for extraction tasks to finish")
 
     # Stop warm path timer
     if hasattr(app.state, "warm_path_task"):
