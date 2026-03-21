@@ -15,6 +15,16 @@
   let query = $state('');
   let selectedIndex = $state(0);
   let inputEl = $state<HTMLInputElement | null>(null);
+  let forgeCheckInterval = $state<ReturnType<typeof setInterval> | null>(null);
+
+  // Lifecycle-safe cleanup: clear polling interval if component unmounts mid-forge
+  $effect(() => {
+    return () => {
+      if (forgeCheckInterval) {
+        clearInterval(forgeCheckInterval);
+      }
+    };
+  });
 
   const allActions: PaletteAction[] = [
     {
@@ -31,14 +41,16 @@
       label: 'Forge',
       run: () => {
         forgeStore.forge();
-        // Watch for traceId to open result tab
-        const check = setInterval(() => {
+        // Watch for traceId to open result tab (lifecycle-safe via $state)
+        forgeCheckInterval = setInterval(() => {
           if (forgeStore.traceId) {
-            clearInterval(check);
+            clearInterval(forgeCheckInterval!);
+            forgeCheckInterval = null;
             editorStore.openResult(forgeStore.traceId);
           }
           if (forgeStore.status === 'error' || forgeStore.status === 'idle') {
-            clearInterval(check);
+            clearInterval(forgeCheckInterval!);
+            forgeCheckInterval = null;
           }
         }, 200);
         window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'editor' }));

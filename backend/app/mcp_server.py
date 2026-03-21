@@ -208,6 +208,14 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     _taxonomy_engine = None
     _routing = None
 
+    # Dispose database engine (MCP server runs as a separate process
+    # with its own SQLAlchemy engine import — must clean up independently).
+    try:
+        from app.database import dispose
+        await dispose()
+    except Exception as exc:
+        logger.warning("MCP database disposal failed: %s", exc)
+
 
 mcp = FastMCP(
     "synthesis_mcp",

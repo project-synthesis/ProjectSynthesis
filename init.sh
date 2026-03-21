@@ -5,7 +5,7 @@ set -uo pipefail
 # Note: -e intentionally omitted — we handle errors per-command
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths & ports
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,85 +15,105 @@ BACKEND_DIR="$SCRIPT_DIR/backend"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 PYTHON="$BACKEND_DIR/.venv/bin/python"
 UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
+VITE="$FRONTEND_DIR/node_modules/.bin/vite"
 
 BACKEND_PORT=8000
 MCP_PORT=8001
 FRONTEND_PORT=5199
 
+# Graceful shutdown timeout per service (seconds).
+# Backend needs 10s: uvicorn --reload supervisor → worker → async lifespan
+# shutdown (routing stop + extraction tasks 5s wait_for + warm-path timer
+# + strategy file watcher).
+declare -A STOP_TIMEOUT=([backend]=10 [mcp]=5 [frontend]=5)
+
+# Startup readiness timeout per service (seconds).
+declare -A READY_TIMEOUT=([backend]=15 [mcp]=10 [frontend]=15)
+
 # ---------------------------------------------------------------------------
-# Helpers
+# Output helpers (ANSI colors when stdout is a terminal)
 # ---------------------------------------------------------------------------
 
-_log()  { echo "[init.sh] $*"; }
-_ok()   { echo "  ✓ $*"; }
-_fail() { echo "  ✗ $*"; }
-_warn() { echo "  ! $*"; }
+if [[ -t 1 ]]; then
+    _RST='\033[0m' _GRN='\033[32m' _YLW='\033[33m' _RED='\033[31m'
+    _CYN='\033[36m' _DIM='\033[90m'
+else
+    _RST='' _GRN='' _YLW='' _RED='' _CYN='' _DIM=''
+fi
 
-_ensure_dirs() {
-    mkdir -p "$DATA_DIR" "$PID_DIR" "$DATA_DIR/traces"
-}
+_log()  { echo -e "${_CYN}[init.sh]${_RST} $*"; }
+_ok()   { echo -e "  ${_GRN}✓${_RST} $*"; }
+_fail() { echo -e "  ${_RED}✗${_RST} $*"; }
+_warn() { echo -e "  ${_YLW}!${_RST} $*"; }
 
-_pid_file() {
-    # $1 = service name (backend|mcp|frontend)
-    echo "$PID_DIR/$1.pid"
-}
+# ---------------------------------------------------------------------------
+# Low-level utilities
+# ---------------------------------------------------------------------------
+
+_ensure_dirs() { mkdir -p "$DATA_DIR" "$PID_DIR" "$DATA_DIR/traces"; }
+_pid_file()    { echo "$PID_DIR/$1.pid"; }
 
 _read_pid() {
-    local pidfile
-    pidfile="$(_pid_file "$1")"
-    if [[ -f "$pidfile" ]]; then
-        cat "$pidfile"
-    fi
+    local f; f="$(_pid_file "$1")"
+    [[ -f "$f" ]] && cat "$f"
 }
 
 _is_running() {
-    local pid
-    pid="$(_read_pid "$1")"
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-        return 0
-    fi
-    return 1
+    local pid; pid="$(_read_pid "$1")"
+    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
-_wait_for_port() {
-    # $1 = port, $2 = timeout seconds, $3 = label, $4 = optional health path
-    local port="$1" timeout="$2" label="$3" health_path="${4:-}"
-    local elapsed=0
-    while (( elapsed < timeout )); do
-        if [[ -n "$health_path" ]] && command -v curl &>/dev/null; then
-            # Probe specific health endpoint
-            curl -sf "http://127.0.0.1:${port}${health_path}" >/dev/null 2>&1 && return 0
-        elif command -v nc &>/dev/null; then
-            nc -z 127.0.0.1 "$port" 2>/dev/null && return 0
-        else
-            (echo >/dev/tcp/127.0.0.1/"$port") 2>/dev/null && return 0
-        fi
-        sleep 1
-        (( elapsed++ ))
-    done
+_svc_port() {
+    case "$1" in
+        backend)  echo "$BACKEND_PORT"  ;;
+        mcp)      echo "$MCP_PORT"      ;;
+        frontend) echo "$FRONTEND_PORT" ;;
+    esac
+}
+
+_probe_port() {
+    # $1 = port, $2 = optional HTTP health path (e.g. /api/health)
+    # With health path: HTTP GET only — verifies the app is fully ready.
+    # Without: TCP connect only — checks if anything listens on the port.
+    local port="$1" health="${2:-}"
+    if [[ -n "$health" ]]; then
+        command -v curl &>/dev/null || return 1
+        curl -sf --max-time 2 "http://127.0.0.1:${port}${health}" >/dev/null 2>&1
+        return $?
+    fi
+    if command -v nc &>/dev/null; then
+        nc -z 127.0.0.1 "$port" 2>/dev/null && return 0
+    else
+        (echo >/dev/tcp/127.0.0.1/"$port") 2>/dev/null && return 0
+    fi
     return 1
 }
 
 _check_port_free() {
     # $1 = port, $2 = label
-    if command -v lsof &>/dev/null; then
-        if lsof -i :"$1" -sTCP:LISTEN >/dev/null 2>&1; then
-            _fail "Port $1 already in use ($2). Run './init.sh stop' first."
-            return 1
-        fi
+    if _probe_port "$1"; then
+        _fail "Port $1 in use ($2). Run './init.sh stop' first."
+        return 1
     fi
     return 0
 }
 
+_wait_port_free() {
+    # Block until port is released or timeout (seconds).
+    local port="$1" timeout="$2" t0=$SECONDS
+    while (( SECONDS - t0 < timeout )); do
+        _probe_port "$port" || return 0
+        sleep 0.5
+    done
+    return 1
+}
+
 _rotate_log() {
-    # $1 = log file path — rotate if > 10MB
-    local logfile="$1"
-    if [[ -f "$logfile" ]]; then
-        local size
-        size=$(stat -c%s "$logfile" 2>/dev/null || stat -f%z "$logfile" 2>/dev/null || echo 0)
-        if (( size > 10485760 )); then
-            mv "$logfile" "${logfile}.1"
-        fi
+    # Rotate if > 10 MB, keeping one generation.
+    local f="$1"
+    if [[ -f "$f" ]]; then
+        local sz; sz=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+        (( sz > 10485760 )) && mv "$f" "${f}.1"
     fi
 }
 
@@ -106,19 +126,19 @@ preflight() {
 
     if [[ ! -x "$PYTHON" ]]; then
         _fail "Python venv not found at $PYTHON"
-        _fail "Run: cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+        echo -e "       ${_DIM}cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt${_RST}"
         ok=false
     fi
 
     if [[ ! -x "$UVICORN" ]]; then
-        _fail "uvicorn not found in venv"
-        _fail "Run: cd backend && source .venv/bin/activate && pip install -r requirements.txt"
+        _fail "uvicorn not in venv"
+        echo -e "       ${_DIM}cd backend && source .venv/bin/activate && pip install -r requirements.txt${_RST}"
         ok=false
     fi
 
-    if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
-        _fail "Frontend node_modules not found"
-        _fail "Run: cd frontend && npm install"
+    if [[ ! -x "$VITE" ]]; then
+        _fail "Vite not found at $VITE"
+        echo -e "       ${_DIM}cd frontend && npm install${_RST}"
         ok=false
     fi
 
@@ -127,94 +147,129 @@ preflight() {
         ok=false
     fi
 
-    if [[ "$ok" = false ]]; then
-        _log "Preflight failed. Fix the above issues and retry."
-        exit 1
+    [[ "$ok" = false ]] && { _log "Preflight failed."; exit 1; }
+}
+
+# ---------------------------------------------------------------------------
+# Launch (non-blocking — spawn process, write PID file, return immediately)
+# ---------------------------------------------------------------------------
+# Returns: 0 = launched, 1 = already running, 2 = port conflict
+
+_launch() {
+    local name="$1"
+    if _is_running "$name"; then
+        _warn "$name already running (PID $(_read_pid "$name"))"
+        return 1
     fi
+    local port; port="$(_svc_port "$name")"
+    _check_port_free "$port" "$name" || return 2
+    _rotate_log "$DATA_DIR/${name}.log"
+
+    case "$name" in
+        backend)
+            cd "$BACKEND_DIR"
+            # --reload-dir: restrict file watching to app/ (skips .venv, data, tests)
+            # --timeout-graceful-shutdown: cap connection drain wait.  With
+            #   event_bus.shutdown() sending sentinels to SSE subscribers,
+            #   connections close in ~0.1s.  The 3s ceiling is a safety net.
+            setsid "$UVICORN" app.main:asgi_app \
+                --host 127.0.0.1 --port "$BACKEND_PORT" \
+                --reload --reload-dir app \
+                --timeout-graceful-shutdown 3 \
+                </dev/null >> "$DATA_DIR/backend.log" 2>&1 &
+            ;;
+        mcp)
+            cd "$BACKEND_DIR"
+            setsid "$PYTHON" -m app.mcp_server \
+                </dev/null >> "$DATA_DIR/mcp.log" 2>&1 &
+            ;;
+        frontend)
+            # Use vite binary directly — avoids npx → sh → node wrapper layers.
+            cd "$FRONTEND_DIR"
+            setsid "$VITE" dev --port "$FRONTEND_PORT" --host 127.0.0.1 \
+                </dev/null >> "$DATA_DIR/frontend.log" 2>&1 &
+            ;;
+    esac
+    echo "$!" > "$(_pid_file "$name")"
+    cd "$SCRIPT_DIR"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Await readiness (parallel port polling for all launched services)
+# ---------------------------------------------------------------------------
+
+_await_ready() {
+    local -a names=("$@")
+    local -A ready health
+    for n in "${names[@]}"; do
+        ready[$n]=0
+        health[$n]=""
+    done
+    health[backend]="/api/health"
+
+    local t0=$SECONDS max_t=0
+    for n in "${names[@]}"; do
+        (( ${READY_TIMEOUT[$n]} > max_t )) && max_t=${READY_TIMEOUT[$n]}
+    done
+
+    while (( SECONDS - t0 <= max_t )); do
+        local pending=false
+        for n in "${names[@]}"; do
+            (( ${ready[$n]} != 0 )) && continue
+            local elapsed=$(( SECONDS - t0 ))
+            local port; port="$(_svc_port "$n")"
+            local pid; pid="$(_read_pid "$n")"
+
+            # Detect process death during startup
+            if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+                ready[$n]=2
+                _fail "$n exited during startup — check data/${n}.log"
+                continue
+            fi
+
+            if _probe_port "$port" "${health[$n]:-}"; then
+                ready[$n]=1
+                _ok "$n ready ${_DIM}(PID $pid, port $port)${_RST}"
+            elif (( elapsed >= ${READY_TIMEOUT[$n]} )); then
+                ready[$n]=2
+                _warn "$n not responding after ${READY_TIMEOUT[$n]}s — check data/${n}.log"
+            else
+                pending=true
+            fi
+        done
+        $pending || return 0
+        sleep 1
+    done
 }
 
 # ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
 
-start_backend() {
-    if _is_running backend; then
-        _warn "Backend already running (PID $(_read_pid backend))"
-        return 0
-    fi
-    _check_port_free "$BACKEND_PORT" "backend" || return 1
-    _rotate_log "$DATA_DIR/backend.log"
-
-    cd "$BACKEND_DIR"
-    setsid nohup "$UVICORN" app.main:asgi_app \
-        --host 127.0.0.1 \
-        --port "$BACKEND_PORT" \
-        --reload \
-        >> "$DATA_DIR/backend.log" 2>&1 &
-    local pid=$!
-    echo "$pid" > "$(_pid_file backend)"
-    cd "$SCRIPT_DIR"
-
-    if _wait_for_port "$BACKEND_PORT" 15 "backend" "/api/health"; then
-        _ok "Backend ready (PID $pid, port $BACKEND_PORT)"
-    else
-        _warn "Backend started (PID $pid) but not responding yet — check data/backend.log"
-    fi
-}
-
-start_mcp() {
-    if _is_running mcp; then
-        _warn "MCP already running (PID $(_read_pid mcp))"
-        return 0
-    fi
-    _check_port_free "$MCP_PORT" "mcp" || return 1
-    _rotate_log "$DATA_DIR/mcp.log"
-
-    cd "$BACKEND_DIR"
-    setsid nohup "$PYTHON" -m app.mcp_server \
-        >> "$DATA_DIR/mcp.log" 2>&1 &
-    local pid=$!
-    echo "$pid" > "$(_pid_file mcp)"
-    cd "$SCRIPT_DIR"
-
-    if _wait_for_port "$MCP_PORT" 10 "mcp"; then
-        _ok "MCP server ready (PID $pid, port $MCP_PORT)"
-    else
-        _warn "MCP started (PID $pid) but not responding yet — check data/mcp.log"
-    fi
-}
-
-start_frontend() {
-    if _is_running frontend; then
-        _warn "Frontend already running (PID $(_read_pid frontend))"
-        return 0
-    fi
-    _check_port_free "$FRONTEND_PORT" "frontend" || return 1
-    _rotate_log "$DATA_DIR/frontend.log"
-
-    cd "$FRONTEND_DIR"
-    setsid nohup npx vite dev --port "$FRONTEND_PORT" --host 127.0.0.1 \
-        >> "$DATA_DIR/frontend.log" 2>&1 &
-    local pid=$!
-    echo "$pid" > "$(_pid_file frontend)"
-    cd "$SCRIPT_DIR"
-
-    if _wait_for_port "$FRONTEND_PORT" 15 "frontend"; then
-        _ok "Frontend ready (PID $pid, port $FRONTEND_PORT)"
-    else
-        _warn "Frontend started (PID $pid) but not responding yet — check data/frontend.log"
-    fi
-}
-
 start_services() {
     preflight
     _ensure_dirs
+    local t0=$SECONDS
     _log "Starting services..."
-    start_backend
-    start_mcp
-    start_frontend
+
+    # Launch all three processes concurrently (no cross-dependencies at startup).
+    local -a to_await=()
+    for svc in backend mcp frontend; do
+        _launch "$svc"
+        case $? in
+            0) to_await+=("$svc") ;;   # freshly launched — wait for readiness
+            1) ;;                       # already running (warning printed)
+            2) exit 1 ;;               # port conflict — abort
+        esac
+    done
+
+    if (( ${#to_await[@]} > 0 )); then
+        _await_ready "${to_await[@]}"
+    fi
+
     echo ""
-    _log "Logs: data/backend.log, data/frontend.log, data/mcp.log"
+    _log "Ready in $(( SECONDS - t0 ))s — logs: data/{backend,frontend,mcp}.log"
 }
 
 # ---------------------------------------------------------------------------
@@ -222,37 +277,42 @@ start_services() {
 # ---------------------------------------------------------------------------
 
 stop_service() {
-    # $1 = service name
     local name="$1"
-    local pid
-    pid="$(_read_pid "$name")"
+    local pid; pid="$(_read_pid "$name")"
 
+    # Stale PID file — try pattern match as fallback
     if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-        # PID file stale or missing — try pattern match as fallback
         case "$name" in
-            backend)  pid=$(pgrep -f "uvicorn app.main" 2>/dev/null | head -1) ;;
-            mcp)      pid=$(pgrep -f "app.mcp_server" 2>/dev/null | head -1) ;;
-            frontend) pid=$(pgrep -f "vite.*${FRONTEND_PORT}" 2>/dev/null | head -1) ;;
+            backend)  pid=$(pgrep -f "uvicorn app.main:asgi_app" 2>/dev/null | head -1) ;;
+            mcp)      pid=$(pgrep -f "python.*app\.mcp_server" 2>/dev/null | head -1) ;;
+            frontend) pid=$(pgrep -f "vite dev.*${FRONTEND_PORT}" 2>/dev/null | head -1) ;;
         esac
     fi
 
     if [[ -z "$pid" ]]; then
-        _warn "$name not running"
+        echo -e "  ${_DIM}– $name already stopped${_RST}"
         rm -f "$(_pid_file "$name")"
         return 0
     fi
 
-    # Graceful shutdown: SIGTERM the process group, wait up to 5s, then SIGKILL
-    # Use negative PID to kill the entire process group (parent + children)
-    kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null
-    local waited=0
-    while (( waited < 5 )) && kill -0 "$pid" 2>/dev/null; do
-        sleep 1
-        (( waited++ ))
+    local timeout=${STOP_TIMEOUT[$name]}
+
+    # Phase 1: SIGTERM to the process only (not the process group).
+    # For uvicorn --reload this lets the supervisor forward SIGTERM to the
+    # worker, which runs the async lifespan shutdown (routing, extraction
+    # tasks with 5s wait_for, warm-path timer, strategy file watcher).
+    # Sending SIGTERM to the entire group simultaneously would bypass the
+    # supervisor's orderly child shutdown and cause force-kills.
+    kill "$pid" 2>/dev/null
+    local t0=$SECONDS
+    while (( SECONDS - t0 < timeout )) && kill -0 "$pid" 2>/dev/null; do
+        sleep 0.5
     done
 
+    # Phase 2: SIGKILL the entire process group if still alive.
     if kill -0 "$pid" 2>/dev/null; then
         kill -9 -- -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null
+        sleep 0.2
         _warn "$name force-killed (PID $pid)"
     else
         _ok "$name stopped (PID $pid)"
@@ -263,9 +323,33 @@ stop_service() {
 
 stop_services() {
     _log "Stopping services..."
+    # Drain order: frontend (user traffic) → MCP (tool calls) → backend (data layer)
     stop_service frontend
     stop_service mcp
     stop_service backend
+}
+
+# ---------------------------------------------------------------------------
+# Restart
+# ---------------------------------------------------------------------------
+
+do_restart() {
+    stop_services
+
+    # Verify ports are released (handles force-kill edge case where
+    # the kernel hasn't fully cleaned up the socket yet).
+    local need_wait=false
+    for p in $BACKEND_PORT $MCP_PORT $FRONTEND_PORT; do
+        _probe_port "$p" && { need_wait=true; break; }
+    done
+    if $need_wait; then
+        echo -e "  ${_DIM}Waiting for ports to release...${_RST}"
+        for p in $BACKEND_PORT $MCP_PORT $FRONTEND_PORT; do
+            _wait_port_free "$p" 5 || { _fail "Port $p still in use"; exit 1; }
+        done
+    fi
+
+    start_services
 }
 
 # ---------------------------------------------------------------------------
@@ -275,30 +359,39 @@ stop_services() {
 show_status() {
     _log "Service status:"
     for name in backend mcp frontend; do
-        local pid port
+        local pid port health_path=""
         pid="$(_read_pid "$name")"
-        case "$name" in
-            backend)  port=$BACKEND_PORT ;;
-            mcp)      port=$MCP_PORT ;;
-            frontend) port=$FRONTEND_PORT ;;
-        esac
+        port="$(_svc_port "$name")"
+        [[ "$name" = "backend" ]] && health_path="/api/health"
 
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-            echo "  $name: running (PID $pid, port $port)"
+            if _probe_port "$port" "$health_path"; then
+                echo -e "  ${_GRN}●${_RST} $name  ${_DIM}pid $pid  port $port${_RST}"
+            else
+                echo -e "  ${_YLW}●${_RST} $name  ${_DIM}pid $pid  port $port  (not responding)${_RST}"
+            fi
         else
-            echo "  $name: stopped"
-            # Clean stale PID file
-            if [[ -n "$pid" ]]; then rm -f "$(_pid_file "$name")"; fi
+            echo -e "  ${_DIM}○ $name  stopped${_RST}"
+            [[ -n "$pid" ]] && rm -f "$(_pid_file "$name")"
         fi
     done
+    return 0
 }
 
 # ---------------------------------------------------------------------------
-# Logs (tail all)
+# Logs (tail all available)
 # ---------------------------------------------------------------------------
 
 show_logs() {
-    tail -f "$DATA_DIR/backend.log" "$DATA_DIR/frontend.log" "$DATA_DIR/mcp.log" 2>/dev/null
+    local -a files=()
+    for f in "$DATA_DIR"/{backend,frontend,mcp}.log; do
+        [[ -f "$f" ]] && files+=("$f")
+    done
+    if (( ${#files[@]} == 0 )); then
+        _warn "No log files found in $DATA_DIR/"
+        return 1
+    fi
+    tail -f "${files[@]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -308,16 +401,16 @@ show_logs() {
 case "${1:-start}" in
     start)   start_services ;;
     stop)    stop_services ;;
-    restart) stop_services; sleep 2; start_services ;;
+    restart) do_restart ;;
     status)  show_status ;;
     logs)    show_logs ;;
     *)
         echo "Usage: $0 {start|stop|restart|status|logs}"
         echo ""
         echo "  start    Start all services (backend, MCP, frontend)"
-        echo "  stop     Gracefully stop all services"
-        echo "  restart  Stop + start"
-        echo "  status   Show running/stopped status with PIDs"
+        echo "  stop     Graceful stop (SIGTERM → wait → SIGKILL)"
+        echo "  restart  Stop then start"
+        echo "  status   Show service health with PIDs"
         echo "  logs     Tail all service logs"
         exit 1
         ;;

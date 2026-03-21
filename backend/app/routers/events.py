@@ -59,6 +59,8 @@ async def event_stream() -> StreamingResponse:
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    if event_bus.is_shutdown_event(event):
+                        return
                     event_type = event["event"]
                     data = json.dumps(event["data"])
                     yield f"event: {event_type}\ndata: {data}\n\n"

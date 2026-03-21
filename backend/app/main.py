@@ -155,19 +155,32 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Stop routing disconnect checker
+    # ── Shutdown (5-phase concurrent approach) ─────────────────────────
+
+    # Phase 1: Drain SSE connections.  The sentinel unblocks all SSE
+    # subscriber queues so persistent streams close *before* uvicorn's
+    # graceful-shutdown timer kicks in (~0ms instead of waiting 3-5s).
+    event_bus.shutdown()
+    await asyncio.sleep(0.1)  # yield control so SSE generators return
+
+    # Phase 2: Cancel all background tasks concurrently via gather().
+    # Previous code awaited each sequentially (4 × cancel+await blocks).
+    bg_tasks = [
+        t for t in [
+            getattr(app.state, "extraction_task", None),
+            getattr(app.state, "warm_path_task", None),
+            getattr(app.state, "watcher_task", None),
+        ]
+        if t is not None
+    ]
     if hasattr(app.state, "routing"):
         await app.state.routing.stop()
+    for t in bg_tasks:
+        t.cancel()
+    if bg_tasks:
+        await asyncio.gather(*bg_tasks, return_exceptions=True)
 
-    # Stop pattern extraction listener
-    if hasattr(app.state, "extraction_task"):
-        app.state.extraction_task.cancel()
-        try:
-            await app.state.extraction_task
-        except asyncio.CancelledError:
-            pass
-
-    # Cancel in-flight extraction tasks (snapshot to avoid set-modified-during-iteration)
+    # Phase 3: Drain in-flight extraction tasks (may be mid-DB-write).
     pending = list(extraction_tasks)
     if pending:
         logger.info("Cancelling %d in-flight extraction tasks", len(pending))
@@ -181,23 +194,7 @@ async def lifespan(app: FastAPI):
         except asyncio.TimeoutError:
             logger.warning("Timed out waiting for extraction tasks to finish")
 
-    # Stop warm path timer
-    if hasattr(app.state, "warm_path_task"):
-        app.state.warm_path_task.cancel()
-        try:
-            await app.state.warm_path_task
-        except asyncio.CancelledError:
-            pass
-
-    # Stop strategy file watcher
-    if hasattr(app.state, "watcher_task"):
-        app.state.watcher_task.cancel()
-        try:
-            await app.state.watcher_task
-        except asyncio.CancelledError:
-            pass
-
-    # Shutdown: mark in-flight optimizations as interrupted
+    # Phase 4: Mark in-flight optimizations as interrupted + trace rotation.
     logger.info("Shutting down — marking in-flight optimizations as interrupted")
     try:
         from sqlalchemy import update
@@ -214,7 +211,6 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error("Shutdown cleanup failed: %s", exc)
 
-    # Run trace rotation
     try:
         from app.services.trace_logger import TraceLogger
         tl = TraceLogger(DATA_DIR / "traces")
@@ -223,6 +219,20 @@ async def lifespan(app: FastAPI):
             logger.info("Trace rotation: deleted %d old files", deleted)
     except Exception as exc:
         logger.error("Trace rotation failed: %s", exc)
+
+    # Phase 5: Clear taxonomy singleton + dispose database engine.
+    try:
+        from app.services.taxonomy import reset_engine
+        reset_engine()
+    except Exception:
+        pass
+    app.state.taxonomy_engine = None
+
+    try:
+        from app.database import dispose
+        await dispose()
+    except Exception as exc:
+        logger.error("Database disposal failed: %s", exc)
 
 
 app = FastAPI(

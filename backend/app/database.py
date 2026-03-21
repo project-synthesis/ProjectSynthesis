@@ -17,3 +17,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency — yields an async session, auto-closes on exit."""
     async with async_session_factory() as session:
         yield session
+
+
+async def dispose() -> None:
+    """Close all pooled connections. Called during application shutdown."""
+    await engine.dispose()
