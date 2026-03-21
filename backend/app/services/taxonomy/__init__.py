@@ -16,9 +16,9 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from app.services.taxonomy.engine import (
+from app.services.taxonomy.engine import TaxonomyEngine
+from app.services.taxonomy.matching import (
     PatternMatch,
-    TaxonomyEngine,
     TaxonomyMapping,
 )
 from app.services.taxonomy.quality import QWeights
