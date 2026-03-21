@@ -121,6 +121,23 @@ async def lifespan(app: FastAPI):
                     "EmbeddingIndex warm-load failed (non-fatal): %s", idx_exc
                 )
 
+            # Startup: backfill orphan optimizations with null cluster_id
+            try:
+                from app.services.prompt_lifecycle import PromptLifecycleService
+                async with async_session_factory() as _db:
+                    lifecycle = PromptLifecycleService()
+                    orphans_linked = await lifecycle.backfill_orphans(
+                        _db, engine.embedding_index
+                    )
+                    await _db.commit()
+                    logger.info(
+                        "Backfill: %d orphan optimizations linked", orphans_linked
+                    )
+            except Exception as backfill_exc:
+                logger.warning(
+                    "Orphan backfill failed (non-fatal): %s", backfill_exc
+                )
+
             logger.info("Taxonomy extraction listener started — subscribing to event bus")
 
             async for event in event_bus.subscribe():
@@ -136,6 +153,25 @@ async def lifespan(app: FastAPI):
                             try:
                                 async with async_session_factory() as db:
                                     await engine.process_optimization(oid, db)
+                                    # Hot path: check cluster promotion after
+                                    # process_optimization writes OptimizationPattern
+                                    from app.services.prompt_lifecycle import (
+                                        PromptLifecycleService,
+                                    )
+                                    from sqlalchemy import select as _sel
+                                    from app.models import OptimizationPattern as _OP
+                                    _row = (await db.execute(
+                                        _sel(_OP).where(
+                                            _OP.optimization_id == oid,
+                                            _OP.relationship == "source",
+                                        )
+                                    )).scalar_one_or_none()
+                                    if _row is not None and _row.cluster_id:
+                                        lifecycle = PromptLifecycleService()
+                                        await lifecycle.check_promotion(
+                                            db, _row.cluster_id
+                                        )
+                                        await db.commit()
                             except Exception as task_exc:
                                 logger.error(
                                     "Background taxonomy extraction failed for %s: %s",
@@ -172,6 +208,9 @@ async def lifespan(app: FastAPI):
                     engine = getattr(app.state, "taxonomy_engine", None)
                     if engine:
                         from app.database import async_session_factory
+                        from app.services.prompt_lifecycle import (
+                            PromptLifecycleService,
+                        )
                         async with async_session_factory() as db:
                             result = await engine.run_warm_path(db)
                             if result:
@@ -182,6 +221,11 @@ async def lifespan(app: FastAPI):
                                     result.operations_attempted,
                                     result.snapshot_id,
                                 )
+                            # Warm path: curation + usage decay after clustering
+                            lifecycle = PromptLifecycleService()
+                            await lifecycle.curate(db)
+                            await lifecycle.decay_usage(db)
+                            await db.commit()
                 except Exception as exc:
                     logger.error("Warm path timer failed: %s", exc, exc_info=True)
         except asyncio.CancelledError:
