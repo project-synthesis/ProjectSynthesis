@@ -67,19 +67,23 @@ async def lifespan(app: FastAPI):
     )
     app.state.watcher_task = watcher_task
 
+    # Track in-flight extraction tasks for graceful shutdown
+    extraction_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
+
     # Start taxonomy engine subscriber (replaces PatternExtractorService)
     async def _taxonomy_extraction_listener():
         """Subscribe to optimization_created events and run taxonomy hot path."""
         try:
             from app.database import async_session_factory
             from app.services.embedding_service import EmbeddingService
-            from app.services.taxonomy import TaxonomyEngine
+            from app.services.taxonomy import TaxonomyEngine, set_engine
 
             engine = TaxonomyEngine(
                 embedding_service=EmbeddingService(),
                 provider=app.state.routing.state.provider,
             )
             app.state.taxonomy_engine = engine
+            set_engine(engine)
             logger.info("Taxonomy extraction listener started — subscribing to event bus")
 
             async for event in event_bus.subscribe():
@@ -101,10 +105,12 @@ async def lifespan(app: FastAPI):
                                     oid, task_exc, exc_info=True,
                                 )
 
-                        asyncio.create_task(
+                        task = asyncio.create_task(
                             _run_extraction(opt_id),
                             name=f"taxonomy-extract-{opt_id}",
                         )
+                        extraction_tasks.add(task)
+                        task.add_done_callback(extraction_tasks.discard)
                     else:
                         logger.warning(
                             "optimization_created event missing 'id' in data: %s",
@@ -160,6 +166,13 @@ async def lifespan(app: FastAPI):
             await app.state.extraction_task
         except asyncio.CancelledError:
             pass
+
+    # Cancel in-flight extraction tasks
+    if extraction_tasks:
+        logger.info("Cancelling %d in-flight extraction tasks", len(extraction_tasks))
+        for t in extraction_tasks:
+            t.cancel()
+        await asyncio.gather(*extraction_tasks, return_exceptions=True)
 
     # Stop warm path timer
     if hasattr(app.state, "warm_path_task"):

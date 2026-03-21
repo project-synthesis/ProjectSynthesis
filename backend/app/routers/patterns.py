@@ -98,13 +98,9 @@ async def match_pattern(
 ) -> PatternMatchResponse:
     """Hierarchical similarity check for auto-suggestion on paste."""
     try:
-        from app.services.taxonomy import TaxonomyEngine
+        from app.services.taxonomy import get_engine
 
-        # Use singleton engine from app.state; fallback for tests
-        engine = getattr(request.app.state, "taxonomy_engine", None)
-        if not engine:
-            from app.services.embedding_service import EmbeddingService
-            engine = TaxonomyEngine(embedding_service=EmbeddingService())
+        engine = get_engine(app=request.app)
         result = await engine.match_prompt(body.prompt_text, db=db)
 
         if result is None or result.match_level == "none":
