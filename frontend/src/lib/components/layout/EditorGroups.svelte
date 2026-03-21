@@ -7,7 +7,7 @@
   import PassthroughView from '$lib/components/editor/PassthroughView.svelte';
   import DiffView from '$lib/components/shared/DiffView.svelte';
   import RefinementTimeline from '$lib/components/refinement/RefinementTimeline.svelte';
-  import RadialMindmap from '$lib/components/patterns/RadialMindmap.svelte';
+  import SemanticTopology from '$lib/components/taxonomy/SemanticTopology.svelte';
 
   // Initialize refinement when result tab is active and forge is complete
   let lastInitId = $state<string | null>(null);
@@ -125,7 +125,7 @@
             </div>
           {/if}
         {:else if tab.type === 'mindmap'}
-          <RadialMindmap />
+          <SemanticTopology />
         {/if}
       </div>
     {/each}

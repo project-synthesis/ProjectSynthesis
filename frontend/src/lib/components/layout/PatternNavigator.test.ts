@@ -49,19 +49,6 @@ function defaultHandlers(
       match: '/api/patterns/families/',
       response: familyDetail(),
     },
-    {
-      match: '/api/patterns/stats',
-      response: {
-        total_families: items.length,
-        total_patterns: items.length * 2,
-        total_optimizations: items.length * 5,
-        domain_distribution: {},
-      },
-    },
-    {
-      match: '/api/patterns/search',
-      response: [],
-    },
   ]);
 }
 
@@ -209,9 +196,6 @@ describe('PatternNavigator', () => {
           { total: 2, has_more: true, next_offset: 50 }
         )), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.includes('/api/patterns/search')) {
-        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
       return new Response('Not Found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -258,7 +242,7 @@ describe('PatternNavigator', () => {
     expect(screen.getAllByText('frontend').length).toBe(1);
   });
 
-  // ── 4. Search ──────────────────────────────────────────────────────────────
+  // ── 4. Search (local filtering from taxonomy tree) ──────────────────────────
 
   it('shows search input with placeholder', () => {
     defaultHandlers([]);
@@ -266,96 +250,40 @@ describe('PatternNavigator', () => {
     expect(screen.getByPlaceholderText('Search patterns...')).toBeInTheDocument();
   });
 
-  it('shows search results after debounce when typing in search input', async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  it('shows search results immediately when typing (local filter from taxonomy tree)', async () => {
+    const user = userEvent.setup();
 
-    mockFetch([
-      {
-        match: '/api/patterns/families',
-        response: familiesResponse([]),
-      },
-      {
-        match: '/api/patterns/search',
-        response: [
-          { type: 'family', id: 'fam-1', label: 'API patterns', score: 0.9, domain: 'backend' },
-        ],
-      },
-    ]);
+    // Pre-populate taxonomy tree for local search
+    patternsStore.taxonomyTree = [
+      { id: 'node-1', parent_id: null, label: 'API patterns', state: 'confirmed', persistence: null, coherence: 0.9, separation: null, stability: null, member_count: 3, usage_count: 5, color_hex: '#a855f7', umap_x: null, umap_y: null, umap_z: null },
+    ] as any;
 
+    defaultHandlers([]);
     render(PatternNavigator);
 
     const input = screen.getByPlaceholderText('Search patterns...');
     await user.type(input, 'API');
-
-    // Advance past the 300ms debounce
-    vi.advanceTimersByTime(350);
-    await vi.runAllTimersAsync();
 
     await waitFor(() => {
       expect(screen.getByText('API patterns')).toBeInTheDocument();
     });
-
-    vi.useRealTimers();
   });
 
-  it('shows "Searching..." indicator while search request is pending', async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  it('shows no-match message when search query matches no taxonomy nodes', async () => {
+    const user = userEvent.setup();
 
-    // Search never resolves — simulate pending
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/patterns/families')) {
-        return new Response(JSON.stringify(familiesResponse([])), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.includes('/api/patterns/search')) {
-        // Hang forever to test loading indicator
-        return new Promise(() => {}) as Promise<Response>;
-      }
-      return new Response('Not Found', { status: 404 });
-    }));
+    // Empty taxonomy tree
+    patternsStore.taxonomyTree = [];
 
-    render(PatternNavigator);
-
-    const input = screen.getByPlaceholderText('Search patterns...');
-    await user.type(input, 'API');
-
-    // Trigger the timer so the search request fires but doesn't resolve
-    vi.advanceTimersByTime(350);
-
-    await waitFor(() => {
-      expect(screen.getByText('Searching...')).toBeInTheDocument();
-    });
-
-    vi.useRealTimers();
-  });
-
-  it('shows no-match message when search returns empty results', async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-
-    mockFetch([
-      { match: '/api/patterns/families', response: familiesResponse([]) },
-      { match: '/api/patterns/search', response: [] },
-    ]);
-
+    defaultHandlers([]);
     render(PatternNavigator);
 
     const input = screen.getByPlaceholderText('Search patterns...');
     await user.type(input, 'xyz');
 
-    vi.advanceTimersByTime(350);
-    await vi.runAllTimersAsync();
-
     await waitFor(() => {
       expect(screen.getByText(/No matches for/i)).toBeInTheDocument();
     });
-
-    vi.useRealTimers();
   });
 
   it('shows a clear button when search query is non-empty', async () => {
@@ -370,24 +298,15 @@ describe('PatternNavigator', () => {
   });
 
   it('clicking the clear button resets search and hides search results', async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const user = userEvent.setup();
 
-    mockFetch([
-      {
-        match: '/api/patterns/families',
-        response: familiesResponse([
-          mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
-        ]),
-      },
-      {
-        match: '/api/patterns/search',
-        response: [
-          { type: 'family', id: 'fam-1', label: 'API patterns', score: 0.9, domain: 'backend' },
-        ],
-      },
+    patternsStore.taxonomyTree = [
+      { id: 'node-1', parent_id: null, label: 'API patterns', state: 'confirmed', persistence: null, coherence: 0.9, separation: null, stability: null, member_count: 3, usage_count: 5, color_hex: '#a855f7', umap_x: null, umap_y: null, umap_z: null },
+    ] as any;
+
+    defaultHandlers([
+      mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
     ]);
-
     render(PatternNavigator);
 
     // Wait for initial load
@@ -398,9 +317,6 @@ describe('PatternNavigator', () => {
     const input = screen.getByPlaceholderText('Search patterns...');
     await user.type(input, 'API');
 
-    vi.advanceTimersByTime(350);
-    await vi.runAllTimersAsync();
-
     // Clear the search
     await user.click(screen.getByRole('button', { name: 'Clear search' }));
 
@@ -408,8 +324,6 @@ describe('PatternNavigator', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'Clear search' })).not.toBeInTheDocument();
     });
-
-    vi.useRealTimers();
   });
 
   // ── 5. Family selection ───────────────────────────────────────────────────
@@ -429,9 +343,6 @@ describe('PatternNavigator', () => {
         return new Response(JSON.stringify(familiesResponse([
           mockPatternFamily({ id: 'fam-42', domain: 'backend', intent_label: 'API patterns' }),
         ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      if (url.includes('/api/patterns/search')) {
-        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('Not Found', { status: 404 });
     }));
@@ -462,9 +373,6 @@ describe('PatternNavigator', () => {
         return new Response(JSON.stringify(familiesResponse([
           mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
         ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      if (url.includes('/api/patterns/search')) {
-        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('Not Found', { status: 404 });
     }));
@@ -499,9 +407,6 @@ describe('PatternNavigator', () => {
           mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
         ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.includes('/api/patterns/search')) {
-        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
       return new Response('Not Found', { status: 404 });
     }));
 
@@ -533,9 +438,6 @@ describe('PatternNavigator', () => {
         return new Response(JSON.stringify(familiesResponse([
           mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
         ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      if (url.includes('/api/patterns/search')) {
-        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('Not Found', { status: 404 });
     }));
@@ -579,7 +481,7 @@ describe('PatternNavigator', () => {
   it('clicking the mindmap button calls editorStore.openMindmap', async () => {
     const user = userEvent.setup();
     const openMindmapSpy = vi.spyOn(editorStore, 'openMindmap');
-    const loadGraphSpy = vi.spyOn(patternsStore, 'loadGraph').mockResolvedValue();
+    const loadTreeSpy = vi.spyOn(patternsStore, 'loadTree').mockResolvedValue();
 
     defaultHandlers([]);
     render(PatternNavigator);
@@ -588,7 +490,7 @@ describe('PatternNavigator', () => {
     await user.click(mindmapBtn);
 
     expect(openMindmapSpy).toHaveBeenCalled();
-    expect(loadGraphSpy).toHaveBeenCalled();
+    expect(loadTreeSpy).toHaveBeenCalled();
   });
 
   // ── 9. Error state ────────────────────────────────────────────────────────
@@ -607,9 +509,13 @@ describe('PatternNavigator', () => {
   // ── 10. Search result clicking selects family ──────────────────────────────
 
   it('clicking a search result calls patternsStore.selectFamily and clears search', async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const user = userEvent.setup();
     const selectSpy = vi.spyOn(patternsStore, 'selectFamily');
+
+    // Pre-populate taxonomy tree for local search
+    patternsStore.taxonomyTree = [
+      { id: 'fam-1', parent_id: null, label: 'API patterns', state: 'confirmed', persistence: null, coherence: 0.9, separation: null, stability: null, member_count: 3, usage_count: 5, color_hex: '#a855f7', umap_x: null, umap_y: null, umap_z: null },
+    ] as any;
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -617,11 +523,6 @@ describe('PatternNavigator', () => {
         return new Response(JSON.stringify(familyDetail({ id: 'fam-1' })), {
           status: 200, headers: { 'Content-Type': 'application/json' },
         });
-      }
-      if (url.includes('/api/patterns/search')) {
-        return new Response(JSON.stringify([
-          { type: 'family', id: 'fam-1', label: 'API patterns', score: 0.9, domain: 'backend' },
-        ]), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.includes('/api/patterns/families')) {
         return new Response(JSON.stringify(familiesResponse([])), {
@@ -636,9 +537,6 @@ describe('PatternNavigator', () => {
     const input = screen.getByPlaceholderText('Search patterns...');
     await user.type(input, 'API');
 
-    vi.advanceTimersByTime(350);
-    await vi.runAllTimersAsync();
-
     await waitFor(() => {
       expect(screen.getByText('API patterns')).toBeInTheDocument();
     });
@@ -651,8 +549,6 @@ describe('PatternNavigator', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'Clear search' })).not.toBeInTheDocument();
     });
-
-    vi.useRealTimers();
   });
 
   // ── 11. Expanded detail — no meta-patterns fallback ───────────────────────
@@ -672,9 +568,6 @@ describe('PatternNavigator', () => {
         return new Response(JSON.stringify(familiesResponse([
           mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
         ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      if (url.includes('/api/patterns/search')) {
-        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('Not Found', { status: 404 });
     }));

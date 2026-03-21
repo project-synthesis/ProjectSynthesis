@@ -5,7 +5,7 @@
   import { editorStore } from '$lib/stores/editor.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { addToast, type ToastAction } from '$lib/stores/toast.svelte';
-  import { scoreColor, domainColor } from '$lib/constants/patterns';
+  import { scoreColor, taxonomyColor } from '$lib/utils/colors';
   import { formatScore } from '$lib/utils/formatting';
   import { forceSamplingTooltip, forcePassthroughTooltip } from '$lib/utils/mcp-tooltips';
   import { getSettings, getProviders, getHistory, getOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
@@ -317,7 +317,7 @@
               <span class="row-prompt">{item.intent_label || (item.raw_prompt ? item.raw_prompt.slice(0, 60) + (item.raw_prompt.length > 60 ? '..' : '') : 'Untitled')}</span>
               <div class="history-meta">
                 {#if item.domain}
-                  <span class="row-domain font-mono" style="color: {domainColor(item.domain)};">{item.domain}</span>
+                  <span class="row-domain font-mono" style="color: {taxonomyColor(item.domain)};">{item.domain}</span>
                 {/if}
                 <span class="row-badge font-mono">{item.strategy_used || 'auto'}</span>
                 <span

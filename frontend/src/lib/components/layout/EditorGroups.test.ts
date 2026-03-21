@@ -10,7 +10,7 @@ vi.mock('$lib/components/editor/ForgeArtifact.svelte', () => ({ default: () => (
 vi.mock('$lib/components/editor/PassthroughView.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
 vi.mock('$lib/components/shared/DiffView.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
 vi.mock('$lib/components/refinement/RefinementTimeline.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
-vi.mock('$lib/components/patterns/RadialMindmap.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
+vi.mock('$lib/components/taxonomy/SemanticTopology.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
 
 // Mock API calls used by sub-components
 vi.mock('$lib/api/client', () => ({

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { listFamilies, getFamilyDetail, searchPatterns, type PatternFamily, type FamilyDetail, type SearchResult } from '$lib/api/patterns';
+  import { listFamilies, getFamilyDetail, type PatternFamily, type FamilyDetail } from '$lib/api/patterns';
   import { patternsStore } from '$lib/stores/patterns.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
-  import { domainColor, scoreColor } from '$lib/constants/patterns';
+  import { scoreColor, taxonomyColor } from '$lib/utils/colors';
   import { formatScore } from '$lib/utils/formatting';
 
   const PAGE_SIZE = 50;
@@ -15,12 +15,23 @@
   let loadingMore = $state(false);
   let totalFamilies = $state(0);
 
-  // Search state
+  // Search state — local filtering from taxonomy tree
   let searchQuery = $state('');
-  let searchResults = $state<SearchResult[]>([]);
-  let searching = $state(false);
   let searchActive = $derived(searchQuery.trim().length > 0);
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  interface LocalSearchResult { type: string; id: string; label: string; score: number; family_id?: string; }
+  let searchResults = $derived.by<LocalSearchResult[]>(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return patternsStore.taxonomyTree
+      .filter(node => node.label.toLowerCase().includes(q))
+      .slice(0, 10)
+      .map(node => ({
+        type: 'family' as const,
+        id: node.id,
+        label: node.label,
+        score: node.coherence ?? 0,
+      }));
+  });
 
   // Expanded family — inline detail
   let expandedId = $state<string | null>(null);
@@ -48,15 +59,14 @@
     }
   });
 
-  // Reload when graph is invalidated (pattern_updated event)
-  let _lastGraphLoaded = $state(true);
+  // Reload when taxonomy tree is refreshed (taxonomy_changed event)
+  let _lastTreeLen = $state(0);
   $effect(() => {
-    const gl = patternsStore.graphLoaded;
-    if (_lastGraphLoaded && !gl) {
-      // Graph was invalidated — refresh family list
+    const tl = patternsStore.taxonomyTree.length;
+    if (tl > 0 && tl !== _lastTreeLen) {
       loadFamilies();
     }
-    _lastGraphLoaded = gl;
+    _lastTreeLen = tl;
   });
 
   async function loadFamilies() {
@@ -89,36 +99,14 @@
   }
 
   function handleSearchInput(e: Event) {
-    const q = (e.target as HTMLInputElement).value;
-    searchQuery = q;
-
-    if (searchTimer) clearTimeout(searchTimer);
-
-    if (!q.trim()) {
-      searchResults = [];
-      searching = false;
-      return;
-    }
-
-    searching = true;
-    searchTimer = setTimeout(async () => {
-      try {
-        searchResults = await searchPatterns(q.trim(), 10);
-      } catch {
-        searchResults = [];
-      }
-      searching = false;
-    }, 300);
+    searchQuery = (e.target as HTMLInputElement).value;
   }
 
   function clearSearch() {
     searchQuery = '';
-    searchResults = [];
-    searching = false;
-    if (searchTimer) clearTimeout(searchTimer);
   }
 
-  function selectSearchResult(result: SearchResult) {
+  function selectSearchResult(result: LocalSearchResult) {
     const familyId = result.type === 'family' ? result.id : result.family_id;
     if (familyId) {
       patternsStore.selectFamily(familyId);
@@ -154,7 +142,7 @@
   }
 
   function openMindmap() {
-    patternsStore.loadGraph();
+    patternsStore.loadTree();
     editorStore.openMindmap();
   }
 </script>
@@ -195,10 +183,8 @@
 
   <div class="panel-body">
     {#if searchActive}
-      <!-- Search results -->
-      {#if searching}
-        <p class="empty-note">Searching...</p>
-      {:else if searchResults.length === 0}
+      <!-- Search results (local filtering from taxonomy tree) -->
+      {#if searchResults.length === 0}
         <p class="empty-note">No matches for "{searchQuery}"</p>
       {:else}
         {#each searchResults as result (result.id)}
@@ -222,7 +208,7 @@
       {#each domains as domain (domain)}
         <div class="domain-group">
           <div class="domain-header">
-            <span class="domain-dot" style="background: {domainColor(domain)};"></span>
+            <span class="domain-dot" style="background: {taxonomyColor(null)};"></span>
             <span class="domain-label">{domain}</span>
             <span class="domain-count">{grouped[domain].length}</span>
           </div>
@@ -313,7 +299,7 @@
   }
 
   .search-input:focus {
-    border-color: rgba(0, 229, 255, 0.3);
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
   }
 
   .search-input::placeholder {
@@ -416,6 +402,7 @@
   .domain-dot {
     width: 6px;
     height: 6px;
+    border-radius: 50%;
     flex-shrink: 0;
   }
 
@@ -462,7 +449,7 @@
 
   .family-row--expanded {
     border-color: var(--color-neon-cyan);
-    background: rgba(0, 229, 255, 0.04);
+    background: color-mix(in srgb, var(--color-neon-cyan) 4%, transparent);
   }
 
   .family-label {

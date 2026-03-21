@@ -2,14 +2,6 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/svelte';
 import { mockFetch, mockHealthResponse, mockOptimizationResult } from '$lib/test-utils';
 
-// Mock the patterns API to avoid errors
-vi.mock('$lib/api/patterns', () => ({
-  getPatternStats: vi.fn().mockResolvedValue({ total_families: 0 }),
-  matchPattern: vi.fn(),
-  getPatternGraph: vi.fn(),
-  getFamilyDetail: vi.fn(),
-}));
-
 import StatusBar from './StatusBar.svelte';
 import { forgeStore } from '$lib/stores/forge.svelte';
 import { patternsStore } from '$lib/stores/patterns.svelte';
@@ -45,20 +37,28 @@ describe('StatusBar', () => {
     expect(screen.getByText('PASSTHROUGH')).toBeInTheDocument();
   });
 
-  it('shows pattern count when patternCount > 0', async () => {
-    const { getPatternStats } = await import('$lib/api/patterns');
-    vi.mocked(getPatternStats).mockResolvedValue({ total_families: 7 } as never);
+  it('shows pattern count when taxonomyStats has confirmed nodes > 0', async () => {
+    // Set taxonomy stats with confirmed nodes
+    patternsStore.taxonomyStats = {
+      q_system: 0.8,
+      q_coherence: 0.7,
+      q_separation: 0.6,
+      q_coverage: 0.5,
+      q_dbcv: 0.4,
+      nodes: { confirmed: 7, candidate: 2, retired: 0, max_depth: 3, leaf_count: 5 },
+      last_warm_path: null,
+      last_cold_path: null,
+      q_history: [],
+    };
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     render(StatusBar);
-    // Wait for async effect
     await vi.waitFor(() => {
       expect(screen.queryByText('7 patterns')).toBeInTheDocument();
     });
   });
 
-  it('does not show pattern count when patternCount is 0', async () => {
-    const { getPatternStats } = await import('$lib/api/patterns');
-    vi.mocked(getPatternStats).mockResolvedValue({ total_families: 0 } as never);
+  it('does not show pattern count when taxonomyStats is null', async () => {
+    patternsStore.taxonomyStats = null;
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     render(StatusBar);
     await vi.waitFor(() => {}, { timeout: 100 });
@@ -149,18 +149,29 @@ describe('StatusBar', () => {
     expect(screen.getByText(/passthrough\.\.\./i)).toBeInTheDocument();
   });
 
-  it('refreshes pattern count when graph is invalidated', async () => {
-    const { getPatternStats } = await import('$lib/api/patterns');
-    vi.mocked(getPatternStats).mockResolvedValue({ total_families: 5 } as never);
+  it('pattern count updates when taxonomy stats change', async () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     render(StatusBar);
 
-    // Simulate graph invalidation by toggling graphLoaded
-    patternsStore.graphLoaded = true;
-    patternsStore.graphLoaded = false;
+    // Initially no pattern count
+    await vi.waitFor(() => {}, { timeout: 100 });
+    expect(screen.queryByText(/patterns/)).not.toBeInTheDocument();
+
+    // Set taxonomy stats
+    patternsStore.taxonomyStats = {
+      q_system: 0.8,
+      q_coherence: 0.7,
+      q_separation: 0.6,
+      q_coverage: 0.5,
+      q_dbcv: 0.4,
+      nodes: { confirmed: 5, candidate: 1, retired: 0, max_depth: 2, leaf_count: 4 },
+      last_warm_path: null,
+      last_cold_path: null,
+      q_history: [],
+    };
 
     await vi.waitFor(() => {
-      expect(getPatternStats).toHaveBeenCalled();
+      expect(screen.queryByText('5 patterns')).toBeInTheDocument();
     });
   });
 });

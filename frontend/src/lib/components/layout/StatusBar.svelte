@@ -1,10 +1,9 @@
 <script lang="ts">
   import { getHealth } from '$lib/api/client';
-  import { getPatternStats } from '$lib/api/patterns';
   import { patternsStore } from '$lib/stores/patterns.svelte';
   import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
-  import { domainColor } from '$lib/constants/patterns';
+  import { taxonomyColor } from '$lib/utils/colors';
   import { getPhaseLabel } from '$lib/utils/dimensions';
   import { formatScore } from '$lib/utils/formatting';
   import Logo from '$lib/components/shared/Logo.svelte';
@@ -12,7 +11,9 @@
 
   let provider = $state<string | null>(null);
   let version = $state<string | null>(null);
-  let patternCount = $state<number | null>(null);
+
+  // Pattern count derived from taxonomy stats (loaded by patternsStore.loadTree)
+  const patternCount = $derived(patternsStore.taxonomyStats?.nodes?.confirmed ?? null);
 
   let loaded = false;
   $effect(() => {
@@ -21,21 +22,6 @@
     getHealth()
       .then((h) => { provider = h.provider; version = h.version; })
       .catch(() => {});
-    getPatternStats()
-      .then((s) => { patternCount = s.total_families; })
-      .catch(() => {});
-  });
-
-  // Refresh pattern count when graph is invalidated (new patterns extracted)
-  let _lastGraphLoaded = $state(true);
-  $effect(() => {
-    const gl = patternsStore.graphLoaded;
-    if (_lastGraphLoaded && !gl) {
-      getPatternStats()
-        .then((s) => { patternCount = s.total_families; })
-        .catch(() => {});
-    }
-    _lastGraphLoaded = gl;
   });
 
   const phaseDisplay = $derived(getPhaseLabel(forgeStore.status)?.toLowerCase() ?? null);
@@ -75,7 +61,7 @@
       {#if breadcrumbLabel}
         <span class="status-breadcrumb">
           {#if breadcrumbDomain}
-            <span class="status-breadcrumb-domain" style="color: {domainColor(breadcrumbDomain)};">{breadcrumbDomain}</span>
+            <span class="status-breadcrumb-domain" style="color: {taxonomyColor(breadcrumbDomain)};">{breadcrumbDomain}</span>
             <span class="status-breadcrumb-sep">&rsaquo;</span>
           {/if}
           <span class="status-breadcrumb-label">{breadcrumbLabel}</span>

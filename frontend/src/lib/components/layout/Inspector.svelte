@@ -3,9 +3,12 @@
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import { patternsStore } from '$lib/stores/patterns.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
-  import { domainColor } from '$lib/constants/patterns';
+  import { taxonomyColor, scoreColor } from '$lib/utils/colors';
+
+  /** Known domains for the domain picker (legacy compat). */
+  const KNOWN_DOMAINS = ['backend', 'frontend', 'database', 'security', 'devops', 'fullstack', 'general'];
   import { getOptimization } from '$lib/api/client';
-  import { renameFamily } from '$lib/api/patterns';
+  import { updateFamily } from '$lib/api/patterns';
   import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
   import ScoreSparkline from '$lib/components/refinement/ScoreSparkline.svelte';
   import { PHASE_LABELS } from '$lib/utils/dimensions';
@@ -60,7 +63,7 @@
     if (!id || !trimmed || renameSaving) return;
     renameSaving = true;
     try {
-      await renameFamily(id, trimmed);
+      await updateFamily(id, { intent_label: trimmed });
       // Refresh the detail to reflect the new name
       patternsStore.selectFamily(id);
       patternsStore.invalidateGraph();
@@ -69,6 +72,29 @@
       // keep rename input open on error
     }
     renameSaving = false;
+  }
+
+  // Domain picker state
+  let domainPickerOpen = $state(false);
+  let domainSaving = $state(false);
+
+  function toggleDomainPicker(): void {
+    domainPickerOpen = !domainPickerOpen;
+  }
+
+  async function selectDomain(newDomain: string): Promise<void> {
+    const id = patternsStore.selectedFamilyId;
+    if (!id || domainSaving) return;
+    domainSaving = true;
+    try {
+      await updateFamily(id, { domain: newDomain });
+      patternsStore.selectFamily(id);
+      patternsStore.invalidateGraph();
+      domainPickerOpen = false;
+    } catch {
+      // keep picker open on error
+    }
+    domainSaving = false;
   }
 
   // Sync feedback state from real-time events (e.g. MCP or cross-tab submissions)
@@ -149,10 +175,28 @@
                 title="Click to rename"
               >{family.intent_label}</button>
             {/if}
-            <span
+            <button
               class="domain-badge"
-              style="background: {domainColor(family.domain)};"
-            >{family.domain}</span>
+              style="background: {taxonomyColor(family.domain)};"
+              onclick={toggleDomainPicker}
+              title="Click to change domain"
+              aria-label="Change domain"
+            >{family.domain}</button>
+            {#if domainPickerOpen}
+              <div class="domain-picker" role="listbox" aria-label="Select domain">
+                {#each KNOWN_DOMAINS as d (d)}
+                  <button
+                    class="domain-option"
+                    class:domain-option--active={d === family.domain}
+                    style="background: {taxonomyColor(null)};"
+                    onclick={() => selectDomain(d)}
+                    disabled={domainSaving}
+                    role="option"
+                    aria-selected={d === family.domain}
+                  >{d}</button>
+                {/each}
+              </div>
+            {/if}
             <button
               class="dismiss-btn"
               onclick={dismissFamily}
@@ -195,7 +239,7 @@
           <!-- Linked optimizations -->
           {#if family.optimizations.length > 0}
             <div class="family-section">
-              <div class="section-heading" style="margin-bottom: 4px;">Linked Optimizations</div>
+              <div class="section-heading" style="margin-bottom: 4px;">Linked optimizations</div>
               <div class="opt-list">
                 {#each family.optimizations.slice(0, 10) as opt (opt.id)}
                   <button
@@ -534,7 +578,7 @@
     font-family: var(--font-display);
     color: var(--color-text-primary);
     background: var(--color-bg-input);
-    border: 1px solid rgba(0, 229, 255, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
     outline: none;
   }
 
@@ -578,11 +622,50 @@
     display: inline-block;
     font-size: 9px;
     font-family: var(--font-mono);
-    color: #06060c;
+    color: var(--color-bg-primary);
     padding: 1px 5px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     flex-shrink: 0;
+    border: none;
+    cursor: pointer;
+    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .domain-badge:hover {
+    opacity: 0.8;
+  }
+
+  .domain-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    width: 100%;
+  }
+
+  .domain-option {
+    font-size: 8px;
+    font-family: var(--font-mono);
+    color: var(--color-bg-primary);
+    padding: 1px 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .domain-option:hover {
+    opacity: 0.8;
+  }
+
+  .domain-option--active {
+    border-color: var(--color-text-primary);
+  }
+
+  .domain-option:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .dismiss-btn {
