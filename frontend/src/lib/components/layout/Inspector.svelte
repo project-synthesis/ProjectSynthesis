@@ -3,7 +3,7 @@
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import { patternsStore } from '$lib/stores/patterns.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
-  import { taxonomyColor, scoreColor } from '$lib/utils/colors';
+  import { taxonomyColor, scoreColor, qHealthColor } from '$lib/utils/colors';
 
   /** Known domains for the domain picker (legacy compat). */
   const KNOWN_DOMAINS = ['backend', 'frontend', 'database', 'security', 'devops', 'fullstack', 'general'];
@@ -260,10 +260,34 @@
       </div>
 
     {:else if forgeStore.status === 'idle'}
-      <!-- Empty state -->
-      <div class="empty-note">
-        Enter a prompt and synthesize
-      </div>
+      {#if patternsStore.taxonomyStats}
+        {@const stats = patternsStore.taxonomyStats}
+        <div class="health-panel">
+          <div class="health-title">TAXONOMY HEALTH</div>
+          <div class="health-metric">
+            <span class="metric-label">Q_system</span>
+            <span class="metric-value" style="color: {qHealthColor(stats.q_system)}">{stats.q_system?.toFixed(3) ?? '—'}</span>
+          </div>
+          <div class="health-metric">
+            <span class="metric-label">Coherence</span>
+            <span class="metric-value">{stats.q_coherence?.toFixed(3) ?? '—'}</span>
+          </div>
+          <div class="health-metric">
+            <span class="metric-label">Separation</span>
+            <span class="metric-value">{stats.q_separation?.toFixed(3) ?? '—'}</span>
+          </div>
+          <div class="health-counts">
+            <span>{stats.nodes?.confirmed ?? 0} confirmed</span>
+            <span class="dot-sep">·</span>
+            <span>{stats.nodes?.candidate ?? 0} candidate</span>
+          </div>
+        </div>
+      {:else}
+        <!-- Empty state -->
+        <div class="empty-note">
+          Enter a prompt and synthesize
+        </div>
+      {/if}
 
     {:else if forgeStore.status === 'analyzing' || forgeStore.status === 'optimizing' || forgeStore.status === 'scoring'}
       <!-- Active phase -->
@@ -784,5 +808,56 @@
 
   .opt-score--null {
     color: var(--color-text-dim);
+  }
+
+  /* Taxonomy health panel */
+  .health-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 0;
+  }
+
+  .health-title {
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    letter-spacing: 0.08em;
+    padding: 0 6px;
+  }
+
+  .health-metric {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 6px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border-subtle);
+  }
+
+  .metric-label {
+    font-size: 10px;
+    font-family: var(--font-sans);
+    color: var(--color-text-dim);
+  }
+
+  .metric-value {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--color-text-secondary);
+  }
+
+  .health-counts {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 6px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+  }
+
+  .dot-sep {
+    color: var(--color-border-subtle);
   }
 </style>

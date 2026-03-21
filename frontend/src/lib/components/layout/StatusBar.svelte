@@ -3,7 +3,7 @@
   import { patternsStore } from '$lib/stores/patterns.svelte';
   import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
-  import { taxonomyColor } from '$lib/utils/colors';
+  import { taxonomyColor, qHealthColor } from '$lib/utils/colors';
   import { getPhaseLabel } from '$lib/utils/dimensions';
   import { formatScore } from '$lib/utils/formatting';
   import Logo from '$lib/components/shared/Logo.svelte';
@@ -78,6 +78,11 @@
   <div class="status-right">
     {#if patternCount !== null && patternCount > 0}
       <span class="status-patterns" title="{patternCount} pattern families">{patternCount} patterns</span>
+    {/if}
+    {#if patternsStore.taxonomyStats?.q_system != null}
+      <span class="statusbar-item" title="Taxonomy health (Q_system)">
+        Q: <span style="color: {qHealthColor(patternsStore.taxonomyStats.q_system)}">{patternsStore.taxonomyStats.q_system.toFixed(2)}</span>
+      </span>
     {/if}
     <span class="status-kbd" aria-label="Open command palette with Ctrl+K">Ctrl+K</span>
   </div>
@@ -182,6 +187,13 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-neon-yellow);
+    white-space: nowrap;
+  }
+
+  .statusbar-item {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-dim);
     white-space: nowrap;
   }
 </style>
