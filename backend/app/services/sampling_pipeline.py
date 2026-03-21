@@ -1120,15 +1120,25 @@ async def _resolve_applied_patterns(
                 + "\n".join(lines)
             )
 
-            # Increment usage_count on affected families
+            # Propagate usage counts up the taxonomy tree (Spec 7.8)
             family_ids = {p.family_id for p in patterns}
-            for fid in family_ids:
-                fam_result = await db.execute(
-                    select(PatternFamily).where(PatternFamily.id == fid)
-                )
-                fam = fam_result.scalar_one_or_none()
-                if fam:
-                    fam.usage_count += 1
+            try:
+                from app.services.embedding_service import EmbeddingService
+                from app.services.taxonomy import TaxonomyEngine
+
+                _engine = TaxonomyEngine(embedding_service=EmbeddingService())
+                for fid in family_ids:
+                    await _engine.increment_usage(fid, db)
+            except Exception as usage_exc:
+                logger.warning("Sampling usage propagation failed: %s", usage_exc)
+                # Fallback: at least increment the family directly
+                for fid in family_ids:
+                    fam_result = await db.execute(
+                        select(PatternFamily).where(PatternFamily.id == fid)
+                    )
+                    fam = fam_result.scalar_one_or_none()
+                    if fam:
+                        fam.usage_count = (fam.usage_count or 0) + 1
 
             await db.commit()
 

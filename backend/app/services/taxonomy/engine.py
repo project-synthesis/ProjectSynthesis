@@ -1916,6 +1916,39 @@ class TaxonomyEngine:
             "warm_path_age": self._warm_path_age,
         }
 
+    async def increment_usage(self, family_id: str, db: AsyncSession) -> None:
+        """Increment usage on the family and propagate up the taxonomy tree.
+
+        Spec Section 7.8 — usage count flows upward so that ancestor
+        nodes reflect aggregate activity from their subtree.
+
+        Args:
+            family_id: ID of the PatternFamily whose patterns were applied.
+            db: Async SQLAlchemy session.
+        """
+        family = await db.get(PatternFamily, family_id)
+        if not family:
+            logger.warning("increment_usage: family %s not found", family_id)
+            return
+
+        family.usage_count = (family.usage_count or 0) + 1
+
+        # Walk up the taxonomy tree
+        node_id = family.taxonomy_node_id
+        while node_id:
+            node = await db.get(TaxonomyNode, node_id)
+            if not node:
+                break
+            node.usage_count = (node.usage_count or 0) + 1
+            node_id = node.parent_id
+
+        await db.flush()
+        logger.debug(
+            "Usage incremented: family=%s (usage=%d)",
+            family_id,
+            family.usage_count,
+        )
+
     @staticmethod
     def _node_to_dict(node: TaxonomyNode) -> dict:
         return {

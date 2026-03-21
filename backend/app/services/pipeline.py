@@ -329,16 +329,6 @@ class PipelineOrchestrator:
                             + "\n".join(lines)
                         )
 
-                        # Increment usage_count on affected families
-                        family_ids = {p.family_id for p in patterns}
-                        for fid in family_ids:
-                            fam_result = await db.execute(
-                                select(PatternFamily).where(PatternFamily.id == fid)
-                            )
-                            fam = fam_result.scalar_one_or_none()
-                            if fam:
-                                fam.usage_count += 1
-
                         logger.info(
                             "Injecting %d applied patterns from %d families into optimizer context. trace_id=%s",
                             len(patterns), len(family_ids), trace_id,
@@ -622,8 +612,9 @@ class PipelineOrchestrator:
                 try:
                     from app.models import OptimizationPattern
 
+                    # Collect unique family_ids from applied patterns
+                    applied_family_ids: set[str] = set()
                     for pid in applied_pattern_ids:
-                        # Resolve which family the meta-pattern belongs to
                         mp_result = await db.execute(
                             select(MetaPattern).where(MetaPattern.id == pid)
                         )
@@ -635,6 +626,16 @@ class PipelineOrchestrator:
                                 meta_pattern_id=mp.id,
                                 relationship="applied",
                             ))
+                            applied_family_ids.add(mp.family_id)
+
+                    # Propagate usage counts up the taxonomy tree (Spec 7.8)
+                    if taxonomy_engine and applied_family_ids:
+                        for fid in applied_family_ids:
+                            try:
+                                await taxonomy_engine.increment_usage(fid, db)
+                            except Exception as usage_exc:
+                                logger.warning("Usage propagation failed for %s: %s", fid, usage_exc)
+
                 except Exception as exc:
                     logger.warning("Failed to track applied patterns: %s", exc)
 
