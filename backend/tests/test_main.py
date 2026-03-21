@@ -29,7 +29,7 @@ async def test_lifespan_startup_and_shutdown():
              patch("app.services.trace_logger.TraceLogger") as mock_trace_logger, \
              patch("app.main.DATA_DIR") as mock_data_dir, \
              patch("app.main.event_bus") as mock_event_bus, \
-             patch("app.services.pattern_extractor.PatternExtractorService") as mock_pattern_extractor, \
+             patch("app.services.taxonomy.TaxonomyEngine") as mock_pattern_extractor, \
              patch("app.services.routing.RoutingManager", mock_routing_cls):
 
             # Setup mocks
@@ -66,21 +66,28 @@ async def test_lifespan_startup_and_shutdown():
             mock_extractor_instance = AsyncMock()
             mock_pattern_extractor.return_value = mock_extractor_instance
 
-            # Since we want to test the inner listener, let's capture the tasks
+            # Since we want to test the inner listener, let's capture the tasks.
+            # DummyTask only runs the extraction listener (named "taxonomy-extract-*")
+            # and immediately cancels all other long-running tasks (warm_path_timer, etc.)
             class DummyTask:
                 def __init__(self, coro=None, name=None, *args, **kwargs):
                     self.coro = coro
-                    self.name = name
+                    self.name = name or ""
                     self.cancelled = False
                 def cancel(self):
                     self.cancelled = True
+                    if self.coro is not None:
+                        self.coro.close()
                 def __await__(self):
                     async def _inner():
-                        if self.coro:
+                        if self.coro and self.name.startswith("taxonomy-extract-"):
                             try:
                                 await self.coro
                             except Exception:
                                 pass
+                        elif self.coro:
+                            # Close long-running background coroutines without running them
+                            self.coro.close()
                     return _inner().__await__()
 
             with patch("app.main.asyncio.create_task", side_effect=DummyTask):
