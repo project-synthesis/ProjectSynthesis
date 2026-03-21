@@ -86,7 +86,8 @@ async def test_process_optimization_creates_family(db, mock_embedding, mock_prov
     result = await db.execute(select(PatternFamily))
     families = result.scalars().all()
     assert len(families) == 1
-    assert families[0].domain == "backend"
+    # domain_raw takes precedence over hardcoded domain field
+    assert families[0].domain == "test automation"
 
 
 @pytest.mark.asyncio

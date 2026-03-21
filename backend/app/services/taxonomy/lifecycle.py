@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import PatternFamily, TaxonomyNode
 from app.providers.base import LLMProvider
-from app.services.taxonomy.clustering import compute_pairwise_coherence
+from app.services.taxonomy.clustering import compute_pairwise_coherence, l2_normalize_1d
 from app.services.taxonomy.coloring import generate_color
 from app.services.taxonomy.labeling import generate_label
 
@@ -46,19 +46,11 @@ _PRIORITY: dict[str, int] = {
 # ---------------------------------------------------------------------------
 
 
-def _l2_normalize(vec: np.ndarray) -> np.ndarray:
-    """Return the L2-normalised version of *vec* (1-D float32)."""
-    norm = np.linalg.norm(vec)
-    if norm < 1e-9:
-        return vec.astype(np.float32)
-    return (vec / norm).astype(np.float32)
-
-
 def _compute_centroid(embeddings: list[np.ndarray]) -> np.ndarray:
     """Mean of embeddings, L2-normalised. Returns float32 1-D array."""
     mat = np.stack(embeddings, axis=0).astype(np.float32)
     mean_vec = mat.mean(axis=0)
-    return _l2_normalize(mean_vec)
+    return l2_normalize_1d(mean_vec)
 
 
 # ---------------------------------------------------------------------------
@@ -187,11 +179,11 @@ async def attempt_merge(
         emb_a = np.frombuffer(node_a.centroid_embedding, dtype=np.float32).copy()
         emb_b = np.frombuffer(node_b.centroid_embedding, dtype=np.float32).copy()
         if total > 0:
-            merged_centroid = _l2_normalize(
+            merged_centroid = l2_normalize_1d(
                 (emb_a * count_a + emb_b * count_b) / total
             )
         else:
-            merged_centroid = _l2_normalize((emb_a + emb_b) / 2.0)
+            merged_centroid = l2_normalize_1d((emb_a + emb_b) / 2.0)
 
         # Weighted coherence average.
         coh_a = node_a.coherence or 0.0

@@ -166,6 +166,36 @@ class TestPipelineOrchestrator:
             pass
         assert mock_provider.complete_parsed.call_count == 3
 
+    async def test_low_confidence_overrides_domain_to_general(self, orchestrator, mock_provider, db_session):
+        """Domain confidence gate: confidence < 0.6 forces domain='general'."""
+        mock_provider.complete_parsed.side_effect = [
+            _make_analysis(confidence=0.5, domain="backend"),
+            _make_optimization(),
+            _make_scores(),
+        ]
+        events = []
+        async for event in orchestrator.run(
+            raw_prompt="test prompt", provider=mock_provider, db=db_session,
+        ):
+            events.append(event)
+        complete = next(e for e in events if e.event == "optimization_complete")
+        assert complete.data["domain"] == "general"
+
+    async def test_high_confidence_preserves_domain(self, orchestrator, mock_provider, db_session):
+        """Domain preserved when confidence >= 0.6."""
+        mock_provider.complete_parsed.side_effect = [
+            _make_analysis(confidence=0.8, domain="backend"),
+            _make_optimization(),
+            _make_scores(),
+        ]
+        events = []
+        async for event in orchestrator.run(
+            raw_prompt="test prompt", provider=mock_provider, db=db_session,
+        ):
+            events.append(event)
+        complete = next(e for e in events if e.event == "optimization_complete")
+        assert complete.data["domain"] == "backend"
+
     async def test_scoring_disabled_skips_phase_3(self, orchestrator, mock_provider, db_session, tmp_path):
         """When enable_scoring=False, pipeline skips Phase 3 and returns null scores."""
         import json

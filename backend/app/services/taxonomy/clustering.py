@@ -41,7 +41,7 @@ class ClusterResult:
 
 
 def _l2_normalize(vecs: np.ndarray) -> np.ndarray:
-    """Row-wise L2 normalisation.
+    """Row-wise L2 normalisation for 2-D arrays.
 
     Args:
         vecs: 2-D float32 array of shape (N, D).
@@ -53,6 +53,23 @@ def _l2_normalize(vecs: np.ndarray) -> np.ndarray:
     # Avoid division by zero
     norms = np.where(norms == 0, 1.0, norms)
     return (vecs / norms).astype(np.float32)
+
+
+def l2_normalize_1d(vec: np.ndarray) -> np.ndarray:
+    """L2-normalise a single 1-D vector.
+
+    Public helper shared by lifecycle.py and engine.py to avoid duplication.
+
+    Args:
+        vec: 1-D float32 array.
+
+    Returns:
+        Unit-norm version of *vec* as float32.
+    """
+    norm = np.linalg.norm(vec)
+    if norm < 1e-9:
+        return vec.astype(np.float32)
+    return (vec / norm).astype(np.float32)
 
 
 def _extract_persistences(hdb: HDBSCAN, n_clusters: int) -> list[float]:
@@ -257,11 +274,11 @@ def compute_separation(centroids: list[np.ndarray]) -> float:
         centroids: List of 1-D float32 centroid arrays.
 
     Returns:
-        Minimum pairwise cosine distance, or ``0.0`` for fewer than two
-        centroids.
+        Minimum pairwise cosine distance, or ``1.0`` for fewer than two
+        centroids (perfect separation — no siblings to conflict with).
     """
     if len(centroids) < 2:
-        return 0.0
+        return 1.0
 
     mat = np.stack(centroids, axis=0).astype(np.float32)
     mat = _l2_normalize(mat)

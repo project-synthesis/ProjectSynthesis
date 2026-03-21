@@ -196,7 +196,7 @@ input:focus, textarea:focus, select:focus {
   display: inline-block;
   font-size: 9px;
   font-family: var(--font-mono);
-  color: #06060c;
+  color: var(--color-bg-primary);
   background: var(--color-text-primary);
   padding: 1px 5px;
   text-transform: uppercase;
