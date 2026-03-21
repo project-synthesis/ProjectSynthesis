@@ -104,7 +104,7 @@ class PatternStore {
   }
 
   /**
-   * Refresh graph data (called on pattern_updated events).
+   * Refresh graph data (called via invalidateTaxonomy on taxonomy_changed events).
    */
   invalidateGraph(): void {
     this.graphLoaded = false;
