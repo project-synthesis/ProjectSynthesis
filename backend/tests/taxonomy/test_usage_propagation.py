@@ -43,7 +43,7 @@ async def test_increment_usage_propagates_to_parent(db, mock_embedding, mock_pro
         intent_label="REST API patterns",
         domain="REST API design",
         task_type="coding",
-        taxonomy_node_id=child.id,
+        parent_id=child.id,
         centroid_embedding=rng.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
         member_count=3,
         usage_count=0,
@@ -65,7 +65,7 @@ async def test_increment_usage_propagates_to_parent(db, mock_embedding, mock_pro
 
 @pytest.mark.asyncio
 async def test_increment_usage_no_node_is_noop(db, mock_embedding, mock_provider):
-    """Family with no taxonomy_node_id should still increment family only."""
+    """Family with no parent_id should still increment family only."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
     rng = np.random.RandomState(42)
 
@@ -73,7 +73,7 @@ async def test_increment_usage_no_node_is_noop(db, mock_embedding, mock_provider
         intent_label="Orphan family",
         domain="general",
         task_type="general",
-        taxonomy_node_id=None,
+        parent_id=None,
         centroid_embedding=rng.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
         member_count=1,
         usage_count=0,

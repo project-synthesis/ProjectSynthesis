@@ -13,7 +13,7 @@ async def test_map_domain_cold_start(db, mock_embedding, mock_provider):
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
     result = await engine.map_domain("REST API design", db=db)
     assert isinstance(result, TaxonomyMapping)
-    assert result.taxonomy_node_id is None  # unmapped
+    assert result.cluster_id is None  # unmapped
 
 
 @pytest.mark.asyncio
@@ -36,7 +36,7 @@ async def test_map_domain_finds_match(db, mock_embedding, mock_provider):
 
     result = await engine.map_domain("REST API design", db=db)
     # Same text should map to same node (high cosine)
-    assert result.taxonomy_node_id == node.id
+    assert result.cluster_id == node.id
 
 
 @pytest.mark.asyncio
@@ -80,13 +80,13 @@ async def test_map_domain_bayesian_blend(db, mock_embedding, mock_provider):
         intent_label="API patterns",
         domain="backend",
         centroid_embedding=api_vec.tobytes(),
-        taxonomy_node_id=node_api.id,
+        parent_id=node_api.id,
     )
     db.add(family)
     await db.flush()
 
     mp = MetaPattern(
-        family_id=family.id,
+        cluster_id=family.id,
         pattern_text="use RESTful conventions",
         embedding=api_vec.tobytes(),
     )
@@ -101,13 +101,13 @@ async def test_map_domain_bayesian_blend(db, mock_embedding, mock_provider):
     result_no_blend = await engine.map_domain(
         "ambiguous task", db=db, applied_pattern_ids=None,
     )
-    assert result_no_blend.taxonomy_node_id is None  # below floor
+    assert result_no_blend.cluster_id is None  # below floor
 
     # With blend: 70% query + 30% api centroid → cosine to api ≈ 0.47 > 0.35
     result_blended = await engine.map_domain(
         "ambiguous task", db=db, applied_pattern_ids=[mp.id],
     )
-    assert result_blended.taxonomy_node_id == node_api.id  # blend pushed above floor
+    assert result_blended.cluster_id == node_api.id  # blend pushed above floor
 
     # Restore original mock
     mock_embedding.aembed_single = AsyncMock(side_effect=original_side_effect)
@@ -143,7 +143,7 @@ async def test_map_domain_below_floor_returns_unmapped(db, mock_embedding, mock_
 
     result = await engine.map_domain("quantum physics simulation", db=db)
     # Cosine of query vs orthogonal centroid ≈ 0 < DOMAIN_ALIGNMENT_FLOOR
-    assert result.taxonomy_node_id is None
+    assert result.cluster_id is None
 
 
 @pytest.mark.asyncio
@@ -175,7 +175,7 @@ async def test_map_domain_only_considers_confirmed_nodes(db, mock_embedding, moc
 
     result = await engine.map_domain("machine learning pipeline", db=db)
     # No confirmed nodes → unmapped
-    assert result.taxonomy_node_id is None
+    assert result.cluster_id is None
 
 
 @pytest.mark.asyncio
@@ -214,7 +214,7 @@ async def test_map_domain_returns_breadcrumb(db, mock_embedding, mock_provider):
     result = await engine.map_domain("frontend UI development", db=db)
 
     # Should match child node specifically (identical embedding)
-    assert result.taxonomy_node_id == child.id
+    assert result.cluster_id == child.id
     # Breadcrumb should be [parent, child] — length 2
     assert result.taxonomy_breadcrumb == ["Software Engineering", "Frontend Development"]
 
@@ -237,7 +237,7 @@ async def test_map_domain_no_applied_patterns_no_blend(db, mock_embedding, mock_
     await db.commit()
 
     result = await engine.map_domain("database indexing", db=db, applied_pattern_ids=None)
-    assert result.taxonomy_node_id == node.id
+    assert result.cluster_id == node.id
     assert result.domain_raw == "database indexing"
 
 
@@ -260,4 +260,4 @@ async def test_map_domain_empty_applied_pattern_ids(db, mock_embedding, mock_pro
 
     result_none = await engine.map_domain("CI/CD automation", db=db, applied_pattern_ids=None)
     result_empty = await engine.map_domain("CI/CD automation", db=db, applied_pattern_ids=[])
-    assert result_none.taxonomy_node_id == result_empty.taxonomy_node_id
+    assert result_none.cluster_id == result_empty.cluster_id

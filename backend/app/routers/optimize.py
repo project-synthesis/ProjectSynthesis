@@ -53,7 +53,7 @@ class OptimizationDetail(BaseModel):
     created_at: str | None = Field(default=None, description="ISO 8601 creation timestamp.")
     intent_label: str | None = Field(default=None, description="Short intent classification label (3-6 words).")
     domain: str | None = Field(default=None, description="Domain category (backend, frontend, database, etc.).")
-    family_id: str | None = Field(default=None, description="Pattern family ID this optimization belongs to.")
+    cluster_id: str | None = Field(default=None, description="Pattern family ID this optimization belongs to.")
 
 
 class PassthroughPrepareResponse(BaseModel):
@@ -187,14 +187,14 @@ async def get_optimization(
             detail="Optimization with trace_id '%s' not found." % trace_id,
         )
 
-    family_id = await _get_family_id(db, opt.id)
-    return _serialize_optimization(opt, family_id=family_id)
+    cluster_id = await _get_cluster_id(db, opt.id)
+    return _serialize_optimization(opt, cluster_id=cluster_id)
 
 
-async def _get_family_id(db: AsyncSession, optimization_id: str) -> str | None:
-    """Look up the 'source' family for an optimization (at most one)."""
+async def _get_cluster_id(db: AsyncSession, optimization_id: str) -> str | None:
+    """Look up the 'source' cluster for an optimization (at most one)."""
     result = await db.execute(
-        select(OptimizationPattern.family_id)
+        select(OptimizationPattern.cluster_id)
         .where(
             OptimizationPattern.optimization_id == optimization_id,
             OptimizationPattern.relationship == "source",
@@ -205,7 +205,7 @@ async def _get_family_id(db: AsyncSession, optimization_id: str) -> str | None:
     return row
 
 
-def _serialize_optimization(opt: Optimization, *, family_id: str | None = None) -> OptimizationDetail:
+def _serialize_optimization(opt: Optimization, *, cluster_id: str | None = None) -> OptimizationDetail:
     """Serialize an Optimization record to the standard API shape."""
     return OptimizationDetail(
         id=opt.id,
@@ -234,7 +234,7 @@ def _serialize_optimization(opt: Optimization, *, family_id: str | None = None) 
         created_at=opt.created_at.isoformat() if opt.created_at else None,
         intent_label=opt.intent_label,
         domain=opt.domain,
-        family_id=family_id,
+        cluster_id=cluster_id,
     )
 
 
@@ -376,4 +376,4 @@ async def passthrough_save(
     )
 
     # Passthrough optimizations have no family yet (extraction is async)
-    return _serialize_optimization(opt, family_id=None)
+    return _serialize_optimization(opt, cluster_id=None)

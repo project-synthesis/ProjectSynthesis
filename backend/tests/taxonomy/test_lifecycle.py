@@ -34,7 +34,7 @@ async def test_emerge_creates_candidate_node(db, mock_embedding):
 
     result = await attempt_emerge(
         db=db,
-        member_family_ids=[f.id for f in families],
+        member_cluster_ids=[f.id for f in families],
         embeddings=cluster,
         warm_path_age=5,
         provider=None,
@@ -120,7 +120,6 @@ async def test_retire_redistributes_members(db, mock_embedding):
         centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
         member_count=1,
         state="confirmed",
-        observations=30,
         color_hex="#7a7a9e",
     )
     db.add_all([sibling, target])
@@ -193,10 +192,10 @@ async def test_retire_root_node_rejected(db, mock_embedding):
 
 @pytest.mark.asyncio
 async def test_emerge_empty_inputs_returns_none(db, mock_embedding):
-    """Emerge with empty member_family_ids should return None."""
+    """Emerge with empty member_cluster_ids should return None."""
     result = await attempt_emerge(
         db=db,
-        member_family_ids=[],
+        member_cluster_ids=[],
         embeddings=[],
         warm_path_age=5,
         provider=None,
@@ -230,7 +229,7 @@ async def test_split_creates_child_nodes(db, mock_embedding):
         f = PatternFamily(
             intent_label=f"api-{i}", domain="backend",
             centroid_embedding=emb.astype(np.float32).tobytes(),
-            taxonomy_node_id=parent.id,
+            parent_id=parent.id,
         )
         db.add(f)
         families_a.append(f)
@@ -238,7 +237,7 @@ async def test_split_creates_child_nodes(db, mock_embedding):
         f = PatternFamily(
             intent_label=f"sql-{i}", domain="database",
             centroid_embedding=emb.astype(np.float32).tobytes(),
-            taxonomy_node_id=parent.id,
+            parent_id=parent.id,
         )
         db.add(f)
         families_b.append(f)

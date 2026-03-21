@@ -37,13 +37,13 @@ async def test_match_prompt_family_level(db, mock_embedding, mock_provider):
         intent_label="REST API patterns",
         domain="backend",
         centroid_embedding=emb.astype(np.float32).tobytes(),
-        taxonomy_node_id=node.id,
+        parent_id=node.id,
         member_count=5,
     )
     db.add(family)
     await db.flush()
 
-    mp = MetaPattern(family_id=family.id, pattern_text="Use RESTful naming conventions")
+    mp = MetaPattern(cluster_id=family.id, pattern_text="Use RESTful naming conventions")
     db.add(mp)
     await db.commit()
 
@@ -75,7 +75,7 @@ async def test_match_prompt_candidate_strict_threshold(db, mock_embedding, mock_
         intent_label="Test patterns",
         domain="general",
         centroid_embedding=emb.astype(np.float32).tobytes(),
-        taxonomy_node_id=node.id,
+        parent_id=node.id,
     )
     db.add(family)
     await db.commit()
@@ -121,7 +121,7 @@ async def test_match_prompt_cluster_level_fallback(db, mock_embedding, mock_prov
         intent_label="GraphQL subs",
         domain="backend",
         centroid_embedding=child_emb.astype(np.float32).tobytes(),
-        taxonomy_node_id=child.id,
+        parent_id=child.id,
     )
     db.add(family)
     await db.commit()

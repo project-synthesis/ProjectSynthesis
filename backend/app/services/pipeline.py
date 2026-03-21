@@ -243,7 +243,7 @@ class PipelineOrchestrator:
             # Phase 1.5: Domain Mapping (Spec Section 4.2)
             # ---------------------------------------------------------------
             domain_raw = analysis.domain or "general"  # original analyzer output (pre-gate)
-            taxonomy_node_id = None
+            cluster_id = None
             taxonomy_label = None
             taxonomy_breadcrumb: list[str] = []
 
@@ -256,11 +256,11 @@ class PipelineOrchestrator:
                         db=db,
                         applied_pattern_ids=applied_pattern_ids,
                     )
-                    taxonomy_node_id = mapping.taxonomy_node_id
+                    cluster_id = mapping.cluster_id
                     taxonomy_label = mapping.taxonomy_label
                     taxonomy_breadcrumb = mapping.taxonomy_breadcrumb
 
-                    if taxonomy_node_id:
+                    if cluster_id:
                         logger.info(
                             "Domain mapped: '%s' -> node '%s' (%s) trace_id=%s",
                             domain_raw, taxonomy_label,
@@ -584,8 +584,8 @@ class PipelineOrchestrator:
                 task_type=analysis.task_type,
                 intent_label=analysis.intent_label or "general",
                 domain=effective_domain,
-                domain_raw=domain_raw,              # NEW
-                taxonomy_node_id=taxonomy_node_id,  # NEW
+                domain_raw=domain_raw,
+                cluster_id=cluster_id,
                 strategy_used=effective_strategy,
                 changes_summary=optimization.changes_summary,
                 score_clarity=optimized_scores.clarity if optimized_scores else None,
@@ -608,12 +608,12 @@ class PipelineOrchestrator:
             db.add(db_opt)
 
             # Track applied patterns in join table (relationship: "applied")
-            applied_family_ids: set[str] = set()
+            applied_cluster_ids: set[str] = set()
             if applied_pattern_ids:
                 try:
                     from app.models import OptimizationPattern
 
-                    # Collect unique family_ids from applied patterns
+                    # Collect unique cluster_ids from applied patterns
                     for pid in applied_pattern_ids:
                         mp_result = await db.execute(
                             select(MetaPattern).where(MetaPattern.id == pid)
@@ -622,11 +622,11 @@ class PipelineOrchestrator:
                         if mp:
                             db.add(OptimizationPattern(
                                 optimization_id=opt_id,
-                                family_id=mp.family_id,
+                                cluster_id=mp.cluster_id,
                                 meta_pattern_id=mp.id,
                                 relationship="applied",
                             ))
-                            applied_family_ids.add(mp.family_id)
+                            applied_cluster_ids.add(mp.cluster_id)
 
                 except Exception as exc:
                     logger.warning("Failed to track applied patterns: %s", exc)
@@ -635,12 +635,12 @@ class PipelineOrchestrator:
 
             # Propagate usage counts AFTER successful commit (Spec 7.8)
             # Use a fresh session — the original db session may be expired post-commit
-            if applied_family_ids and taxonomy_engine:
+            if applied_cluster_ids and taxonomy_engine:
                 try:
                     from app.database import async_session_factory
 
                     async with async_session_factory() as usage_db:
-                        for fid in applied_family_ids:
+                        for fid in applied_cluster_ids:
                             try:
                                 await taxonomy_engine.increment_usage(fid, usage_db)
                             except Exception as usage_exc:
@@ -658,7 +658,7 @@ class PipelineOrchestrator:
                     "task_type": analysis.task_type,
                     "intent_label": analysis.intent_label or "general",
                     "domain": effective_domain,
-                    "domain_raw": domain_raw,  # NEW
+                    "domain_raw": domain_raw,
                     "strategy_used": effective_strategy,
                     "overall_score": optimized_scores.overall if optimized_scores else None,
                     "provider": provider.name,

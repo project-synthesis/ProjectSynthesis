@@ -67,9 +67,9 @@ PROMPT_TRUNCATION_LIMIT = 2000  # max chars for prompts sent to LLM extraction
 
 @dataclass
 class TaxonomyMapping:
-    """Result of map_domain — may be fully unmapped (taxonomy_node_id is None)."""
+    """Result of map_domain — may be fully unmapped (cluster_id is None)."""
 
-    taxonomy_node_id: str | None
+    cluster_id: str | None
     taxonomy_label: str | None
     taxonomy_breadcrumb: list[str]
     domain_raw: str
@@ -236,7 +236,7 @@ class TaxonomyEngine:
             # 5. Write join record
             join = OptimizationPattern(
                 optimization_id=opt.id,
-                family_id=family.id,
+                cluster_id=family.id,
                 relationship="source",
             )
             db.add(join)
@@ -254,7 +254,7 @@ class TaxonomyEngine:
                 from app.services.event_bus import event_bus
                 event_bus.publish("taxonomy_changed", {
                     "optimization_id": optimization_id,
-                    "family_id": family.id,
+                    "cluster_id": family.id,
                     "family_label": family.intent_label,
                     "meta_patterns_added": len(meta_texts),
                 })
@@ -299,7 +299,7 @@ class TaxonomyEngine:
         # ------------------------------------------------------------------
         result = await db.execute(
             select(PatternFamily).where(
-                PatternFamily.taxonomy_node_id.isnot(None)
+                PatternFamily.parent_id.isnot(None)
             )
         )
         families = list(result.scalars().all())
@@ -317,8 +317,8 @@ class TaxonomyEngine:
                         continue
                     centroids.append(c)
                     valid_families.append(f)
-                    if f.taxonomy_node_id:
-                        node_ids.add(f.taxonomy_node_id)
+                    if f.parent_id:
+                        node_ids.add(f.parent_id)
                 except (ValueError, TypeError):
                     continue
 
@@ -346,7 +346,7 @@ class TaxonomyEngine:
 
                 for idx, score in matches:
                     family = valid_families[idx]
-                    node = node_map.get(family.taxonomy_node_id) if family.taxonomy_node_id else None
+                    node = node_map.get(family.parent_id) if family.parent_id else None
 
                     # Determine threshold based on node state (Spec 7.4)
                     if node and node.state == "candidate":
@@ -363,7 +363,7 @@ class TaxonomyEngine:
                         # Load meta-patterns for this family
                         mp_result = await db.execute(
                             select(MetaPattern).where(
-                                MetaPattern.family_id == family.id
+                                MetaPattern.cluster_id == family.id
                             )
                         )
                         meta_patterns = list(mp_result.scalars().all())
@@ -430,7 +430,7 @@ class TaxonomyEngine:
                         # ranked by cosine similarity to query (Spec 7.7)
                         child_fam_result = await db.execute(
                             select(PatternFamily)
-                            .where(PatternFamily.taxonomy_node_id == node.id)
+                            .where(PatternFamily.parent_id == node.id)
                         )
                         candidate_families = list(child_fam_result.scalars().all())
 
@@ -447,7 +447,7 @@ class TaxonomyEngine:
                             child_child_fam_result = await db.execute(
                                 select(PatternFamily)
                                 .where(
-                                    PatternFamily.taxonomy_node_id.in_(child_node_ids)
+                                    PatternFamily.parent_id.in_(child_node_ids)
                                 )
                             )
                             candidate_families.extend(
@@ -478,11 +478,11 @@ class TaxonomyEngine:
                         top_families = [f for f, _ in scored_families[:3]]
 
                         # Gather meta-patterns from these families
-                        family_ids = [f.id for f in top_families]
-                        if family_ids:
+                        cluster_ids = [f.id for f in top_families]
+                        if cluster_ids:
                             mp_result = await db.execute(
                                 select(MetaPattern).where(
-                                    MetaPattern.family_id.in_(family_ids)
+                                    MetaPattern.cluster_id.in_(cluster_ids)
                                 )
                             )
                             all_meta_patterns = list(mp_result.scalars().all())
@@ -644,7 +644,7 @@ class TaxonomyEngine:
                 # Gather families assigned to this node
                 fam_q = await db.execute(
                     select(PatternFamily).where(
-                        PatternFamily.taxonomy_node_id == node.id
+                        PatternFamily.parent_id == node.id
                     )
                 )
                 node_families = list(fam_q.scalars().all())
@@ -706,9 +706,9 @@ class TaxonomyEngine:
                                         )
 
         # --- Priority 2: Emerge ---
-        # Load unassigned families (no taxonomy_node_id) for emerge candidates
+        # Load unassigned families (no cluster_id) for emerge candidates
         fam_result = await db.execute(
-            select(PatternFamily).where(PatternFamily.taxonomy_node_id.is_(None))
+            select(PatternFamily).where(PatternFamily.parent_id.is_(None))
         )
         unassigned_families = list(fam_result.scalars().all())
 
@@ -716,12 +716,12 @@ class TaxonomyEngine:
         if len(unassigned_families) >= 3:
             ops_attempted += 1
             embeddings = []
-            family_ids = []
+            cluster_ids = []
             for f in unassigned_families:
                 try:
                     emb = np.frombuffer(f.centroid_embedding, dtype=np.float32)
                     embeddings.append(emb)
-                    family_ids.append(f.id)
+                    cluster_ids.append(f.id)
                 except (ValueError, TypeError):
                     continue
 
@@ -733,7 +733,7 @@ class TaxonomyEngine:
                     for cid in range(cluster_result.n_clusters):
                         mask = cluster_result.labels == cid
                         cluster_fam_ids = [
-                            family_ids[i] for i in range(len(family_ids)) if mask[i]
+                            cluster_ids[i] for i in range(len(cluster_ids)) if mask[i]
                         ]
                         cluster_embs = [
                             embeddings[i] for i in range(len(embeddings)) if mask[i]
@@ -741,7 +741,7 @@ class TaxonomyEngine:
                         if cluster_fam_ids:
                             node = await attempt_emerge(
                                 db=db,
-                                member_family_ids=cluster_fam_ids,
+                                member_cluster_ids=cluster_fam_ids,
                                 embeddings=cluster_embs,
                                 warm_path_age=self._warm_path_age,
                                 provider=self._provider,
@@ -887,7 +887,7 @@ class TaxonomyEngine:
                         if forced_fam_ids:
                             node = await attempt_emerge(
                                 db=db,
-                                member_family_ids=forced_fam_ids,
+                                member_cluster_ids=forced_fam_ids,
                                 embeddings=forced_embs,
                                 warm_path_age=self._warm_path_age,
                                 provider=self._provider,
@@ -1144,7 +1144,7 @@ class TaxonomyEngine:
             for fid in cluster_fam_ids:
                 fam = family_by_id.get(fid)
                 if fam:
-                    fam.taxonomy_node_id = node.id
+                    fam.parent_id = node.id
 
             node_embeddings.append(centroid)
             all_nodes.append(node)
@@ -1393,7 +1393,7 @@ class TaxonomyEngine:
                 this optimization — used to inject a pattern-based prior.
 
         Returns:
-            TaxonomyMapping.  taxonomy_node_id is None when no confirmed node
+            TaxonomyMapping.  cluster_id is None when no confirmed node
             has cosine similarity ≥ DOMAIN_ALIGNMENT_FLOOR.
         """
         # Embed domain_raw
@@ -1419,7 +1419,7 @@ class TaxonomyEngine:
 
         if not nodes:
             return TaxonomyMapping(
-                taxonomy_node_id=None,
+                cluster_id=None,
                 taxonomy_label=None,
                 taxonomy_breadcrumb=[],
                 domain_raw=domain_raw,
@@ -1450,7 +1450,7 @@ class TaxonomyEngine:
 
         if not centroids:
             return TaxonomyMapping(
-                taxonomy_node_id=None,
+                cluster_id=None,
                 taxonomy_label=None,
                 taxonomy_breadcrumb=[],
                 domain_raw=domain_raw,
@@ -1460,7 +1460,7 @@ class TaxonomyEngine:
         matches = EmbeddingService.cosine_search(query_emb, centroids, top_k=1)
         if not matches:
             return TaxonomyMapping(
-                taxonomy_node_id=None,
+                cluster_id=None,
                 taxonomy_label=None,
                 taxonomy_breadcrumb=[],
                 domain_raw=domain_raw,
@@ -1469,7 +1469,7 @@ class TaxonomyEngine:
         idx, score = matches[0]
         if score < DOMAIN_ALIGNMENT_FLOOR:
             return TaxonomyMapping(
-                taxonomy_node_id=None,
+                cluster_id=None,
                 taxonomy_label=None,
                 taxonomy_breadcrumb=[],
                 domain_raw=domain_raw,
@@ -1479,7 +1479,7 @@ class TaxonomyEngine:
         breadcrumb = await self._build_breadcrumb(db, best_node)
 
         return TaxonomyMapping(
-            taxonomy_node_id=best_node.id,
+            cluster_id=best_node.id,
             taxonomy_label=best_node.label,
             taxonomy_breadcrumb=breadcrumb,
             domain_raw=domain_raw,
@@ -1647,10 +1647,10 @@ class TaxonomyEngine:
         try:
             # Build taxonomy context string (Spec 7.6)
             taxonomy_context = ""
-            if opt.taxonomy_node_id:
+            if opt.cluster_id:
                 try:
                     node_result = await db.execute(
-                        select(TaxonomyNode).where(TaxonomyNode.id == opt.taxonomy_node_id)
+                        select(TaxonomyNode).where(TaxonomyNode.id == opt.cluster_id)
                     )
                     tax_node = node_result.scalar_one_or_none()
                     if tax_node:
@@ -1701,7 +1701,7 @@ class TaxonomyEngine:
             return []
 
     async def _merge_meta_pattern(
-        self, db: AsyncSession, family_id: str, pattern_text: str
+        self, db: AsyncSession, cluster_id: str, pattern_text: str
     ) -> bool:
         """Merge a meta-pattern into a family — enrich existing or create new.
 
@@ -1711,7 +1711,7 @@ class TaxonomyEngine:
 
         Args:
             db: Async SQLAlchemy session.
-            family_id: PatternFamily PK.
+            cluster_id: PatternFamily PK.
             pattern_text: Meta-pattern text extracted by Haiku.
 
         Returns:
@@ -1719,7 +1719,7 @@ class TaxonomyEngine:
         """
         try:
             result = await db.execute(
-                select(MetaPattern).where(MetaPattern.family_id == family_id)
+                select(MetaPattern).where(MetaPattern.cluster_id == cluster_id)
             )
             existing = result.scalars().all()
 
@@ -1757,7 +1757,7 @@ class TaxonomyEngine:
 
             # No match — create new MetaPattern
             mp = MetaPattern(
-                family_id=family_id,
+                cluster_id=cluster_id,
                 pattern_text=pattern_text,
                 embedding=pattern_embedding.astype(np.float32).tobytes(),
                 source_count=1,
@@ -1765,7 +1765,7 @@ class TaxonomyEngine:
             db.add(mp)
             logger.debug(
                 "Created new MetaPattern for family=%s: '%s'",
-                family_id,
+                cluster_id,
                 pattern_text[:50],
             )
             return False
@@ -1773,7 +1773,7 @@ class TaxonomyEngine:
         except Exception as exc:
             logger.warning(
                 "Failed to merge meta-pattern into family=%s: %s",
-                family_id,
+                cluster_id,
                 exc,
             )
             return False
@@ -1783,7 +1783,7 @@ class TaxonomyEngine:
     ) -> np.ndarray | None:
         """Compute mean centroid of TaxonomyNodes linked via MetaPattern → PatternFamily.
 
-        Looks up MetaPatterns by ID, gets their families' taxonomy_node_id,
+        Looks up MetaPatterns by ID, gets their families' cluster_id,
         loads the corresponding TaxonomyNode centroids, and returns the mean.
 
         Args:
@@ -1805,18 +1805,18 @@ class TaxonomyEngine:
             return None
 
         # Collect unique family IDs
-        family_ids = list({mp.family_id for mp in meta_patterns if mp.family_id})
-        if not family_ids:
+        cluster_ids = list({mp.cluster_id for mp in meta_patterns if mp.cluster_id})
+        if not cluster_ids:
             return None
 
-        # Load families to get taxonomy_node_ids
+        # Load families to get cluster_ids
         fam_result = await db.execute(
-            select(PatternFamily).where(PatternFamily.id.in_(family_ids))
+            select(PatternFamily).where(PatternFamily.id.in_(cluster_ids))
         )
         families = fam_result.scalars().all()
 
         node_ids = list(
-            {f.taxonomy_node_id for f in families if f.taxonomy_node_id}
+            {f.parent_id for f in families if f.parent_id}
         )
         if not node_ids:
             return None
@@ -1924,7 +1924,7 @@ class TaxonomyEngine:
         # Add family count
         fam_count = await db.execute(
             select(func.count(PatternFamily.id)).where(
-                PatternFamily.taxonomy_node_id == node_id
+                PatternFamily.parent_id == node_id
             )
         )
         node_dict["family_count"] = fam_count.scalar() or 0
@@ -1968,9 +1968,11 @@ class TaxonomyEngine:
         parent_ids = {r.parent_id for r in tree_rows if r.parent_id}
         leaf_count = sum(1 for nid in active_ids if nid not in parent_ids)
 
-        # Total pattern families via scalar COUNT (avoids materializing rows)
+        # Total pattern families (leaf clusters with a parent) via scalar COUNT
         fam_count_result = await db.execute(
-            select(func.count(PatternFamily.id))
+            select(func.count(PatternFamily.id)).where(
+                PatternFamily.parent_id.isnot(None)
+            )
         )
         total_families = fam_count_result.scalar() or 0
 
@@ -2039,25 +2041,25 @@ class TaxonomyEngine:
             "warm_path_age": self._warm_path_age,
         }
 
-    async def increment_usage(self, family_id: str, db: AsyncSession) -> None:
+    async def increment_usage(self, cluster_id: str, db: AsyncSession) -> None:
         """Increment usage on the family and propagate up the taxonomy tree.
 
         Spec Section 7.8 — usage count flows upward so that ancestor
         nodes reflect aggregate activity from their subtree.
 
         Args:
-            family_id: ID of the PatternFamily whose patterns were applied.
+            cluster_id: ID of the PatternFamily whose patterns were applied.
             db: Async SQLAlchemy session.
         """
-        family = await db.get(PatternFamily, family_id)
+        family = await db.get(PatternFamily, cluster_id)
         if not family:
-            logger.warning("increment_usage: family %s not found", family_id)
+            logger.warning("increment_usage: family %s not found", cluster_id)
             return
 
         family.usage_count = (family.usage_count or 0) + 1
 
         # Walk up the taxonomy tree (with cycle guard)
-        node_id = family.taxonomy_node_id
+        node_id = family.parent_id
         visited: set[str] = set()
         while node_id:
             if node_id in visited:
@@ -2073,7 +2075,7 @@ class TaxonomyEngine:
         await db.flush()
         logger.debug(
             "Usage incremented: family=%s (usage=%d)",
-            family_id,
+            cluster_id,
             family.usage_count,
         )
 

@@ -30,7 +30,7 @@ class HistoryItem(BaseModel):
     optimized_prompt: str | None = Field(default=None, description="Truncated optimized prompt (first 100 chars).")
     intent_label: str | None = Field(default=None, description="Short intent classification label.")
     domain: str | None = Field(default=None, description="Domain category.")
-    family_id: str | None = Field(default=None, description="Pattern family ID.")
+    cluster_id: str | None = Field(default=None, description="Pattern family ID.")
 
 
 class HistoryResponse(BaseModel):
@@ -71,7 +71,7 @@ async def get_history(
             await db.execute(
                 select(
                     OptimizationPattern.optimization_id,
-                    OptimizationPattern.family_id,
+                    OptimizationPattern.cluster_id,
                 )
                 .where(
                     OptimizationPattern.optimization_id.in_(opt_ids),
@@ -79,7 +79,7 @@ async def get_history(
                 )
             )
         ).all()
-        family_map = {row.optimization_id: row.family_id for row in family_rows}
+        family_map = {row.optimization_id: row.cluster_id for row in family_rows}
 
     return HistoryResponse(
         total=result["total"],
@@ -102,7 +102,7 @@ async def get_history(
                 optimized_prompt=opt.optimized_prompt[:100] if opt.optimized_prompt else None,
                 intent_label=opt.intent_label,
                 domain=opt.domain,
-                family_id=family_map.get(opt.id),
+                cluster_id=family_map.get(opt.id),
             )
             for opt in items
         ],

@@ -60,7 +60,7 @@ def _compute_centroid(embeddings: list[np.ndarray]) -> np.ndarray:
 
 async def attempt_emerge(
     db: AsyncSession,
-    member_family_ids: list[str],
+    member_cluster_ids: list[str],
     embeddings: list[np.ndarray],
     warm_path_age: int,
     provider: LLMProvider | None,
@@ -78,7 +78,7 @@ async def attempt_emerge(
 
     Args:
         db: Async DB session.
-        member_family_ids: IDs of PatternFamily rows forming this cluster.
+        member_cluster_ids: IDs of PatternFamily rows forming this cluster.
         embeddings: Corresponding embedding vectors (same order).
         warm_path_age: Number of warm-path cycles completed (for quality gates).
         provider: LLM provider for label generation (None → fallback label).
@@ -87,8 +87,8 @@ async def attempt_emerge(
     Returns:
         The newly created TaxonomyNode, or None on failure.
     """
-    if not member_family_ids or not embeddings:
-        logger.warning("attempt_emerge: empty member_family_ids or embeddings — skipping")
+    if not member_cluster_ids or not embeddings:
+        logger.warning("attempt_emerge: empty member_cluster_ids or embeddings — skipping")
         return None
 
     try:
@@ -97,7 +97,7 @@ async def attempt_emerge(
 
         # Fetch family intent_labels for label generation.
         result = await db.execute(
-            select(PatternFamily).where(PatternFamily.id.in_(member_family_ids))
+            select(PatternFamily).where(PatternFamily.id.in_(member_cluster_ids))
         )
         families = result.scalars().all()
         member_texts = [f.intent_label for f in families if f.intent_label]
@@ -114,7 +114,7 @@ async def attempt_emerge(
         node = TaxonomyNode(
             label=label,
             centroid_embedding=centroid.tobytes(),
-            member_count=len(member_family_ids),
+            member_count=len(member_cluster_ids),
             coherence=coherence,
             state="candidate",
             color_hex=color_hex,
@@ -124,7 +124,7 @@ async def attempt_emerge(
 
         # Link families to this node.
         for family in families:
-            family.taxonomy_node_id = node.id
+            family.parent_id = node.id
 
         await db.flush()
         logger.info(
@@ -209,11 +209,11 @@ async def attempt_merge(
 
         # Reassign loser's families to survivor.
         result = await db.execute(
-            select(PatternFamily).where(PatternFamily.taxonomy_node_id == loser.id)
+            select(PatternFamily).where(PatternFamily.parent_id == loser.id)
         )
         loser_families = result.scalars().all()
         for family in loser_families:
-            family.taxonomy_node_id = survivor.id
+            family.parent_id = survivor.id
 
         await db.flush()
         logger.info(
@@ -241,7 +241,7 @@ async def attempt_split(
 ) -> list[TaxonomyNode]:
     """Split a parent TaxonomyNode into child candidate nodes.
 
-    Each element of *child_clusters* is a ``(family_ids, embeddings)`` tuple
+    Each element of *child_clusters* is a ``(cluster_ids, embeddings)`` tuple
     produced by the clustering module.  A new candidate child node is created
     for each cluster, inheriting the parent's id as ``parent_id``.  The
     parent's ``member_count`` is decremented by the number of members moved.
@@ -249,7 +249,7 @@ async def attempt_split(
     Args:
         db: Async DB session.
         parent_node: The node being split.
-        child_clusters: List of ``(family_ids, embeddings)`` tuples.
+        child_clusters: List of ``(cluster_ids, embeddings)`` tuples.
         warm_path_age: Warm-path age (reserved for quality gates).
         provider: LLM provider for child label generation.
         model: Model ID passed to the labeling module.
@@ -265,15 +265,15 @@ async def attempt_split(
     created_children: list[TaxonomyNode] = []
     total_moved = 0
 
-    for family_ids, embeddings in child_clusters:
-        if not family_ids or not embeddings:
+    for cluster_ids, embeddings in child_clusters:
+        if not cluster_ids or not embeddings:
             continue
         try:
             centroid = _compute_centroid(embeddings)
             coherence = compute_pairwise_coherence(embeddings)
 
             result = await db.execute(
-                select(PatternFamily).where(PatternFamily.id.in_(family_ids))
+                select(PatternFamily).where(PatternFamily.id.in_(cluster_ids))
             )
             families = result.scalars().all()
             member_texts = [f.intent_label for f in families if f.intent_label]
@@ -289,7 +289,7 @@ async def attempt_split(
                 label=label,
                 parent_id=parent_node.id,
                 centroid_embedding=centroid.tobytes(),
-                member_count=len(family_ids),
+                member_count=len(cluster_ids),
                 coherence=coherence,
                 state="candidate",
                 color_hex=color_hex,
@@ -298,11 +298,11 @@ async def attempt_split(
             await db.flush()
 
             for family in families:
-                family.taxonomy_node_id = child.id
+                family.parent_id = child.id
 
             await db.flush()
             created_children.append(child)
-            total_moved += len(family_ids)
+            total_moved += len(cluster_ids)
 
             logger.info(
                 "split: created child '%s' (id=%s, members=%d) under parent '%s'",
@@ -374,11 +374,11 @@ async def attempt_retire(
         # Redistribute families to the first sibling.
         target_sibling = siblings[0]
         families_result = await db.execute(
-            select(PatternFamily).where(PatternFamily.taxonomy_node_id == node.id)
+            select(PatternFamily).where(PatternFamily.parent_id == node.id)
         )
         families = families_result.scalars().all()
         for family in families:
-            family.taxonomy_node_id = target_sibling.id
+            family.parent_id = target_sibling.id
             target_sibling.member_count = (target_sibling.member_count or 0) + 1
 
         # Mark node as retired.

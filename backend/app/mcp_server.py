@@ -858,7 +858,7 @@ async def synthesis_analyze(
 
     # --- Phase 2.5: Domain Mapping (Spec 6.7, hot-path only) ---
     domain_raw = getattr(analysis, "domain", None) or "general"
-    taxonomy_node_id = None
+    cluster_id = None
     if _taxonomy_engine is not None:
         try:
             async with async_session_factory() as db_map:
@@ -867,7 +867,7 @@ async def synthesis_analyze(
                     db=db_map,
                     applied_pattern_ids=None,
                 )
-                taxonomy_node_id = mapping.taxonomy_node_id
+                cluster_id = mapping.cluster_id
         except Exception as exc:
             logger.warning("MCP domain mapping failed (non-fatal): %s", exc)
 
@@ -892,7 +892,7 @@ async def synthesis_analyze(
             score_conciseness=baseline.conciseness,
             overall_score=overall,
             domain_raw=domain_raw,
-            taxonomy_node_id=taxonomy_node_id,
+            cluster_id=cluster_id,
             provider=provider.name,
             model_used=_prefs.resolve_model("analyzer", prefs_snapshot),
             scoring_mode="baseline",
@@ -904,8 +904,8 @@ async def synthesis_analyze(
         await db.commit()
 
     logger.info(
-        "synthesis_analyze persisted: optimization_id=%s trace_id=%s taxonomy_node_id=%s",
-        opt_id, trace_id, taxonomy_node_id,
+        "synthesis_analyze persisted: optimization_id=%s trace_id=%s cluster_id=%s",
+        opt_id, trace_id, cluster_id,
     )
 
     # --- Notify event bus ---

@@ -31,9 +31,9 @@ class PatternMatchResponse(BaseModel):
         default="none",
         description="Match level: 'family', 'cluster', or 'none'.",
     )
-    taxonomy_node_id: str | None = Field(
+    cluster_id: str | None = Field(
         default=None,
-        description="Taxonomy node ID for the matched cluster.",
+        description="Cluster ID for the matched cluster.",
     )
     taxonomy_label: str | None = Field(
         default=None,
@@ -126,7 +126,7 @@ async def match_pattern(
         return PatternMatchResponse(
             match=match_dict,
             match_level=result.match_level,
-            taxonomy_node_id=taxonomy_node.id if taxonomy_node else None,
+            cluster_id=taxonomy_node.id if taxonomy_node else None,
             taxonomy_label=taxonomy_node.label if taxonomy_node else None,
             taxonomy_color=taxonomy_node.color_hex if taxonomy_node else None,
             taxonomy_breadcrumb=result.taxonomy_breadcrumb or [],
@@ -206,7 +206,7 @@ async def get_family(
     # Meta-patterns
     meta_result = await db.execute(
         select(MetaPattern)
-        .where(MetaPattern.family_id == family_id)
+        .where(MetaPattern.cluster_id == family_id)
         .order_by(MetaPattern.source_count.desc())
     )
     meta_patterns = meta_result.scalars().all()
@@ -215,7 +215,7 @@ async def get_family(
     opt_result = await db.execute(
         select(Optimization)
         .join(OptimizationPattern, OptimizationPattern.optimization_id == Optimization.id)
-        .where(OptimizationPattern.family_id == family_id)
+        .where(OptimizationPattern.cluster_id == family_id)
         .order_by(Optimization.created_at.desc())
         .limit(20)
     )

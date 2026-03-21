@@ -515,7 +515,7 @@ async def run_sampling_pipeline(
 
     # Domain mapping (Spec Section 4.2, 4.4)
     domain_raw = getattr(analysis, "domain", None) or "general"  # pre-gate
-    taxonomy_node_id = None
+    cluster_id = None
 
     try:
         from app.services.taxonomy import get_engine
@@ -527,9 +527,9 @@ async def run_sampling_pipeline(
                 db=_db,
                 applied_pattern_ids=applied_pattern_ids,
             )
-        taxonomy_node_id = mapping.taxonomy_node_id
+        cluster_id = mapping.cluster_id
 
-        if taxonomy_node_id:
+        if cluster_id:
             logger.info(
                 "Domain mapped (sampling): '%s' -> '%s'",
                 domain_raw, mapping.taxonomy_label,
@@ -567,9 +567,9 @@ async def run_sampling_pipeline(
 
     # 4b: Resolve applied meta-patterns (read-only — usage incremented post-commit)
     applied_patterns_text: str | None = None
-    applied_family_ids: set[str] = set()
+    applied_cluster_ids: set[str] = set()
     if applied_pattern_ids:
-        applied_patterns_text, applied_family_ids = await _resolve_applied_pattern_text(
+        applied_patterns_text, applied_cluster_ids = await _resolve_applied_pattern_text(
             applied_pattern_ids,
         )
     if applied_patterns_text is not None:
@@ -764,7 +764,7 @@ async def run_sampling_pipeline(
             intent_label=getattr(analysis, "intent_label", None) or "general",
             domain=effective_domain,
             domain_raw=domain_raw,
-            taxonomy_node_id=taxonomy_node_id,
+            cluster_id=cluster_id,
             strategy_used=effective_strategy,
             changes_summary=optimization.changes_summary,
             score_clarity=optimized_scores.clarity if optimized_scores else None,
@@ -793,8 +793,8 @@ async def run_sampling_pipeline(
         await db.commit()
 
     # Increment usage counts AFTER successful commit (Spec 7.8)
-    if applied_family_ids:
-        await _increment_pattern_usage(applied_family_ids)
+    if applied_cluster_ids:
+        await _increment_pattern_usage(applied_cluster_ids)
 
     # Notify backend event bus (MCP runs in a separate process)
     await notify_event_bus("optimization_created", {
@@ -892,7 +892,7 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
 
     # Domain mapping (Spec Section 4.2, 4.4)
     domain_raw = getattr(analysis, "domain", None) or "general"  # pre-gate
-    taxonomy_node_id: str | None = None
+    cluster_id: str | None = None
 
     try:
         from app.services.taxonomy import get_engine
@@ -904,9 +904,9 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
                 db=_db,
                 applied_pattern_ids=None,
             )
-        taxonomy_node_id = mapping.taxonomy_node_id
+        cluster_id = mapping.cluster_id
 
-        if taxonomy_node_id:
+        if cluster_id:
             logger.info(
                 "Domain mapped (sampling/analyze): '%s' -> '%s'",
                 domain_raw, mapping.taxonomy_label,
@@ -962,7 +962,7 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
             intent_label=getattr(analysis, "intent_label", None) or "general",
             domain=effective_domain,
             domain_raw=domain_raw,
-            taxonomy_node_id=taxonomy_node_id,
+            cluster_id=cluster_id,
             strategy_used=analysis.selected_strategy,
             changes_summary="",
             score_clarity=baseline.clarity,
@@ -1102,7 +1102,7 @@ async def _resolve_applied_pattern_text(
     """Resolve meta-pattern texts (read-only — no usage increment).
 
     Returns:
-        (applied_text, family_ids) — text for optimizer context + family IDs
+        (applied_text, cluster_ids) — text for optimizer context + family IDs
         for deferred usage increment after successful completion.
     """
     try:
@@ -1123,20 +1123,20 @@ async def _resolve_applied_pattern_text(
                 + "\n".join(lines)
             )
 
-            family_ids = {p.family_id for p in patterns}
+            cluster_ids = {p.cluster_id for p in patterns}
             logger.info(
                 "Sampling: resolved %d applied patterns from %d families",
-                len(patterns), len(family_ids),
+                len(patterns), len(cluster_ids),
             )
-            return applied_text, family_ids
+            return applied_text, cluster_ids
     except Exception as exc:
         logger.warning("Failed to resolve applied patterns in sampling: %s", exc)
         return None, set()
 
 
-async def _increment_pattern_usage(family_ids: set[str]) -> None:
+async def _increment_pattern_usage(cluster_ids: set[str]) -> None:
     """Increment usage counts for applied pattern families (post-optimization)."""
-    if not family_ids:
+    if not cluster_ids:
         return
     try:
         from app.models import PatternFamily
@@ -1144,7 +1144,7 @@ async def _increment_pattern_usage(family_ids: set[str]) -> None:
 
         engine = get_engine()
         async with async_session_factory() as db:
-            for fid in family_ids:
+            for fid in cluster_ids:
                 try:
                     await engine.increment_usage(fid, db)
                 except Exception as usage_exc:
@@ -1232,7 +1232,7 @@ async def _track_applied_patterns(
             if mp:
                 db.add(OptimizationPattern(
                     optimization_id=opt_id,
-                    family_id=mp.family_id,
+                    cluster_id=mp.cluster_id,
                     meta_pattern_id=mp.id,
                     relationship="applied",
                 ))

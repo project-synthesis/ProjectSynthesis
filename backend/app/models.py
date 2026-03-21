@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -15,7 +16,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, backref, relationship, synonym
 
 
 def _utcnow() -> datetime:
@@ -64,7 +65,7 @@ class Optimization(Base):
     intent_label = Column(String, nullable=True)
     domain = Column(String, nullable=True)
     embedding = Column(LargeBinary, nullable=True)
-    taxonomy_node_id = Column(String, ForeignKey("taxonomy_nodes.id"), nullable=True)
+    cluster_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=True)
     domain_raw = Column(String, nullable=True)
 
 
@@ -90,93 +91,92 @@ class StrategyAffinity(Base):
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
 
-class PatternFamily(Base):
-    __tablename__ = "pattern_families"
+class PromptCluster(Base):
+    """Unified prompt cluster — replaces PatternFamily + TaxonomyNode."""
+    __tablename__ = "prompt_cluster"
 
     id = Column(String, primary_key=True, default=_uuid)
-    intent_label = Column(String, nullable=False)
-    domain = Column(String, nullable=False, default="general")
-    task_type = Column(String, nullable=False, default="general")
-    centroid_embedding = Column(LargeBinary, nullable=False)
-    usage_count = Column(Integer, default=0, nullable=False)
-    member_count = Column(Integer, default=1, nullable=False)
+    parent_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=True, index=True)
+    label = Column(String, nullable=False, default="")
+    state = Column(String(20), nullable=False, default="active")  # candidate|active|mature|template|archived
+    domain = Column(String(50), nullable=False, default="general")
+    task_type = Column(String(50), nullable=False, default="general")
+
+    centroid_embedding = Column(LargeBinary, nullable=True)
+    member_count = Column(Integer, nullable=False, default=0)
+    usage_count = Column(Integer, nullable=False, default=0)
     avg_score = Column(Float, nullable=True)
-    taxonomy_node_id = Column(String, ForeignKey("taxonomy_nodes.id"), nullable=True)
-    domain_raw = Column(String, nullable=True)
-    created_at = Column(DateTime, default=_utcnow, nullable=False)
-    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    coherence = Column(Float, nullable=True)
+    separation = Column(Float, nullable=True)
+    stability = Column(Float, nullable=True, default=0.0)
+    persistence = Column(Float, nullable=True, default=0.5)
+
+    umap_x = Column(Float, nullable=True)
+    umap_y = Column(Float, nullable=True)
+    umap_z = Column(Float, nullable=True)
+    color_hex = Column(String(7), nullable=True)
+
+    preferred_strategy = Column(String(50), nullable=True)
+    prune_flag_count = Column(Integer, nullable=False, default=0)
+    last_used_at = Column(DateTime, nullable=True)
+    promoted_at = Column(DateTime, nullable=True)
+    archived_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    # Relationships
+    children = relationship("PromptCluster", backref=backref("parent", remote_side="PromptCluster.id"), lazy="select")
+    meta_patterns = relationship("MetaPattern", back_populates="cluster", lazy="select")
+
+    __table_args__ = (
+        Index("ix_prompt_cluster_state", "state"),
+        Index("ix_prompt_cluster_domain_state", "domain", "state"),
+        Index("ix_prompt_cluster_persistence", "persistence"),
+        Index("ix_prompt_cluster_created_at", created_at.desc()),
+    )
+
+    # Backward-compat aliases — old PatternFamily/TaxonomyNode code uses these.
+    intent_label = synonym("label")
+    retired_at = synonym("archived_at")
+    confirmed_at = synonym("promoted_at")
+
+
+# Backward compatibility aliases — existing code may import these names.
+# They resolve to PromptCluster so no table duplication occurs.
+PatternFamily = PromptCluster
+TaxonomyNode = PromptCluster
 
 
 class MetaPattern(Base):
     __tablename__ = "meta_patterns"
 
     id = Column(String, primary_key=True, default=_uuid)
-    family_id = Column(String, ForeignKey("pattern_families.id"), nullable=False)
+    cluster_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=False, index=True)
     pattern_text = Column(Text, nullable=False)
     embedding = Column(LargeBinary, nullable=True)
     source_count = Column(Integer, default=1, nullable=False)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
+    cluster = relationship("PromptCluster", back_populates="meta_patterns")
+
 
 class OptimizationPattern(Base):
     __tablename__ = "optimization_patterns"
-    __table_args__ = (
-        Index("ix_optpat_optid_rel", "optimization_id", "relationship"),
-    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     optimization_id = Column(String, ForeignKey("optimizations.id"), nullable=False)
-    family_id = Column(String, ForeignKey("pattern_families.id"), nullable=False)
+    cluster_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=False)
     meta_pattern_id = Column(String, ForeignKey("meta_patterns.id"), nullable=True)
-    relationship = Column(String, nullable=False)  # "source" or "applied"
+    relationship = Column(String(20), nullable=False, default="source")
+    similarity = Column(Float, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
-
-# --- Taxonomy tables (Evolutionary Taxonomy Engine) ---
-
-class TaxonomyNode(Base):
-    __tablename__ = "taxonomy_nodes"
     __table_args__ = (
-        Index("ix_taxonomy_parent", "parent_id"),
-        Index("ix_taxonomy_state", "state"),
-        Index("ix_taxonomy_persistence", "persistence"),
+        Index("ix_optimization_pattern_opt_rel", "optimization_id", "relationship"),
+        Index("ix_optimization_pattern_cluster", "cluster_id"),
     )
-
-    id = Column(String, primary_key=True, default=_uuid)
-    parent_id = Column(String, ForeignKey("taxonomy_nodes.id"), nullable=True)
-
-    # Cluster identity
-    label = Column(String, nullable=False)
-    label_generated_at = Column(DateTime, default=_utcnow, nullable=False)
-
-    # Embedding state
-    centroid_embedding = Column(LargeBinary, nullable=False)
-    member_count = Column(Integer, default=0, nullable=False)
-
-    # Quality metrics (updated each warm-path cycle)
-    coherence = Column(Float, default=0.0, nullable=False)
-    separation = Column(Float, default=1.0, nullable=False)
-    stability = Column(Float, default=1.0, nullable=False)
-    persistence = Column(Float, default=0.0, nullable=False)
-
-    # Lifecycle
-    state = Column(String, default="candidate", nullable=False)
-    created_at = Column(DateTime, default=_utcnow, nullable=False)
-    confirmed_at = Column(DateTime, nullable=True)
-    retired_at = Column(DateTime, nullable=True)
-    observations = Column(Integer, default=0, nullable=False)
-
-    # Usage (propagated up tree — spec Section 7.8)
-    usage_count = Column(Integer, default=0, nullable=False)
-
-    # UMAP projection (cached)
-    umap_x = Column(Float, nullable=True)
-    umap_y = Column(Float, nullable=True)
-    umap_z = Column(Float, nullable=True)
-
-    # Generated color
-    color_hex = Column(String, default="#7a7a9e", nullable=False)
 
 
 class TaxonomySnapshot(Base):
@@ -202,6 +202,9 @@ class TaxonomySnapshot(Base):
 
     # Recovery
     tree_state = Column(Text, nullable=True)  # JSON: node IDs + parent edges
+
+    # Legacy flag — marks snapshots from pre-PromptCluster era
+    legacy = Column(Boolean, nullable=False, default=False)
 
 
 # --- Ported tables (GitHub/Embedding) ---
