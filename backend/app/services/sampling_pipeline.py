@@ -518,13 +518,9 @@ async def run_sampling_pipeline(
     taxonomy_node_id = None
 
     try:
-        from app.services.embedding_service import EmbeddingService
-        from app.services.taxonomy import TaxonomyEngine
+        from app.services.taxonomy import get_engine
 
-        _sampling_engine = TaxonomyEngine(
-            embedding_service=EmbeddingService(),
-            provider=None,  # sampling pipeline has no local provider
-        )
+        _sampling_engine = get_engine()
         async with async_session_factory() as _db:
             mapping = await _sampling_engine.map_domain(
                 domain_raw=domain_raw,
@@ -569,10 +565,13 @@ async def run_sampling_pipeline(
         f"Rationale: {analysis.strategy_rationale}"
     )
 
-    # 4b: Resolve applied meta-patterns
+    # 4b: Resolve applied meta-patterns (read-only — usage incremented post-commit)
     applied_patterns_text: str | None = None
+    applied_family_ids: set[str] = set()
     if applied_pattern_ids:
-        applied_patterns_text = await _resolve_applied_patterns(applied_pattern_ids)
+        applied_patterns_text, applied_family_ids = await _resolve_applied_pattern_text(
+            applied_pattern_ids,
+        )
     if applied_patterns_text is not None:
         context_sources["patterns"] = True
 
@@ -793,6 +792,10 @@ async def run_sampling_pipeline(
 
         await db.commit()
 
+    # Increment usage counts AFTER successful commit (Spec 7.8)
+    if applied_family_ids:
+        await _increment_pattern_usage(applied_family_ids)
+
     # Notify backend event bus (MCP runs in a separate process)
     await notify_event_bus("optimization_created", {
         "id": opt_id,
@@ -892,13 +895,9 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
     taxonomy_node_id: str | None = None
 
     try:
-        from app.services.embedding_service import EmbeddingService
-        from app.services.taxonomy import TaxonomyEngine
+        from app.services.taxonomy import get_engine
 
-        _sampling_engine = TaxonomyEngine(
-            embedding_service=EmbeddingService(),
-            provider=None,  # sampling pipeline has no local provider
-        )
+        _sampling_engine = get_engine()
         async with async_session_factory() as _db:
             mapping = await _sampling_engine.map_domain(
                 domain_raw=domain_raw,
@@ -1097,12 +1096,17 @@ async def _run_explore_phase(
     )
 
 
-async def _resolve_applied_patterns(
+async def _resolve_applied_pattern_text(
     applied_pattern_ids: list[str],
-) -> str | None:
-    """Resolve meta-pattern texts and increment family usage counts."""
+) -> tuple[str | None, set[str]]:
+    """Resolve meta-pattern texts (read-only — no usage increment).
+
+    Returns:
+        (applied_text, family_ids) — text for optimizer context + family IDs
+        for deferred usage increment after successful completion.
+    """
     try:
-        from app.models import MetaPattern, PatternFamily
+        from app.models import MetaPattern
 
         async with async_session_factory() as db:
             result = await db.execute(
@@ -1110,7 +1114,7 @@ async def _resolve_applied_patterns(
             )
             patterns = result.scalars().all()
             if not patterns:
-                return None
+                return None, set()
 
             lines = [f"- {p.pattern_text}" for p in patterns]
             applied_text = (
@@ -1119,36 +1123,42 @@ async def _resolve_applied_patterns(
                 + "\n".join(lines)
             )
 
-            # Propagate usage counts up the taxonomy tree (Spec 7.8)
             family_ids = {p.family_id for p in patterns}
-            try:
-                from app.services.embedding_service import EmbeddingService
-                from app.services.taxonomy import TaxonomyEngine
+            logger.info(
+                "Sampling: resolved %d applied patterns from %d families",
+                len(patterns), len(family_ids),
+            )
+            return applied_text, family_ids
+    except Exception as exc:
+        logger.warning("Failed to resolve applied patterns in sampling: %s", exc)
+        return None, set()
 
-                _engine = TaxonomyEngine(embedding_service=EmbeddingService())
-                for fid in family_ids:
-                    await _engine.increment_usage(fid, db)
-            except Exception as usage_exc:
-                logger.warning("Sampling usage propagation failed: %s", usage_exc)
-                # Fallback: at least increment the family directly
-                for fid in family_ids:
+
+async def _increment_pattern_usage(family_ids: set[str]) -> None:
+    """Increment usage counts for applied pattern families (post-optimization)."""
+    if not family_ids:
+        return
+    try:
+        from app.models import PatternFamily
+        from app.services.taxonomy import get_engine
+
+        engine = get_engine()
+        async with async_session_factory() as db:
+            for fid in family_ids:
+                try:
+                    await engine.increment_usage(fid, db)
+                except Exception as usage_exc:
+                    logger.warning("Usage propagation failed for %s: %s", fid, usage_exc)
+                    # Fallback: at least increment the family directly
                     fam_result = await db.execute(
                         select(PatternFamily).where(PatternFamily.id == fid)
                     )
                     fam = fam_result.scalar_one_or_none()
                     if fam:
                         fam.usage_count = (fam.usage_count or 0) + 1
-
             await db.commit()
-
-            logger.info(
-                "Sampling: injecting %d applied patterns from %d families",
-                len(patterns), len(family_ids),
-            )
-            return applied_text
     except Exception as exc:
-        logger.warning("Failed to resolve applied patterns in sampling: %s", exc)
-        return None
+        logger.warning("Sampling usage increment failed: %s", exc)
 
 
 async def _resolve_adaptation_state(task_type: str) -> str | None:

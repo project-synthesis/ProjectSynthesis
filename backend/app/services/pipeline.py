@@ -628,18 +628,22 @@ class PipelineOrchestrator:
                             ))
                             applied_family_ids.add(mp.family_id)
 
-                    # Propagate usage counts up the taxonomy tree (Spec 7.8)
-                    if taxonomy_engine and applied_family_ids:
-                        for fid in applied_family_ids:
-                            try:
-                                await taxonomy_engine.increment_usage(fid, db)
-                            except Exception as usage_exc:
-                                logger.warning("Usage propagation failed for %s: %s", fid, usage_exc)
-
                 except Exception as exc:
                     logger.warning("Failed to track applied patterns: %s", exc)
 
             await db.commit()
+
+            # Propagate usage counts AFTER successful commit (Spec 7.8)
+            if applied_pattern_ids and taxonomy_engine:
+                try:
+                    for fid in applied_family_ids:
+                        try:
+                            await taxonomy_engine.increment_usage(fid, db)
+                        except Exception as usage_exc:
+                            logger.warning("Usage propagation failed for %s: %s", fid, usage_exc)
+                    await db.commit()
+                except Exception as exc:
+                    logger.warning("Post-commit usage propagation failed: %s", exc)
 
             # Publish real-time event for cross-source notifications
             try:
