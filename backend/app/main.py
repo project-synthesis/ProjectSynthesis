@@ -328,16 +328,4 @@ try:
 except ImportError:
     pass
 
-try:
-    from app.routers.patterns import router as patterns_router
-    app.include_router(patterns_router)
-except ImportError:
-    pass
-
-try:
-    from app.routers.taxonomy import router as taxonomy_router
-    app.include_router(taxonomy_router)
-except ImportError:
-    pass
-
 asgi_app = app

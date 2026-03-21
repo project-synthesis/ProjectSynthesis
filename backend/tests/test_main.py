@@ -157,7 +157,7 @@ async def test_lazy_imports_exception_handling():
         "app.routers.github_auth": None, "app.routers.github_repos": None,
         "app.routers.refinement": None, "app.routers.events": None,
         "app.routers.preferences": None, "app.routers.strategies": None,
-        "app.routers.patterns": None,
+        "app.routers.clusters": None,
     }):
         reload(app.main)
 

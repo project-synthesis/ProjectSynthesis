@@ -379,3 +379,91 @@ class TestLegacyRedirects:
         location = resp.headers.get("location", "")
         assert "/api/clusters/tree" in location
         assert "min_persistence=0.5" in location
+
+
+class TestClusterErrorHandling:
+    """Error handling tests for cluster endpoints (via both direct and legacy paths)."""
+
+    @pytest.mark.asyncio
+    async def test_recluster_error_returns_500(self, app_client, db_session):
+        """POST /api/clusters/recluster returns 500 when engine raises."""
+        from unittest.mock import AsyncMock, patch
+
+        mock_engine = AsyncMock()
+        mock_engine.run_cold_path.side_effect = RuntimeError("HDBSCAN failed")
+
+        with patch("app.routers.clusters._get_engine", return_value=mock_engine):
+            resp = await app_client.post("/api/clusters/recluster")
+
+        assert resp.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_get_tree_db_error_returns_500(self, app_client, db_session):
+        """GET /api/clusters/tree returns 500 when engine raises."""
+        from unittest.mock import AsyncMock, patch
+
+        mock_engine = AsyncMock()
+        mock_engine.get_tree.side_effect = RuntimeError("DB connection lost")
+
+        with patch("app.routers.clusters._get_engine", return_value=mock_engine):
+            resp = await app_client.get("/api/clusters/tree")
+
+        assert resp.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_get_node_db_error_returns_500(self, app_client, db_session):
+        """GET /api/clusters/{id} returns 500 when engine raises."""
+        from unittest.mock import AsyncMock, patch
+
+        mock_engine = AsyncMock()
+        mock_engine.get_node.side_effect = RuntimeError("DB connection lost")
+
+        with patch("app.routers.clusters._get_engine", return_value=mock_engine):
+            resp = await app_client.get("/api/clusters/test-id")
+
+        assert resp.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_get_stats_db_error_returns_500(self, app_client, db_session):
+        """GET /api/clusters/stats returns 500 when engine raises."""
+        from unittest.mock import AsyncMock, patch
+
+        mock_engine = AsyncMock()
+        mock_engine.get_stats.side_effect = RuntimeError("DB connection lost")
+
+        with patch("app.routers.clusters._get_engine", return_value=mock_engine):
+            resp = await app_client.get("/api/clusters/stats")
+
+        assert resp.status_code == 500
+
+
+class TestDomainFieldValidation:
+    """Domain field validation for AnalysisResult schema."""
+
+    def test_valid_domain_accepted(self):
+        from app.schemas.pipeline_contracts import AnalysisResult
+        result = AnalysisResult(
+            task_type="coding", weaknesses=[], strengths=[],
+            selected_strategy="auto", strategy_rationale="test",
+            confidence=0.9, domain="backend",
+        )
+        assert result.domain == "backend"
+
+    def test_freetext_domain_accepted(self):
+        """Free-text domains like 'web' are now valid strings."""
+        from app.schemas.pipeline_contracts import AnalysisResult
+        result = AnalysisResult(
+            task_type="coding", weaknesses=[], strengths=[],
+            selected_strategy="auto", strategy_rationale="test",
+            confidence=0.9, domain="web",
+        )
+        assert result.domain == "web"
+
+    def test_missing_domain_defaults_to_general(self):
+        from app.schemas.pipeline_contracts import AnalysisResult
+        result = AnalysisResult(
+            task_type="coding", weaknesses=[], strengths=[],
+            selected_strategy="auto", strategy_rationale="test",
+            confidence=0.9,
+        )
+        assert result.domain == "general"
