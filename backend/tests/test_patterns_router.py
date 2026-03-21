@@ -16,19 +16,59 @@ class TestPatternsEndpoints:
 
     @pytest.mark.asyncio
     async def test_match_endpoint(self, app_client):
-        with patch("app.routers.patterns._matcher_service.match", new_callable=AsyncMock) as mock_match:
-            mock_match.return_value = {"family_id": "fam1", "score": 0.85}
+        """POST /api/patterns/match returns taxonomy-enriched match."""
+        from app.services.taxonomy.engine import PatternMatch
+        from unittest.mock import MagicMock, AsyncMock as _AsyncMock
+        from app.main import app
+
+        mock_family = MagicMock()
+        mock_family.id = "fam1"
+        mock_family.intent_label = "REST API patterns"
+        mock_family.domain = "backend"
+        mock_family.member_count = 5
+
+        mock_result = PatternMatch(
+            family=mock_family,
+            taxonomy_node=None,
+            meta_patterns=[],
+            similarity=0.85,
+            match_level="family",
+        )
+
+        mock_engine = MagicMock()
+        mock_engine.match_prompt = _AsyncMock(return_value=mock_result)
+        app.state.taxonomy_engine = mock_engine
+
+        try:
             resp = await app_client.post("/api/patterns/match", json={"prompt_text": "this is a test prompt text"})
-            assert resp.status_code == 200
-            assert resp.json() == {"match": {"family_id": "fam1", "score": 0.85}}
+        finally:
+            del app.state.taxonomy_engine
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["match_level"] == "family"
+        assert data["similarity"] == 0.85
+        assert data["match"]["family"]["id"] == "fam1"
 
     @pytest.mark.asyncio
     async def test_match_endpoint_no_match(self, app_client):
-        with patch("app.routers.patterns._matcher_service.match", new_callable=AsyncMock) as mock_match:
-            mock_match.return_value = None
+        """POST /api/patterns/match returns empty on no match."""
+        from unittest.mock import MagicMock, AsyncMock as _AsyncMock
+        from app.main import app
+
+        mock_engine = MagicMock()
+        mock_engine.match_prompt = _AsyncMock(return_value=None)
+        app.state.taxonomy_engine = mock_engine
+
+        try:
             resp = await app_client.post("/api/patterns/match", json={"prompt_text": "this is a test prompt text"})
-            assert resp.status_code == 200
-            assert resp.json() == {"match": None}
+        finally:
+            del app.state.taxonomy_engine
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["match"] is None
+        assert data["match_level"] == "none"
 
     @pytest.mark.asyncio
     async def test_families_endpoint(self, app_client, db_session):

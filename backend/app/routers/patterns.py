@@ -2,21 +2,19 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import PatternFamily
 from app.services.knowledge_graph import KnowledgeGraphService
-from app.services.pattern_matcher import PatternMatcherService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/patterns", tags=["patterns"])
 
 _graph_service = KnowledgeGraphService()
-_matcher_service = PatternMatcherService()
 
 
 class MatchRequest(BaseModel):
@@ -29,7 +27,31 @@ class MatchRequest(BaseModel):
 class PatternMatchResponse(BaseModel):
     match: dict | None = Field(
         default=None,
-        description="Matched pattern family with meta-patterns and similarity score, or null if no match.",
+        description="Matched pattern with taxonomy context, or null if no match.",
+    )
+    match_level: str = Field(
+        default="none",
+        description="Match level: 'family', 'cluster', or 'none'.",
+    )
+    taxonomy_node_id: str | None = Field(
+        default=None,
+        description="Taxonomy node ID for the matched cluster.",
+    )
+    taxonomy_label: str | None = Field(
+        default=None,
+        description="Generated label for the matched taxonomy node.",
+    )
+    taxonomy_color: str | None = Field(
+        default=None,
+        description="OKLab-derived color hex for the matched taxonomy node.",
+    )
+    taxonomy_breadcrumb: list[str] = Field(
+        default_factory=list,
+        description="Hierarchy path from root to matched node.",
+    )
+    similarity: float = Field(
+        default=0.0,
+        description="Cosine similarity score of the match.",
     )
 
 
@@ -85,15 +107,54 @@ async def get_graph(
 
 @router.post("/match")
 async def match_pattern(
+    request: Request,
     body: MatchRequest,
     db: AsyncSession = Depends(get_db),
 ) -> PatternMatchResponse:
-    """Similarity check for auto-suggestion on paste."""
+    """Hierarchical similarity check for auto-suggestion on paste."""
     try:
-        result = await _matcher_service.match(db, body.prompt_text)
-        if result is None:
-            return PatternMatchResponse(match=None)
-        return PatternMatchResponse(match=result)
+        from app.services.taxonomy import TaxonomyEngine
+
+        # Use singleton engine from app.state; fallback for tests
+        engine = getattr(request.app.state, "taxonomy_engine", None)
+        if not engine:
+            from app.services.embedding_service import EmbeddingService
+            engine = TaxonomyEngine(embedding_service=EmbeddingService())
+        result = await engine.match_prompt(body.prompt_text, db=db)
+
+        if result is None or result.match_level == "none":
+            return PatternMatchResponse()
+
+        # Build match dict for backward compatibility
+        match_dict: dict = {}
+        if result.family:
+            match_dict["family"] = {
+                "id": result.family.id,
+                "intent_label": result.family.intent_label,
+                "domain": result.family.domain,
+                "member_count": result.family.member_count,
+            }
+        match_dict["meta_patterns"] = [
+            {"id": mp.id, "pattern_text": mp.pattern_text, "source_count": mp.source_count}
+            for mp in result.meta_patterns
+        ]
+        match_dict["similarity"] = result.similarity
+
+        # Taxonomy context — reuse the same engine instance
+        taxonomy_node = result.taxonomy_node
+        breadcrumb: list[str] = []
+        if taxonomy_node:
+            breadcrumb = await engine._build_breadcrumb(db, taxonomy_node)
+
+        return PatternMatchResponse(
+            match=match_dict,
+            match_level=result.match_level,
+            taxonomy_node_id=taxonomy_node.id if taxonomy_node else None,
+            taxonomy_label=taxonomy_node.label if taxonomy_node else None,
+            taxonomy_color=taxonomy_node.color_hex if taxonomy_node else None,
+            taxonomy_breadcrumb=breadcrumb,
+            similarity=result.similarity,
+        )
     except Exception as exc:
         logger.error("Pattern match failed: %s", exc, exc_info=True)
         raise HTTPException(500, "Pattern matching failed") from exc
