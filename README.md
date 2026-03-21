@@ -58,7 +58,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 │      │ History    │  Result (Markdown)   │  Deltas     │
 │      │ Patterns   │  Diff View           │  Sparkline  │
 │      │ GitHub     │  Refinement Timeline │  Family     │
-│      │ Settings   │  Radial Mindmap      │  Detail     │
+│      │ Settings   │  3D Taxonomy         │  Detail     │
 ├──────┴────────────┴──────────────────────┴─────────────┤
 │                      Status Bar                        │
 └────────────────────────────────────────────────────────┘
@@ -69,7 +69,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 | Backend | Python 3.12, FastAPI, SQLAlchemy (async), aiosqlite |
 | Frontend | SvelteKit 2 (Svelte 5 runes), Tailwind CSS 4 |
 | Database | SQLite (WAL mode) |
-| Visualization | D3.js v7 (selection, zoom, shape — tree-shakeable imports) |
+| Visualization | Three.js (3D taxonomy topology with LOD, raycasting, force layout) |
+| Clustering | HDBSCAN + UMAP 3D projection + OKLab coloring |
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2, 384-dim, CPU) |
 | LLM | Configurable per phase — Opus, Sonnet, Haiku (via Settings) |
 | Scoring | Hybrid: LLM scores blended with model-independent heuristics + z-score normalization |
@@ -111,7 +112,9 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, .cursorrules for context injection
 - **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution. Dimension-specific weights prevent single-model bias. Divergence flags when LLM and heuristic disagree by >2.5 points
 - **Real-time events** — SSE-based event bus with toast notifications for file changes, MCP operations, and pipeline status
-- **Pattern knowledge graph** — self-building library of prompt patterns extracted from every optimization. Clusters into families (cosine ≥0.78), extracts reusable meta-patterns via Haiku (cosine ≥0.82 merge), and suggests matching patterns on paste (cosine ≥0.72). D3.js radial mindmap visualization with domain grouping and cross-family similarity edges (cosine ≥0.55)
+- **Evolutionary taxonomy engine** — self-organizing hierarchical clustering that groups optimizations into a navigable taxonomy. Three execution paths: hot (per-optimization embedding + nearest-node search), warm (periodic HDBSCAN re-clustering with speculative lifecycle mutations), cold (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Quality-gated: 5-dimension Q_system score (coherence, separation, coverage, DBCV, stability) prevents regressions. Snapshot audit trail for recovery
+- **3D taxonomy visualization** — Three.js interactive topology with LOD tiers (far/mid/near) based on persistence thresholds. Click-to-focus navigation, raycasting hover, billboard labels, force-directed collision resolution, Ctrl+F search, Q_system badge, and recluster controls
+- **Pattern suggestion on paste** — embeds pasted text, cosine-searches confirmed taxonomy nodes (≥0.72), suggests matching families with 1-click apply (50-char delta, 300ms debounce, 10s auto-dismiss). Applied patterns injected into optimizer context
 - **Bidirectional history–patterns navigation** — history items show intent labels and domain badges. Loading an optimization auto-selects its pattern family in Inspector. Clicking a linked optimization in a family detail loads it in the editor. Live family link: background pattern extraction triggers automatic UI sync via SSE
 - **StatusBar breadcrumb** — shows `[domain] › intent_label` for the active optimization with domain color coding. Editor tabs use intent labels as titles
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation
@@ -176,6 +179,10 @@ cd frontend && npm run build
 | `/api/patterns/families/{id}` | GET/PATCH | Family detail / rename |
 | `/api/patterns/search` | GET | Semantic search across patterns |
 | `/api/patterns/stats` | GET | Pattern count + domain distribution |
+| `/api/taxonomy/tree` | GET | Flat taxonomy node list for 3D visualization |
+| `/api/taxonomy/node/{id}` | GET | Node detail with children, breadcrumb, family count |
+| `/api/taxonomy/stats` | GET | Q_system metrics, node counts, history sparkline |
+| `/api/taxonomy/recluster` | POST | Trigger cold-path refit (HDBSCAN + UMAP + labels) |
 | `/api/github/auth/*` | GET/POST | GitHub OAuth flow |
 | `/api/github/repos/*` | GET/POST/DELETE | Repo management |
 

@@ -86,6 +86,7 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - `pattern_matcher.py` — on-paste similarity search: matches prompt text against family centroids (cosine ≥0.72 suggestion threshold). Returns best family + meta-patterns.
 - `knowledge_graph.py` — graph building for radial mindmap: family nodes, domain grouping, cross-family edges (cosine ≥0.55), semantic search, family detail with linked optimizations.
 - `routing.py` — intelligent routing service: `RoutingState` (immutable capabilities snapshot), `RoutingContext` (per-request), `RoutingDecision` (tier + reason), `resolve_route()` (pure 5-tier decision function), `RoutingManager` (state lifecycle, SSE events, disconnect detection, persistence recovery)
+- `taxonomy/` — evolutionary taxonomy engine (10 modules, 3,848 lines). Process-wide singleton via `get_engine()`/`set_engine()` with thread-safe double-checked locking. `engine.py` orchestrates 3 paths: hot (per-optimization embedding + nearest-node cosine search), warm (periodic HDBSCAN clustering + speculative lifecycle mutations gated by Q_system non-regression), cold (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Sub-modules: `clustering.py` (HDBSCAN wrapper), `lifecycle.py` (emerge/merge/split/retire operations), `quality.py` (5-dimension Q_system with adaptive weights), `projection.py` (UMAP + Procrustes alignment + PCA fallback), `coloring.py` (OKLab from UMAP position), `labeling.py` (Haiku 2-4 word labels), `snapshot.py` (audit trail CRUD + retention), `sparkline.py` (LTTB downsampling + OLS trend). Key types: `TaxonomyMapping` (domain embed result), `PatternMatch` (cascade search result), `QWeights` (frozen constant-sum weights), `SparklineData`
 
 ### Model configuration
 Model IDs are centralized in `config.py` as `MODEL_SONNET`, `MODEL_OPUS`, `MODEL_HAIKU` (default: `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`). Never hardcode model IDs in service code — use `PreferencesService.resolve_model(phase, snapshot)` which maps user preferences to full model IDs.
@@ -112,6 +113,7 @@ Provider is detected **once at startup** and stored on `app.state.routing` (a `R
 - `health.py` — `GET /api/health` (status, provider, score_health, recent_errors, avg_duration_ms, sampling_capable, mcp_disconnected, available_tiers)
 - `events.py` — `GET /api/events` (SSE event stream), `POST /api/events/_publish` (internal cross-process)
 - `patterns.py` — `GET /api/patterns/graph`, `POST /api/patterns/match`, `GET /api/patterns/families`, `GET /api/patterns/families/{id}`, `PATCH /api/patterns/families/{id}`, `GET /api/patterns/search`, `GET /api/patterns/stats`
+- `taxonomy.py` — `GET /api/taxonomy/tree` (flat node list, optional `min_persistence`), `GET /api/taxonomy/node/{id}` (detail with children/breadcrumb/family_count), `GET /api/taxonomy/stats` (Q metrics + sparkline), `POST /api/taxonomy/recluster` (cold-path trigger). All endpoints return typed Pydantic models from `schemas/taxonomy.py`
 
 ### Sort column whitelist
 `optimization_service.py` defines `_VALID_SORT_COLUMNS`. Add new sortable columns there before using them.
@@ -119,6 +121,10 @@ Provider is detected **once at startup** and stored on `app.state.routing` (a `R
 ### Shared utilities
 - `app/utils/sse.py` — shared `format_sse()` for SSE event formatting (used by optimize + refinement routers)
 - `app/dependencies/rate_limit.py` — in-memory rate limiting FastAPI dependency via `limits` library
+
+### Taxonomy models (`app/models.py`)
+- `TaxonomyNode` — hierarchical cluster node. UUID PK, self-join `parent_id`, L2-normalized centroid embedding (384-dim, LargeBinary), per-node metrics (coherence, separation, stability, persistence), state (`candidate`|`confirmed`|`retired`), observations/usage counts, timestamps. Indices on `parent_id`, `state`, `persistence`.
+- `TaxonomySnapshot` — audit trail. UUID PK, trigger (`warm_path`|`cold_path`|`manual`), system metrics (q_system, q_coherence, q_separation, q_coverage, q_dbcv), operation log + tree_state (JSON), node creation/retirement/merge/split counts.
 
 ### Pattern knowledge graph models (`app/models.py`)
 - `PatternFamily` — cluster of related optimizations. Fields: `centroid_embedding` (running mean, bytes), `intent_label`, `domain`, `task_type`, `member_count`, `usage_count`, `avg_score`.
@@ -146,14 +152,15 @@ Provider is detected **once at startup** and stored on `app.state.routing` (a `R
 src/lib/components/
   layout/       # ActivityBar, Navigator, PatternNavigator, EditorGroups, Inspector, StatusBar
   editor/       # PromptEdit, ForgeArtifact, PatternSuggestion
-  patterns/     # RadialMindmap
+  taxonomy/     # SemanticTopology, TopologyControls, TopologyRenderer, TopologyData,
+                # TopologyInteraction, TopologyLabels, TopologyWorker
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, DiffView, MarkdownRenderer, ProviderBadge, ScoreCard, Toast
 ```
 
 ### Shared frontend utilities
-- `constants/patterns.ts` — domain color map, `scoreColor()` helper (shared by Navigator, RadialMindmap, PatternNavigator, Inspector)
+- `utils/colors.ts` — `scoreColor()`, `taxonomyColor()` (hex/domain/null → color), `qHealthColor()`. Used by Navigator, PatternNavigator, Inspector, StatusBar, TopologyControls
 
 ## Prompt templates
 
@@ -273,5 +280,6 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **Workspace intelligence**: `workspace_intelligence.py` auto-detects project type from manifest files (package.json, requirements.txt, etc.) and injects workspace profile into MCP tool context via `roots/list`.
 - **MCP sampling detection**: ASGI middleware on `initialize` calls `RoutingManager.on_mcp_initialize()` (in-memory state primary, `mcp_session.json` write-through for restart recovery). Optimistic strategy prevents VS Code multi-session flicker (False never overwrites fresh True within 30-min window). `RoutingManager` owns in-memory `sampling_capable`, `mcp_connected`, timestamps. Health endpoint reads live state from `app.state.routing`. Background disconnect checker (60s poll, 300s staleness window). Dual staleness windows in `config.py`: `MCP_CAPABILITY_STALENESS_MINUTES` (30 min), `MCP_ACTIVITY_STALENESS_SECONDS` (300s). MCP server is sole writer to `mcp_session.json`. Frontend receives `routing_state_changed` SSE events — no longer makes routing decisions. Fixed 60s health polling for display only.
 - **MCP sampling pipeline**: full feature parity with internal pipeline — extracted into `services/sampling_pipeline.py`. Uses structured output via tool calling (`tools` + `tool_choice` on `create_message()`), `ModelPreferences` per phase, `SamplingLLMAdapter` for explore, and captures `result.model` for DB persistence. All 4 MCP tools use `structured_output=True` (return Pydantic models, expose `outputSchema`). `synthesis_analyze` falls back to sampling when no local provider.
+- **Taxonomy engine**: evolutionary hierarchical clustering in `services/taxonomy/` (10 modules, 3,848 lines). Process-wide singleton (`get_engine()`/`set_engine()`) with async lock-gated hot path. Three execution paths: hot (embed + cosine search nearest confirmed node per optimization), warm (periodic HDBSCAN + speculative lifecycle mutations — emerge/merge/split/retire — gated by Q_system non-regression), cold (full HDBSCAN refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Quality system: 5-dimension Q_system (coherence, separation, coverage, DBCV, stability) with adaptive weights that scale by confirmed node count. Snapshot audit trail records every mutation cycle. Frontend: Three.js `SemanticTopology` with LOD tiers (persistence thresholds: far=0.6, mid=0.3, near=0.0), raycasting interaction, force-directed layout (`TopologyWorker`), and `TopologyControls` overlay. Replaces flat `PatternExtractorService`/`PatternMatcherService` and `RadialMindmap`.
 - **Knowledge graph**: self-building pattern library. Post-completion background job embeds prompts, clusters into `PatternFamily` groups (cosine ≥0.78 merge), extracts meta-patterns via Haiku (cosine ≥0.82 pattern merge). On-paste detection (50-char delta, 300ms debounce) suggests matching families (cosine ≥0.72). Applied patterns injected into optimizer context. Models: `PatternFamily` (centroid running mean), `MetaPattern` (enriched on duplicate), `OptimizationPattern` (join). Cross-family edges at cosine ≥0.55. Domain color coding: backend=#a855f7, frontend=#fbbf24, database=#00d4aa, security=#ff3366, devops=#4d8eff, fullstack=#00e5ff, general=#7a7a9e. UI: PatternNavigator (search + paginated family list + domain filter), Inspector family detail (linked optimizations, rename), RadialMindmap (D3.js force-directed SVG), StatusBar pattern count. Activity type `'patterns'` in layout routing.
 - **Intelligent routing**: centralized 5-tier priority chain in `services/routing.py`: force_passthrough > force_sampling > internal provider > auto sampling > passthrough fallback. Pure `resolve_route()` function (deterministic, no I/O) + thin `RoutingManager` wrapper (state lifecycle, SSE events, persistence, disconnect detection). Both FastAPI and MCP server own their own `RoutingManager` instance. `routing` SSE event emitted as first event in every optimize stream. `routing_state_changed` ambient SSE for tier availability changes. Frontend is purely reactive — never makes routing decisions. `caller` field gates sampling (REST callers never reach sampling tiers). Unified `POST /api/optimize` handles passthrough inline via SSE (no more 503).

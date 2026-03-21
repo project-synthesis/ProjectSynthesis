@@ -4,6 +4,42 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added (Taxonomy Engine)
+- Added evolutionary taxonomy engine (`services/taxonomy/`, 3,848 lines, 10 modules) — self-organizing hierarchical clustering that replaces the flat pattern knowledge graph with a 3-path execution model: hot path (per-optimization embedding + nearest-node search), warm path (periodic HDBSCAN clustering with speculative lifecycle mutations), cold path (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling)
+- Added quality metrics system (Q_system) with 5 dimensions: coherence, separation, coverage, DBCV, stability. Adaptive threshold weights scale based on confirmed node count; DBCV linear ramp over 20 samples
+- Added 4 lifecycle operations: emerge (new cluster detection), merge (cosine ≥0.78 similarity), split (coherence < 0.5), retire (idle nodes). Non-regressive gate ensures Q_system never degrades
+- Added process-wide singleton factory (`get_engine()`/`set_engine()`) with thread-safe double-checked locking for concurrent hot-path writes
+- Added snapshot audit trail — every warm/cold path writes operation log + full tree state (JSON) for recovery. Configurable retention policy
+- Added UMAP 3D projection with Procrustes alignment for incremental updates and PCA fallback for < 5 points
+- Added OKLab color generation from UMAP position — perceptually uniform on dark backgrounds with enforced minimum sibling distance
+- Added LTTB downsampling for Q_system sparklines (preserves shape in ≤30 points) with OLS trend normalization
+- Added Haiku-based 2–4 word cluster label generation from member text samples
+- Added taxonomy REST API: `GET /api/taxonomy/tree` (flat list for 3D viz, optional `min_persistence` filter), `GET /api/taxonomy/node/{id}` (detail with children, breadcrumb, family_count), `GET /api/taxonomy/stats` (Q metrics + history + sparkline), `POST /api/taxonomy/recluster` (manual cold-path trigger)
+- Added Pydantic response models: `TaxonomyTreeResponse`, `TaxonomyNodeResponse`, `TaxonomyStatsResponse`, `ReclusterResponse`, `TaxonomyNodeCounts`, `QHistoryEntry`
+- Added `TaxonomyNode` and `TaxonomySnapshot` SQLAlchemy models with indices on parent_id, state, persistence
+- Added Three.js 3D topology visualization (`SemanticTopology.svelte`) with LOD tiers (far/mid/near) based on persistence thresholds, raycasting click-to-focus, billboard labels, and force-directed collision resolution
+- Added `TopologyControls` overlay — Q_system badge, LOD tier indicator, Ctrl+F search, node counts
+- Added taxonomy API client (`taxonomy.ts`) with typed wrappers for tree, node, stats, and recluster endpoints
+- Added taxonomy state to patterns store — tree/stats loading, SSE `taxonomy_changed` handler, `loadTree()` with stale-response guard
+- Added canvas accessibility — `aria-label`, `tabindex`, `role="tooltip"` on hover, `role="alert" aria-live="polite"` on error
+- Added `taxonomyColor()` and `qHealthColor()` to `colors.ts` — resolves hex, domain names, or null to fallback color
+- Added `umap-learn` and `scipy` backend dependencies
+
+### Changed (Taxonomy Engine)
+- Replaced flat `PatternExtractorService` and `PatternMatcherService` with hierarchical `TaxonomyEngine` for pattern clustering and matching
+- Replaced `RadialMindmap` (D3.js 2D SVG) with `SemanticTopology` (Three.js 3D canvas) for pattern visualization
+- Replaced `DOMAIN_COLORS` constant and `domainColor()` with API-driven `taxonomyColor()` that resolves hex colors from backend OKLab system
+- Changed `domain` from `Literal` type to free-text `str` — analyzer writes unconstrained domain, taxonomy engine maps to canonical node
+- Changed pattern matching to hierarchical cascade: nearest confirmed node → walk parent chain → breadcrumb path
+- Changed usage count propagation to walk up the taxonomy tree on each optimization
+
+### Fixed (Taxonomy Engine — Audit)
+- Fixed process-wide singleton with thread-safe double-checked locking (was creating multiple engine instances)
+- Fixed task lifecycle — extraction tasks tracked in `set[Task]` with `add_done_callback` cleanup and 5s shutdown timeout
+- Fixed usage propagation timing — split `_resolve_applied_patterns()` into read-only resolution + post-commit increment (avoids expired session)
+- Fixed null label guard in `buildSceneData` — runtime `null` labels coerced to empty string
+- Fixed duplicate `total_families` property in StatusBar test (cherry-pick merge artifact)
+
 ### Added (Intelligent Routing)
 - Added centralized intelligent routing service (`routing.py`) with pure 5-tier priority chain: force_passthrough > force_sampling > internal provider > auto sampling > passthrough fallback
 - Added `routing` SSE event as first event in every optimize stream (tier, provider, reason, degraded_from)
