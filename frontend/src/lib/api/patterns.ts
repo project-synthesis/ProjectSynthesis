@@ -24,6 +24,12 @@ export interface PatternMatch {
   family: PatternFamily;
   meta_patterns: MetaPatternItem[];
   similarity: number;
+  // Taxonomy context (from TaxonomyEngine.match_prompt)
+  match_level: 'family' | 'cluster' | null;
+  taxonomy_node_id: string | null;
+  taxonomy_label: string | null;
+  taxonomy_color: string | null;
+  taxonomy_breadcrumb: string[] | null;
 }
 
 export interface GraphEdge {
@@ -73,11 +79,15 @@ export const listFamilies = (params?: { offset?: number; limit?: number; domain?
 export const getFamilyDetail = (familyId: string) =>
   apiFetch<FamilyDetail>(`/patterns/families/${familyId}`);
 
-export const renameFamily = (familyId: string, intent_label: string) =>
-  apiFetch<{ id: string; intent_label: string }>(`/patterns/families/${familyId}`, {
+export const updateFamily = (familyId: string, updates: { intent_label?: string; domain?: string }) =>
+  apiFetch<{ id: string; intent_label: string; domain: string }>(`/patterns/families/${familyId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ intent_label }),
+    body: JSON.stringify(updates),
   });
+
+/** @deprecated Use updateFamily instead */
+export const renameFamily = (familyId: string, intent_label: string) =>
+  updateFamily(familyId, { intent_label });
 
 export interface SearchResult {
   type: string;
