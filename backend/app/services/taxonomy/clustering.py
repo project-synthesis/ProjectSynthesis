@@ -75,6 +75,26 @@ def l2_normalize_1d(vec: np.ndarray) -> np.ndarray:
     return (vec / norm).astype(np.float32)
 
 
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity between two 1-D vectors.
+
+    Returns the dot product of L2-normalised inputs.  Returns 0.0 if
+    either vector has zero norm.
+
+    Args:
+        a: 1-D float array.
+        b: 1-D float array.
+
+    Returns:
+        Scalar cosine similarity in [-1, 1].
+    """
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a < 1e-9 or norm_b < 1e-9:
+        return 0.0
+    return float(np.dot(a, b) / (norm_a * norm_b))
+
+
 def _extract_persistences(hdb: HDBSCAN, n_clusters: int) -> list[float]:
     """Pull per-cluster persistence from the HDBSCAN condensed tree.
 

@@ -456,6 +456,8 @@ class TaxonomyEngine:
 
                         # Rank all candidate families by cosine similarity
                         # to the query embedding and take top-3
+                        from app.services.taxonomy.clustering import cosine_similarity
+
                         scored_families: list[tuple[PatternFamily, float]] = []
                         for fam in candidate_families:
                             try:
@@ -464,12 +466,8 @@ class TaxonomyEngine:
                                 )
                                 if fc.shape[0] != query_emb.shape[0]:
                                     continue
-                                norm_fc = np.linalg.norm(fc)
-                                norm_q = np.linalg.norm(query_emb)
-                                if norm_fc > 0 and norm_q > 0:
-                                    sim = float(
-                                        np.dot(query_emb, fc) / (norm_q * norm_fc)
-                                    )
+                                sim = cosine_similarity(query_emb, fc)
+                                if sim > 0:
                                     scored_families.append((fam, sim))
                             except (ValueError, TypeError):
                                 continue
@@ -525,6 +523,8 @@ class TaxonomyEngine:
         if len(patterns) <= 1:
             return patterns
 
+        from app.services.taxonomy.clustering import cosine_similarity
+
         deduped: list[MetaPattern] = []
         deduped_embeddings: list[np.ndarray] = []
 
@@ -544,13 +544,9 @@ class TaxonomyEngine:
             for kept_emb in deduped_embeddings:
                 if emb.shape != kept_emb.shape:
                     continue
-                norm_a = np.linalg.norm(emb)
-                norm_b = np.linalg.norm(kept_emb)
-                if norm_a > 0 and norm_b > 0:
-                    sim = float(np.dot(emb, kept_emb) / (norm_a * norm_b))
-                    if sim >= PATTERN_MERGE_THRESHOLD:
-                        is_duplicate = True
-                        break
+                if cosine_similarity(emb, kept_emb) >= PATTERN_MERGE_THRESHOLD:
+                    is_duplicate = True
+                    break
 
             if not is_duplicate:
                 deduped.append(mp)
@@ -995,6 +991,7 @@ class TaxonomyEngine:
             batch_cluster,
             compute_pairwise_coherence,
             compute_separation,
+            cosine_similarity,
         )
         from app.services.taxonomy.coloring import (
             enforce_minimum_delta_e,
@@ -1072,12 +1069,10 @@ class TaxonomyEngine:
 
             centroid = cluster_result.centroids[cid] if cid < len(cluster_result.centroids) else None
             if centroid is None:
-                centroid = np.mean(
-                    np.stack(cluster_embs, axis=0), axis=0
-                ).astype(np.float32)
-                norm = np.linalg.norm(centroid)
-                if norm > 0:
-                    centroid = centroid / norm
+                from app.services.taxonomy.clustering import l2_normalize_1d
+                centroid = l2_normalize_1d(
+                    np.mean(np.stack(cluster_embs, axis=0), axis=0).astype(np.float32)
+                )
 
             coherence = compute_pairwise_coherence(cluster_embs)
 
@@ -1091,10 +1086,7 @@ class TaxonomyEngine:
                         ex_emb = np.frombuffer(
                             existing.centroid_embedding, dtype=np.float32
                         )
-                        sim = float(
-                            np.dot(centroid, ex_emb)
-                            / (np.linalg.norm(centroid) * np.linalg.norm(ex_emb) + 1e-9)
-                        )
+                        sim = cosine_similarity(centroid, ex_emb)
                         if sim > best_sim:
                             best_sim = sim
                             best_match_id = nid
@@ -1234,13 +1226,27 @@ class TaxonomyEngine:
         # 10. Reset deadlock breaker flag (cold path has run)
         self._cold_path_needed = False
 
-        return ColdPathResult(
+        result = ColdPathResult(
             snapshot_id=snap.id,
             q_system=q_system,
             nodes_created=nodes_created,
             nodes_updated=nodes_updated,
             umap_fitted=umap_fitted,
         )
+
+        # 11. Publish taxonomy_changed event (parity with warm path)
+        try:
+            from app.services.event_bus import event_bus
+            event_bus.publish("taxonomy_changed", {
+                "trigger": "cold_path",
+                "nodes_created": nodes_created,
+                "nodes_updated": nodes_updated,
+                "q_system": q_system,
+            })
+        except Exception as evt_exc:
+            logger.warning("Failed to publish taxonomy_changed (cold): %s", evt_exc)
+
+        return result
 
     # ------------------------------------------------------------------
     # Warm/cold path helpers
