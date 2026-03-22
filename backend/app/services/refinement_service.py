@@ -19,7 +19,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import DATA_DIR, settings
-from app.services.pipeline_constants import compute_optimize_max_tokens
 from app.models import Optimization, RefinementBranch, RefinementTurn
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.schemas.pipeline_contracts import (
@@ -31,6 +30,7 @@ from app.schemas.pipeline_contracts import (
     SuggestionsOutput,
 )
 from app.services.heuristic_scorer import HeuristicScorer
+from app.services.pipeline_constants import compute_optimize_max_tokens
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
