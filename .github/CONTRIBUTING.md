@@ -26,9 +26,9 @@ cd .. && ./init.sh start
 
 ## Code Style
 
-- **Backend**: Python 3.12+, Ruff for linting, type hints on all public methods
+- **Backend**: Python 3.14, Ruff for linting, type hints on all public methods
 - **Frontend**: SvelteKit 2, Svelte 5 runes, Tailwind CSS 4
-- **Brand**: Industrial cyberpunk — no glow, no shadows, 1px borders, dark backgrounds. See `.claude/skills/brand-guidelines/`
+- **Brand**: Industrial cyberpunk — no glow, no shadows, 1px borders, dark backgrounds
 
 ## Architecture Rules
 

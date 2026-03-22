@@ -1,18 +1,25 @@
-<!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
-- [x] Verify that the copilot-instructions.md file in the .github directory is created.
+<!-- GitHub Copilot workspace instructions for Project Synthesis -->
 
-- [x] Clarify Project Requirements
+## Project Synthesis
 
-- [x] Scaffold the Project
+AI-powered prompt optimization platform. Backend: FastAPI + SQLAlchemy async + SQLite. Frontend: SvelteKit 2 (Svelte 5 runes) + Tailwind CSS 4 + Three.js.
 
-- [x] Customize the Project
+## Architecture Rules
 
-- [x] Install Required Extensions
+- `routers/` → `services/` → `models/` only. Services never import from routers.
+- All prompts live in `prompts/` with `{{variable}}` syntax. Never hardcode prompts.
+- Model IDs centralized in `backend/app/config.py`. Use `PreferencesService.resolve_model()`.
+- Provider detected once at startup via `app.state.routing`. Never call `detect_provider()` in handlers.
+- All list endpoints use pagination envelope: `{total, count, offset, items, has_more, next_offset}`.
 
-- [x] Compile the Project
+## Frontend Style
 
-- [x] Create and Run Task
+- Industrial cyberpunk: dark backgrounds (`#06060c`), 1px neon contours, no rounded corners, no shadows, no glow effects.
+- Colors from `$lib/utils/colors.ts`: `scoreColor()`, `taxonomyColor()`, `qHealthColor()`, `stateColor()`.
+- Svelte 5 runes: `$state`, `$derived`, `$effect`. No legacy `$:` reactive statements.
 
-- [x] Launch the Project
+## Key Services
 
-- [x] Ensure Documentation is Complete
+- `backend/app/services/pipeline.py` — 3-phase pipeline: analyze → optimize → score
+- `backend/app/services/taxonomy/engine.py` — evolutionary taxonomy with hot/warm/cold paths
+- `frontend/src/lib/stores/clusters.svelte.ts` — unified cluster store (not `patternsStore`)

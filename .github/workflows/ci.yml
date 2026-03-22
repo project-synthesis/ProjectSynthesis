@@ -57,4 +57,5 @@ jobs:
       - run: npm ci
       - run: npx svelte-kit sync
       - run: npx svelte-check --tsconfig ./tsconfig.json --threshold error
+      - run: npm run test
       - run: npm run build
