@@ -123,16 +123,30 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 
 ## MCP Integration
 
-The MCP server provides 4 tools:
+The MCP server provides 11 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
+
+### Core pipeline tools
 
 | Tool | Purpose |
 |------|---------|
 | `synthesis_optimize` | Full pipeline — send a prompt, get back optimized version with scores. 5 execution paths: force_passthrough → force_sampling → provider → sampling fallback → passthrough fallback |
 | `synthesis_analyze` | Analysis + baseline scoring — task type, weaknesses, strategy recommendation, quality scores, actionable next steps |
-| `synthesis_prepare_optimization` | Assemble prompt + context for your IDE's LLM to process (supports `workspace_path` for roots scanning) |
-| `synthesis_save_result` | Persist the IDE LLM's result with heuristic bias correction |
+| `synthesis_prepare_optimization` | Assemble prompt + context for your IDE's LLM to process (step 1 of passthrough workflow) |
+| `synthesis_save_result` | Persist the IDE LLM's result with heuristic bias correction (step 3 of passthrough workflow) |
 
-All 4 tools refresh MCP client sampling capabilities on every invocation. Connect via `.mcp.json` (auto-loaded by Claude Code) or manually at `http://127.0.0.1:8001/mcp`.
+### Workflow tools
+
+| Tool | Purpose |
+|------|---------|
+| `synthesis_health` | System capabilities check — provider, tiers, strategies, stats. Call at session start |
+| `synthesis_strategies` | List available optimization strategies with metadata |
+| `synthesis_history` | Paginated optimization history with sort/filter |
+| `synthesis_get_optimization` | Full optimization detail by ID or trace_id |
+| `synthesis_match` | Knowledge graph search for similar clusters and reusable patterns |
+| `synthesis_feedback` | Submit quality feedback (thumbs_up/thumbs_down) to drive strategy adaptation |
+| `synthesis_refine` | Iteratively improve an optimized prompt with specific instructions |
+
+Connect via `.mcp.json` (auto-loaded by Claude Code) or manually at `http://127.0.0.1:8001/mcp`.
 
 ## Docker
 

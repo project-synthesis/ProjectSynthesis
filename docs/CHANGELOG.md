@@ -12,6 +12,18 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ### Changed
 - Rewrote all 11 MCP tool descriptions for LLM-first consumption with chaining hints (When → Returns → Chain)
 - Removed prompt echo from `AnalyzeOutput.optimization_ready` to eliminate token waste on large prompts
+- Extracted shared `build_scores_dict()` helper into `tools/_shared.py` (eliminates duplication in get_optimization + refine handlers)
+- Moved inline imports to module level in health, history, and optimize handlers for consistency
+- Imported `VALID_SORT_COLUMNS` from `OptimizationService` in history handler (single source of truth, no divergence risk)
+- Renamed `_VALID_SORT_COLUMNS` to `VALID_SORT_COLUMNS` in optimization_service.py (public API for cross-module use)
+- Replaced `hasattr` checks with direct attribute access on ORM columns in get_optimization and match handlers
+
+### Fixed
+- Fixed `SaveResultOutput.strategy_compliance` description — documented values now match actual output ('matched'/'partial'/'unknown')
+- Removed redundant re-raise pattern in feedback handler (`except ValueError: raise ValueError(str)` → let exception propagate)
+- Removed unused `selectinload` import from refine handler
+- Updated README.md MCP section from 4 to 11 tools with complete tool listing
+- Fixed test patch targets for health and history tests after moving imports to module level
 
 ## v0.3.0 — 2026-03-22
 
