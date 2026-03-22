@@ -21,7 +21,7 @@ vi.mock('$lib/api/client', async (importOriginal) => {
 
 import { forgeStore } from './forge.svelte';
 import { editorStore } from './editor.svelte';
-import { clustersStore as patternsStore } from './clusters.svelte';
+import { clustersStore } from './clusters.svelte';
 import { mockFetch, mockOptimizationResult, mockDimensionScores } from '../test-utils';
 import type { SSEEvent } from '$lib/api/client';
 import * as apiClient from '$lib/api/client';
@@ -30,7 +30,7 @@ describe('ForgeStore', () => {
   beforeEach(() => {
     forgeStore._reset();
     editorStore._reset();
-    patternsStore._reset();
+    clustersStore._reset();
   });
 
   afterEach(() => {
@@ -283,7 +283,7 @@ describe('ForgeStore', () => {
       ]);
       const result = mockOptimizationResult({ id: 'opt-cluster-1', cluster_id: 'clus-1' });
       forgeStore.loadFromRecord(result as any);
-      expect(patternsStore.selectedClusterId).toBe('clus-1');
+      expect(clustersStore.selectedClusterId).toBe('clus-1');
     });
 
     it('clears assembledPrompt and passthroughStrategy', () => {
@@ -346,8 +346,8 @@ describe('ForgeStore', () => {
       expect(forgeStore.scores).toBeNull();
     });
 
-    it('calls patternsStore.resetTracking()', () => {
-      const resetTracking = vi.spyOn(patternsStore, 'resetTracking');
+    it('calls clustersStore.resetTracking()', () => {
+      const resetTracking = vi.spyOn(clustersStore, 'resetTracking');
       forgeStore.reset();
       expect(resetTracking).toHaveBeenCalledOnce();
     });
@@ -428,11 +428,11 @@ describe('ForgeStore', () => {
     it('deselects pattern family before forging', () => {
       vi.mocked(apiClient.optimizeSSE).mockReturnValue(mockCtrl());
 
-      patternsStore.selectedFamilyId = 'fam-existing';
+      clustersStore.selectedClusterId = 'fam-existing';
       forgeStore.prompt = 'This is a valid prompt with more than 20 characters';
       forgeStore.forge();
 
-      expect(patternsStore.selectedFamilyId).toBeNull();
+      expect(clustersStore.selectedClusterId).toBeNull();
     });
 
     it('clears all state before forging', () => {

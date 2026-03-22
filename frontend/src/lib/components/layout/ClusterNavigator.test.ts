@@ -4,15 +4,12 @@ import userEvent from '@testing-library/user-event';
 import { mockFetch, mockPatternFamily, mockMetaPattern } from '$lib/test-utils';
 
 import ClusterNavigator from './ClusterNavigator.svelte';
-import { clustersStore as patternsStore } from '$lib/stores/clusters.svelte';
+import { clustersStore } from '$lib/stores/clusters.svelte';
 import { editorStore } from '$lib/stores/editor.svelte';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Build a tree response for /api/clusters/tree.
- * The listFamilies wrapper in clusters.ts does client-side pagination,
- * so the mock just needs to return { nodes: [...] }.
- */
+/** Build a tree response for /api/clusters/tree. */
 function treeResponse(items: ReturnType<typeof mockClusterNode>[]) {
   return { nodes: items };
 }
@@ -89,6 +86,13 @@ function clusterDetail(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Default stats response for /api/clusters/stats. */
+const defaultStats = {
+  q_system: null, q_coherence: null, q_separation: null, q_coverage: null, q_dbcv: null,
+  total_clusters: 0, nodes: null, last_warm_path: null, last_cold_path: null,
+  warm_path_age: null, q_history: null, q_sparkline: null,
+};
+
 /** Default fetch handlers for the component's initial data needs. */
 function defaultHandlers(
   items: ReturnType<typeof mockPatternFamily>[] = [],
@@ -101,23 +105,53 @@ function defaultHandlers(
       response: treeResponse(nodes),
     },
     {
+      match: '/api/clusters/stats',
+      response: defaultStats,
+    },
+    {
       match: '/api/clusters/',
       response: clusterDetail(),
     },
   ]);
 }
 
+/** Stub global fetch with custom handlers + default stats response.
+ *  `handlers` is an object mapping URL substrings to response objects.
+ *  The /api/clusters/stats endpoint is automatically handled. */
+function stubFetch(handlers: Record<string, unknown>) {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    // Check specific handlers (longest match first avoids false positives)
+    for (const [match, response] of Object.entries(handlers).sort((a, b) => b[0].length - a[0].length)) {
+      if (url.includes(match)) {
+        if (response instanceof Promise) return response; // hanging promise
+        return new Response(JSON.stringify(response), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    }
+    // Default stats handler
+    if (url.includes('/api/clusters/stats')) {
+      return new Response(JSON.stringify(defaultStats), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response('Not Found', { status: 404 });
+  }));
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('ClusterNavigator', () => {
   beforeEach(() => {
-    patternsStore._reset();
+    clustersStore._reset();
     editorStore._reset();
     vi.clearAllMocks();
   });
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
   });
 
   // ── 1. Family list rendering ────────────────────────────────────────────────
@@ -201,12 +235,13 @@ describe('ClusterNavigator', () => {
   // ── 2. Pagination ──────────────────────────────────────────────────────────
 
   it('shows "Load more" button when has_more is true', async () => {
-    // listFamilies does client-side pagination over getClusterTree; provide >50 nodes
+    // Provide >50 nodes so client-side pagination shows "Load more"
     const manyNodes = Array.from({ length: 51 }, (_, i) =>
       mockClusterNode({ id: `fam-${i}`, label: `Pattern ${i}`, domain: 'backend' }),
     );
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes: manyNodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
     render(ClusterNavigator);
@@ -238,6 +273,7 @@ describe('ClusterNavigator', () => {
     );
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes: manyNodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
 
@@ -247,6 +283,7 @@ describe('ClusterNavigator', () => {
       expect(screen.getByText('Load more')).toBeInTheDocument();
     });
 
+    // Load more now expands client-side page limit (no additional fetch)
     await user.click(screen.getByText('Load more'));
 
     await waitFor(() => {
@@ -260,11 +297,9 @@ describe('ClusterNavigator', () => {
 
   // ── 3. Domain filtering (via search) ───────────────────────────────────────
   //
-  // Note: ClusterNavigator groups families by domain but does NOT have a
-  // separate domain filter UI element — filtering happens by displaying
-  // grouped headers. The component uses listFamilies() without a domain param
-  // on the initial load; domain filtering is rendered through domain grouping.
-  // We verify the grouping reflects different domains correctly.
+  // Note: ClusterNavigator groups families by domain. Domain filtering is
+  // rendered through domain grouping. We verify the grouping reflects
+  // different domains correctly.
 
   it('groups families from the same domain under one header', async () => {
     defaultHandlers([
@@ -295,7 +330,7 @@ describe('ClusterNavigator', () => {
     const user = userEvent.setup();
 
     // Pre-populate taxonomy tree for local search
-    patternsStore.taxonomyTree = [
+    clustersStore.taxonomyTree = [
       { id: 'node-1', parent_id: null, label: 'API patterns', state: 'active', persistence: null, coherence: 0.9, separation: null, stability: null, member_count: 3, usage_count: 5, color_hex: '#a855f7', umap_x: null, umap_y: null, umap_z: null },
     ] as any;
 
@@ -314,7 +349,7 @@ describe('ClusterNavigator', () => {
     const user = userEvent.setup();
 
     // Empty taxonomy tree
-    patternsStore.taxonomyTree = [];
+    clustersStore.taxonomyTree = [];
 
     defaultHandlers([]);
     render(ClusterNavigator);
@@ -341,7 +376,7 @@ describe('ClusterNavigator', () => {
   it('clicking the clear button resets search and hides search results', async () => {
     const user = userEvent.setup();
 
-    patternsStore.taxonomyTree = [
+    clustersStore.taxonomyTree = [
       { id: 'node-1', parent_id: null, label: 'API patterns', state: 'active', persistence: null, coherence: 0.9, separation: null, stability: null, member_count: 3, usage_count: 5, color_hex: '#a855f7', umap_x: null, umap_y: null, umap_z: null },
     ] as any;
 
@@ -369,24 +404,16 @@ describe('ClusterNavigator', () => {
 
   // ── 5. Family selection ───────────────────────────────────────────────────
 
-  it('clicking a family row calls patternsStore.selectFamily with its id', async () => {
+  it('clicking a family row calls clustersStore.selectCluster with its id', async () => {
     const user = userEvent.setup();
-    const selectSpy = vi.spyOn(patternsStore, 'selectCluster');
+    const selectSpy = vi.spyOn(clustersStore, 'selectCluster');
 
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/clusters/fam-42')) {
-        return new Response(JSON.stringify(clusterDetail({ id: 'fam-42' })), {
-          status: 200, headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.includes('/api/clusters/tree')) {
-        return new Response(JSON.stringify(treeResponseWrapped([
-          mockPatternFamily({ id: 'fam-42', domain: 'backend', intent_label: 'API patterns' }),
-        ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response('Not Found', { status: 404 });
-    }));
+    stubFetch({
+      '/api/clusters/fam-42': clusterDetail({ id: 'fam-42' }),
+      '/api/clusters/tree': treeResponseWrapped([
+        mockPatternFamily({ id: 'fam-42', domain: 'backend', intent_label: 'API patterns' }),
+      ]),
+    });
 
     render(ClusterNavigator);
 
@@ -399,24 +426,16 @@ describe('ClusterNavigator', () => {
     expect(selectSpy).toHaveBeenCalledWith('fam-42');  // selectCluster
   });
 
-  it('clicking an already-expanded family collapses it and calls selectFamily(null)', async () => {
+  it('clicking an already-expanded family collapses it and calls selectCluster(null)', async () => {
     const user = userEvent.setup();
-    const selectSpy = vi.spyOn(patternsStore, 'selectCluster');
+    const selectSpy = vi.spyOn(clustersStore, 'selectCluster');
 
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/clusters/fam-1')) {
-        return new Response(JSON.stringify(clusterDetail()), {
-          status: 200, headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.includes('/api/clusters/tree')) {
-        return new Response(JSON.stringify(treeResponseWrapped([
-          mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
-        ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response('Not Found', { status: 404 });
-    }));
+    stubFetch({
+      '/api/clusters/fam-1': clusterDetail(),
+      '/api/clusters/tree': treeResponseWrapped([
+        mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
+      ]),
+    });
 
     render(ClusterNavigator);
 
@@ -437,19 +456,12 @@ describe('ClusterNavigator', () => {
     const user = userEvent.setup();
 
     // Make the family detail request hang so we can see the loading state
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/clusters/fam-1')) {
-        // Hang forever to test loading indicator
-        return new Promise(() => {}) as Promise<Response>;
-      }
-      if (url.includes('/api/clusters/tree')) {
-        return new Response(JSON.stringify(treeResponseWrapped([
-          mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
-        ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response('Not Found', { status: 404 });
-    }));
+    stubFetch({
+      '/api/clusters/fam-1': new Promise(() => {}),
+      '/api/clusters/tree': treeResponseWrapped([
+        mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
+      ]),
+    });
 
     render(ClusterNavigator);
 
@@ -468,20 +480,14 @@ describe('ClusterNavigator', () => {
   it('shows expanded meta-patterns after family detail loads', async () => {
     const user = userEvent.setup();
 
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/clusters/fam-1')) {
-        return new Response(JSON.stringify(clusterDetail({
-          meta_patterns: [mockMetaPattern({ id: 'mp-1', pattern_text: 'Validate inputs', source_count: 4 })],
-        })), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      if (url.includes('/api/clusters/tree')) {
-        return new Response(JSON.stringify(treeResponseWrapped([
-          mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
-        ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response('Not Found', { status: 404 });
-    }));
+    stubFetch({
+      '/api/clusters/fam-1': clusterDetail({
+        meta_patterns: [mockMetaPattern({ id: 'mp-1', pattern_text: 'Validate inputs', source_count: 4 })],
+      }),
+      '/api/clusters/tree': treeResponseWrapped([
+        mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
+      ]),
+    });
 
     render(ClusterNavigator);
 
@@ -511,7 +517,7 @@ describe('ClusterNavigator', () => {
   // ── 7. Loading state ──────────────────────────────────────────────────────
 
   it('shows "Loading..." while initial families fetch is pending', () => {
-    // Fetch never resolves
+    // Fetch never resolves — component shows loading state
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
     render(ClusterNavigator);
     expect(screen.getByText('Loading...')).toBeInTheDocument();
@@ -522,7 +528,7 @@ describe('ClusterNavigator', () => {
   it('clicking the mindmap button calls editorStore.openMindmap', async () => {
     const user = userEvent.setup();
     const openMindmapSpy = vi.spyOn(editorStore, 'openMindmap');
-    const loadTreeSpy = vi.spyOn(patternsStore, 'loadTree').mockResolvedValue();
+    const loadTreeSpy = vi.spyOn(clustersStore, 'loadTree').mockResolvedValue();
 
     defaultHandlers([]);
     render(ClusterNavigator);
@@ -543,35 +549,26 @@ describe('ClusterNavigator', () => {
     render(ClusterNavigator);
 
     await waitFor(() => {
+      // Error propagates through clustersStore.loadTree → taxonomyError
       expect(screen.getByText('Network failure')).toBeInTheDocument();
     });
   });
 
   // ── 10. Search result clicking selects family ──────────────────────────────
 
-  it('clicking a search result calls patternsStore.selectFamily and clears search', async () => {
+  it('clicking a search result calls clustersStore.selectCluster and clears search', async () => {
     const user = userEvent.setup();
-    const selectSpy = vi.spyOn(patternsStore, 'selectCluster');
+    const selectSpy = vi.spyOn(clustersStore, 'selectCluster');
 
     // Pre-populate taxonomy tree for local search
-    patternsStore.taxonomyTree = [
+    clustersStore.taxonomyTree = [
       { id: 'fam-1', parent_id: null, label: 'API patterns', state: 'active', persistence: null, coherence: 0.9, separation: null, stability: null, member_count: 3, usage_count: 5, color_hex: '#a855f7', umap_x: null, umap_y: null, umap_z: null },
     ] as any;
 
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/clusters/fam-1')) {
-        return new Response(JSON.stringify(clusterDetail({ id: 'fam-1' })), {
-          status: 200, headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.includes('/api/clusters/tree')) {
-        return new Response(JSON.stringify(treeResponseWrapped([])), {
-          status: 200, headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return new Response('Not Found', { status: 404 });
-    }));
+    stubFetch({
+      '/api/clusters/fam-1': clusterDetail({ id: 'fam-1' }),
+      '/api/clusters/tree': treeResponseWrapped([]),
+    });
 
     render(ClusterNavigator);
 
@@ -597,21 +594,12 @@ describe('ClusterNavigator', () => {
   it('shows "No meta-patterns extracted yet" when family has empty meta_patterns', async () => {
     const user = userEvent.setup();
 
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/clusters/fam-1')) {
-        return new Response(JSON.stringify(clusterDetail({ meta_patterns: [] })), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.includes('/api/clusters/tree')) {
-        return new Response(JSON.stringify(treeResponseWrapped([
-          mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
-        ])), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response('Not Found', { status: 404 });
-    }));
+    stubFetch({
+      '/api/clusters/fam-1': clusterDetail({ meta_patterns: [] }),
+      '/api/clusters/tree': treeResponseWrapped([
+        mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
+      ]),
+    });
 
     render(ClusterNavigator);
 
@@ -680,6 +668,7 @@ describe('ClusterNavigator', () => {
     ];
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
     render(ClusterNavigator);
@@ -710,6 +699,7 @@ describe('ClusterNavigator', () => {
     ];
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
     render(ClusterNavigator);
@@ -736,6 +726,7 @@ describe('ClusterNavigator', () => {
     ];
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
     render(ClusterNavigator);
@@ -752,6 +743,7 @@ describe('ClusterNavigator', () => {
     ];
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
     render(ClusterNavigator);
@@ -769,6 +761,7 @@ describe('ClusterNavigator', () => {
     ];
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
     render(ClusterNavigator);
@@ -790,6 +783,7 @@ describe('ClusterNavigator', () => {
     ];
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
     render(ClusterNavigator);
@@ -804,13 +798,14 @@ describe('ClusterNavigator', () => {
 
   it('clicking "Use" button calls clustersStore.spawnTemplate with cluster id', async () => {
     const user = userEvent.setup();
-    const spawnSpy = vi.spyOn(patternsStore, 'spawnTemplate').mockResolvedValue(null);
+    const spawnSpy = vi.spyOn(clustersStore, 'spawnTemplate').mockResolvedValue(null);
 
     const nodes = [
       mockClusterNode({ id: 'tmpl-42', label: 'My template', state: 'template', domain: 'general' }),
     ];
     mockFetch([
       { match: '/api/clusters/tree', response: { nodes } },
+      { match: '/api/clusters/stats', response: defaultStats },
       { match: '/api/clusters/', response: clusterDetail() },
     ]);
     render(ClusterNavigator);

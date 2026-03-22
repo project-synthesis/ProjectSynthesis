@@ -98,8 +98,8 @@ Object.defineProperty(globalThis, 'ResizeObserver', {
 describe('SemanticTopology', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { clustersStore: patternsStore } = await import('$lib/stores/clusters.svelte');
-    patternsStore._reset();
+    const { clustersStore } = await import('$lib/stores/clusters.svelte');
+    clustersStore._reset();
   });
 
   it('renders a canvas element', () => {

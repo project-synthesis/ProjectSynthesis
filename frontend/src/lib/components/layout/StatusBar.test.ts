@@ -4,12 +4,12 @@ import { mockFetch, mockHealthResponse, mockOptimizationResult } from '$lib/test
 
 import StatusBar from './StatusBar.svelte';
 import { forgeStore } from '$lib/stores/forge.svelte';
-import { clustersStore as patternsStore } from '$lib/stores/clusters.svelte';
+import { clustersStore } from '$lib/stores/clusters.svelte';
 
 describe('StatusBar', () => {
   beforeEach(() => {
     forgeStore._reset();
-    patternsStore._reset();
+    clustersStore._reset();
     vi.clearAllMocks();
   });
 
@@ -39,7 +39,7 @@ describe('StatusBar', () => {
 
   it('shows cluster count when taxonomyStats has active nodes > 0', async () => {
     // Set taxonomy stats with active nodes
-    patternsStore.taxonomyStats = {
+    clustersStore.taxonomyStats = {
       q_system: 0.8,
       q_coherence: 0.7,
       q_separation: 0.6,
@@ -61,7 +61,7 @@ describe('StatusBar', () => {
   });
 
   it('does not show cluster count when taxonomyStats is null', async () => {
-    patternsStore.taxonomyStats = null;
+    clustersStore.taxonomyStats = null;
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     render(StatusBar);
     await vi.waitFor(() => {}, { timeout: 100 });
@@ -148,6 +148,37 @@ describe('StatusBar', () => {
     expect(screen.getByText(/passthrough\.\.\./i)).toBeInTheDocument();
   });
 
+  it('shows Q_system badge when taxonomyStats has q_system value', async () => {
+    clustersStore.taxonomyStats = {
+      q_system: 0.82,
+      q_coherence: 0.7,
+      q_separation: 0.6,
+      q_coverage: 0.5,
+      q_dbcv: 0.4,
+      total_clusters: 5,
+      nodes: { active: 5, candidate: 1, mature: 0, template: 0, archived: 0, max_depth: 2, leaf_count: 4 },
+      last_warm_path: null,
+      last_cold_path: null,
+      warm_path_age: null,
+      q_history: [],
+      q_sparkline: [],
+    };
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    render(StatusBar);
+    await vi.waitFor(() => {
+      expect(screen.getByTitle('Taxonomy health (Q_system)')).toBeInTheDocument();
+      expect(screen.getByText('0.82')).toBeInTheDocument();
+    });
+  });
+
+  it('does not show Q_system badge when taxonomyStats is null', async () => {
+    clustersStore.taxonomyStats = null;
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    render(StatusBar);
+    await vi.waitFor(() => {}, { timeout: 100 });
+    expect(screen.queryByTitle('Taxonomy health (Q_system)')).not.toBeInTheDocument();
+  });
+
   it('cluster count updates when taxonomy stats change', async () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     render(StatusBar);
@@ -157,7 +188,7 @@ describe('StatusBar', () => {
     expect(screen.queryByText(/clusters/)).not.toBeInTheDocument();
 
     // Set taxonomy stats
-    patternsStore.taxonomyStats = {
+    clustersStore.taxonomyStats = {
       q_system: 0.8,
       q_coherence: 0.7,
       q_separation: 0.6,

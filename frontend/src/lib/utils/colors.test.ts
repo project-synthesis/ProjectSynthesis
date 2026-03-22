@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scoreColor, taxonomyColor, qHealthColor } from './colors';
+import { scoreColor, taxonomyColor, qHealthColor, stateColor } from './colors';
 
 describe('scoreColor', () => {
   it('returns dim for null', () => {
@@ -87,5 +87,23 @@ describe('qHealthColor', () => {
 
   it('returns red for < 0.4', () => {
     expect(qHealthColor(0.2)).toBe('var(--color-neon-red)');
+  });
+});
+
+describe('stateColor', () => {
+  it('returns correct color for each lifecycle state', () => {
+    expect(stateColor('candidate')).toBe('#7a7a9e');
+    expect(stateColor('active')).toBe('#4d8eff');
+    expect(stateColor('mature')).toBe('#a855f7');
+    expect(stateColor('template')).toBe('#00e5ff');
+    expect(stateColor('archived')).toBe('#2a2a3e');
+  });
+
+  it('returns fallback gray for unknown state', () => {
+    expect(stateColor('nonexistent')).toBe('#7a7a9e');
+  });
+
+  it('returns fallback gray for empty string', () => {
+    expect(stateColor('')).toBe('#7a7a9e');
   });
 });

@@ -16,7 +16,7 @@ vi.mock('$lib/components/refinement/ScoreSparkline.svelte', () => ({
 
 import Inspector from './Inspector.svelte';
 import { forgeStore } from '$lib/stores/forge.svelte';
-import { clustersStore as patternsStore } from '$lib/stores/clusters.svelte';
+import { clustersStore } from '$lib/stores/clusters.svelte';
 import { editorStore } from '$lib/stores/editor.svelte';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ function familyFetchHandlers(familyOverrides: Record<string, unknown> = {}) {
 describe('Inspector', () => {
   beforeEach(() => {
     forgeStore._reset();
-    patternsStore._reset();
+    clustersStore._reset();
     editorStore._reset();
     vi.clearAllMocks();
   });
@@ -108,9 +108,9 @@ describe('Inspector', () => {
   it('shows family metadata when a family is selected', async () => {
     familyFetchHandlers();
     // Directly set store state that the component reads
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
 
     render(Inspector);
 
@@ -127,9 +127,9 @@ describe('Inspector', () => {
   });
 
   it('shows usage, members and avg-score labels', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -142,9 +142,9 @@ describe('Inspector', () => {
   });
 
   it('shows domain badge for the selected family', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ domain: 'frontend' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ domain: 'frontend' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -163,9 +163,9 @@ describe('Inspector', () => {
         mockMetaPattern({ id: 'mp-2', pattern_text: 'Validate input parameters', source_count: 7 }),
       ],
     });
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = detail as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = detail as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -180,9 +180,9 @@ describe('Inspector', () => {
   });
 
   it('shows the Meta-patterns section heading', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -193,9 +193,9 @@ describe('Inspector', () => {
   });
 
   it('does not render meta-patterns section when list is empty', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ meta_patterns: [] }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ meta_patterns: [] }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -209,9 +209,9 @@ describe('Inspector', () => {
   // ── 4. Linked optimizations ──────────────────────────────────────────────────
 
   it('renders linked optimization entries', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -237,9 +237,9 @@ describe('Inspector', () => {
       },
     ]);
 
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
 
     render(Inspector);
 
@@ -256,9 +256,9 @@ describe('Inspector', () => {
   });
 
   it('does not render linked optimizations section when list is empty', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ optimizations: [] }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ optimizations: [] }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -273,9 +273,9 @@ describe('Inspector', () => {
 
   it('clicking the family intent label enters rename edit mode', async () => {
     const user = userEvent.setup();
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -295,9 +295,9 @@ describe('Inspector', () => {
 
   it('pressing Escape in rename input cancels rename', async () => {
     const user = userEvent.setup();
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -320,9 +320,9 @@ describe('Inspector', () => {
 
   it('clicking cancel button in rename form reverts to display mode', async () => {
     const user = userEvent.setup();
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -368,9 +368,9 @@ describe('Inspector', () => {
       return new Response('Not Found', { status: 404 });
     }));
 
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
 
     render(Inspector);
 
@@ -401,9 +401,9 @@ describe('Inspector', () => {
 
   it('clicking domain badge opens domain picker with 7 domain options', async () => {
     const user = userEvent.setup();
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -443,9 +443,9 @@ describe('Inspector', () => {
       return new Response('Not Found', { status: 404 });
     }));
 
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
 
     render(Inspector);
 
@@ -480,9 +480,9 @@ describe('Inspector', () => {
 
   it('clicking dismiss button deselects the family', async () => {
     const user = userEvent.setup();
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -493,15 +493,15 @@ describe('Inspector', () => {
 
     await user.click(screen.getByRole('button', { name: 'Close family detail' }));
 
-    expect(patternsStore.selectedFamilyId).toBeNull();
+    expect(clustersStore.selectedClusterId).toBeNull();
   });
 
   // ── 7. Loading state ─────────────────────────────────────────────────────────
 
-  it('shows loading spinner when familyDetailLoading is true', () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = null;
-    patternsStore.clusterDetailLoading = true;
+  it('shows loading spinner when clusterDetailLoading is true', () => {
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = null;
+    clustersStore.clusterDetailLoading = true;
     mockFetch([]);
 
     render(Inspector);
@@ -509,13 +509,13 @@ describe('Inspector', () => {
     expect(screen.getByRole('status', { name: 'Loading family' })).toBeInTheDocument();
   });
 
-  // ── 8. Error state from family detail ────────────────────────────────────────
+  // ── 8. Error state from cluster detail ───────────────────────────────────────
 
-  it('shows error message when familyDetailError is set', () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = null;
-    patternsStore.clusterDetailLoading = false;
-    patternsStore.clusterDetailError = 'Failed to load family';
+  it('shows error message when clusterDetailError is set', () => {
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = null;
+    clustersStore.clusterDetailLoading = false;
+    clustersStore.clusterDetailError = 'Failed to load family';
     mockFetch([]);
 
     render(Inspector);
@@ -705,9 +705,9 @@ describe('Inspector', () => {
 
   it('does not show family detail when forge is actively running (analyzing)', () => {
     forgeStore.status = 'analyzing';
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail() as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail() as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -721,9 +721,9 @@ describe('Inspector', () => {
   // ── 15. State badge ──────────────────────────────────────────────────────────
 
   it('renders state badge with correct text for active state', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -734,9 +734,9 @@ describe('Inspector', () => {
   });
 
   it('renders state badge with correct text for archived state', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'archived' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'archived' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -749,9 +749,9 @@ describe('Inspector', () => {
   // ── 16. Promote to template button ──────────────────────────────────────────
 
   it('renders "Promote to template" button when state is active', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -762,9 +762,9 @@ describe('Inspector', () => {
   });
 
   it('renders "Promote to template" button when state is mature', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'mature' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'mature' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -777,9 +777,9 @@ describe('Inspector', () => {
   // ── 17. Unarchive button ─────────────────────────────────────────────────────
 
   it('renders "Unarchive" button when state is archived', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'archived' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'archived' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -792,9 +792,9 @@ describe('Inspector', () => {
   // ── 18. Buttons NOT shown for other states ───────────────────────────────────
 
   it('does not render action buttons when state is template', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'template' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'template' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -807,9 +807,9 @@ describe('Inspector', () => {
   });
 
   it('does not render promote/unarchive when state is candidate', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'candidate' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'candidate' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -822,9 +822,9 @@ describe('Inspector', () => {
   });
 
   it('renders promote button when state is active', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -838,9 +838,9 @@ describe('Inspector', () => {
   // ── 19. preferred_strategy display ──────────────────────────────────────────
 
   it('shows preferred_strategy row when non-null', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ preferred_strategy: 'chain-of-thought' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ preferred_strategy: 'chain-of-thought' }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -852,9 +852,9 @@ describe('Inspector', () => {
   });
 
   it('does not show Strategy row when preferred_strategy is null', async () => {
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ preferred_strategy: null }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ preferred_strategy: null }) as any;
+    clustersStore.clusterDetailLoading = false;
     mockFetch([]);
 
     render(Inspector);
@@ -885,9 +885,9 @@ describe('Inspector', () => {
       });
     }));
 
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
+    clustersStore.clusterDetailLoading = false;
 
     render(Inspector);
 
@@ -927,9 +927,9 @@ describe('Inspector', () => {
       });
     }));
 
-    patternsStore.selectedClusterId = 'fam-1';
-    patternsStore.clusterDetail = makeFamilyDetail({ state: 'archived' }) as any;
-    patternsStore.clusterDetailLoading = false;
+    clustersStore.selectedClusterId = 'fam-1';
+    clustersStore.clusterDetail = makeFamilyDetail({ state: 'archived' }) as any;
+    clustersStore.clusterDetailLoading = false;
 
     render(Inspector);
 

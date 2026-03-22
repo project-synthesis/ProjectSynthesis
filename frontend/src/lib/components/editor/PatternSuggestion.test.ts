@@ -2,12 +2,12 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import PatternSuggestion from './PatternSuggestion.svelte';
-import { clustersStore as patternsStore } from '$lib/stores/clusters.svelte';
+import { clustersStore } from '$lib/stores/clusters.svelte';
 import { mockClusterMatch, mockMetaPattern } from '$lib/test-utils';
 
 describe('PatternSuggestion', () => {
   beforeEach(() => {
-    patternsStore._reset();
+    clustersStore._reset();
     vi.clearAllMocks();
   });
 
@@ -33,52 +33,52 @@ describe('PatternSuggestion', () => {
   });
 
   it('renders nothing when suggestion is null even if visible flag is set', () => {
-    patternsStore.suggestion = null;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestion = null;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows the suggestion banner when suggestion is visible', () => {
-    patternsStore.suggestion = makeSuggestion() as never;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestion = makeSuggestion() as never;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
     expect(screen.getByRole('alert')).toBeInTheDocument();
   });
 
   it('displays the family intent label in the suggestion banner', () => {
-    patternsStore.suggestion = makeSuggestion() as never;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestion = makeSuggestion() as never;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
     expect(screen.getByText('API endpoint patterns')).toBeInTheDocument();
   });
 
   it('displays similarity percentage', () => {
-    patternsStore.suggestion = makeSuggestion({ similarity: 0.85 }) as never;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestion = makeSuggestion({ similarity: 0.85 }) as never;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
     expect(screen.getByText(/85%/)).toBeInTheDocument();
   });
 
   it('shows meta-pattern count', () => {
-    patternsStore.suggestion = makeSuggestion() as never;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestion = makeSuggestion() as never;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
     expect(screen.getByText(/2 meta-patterns available/)).toBeInTheDocument();
   });
 
   it('shows singular meta-pattern text when only one', () => {
-    patternsStore.suggestion = makeSuggestion({
+    clustersStore.suggestion = makeSuggestion({
       meta_patterns: [mockMetaPattern({ id: 'mp-1' })],
     }) as never;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
     expect(screen.getByText(/1 meta-pattern available/)).toBeInTheDocument();
   });
 
   it('renders Apply and Skip buttons', () => {
-    patternsStore.suggestion = makeSuggestion() as never;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestion = makeSuggestion() as never;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
     expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument();
@@ -87,8 +87,8 @@ describe('PatternSuggestion', () => {
   it('calls applySuggestion and onApply with pattern IDs when Apply is clicked', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();
-    patternsStore.suggestion = makeSuggestion() as never;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestion = makeSuggestion() as never;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply } });
 
     await user.click(screen.getByRole('button', { name: 'Apply' }));
@@ -97,9 +97,9 @@ describe('PatternSuggestion', () => {
 
   it('calls dismissSuggestion when Skip is clicked', async () => {
     const user = userEvent.setup();
-    patternsStore.suggestion = makeSuggestion() as never;
-    patternsStore.suggestionVisible = true;
-    const dismissSpy = vi.spyOn(patternsStore, 'dismissSuggestion');
+    clustersStore.suggestion = makeSuggestion() as never;
+    clustersStore.suggestionVisible = true;
+    const dismissSpy = vi.spyOn(clustersStore, 'dismissSuggestion');
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
 
     await user.click(screen.getByRole('button', { name: 'Skip' }));
@@ -108,8 +108,8 @@ describe('PatternSuggestion', () => {
 
   it('dismisses suggestion after Skip (banner no longer visible)', async () => {
     const user = userEvent.setup();
-    patternsStore.suggestion = makeSuggestion() as never;
-    patternsStore.suggestionVisible = true;
+    clustersStore.suggestion = makeSuggestion() as never;
+    clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
 
     expect(screen.getByRole('alert')).toBeInTheDocument();

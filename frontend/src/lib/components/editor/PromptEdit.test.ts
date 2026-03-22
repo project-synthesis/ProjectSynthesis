@@ -14,14 +14,14 @@ vi.mock('$lib/api/client', () => ({
 
 import PromptEdit from './PromptEdit.svelte';
 import { forgeStore } from '$lib/stores/forge.svelte';
-import { clustersStore as patternsStore } from '$lib/stores/clusters.svelte';
+import { clustersStore } from '$lib/stores/clusters.svelte';
 import { editorStore } from '$lib/stores/editor.svelte';
 import * as apiClient from '$lib/api/client';
 
 describe('PromptEdit', () => {
   beforeEach(() => {
     forgeStore._reset();
-    patternsStore._reset();
+    clustersStore._reset();
     vi.clearAllMocks();
   });
 
@@ -179,9 +179,9 @@ describe('PromptEdit', () => {
     expect(forgeStore.status).not.toBe('idle');
   });
 
-  it('typing in textarea calls patternsStore.checkForPatterns', async () => {
+  it('typing in textarea calls clustersStore.checkForPatterns', async () => {
     const user = userEvent.setup();
-    const checkSpy = vi.spyOn(patternsStore, 'checkForPatterns');
+    const checkSpy = vi.spyOn(clustersStore, 'checkForPatterns');
     render(PromptEdit);
     const textarea = screen.getByRole('textbox', { name: 'Prompt editor' });
     await user.type(textarea, 'x');
