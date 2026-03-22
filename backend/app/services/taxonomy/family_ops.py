@@ -29,7 +29,7 @@ from app.models import (
     Optimization,
     PromptCluster,
 )
-from app.providers.base import LLMProvider
+from app.providers.base import LLMProvider, call_provider_with_retry
 from app.services.embedding_service import EmbeddingService
 from app.services.prompt_loader import PromptLoader
 
@@ -324,7 +324,8 @@ async def extract_meta_patterns(
             },
         )
 
-        response = await provider.complete_parsed(
+        response = await call_provider_with_retry(
+            provider,
             model=settings.MODEL_HAIKU,
             system_prompt=(
                 "You are a prompt engineering analyst. "

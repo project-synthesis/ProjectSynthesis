@@ -19,6 +19,7 @@ from app.config import PROMPTS_DIR, settings
 logger = logging.getLogger(__name__)
 
 VALID_MODELS: set[str] = {"sonnet", "opus", "haiku"}
+VALID_EFFORTS: set[str] = {"high", "max"}
 
 
 def _discover_strategies() -> set[str] | None:
@@ -46,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
         "enable_adaptation": True,
         "force_sampling": False,
         "force_passthrough": False,
+        "optimizer_effort": "high",
     },
     "defaults": {
         "strategy": "auto",
@@ -179,6 +181,16 @@ class PreferencesService:
                 )
                 pipeline[toggle] = default_val
 
+        # optimizer_effort must be "high" or "max"
+        effort = pipeline.get("optimizer_effort")
+        if effort not in VALID_EFFORTS:
+            default_effort = DEFAULTS["pipeline"]["optimizer_effort"]
+            logger.warning(
+                "Invalid optimizer_effort '%s' — falling back to '%s'",
+                effort, default_effort,
+            )
+            pipeline["optimizer_effort"] = default_effort
+
     @staticmethod
     def _validate(prefs: dict[str, Any]) -> None:
         """Raise ``ValueError`` for invalid model, strategy, or toggle values."""
@@ -206,6 +218,12 @@ class PreferencesService:
                 raise ValueError(
                     f"Pipeline toggle '{toggle}' must be boolean, got {type(val).__name__}"
                 )
+
+        effort = pipeline.get("optimizer_effort")
+        if effort is not None and effort not in VALID_EFFORTS:
+            raise ValueError(
+                f"Invalid optimizer_effort '{effort}'. Valid: {sorted(VALID_EFFORTS)}"
+            )
 
         if pipeline.get("force_sampling") and pipeline.get("force_passthrough"):
             raise ValueError("force_sampling and force_passthrough are mutually exclusive")

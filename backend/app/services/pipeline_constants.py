@@ -18,8 +18,10 @@ CODING_KEYWORDS: set[str] = {
 
 
 def compute_optimize_max_tokens(prompt_len: int) -> int:
-    """Dynamic output budget: scale with input length, cap at 65536.
+    """Dynamic output budget: scale with input length, cap at 131072 (128K).
 
-    Opus 4.6 supports 128K but ``.parse()`` needs headroom to avoid timeouts.
+    Opus 4.6 supports 128K output tokens.  The optimize/refine phases use
+    streaming (``complete_parsed_streaming``) which prevents HTTP timeouts,
+    so the full 128K capacity is safely available.
     """
-    return min(max(16384, prompt_len // 4 * 2), 65536)
+    return min(max(16384, prompt_len // 4 * 2), 131072)

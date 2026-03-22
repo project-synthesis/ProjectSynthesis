@@ -49,6 +49,12 @@ def _make_scores(a_clarity=4.0, b_clarity=8.0):
 def mock_provider():
     provider = AsyncMock(spec=LLMProvider)
     provider.name = "mock"
+    # Streaming delegates to non-streaming (mirrors base class default),
+    # so tests that set side_effect on complete_parsed work for both paths.
+    async def _streaming_delegate(**kw):
+        return await provider.complete_parsed(**kw)
+
+    provider.complete_parsed_streaming.side_effect = _streaming_delegate
     return provider
 
 

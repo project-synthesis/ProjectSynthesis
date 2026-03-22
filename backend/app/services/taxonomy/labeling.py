@@ -10,7 +10,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from app.providers.base import LLMProvider
+from app.providers.base import LLMProvider, call_provider_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,8 @@ async def generate_label(
     sample_block = "\n".join(f"- {t}" for t in truncated)
 
     try:
-        result = await provider.complete_parsed(
+        result = await call_provider_with_retry(
+            provider,
             model=model,
             system_prompt=(
                 "You are a taxonomy labeler. Given a list of text samples that "

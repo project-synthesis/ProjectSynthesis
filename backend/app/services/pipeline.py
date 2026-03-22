@@ -81,12 +81,16 @@ class PipelineOrchestrator:
         model: str,
         effort: str | None = None,
         max_tokens: int = 16384,
+        streaming: bool = False,
     ) -> Any:
         """Call provider with smart retry logic.
 
         Delegates to the shared ``call_provider_with_retry`` utility
         in ``providers.base`` which handles retryable vs non-retryable
         error classification and exponential backoff.
+
+        When ``streaming=True``, dispatches to ``complete_parsed_streaming()``
+        to prevent HTTP timeouts on long outputs (e.g. Opus 128K).
         """
         return await call_provider_with_retry(
             provider,
@@ -96,6 +100,7 @@ class PipelineOrchestrator:
             output_format=output_format,
             max_tokens=max_tokens,
             effort=effort,
+            streaming=streaming,
         )
 
     @staticmethod
@@ -429,8 +434,9 @@ class PipelineOrchestrator:
                 user_message=optimize_msg,
                 output_format=OptimizationResult,
                 model=prefs.resolve_model("optimizer", prefs_snapshot),
-                effort="high",
+                effort=prefs.get("pipeline.optimizer_effort", prefs_snapshot) or "high",
                 max_tokens=dynamic_max_tokens,
+                streaming=True,
             )
 
             yield PipelineEvent(event="status", data={"stage": "optimize", "state": "complete"})

@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import DATA_DIR, settings
+from app.services.pipeline_constants import compute_optimize_max_tokens
 from app.models import Optimization, RefinementBranch, RefinementTurn
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.schemas.pipeline_contracts import (
@@ -71,10 +72,13 @@ class RefinementService:
         model: str,
         effort: str | None = None,
         max_tokens: int = 16384,
+        streaming: bool = False,
     ) -> Any:
         """Call provider with smart retry logic.
 
         Delegates to the shared ``call_provider_with_retry`` utility.
+        When ``streaming=True``, uses ``complete_parsed_streaming()`` to
+        prevent HTTP timeouts on long outputs (e.g. Opus refine phase).
         """
         return await call_provider_with_retry(
             self.provider,
@@ -84,6 +88,7 @@ class RefinementService:
             output_format=output_format,
             max_tokens=max_tokens,
             effort=effort,
+            streaming=streaming,
         )
 
     # ------------------------------------------------------------------
@@ -233,16 +238,17 @@ class RefinementService:
             "adaptation_state": adaptation_state,
         })
 
-        # Dynamic output budget matching the main pipeline
-        dynamic_max_tokens = min(max(16384, len(current_prompt) // 4 * 2), 65536)
+        # Dynamic output budget matching the main pipeline (128K cap with streaming)
+        dynamic_max_tokens = compute_optimize_max_tokens(len(current_prompt))
 
         refined: OptimizationResult = await self._call_provider(
             system_prompt=system_prompt,
             user_message=refine_msg,
             output_format=OptimizationResult,
             model=_prefs.resolve_model("optimizer", _prefs_snapshot),
-            effort="high",
+            effort=_prefs.get("pipeline.optimizer_effort", _prefs_snapshot) or "high",
             max_tokens=dynamic_max_tokens,
+            streaming=True,
         )
 
         yield PipelineEvent(event="prompt_preview", data={

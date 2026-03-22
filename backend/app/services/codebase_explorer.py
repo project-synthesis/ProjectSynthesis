@@ -12,7 +12,7 @@ from pathlib import PurePosixPath
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
-from app.providers.base import LLMProvider
+from app.providers.base import LLMProvider, call_provider_with_retry
 from app.services.embedding_service import EmbeddingService
 from app.services.explore_cache import ExploreCache
 from app.services.github_client import GitHubClient
@@ -188,8 +188,9 @@ class CodebaseExplorer:
             "file_contents": file_contents_str,
         })
 
-        # 9. Single-shot synthesis via provider
-        result: ExploreOutput = await self._provider.complete_parsed(
+        # 9. Single-shot synthesis via provider (with retry for transient errors)
+        result: ExploreOutput = await call_provider_with_retry(
+            self._provider,
             model=settings.MODEL_HAIKU,
             system_prompt=self._loader.load("explore-guidance.md"),
             user_message=rendered,
