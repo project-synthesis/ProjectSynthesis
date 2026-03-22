@@ -83,7 +83,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 |---------|------|---------|
 | Backend | 8000 | FastAPI API + pipeline orchestration |
 | Frontend | 5199 | SvelteKit dev server |
-| MCP Server | 8001 | 4-tool MCP server for IDE integration |
+| MCP Server | 8001 | 11-tool MCP server for IDE integration |
 
 ```bash
 ./init.sh start     # start all (with preflight checks + health probes)

@@ -5,11 +5,17 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- Added streaming support for optimize/refine phases via `messages.stream()` + `get_final_message()` — prevents HTTP timeouts on long Opus outputs up to 128K tokens
+- Added `complete_parsed_streaming()` to LLM provider interface with fallback default in base class
+- Added `streaming` parameter to `call_provider_with_retry()` dispatcher
+- Added `optimizer_effort` user preference (`"high"` | `"max"`) with validation and sanitization in `PreferencesService`
 - Added 7 new MCP tools completing the autonomous LLM workflow: `synthesis_health`, `synthesis_strategies`, `synthesis_history`, `synthesis_get_optimization`, `synthesis_match`, `synthesis_feedback`, `synthesis_refine`
 - Extracted MCP tool handlers into `backend/app/tools/` package (11 modules) — `mcp_server.py` is now a thin ~420-line registration layer
 - Added `tools/_shared.py` for module-level state management (routing, taxonomy engine) with setter/getter pattern
 
 ### Changed
+- Raised optimize/refine `max_tokens` cap from 65,536 to 131,072 (safe with streaming)
+- Refactored `anthropic_api.py` — extracted `_build_kwargs()`, `_track_usage()`, `_raise_provider_error()` helpers, eliminating ~70 lines of duplicated error handling
 - Rewrote all 11 MCP tool descriptions for LLM-first consumption with chaining hints (When → Returns → Chain)
 - Removed prompt echo from `AnalyzeOutput.optimization_ready` to eliminate token waste on large prompts
 - Extracted shared `build_scores_dict()` helper into `tools/_shared.py` (eliminates duplication in get_optimization + refine handlers)
@@ -19,6 +25,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Replaced `hasattr` checks with direct attribute access on ORM columns in get_optimization and match handlers
 
 ### Fixed
+- Fixed double retry on Anthropic API provider — SDK default `max_retries=2` compounded with app-level retry for up to 6 attempts; now set to `max_retries=0`
+- Fixed 3 unprotected LLM call sites (`codebase_explorer`, `taxonomy/labeling`, `taxonomy/family_ops`) missing retry wrappers — transient 429/529 errors silently dropped results
+- Fixed effort parameter passed to Haiku models in both API and CLI providers — Haiku doesn't support effort
+- Fixed flaky `test_prune_daily_best_retention` — snapshots created near midnight UTC could cross calendar day boundaries
 - Fixed MCP internal pipeline path missing `taxonomy_engine` — MCP-originated internal runs now include domain mapping and auto-pattern injection
 - Fixed sampling pipeline missing auto-injection of cluster meta-patterns (only used explicit `applied_pattern_ids`, never auto-discovered)
 - Fixed sampling pipeline using fixed 16384 `max_tokens` for optimize phase — now dynamically scales with prompt length (16K–65K), matching internal pipeline
