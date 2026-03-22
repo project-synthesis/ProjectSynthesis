@@ -97,8 +97,9 @@ async def test_prune_daily_best_retention(db):
     """Snapshots between 1-30 days old: keep only the best per calendar day."""
     now = datetime.now(timezone.utc)
 
-    # Create 3 snapshots for the same day (5 days ago)
-    base = now - timedelta(days=5)
+    # Create 3 snapshots for the same day (5 days ago).
+    # Pin to noon UTC so hour offsets never cross a calendar-day boundary.
+    base = (now - timedelta(days=5)).replace(hour=12, minute=0, second=0, microsecond=0)
     for i, q in enumerate([0.70, 0.85, 0.75]):
         snap = TaxonomySnapshot(
             trigger="warm_path",
