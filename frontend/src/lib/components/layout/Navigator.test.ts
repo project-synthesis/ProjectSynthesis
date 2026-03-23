@@ -175,11 +175,13 @@ describe('Navigator', () => {
 
   // ── History panel ──────────────────────────────────────────────────────────
 
-  it('shows "Loading..." while history is being fetched', () => {
+  it('shows skeleton loading state while history is being fetched', () => {
     // Don't resolve fetch immediately — just check initial state
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))); // never resolves
     render(Navigator, { props: { active: 'history' } });
-    expect(screen.getByText(/Loading…/i)).toBeInTheDocument();
+    // Component shows skeleton bars (not text) while loading
+    const skeletonBars = document.querySelectorAll('.skeleton-row');
+    expect(skeletonBars.length).toBeGreaterThan(0);
   });
 
   it('shows empty state when history is empty', async () => {
@@ -219,7 +221,7 @@ describe('Navigator', () => {
     expect(screen.getByText(/8\.5/)).toBeInTheDocument();
   });
 
-  it('shows domain label for history items that have a domain', async () => {
+  it('applies domain-based accent color to history items', async () => {
     defaultFetchHandlers({
       history: {
         total: 1,
@@ -239,8 +241,12 @@ describe('Navigator', () => {
     });
     render(Navigator, { props: { active: 'history' } });
     await waitFor(() => {
-      expect(screen.getByText('frontend')).toBeInTheDocument();
+      expect(screen.getByText('React component')).toBeInTheDocument();
     });
+    // Domain is applied as a CSS --accent variable, not rendered as text
+    const row = screen.getByText('React component').closest('.history-row') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.style.cssText).toContain('--accent');
   });
 
   it('does not render items with non-completed status', async () => {
@@ -355,9 +361,10 @@ describe('Navigator', () => {
   it('renders model dropdowns in settings panel', () => {
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
-    expect(screen.getByText('Analyzer')).toBeInTheDocument();
-    expect(screen.getByText('Optimizer')).toBeInTheDocument();
-    expect(screen.getByText('Scorer')).toBeInTheDocument();
+    // Labels appear twice: once in Models section, once in Effort section
+    expect(screen.getAllByText('Analyzer')).toHaveLength(2);
+    expect(screen.getAllByText('Optimizer')).toHaveLength(2);
+    expect(screen.getAllByText('Scorer')).toHaveLength(2);
   });
 
   it('model selects show current preferences values', () => {
