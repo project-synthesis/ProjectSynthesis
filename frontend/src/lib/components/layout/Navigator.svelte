@@ -97,6 +97,7 @@
   let apiKeyInput = $state('');
   let apiKeyError = $state<string | null>(null);
   let apiKeySaving = $state(false);
+  let confirmingDelete = $state(false);
 
   // ---- Settings accordion state ----
   let showProvider = $state(false);
@@ -635,8 +636,20 @@
                   {apiKeySaving ? 'SAVING...' : 'SET KEY'}
                 </button>
                 {#if apiKeyStatus?.configured}
-                  <button class="action-btn" onclick={handleDeleteApiKey}>
-                    REMOVE
+                  <button
+                    class="action-btn"
+                    style={confirmingDelete ? 'color: var(--color-neon-red); border-color: var(--color-neon-red);' : ''}
+                    onclick={() => {
+                      if (confirmingDelete) {
+                        confirmingDelete = false;
+                        handleDeleteApiKey();
+                      } else {
+                        confirmingDelete = true;
+                        setTimeout(() => { confirmingDelete = false; }, 3000);
+                      }
+                    }}
+                  >
+                    {confirmingDelete ? 'CONFIRM?' : 'REMOVE'}
                   </button>
                 {/if}
               </div>
