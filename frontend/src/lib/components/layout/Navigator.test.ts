@@ -473,7 +473,7 @@ describe('Navigator', () => {
       // Other handlers
       if (url.includes('/api/provider/api-key')) return new Response(JSON.stringify({ configured: false, masked_key: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/providers')) return new Response(JSON.stringify({ active_provider: 'claude-cli', available: ['claude_cli'], routing_tiers: ['internal'] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url.includes('/api/settings')) return new Response(JSON.stringify({ version: '0.1.0', max_raw_prompt_chars: 50000, max_context_tokens: 8000, embedding_model: 'all-MiniLM-L6-v2', optimize_rate_limit: '10/minute', feedback_rate_limit: '30/minute', trace_retention_days: 7 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/settings')) return new Response(JSON.stringify(DEFAULT_SETTINGS), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/preferences')) return new Response(JSON.stringify(preferencesStore.prefs), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response('Not Found', { status: 404 });
     }));
