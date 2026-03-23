@@ -6,10 +6,15 @@
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { addToast, type ToastAction } from '$lib/stores/toast.svelte';
   import { scoreColor, taxonomyColor } from '$lib/utils/colors';
-  import { formatScore } from '$lib/utils/formatting';
+  import { formatScore, formatRelativeTime } from '$lib/utils/formatting';
   import { forceSamplingTooltip, forcePassthroughTooltip } from '$lib/utils/mcp-tooltips';
   import { getSettings, getProviders, getHistory, getOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
   import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo } from '$lib/api/client';
+
+  const TASK_TYPE_ABBREV: Record<string, string> = {
+    coding: 'COD', writing: 'WRT', analysis: 'ANL',
+    creative: 'CRE', data: 'DAT', system: 'SYS',
+  };
 
   type Activity = 'editor' | 'history' | 'clusters' | 'github' | 'settings';
 
@@ -81,6 +86,7 @@
   let historyItems = $state<HistoryItem[]>([]);
   let historyError = $state<string | null>(null);
   let historyLoaded = $state(false);
+  let completedItems = $derived(historyItems.filter(i => i.status === 'completed'));
 
   // ---- Settings panel state ----
   let settings = $state<SettingsResponse | null>(null);
@@ -309,17 +315,25 @@
         {#if historyError}
           <p class="empty-note">{historyError}</p>
         {:else if !historyLoaded}
-          <p class="empty-note">Loading…</p>
+          {#each {length: 4} as _}
+            <div class="skeleton-row">
+              <div class="skeleton-bar skeleton-wide"></div>
+              <div class="skeleton-bar skeleton-narrow"></div>
+            </div>
+          {/each}
         {:else if historyItems.length === 0}
           <p class="empty-note">No optimizations yet.</p>
         {:else}
-          {#each historyItems.filter(i => i.status === 'completed') as item (item.id)}
-            <button class="row-item history-row" onclick={() => loadHistoryItem(item)}>
-              <span class="row-prompt">{item.intent_label || (item.raw_prompt ? item.raw_prompt.slice(0, 60) + (item.raw_prompt.length > 60 ? '..' : '') : 'Untitled')}</span>
-              <div class="history-meta">
-                {#if item.domain}
-                  <span class="row-domain font-mono" style="color: {taxonomyColor(item.domain)};">{item.domain}</span>
+          {#each completedItems as item (item.id)}
+            <button class="row-item history-row" style="--accent: {taxonomyColor(item.domain)};" onclick={() => loadHistoryItem(item)}>
+              <span class="row-prompt-line">
+                {#if item.task_type && item.task_type !== 'general' && TASK_TYPE_ABBREV[item.task_type]}
+                  <span class="row-type">{TASK_TYPE_ABBREV[item.task_type]}</span>
                 {/if}
+                <span class="row-prompt">{item.intent_label || (item.raw_prompt ? item.raw_prompt.slice(0, 60) + (item.raw_prompt.length > 60 ? '..' : '') : 'Untitled')}</span>
+                <span class="row-time">{formatRelativeTime(item.created_at)}</span>
+              </span>
+              <div class="history-meta">
                 <span class="row-badge font-mono">{item.strategy_used || 'auto'}</span>
                 <span
                   class="row-score font-mono"
@@ -337,7 +351,7 @@
               </div>
             </button>
           {/each}
-          {#if historyItems.filter(i => i.status === 'completed').length === 0}
+          {#if completedItems.length === 0}
             <p class="empty-note">No completed optimizations yet.</p>
           {/if}
         {/if}
@@ -448,7 +462,7 @@
                   class:toggle-track--on={preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline]}
                   onclick={() => preferencesStore.setPipelineToggle(key, !preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline])}
                   role="switch"
-                  aria-checked={preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline]}
+                  aria-checked={preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline] as boolean}
                   aria-label="Toggle {label}"
                 >
                   <span class="toggle-thumb"></span>
@@ -494,6 +508,32 @@
                 <span class="toggle-thumb"></span>
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- Effort (per-phase speed vs quality) -->
+        <div class="sub-section">
+          <span class="sub-heading">Effort</span>
+          <div class="card-terminal">
+            {#each [
+              { label: 'Analyzer', key: 'analyzer_effort' },
+              { label: 'Optimizer', key: 'optimizer_effort' },
+              { label: 'Scorer', key: 'scorer_effort' },
+            ] as { label, key }}
+              <div class="data-row">
+                <span class="data-label">{label}</span>
+                <select
+                  class="pref-select"
+                  value={preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline] as string}
+                  onchange={(e) => preferencesStore.setEffort(key, (e.target as HTMLSelectElement).value)}
+                >
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="max">max</option>
+                </select>
+              </div>
+            {/each}
           </div>
         </div>
 
@@ -801,32 +841,57 @@
   .history-row {
     height: auto;
     min-height: 20px;
-    padding: 2px 4px;
+    padding: 2px 6px 2px 8px;
     flex-direction: column;
     align-items: stretch;
     gap: 1px;
+    border-left: 2px solid var(--accent, transparent);
+  }
+
+  .history-row:hover {
+    border-left-color: var(--accent, transparent);
+  }
+
+  .row-prompt-line {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .row-type {
+    font-size: 8px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+
+  .row-time {
+    font-size: 8px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    margin-left: auto;
+    flex-shrink: 0;
   }
 
   .row-prompt {
     font-size: 10px;
+    font-weight: 500;
     color: var(--color-text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     text-align: left;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
   }
 
   .history-meta {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 6px;
     width: 100%;
-  }
-
-  .row-domain {
-    font-size: 9px;
-    flex-shrink: 0;
   }
 
   .row-score {
@@ -837,6 +902,29 @@
   .row-feedback {
     font-size: 10px;
     flex-shrink: 0;
+  }
+
+  .skeleton-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 6px 4px 10px;
+    border-left: 2px solid var(--color-border-subtle);
+  }
+
+  .skeleton-bar {
+    height: 8px;
+    background: linear-gradient(90deg, var(--color-bg-card) 25%, var(--color-bg-hover) 50%, var(--color-bg-card) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1500ms ease-in-out infinite;
+  }
+
+  .skeleton-wide { width: 85%; }
+  .skeleton-narrow { width: 55%; }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
   }
 
   /* ---- Info blocks ---- */

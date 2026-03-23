@@ -12,6 +12,9 @@ export interface PipelinePrefs {
   enable_adaptation: boolean;
   force_sampling: boolean;
   force_passthrough: boolean;
+  optimizer_effort: string;
+  analyzer_effort: string;
+  scorer_effort: string;
 }
 
 export interface Preferences {
@@ -24,7 +27,7 @@ export interface Preferences {
 const DEFAULTS: Preferences = {
   schema_version: 1,
   models: { analyzer: 'sonnet', optimizer: 'opus', scorer: 'sonnet' },
-  pipeline: { enable_explore: true, enable_scoring: true, enable_adaptation: true, force_sampling: false, force_passthrough: false },
+  pipeline: { enable_explore: true, enable_scoring: true, enable_adaptation: true, force_sampling: false, force_passthrough: false, optimizer_effort: 'high', analyzer_effort: 'low', scorer_effort: 'low' },
   defaults: { strategy: 'auto' },
 };
 
@@ -80,6 +83,10 @@ class PreferencesStore {
 
   async setDefaultStrategy(strategy: string): Promise<void> {
     await this.update({ defaults: { strategy } });
+  }
+
+  async setEffort(key: string, value: string): Promise<void> {
+    await this.update({ pipeline: { [key]: value } });
   }
 
   /** @internal Test-only: restore initial state */
