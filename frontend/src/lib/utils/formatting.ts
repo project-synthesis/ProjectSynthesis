@@ -19,6 +19,23 @@ export function truncateText(text: string, maxLen = 80): string {
   return text.slice(0, maxLen).trimEnd() + '...';
 }
 
+/** Compact relative time string for sidebar display (e.g. "2h", "3d", "1mo"). */
+export function formatRelativeTime(isoString: string): string {
+  const diff = Date.now() - new Date(isoString).getTime();
+  if (diff < 0) return 'now';
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return 'now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  if (days < 30) return `${Math.floor(days / 7)}w`;
+  if (days < 365) return `${Math.floor(days / 30)}mo`;
+  return `${Math.floor(days / 365)}y`;
+}
+
 /**
  * Copy text to clipboard with fallback for older browsers.
  * Returns true on success, false on failure.

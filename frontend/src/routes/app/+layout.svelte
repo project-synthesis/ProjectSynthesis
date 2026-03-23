@@ -7,6 +7,7 @@
   import Toast from '$lib/components/shared/Toast.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
+  import { clustersStore } from '$lib/stores/clusters.svelte';
 
   let { children } = $props();
 
@@ -16,6 +17,7 @@
   $effect(() => {
     preferencesStore.init();
     forgeStore.restoreSession();
+    clustersStore.loadTree();
   });
 
   $effect(() => {

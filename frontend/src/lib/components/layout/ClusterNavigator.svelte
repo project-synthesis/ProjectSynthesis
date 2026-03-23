@@ -4,7 +4,7 @@
   import { editorStore, PROMPT_TAB_ID } from '$lib/stores/editor.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
-  import { scoreColor, taxonomyColor } from '$lib/utils/colors';
+  import { scoreColor, taxonomyColor, stateColor } from '$lib/utils/colors';
   import { formatScore } from '$lib/utils/formatting';
 
   const PAGE_SIZE = 50;
@@ -29,7 +29,7 @@
   // Search state — local filtering from taxonomy tree
   let searchQuery = $state('');
   let searchActive = $derived(searchQuery.trim().length > 0);
-  interface LocalSearchResult { id: string; label: string; score: number; }
+  interface LocalSearchResult { id: string; label: string; score: number; state: string; domain: string; }
   let searchResults = $derived.by<LocalSearchResult[]>(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [];
@@ -40,6 +40,8 @@
         id: node.id,
         label: node.label ?? '',
         score: node.coherence ?? 0,
+        state: node.state ?? 'active',
+        domain: node.domain ?? 'general',
       }));
   });
 
@@ -197,8 +199,9 @@
           <button
             class="search-result"
             onclick={() => selectSearchResult(result)}
+            style="--state-color: {stateColor(result.state)};"
           >
-            <span class="badge-neon">CLU</span>
+            <span class="domain-dot" style="background: {taxonomyColor(result.domain)};"></span>
             <span class="search-label">{result.label}</span>
             <span class="search-score font-mono">{(result.score * 100).toFixed(0)}%</span>
           </button>
@@ -254,9 +257,11 @@
               class="family-row"
               class:family-row--expanded={expandedId === family.id}
               onclick={() => toggleExpand(family)}
+              style="--state-color: {stateColor(family.state)};"
             >
               <span class="family-label">{family.label}</span>
               <span class="family-badges">
+                <span class="member-count font-mono" title="{family.member_count} members">{family.member_count}m</span>
                 <span class="badge-neon" title="Usage count">{family.usage_count}</span>
                 <span
                   class="badge-score font-mono"
@@ -272,6 +277,13 @@
                 {#if clustersStore.clusterDetailLoading}
                   <p class="detail-note">Loading...</p>
                 {:else if clustersStore.clusterDetail}
+                  <div class="detail-stats">
+                    <span style="color: {stateColor(clustersStore.clusterDetail.state)}">{clustersStore.clusterDetail.state}</span>
+                    <span>{clustersStore.clusterDetail.member_count} members</span>
+                    {#if clustersStore.clusterDetail.preferred_strategy}
+                      <span>{clustersStore.clusterDetail.preferred_strategy}</span>
+                    {/if}
+                  </div>
                   {#if clustersStore.clusterDetail.meta_patterns.length > 0}
                     <div class="meta-list">
                       {#each clustersStore.clusterDetail.meta_patterns as mp (mp.id)}
@@ -287,7 +299,10 @@
                 {:else if clustersStore.clusterDetailError}
                   <p class="detail-note">Failed to load detail.</p>
                 {:else}
-                  <p class="detail-note">Loading...</p>
+                  <div class="skeleton-row">
+                    <div class="skeleton-bar skeleton-wide"></div>
+                    <div class="skeleton-bar skeleton-narrow"></div>
+                  </div>
                 {/if}
               </div>
             {/if}
@@ -409,6 +424,7 @@
     padding: 0 6px;
     background: transparent;
     border: 1px solid transparent;
+    border-left: 2px solid var(--state-color, transparent);
     cursor: pointer;
     width: 100%;
     text-align: left;
@@ -419,6 +435,7 @@
   .search-result:hover {
     background: var(--color-bg-hover);
     border-color: var(--color-border-accent);
+    border-left-color: var(--state-color, transparent);
   }
 
   .search-result:active {
@@ -602,6 +619,7 @@
     padding: 0 6px 0 16px;
     background: transparent;
     border: 1px solid transparent;
+    border-left: 2px solid var(--state-color, transparent);
     cursor: pointer;
     width: 100%;
     text-align: left;
@@ -612,6 +630,7 @@
   .family-row:hover {
     background: var(--color-bg-hover);
     border-color: var(--color-border-accent);
+    border-left-color: var(--state-color, transparent);
   }
 
   .family-row:active {
@@ -620,6 +639,7 @@
 
   .family-row--expanded {
     border-color: var(--color-neon-cyan);
+    border-left-color: var(--state-color, var(--color-neon-cyan));
     background: color-mix(in srgb, var(--color-neon-cyan) 4%, transparent);
   }
 
@@ -692,5 +712,45 @@
     font-size: 8px;
     color: var(--color-text-dim);
     flex-shrink: 0;
+  }
+
+  .member-count {
+    font-size: 8px;
+    color: var(--color-text-dim);
+    flex-shrink: 0;
+  }
+
+  .detail-stats {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 2px 0 4px;
+    font-size: 8px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    border-bottom: 1px solid var(--color-border-subtle);
+    margin-bottom: 4px;
+  }
+
+  .skeleton-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 3px 0;
+  }
+
+  .skeleton-bar {
+    height: 6px;
+    background: linear-gradient(90deg, var(--color-bg-card) 25%, var(--color-bg-hover) 50%, var(--color-bg-card) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1500ms ease-in-out infinite;
+  }
+
+  .skeleton-wide { width: 80%; }
+  .skeleton-narrow { width: 50%; }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
   }
 </style>
