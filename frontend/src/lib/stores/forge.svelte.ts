@@ -309,6 +309,7 @@ class ForgeStore {
     } catch {
       // No valid session to restore — start fresh
       localStorage.removeItem('synthesis:last_trace_id');
+      addToast('modified', 'Previous session could not be restored');
     }
   }
 

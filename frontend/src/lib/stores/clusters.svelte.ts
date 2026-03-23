@@ -119,6 +119,11 @@ class ClusterStore {
   /** Called by SSE handler when taxonomy_changed fires. */
   invalidateClusters(): void {
     this.loadTree();
+    // Refresh the currently selected cluster detail (if any) so the
+    // Inspector never shows stale data after a warm/cold path mutation.
+    if (this.selectedClusterId) {
+      this._loadClusterDetail(this.selectedClusterId);
+    }
   }
 
 

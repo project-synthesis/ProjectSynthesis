@@ -2,6 +2,8 @@
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { preferencesStore } from '$lib/stores/preferences.svelte';
+  import type { Preferences } from '$lib/stores/preferences.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
   import { getHealth, connectEventStream } from '$lib/api/client';
   import type { HealthResponse } from '$lib/api/client';
@@ -9,6 +11,7 @@
   let health = $state<HealthResponse | null>(null);
   let backendError = $state<string | null>(null);
   let eventSource: EventSource | null = null;
+  let sseHadError = false;
 
   // Real-time event stream
   $effect(() => {
@@ -49,7 +52,27 @@
         if (delta.samplingChanged) addToast('created', 'MCP client connected with sampling capability');
         if (delta.disconnected) addToast('deleted', 'MCP client disconnected');
       }
+      if (type === 'preferences_changed') {
+        preferencesStore.prefs = data as unknown as Preferences;
+      }
     });
+
+    // SSE reconnection reconciliation — EventSource auto-reconnects on error,
+    // but events may have been lost during the gap. The server sends replays
+    // via Last-Event-ID, but as a defense-in-depth we also refetch critical
+    // state when the connection recovers.
+    eventSource.addEventListener('open', () => {
+      if (sseHadError) {
+        sseHadError = false;
+        healthPoll();
+        clustersStore.invalidateClusters();
+        window.dispatchEvent(new CustomEvent('strategy-changed'));
+      }
+    });
+    eventSource.onerror = () => {
+      sseHadError = true;
+    };
+
     return () => eventSource?.close();
   });
 

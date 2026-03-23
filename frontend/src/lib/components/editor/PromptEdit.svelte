@@ -35,6 +35,20 @@
     return () => window.removeEventListener('strategy-changed', handler);
   });
 
+  // Defense-in-depth: re-fetch strategies when tab becomes visible.
+  // Covers missed SSE events (e.g., connection loss during background tab).
+  $effect(() => {
+    const handler = () => {
+      if (document.visibilityState === 'visible') {
+        getStrategies()
+          .then((list) => { strategyOptions = strategyListToOptions(list); })
+          .catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  });
+
   const isSynthesizing = $derived(
     forgeStore.status !== 'idle' &&
     forgeStore.status !== 'complete' &&
