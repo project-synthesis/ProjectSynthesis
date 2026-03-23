@@ -704,6 +704,10 @@
             {#if settings}
               <div class="card-terminal">
                 <div class="data-row">
+                  <span class="data-label">Version</span>
+                  <span class="data-value font-mono">{forgeStore.version ?? '—'}</span>
+                </div>
+                <div class="data-row">
                   <span class="data-label">Max chars</span>
                   <span class="data-value font-mono">{settings.max_raw_prompt_chars.toLocaleString()}</span>
                 </div>
