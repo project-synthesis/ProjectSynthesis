@@ -633,7 +633,9 @@
             </div>
             <form class="api-key-form" onsubmit={(e: Event) => { e.preventDefault(); handleSetApiKey(); }} autocomplete="off">
               <input type="text" name="username" value="anthropic-api-key" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true" />
+              <label for="api-key-input" class="sr-only">Anthropic API key</label>
               <input
+                id="api-key-input"
                 class="api-key-input"
                 type="password"
                 name="password"
@@ -675,17 +677,17 @@
         </div>
 
         <!-- System config (collapsible — tertiary) -->
-        {#if settings}
-          <div class="sub-section">
-            <button
-              class="accordion-heading"
-              onclick={() => showSystem = !showSystem}
-              aria-expanded={showSystem}
-            >
-              <span class="accordion-arrow" class:accordion-arrow--open={showSystem}>&#x25B8;</span>
-              <span class="sub-heading">System</span>
-            </button>
-            {#if showSystem}
+        <div class="sub-section">
+          <button
+            class="accordion-heading"
+            onclick={() => showSystem = !showSystem}
+            aria-expanded={showSystem}
+          >
+            <span class="accordion-arrow" class:accordion-arrow--open={showSystem}>&#x25B8;</span>
+            <span class="sub-heading">System</span>
+          </button>
+          {#if showSystem}
+            {#if settings}
               <div class="card-terminal">
                 <div class="data-row">
                   <span class="data-label">Max chars</span>
@@ -716,9 +718,11 @@
                   <span class="data-value font-mono" title="LLM + heuristic blended scores">hybrid</span>
                 </div>
               </div>
+            {:else}
+              <p class="empty-note">Backend unavailable</p>
             {/if}
-          </div>
-        {/if}
+          {/if}
+        </div>
       </div>
     </div>
   {/if}
