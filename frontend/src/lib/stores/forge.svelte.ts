@@ -128,13 +128,20 @@ class ForgeStore {
       (err: Error) => {
         this.error = err.message;
         this.status = 'error';
-        // Attempt reconnection if we have a trace ID
-        if (this.traceId) this.reconnect();
+        // Passthrough SSE is only 2 events — no reconnection needed.
+        // Internal pipeline: attempt reconnection via trace ID polling.
+        if (this.traceId && !this.passthroughTraceId) this.reconnect();
       },
       () => {
         if (this.status !== 'complete' && this.status !== 'error') {
-          // Stream ended without complete event — try reconnection
-          if (this.traceId) this.reconnect();
+          if (this.status === 'passthrough') return; // Already received passthrough event — done
+          if (this.traceId) {
+            this.reconnect();
+          } else if (this.passthroughTraceId) {
+            // Stream dropped before passthrough event arrived
+            this.error = 'Connection lost during passthrough setup. Please try again.';
+            this.status = 'error';
+          }
         }
       },
       patternIds,
@@ -171,6 +178,7 @@ class ForgeStore {
       this.passthroughTraceId = event.trace_id as string;
       this.passthroughStrategy = event.strategy as string;
       this.status = 'passthrough';
+      this._saveSession();
       return;
     }
 
@@ -299,24 +307,62 @@ class ForgeStore {
   }
 
   private _saveSession(): void {
-    if (this.result?.trace_id) {
-      try {
+    try {
+      if (this.result?.trace_id) {
         localStorage.setItem('synthesis:last_trace_id', this.result.trace_id);
-      } catch { /* storage full or unavailable */ }
-    }
+        localStorage.removeItem('synthesis:passthrough_state');
+      } else if (this.passthroughTraceId) {
+        localStorage.setItem('synthesis:passthrough_state', JSON.stringify({
+          traceId: this.passthroughTraceId,
+          assembledPrompt: this.assembledPrompt,
+          strategy: this.passthroughStrategy,
+          prompt: this.prompt,
+        }));
+      }
+    } catch { /* storage full or unavailable */ }
   }
 
   async restoreSession(): Promise<void> {
     try {
+      // Try completed session first
       const traceId = localStorage.getItem('synthesis:last_trace_id');
-      if (!traceId) return;
-      const { getOptimization } = await import('$lib/api/client');
-      const opt = await getOptimization(traceId);
-      this.loadFromRecord(opt);
-      editorStore.openResult(opt.id);
+      if (traceId) {
+        const { getOptimization } = await import('$lib/api/client');
+        const opt = await getOptimization(traceId);
+        this.loadFromRecord(opt);
+        editorStore.openResult(opt.id);
+        return;
+      }
+
+      // Try passthrough session
+      const ptRaw = localStorage.getItem('synthesis:passthrough_state');
+      if (ptRaw) {
+        const pt = JSON.parse(ptRaw) as {
+          traceId: string; assembledPrompt: string | null;
+          strategy: string | null; prompt: string;
+        };
+        // Check if it was completed while we were away
+        try {
+          const { getOptimization } = await import('$lib/api/client');
+          const opt = await getOptimization(pt.traceId);
+          if (opt.status === 'completed') {
+            this.loadFromRecord(opt);
+            editorStore.openResult(opt.id);
+            localStorage.removeItem('synthesis:passthrough_state');
+            return;
+          }
+        } catch { /* still pending — restore passthrough state */ }
+
+        this.prompt = pt.prompt || '';
+        this.passthroughTraceId = pt.traceId;
+        this.assembledPrompt = pt.assembledPrompt;
+        this.passthroughStrategy = pt.strategy;
+        this.status = 'passthrough';
+      }
     } catch {
       // No valid session to restore — start fresh
       localStorage.removeItem('synthesis:last_trace_id');
+      localStorage.removeItem('synthesis:passthrough_state');
       addToast('modified', 'Previous session could not be restored');
     }
   }
@@ -363,6 +409,7 @@ class ForgeStore {
     this.clusterId = null;
     this.routingDecision = null;
     clustersStore.resetTracking();
+    try { localStorage.removeItem('synthesis:passthrough_state'); } catch { /* noop */ }
   }
 }
 
