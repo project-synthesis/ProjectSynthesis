@@ -219,9 +219,10 @@ describe('submitFeedback', () => {
 
 describe('getProviders', () => {
   it('calls GET /providers', async () => {
-    const mock = mockFetch([{ match: '/providers', response: { active_provider: 'claude-cli', available: ['claude-cli'] } }]);
+    const mock = mockFetch([{ match: '/providers', response: { active_provider: 'claude-cli', available: ['claude_cli'], routing_tiers: ['internal'] } }]);
     const result = await getProviders();
     expect(result.active_provider).toBe('claude-cli');
+    expect(result.routing_tiers).toEqual(['internal']);
     const [url] = mock.mock.calls[0];
     expect(url).toContain('/providers');
   });

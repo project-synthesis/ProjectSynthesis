@@ -325,11 +325,13 @@ class ForgeStore {
   /** @internal Test-only: restore initial state (delegates to reset() + clears ambient routing state) */
   _reset() {
     this.reset();
-    // Clear ambient routing state (not cleared by user-facing reset)
+    // Clear ambient routing/health state (not cleared by user-facing reset)
     this.samplingCapable = null;
     this.mcpDisconnected = false;
     this.provider = null;
     this.version = null;
+    this.recentErrors = null;
+    this.avgDurationMs = null;
   }
 
   reset() {
