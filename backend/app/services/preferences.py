@@ -19,7 +19,7 @@ from app.config import PROMPTS_DIR, settings
 logger = logging.getLogger(__name__)
 
 VALID_MODELS: set[str] = {"sonnet", "opus", "haiku"}
-VALID_EFFORTS: set[str] = {"high", "max"}
+VALID_EFFORTS: set[str] = {"low", "medium", "high", "max"}
 
 
 def _discover_strategies() -> set[str] | None:
@@ -48,6 +48,8 @@ DEFAULTS: dict[str, Any] = {
         "force_sampling": False,
         "force_passthrough": False,
         "optimizer_effort": "high",
+        "analyzer_effort": "low",
+        "scorer_effort": "low",
     },
     "defaults": {
         "strategy": "auto",
@@ -181,15 +183,16 @@ class PreferencesService:
                 )
                 pipeline[toggle] = default_val
 
-        # optimizer_effort must be "high" or "max"
-        effort = pipeline.get("optimizer_effort")
-        if effort not in VALID_EFFORTS:
-            default_effort = DEFAULTS["pipeline"]["optimizer_effort"]
-            logger.warning(
-                "Invalid optimizer_effort '%s' — falling back to '%s'",
-                effort, default_effort,
-            )
-            pipeline["optimizer_effort"] = default_effort
+        # Effort keys must be in VALID_EFFORTS
+        for effort_key in ("optimizer_effort", "analyzer_effort", "scorer_effort"):
+            effort = pipeline.get(effort_key)
+            if effort not in VALID_EFFORTS:
+                default_effort = DEFAULTS["pipeline"][effort_key]
+                logger.warning(
+                    "Invalid %s '%s' — falling back to '%s'",
+                    effort_key, effort, default_effort,
+                )
+                pipeline[effort_key] = default_effort
 
     @staticmethod
     def _validate(prefs: dict[str, Any]) -> None:
@@ -219,11 +222,12 @@ class PreferencesService:
                     f"Pipeline toggle '{toggle}' must be boolean, got {type(val).__name__}"
                 )
 
-        effort = pipeline.get("optimizer_effort")
-        if effort is not None and effort not in VALID_EFFORTS:
-            raise ValueError(
-                f"Invalid optimizer_effort '{effort}'. Valid: {sorted(VALID_EFFORTS)}"
-            )
+        for effort_key in ("optimizer_effort", "analyzer_effort", "scorer_effort"):
+            effort = pipeline.get(effort_key)
+            if effort is not None and effort not in VALID_EFFORTS:
+                raise ValueError(
+                    f"Invalid {effort_key} '{effort}'. Valid: {sorted(VALID_EFFORTS)}"
+                )
 
         if pipeline.get("force_sampling") and pipeline.get("force_passthrough"):
             raise ValueError("force_sampling and force_passthrough are mutually exclusive")

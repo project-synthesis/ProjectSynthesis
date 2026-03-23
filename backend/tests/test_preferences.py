@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch as mock_patch
 
 import pytest
 
@@ -329,3 +330,113 @@ class TestMutualExclusion:
         result = svc.patch({"pipeline": {"force_passthrough": True, "force_sampling": False}})
         assert result["pipeline"]["force_passthrough"] is True
         assert result["pipeline"]["force_sampling"] is False
+
+
+# ── TestPreferencesChangedEvent ─────────────────────────────────────
+
+
+class TestPreferencesChangedEvent:
+    async def test_patch_publishes_preferences_changed_event(self, svc: PreferencesService) -> None:
+        """PATCH /api/preferences publishes a preferences_changed event."""
+        from app.services.event_bus import event_bus
+
+        with mock_patch.object(event_bus, "publish") as mock_publish:
+            # Swap in our tmp_path-based service
+            with mock_patch("app.routers.preferences._svc", svc):
+                from app.routers.preferences import patch_preferences
+
+                result = await patch_preferences({"models": {"analyzer": "haiku"}})
+
+            mock_publish.assert_called_once_with("preferences_changed", result)
+            assert result["models"]["analyzer"] == "haiku"
+
+
+# ── TestEffortPreferences ─────────────────────────────────────────────
+
+
+class TestEffortPreferences:
+    """Tests for per-phase effort preference keys."""
+
+    def test_defaults_include_analyzer_and_scorer_effort(
+        self, svc: PreferencesService
+    ) -> None:
+        prefs = svc.load()
+        assert prefs["pipeline"]["analyzer_effort"] == "low"
+        assert prefs["pipeline"]["scorer_effort"] == "low"
+        assert prefs["pipeline"]["optimizer_effort"] == "high"
+
+    def test_existing_file_gains_new_effort_defaults(
+        self, svc: PreferencesService, prefs_file: Path
+    ) -> None:
+        """Simulates upgrading from a preferences file without effort keys."""
+        prefs_file.write_text(json.dumps({
+            "schema_version": 1,
+            "models": {"analyzer": "sonnet", "optimizer": "opus", "scorer": "sonnet"},
+            "pipeline": {"enable_explore": True, "enable_scoring": True,
+                         "enable_adaptation": True, "force_sampling": False,
+                         "force_passthrough": False, "optimizer_effort": "high"},
+            "defaults": {"strategy": "auto"},
+        }))
+        prefs = svc.load()
+        assert prefs["pipeline"]["analyzer_effort"] == "low"
+        assert prefs["pipeline"]["scorer_effort"] == "low"
+
+    def test_valid_efforts_accepted_by_patch(
+        self, svc: PreferencesService
+    ) -> None:
+        for effort in ("low", "medium", "high", "max"):
+            result = svc.patch({"pipeline": {"analyzer_effort": effort}})
+            assert result["pipeline"]["analyzer_effort"] == effort
+
+    def test_valid_efforts_accepted_for_scorer(
+        self, svc: PreferencesService
+    ) -> None:
+        for effort in ("low", "medium", "high", "max"):
+            result = svc.patch({"pipeline": {"scorer_effort": effort}})
+            assert result["pipeline"]["scorer_effort"] == effort
+
+    def test_optimizer_effort_now_accepts_low_and_medium(
+        self, svc: PreferencesService
+    ) -> None:
+        for effort in ("low", "medium"):
+            result = svc.patch({"pipeline": {"optimizer_effort": effort}})
+            assert result["pipeline"]["optimizer_effort"] == effort
+
+    def test_invalid_effort_rejected_by_validate(
+        self, svc: PreferencesService
+    ) -> None:
+        prefs = svc.load()
+        prefs["pipeline"]["analyzer_effort"] = "turbo"
+        with pytest.raises(ValueError, match="Invalid.*effort.*turbo"):
+            svc.save(prefs)
+
+    def test_invalid_scorer_effort_rejected(
+        self, svc: PreferencesService
+    ) -> None:
+        prefs = svc.load()
+        prefs["pipeline"]["scorer_effort"] = "ultra"
+        with pytest.raises(ValueError, match="Invalid.*effort.*ultra"):
+            svc.save(prefs)
+
+    def test_invalid_effort_sanitized_on_load(
+        self, svc: PreferencesService, prefs_file: Path
+    ) -> None:
+        prefs_file.write_text(json.dumps({
+            "schema_version": 1,
+            "models": {"analyzer": "sonnet", "optimizer": "opus", "scorer": "sonnet"},
+            "pipeline": {"enable_explore": True, "enable_scoring": True,
+                         "enable_adaptation": True, "force_sampling": False,
+                         "force_passthrough": False, "optimizer_effort": "high",
+                         "analyzer_effort": "turbo", "scorer_effort": "warp"},
+            "defaults": {"strategy": "auto"},
+        }))
+        prefs = svc.load()
+        # Invalid values replaced with defaults
+        assert prefs["pipeline"]["analyzer_effort"] == "low"
+        assert prefs["pipeline"]["scorer_effort"] == "low"
+
+    def test_get_dot_path_for_effort(self, svc: PreferencesService) -> None:
+        snap = svc.load()
+        assert svc.get("pipeline.analyzer_effort", snapshot=snap) == "low"
+        assert svc.get("pipeline.scorer_effort", snapshot=snap) == "low"
+        assert svc.get("pipeline.optimizer_effort", snapshot=snap) == "high"
