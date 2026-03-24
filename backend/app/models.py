@@ -51,6 +51,7 @@ class Optimization(Base):
     overall_score = Column(Float, nullable=True)
     provider = Column(String, nullable=True)
     model_used = Column(String, nullable=True)
+    models_by_phase = Column(JSON, nullable=True)
     scoring_mode = Column(String, nullable=True)  # independent / self_rated
     duration_ms = Column(Integer, nullable=True)
     repo_full_name = Column(String, nullable=True)
