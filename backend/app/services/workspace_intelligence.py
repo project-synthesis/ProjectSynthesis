@@ -8,7 +8,7 @@ import logging
 import time
 from pathlib import Path
 
-from app.services.roots_scanner import RootsScanner
+from app.services.roots_scanner import RootsScanner, discover_project_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +81,18 @@ class WorkspaceIntelligence:
         logger.debug("Workspace profile cache invalidated (%d entries cleared)", count)
 
     def _detect_stack(self, roots: list[Path]) -> dict:
-        """Scan manifest files across all roots."""
+        """Scan manifest files across all roots and their project subdirectories."""
         languages: set[str] = set()
         frameworks: set[str] = set()
         tools: set[str] = set()
 
+        # Build expanded root list: original roots + manifest-detected subdirs
+        all_dirs: list[Path] = []
         for root in roots:
+            all_dirs.append(root)
+            all_dirs.extend(discover_project_dirs(root))
+
+        for root in all_dirs:
             if not root.is_dir():
                 continue
 

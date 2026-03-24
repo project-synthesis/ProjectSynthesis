@@ -170,3 +170,28 @@ class TestCacheTTLExpiry:
         with patch.object(intel, "_detect_stack", wraps=intel._detect_stack) as mock_detect:
             intel.analyze([tmp_path])
             mock_detect.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 8. test_subdir_stack_detection
+# ---------------------------------------------------------------------------
+
+class TestSubdirStackDetection:
+    def test_detects_stack_in_subdirectories(self, tmp_path):
+        """Stack detection scans manifest-detected subdirectories too."""
+        # Root has no manifests, but backend/ and frontend/ do
+        (tmp_path / "backend").mkdir()
+        (tmp_path / "backend" / "requirements.txt").write_text("fastapi\nsqlalchemy\n")
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "frontend" / "package.json").write_text(
+            '{"dependencies": {"svelte": "4.0.0", "tailwindcss": "4.0.0"}}'
+        )
+
+        wi = WorkspaceIntelligence()
+        result = wi.analyze([tmp_path])
+
+        assert result is not None
+        assert "Python" in result
+        assert "FastAPI" in result
+        assert "Svelte" in result
+        assert "Tailwind CSS" in result

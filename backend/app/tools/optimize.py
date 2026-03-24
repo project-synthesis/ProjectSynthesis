@@ -23,9 +23,9 @@ from app.services.routing import RoutingContext
 from app.services.sampling_pipeline import run_sampling_pipeline
 from app.tools._shared import (
     DATA_DIR,
+    get_context_service,
     get_routing,
     get_taxonomy_engine,
-    resolve_workspace_guidance,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,12 +54,25 @@ async def handle_optimize(
     prefs = PreferencesService(DATA_DIR)
     prefs_snapshot = prefs.load()
     effective_strategy = strategy or prefs.get("defaults.strategy", prefs_snapshot) or "auto"
-    guidance = await resolve_workspace_guidance(ctx, workspace_path)
 
-    # ---- Routing decision ----
+    # ---- Routing decision (before enrichment so we know the tier) ----
     routing = get_routing()
     ctx_routing = RoutingContext(preferences=prefs_snapshot, caller="mcp")
     decision = routing.resolve(ctx_routing)
+
+    # ---- Unified context enrichment ----
+    context_service = get_context_service()
+    async with async_session_factory() as enrich_db:
+        enrichment = await context_service.enrich(
+            raw_prompt=prompt,
+            tier=decision.tier,
+            db=enrich_db,
+            workspace_path=workspace_path,
+            mcp_ctx=ctx,
+            repo_full_name=repo_full_name,
+            applied_pattern_ids=applied_pattern_ids,
+            preferences_snapshot=prefs_snapshot,
+        )
 
     if decision.tier == "passthrough":
         # Passthrough: assemble template for external LLM processing
@@ -68,7 +81,11 @@ async def handle_optimize(
             prompts_dir=PROMPTS_DIR,
             raw_prompt=prompt,
             strategy_name=effective_strategy,
-            codebase_guidance=guidance,
+            codebase_guidance=enrichment.workspace_guidance,
+            adaptation_state=enrichment.adaptation_state,
+            analysis_summary=enrichment.analysis_summary,
+            codebase_context=enrichment.codebase_context,
+            applied_patterns=enrichment.applied_patterns,
         )
         trace_id = str(uuid.uuid4())
         async with async_session_factory() as db:
@@ -79,7 +96,11 @@ async def handle_optimize(
                 trace_id=trace_id,
                 provider="mcp_passthrough",
                 strategy_used=strategy_name,
-                task_type="general",
+                task_type=enrichment.task_type,
+                domain=enrichment.domain_value,
+                domain_raw=enrichment.domain_value,
+                intent_label=enrichment.intent_label,
+                context_sources=enrichment.context_sources_dict,
             )
             db.add(pending)
             await db.commit()
@@ -107,7 +128,7 @@ async def handle_optimize(
             result = await run_sampling_pipeline(
                 ctx, prompt,
                 effective_strategy if effective_strategy != "auto" else None,
-                guidance,
+                enrichment.workspace_guidance,
                 repo_full_name=repo_full_name,
                 applied_pattern_ids=applied_pattern_ids,
             )
@@ -141,7 +162,10 @@ async def handle_optimize(
             provider=decision.provider,
             db=db,
             strategy_override=effective_strategy if effective_strategy != "auto" else None,
-            codebase_guidance=guidance,
+            codebase_guidance=enrichment.workspace_guidance,
+            codebase_context=enrichment.codebase_context,
+            adaptation_state=enrichment.adaptation_state,
+            context_sources=enrichment.context_sources_dict,
             repo_full_name=repo_full_name,
             applied_pattern_ids=applied_pattern_ids,
             taxonomy_engine=get_taxonomy_engine(),

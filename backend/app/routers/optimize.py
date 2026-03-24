@@ -68,6 +68,7 @@ class OptimizeRequest(BaseModel):
     prompt: str = Field(..., min_length=20, description="The raw prompt to optimize")
     strategy: str | None = Field(None, description="Strategy override")
     workspace_path: str | None = Field(None, description="Workspace root for guidance file scanning")
+    repo_full_name: str | None = Field(None, description="GitHub repo (owner/name) for curated codebase context")
     applied_pattern_ids: list[str] | None = Field(None, description="Pattern IDs to inject into optimizer context")
 
 
@@ -95,35 +96,34 @@ async def optimize(
         len(body.prompt), body.strategy, decision.tier,
     )
 
-    # Scan workspace for guidance files
-    guidance = None
-    if body.workspace_path:
-        from pathlib import Path as _Path
-
-        from app.services.roots_scanner import RootsScanner
-        scanner = RootsScanner()
-        guidance = scanner.scan(_Path(body.workspace_path))
-
     effective_strategy = body.strategy or _prefs.get("defaults.strategy", prefs_snapshot) or "auto"
 
+    # Unified context enrichment
+    context_service = getattr(request.app.state, "context_service", None)
+    if not context_service:
+        raise HTTPException(status_code=503, detail="Context enrichment service not initialized.")
+
+    enrichment = await context_service.enrich(
+        raw_prompt=body.prompt,
+        tier=decision.tier,
+        db=db,
+        workspace_path=body.workspace_path,
+        repo_full_name=body.repo_full_name,
+        applied_pattern_ids=body.applied_pattern_ids,
+        preferences_snapshot=prefs_snapshot,
+    )
+
     if decision.tier == "passthrough":
-        # Resolve adaptation state for passthrough template injection
-        adaptation_state: str | None = None
-        try:
-            from app.services.adaptation_tracker import AdaptationTracker
-
-            tracker = AdaptationTracker(db)
-            adaptation_state = await tracker.render_adaptation_state("general")
-        except Exception as exc:
-            logger.debug("Adaptation state unavailable for passthrough: %s", exc)
-
         # Inline passthrough — stream assembled template via SSE
         assembled, strategy_name = assemble_passthrough_prompt(
             prompts_dir=PROMPTS_DIR,
             raw_prompt=body.prompt,
             strategy_name=effective_strategy,
-            codebase_guidance=guidance,
-            adaptation_state=adaptation_state,
+            codebase_guidance=enrichment.workspace_guidance,
+            adaptation_state=enrichment.adaptation_state,
+            analysis_summary=enrichment.analysis_summary,
+            codebase_context=enrichment.codebase_context,
+            applied_patterns=enrichment.applied_patterns,
         )
 
         trace_id = str(uuid.uuid4())
@@ -131,7 +131,12 @@ async def optimize(
         pending = Optimization(
             id=opt_id, raw_prompt=body.prompt, status="pending",
             trace_id=trace_id, provider="web_passthrough",
-            strategy_used=strategy_name, task_type="general",
+            strategy_used=strategy_name,
+            task_type=enrichment.task_type,
+            domain=enrichment.domain_value,
+            domain_raw=enrichment.domain_value,
+            intent_label=enrichment.intent_label,
+            context_sources=enrichment.context_sources_dict,
         )
         db.add(pending)
         await db.commit()
@@ -168,7 +173,10 @@ async def optimize(
             async for event in orchestrator.run(
                 raw_prompt=body.prompt, provider=decision.provider, db=db,
                 strategy_override=effective_strategy if effective_strategy != "auto" else None,
-                codebase_guidance=guidance,
+                codebase_guidance=enrichment.workspace_guidance,
+                codebase_context=enrichment.codebase_context,
+                adaptation_state=enrichment.adaptation_state,
+                context_sources=enrichment.context_sources_dict,
                 applied_pattern_ids=body.applied_pattern_ids,
                 taxonomy_engine=get_taxonomy_engine(app=request.app),
             ):
@@ -287,6 +295,7 @@ class PassthroughSaveRequest(BaseModel):
 @router.post("/optimize/passthrough")
 async def passthrough_prepare(
     body: OptimizeRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _rate: None = Depends(RateLimit(lambda: settings.OPTIMIZE_RATE_LIMIT)),
 ) -> PassthroughPrepareResponse:
@@ -300,31 +309,29 @@ async def passthrough_prepare(
     _prefs = PreferencesService(DATA_DIR)
     requested_strategy = body.strategy or _prefs.get("defaults.strategy") or "auto"
 
-    # Scan workspace for guidance files (same as main optimize endpoint)
-    guidance = None
-    if body.workspace_path:
-        from pathlib import Path as _Path
+    # Unified context enrichment
+    context_service = getattr(request.app.state, "context_service", None)
+    if not context_service:
+        raise HTTPException(status_code=503, detail="Context enrichment service not initialized.")
 
-        from app.services.roots_scanner import RootsScanner
-        scanner = RootsScanner()
-        guidance = scanner.scan(_Path(body.workspace_path))
-
-    # Resolve adaptation state for passthrough template injection
-    adaptation_state: str | None = None
-    try:
-        from app.services.adaptation_tracker import AdaptationTracker
-
-        tracker = AdaptationTracker(db)
-        adaptation_state = await tracker.render_adaptation_state("general")
-    except Exception as exc:
-        logger.debug("Adaptation state unavailable for passthrough prepare: %s", exc)
+    enrichment = await context_service.enrich(
+        raw_prompt=body.prompt,
+        tier="passthrough",
+        db=db,
+        workspace_path=body.workspace_path,
+        repo_full_name=body.repo_full_name,
+        applied_pattern_ids=body.applied_pattern_ids,
+    )
 
     assembled, strategy_name = assemble_passthrough_prompt(
         prompts_dir=PROMPTS_DIR,
         raw_prompt=body.prompt,
         strategy_name=requested_strategy,
-        codebase_guidance=guidance,
-        adaptation_state=adaptation_state,
+        codebase_guidance=enrichment.workspace_guidance,
+        adaptation_state=enrichment.adaptation_state,
+        analysis_summary=enrichment.analysis_summary,
+        codebase_context=enrichment.codebase_context,
+        applied_patterns=enrichment.applied_patterns,
     )
 
     trace_id = str(uuid.uuid4())
@@ -337,7 +344,11 @@ async def passthrough_prepare(
         trace_id=trace_id,
         provider="web_passthrough",
         strategy_used=strategy_name,
-        task_type="general",
+        task_type=enrichment.task_type,
+        domain=enrichment.domain_value,
+        domain_raw=enrichment.domain_value,
+        intent_label=enrichment.intent_label,
+        context_sources=enrichment.context_sources_dict,
     )
     db.add(pending)
     await db.commit()

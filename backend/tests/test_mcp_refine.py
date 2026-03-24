@@ -8,6 +8,7 @@ import pytest
 from app.mcp_server import synthesis_refine
 from app.schemas.mcp_models import RefineOutput
 from app.schemas.pipeline_contracts import PipelineEvent
+from app.services.context_enrichment import EnrichedContext
 from app.services.routing import RoutingDecision
 
 pytestmark = pytest.mark.asyncio
@@ -193,14 +194,19 @@ async def test_refine_happy_path():
         r.scalar_one_or_none.return_value = obj
         mock_results.append(r)
 
+    # Mock context enrichment service
+    mock_enrichment = EnrichedContext(raw_prompt="mock", workspace_guidance=None)
+    mock_ctx_svc = AsyncMock()
+    mock_ctx_svc.enrich.return_value = mock_enrichment
+
     with (
         patch("app.tools._shared._routing", _mock_routing(
             "internal", provider=mock_provider, provider_name="test_provider",
         )),
+        patch("app.tools._shared._context_service", mock_ctx_svc),
         patch("app.tools.refine.PreferencesService") as mock_prefs_cls,
         patch("app.tools.refine.async_session_factory") as mock_factory,
         patch("app.tools.refine.RefinementService") as mock_svc_cls,
-        patch("app.tools.refine.resolve_workspace_guidance", new_callable=AsyncMock, return_value=None),
         patch("app.tools.refine.notify_event_bus", new_callable=AsyncMock) as mock_notify,
     ):
         mock_prefs = MagicMock()

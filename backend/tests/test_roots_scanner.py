@@ -6,6 +6,7 @@ from app.services.roots_scanner import (
     MAX_CHARS_PER_FILE,
     MAX_LINES_PER_FILE,
     RootsScanner,
+    discover_project_dirs,
 )
 
 # ---------------------------------------------------------------------------
@@ -95,11 +96,9 @@ class TestScan:
         result = scanner.scan(tmp_path)
 
         assert result is not None
-        # The raw content inside the wrapper must not exceed MAX_CHARS_PER_FILE
-        # We can check the total length roughly — wrapper tags are small
-        assert len(result) < 15_000 + 200  # 200 bytes of slack for wrapper tags
-        # And verify the first MAX_CHARS_PER_FILE chars of content are present
+        # Truncation must happen at exactly MAX_CHARS_PER_FILE
         assert "x" * MAX_CHARS_PER_FILE in result
+        assert "x" * (MAX_CHARS_PER_FILE + 1) not in result
 
     # -----------------------------------------------------------------------
     # 5. test_wraps_in_untrusted_context
@@ -217,3 +216,85 @@ class TestScan:
         scanner = RootsScanner()
         result = scanner.scan_roots([root1, root2])
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# TestDiscoverProjectDirs
+# ---------------------------------------------------------------------------
+
+class TestDiscoverProjectDirs:
+    def test_finds_subdirs_with_manifests(self, tmp_path):
+        """Subdirectories with package.json or pyproject.toml are detected."""
+        _make_file(tmp_path, "backend/pyproject.toml", "[tool.ruff]")
+        _make_file(tmp_path, "frontend/package.json", '{"name": "app"}')
+        _make_file(tmp_path, "docs/readme.md", "# docs")  # No manifest
+
+        dirs = discover_project_dirs(tmp_path)
+        names = [d.name for d in dirs]
+        assert "backend" in names
+        assert "frontend" in names
+        assert "docs" not in names
+
+    def test_skips_ignored_dirs(self, tmp_path):
+        """node_modules, .venv, __pycache__ etc. are skipped even with manifests."""
+        _make_file(tmp_path, "node_modules/package.json", '{}')
+        _make_file(tmp_path, ".venv/pyproject.toml", "[tool]")
+        _make_file(tmp_path, "__pycache__/pyproject.toml", "[tool]")
+
+        dirs = discover_project_dirs(tmp_path)
+        assert dirs == []
+
+    def test_empty_root(self, tmp_path):
+        dirs = discover_project_dirs(tmp_path)
+        assert dirs == []
+
+    def test_nonexistent_root(self):
+        dirs = discover_project_dirs(Path("/nonexistent/path"))
+        assert dirs == []
+
+
+# ---------------------------------------------------------------------------
+# TestSubdirScanning
+# ---------------------------------------------------------------------------
+
+class TestSubdirScanning:
+    def test_scans_root_and_subdirs(self, tmp_path):
+        """Scan root + manifest-detected subdirectories."""
+        _make_file(tmp_path, "CLAUDE.md", "root guidance")
+        _make_file(tmp_path, "backend/pyproject.toml", "[tool]")
+        _make_file(tmp_path, "backend/CLAUDE.md", "backend guidance")
+
+        scanner = RootsScanner()
+        result = scanner.scan(tmp_path)
+
+        assert result is not None
+        assert "root guidance" in result
+        assert "backend guidance" in result
+
+    def test_deduplicates_identical_files(self, tmp_path):
+        """Identical content in root and subdir is included only once."""
+        same_content = "identical guidance content"
+        _make_file(tmp_path, "CLAUDE.md", same_content)
+        _make_file(tmp_path, "backend/pyproject.toml", "[tool]")
+        _make_file(tmp_path, "backend/CLAUDE.md", same_content)
+
+        scanner = RootsScanner()
+        result = scanner.scan(tmp_path)
+
+        assert result is not None
+        # Content appears only once (root wins)
+        assert result.count(same_content) == 1
+
+    def test_new_guidance_files_discovered(self, tmp_path):
+        """GEMINI.md, .clinerules, CONVENTIONS.md are now discovered."""
+        _make_file(tmp_path, "GEMINI.md", "gemini rules")
+        _make_file(tmp_path, ".clinerules", "cline rules")
+        _make_file(tmp_path, "CONVENTIONS.md", "conventions")
+
+        scanner = RootsScanner()
+        found = scanner.discover(tmp_path)
+        names = [p.name for p in found]
+
+        assert "GEMINI.md" in names
+        assert ".clinerules" in names
+        assert "CONVENTIONS.md" in names

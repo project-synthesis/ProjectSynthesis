@@ -63,8 +63,10 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - `sampling_pipeline.py` — MCP sampling-based pipeline (extracted from `mcp_server.py`). Full feature parity with internal pipeline via `run_sampling_pipeline()` and `run_sampling_analyze()`. Uses structured output via tool calling in sampling, model preferences per phase, `SamplingLLMAdapter` for explore phase. Falls back to text parsing when client doesn't support tools in sampling.
 - `prompt_loader.py` — template loading + variable substitution from `prompts/`. Validates all templates at startup.
 - `strategy_loader.py` — strategy file discovery from `prompts/strategies/` with YAML frontmatter parsing (tagline, description). Warns if empty at startup (does not crash). `load()` strips frontmatter before injection. Fully adaptive — adding/removing `.md` files changes available strategies.
-- `context_resolver.py` — per-source character caps, untrusted-context wrapping, workspace roots scanning
-- `roots_scanner.py` — discovers agent guidance files (CLAUDE.md, AGENTS.md, .cursorrules, etc.) from workspace paths
+- `context_enrichment.py` — unified enrichment orchestrator for all routing tiers. Single `enrich()` entry point resolving workspace guidance, heuristic analysis (passthrough), curated codebase context, adaptation state, and applied patterns. Returns frozen `EnrichedContext` with accessor properties.
+- `heuristic_analyzer.py` — zero-LLM prompt classifier for passthrough tier. 6-layer analysis: keyword classification, structural analysis, weakness/strength detection, adaptation-aware strategy selection, historical learning, intent label generation.
+- `context_resolver.py` — per-source character caps, untrusted-context wrapping, workspace roots scanning (internal pipeline path)
+- `roots_scanner.py` — discovers agent guidance files (CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, .clinerules, CONVENTIONS.md, etc.) from workspace paths. `discover_project_dirs()` detects manifest-containing subdirectories. SHA256 content deduplication (root copy wins).
 - `optimization_service.py` — CRUD, sort/filter, score distribution tracking, recent error counts
 - `feedback_service.py` — feedback CRUD + synchronous adaptation tracker update
 - `adaptation_tracker.py` — strategy affinity tracking with degenerate pattern detection
@@ -77,7 +79,7 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - `embedding_service.py` — singleton sentence-transformers (`all-MiniLM-L6-v2`, 384-dim). Async wrappers via `aembed_single`/`aembed_texts`.
 - `codebase_explorer.py` — semantic retrieval + single-shot Haiku synthesis. SHA-based result caching.
 - `explore_cache.py` — in-memory TTL cache with LRU eviction for explore results
-- `repo_index_service.py` — background repo file indexing and semantic query
+- `repo_index_service.py` — background repo file indexing with type-aware structured outlines (`FileOutline`) and `query_curated_context()` for token-conscious semantic retrieval with domain boosting and budget packing
 - `github_service.py` — Fernet token encryption/decryption
 - `github_client.py` — raw GitHub API calls; explicit token parameter on every method
 - `event_bus.py` — in-process pub/sub for real-time cross-client notifications
@@ -114,7 +116,7 @@ Provider is detected **once at startup** and stored on `app.state.routing` (a `R
 - `clusters.py` — `GET /api/clusters` (paginated list with state/domain filter), `GET /api/clusters/{id}` (detail with children/breadcrumb/optimizations), `POST /api/clusters/match` (paste-time similarity), `GET /api/clusters/tree` (flat node list for 3D viz), `GET /api/clusters/stats` (Q metrics + sparkline), `GET /api/clusters/templates` (proven templates), `POST /api/clusters/recluster` (cold-path trigger), `PATCH /api/clusters/{id}` (rename/state override). Legacy 301 redirects for `/api/patterns/*` and `/api/taxonomy/*`.
 
 ### Sort column whitelist
-`optimization_service.py` defines `_VALID_SORT_COLUMNS`. Add new sortable columns there before using them.
+`optimization_service.py` defines `VALID_SORT_COLUMNS`. Add new sortable columns there before using them.
 
 ### Shared utilities
 - `app/utils/sse.py` — shared `format_sse()` for SSE event formatting (used by optimize + refinement routers)

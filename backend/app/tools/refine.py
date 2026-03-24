@@ -18,7 +18,7 @@ from app.services.event_notification import notify_event_bus
 from app.services.preferences import PreferencesService
 from app.services.refinement_service import RefinementService
 from app.services.routing import RoutingContext
-from app.tools._shared import DATA_DIR, build_scores_dict, get_routing, resolve_workspace_guidance
+from app.tools._shared import DATA_DIR, build_scores_dict, get_context_service, get_routing
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +119,16 @@ async def handle_refine(
         if not latest_turn:
             raise ValueError(f"No turns found on branch {branch.id}")
 
-        # Resolve workspace guidance
-        guidance = await resolve_workspace_guidance(ctx, workspace_path)
+        # Resolve workspace guidance via unified context enrichment
+        context_service = get_context_service()
+        enrichment = await context_service.enrich(
+            raw_prompt=opt.optimized_prompt,
+            tier=decision.tier,
+            db=db,
+            workspace_path=workspace_path,
+            mcp_ctx=ctx,
+        )
+        guidance = enrichment.workspace_guidance
 
         # Consume the refinement generator to completion
         logger.info(

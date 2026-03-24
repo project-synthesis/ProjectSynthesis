@@ -80,16 +80,19 @@ async def lifespan(app: FastAPI):
     # Track in-flight extraction tasks for graceful shutdown
     extraction_tasks: set[asyncio.Task[None]] = set()
 
+    # Shared EmbeddingService singleton — reused by taxonomy engine and context service
+    from app.services.embedding_service import EmbeddingService
+    _shared_embedding_service = EmbeddingService()
+
     # Start taxonomy engine subscriber (replaces PatternExtractorService)
     async def _taxonomy_extraction_listener():
         """Subscribe to optimization_created events and run taxonomy hot path."""
         try:
             from app.database import async_session_factory
-            from app.services.embedding_service import EmbeddingService
             from app.services.taxonomy import TaxonomyEngine, set_engine
 
             engine = TaxonomyEngine(
-                embedding_service=EmbeddingService(),
+                embedding_service=_shared_embedding_service,
                 provider_resolver=lambda: app.state.routing.state.provider,
             )
             app.state.taxonomy_engine = engine
@@ -210,6 +213,30 @@ async def lifespan(app: FastAPI):
 
     extraction_task = asyncio.create_task(_taxonomy_extraction_listener())
     app.state.extraction_task = extraction_task
+
+    # Initialize unified context enrichment service
+    try:
+        from app.services.context_enrichment import ContextEnrichmentService
+        from app.services.github_client import GitHubClient
+        from app.services.heuristic_analyzer import HeuristicAnalyzer
+        from app.services.workspace_intelligence import WorkspaceIntelligence
+
+        app.state.context_service = ContextEnrichmentService(
+            prompts_dir=PROMPTS_DIR,
+            data_dir=DATA_DIR,
+            workspace_intel=WorkspaceIntelligence(),
+            embedding_service=_shared_embedding_service,
+            heuristic_analyzer=HeuristicAnalyzer(),
+            github_client=GitHubClient(),
+            taxonomy_engine=getattr(app.state, "taxonomy_engine", None),
+        )
+        logger.info("ContextEnrichmentService initialized")
+    except Exception as exc:
+        logger.error(
+            "ContextEnrichmentService init failed — passthrough and pattern "
+            "resolution will be unavailable: %s", exc,
+        )
+        app.state.context_service = None
 
     # Start warm-path periodic timer (Spec Section 6.4 — every 5 minutes)
     async def _warm_path_timer():

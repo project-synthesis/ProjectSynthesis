@@ -45,7 +45,10 @@ def assemble_passthrough_prompt(
     raw_prompt: str,
     strategy_name: str | None = None,
     codebase_guidance: str | None = None,
+    codebase_context: str | None = None,
     adaptation_state: str | None = None,
+    analysis_summary: str | None = None,
+    applied_patterns: str | None = None,
 ) -> tuple[str, str]:
     """Assemble a full passthrough optimization prompt from templates.
 
@@ -54,7 +57,10 @@ def assemble_passthrough_prompt(
         raw_prompt: The user's raw prompt to optimize.
         strategy_name: Requested strategy name (None → "auto").
         codebase_guidance: Optional workspace guidance content.
+        codebase_context: Optional curated index context.
         adaptation_state: Optional adaptation state content.
+        analysis_summary: Optional heuristic analysis results.
+        applied_patterns: Optional proven patterns from taxonomy engine.
 
     Returns:
         (assembled_prompt, resolved_strategy_name) tuple.
@@ -76,8 +82,10 @@ def assemble_passthrough_prompt(
         "strategy_instructions": strategy_instructions,
         "scoring_rubric_excerpt": scoring_excerpt,
         "codebase_guidance": codebase_guidance,
-        "codebase_context": None,
+        "codebase_context": codebase_context,
         "adaptation_state": adaptation_state,
+        "analysis_summary": analysis_summary,
+        "applied_patterns": applied_patterns,
     })
 
     return assembled, resolved_name

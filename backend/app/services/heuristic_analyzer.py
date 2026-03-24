@@ -1,0 +1,508 @@
+"""Zero-LLM heuristic prompt analyzer.
+
+Classifies task_type, domain, detects weaknesses/strengths, and recommends
+a strategy — all without any LLM calls. Designed for passthrough tier
+enrichment where we cannot call external models.
+
+Copyright 2025-2026 Project Synthesis contributors.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class HeuristicAnalysis:
+    """Result of heuristic prompt analysis."""
+
+    task_type: str       # coding | writing | analysis | creative | data | system | general
+    domain: str          # backend | frontend | database | devops | security | fullstack | general
+    intent_label: str    # 3-6 word phrase
+    weaknesses: list[str] = field(default_factory=list)
+    strengths: list[str] = field(default_factory=list)
+    recommended_strategy: str = "auto"
+    confidence: float = 0.0
+
+    def format_summary(self) -> str:
+        """Format analysis as a human-readable string for template injection."""
+        parts = [
+            f"Task type: {self.task_type}",
+            f"Domain: {self.domain}",
+            f"Intent: {self.intent_label}",
+        ]
+        if self.weaknesses:
+            parts.append("Weaknesses:")
+            for w in self.weaknesses:
+                parts.append(f"- {w}")
+        if self.strengths:
+            parts.append("Strengths:")
+            for s in self.strengths:
+                parts.append(f"- {s}")
+        parts.append(
+            f"Recommended strategy: {self.recommended_strategy}"
+            f" (confidence: {self.confidence:.2f})"
+        )
+        return "\n".join(parts)
+
+
+# --- Weighted keyword signals (case-insensitive matching) ---
+
+_TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
+    "coding": [
+        ("implement", 1.0), ("refactor", 1.0), ("debug", 0.9),
+        ("function", 0.7), ("api", 0.8), ("endpoint", 0.8),
+        ("bug", 0.9), ("test", 0.7), ("deploy", 0.6),
+        ("class", 0.6), ("module", 0.6), ("code", 0.5),
+        ("fix", 0.6), ("build", 0.5), ("migrate", 0.7),
+        ("database", 0.5),
+    ],
+    "writing": [
+        ("write", 0.6), ("draft", 0.9), ("blog", 1.0),
+        ("article", 1.0), ("essay", 1.0), ("copy", 0.8),
+        ("tone", 0.7), ("audience", 0.6), ("narrative", 0.8),
+        ("publish", 0.7), ("editorial", 0.9),
+    ],
+    "analysis": [
+        ("analyze", 1.0), ("compare", 0.9), ("evaluate", 0.9),
+        ("review", 0.7), ("assess", 0.9), ("critique", 0.8),
+        ("pros and cons", 0.9), ("trade-off", 0.8), ("tradeoff", 0.8),
+        ("investigate", 0.7), ("examine", 0.7),
+    ],
+    "creative": [
+        ("create", 0.5), ("brainstorm", 1.0), ("imagine", 0.9),
+        ("story", 1.0), ("generate ideas", 0.9), ("creative", 0.8),
+        ("invent", 0.9), ("design", 0.7), ("concept", 0.6),
+    ],
+    "data": [
+        ("data", 0.6), ("dataset", 0.9), ("etl", 1.0),
+        ("pipeline", 0.6), ("transform", 0.6), ("schema", 0.7),
+        ("query", 0.7), ("aggregate", 0.8), ("visualization", 0.7),
+        ("csv", 0.8), ("dataframe", 0.9), ("pandas", 0.9),
+    ],
+    "system": [
+        ("system prompt", 1.0), ("agent", 0.7), ("workflow", 0.6),
+        ("automate", 0.8), ("orchestrate", 0.9), ("configure", 0.7),
+        ("setup", 0.5), ("infrastructure", 0.7), ("prompt engineer", 0.9),
+    ],
+}
+
+_DOMAIN_SIGNALS: dict[str, list[tuple[str, float]]] = {
+    "backend": [
+        ("api", 0.8), ("endpoint", 0.9), ("server", 0.8),
+        ("middleware", 0.9), ("fastapi", 1.0), ("django", 1.0),
+        ("flask", 1.0), ("database", 0.6), ("authentication", 0.7),
+        ("route", 0.6),
+    ],
+    "frontend": [
+        ("react", 1.0), ("svelte", 1.0), ("component", 0.8),
+        ("css", 0.9), ("ui", 0.8), ("layout", 0.7),
+        ("responsive", 0.8), ("tailwind", 0.9), ("vue", 1.0),
+    ],
+    "database": [
+        ("sql", 1.0), ("migration", 0.9), ("schema", 0.8),
+        ("query", 0.7), ("index", 0.6), ("postgresql", 1.0),
+        ("sqlite", 1.0), ("orm", 0.8), ("table", 0.6),
+    ],
+    "devops": [
+        ("docker", 1.0), ("ci/cd", 1.0), ("kubernetes", 1.0),
+        ("terraform", 1.0), ("nginx", 0.9), ("monitoring", 0.7),
+        ("deploy", 0.8), ("pipeline", 0.5),
+    ],
+    "security": [
+        ("auth", 0.7), ("encryption", 1.0), ("vulnerability", 1.0),
+        ("cors", 0.9), ("jwt", 0.9), ("oauth", 0.9), ("sanitize", 0.8),
+        ("injection", 0.9), ("xss", 1.0), ("csrf", 1.0),
+    ],
+}
+
+
+# Pre-compiled word-boundary patterns for all single-word keywords.
+# Built once at import time to avoid recompilation in hot loops.
+_KEYWORD_PATTERNS: dict[str, re.Pattern[str]] = {}
+
+
+def _precompile_keyword_patterns() -> None:
+    """Pre-compile regex for all single-word signals at module load."""
+    for signal_dict in (_TASK_TYPE_SIGNALS, _DOMAIN_SIGNALS):
+        for keywords in signal_dict.values():
+            for keyword, _weight in keywords:
+                kw = keyword.lower()
+                if " " not in kw and kw not in _KEYWORD_PATTERNS:
+                    _KEYWORD_PATTERNS[kw] = re.compile(
+                        r"\b" + re.escape(kw) + r"\b",
+                    )
+
+
+_precompile_keyword_patterns()
+
+
+def _classify_domain(scored: dict[str, float]) -> str:
+    """Classify domain with fullstack promotion when both backend + frontend score high."""
+    if not scored:
+        return "general"
+    best = max(scored, key=scored.get)
+    # Promote to fullstack when both backend and frontend score significantly
+    if (
+        scored.get("backend", 0) >= 1.5
+        and scored.get("frontend", 0) >= 1.5
+    ):
+        return "fullstack"
+    return best if scored[best] >= 1.0 else "general"
+
+
+_DEFAULT_STRATEGY_MAP: dict[str, str] = {
+    "coding": "structured-output",
+    "writing": "role-playing",
+    "analysis": "chain-of-thought",
+    "creative": "role-playing",
+    "data": "structured-output",
+    "system": "meta-prompting",
+    "general": "auto",
+}
+
+# Vague quantifier patterns
+_VAGUE_PATTERNS = re.compile(
+    r"\b(some|various|many|a few|several|certain|stuff|things|better|improve)\b",
+    re.IGNORECASE,
+)
+
+# Code block detection
+_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```")
+
+# Constraint/requirement keywords
+_CONSTRAINT_KEYWORDS = {
+    "must", "should", "require", "constraint", "limit", "maximum",
+    "minimum", "exactly", "no more than", "at least", "ensure",
+}
+
+# Success criteria keywords
+_OUTCOME_KEYWORDS = {
+    "return", "output", "produce", "result", "generate", "create",
+    "should return", "expected", "format",
+}
+
+# Audience/persona keywords
+_AUDIENCE_KEYWORDS = {
+    "audience", "persona", "reader", "user", "customer", "developer",
+    "beginner", "expert", "stakeholder", "team", "client",
+}
+
+
+class HeuristicAnalyzer:
+    """Zero-LLM prompt classifier and weakness detector."""
+
+    async def analyze(
+        self, raw_prompt: str, db: AsyncSession,
+    ) -> HeuristicAnalysis:
+        """Classify prompt and detect weaknesses without any LLM calls."""
+        try:
+            return await self._analyze_inner(raw_prompt, db)
+        except Exception:
+            logger.exception("Heuristic analysis failed — returning general fallback")
+            return HeuristicAnalysis(
+                task_type="general", domain="general",
+                intent_label="general optimization",
+                confidence=0.0,
+            )
+
+    async def _analyze_inner(
+        self, raw_prompt: str, db: AsyncSession,
+    ) -> HeuristicAnalysis:
+        prompt_lower = raw_prompt.lower()
+        words = prompt_lower.split()
+        first_sentence = prompt_lower.split(".")[0] if "." in prompt_lower else prompt_lower
+
+        # Layer 1: Keyword classification
+        task_type, task_confidence = self._classify(
+            prompt_lower, first_sentence, _TASK_TYPE_SIGNALS,
+        )
+        # Domain classification with fullstack promotion
+        domain_scores: dict[str, float] = {}
+        for category, keywords in _DOMAIN_SIGNALS.items():
+            domain_scores[category] = self._score_category(
+                prompt_lower, first_sentence, keywords,
+            )
+        domain = _classify_domain(domain_scores)
+        domain_confidence = min(1.0, max(domain_scores.values())) if domain_scores else 0.0
+
+        # Layer 2: Structural signals
+        has_code_blocks = bool(_CODE_BLOCK_RE.search(raw_prompt))
+        has_lists = bool(re.search(r"^\s*[-*]\s", raw_prompt, re.MULTILINE))
+        is_question = first_sentence.strip().startswith(
+            ("what", "how", "why", "when", "which", "is", "are", "can", "does"),
+        )
+
+        # Boost coding confidence if code blocks present
+        if has_code_blocks and task_type != "coding":
+            coding_score = self._score_category(prompt_lower, first_sentence, _TASK_TYPE_SIGNALS.get("coding", []))
+            if coding_score > task_confidence * 0.7:
+                task_type = "coding"
+                task_confidence = max(task_confidence, coding_score)
+
+        # Boost analysis confidence if question form detected
+        if is_question and task_type not in ("coding", "analysis"):
+            analysis_score = self._score_category(prompt_lower, first_sentence, _TASK_TYPE_SIGNALS.get("analysis", []))
+            if analysis_score > task_confidence * 0.5:
+                task_type = "analysis"
+                task_confidence = max(task_confidence, analysis_score)
+
+        # Pre-compute shared keyword flags for weakness/strength detection
+        has_constraints = any(kw in prompt_lower for kw in _CONSTRAINT_KEYWORDS)
+        has_outcome = any(kw in prompt_lower for kw in _OUTCOME_KEYWORDS)
+        has_audience = any(kw in prompt_lower for kw in _AUDIENCE_KEYWORDS)
+
+        # Layer 3: Weakness detection
+        weaknesses = self._detect_weaknesses(
+            raw_prompt, prompt_lower, words, task_type,
+            has_constraints, has_outcome, has_audience,
+        )
+        strengths = self._detect_strengths(
+            raw_prompt, prompt_lower, words, has_code_blocks, has_lists,
+            has_constraints, has_outcome,
+        )
+
+        # Layer 4: Strategy from adaptation tracker
+        strategy = await self._select_strategy(db, task_type)
+
+        # Layer 5: Intent label
+        intent_label = self._generate_intent_label(raw_prompt, task_type, domain)
+
+        # Combine confidence
+        confidence = min(1.0, (task_confidence + domain_confidence) / 2)
+        if task_type == "general":
+            confidence = min(confidence, 0.3)
+
+        return HeuristicAnalysis(
+            task_type=task_type,
+            domain=domain,
+            intent_label=intent_label,
+            weaknesses=weaknesses,
+            strengths=strengths,
+            recommended_strategy=strategy,
+            confidence=round(confidence, 2),
+        )
+
+    def _classify(
+        self, prompt_lower: str, first_sentence: str,
+        signals: dict[str, list[tuple[str, float]]],
+    ) -> tuple[str, float]:
+        """Score all categories and return (best_category, confidence)."""
+        scores: dict[str, float] = {}
+        for category, keywords in signals.items():
+            scores[category] = self._score_category(
+                prompt_lower, first_sentence, keywords,
+            )
+        if not scores or max(scores.values()) == 0:
+            return "general", 0.0
+        best = max(scores, key=scores.get)  # type: ignore[arg-type]
+        return best, min(1.0, scores[best])
+
+    @staticmethod
+    def _score_category(
+        prompt_lower: str, first_sentence: str,
+        keywords: list[tuple[str, float]],
+    ) -> float:
+        """Score a category by weighted keyword presence with positional boost.
+
+        Uses pre-compiled word-boundary patterns to avoid false positives
+        (e.g. "class" should not match "classification").  Multi-word
+        keywords (e.g. "system prompt") use simple substring search since
+        ``\\b`` would not match internal spaces correctly.
+        """
+        score = 0.0
+        for keyword, weight in keywords:
+            kw = keyword.lower()
+            # Multi-word keywords: substring match (word-boundary would fail)
+            if " " in kw:
+                found_in_prompt = kw in prompt_lower
+                found_in_first = kw in first_sentence
+            else:
+                pat = _KEYWORD_PATTERNS.get(kw)
+                if pat:
+                    found_in_prompt = bool(pat.search(prompt_lower))
+                    found_in_first = bool(pat.search(first_sentence))
+                else:
+                    found_in_prompt = kw in prompt_lower
+                    found_in_first = kw in first_sentence
+            if found_in_prompt:
+                # 2x boost if keyword appears in first sentence
+                multiplier = 2.0 if found_in_first else 1.0
+                score += weight * multiplier
+        return score
+
+    def _detect_weaknesses(
+        self, raw_prompt: str, prompt_lower: str,
+        words: list[str], task_type: str,
+        has_constraints: bool, has_outcome: bool,
+        has_audience: bool,
+    ) -> list[str]:
+        weaknesses: list[str] = []
+        word_count = len(words)
+
+        # Vague language
+        vague_matches = _VAGUE_PATTERNS.findall(prompt_lower)
+        if len(vague_matches) >= 2:
+            weaknesses.append("vague language reduces precision")
+
+        # Missing constraints
+        if not has_constraints and word_count > 10:
+            weaknesses.append("lacks constraints — no boundaries for the output")
+
+        # Missing outcome
+        if not has_outcome and word_count > 15:
+            weaknesses.append("no measurable outcome defined")
+
+        # Missing audience/persona
+        if not has_audience and task_type in ("writing", "creative") and word_count > 10:
+            weaknesses.append("target audience unclear")
+
+        # Too short for complex task (spec: < 50 words for non-trivial)
+        if task_type in ("coding", "data", "system") and word_count < 50:
+            weaknesses.append("prompt underspecified for task complexity")
+
+        # No examples
+        has_examples = "example" in prompt_lower or "e.g." in prompt_lower or "```" in raw_prompt
+        if not has_examples and word_count > 20:
+            weaknesses.append("no examples to anchor expected output")
+
+        # Broad scope
+        if any(w in prompt_lower for w in ("everything", "all aspects", "every part")):
+            weaknesses.append("scope too broad — consider narrowing focus")
+
+        # Missing technical context for coding
+        if task_type == "coding":
+            tech_terms = {"python", "javascript", "typescript", "rust", "go", "java",
+                          "react", "svelte", "fastapi", "django", "flask", "sql"}
+            if not any(t in prompt_lower for t in tech_terms):
+                weaknesses.append("insufficient technical context — no language or framework specified")
+
+        return weaknesses
+
+    def _detect_strengths(
+        self, raw_prompt: str, prompt_lower: str,
+        words: list[str], has_code_blocks: bool, has_lists: bool,
+        has_constraints: bool, has_outcome: bool,
+    ) -> list[str]:
+        strengths: list[str] = []
+
+        if has_code_blocks:
+            strengths.append("includes concrete code examples")
+        if has_lists:
+            strengths.append("well-organized prompt structure")
+
+        if has_constraints:
+            strengths.append("clear constraints defined")
+
+        # Specific technologies mentioned
+        tech_count = sum(1 for t in (
+            "python", "javascript", "typescript", "react", "svelte",
+            "fastapi", "django", "sql", "docker", "kubernetes",
+        ) if t in prompt_lower)
+        if tech_count >= 2:
+            strengths.append("specific technical context provided")
+
+        if has_outcome:
+            strengths.append("measurable outcome specified")
+
+        return strengths
+
+    async def _select_strategy(
+        self, db: AsyncSession, task_type: str,
+    ) -> str:
+        """Select strategy: historical learning → adaptation → static fallback."""
+        # Try historical learning first
+        learned = await self._learn_from_history(db, task_type)
+        if learned:
+            return learned
+
+        # Try adaptation tracker (use get_affinities — no get_best_strategy method)
+        try:
+            from app.services.adaptation_tracker import AdaptationTracker
+            tracker = AdaptationTracker(db)
+            affinities = await tracker.get_affinities(task_type)
+            blocked = await tracker.get_blocked_strategies(task_type)
+            if affinities:
+                # Pick strategy with highest approval rate, excluding blocked
+                candidates = {
+                    k: v for k, v in affinities.items()
+                    if k not in blocked and v.get("approval_rate", 0) > 0.6
+                }
+                if candidates:
+                    best_key = max(candidates, key=lambda k: candidates[k].get("approval_rate", 0))
+                    return best_key
+        except Exception:
+            logger.debug("Adaptation tracker unavailable", exc_info=True)
+
+        # Static fallback
+        return _DEFAULT_STRATEGY_MAP.get(task_type, "auto")
+
+    async def _learn_from_history(
+        self, db: AsyncSession, task_type: str,
+    ) -> str | None:
+        """Query historical strategy performance for this task_type."""
+        try:
+            from app.models import Optimization
+            result = await db.execute(
+                select(
+                    Optimization.strategy_used,
+                    func.avg(Optimization.overall_score).label("avg_score"),
+                    func.count().label("count"),
+                )
+                .where(
+                    Optimization.task_type == task_type,
+                    Optimization.status == "completed",
+                    Optimization.overall_score.isnot(None),
+                    Optimization.scoring_mode.notin_(["heuristic", "hybrid_passthrough"]),
+                )
+                .group_by(Optimization.strategy_used)
+                .having(func.count() >= 3)
+            )
+            rows = result.all()
+            if not rows:
+                return None
+            best = max(rows, key=lambda r: r.avg_score)
+            if best.avg_score >= 6.0:
+                return best.strategy_used
+        except Exception:
+            logger.debug("Historical learning query failed", exc_info=True)
+        return None
+
+    def _generate_intent_label(
+        self, raw_prompt: str, task_type: str, domain: str,
+    ) -> str:
+        """Generate a short 3-6 word intent label."""
+        first_verb = self._extract_first_verb(raw_prompt)
+        if first_verb is None:
+            # Spec fallback: "{task_type} optimization"
+            label = f"{task_type} optimization"
+        elif domain != "general":
+            label = f"{first_verb} {domain} {task_type} task"
+        else:
+            label = f"{first_verb} {task_type} task"
+        # Cap at 6 words
+        words = label.split()[:6]
+        return " ".join(words)
+
+    @staticmethod
+    def _extract_first_verb(text: str) -> str | None:
+        """Extract the first likely verb from the prompt, or None if not found."""
+        common_verbs = {
+            "implement", "create", "build", "write", "design", "refactor",
+            "fix", "add", "remove", "update", "migrate", "deploy", "test",
+            "analyze", "review", "evaluate", "compare", "draft", "generate",
+            "configure", "optimize", "debug", "integrate", "setup", "improve",
+        }
+        words = text.lower().split()
+        for word in words[:10]:  # Check first 10 words
+            cleaned = re.sub(r"[^a-z]", "", word)
+            if cleaned in common_verbs:
+                return cleaned
+        return None

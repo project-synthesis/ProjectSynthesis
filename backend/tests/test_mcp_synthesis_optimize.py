@@ -4,6 +4,7 @@ import pytest
 
 from app.mcp_server import synthesis_optimize
 from app.schemas.mcp_models import OptimizeOutput
+from app.services.context_enrichment import EnrichedContext
 from app.services.routing import RoutingDecision
 
 pytestmark = pytest.mark.asyncio
@@ -22,6 +23,22 @@ def _mock_routing(tier="passthrough", provider=None, provider_name=None):
     return rm
 
 
+def _mock_context_service(guidance="", **overrides):
+    """Create a mock ContextEnrichmentService that returns an EnrichedContext."""
+    enrichment = EnrichedContext(
+        raw_prompt="mock",
+        workspace_guidance=overrides.get("workspace_guidance", guidance or None),
+        codebase_context=overrides.get("codebase_context"),
+        adaptation_state=overrides.get("adaptation_state"),
+        applied_patterns=overrides.get("applied_patterns"),
+        analysis=overrides.get("analysis"),
+        context_sources=overrides.get("context_sources", {}),
+    )
+    svc = AsyncMock()
+    svc.enrich.return_value = enrichment
+    return svc
+
+
 async def test_synthesis_optimize_with_provider():
     """Internal pipeline path: provider present → runs PipelineOrchestrator."""
     mock_provider = AsyncMock()
@@ -31,18 +48,16 @@ async def test_synthesis_optimize_with_provider():
         patch("app.tools._shared._routing", _mock_routing(
             "internal", provider=mock_provider, provider_name="mock_provider",
         )),
+        patch("app.tools._shared._context_service", _mock_context_service(guidance="guidance")),
         patch("app.tools.optimize.async_session_factory") as mock_session_factory,
         patch("app.tools.optimize.PipelineOrchestrator") as mock_orchestrator,
         patch("app.tools.optimize.notify_event_bus", new_callable=AsyncMock) as mock_notify,
-        patch("app.tools.optimize.resolve_workspace_guidance", new_callable=AsyncMock) as mock_resolve,
         patch("app.tools.optimize.PreferencesService") as mock_prefs_service,
     ):
         mock_prefs = MagicMock()
         mock_prefs.get.return_value = False
         mock_prefs.load.return_value = {}
         mock_prefs_service.return_value = mock_prefs
-
-        mock_resolve.return_value = "guidance"
 
         mock_session = AsyncMock()
         mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
@@ -84,6 +99,7 @@ async def test_synthesis_optimize_force_passthrough():
     """Passthrough tier: assembled prompt returned for external processing."""
     with (
         patch("app.tools._shared._routing", _mock_routing("passthrough")),
+        patch("app.tools._shared._context_service", _mock_context_service()),
         patch("app.tools.optimize.async_session_factory") as mock_session_factory,
         patch("app.tools.optimize.PreferencesService") as mock_prefs_service,
     ):
@@ -113,10 +129,10 @@ async def test_synthesis_optimize_no_provider_but_sampling():
 
     with (
         patch("app.tools._shared._routing", _mock_routing("sampling")),
+        patch("app.tools._shared._context_service", _mock_context_service()),
         patch("app.tools.optimize.run_sampling_pipeline", new_callable=AsyncMock) as mock_sampling,
         patch("app.tools.optimize.notify_event_bus", new_callable=AsyncMock),
         patch("app.tools.optimize.PreferencesService") as mock_prefs_service,
-        patch("app.tools.optimize.resolve_workspace_guidance", new_callable=AsyncMock, return_value=""),
     ):
         mock_prefs = MagicMock()
         mock_prefs.get.return_value = False
@@ -147,9 +163,9 @@ async def test_synthesis_optimize_pipeline_error():
         patch("app.tools._shared._routing", _mock_routing(
             "internal", provider=mock_provider, provider_name="mock_provider",
         )),
+        patch("app.tools._shared._context_service", _mock_context_service()),
         patch("app.tools.optimize.async_session_factory") as mock_session_factory,
         patch("app.tools.optimize.PipelineOrchestrator") as mock_orchestrator,
-        patch("app.tools.optimize.resolve_workspace_guidance", new_callable=AsyncMock, return_value=""),
         patch("app.tools.optimize.PreferencesService") as mock_prefs_service,
     ):
         mock_prefs = MagicMock()

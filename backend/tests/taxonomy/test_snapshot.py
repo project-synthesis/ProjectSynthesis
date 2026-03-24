@@ -123,7 +123,10 @@ async def test_prune_weekly_best_retention(db):
     """Snapshots older than 30 days: keep only the best per ISO week."""
     now = datetime.now(timezone.utc)
 
-    # Create 3 snapshots in the same ISO week (45 days ago)
+    # Create 3 snapshots guaranteed to be in the same ISO week (45 days ago).
+    # Use hour offsets instead of day offsets so they always share the same
+    # calendar date and therefore the same ISO week regardless of when the
+    # test runs.
     base = now - timedelta(days=45)
     for i, q in enumerate([0.60, 0.80, 0.70]):
         snap = TaxonomySnapshot(
@@ -131,8 +134,8 @@ async def test_prune_weekly_best_retention(db):
             q_system=q,
             q_coherence=0.7, q_separation=0.8, q_coverage=0.9, q_dbcv=0.0,
         )
-        # All within the same week (1 day apart)
-        snap.created_at = base + timedelta(days=i)
+        # All within the same day (1 hour apart)
+        snap.created_at = base + timedelta(hours=i)
         db.add(snap)
     await db.commit()
 
