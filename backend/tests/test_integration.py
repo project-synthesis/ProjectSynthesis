@@ -16,8 +16,6 @@ import sys
 
 import pytest
 
-_PY314_ASYNC_BUG = sys.version_info >= (3, 14)
-
 from app.schemas.pipeline_contracts import (
     AnalysisResult,
     DimensionScores,
@@ -25,6 +23,8 @@ from app.schemas.pipeline_contracts import (
     ScoreResult,
     SuggestionsOutput,
 )
+
+_PY314_ASYNC_BUG = sys.version_info >= (3, 14)
 
 
 @pytest.fixture(autouse=True)

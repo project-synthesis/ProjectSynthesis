@@ -9,9 +9,12 @@ Review code changes against project architecture, brand guidelines, and consiste
 - **Provider singleton**: `detect_provider()` runs once at startup. Never call it inside a request handler or tool.
 - **GitHub token layer**: only `github_service.encrypt_token` / `decrypt_token` touch the Fernet key. Routers must not import `_get_fernet`.
 
-### Brand & UI
-- **Zero-effects directive**: no rounded corners, no drop shadows in frontend components.
-- **Theme**: industrial cyberpunk, flat neon contour — dark backgrounds, sharp 1px borders, chromatic data encoding.
+### Brand & UI (`brand-guidelines` skill)
+- **Zero-effects directive**: no rounded corners, no drop shadows, no glow effects, no gradients.
+- **Theme**: industrial cyberpunk — dark backgrounds, sharp 1px neon borders, monospace data.
+- **Tier aesthetics**: internal=cyan, sampling=green, passthrough=yellow. New tier-aware elements must use the correct accent class (`routing.isSampling` / `routing.isPassthrough`).
+- **Domain colors**: backend=purple, frontend=yellow, database=teal, security=red, devops=blue, fullstack=cyan, general=dim.
+- Full spec: invoke `brand-guidelines` skill for color mappings, component patterns, typography, spacing, and accessibility.
 
 ### Consistency
 - **Sort whitelist**: `_VALID_SORT_COLUMNS` in `optimization_service.py`. Add new sortable columns there before using.

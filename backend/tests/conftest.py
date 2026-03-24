@@ -46,7 +46,8 @@ async def mock_provider():
 
 @pytest_asyncio.fixture
 async def app_client(mock_provider, db_session, tmp_path):
-    from app.config import DATA_DIR, PROMPTS_DIR
+    import app.config as _cfg
+    from app.config import PROMPTS_DIR
     from app.database import get_db
     from app.main import app
     from app.services.context_enrichment import ContextEnrichmentService
@@ -57,7 +58,6 @@ async def app_client(mock_provider, db_session, tmp_path):
 
     # Isolate DATA_DIR to tmp_path so tests never read the user's real
     # preferences (e.g. force_passthrough=true from a previous session).
-    import app.config as _cfg
     original_data_dir = _cfg.DATA_DIR
     _cfg.DATA_DIR = tmp_path
 

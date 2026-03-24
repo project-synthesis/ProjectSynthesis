@@ -138,7 +138,7 @@ Provider is detected **once at startup** and stored on `app.state.routing` (a `R
 - **Framework**: SvelteKit 2 (Svelte 5 runes) + Tailwind CSS 4
 - **Dev server**: `npm run dev` → port 5199
 - **API client**: `frontend/src/lib/api/client.ts` — all backend calls go through here
-- **Theme**: industrial cyberpunk — dark backgrounds (`#06060c`), 1px neon contours (`#00e5ff`), no rounded corners, no drop shadows, no glow effects
+- **Brand**: industrial cyberpunk — see `brand-guidelines` skill for color system, tier aesthetics, typography, zero-effects directive, and component patterns
 
 ### Stores (`frontend/src/lib/stores/`)
 - `forge.svelte.ts` — optimization pipeline state (prompt, strategy, SSE events, result, feedback). Session persistence via `localStorage` (`synthesis:last_trace_id`) — page refresh restores last optimization from DB.
