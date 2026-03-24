@@ -287,6 +287,9 @@ input:focus, textarea:focus, select:focus {
 .data-value.neon-yellow {
   color: var(--color-neon-yellow);
 }
+.data-value--dim {
+  opacity: 0.4;
+}
 /* ---- Buttons ---- */
 .action-btn {
   height: 20px;

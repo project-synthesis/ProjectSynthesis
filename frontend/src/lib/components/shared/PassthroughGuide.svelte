@@ -736,7 +736,7 @@
 
   .td-passthrough--dim {
     color: var(--color-text-dim);
-    opacity: 0.5;
+    opacity: 0.4;
   }
 
   /* ------------------------------------------------------------------ */

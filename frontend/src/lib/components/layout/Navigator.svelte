@@ -445,26 +445,26 @@
         <!-- Models / Context — morphs by tier -->
         {#if routing.isPassthrough}
         <div class="sub-section">
-          <span class="sub-heading" style="color: var(--color-neon-yellow);">Context</span>
+          <span class="sub-heading sub-heading--passthrough">Context</span>
           <div class="card-terminal">
             <div class="data-row">
-              <span class="data-label" style="color: var(--color-text-dim);">Analysis</span>
-              <span class="data-value" style="color: var(--color-neon-yellow); font-size: 10px;">heuristic</span>
+              <span class="data-label">Analysis</span>
+              <span class="data-value neon-yellow">heuristic</span>
             </div>
             <div class="data-row">
-              <span class="data-label" style="color: var(--color-text-dim);">Codebase</span>
-              <span class="data-value" style="color: var(--color-neon-yellow); font-size: 10px; {!githubStore.linkedRepo ? 'opacity: 0.4;' : ''}">
+              <span class="data-label">Codebase</span>
+              <span class="data-value neon-yellow" class:data-value--dim={!githubStore.linkedRepo}>
                 {githubStore.linkedRepo ? 'via index' : 'no repo'}
               </span>
             </div>
             <div class="data-row">
-              <span class="data-label" style="color: var(--color-text-dim);">Patterns</span>
-              <span class="data-value" style="color: var(--color-neon-yellow); font-size: 10px;">auto-injected</span>
+              <span class="data-label">Patterns</span>
+              <span class="data-value neon-yellow">auto-injected</span>
             </div>
             <div class="data-row">
               <span class="data-label">Adaptation</span>
               <button
-                class="toggle-track"
+                class="toggle-track toggle-track--yellow"
                 class:toggle-track--on={preferencesStore.pipeline.enable_adaptation}
                 onclick={() => preferencesStore.setPipelineToggle('enable_adaptation', !preferencesStore.pipeline.enable_adaptation)}
                 role="switch"
@@ -577,11 +577,11 @@
         <!-- Effort / Scoring — morphs by tier -->
         {#if routing.isPassthrough}
         <div class="sub-section">
-          <span class="sub-heading" style="color: var(--color-neon-yellow);">Scoring</span>
+          <span class="sub-heading sub-heading--passthrough">Scoring</span>
           <div class="card-terminal">
             <div class="data-row">
-              <span class="data-label" style="color: var(--color-text-dim);">Mode</span>
-              <span class="data-value" style="color: var(--color-neon-yellow); font-size: 10px;">heuristic</span>
+              <span class="data-label">Mode</span>
+              <span class="data-value neon-yellow">heuristic</span>
             </div>
           </div>
         </div>
@@ -1196,6 +1196,20 @@
     background: var(--color-neon-cyan);
   }
 
+  /* Yellow toggle variant — passthrough tier accent */
+  .toggle-track--yellow.toggle-track--on {
+    background: rgba(251, 191, 36, 0.15);
+    border-color: var(--color-neon-yellow);
+  }
+
+  .toggle-track--yellow.toggle-track--on .toggle-thumb {
+    background: var(--color-neon-yellow);
+  }
+
+  /* ---- Passthrough tier utilities ---- */
+  .sub-heading--passthrough {
+    color: var(--color-neon-yellow);
+  }
 
   /* ---- Accordion headings (progressive disclosure) ---- */
   .accordion-heading {

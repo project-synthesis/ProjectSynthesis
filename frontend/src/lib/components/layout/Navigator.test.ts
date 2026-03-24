@@ -720,9 +720,9 @@ describe('Navigator', () => {
     });
     await user.click(screen.getByRole('button', { name: /System/i }));
     await waitFor(() => {
-      // Multiple "heuristic" labels exist in passthrough mode (CONTEXT section + System accordion)
+      // CONTEXT (Analysis) + SCORING (Mode) + System accordion = 3 "heuristic" labels
       const heuristicEls = screen.getAllByText('heuristic');
-      expect(heuristicEls.length).toBeGreaterThanOrEqual(1);
+      expect(heuristicEls.length).toBeGreaterThanOrEqual(3);
     });
   });
 
