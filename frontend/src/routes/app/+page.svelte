@@ -49,8 +49,16 @@
           provider: d.provider,
         });
         if (delta.reconnected) addToast('created', 'MCP client reconnected');
-        if (delta.samplingChanged) addToast('created', 'MCP client connected with sampling capability');
-        if (delta.disconnected) addToast('deleted', 'MCP client disconnected');
+        if (delta.samplingChanged) {
+          addToast('created', 'MCP client connected with sampling capability');
+          // Auto-clear force_passthrough so routing resolves to sampling
+          if (preferencesStore.pipeline.force_passthrough) {
+            preferencesStore.setPipelineToggle('force_passthrough', false);
+          }
+        }
+        // Only toast on disconnect when no local provider (true degradation).
+        // When CLI/API is available, the auto-fallback is silent.
+        if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
       }
       if (type === 'preferences_changed') {
         preferencesStore.prefs = data as unknown as Preferences;
@@ -99,7 +107,13 @@
     forgeStore.avgDurationMs = h.avg_duration_ms ?? null;
     forgeStore.scoreHealth = h.score_health ?? null;
     forgeStore.phaseDurations = (h.phase_durations && Object.keys(h.phase_durations).length > 0) ? h.phase_durations : null;
-    if (delta.samplingChanged) addToast('created', 'MCP client connected with sampling capability');
+    if (delta.samplingChanged) {
+      addToast('created', 'MCP client connected with sampling capability');
+      // Auto-clear force_passthrough so routing resolves to sampling
+      if (preferencesStore.pipeline.force_passthrough) {
+        preferencesStore.setPipelineToggle('force_passthrough', false);
+      }
+    }
   }
 
   // Initial poll + fixed interval

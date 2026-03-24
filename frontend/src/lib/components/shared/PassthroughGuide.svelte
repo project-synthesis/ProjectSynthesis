@@ -656,7 +656,7 @@
 
   .step-note-prefix {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 700;
     user-select: none;
   }

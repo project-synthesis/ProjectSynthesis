@@ -741,13 +741,13 @@ describe('Navigator', () => {
 
   // ── Settings — pipeline force toggles ─────────────────────────────────────
 
-  it('shows SAMPLING badge when force_sampling is on and samplingCapable is true', () => {
+  it('shows VIA MCP SAMPLING badge when sampling tier is active', () => {
     preferencesStore.prefs.pipeline.force_sampling = true;
     forgeStore.samplingCapable = true;
     forgeStore.mcpDisconnected = false;
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
-    expect(screen.getByText('SAMPLING')).toBeInTheDocument();
+    expect(screen.getByText('VIA MCP SAMPLING')).toBeInTheDocument();
   });
 
   it('shows PASSTHROUGH badge when force_passthrough is on', () => {
@@ -899,5 +899,157 @@ describe('Navigator', () => {
 
     // Editor should be closed — textarea gone
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  // ── Settings — sampling tier adaptation ───────────────────────────────────
+
+  function setupSamplingMode() {
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = false;
+    preferencesStore.prefs.pipeline.force_sampling = true;
+  }
+
+  it('shows "Model Hints" heading in sampling mode', () => {
+    setupSamplingMode();
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.getByText('Model Hints')).toBeInTheDocument();
+    expect(screen.queryByText('Models')).not.toBeInTheDocument();
+  });
+
+  it('shows "Effort Hints" heading in sampling mode', () => {
+    setupSamplingMode();
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.getByText('Effort Hints')).toBeInTheDocument();
+    expect(screen.queryByText('Effort')).not.toBeInTheDocument();
+  });
+
+  it('shows "// via IDE" annotation in sampling mode', () => {
+    setupSamplingMode();
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    const annotations = screen.getAllByText('// via IDE');
+    // One for Model Hints, one for Effort Hints
+    expect(annotations).toHaveLength(2);
+  });
+
+  it('falls back to passthrough when sampling is disconnected', () => {
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = true;
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    // Routing: force_sampling=true but mcpDisconnected=true → skip →
+    // no provider → skip → auto sampling disconnected → passthrough fallback
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.getByText('PASSTHROUGH')).toBeInTheDocument();
+  });
+
+  it('shows standard "Models" heading in internal mode (regression)', () => {
+    forgeStore.provider = 'claude_cli';
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.getByText('Models')).toBeInTheDocument();
+    expect(screen.queryByText('Model Hints')).not.toBeInTheDocument();
+  });
+
+  it('shows standard "Effort" heading in internal mode (regression)', () => {
+    forgeStore.provider = 'claude_cli';
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.getByText('Effort')).toBeInTheDocument();
+    expect(screen.queryByText('Effort Hints')).not.toBeInTheDocument();
+  });
+
+  it('does not show "// via IDE" annotation in internal mode', () => {
+    forgeStore.provider = 'claude_cli';
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.queryByText('// via IDE')).not.toBeInTheDocument();
+  });
+
+  it('shows VIA MCP SAMPLING badge in auto-sampling mode (no force toggle)', () => {
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = false;
+    // No force toggles — routing auto-detects sampling
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.getByText('VIA MCP SAMPLING')).toBeInTheDocument();
+  });
+
+  it('shows no tier badge in internal mode', () => {
+    forgeStore.provider = 'claude_cli';
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.queryByText('VIA MCP SAMPLING')).not.toBeInTheDocument();
+    expect(screen.queryByText('PASSTHROUGH')).not.toBeInTheDocument();
+  });
+
+  it('falls back to passthrough when samplingCapable is null', () => {
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = null;
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.getByText('PASSTHROUGH')).toBeInTheDocument();
+  });
+
+  it('hides Explore and Scoring toggles in passthrough mode', () => {
+    forgeStore.provider = null;
+    preferencesStore.prefs.pipeline.force_passthrough = true;
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.queryByRole('switch', { name: 'Toggle Explore' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Toggle Scoring' })).not.toBeInTheDocument();
+  });
+
+  // ── Settings — degradation notice ──────────────────────────────────────────
+
+  it('shows auto-fallback notice when force_sampling ON but MCP disconnected (with provider)', () => {
+    forgeStore.provider = 'claude_cli';
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = true;
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    // Routing: force_sampling=true but disconnected → internal (auto-fallback)
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    const notice = screen.getByRole('status');
+    expect(notice).toBeInTheDocument();
+    expect(notice.textContent).toContain('CLI active');
+    // Should NOT show degradation alert
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows degradation notice with passthrough fallback when no provider', () => {
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = null;
+    forgeStore.mcpDisconnected = false;
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    // Routing: force_sampling=true but samplingCapable=null → passthrough (degraded)
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    const notice = screen.getByRole('alert');
+    expect(notice).toBeInTheDocument();
+    expect(notice.textContent).toContain('using passthrough');
+  });
+
+  it('does not show degradation notice when force_sampling is honored', () => {
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = false;
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    // Routing: sampling honored — no degradation
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('does not show degradation notice when no force toggles active', () => {
+    forgeStore.provider = 'claude_cli';
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

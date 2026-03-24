@@ -142,3 +142,144 @@ describe('routing store — 5-tier priority chain', () => {
     expect(routing.isSampling).toBe(false);
   });
 });
+
+// =========================================================================
+// Degradation detection
+// =========================================================================
+
+describe('routing store — degradation detection', () => {
+  beforeEach(resetStores);
+
+  // -----------------------------------------------------------------------
+  // requestedTier
+  // -----------------------------------------------------------------------
+
+  it('requestedTier is null when no force toggles', () => {
+    expect(routing.requestedTier).toBeNull();
+  });
+
+  it('requestedTier = sampling when force_sampling is on', () => {
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    expect(routing.requestedTier).toBe('sampling');
+  });
+
+  it('requestedTier = passthrough when force_passthrough is on', () => {
+    preferencesStore.prefs.pipeline.force_passthrough = true;
+    expect(routing.requestedTier).toBe('passthrough');
+  });
+
+  it('force_passthrough takes priority over force_sampling for requestedTier', () => {
+    preferencesStore.prefs.pipeline.force_passthrough = true;
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    expect(routing.requestedTier).toBe('passthrough');
+  });
+
+  // -----------------------------------------------------------------------
+  // isDegraded — not degraded scenarios
+  // -----------------------------------------------------------------------
+
+  it('not degraded when no force toggles', () => {
+    expect(routing.isDegraded).toBe(false);
+  });
+
+  it('not degraded when force_passthrough honored', () => {
+    preferencesStore.prefs.pipeline.force_passthrough = true;
+    expect(routing.tier).toBe('passthrough');
+    expect(routing.isDegraded).toBe(false);
+  });
+
+  it('not degraded when force_sampling honored (capable + connected)', () => {
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = false;
+    forgeStore.provider = null;
+    expect(routing.tier).toBe('sampling');
+    expect(routing.isDegraded).toBe(false);
+  });
+
+  // -----------------------------------------------------------------------
+  // isAutoFallback — seamless fallback to internal provider
+  // -----------------------------------------------------------------------
+
+  it('auto-fallback when force_sampling + disconnected + provider available', () => {
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = true;
+    forgeStore.provider = 'claude_cli';
+    expect(routing.tier).toBe('internal');
+    expect(routing.isAutoFallback).toBe(true);
+    expect(routing.isDegraded).toBe(false);
+    expect(routing.autoFallbackMessage).toContain('CLI active');
+  });
+
+  it('auto-fallback when force_sampling + not capable + provider available', () => {
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    forgeStore.samplingCapable = false;
+    forgeStore.mcpDisconnected = false;
+    forgeStore.provider = 'claude_cli';
+    expect(routing.tier).toBe('internal');
+    expect(routing.isAutoFallback).toBe(true);
+    expect(routing.isDegraded).toBe(false);
+  });
+
+  it('auto-fallback when force_sampling + samplingCapable=null + provider', () => {
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    forgeStore.samplingCapable = null;
+    forgeStore.provider = 'claude_cli';
+    expect(routing.tier).toBe('internal');
+    expect(routing.isAutoFallback).toBe(true);
+    expect(routing.isDegraded).toBe(false);
+  });
+
+  it('not auto-fallback when no force toggles', () => {
+    forgeStore.provider = 'claude_cli';
+    expect(routing.isAutoFallback).toBe(false);
+  });
+
+  it('not auto-fallback when force_sampling honored', () => {
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = false;
+    forgeStore.provider = null;
+    expect(routing.tier).toBe('sampling');
+    expect(routing.isAutoFallback).toBe(false);
+  });
+
+  it('autoFallbackMessage is null when not auto-fallback', () => {
+    expect(routing.autoFallbackMessage).toBeNull();
+  });
+
+  // -----------------------------------------------------------------------
+  // isDegraded — true degradation (passthrough fallback only)
+  // -----------------------------------------------------------------------
+
+  it('degraded to passthrough when force_sampling + no provider + no sampling', () => {
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    forgeStore.samplingCapable = null;
+    forgeStore.provider = null;
+    expect(routing.tier).toBe('passthrough');
+    expect(routing.isDegraded).toBe(true);
+    expect(routing.isAutoFallback).toBe(false);
+    expect(routing.degradationReason).toBe('no_sampling_detected');
+  });
+
+  // -----------------------------------------------------------------------
+  // degradationMessage — only for true degradation (passthrough)
+  // -----------------------------------------------------------------------
+
+  it('message says "using passthrough" when truly degraded', () => {
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    forgeStore.samplingCapable = null;
+    forgeStore.provider = null;
+    expect(routing.tier).toBe('passthrough');
+    expect(routing.degradationMessage).toContain('using passthrough');
+  });
+
+  it('degradationMessage is null when not degraded', () => {
+    expect(routing.degradationMessage).toBeNull();
+  });
+
+  it('degradationReason is null when not degraded', () => {
+    expect(routing.degradationReason).toBeNull();
+  });
+});

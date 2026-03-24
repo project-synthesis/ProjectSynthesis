@@ -478,7 +478,8 @@
         </div>
         {:else}
         <div class="sub-section">
-          <span class="sub-heading">Models</span>
+          <span class="sub-heading">{routing.isSampling ? 'Model Hints' : 'Models'}</span>
+          {#if routing.isSampling}<span class="sub-heading-note">// via IDE</span>{/if}
           <div class="card-terminal">
             {#each [
               { label: 'Analyzer', phase: 'analyzer' },
@@ -550,6 +551,15 @@
                 <span class="toggle-thumb"></span>
               </button>
             </div>
+            {#if routing.isAutoFallback}
+            <div class="autofallback-notice" role="status">
+              {routing.autoFallbackMessage}
+            </div>
+            {:else if routing.isDegraded && routing.requestedTier === 'sampling'}
+            <div class="degradation-notice" role="alert">
+              {routing.degradationMessage}
+            </div>
+            {/if}
             <!-- Force passthrough — manual override, always available except when sampling works -->
             <div class="data-row">
               <span class="data-label" title="Bypass all pipelines — returns assembled template for manual processing">Force passthrough</span>
@@ -587,7 +597,8 @@
         </div>
         {:else}
         <div class="sub-section">
-          <span class="sub-heading">Effort</span>
+          <span class="sub-heading">{routing.isSampling ? 'Effort Hints' : 'Effort'}</span>
+          {#if routing.isSampling}<span class="sub-heading-note">// via IDE</span>{/if}
           <div class="card-terminal">
             {#each [
               { label: 'Analyzer', key: 'analyzer_effort' },
@@ -628,15 +639,14 @@
                 {/each}
               </select>
             </div>
-            {#if preferencesStore.pipeline.force_sampling && forgeStore.samplingCapable === true}
+            {#if routing.isSampling}
               <div class="data-row">
                 <span
                   class="badge-neon"
-                  style="color: {forgeStore.mcpDisconnected ? 'var(--color-text-dim)' : 'var(--color-neon-cyan)'}; border-color: {forgeStore.mcpDisconnected ? 'var(--color-border-subtle)' : 'var(--color-neon-cyan)'}; {forgeStore.mcpDisconnected ? 'opacity: 0.4;' : ''}"
-                >{forgeStore.mcpDisconnected ? 'SAMPLING (disconnected)' : 'SAMPLING'}</span>
+                  style="color: var(--color-neon-cyan); border-color: var(--color-neon-cyan);"
+                >VIA MCP SAMPLING</span>
               </div>
-            {/if}
-            {#if preferencesStore.pipeline.force_passthrough}
+            {:else if routing.isPassthrough}
               <div class="data-row">
                 <span class="badge-neon" style="color: var(--color-neon-yellow); border-color: var(--color-neon-yellow);">PASSTHROUGH</span>
               </div>
@@ -1206,9 +1216,42 @@
     background: var(--color-neon-yellow);
   }
 
-  /* ---- Passthrough tier utilities ---- */
+  /* ---- Tier-adaptive utilities ---- */
   .sub-heading--passthrough {
     color: var(--color-neon-yellow);
+  }
+
+  .degradation-notice {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-neon-orange);
+    padding: 3px 6px;
+    margin: 2px 0;
+    border-left: 2px solid var(--color-neon-orange);
+    background: rgba(255, 140, 0, 0.06);
+    line-height: 1.4;
+  }
+
+  .autofallback-notice {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-neon-cyan);
+    padding: 3px 6px;
+    margin: 2px 0;
+    border-left: 2px solid rgba(0, 229, 255, 0.4);
+    background: rgba(0, 229, 255, 0.04);
+    line-height: 1.4;
+  }
+
+  .sub-heading-note {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--color-text-dim);
+    padding: 0 6px;
+    margin-bottom: 2px;
+    user-select: none;
   }
 
   /* ---- Accordion headings (progressive disclosure) ---- */

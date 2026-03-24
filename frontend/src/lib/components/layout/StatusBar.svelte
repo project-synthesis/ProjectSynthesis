@@ -1,8 +1,9 @@
 <script lang="ts">
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
-  import ProviderBadge from '$lib/components/shared/ProviderBadge.svelte';
+  import TierBadge from '$lib/components/shared/TierBadge.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
+  import { routing } from '$lib/stores/routing.svelte';
   import { taxonomyColor, qHealthColor } from '$lib/utils/colors';
   import { getPhaseLabel } from '$lib/utils/dimensions';
   import { formatScore } from '$lib/utils/formatting';
@@ -14,6 +15,15 @@
   // Provider and version are fed reactively from forgeStore (via health polls + SSE events)
   const provider = $derived(forgeStore.provider);
   const version = $derived(forgeStore.version);
+
+  // Short provider label for secondary display (e.g. "cli", "api")
+  const providerShort = $derived.by(() => {
+    if (!provider) return null;
+    const p = provider.toLowerCase();
+    if (p.includes('cli')) return 'cli';
+    if (p.includes('api') || p.includes('anthropic')) return 'api';
+    return null;
+  });
 
   // Cluster count derived from taxonomy stats (loaded by clustersStore.loadTree)
   const clusterCount = $derived(clustersStore.taxonomyStats?.nodes?.active ?? null);
@@ -39,13 +49,16 @@
   aria-label="Status bar"
   style="background: var(--color-bg-secondary); border-top: 1px solid var(--color-border-subtle);"
 >
-  <!-- Left side: logo + provider badge + version -->
+  <!-- Left side: logo + tier badge + provider + version -->
   <div class="status-left">
     <div style="opacity: 0.8; margin-right: 2px;">
       <Logo size={14} variant="mark" />
     </div>
-    <ProviderBadge {provider} />
-    {#if forgeStore.mcpDisconnected}
+    <TierBadge tier={routing.tier} degradedFrom={routing.isDegraded ? routing.requestedTier : null} />
+    {#if providerShort && routing.isInternal}
+      <span class="status-provider">{providerShort}</span>
+    {/if}
+    {#if forgeStore.mcpDisconnected && !routing.isDegraded && !routing.isAutoFallback}
       <span class="status-disconnected" title="MCP client disconnected">disconnected</span>
     {/if}
     <span class="status-item">{version ? `v${version}` : ''}</span>
@@ -171,6 +184,13 @@
   }
 
   .status-patterns {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-dim);
+    white-space: nowrap;
+  }
+
+  .status-provider {
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-text-dim);

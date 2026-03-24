@@ -4,11 +4,13 @@ import { mockFetch, mockHealthResponse, mockOptimizationResult } from '$lib/test
 
 import StatusBar from './StatusBar.svelte';
 import { forgeStore } from '$lib/stores/forge.svelte';
+import { preferencesStore } from '$lib/stores/preferences.svelte';
 import { clustersStore } from '$lib/stores/clusters.svelte';
 
 describe('StatusBar', () => {
   beforeEach(() => {
     forgeStore._reset();
+    preferencesStore._reset();
     clustersStore._reset();
     vi.clearAllMocks();
   });
@@ -30,10 +32,10 @@ describe('StatusBar', () => {
     expect(screen.getByText('Ctrl+K')).toBeInTheDocument();
   });
 
-  it('shows provider badge (PASSTHROUGH when no provider loaded yet)', () => {
+  it('shows tier badge (PASSTHROUGH when no provider loaded yet)', () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     render(StatusBar);
-    // ProviderBadge renders PASSTHROUGH when provider is null (initial state)
+    // TierBadge renders PASSTHROUGH when routing resolves to passthrough (initial state)
     expect(screen.getByText('PASSTHROUGH')).toBeInTheDocument();
   });
 
@@ -206,5 +208,69 @@ describe('StatusBar', () => {
     await vi.waitFor(() => {
       expect(screen.queryByText('5 clusters')).toBeInTheDocument();
     });
+  });
+
+  // -----------------------------------------------------------------------
+  // TierBadge integration
+  // -----------------------------------------------------------------------
+
+  it('shows INTERNAL tier badge when provider is available', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.provider = 'claude_cli';
+    render(StatusBar);
+    expect(screen.getByText('INTERNAL')).toBeInTheDocument();
+  });
+
+  it('shows provider short label next to tier badge in internal mode', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.provider = 'claude_cli';
+    render(StatusBar);
+    expect(screen.getByText('cli')).toBeInTheDocument();
+  });
+
+  it('shows SAMPLING tier badge when auto-sampling active', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = false;
+    render(StatusBar);
+    expect(screen.getByText('SAMPLING')).toBeInTheDocument();
+  });
+
+  // -----------------------------------------------------------------------
+  // Auto-fallback and degradation display
+  // -----------------------------------------------------------------------
+
+  it('shows clean INTERNAL badge during auto-fallback (no struck-through SAMPLING)', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.provider = 'claude_cli';
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = true;
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    render(StatusBar);
+    expect(screen.getByText('INTERNAL')).toBeInTheDocument();
+    expect(screen.getByText('cli')).toBeInTheDocument();
+    // No struck-through SAMPLING — auto-fallback is seamless
+    expect(screen.queryByTitle('Requested tier unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText('disconnected')).not.toBeInTheDocument();
+  });
+
+  it('shows struck-through SAMPLING when truly degraded (passthrough fallback)', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = null;
+    preferencesStore.prefs.pipeline.force_sampling = true;
+    render(StatusBar);
+    expect(screen.getByText('PASSTHROUGH')).toBeInTheDocument();
+    expect(screen.getByText('SAMPLING')).toBeInTheDocument(); // struck-through
+  });
+
+  it('shows "disconnected" when MCP is disconnected but no force toggle active', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.provider = 'claude_cli';
+    forgeStore.mcpDisconnected = true;
+    // force_sampling is false (default) — no auto-fallback, no degradation
+    render(StatusBar);
+    expect(screen.getByText('disconnected')).toBeInTheDocument();
   });
 });

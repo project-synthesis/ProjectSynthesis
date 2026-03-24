@@ -4,11 +4,27 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- Added "Model Hints" / "Effort Hints" headings with "// via IDE" annotation to Navigator in sampling mode
+- Added VIA MCP SAMPLING badge to Navigator Defaults section for active sampling tier
+- Added `TierBadge` component — displays effective execution tier (INTERNAL/SAMPLING/PASSTHROUGH) with color-coded badge and optional struck-through degradation label
+- Added intelligent auto-fallback: when Force IDE sampling is ON but MCP is idle, seamlessly uses internal provider with cyan informational notice instead of orange degradation warning
+- Added effort-to-priority mapping for MCP sampling — user effort preferences (low/medium/high/max) now transmitted as `intelligencePriority`/`speedPriority`/`costPriority` in `ModelPreferences`
+- Added shared `semantic_check()`, `apply_domain_gate()`, `resolve_effective_strategy()` helpers in `pipeline_constants.py` — both pipelines now use identical strategy resolution logic (DRY)
+
 ### Changed
 - Updated PassthroughGuide feature matrix to reflect v0.3.1 capabilities: score phase now shows "Heuristic / Hybrid", codebase explore shows "Roots + index", and pattern injection is now marked available (✓) instead of unavailable
 - Expanded PassthroughGuide step 1 description to mention codebase context and applied patterns
 - Navigator MODELS section now morphs in-place to a CONTEXT section in passthrough mode, showing read-only indicators for heuristic analysis, codebase index status, auto-injected patterns, and an Adaptation toggle
 - Navigator EFFORT section now morphs in-place to a SCORING section in passthrough mode, showing read-only "heuristic" mode indicator
+- StatusBar now shows tier badge (INTERNAL/SAMPLING/PASSTHROUGH) instead of raw provider badge (CLI/API)
+- Replaced duplicated strategy resolution logic in `pipeline.py` and `sampling_pipeline.py` with shared helpers from `pipeline_constants.py`
+- MCP disconnect toast suppressed when a local provider is available (silent auto-fallback)
+
+### Fixed
+- MCP session-WITH SSE reconnection not broadcasting routing state changes (activity throttle bypass)
+- Effort preferences silently ignored in MCP sampling mode — now mapped to MCP `ModelPreferences` priority triad
+- Degradation messages hardcoding "fell back to internal provider" when actual fallback was passthrough
 
 ### Removed
 - Removed deprecated `preparePassthrough()` API function and `PassthroughPrepareResult` type from frontend client (passthrough now handled inline via SSE)
