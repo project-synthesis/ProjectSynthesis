@@ -3,6 +3,7 @@
   import { editorStore } from '$lib/stores/editor.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
   import { formatScore, copyToClipboard } from '$lib/utils/formatting';
+  import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
 
   let optimizedPrompt = $state('');
   let changesSummary = $state('');
@@ -55,6 +56,12 @@
       <span class="header-strategy">strategy: {forgeStore.passthroughStrategy}</span>
     {/if}
     <div class="spacer"></div>
+    <button
+      class="guide-btn"
+      onclick={() => passthroughGuide.show(false)}
+      aria-label="Open passthrough workflow guide"
+      title="How passthrough works"
+    >?</button>
     <button class="cancel-btn" onclick={() => forgeStore.cancel()}>CANCEL</button>
   </div>
 
@@ -139,6 +146,28 @@
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--color-text-dim);
+  }
+
+  .guide-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-neon-yellow);
+    border: 1px solid var(--color-neon-yellow);
+    background: transparent;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    cursor: pointer;
+    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    line-height: 1;
+  }
+
+  .guide-btn:hover {
+    background: rgba(251, 191, 36, 0.06);
   }
 
   .cancel-btn {

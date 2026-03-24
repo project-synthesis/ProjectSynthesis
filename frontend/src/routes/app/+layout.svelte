@@ -5,6 +5,7 @@
   import StatusBar from '$lib/components/layout/StatusBar.svelte';
   import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
   import Toast from '$lib/components/shared/Toast.svelte';
+  import PassthroughGuide from '$lib/components/shared/PassthroughGuide.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
@@ -54,6 +55,7 @@
   </div>
   <CommandPalette />
   <Toast />
+  <PassthroughGuide />
 </div>
 
 <style>
