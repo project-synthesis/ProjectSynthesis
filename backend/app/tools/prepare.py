@@ -16,7 +16,7 @@ from app.models import Optimization
 from app.schemas.mcp_models import PrepareOutput
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.preferences import PreferencesService
-from app.tools._shared import DATA_DIR, resolve_workspace_guidance
+from app.tools._shared import DATA_DIR, get_context_service
 
 logger = logging.getLogger(__name__)
 
@@ -48,26 +48,27 @@ async def handle_prepare(
         len(prompt), effective_strategy,
     )
 
-    # Auto-discover workspace roots (zero-config) or fall back to workspace_path
-    guidance = await resolve_workspace_guidance(ctx, workspace_path)
-
-    # Resolve adaptation state for passthrough template injection
-    adaptation_state: str | None = None
-    try:
-        from app.services.adaptation_tracker import AdaptationTracker
-
-        async with async_session_factory() as _adapt_db:
-            tracker = AdaptationTracker(_adapt_db)
-            adaptation_state = await tracker.render_adaptation_state("general")
-    except Exception as exc:
-        logger.debug("Adaptation state unavailable for MCP prepare: %s", exc)
+    # Unified context enrichment — resolves guidance, adaptation, analysis, patterns
+    context_service = get_context_service()
+    async with async_session_factory() as enrich_db:
+        enrichment = await context_service.enrich(
+            raw_prompt=prompt,
+            tier="passthrough",
+            db=enrich_db,
+            workspace_path=workspace_path,
+            mcp_ctx=ctx,
+            repo_full_name=repo_full_name,
+        )
 
     assembled, strategy_name = assemble_passthrough_prompt(
         prompts_dir=PROMPTS_DIR,
         raw_prompt=prompt,
         strategy_name=effective_strategy,
-        codebase_guidance=guidance,
-        adaptation_state=adaptation_state,
+        codebase_guidance=enrichment.workspace_guidance,
+        adaptation_state=enrichment.adaptation_state,
+        analysis_summary=enrichment.analysis.format_summary() if enrichment.analysis else None,
+        codebase_context=enrichment.codebase_context,
+        applied_patterns=enrichment.applied_patterns,
     )
 
     # Enforce max_context_tokens budget
@@ -90,7 +91,11 @@ async def handle_prepare(
             trace_id=trace_id,
             provider="mcp_passthrough",
             strategy_used=strategy_name,
-            task_type="general",
+            task_type=enrichment.analysis.task_type if enrichment.analysis else "general",
+            domain=enrichment.analysis.domain if enrichment.analysis else "general",
+            domain_raw=enrichment.analysis.domain if enrichment.analysis else "general",
+            intent_label=enrichment.analysis.intent_label if enrichment.analysis else "general",
+            context_sources=dict(enrichment.context_sources),
         )
         db.add(pending)
         await db.commit()

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +39,9 @@ class EnrichedContext:
     adaptation_state: str | None = None
     applied_patterns: str | None = None
     analysis: HeuristicAnalysis | None = None
-    context_sources: dict[str, bool] = field(default_factory=dict)
+    context_sources: MappingProxyType[str, bool] = field(
+        default_factory=lambda: MappingProxyType({}),
+    )
 
 
 class ContextEnrichmentService:
@@ -76,11 +79,12 @@ class ContextEnrichmentService:
     ) -> EnrichedContext:
         """Resolve all context layers for the given tier.
 
-        Note: ``preferences_snapshot`` is accepted for forward compatibility —
-        callers (Task 7) may use it to gate layers (e.g. ``enable_adaptation``).
+        ``preferences_snapshot``, when provided, gates optional layers:
+        - ``enable_adaptation``: if ``False``, skip adaptation state resolution.
         Content capping and ``<untrusted-context>`` wrapping remain the caller's
         responsibility (currently handled by ``ContextResolver``).
         """
+        prefs = preferences_snapshot or {}
 
         # 1. Workspace guidance — ALL tiers, same path
         guidance = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
@@ -110,22 +114,25 @@ class ContextEnrichmentService:
             )
 
         # 4. Adaptation state — ALL tiers, task_type-aware
+        #    Skipped when preferences explicitly disable adaptation.
+        adaptation: str | None = None
         effective_task_type = task_type or "general"
-        adaptation = await self._resolve_adaptation(db, effective_task_type)
+        if prefs.get("enable_adaptation", True):
+            adaptation = await self._resolve_adaptation(db, effective_task_type)
 
         # 5. Applied patterns — ALL tiers
         patterns = await self._resolve_patterns(
             raw_prompt, applied_pattern_ids, db,
         )
 
-        # 6. Context sources audit
-        sources = {
+        # 6. Context sources audit (frozen via MappingProxyType)
+        sources = MappingProxyType({
             "workspace_guidance": guidance is not None,
             "codebase_context": codebase_context is not None,
             "adaptation": adaptation is not None,
             "applied_patterns": patterns is not None,
             "heuristic_analysis": analysis is not None,
-        }
+        })
 
         return EnrichedContext(
             raw_prompt=raw_prompt,
@@ -174,7 +181,12 @@ class ContextEnrichmentService:
         domain: str | None,
         db: AsyncSession,
     ) -> str | None:
-        """Query pre-built index for curated codebase context."""
+        """Query pre-built index for curated codebase context.
+
+        Note: ``RepoIndexService`` is instantiated per-call because it holds a
+        reference to the per-request ``AsyncSession``.  The service itself is
+        lightweight (no model loading) so the allocation cost is negligible.
+        """
         try:
             from app.services.repo_index_service import RepoIndexService
             svc = RepoIndexService(db, self._github_client, self._embedding_service)

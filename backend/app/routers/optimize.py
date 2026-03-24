@@ -134,7 +134,7 @@ async def optimize(
             domain=enrichment.analysis.domain if enrichment.analysis else "general",
             domain_raw=enrichment.analysis.domain if enrichment.analysis else "general",
             intent_label=enrichment.analysis.intent_label if enrichment.analysis else "general",
-            context_sources=enrichment.context_sources,
+            context_sources=dict(enrichment.context_sources),
         )
         db.add(pending)
         await db.commit()
@@ -174,7 +174,7 @@ async def optimize(
                 codebase_guidance=enrichment.workspace_guidance,
                 codebase_context=enrichment.codebase_context,
                 adaptation_state=enrichment.adaptation_state,
-                context_sources=enrichment.context_sources,
+                context_sources=dict(enrichment.context_sources),
                 applied_pattern_ids=body.applied_pattern_ids,
                 taxonomy_engine=get_taxonomy_engine(app=request.app),
             ):
@@ -345,7 +345,7 @@ async def passthrough_prepare(
         domain=enrichment.analysis.domain if enrichment.analysis else "general",
         domain_raw=enrichment.analysis.domain if enrichment.analysis else "general",
         intent_label=enrichment.analysis.intent_label if enrichment.analysis else "general",
-        context_sources=enrichment.context_sources,
+        context_sources=dict(enrichment.context_sources),
     )
     db.add(pending)
     await db.commit()

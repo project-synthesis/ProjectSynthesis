@@ -132,6 +132,16 @@ class TestEnrichGracefulDegradation:
         with pytest.raises((AttributeError, TypeError)):
             result.raw_prompt = "something else"  # type: ignore[misc]
 
+    @pytest.mark.asyncio
+    async def test_context_sources_is_immutable(self, db, tmp_path):
+        service = _build_service(tmp_path)
+        result = await service.enrich(
+            raw_prompt="Implement a sorting algorithm",
+            tier="passthrough", db=db,
+        )
+        with pytest.raises(TypeError):
+            result.context_sources["new_key"] = True  # type: ignore[index]
+
 
 class TestEnrichSampling:
     @pytest.mark.asyncio
@@ -154,6 +164,29 @@ class TestEnrichSampling:
         )
         assert result.codebase_context is None
         assert result.context_sources["codebase_context"] is False
+
+
+class TestPreferencesGating:
+    @pytest.mark.asyncio
+    async def test_disable_adaptation_via_preferences(self, db, tmp_path):
+        service = _build_service(tmp_path)
+        result = await service.enrich(
+            raw_prompt="Implement a REST API endpoint",
+            tier="passthrough", db=db,
+            preferences_snapshot={"enable_adaptation": False},
+        )
+        assert result.adaptation_state is None
+        assert result.context_sources["adaptation"] is False
+
+    @pytest.mark.asyncio
+    async def test_adaptation_enabled_by_default(self, db, tmp_path):
+        service = _build_service(tmp_path)
+        result = await service.enrich(
+            raw_prompt="Implement a REST API endpoint",
+            tier="passthrough", db=db,
+        )
+        # Adaptation key exists — may be None (no data) but was attempted
+        assert "adaptation" in result.context_sources
 
 
 class TestDBPersistenceCompat:

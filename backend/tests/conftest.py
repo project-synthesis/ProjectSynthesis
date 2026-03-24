@@ -46,15 +46,29 @@ async def mock_provider():
 
 @pytest_asyncio.fixture
 async def app_client(mock_provider, db_session, tmp_path):
+    from app.config import DATA_DIR, PROMPTS_DIR
     from app.database import get_db
     from app.main import app
+    from app.services.context_enrichment import ContextEnrichmentService
     from app.services.event_bus import EventBus
+    from app.services.heuristic_analyzer import HeuristicAnalyzer
     from app.services.routing import RoutingManager
+    from app.services.workspace_intelligence import WorkspaceIntelligence
 
     # Create a test RoutingManager with mock provider
     test_routing = RoutingManager(event_bus=EventBus(), data_dir=tmp_path)
     test_routing.set_provider(mock_provider)
     app.state.routing = test_routing
+
+    # Create a test ContextEnrichmentService
+    app.state.context_service = ContextEnrichmentService(
+        prompts_dir=PROMPTS_DIR,
+        data_dir=DATA_DIR,
+        workspace_intel=WorkspaceIntelligence(),
+        embedding_service=None,
+        heuristic_analyzer=HeuristicAnalyzer(),
+        github_client=None,
+    )
 
     async def override_get_db():
         yield db_session

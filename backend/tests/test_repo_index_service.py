@@ -273,3 +273,38 @@ class TestCuratedRetrieval:
         )
         assert result is not None
         assert "service.py" in result.context_text
+
+    @pytest.mark.asyncio
+    async def test_max_chars_budget_enforcement(self, db_session):
+        """Files exceeding the max_chars budget are excluded from results."""
+        meta = RepoIndexMeta(
+            repo_full_name="owner/repo", branch="main",
+            status="ready", file_count=3, head_sha="abc123",
+        )
+        db_session.add(meta)
+
+        vec = np.ones(384, dtype=np.float32) * 0.5
+        # Create 3 files with outlines of ~100 chars each
+        for i in range(3):
+            db_session.add(RepoFileIndex(
+                repo_full_name="owner/repo", branch="main",
+                file_path=f"src/module_{i}.py", file_sha=f"sha{i}",
+                outline="x" * 80,  # ~80 chars + header ≈ ~120 per entry
+                embedding=vec.tobytes(),
+            ))
+        await db_session.commit()
+
+        gc = AsyncMock()
+        es = MagicMock()
+        es.aembed_single = AsyncMock(return_value=vec)
+        es.cosine_search = MagicMock(return_value=[
+            (0, 0.9), (1, 0.85), (2, 0.8),
+        ])
+
+        svc = RepoIndexService(db_session, gc, es)
+        # Budget of 250 chars should only fit ~2 entries (each ~120 chars)
+        result = await svc.query_curated_context(
+            "owner/repo", "main", "query", max_chars=250,
+        )
+        assert result is not None
+        assert result.files_included == 2  # third file exceeds budget

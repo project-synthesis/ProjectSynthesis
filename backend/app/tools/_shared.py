@@ -10,14 +10,10 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
-
-from mcp.server.fastmcp import Context
 
 from app.config import DATA_DIR, PROMPTS_DIR
 from app.database import async_session_factory
-from app.services.workspace_intelligence import WorkspaceIntelligence
 
 __all__ = [
     "DATA_DIR",
@@ -27,7 +23,6 @@ __all__ = [
     "get_context_service",
     "get_routing",
     "get_taxonomy_engine",
-    "resolve_workspace_guidance",
     "set_context_service",
     "set_routing",
     "set_taxonomy_engine",
@@ -45,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 _routing: RoutingManager | None = None
 _taxonomy_engine = None  # TaxonomyEngine | None (avoid import for startup speed)
-_workspace_intel = WorkspaceIntelligence()
 _context_service: ContextEnrichmentService | None = None
 
 
@@ -110,39 +104,3 @@ def build_scores_dict(obj: object) -> dict[str, float] | None:
     }
 
 
-async def resolve_workspace_guidance(
-    ctx: Context | None, workspace_path: str | None
-) -> str | None:
-    """Resolve workspace guidance: try roots/list first, fall back to workspace_path."""
-    roots: list[Path] = []
-
-    # Try MCP roots/list (zero-config)
-    if ctx:
-        try:
-            roots_result = await ctx.session.list_roots()
-            for root in roots_result.roots:
-                uri = str(root.uri)
-                if uri.startswith("file://"):
-                    roots.append(Path(uri.removeprefix("file://")))
-            if roots:
-                logger.debug("Resolved %d workspace roots via MCP roots/list", len(roots))
-        except Exception:
-            logger.debug("Client does not support roots/list — will try workspace_path fallback")
-
-    # Fallback: explicit workspace_path (validated)
-    if not roots and workspace_path:
-        wp = Path(workspace_path)
-        if wp.is_dir():
-            roots = [wp]
-            logger.debug("Using explicit workspace_path fallback: %s", workspace_path)
-        else:
-            logger.debug("workspace_path is not a valid directory: %s", workspace_path)
-
-    if not roots:
-        logger.debug("No workspace roots resolved — skipping guidance injection")
-        return None
-
-    profile = _workspace_intel.analyze(roots)
-    if profile:
-        logger.info("Workspace guidance resolved: %d chars from %d roots", len(profile), len(roots))
-    return profile

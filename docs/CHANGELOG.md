@@ -39,6 +39,12 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Added adaptation state injection to all passthrough prepare paths (REST inline, REST dedicated, MCP `synthesis_prepare_optimization`)
 
 ### Changed
+- Shared `EmbeddingService` singleton across taxonomy engine and `ContextEnrichmentService` in both FastAPI and MCP lifespans (was creating duplicate instances)
+- `EnrichedContext.context_sources` now uses `MappingProxyType` for runtime immutability (callers convert to `dict()` at DB boundary)
+- `HeuristicAnalyzer._score_category()` now uses word-boundary regex matching instead of substring search (prevents false positives like "class" matching "classification")
+- Removed unused `prompt_lower` parameter from `_classify_domain()` helper
+- `ContextEnrichmentService.enrich()` now respects `preferences_snapshot["enable_adaptation"]` to skip adaptation state resolution when disabled
+- Improved error logging when `ContextEnrichmentService` init fails — now explicitly warns that passthrough and pattern resolution will be unavailable
 - Passthrough optimizations now persist `task_type`, `domain`, `intent_label`, and `context_sources` from heuristic analysis (previously hardcoded "general")
 - `WorkspaceIntelligence._detect_stack()` uses `discover_project_dirs()` for monorepo subdirectory scanning
 - `passthrough.md` template expanded with `{{analysis_summary}}`, `{{codebase_context}}`, and `{{applied_patterns}}` sections

@@ -121,7 +121,7 @@ _DOMAIN_SIGNALS: dict[str, list[tuple[str, float]]] = {
 }
 
 
-def _classify_domain(prompt_lower: str, scored: dict[str, float]) -> str:
+def _classify_domain(scored: dict[str, float]) -> str:
     """Classify domain with fullstack promotion when both backend + frontend score high."""
     if not scored:
         return "general"
@@ -201,7 +201,7 @@ class HeuristicAnalyzer:
             domain_scores[category] = self._score_category(
                 prompt_lower, first_sentence, keywords,
             )
-        domain = _classify_domain(prompt_lower, domain_scores)
+        domain = _classify_domain(domain_scores)
         domain_confidence = min(1.0, max(domain_scores.values())) if domain_scores else 0.0
 
         # Layer 2: Structural signals
@@ -261,13 +261,27 @@ class HeuristicAnalyzer:
         prompt_lower: str, first_sentence: str,
         keywords: list[tuple[str, float]],
     ) -> float:
-        """Score a category by weighted keyword presence with positional boost."""
+        """Score a category by weighted keyword presence with positional boost.
+
+        Uses word-boundary matching to avoid false positives (e.g. "class"
+        should not match "classification").  Multi-word keywords (e.g.
+        "system prompt") use simple substring search since ``\\b`` would
+        not match internal spaces correctly.
+        """
         score = 0.0
         for keyword, weight in keywords:
             kw = keyword.lower()
-            if kw in prompt_lower:
+            # Multi-word keywords: substring match (word-boundary would fail)
+            if " " in kw:
+                found_in_prompt = kw in prompt_lower
+                found_in_first = kw in first_sentence
+            else:
+                pattern = re.compile(r"\b" + re.escape(kw) + r"\b")
+                found_in_prompt = bool(pattern.search(prompt_lower))
+                found_in_first = bool(pattern.search(first_sentence))
+            if found_in_prompt:
                 # 2x boost if keyword appears in first sentence
-                multiplier = 2.0 if kw in first_sentence else 1.0
+                multiplier = 2.0 if found_in_first else 1.0
                 score += weight * multiplier
         return score
 
