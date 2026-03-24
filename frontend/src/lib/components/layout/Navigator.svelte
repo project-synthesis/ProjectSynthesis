@@ -554,7 +554,7 @@
             <div class="data-row">
               <span class="data-label" title="Bypass all pipelines — returns assembled template for manual processing">Force passthrough</span>
               <button
-                class="toggle-track"
+                class="toggle-track toggle-track--yellow"
                 class:toggle-track--on={preferencesStore.pipeline.force_passthrough}
                 onclick={() => {
                   const newVal = !preferencesStore.pipeline.force_passthrough;
