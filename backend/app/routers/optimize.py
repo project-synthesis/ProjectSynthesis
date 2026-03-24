@@ -44,7 +44,9 @@ class OptimizationDetail(BaseModel):
     overall_score: float | None = Field(default=None, description="Weighted overall quality score (1.0-10.0).")
     provider: str | None = Field(default=None, description="LLM provider used (e.g. 'claude_cli', 'anthropic_api').")
     model_used: str | None = Field(default=None, description="Model ID used for optimization.")
-    models_by_phase: dict[str, str] | None = Field(default=None, description="Per-phase model IDs used during optimization.")
+    models_by_phase: dict[str, str] | None = Field(
+        default=None, description="Per-phase model IDs used during optimization.",
+    )
     scoring_mode: str | None = Field(default=None, description="Scoring method: 'hybrid', 'heuristic', or 'skipped'.")
     duration_ms: int | None = Field(default=None, description="Total pipeline duration in milliseconds.")
     status: str = Field(description="Optimization status: 'completed', 'pending', or 'failed'.")

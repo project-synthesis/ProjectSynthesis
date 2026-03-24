@@ -883,9 +883,6 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
     loader = PromptLoader(PROMPTS_DIR)
     strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
 
-    prefs = PreferencesService(DATA_DIR)
-    prefs_snapshot = prefs.load()
-
     phase_durations: dict[str, int] = {}
     context_sources: dict[str, bool] = {
         "explore": False,

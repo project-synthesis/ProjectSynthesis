@@ -473,7 +473,10 @@ class PipelineOrchestrator:
                 streaming=True,
             )
 
-            yield PipelineEvent(event="status", data={"stage": "optimize", "state": "complete", "model": optimizer_model})
+            yield PipelineEvent(
+                event="status",
+                data={"stage": "optimize", "state": "complete", "model": optimizer_model},
+            )
 
             optimize_duration = int((time.monotonic() - phase_start) * 1000)
             phase_durations["optimize_ms"] = optimize_duration
