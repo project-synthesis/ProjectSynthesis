@@ -230,6 +230,7 @@
           <ol class="step-list">
             {#each STEPS as step, i (step.number)}
               {@const isActive = passthroughGuide.activeStep === i}
+              {@const isCompleted = i < passthroughGuide.activeStep}
               {@const color = accentVar(step.accent)}
               <li
                 class="step-item"
@@ -247,17 +248,18 @@
                     <span
                       class="step-number"
                       class:step-number--active={isActive}
+                      class:step-number--completed={isCompleted}
                       style="
-                        border-color: {isActive ? color : 'var(--color-border-subtle)'};
+                        border-color: {isActive || isCompleted ? color : 'var(--color-border-subtle)'};
                         background: {isActive ? accentBg(step.accent) : 'transparent'};
-                        color: {isActive ? color : 'var(--color-text-dim)'};
+                        color: {isActive || isCompleted ? color : 'var(--color-text-dim)'};
                       "
                     >
                       {step.number}
                     </span>
                     <span
                       class="step-title"
-                      style="color: {isActive ? 'var(--color-text-primary)' : 'var(--color-text-dim)'};"
+                      style="color: {isActive ? 'var(--color-text-primary)' : isCompleted ? 'var(--color-text-secondary)' : 'var(--color-text-dim)'};"
                     >
                       {step.title}
                     </span>
@@ -290,9 +292,9 @@
                 {#if isActive}
                   <div class="step-content" id="step-content-{i}">
                     <p class="step-desc">{step.description}</p>
-                    <div class="step-note" style="border-color: {color};">
-                      {step.detail}
-                    </div>
+                    <p class="step-note">
+                      <span class="step-note-prefix" style="color: {color};">//</span> {step.detail}
+                    </p>
                   </div>
                 {/if}
 
@@ -648,9 +650,15 @@
     color: var(--color-text-dim);
     line-height: 1.4;
     margin: 0;
-    padding: 2px 0 2px 8px;
-    border-left: 1px solid;
+    padding: 0;
     opacity: 0.7;
+  }
+
+  .step-note-prefix {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    user-select: none;
   }
 
 

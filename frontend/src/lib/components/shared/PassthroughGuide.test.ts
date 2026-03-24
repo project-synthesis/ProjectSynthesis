@@ -208,6 +208,31 @@ describe('PassthroughGuide', () => {
     expect(dialog).toHaveAttribute('aria-label', 'Passthrough workflow guide');
   });
 
+  it('completed steps have step-number--completed class', () => {
+    passthroughGuide.show(false);
+    passthroughGuide.setStep(3); // steps 0-2 are completed
+    render(PassthroughGuide);
+    const stepNumbers = document.querySelectorAll('.step-number');
+    // Steps 0, 1, 2 should be completed (before active index 3)
+    expect(stepNumbers[0]).toHaveClass('step-number--completed');
+    expect(stepNumbers[1]).toHaveClass('step-number--completed');
+    expect(stepNumbers[2]).toHaveClass('step-number--completed');
+    // Step 3 is active, not completed
+    expect(stepNumbers[3]).not.toHaveClass('step-number--completed');
+    expect(stepNumbers[3]).toHaveClass('step-number--active');
+    // Steps 4, 5 are upcoming — neither class
+    expect(stepNumbers[4]).not.toHaveClass('step-number--completed');
+    expect(stepNumbers[4]).not.toHaveClass('step-number--active');
+  });
+
+  it('step notes use // prefix instead of border', () => {
+    passthroughGuide.show(false);
+    render(PassthroughGuide);
+    const prefix = document.querySelector('.step-note-prefix');
+    expect(prefix).toBeInTheDocument();
+    expect(prefix!.textContent).toBe('//');
+  });
+
   it('step headers have aria-expanded attribute', () => {
     passthroughGuide.show(false);
     render(PassthroughGuide);
