@@ -36,6 +36,11 @@ export function formatRelativeTime(isoString: string): string {
   return `${Math.floor(days / 365)}y`;
 }
 
+/** True when the result was produced via a passthrough flow (web or MCP). */
+export function isPassthroughResult(result: { provider?: string } | null | undefined): boolean {
+  return result?.provider?.endsWith('_passthrough') === true;
+}
+
 /**
  * Copy text to clipboard with fallback for older browsers.
  * Returns true on success, false on failure.

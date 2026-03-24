@@ -690,6 +690,53 @@ describe('Navigator', () => {
     });
   });
 
+  // ── Settings — System section passthrough adaptation ──────────────────────
+
+  it('hides phase durations in passthrough mode', async () => {
+    const user = userEvent.setup();
+    forgeStore.provider = null;
+    preferencesStore.prefs.pipeline.force_passthrough = true;
+    (forgeStore as any).phaseDurations = { analyzing: 150, optimizing: 800, scoring: 200 };
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /System/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /System/i }));
+    await waitFor(() => {
+      expect(screen.queryByText('150ms')).not.toBeInTheDocument();
+      expect(screen.queryByText('800ms')).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows "heuristic" scoring label in passthrough mode', async () => {
+    const user = userEvent.setup();
+    forgeStore.provider = null;
+    preferencesStore.prefs.pipeline.force_passthrough = true;
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /System/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /System/i }));
+    await waitFor(() => {
+      expect(screen.getByText('heuristic')).toBeInTheDocument();
+    });
+  });
+
+  it('shows "hybrid" scoring label in internal mode', async () => {
+    const user = userEvent.setup();
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /System/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /System/i }));
+    await waitFor(() => {
+      expect(screen.getByText('hybrid')).toBeInTheDocument();
+    });
+  });
+
   // ── Settings — pipeline force toggles ─────────────────────────────────────
 
   it('shows SAMPLING badge when force_sampling is on and samplingCapable is true', () => {

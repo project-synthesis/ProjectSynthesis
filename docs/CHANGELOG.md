@@ -31,6 +31,11 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Added adaptation state injection to all passthrough prepare paths (REST inline, REST dedicated, MCP `synthesis_prepare_optimization`)
 
 ### Changed
+- Suppressed refinement timeline for passthrough results — refinement requires a local provider and would 503
+- Hid stale phase durations from Navigator System section in passthrough mode
+- Changed hardcoded "hybrid" scoring label to dynamic — shows "heuristic" in passthrough mode
+- Hid internal provider jargon (`web_passthrough`) in Inspector for passthrough results
+- Added "(passthrough)" suffix to heuristic scoring label in Inspector for passthrough results
 - Increased passthrough scoring rubric cap from 2000 to 4000 chars (all 5 dimension definitions now included)
 - Replaced vague JSON output instruction in passthrough template with structured schema example
 - Added rate limiting to `POST /api/optimize/passthrough/save` (was unprotected)

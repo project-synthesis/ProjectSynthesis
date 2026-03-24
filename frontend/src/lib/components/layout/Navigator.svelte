@@ -752,7 +752,7 @@
                   <span class="data-label">Retention</span>
                   <span class="data-value font-mono">{settings.trace_retention_days}d</span>
                 </div>
-                {#if forgeStore.phaseDurations}
+                {#if forgeStore.phaseDurations && !routing.isPassthrough}
                   {#each Object.entries(forgeStore.phaseDurations) as [phase, ms]}
                     <div class="data-row">
                       <span class="data-label">{phase}</span>
@@ -762,7 +762,12 @@
                 {/if}
                 <div class="data-row">
                   <span class="data-label">Scoring</span>
-                  <span class="data-value font-mono" title="LLM + heuristic blended scores">hybrid</span>
+                  <span class="data-value font-mono"
+                    title={routing.isPassthrough
+                      ? 'Heuristic-only scoring (no LLM scorer in passthrough mode)'
+                      : 'LLM + heuristic blended scores'}>
+                    {routing.isPassthrough ? 'heuristic' : 'hybrid'}
+                  </span>
                 </div>
                 {#if forgeStore.scoreHealth}
                   <div class="data-row">

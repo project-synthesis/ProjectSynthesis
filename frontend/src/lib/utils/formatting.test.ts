@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { formatScore, formatDelta, truncateText, copyToClipboard } from './formatting';
+import { formatScore, formatDelta, truncateText, copyToClipboard, isPassthroughResult } from './formatting';
 
 describe('formatScore', () => {
   it('formats a number with 1 decimal by default', () => {
@@ -50,6 +50,27 @@ describe('truncateText', () => {
   it('uses default maxLen of 80', () => {
     const exactlyAt = 'a'.repeat(80);
     expect(truncateText(exactlyAt)).toBe(exactlyAt);
+  });
+});
+
+describe('isPassthroughResult', () => {
+  it('returns true for web_passthrough provider', () => {
+    expect(isPassthroughResult({ provider: 'web_passthrough' })).toBe(true);
+  });
+  it('returns true for mcp_passthrough provider', () => {
+    expect(isPassthroughResult({ provider: 'mcp_passthrough' })).toBe(true);
+  });
+  it('returns false for claude-cli provider', () => {
+    expect(isPassthroughResult({ provider: 'claude-cli' })).toBe(false);
+  });
+  it('returns false for null', () => {
+    expect(isPassthroughResult(null)).toBe(false);
+  });
+  it('returns false for undefined', () => {
+    expect(isPassthroughResult(undefined)).toBe(false);
+  });
+  it('returns false for object without provider', () => {
+    expect(isPassthroughResult({})).toBe(false);
   });
 });
 

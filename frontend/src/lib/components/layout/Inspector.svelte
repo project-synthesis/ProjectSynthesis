@@ -13,7 +13,7 @@
   import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
   import ScoreSparkline from '$lib/components/refinement/ScoreSparkline.svelte';
   import { PHASE_LABELS } from '$lib/utils/dimensions';
-  import { formatScore, truncateText } from '$lib/utils/formatting';
+  import { formatScore, truncateText, isPassthroughResult } from '$lib/utils/formatting';
 
   // Tab-aware result: use per-tab cached data when available, fall back to global forge state
   const activeResult = $derived(editorStore.activeResult ?? forgeStore.result);
@@ -22,6 +22,7 @@
 
   const isPassthrough = $derived(forgeStore.status === 'passthrough');
   const isHeuristicScored = $derived(activeResult?.scoring_mode === 'heuristic');
+  const isPassthroughResult_ = $derived(isPassthroughResult(activeResult));
   // Family detail is shown only when selected AND forge is not actively running
   const forgeActive = $derived(
     forgeStore.status === 'analyzing' ||
@@ -399,10 +400,10 @@
           {#if isHeuristicScored}
             <div class="meta-row">
               <span class="meta-label">Scoring</span>
-              <span class="data-value neon-yellow">heuristic</span>
+              <span class="data-value neon-yellow">{isPassthroughResult_ ? 'heuristic (passthrough)' : 'heuristic'}</span>
             </div>
           {/if}
-          {#if activeResult?.provider}
+          {#if activeResult?.provider && !isPassthroughResult_}
             <div class="meta-row">
               <span class="meta-label">Provider</span>
               <span class="meta-value">{activeResult.provider}</span>

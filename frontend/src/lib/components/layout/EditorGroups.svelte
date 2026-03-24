@@ -8,8 +8,10 @@
   import DiffView from '$lib/components/shared/DiffView.svelte';
   import RefinementTimeline from '$lib/components/refinement/RefinementTimeline.svelte';
   import SemanticTopology from '$lib/components/taxonomy/SemanticTopology.svelte';
+  import { isPassthroughResult } from '$lib/utils/formatting';
 
-  // Initialize refinement when result tab is active and forge is complete
+  // Initialize refinement when result tab is active and forge is complete.
+  // Skip for passthrough results — refinement requires a local provider.
   let lastInitId = $state<string | null>(null);
   $effect(() => {
     const tab = editorStore.activeTab;
@@ -17,7 +19,8 @@
       tab?.type === 'result' &&
       forgeStore.status === 'complete' &&
       forgeStore.result?.id &&
-      forgeStore.result.id !== lastInitId
+      forgeStore.result.id !== lastInitId &&
+      !isPassthroughResult(forgeStore.result)
     ) {
       lastInitId = forgeStore.result.id;
       refinementStore.init(forgeStore.result.id);
@@ -25,7 +28,9 @@
   });
 
   const showRefinement = $derived(
-    editorStore.activeTab?.type === 'result' && forgeStore.status === 'complete'
+    editorStore.activeTab?.type === 'result' &&
+    forgeStore.status === 'complete' &&
+    !isPassthroughResult(editorStore.activeResult ?? forgeStore.result)
   );
 
   const hasRefinementTurns = $derived(refinementStore.turns.length > 0);

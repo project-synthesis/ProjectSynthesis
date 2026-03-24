@@ -212,6 +212,18 @@ describe('EditorGroups', () => {
     expect(screen.getAllByRole('tab').length).toBe(1);
   });
 
+  it('does not show refinement for passthrough results', async () => {
+    const { mockOptimizationResult } = await import('$lib/test-utils');
+    const result = mockOptimizationResult({ id: 'opt-pt-1', provider: 'web_passthrough' });
+    forgeStore.result = result as any;
+    forgeStore.status = 'complete';
+    editorStore.openResult('opt-pt-1');
+    render(EditorGroups);
+    expect(editorStore.activeTab?.type).toBe('result');
+    // Refinement should NOT have been initialized for a passthrough result
+    expect(refinementStore.optimizationId).toBeNull();
+  });
+
   it('tab bar scroll is handled by wheel event', async () => {
     render(EditorGroups);
     const tabBar = screen.getByRole('tablist', { name: 'Editor tabs' });
