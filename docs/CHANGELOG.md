@@ -43,11 +43,6 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - `WorkspaceIntelligence._detect_stack()` uses `discover_project_dirs()` for monorepo subdirectory scanning
 - `passthrough.md` template expanded with `{{analysis_summary}}`, `{{codebase_context}}`, and `{{applied_patterns}}` sections
 - All optimize/prepare/refine call sites now use unified `ContextEnrichmentService.enrich()` instead of inline context resolution
-
-### Removed
-- Removed `resolve_workspace_guidance()` from `tools/_shared.py` (replaced by `ContextEnrichmentService`)
-
-### Changed
 - Suppressed refinement timeline for passthrough results — refinement requires a local provider and would 503
 - Hid stale phase durations from Navigator System section in passthrough mode
 - Changed hardcoded "hybrid" scoring label to dynamic — shows "heuristic" in passthrough mode
@@ -77,6 +72,9 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Imported `VALID_SORT_COLUMNS` from `OptimizationService` in history handler (single source of truth, no divergence risk)
 - Renamed `_VALID_SORT_COLUMNS` to `VALID_SORT_COLUMNS` in optimization_service.py (public API for cross-module use)
 - Replaced `hasattr` checks with direct attribute access on ORM columns in get_optimization and match handlers
+
+### Removed
+- Removed `resolve_workspace_guidance()` from `tools/_shared.py` (replaced by `ContextEnrichmentService`)
 
 ### Fixed
 - Removed double-correction (bias + z-score) from passthrough hybrid scoring that systematically deflated passthrough scores vs internal pipeline
