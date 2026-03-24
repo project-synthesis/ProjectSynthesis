@@ -409,6 +409,17 @@
               <span class="meta-value">{activeResult.provider}</span>
             </div>
           {/if}
+          {#if activeResult?.models_by_phase && activeResult.provider === 'mcp_sampling'}
+            <div class="meta-row">
+              <span class="meta-label">Models</span>
+              <span
+                class="meta-value meta-value--green"
+                title="analyze: {activeResult.models_by_phase.analyze || '?'} / optimize: {activeResult.models_by_phase.optimize || '?'} / score: {activeResult.models_by_phase.score || '?'}"
+              >
+                {activeResult.models_by_phase.analyze || '?'} / {activeResult.models_by_phase.optimize || '?'} / {activeResult.models_by_phase.score || '?'}
+              </span>
+            </div>
+          {/if}
         </div>
 
         {#if refinementStore.scoreProgression.length >= 2}
@@ -546,6 +557,9 @@
     color: var(--color-neon-cyan);
   }
 
+  .meta-value--green {
+    color: var(--color-neon-green);
+  }
 
   /* Error state */
   .error-state {
