@@ -59,10 +59,10 @@ from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.pattern_injection import auto_inject_patterns
 from app.services.pipeline_constants import (
-    CODING_KEYWORDS,
-    CONFIDENCE_GATE,
+    apply_domain_gate,
     compute_optimize_max_tokens,
-    resolve_fallback_strategy,
+    resolve_effective_strategy,
+    semantic_check,
 )
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
@@ -83,22 +83,30 @@ _SAMPLING_TIMEOUT_SECONDS: float = 120.0
 # Model preference presets per pipeline phase
 # ---------------------------------------------------------------------------
 
-# NOTE: User preferences pipeline.analyzer_effort and pipeline.scorer_effort
-# are available but NOT applied here — MCP sampling has no effort parameter.
-# The IDE controls model behavior via ModelPreferences. Mapping effort to
-# intelligence/speed ratios is deferred until MCP sampling supports effort.
-_PHASE_PRESETS: dict[str, dict[str, Any]] = {
-    "analyze": {"hint": settings.MODEL_SONNET, "intelligence": 0.6, "speed": 0.7},
-    "optimize": {"hint": settings.MODEL_OPUS, "intelligence": 0.9, "speed": 0.3},
-    "score": {"hint": settings.MODEL_SONNET, "intelligence": 0.6, "speed": 0.7},
-    "suggest": {"hint": settings.MODEL_HAIKU, "intelligence": 0.3, "speed": 0.9},
+# Default model hint and effort per phase (matches internal pipeline defaults).
+_PHASE_PRESETS: dict[str, dict[str, str]] = {
+    "analyze": {"hint": settings.MODEL_SONNET, "default_effort": "low"},
+    "optimize": {"hint": settings.MODEL_OPUS, "default_effort": "high"},
+    "score": {"hint": settings.MODEL_SONNET, "default_effort": "low"},
+    "suggest": {"hint": settings.MODEL_HAIKU, "default_effort": "low"},
 }
 
-# Map user preference names to full model IDs for hints
+# Map user preference names to full model IDs for hints.
 _PREF_TO_MODEL: dict[str, str] = {
     "sonnet": settings.MODEL_SONNET,
     "opus": settings.MODEL_OPUS,
     "haiku": settings.MODEL_HAIKU,
+}
+
+# Map effort levels to MCP ModelPreferences priority triad.
+# intelligencePriority: higher = prefer smarter/deeper reasoning.
+# speedPriority:        higher = prefer faster responses.
+# costPriority:         higher = prefer cheaper models.
+_EFFORT_PRIORITIES: dict[str, dict[str, float]] = {
+    "low": {"intelligence": 0.3, "speed": 0.9, "cost": 0.8},
+    "medium": {"intelligence": 0.5, "speed": 0.5, "cost": 0.5},
+    "high": {"intelligence": 0.8, "speed": 0.3, "cost": 0.3},
+    "max": {"intelligence": 1.0, "speed": 0.0, "cost": 0.0},
 }
 
 
@@ -122,37 +130,49 @@ def _resolve_model_preferences(
     phase: str,
     prefs_snapshot: dict | None = None,
 ) -> ModelPreferences:
-    """Map a pipeline phase to ``ModelPreferences`` with model hints.
+    """Map a pipeline phase to ``ModelPreferences`` with model and effort hints.
 
-    Uses the phase preset as baseline.  If a user preference snapshot is
-    provided and contains a model selection for the phase, the hint is
-    overridden to the user's choice.
+    Uses the phase preset as baseline.  When a user preference snapshot is
+    provided, model hint and effort priorities are overridden from the user's
+    choices.  Effort is mapped to the MCP priority triad
+    (``intelligencePriority``, ``speedPriority``, ``costPriority``).
     """
     preset = _PHASE_PRESETS.get(phase, _PHASE_PRESETS["analyze"])
 
     # Determine hint model ID (presets use full model IDs from settings)
-    hint_name = preset["hint"]
+    hint_name: str = preset["hint"]
+    effort: str = preset["default_effort"]
+
+    # Phase → preference key mapping (suggest is always fixed).
+    pref_key_map: dict[str, str | None] = {
+        "analyze": "analyzer",
+        "optimize": "optimizer",
+        "score": "scorer",
+        "suggest": None,
+    }
+    pref_key = pref_key_map.get(phase)
 
     # Override from user preferences when available
-    if prefs_snapshot:
-        pref_key_map = {
-            "analyze": "analyzer",
-            "optimize": "optimizer",
-            "score": "scorer",
-            "suggest": None,  # always Haiku
-        }
-        pref_key = pref_key_map.get(phase)
-        if pref_key:
-            models_conf = prefs_snapshot.get("models", {})
-            user_choice = models_conf.get(pref_key, "")
-            # User choice is a short name (e.g. "opus") — map to full ID
-            if user_choice in _PREF_TO_MODEL:
-                hint_name = _PREF_TO_MODEL[user_choice]
+    if prefs_snapshot and pref_key:
+        # Model hint override
+        models_conf = prefs_snapshot.get("models", {})
+        user_choice = models_conf.get(pref_key, "")
+        if user_choice in _PREF_TO_MODEL:
+            hint_name = _PREF_TO_MODEL[user_choice]
+
+        # Effort override
+        pipeline_conf = prefs_snapshot.get("pipeline", {})
+        user_effort = pipeline_conf.get(f"{pref_key}_effort", "")
+        if user_effort in _EFFORT_PRIORITIES:
+            effort = user_effort
+
+    priorities = _EFFORT_PRIORITIES.get(effort, _EFFORT_PRIORITIES["medium"])
 
     return ModelPreferences(
         hints=[ModelHint(name=hint_name)],
-        intelligencePriority=preset["intelligence"],
-        speedPriority=preset["speed"],
+        intelligencePriority=priorities["intelligence"],
+        speedPriority=priorities["speed"],
+        costPriority=priorities["cost"],
     )
 
 
@@ -551,21 +571,11 @@ async def run_sampling_pipeline(
         "trace_id": trace_id, "phase": "analyzing", "state": "complete",
     })
 
-    # Semantic check + confidence gate (mirrors pipeline.py)
-    confidence = analysis.confidence
-    if analysis.task_type == "coding":
-        words = set(prompt.lower().split())
-        if not words & CODING_KEYWORDS:
-            logger.warning(
-                "Semantic check: task_type='coding' but no coding keywords in prompt"
-            )
-            confidence = max(0.0, confidence - 0.2)
-
-    # Domain confidence gate (mirrors pipeline.py — 0.6 threshold)
-    effective_domain = getattr(analysis, "domain", None) or "general"
-    if confidence < 0.6:
-        logger.info("Low confidence (%.2f) — overriding domain to 'general'", confidence)
-        effective_domain = "general"
+    # Semantic check + domain confidence gate (shared with internal pipeline)
+    confidence = semantic_check(analysis.task_type, prompt, analysis.confidence)
+    effective_domain = apply_domain_gate(
+        getattr(analysis, "domain", None), confidence,
+    )
 
     # Domain mapping (Spec Section 4.2, 4.4)
     domain_raw = getattr(analysis, "domain", None) or "general"  # pre-gate
@@ -616,36 +626,15 @@ async def run_sampling_pipeline(
         except Exception as exc:
             logger.warning("Sampling auto-injection failed (non-fatal): %s", exc)
 
-    effective_strategy = analysis.selected_strategy
-
-    # Validate analyzer's strategy exists on disk (prevent hallucinated names)
-    available = strategy_loader.list_strategies()
-    fallback = resolve_fallback_strategy(available)
-    if effective_strategy and available and effective_strategy not in available:
-        logger.warning(
-            "Analyzer selected unknown strategy '%s' (available: %s) — "
-            "falling back to '%s'. trace_id=%s",
-            effective_strategy, ", ".join(available), fallback, trace_id,
-        )
-        effective_strategy = fallback
-
-    # Enforce adaptation block — override if analyzer picked a blocked strategy
-    if effective_strategy in blocked_strategies and not strategy_override:
-        logger.info(
-            "Sampling: overriding blocked strategy '%s' to '%s' (low approval rate). trace_id=%s",
-            effective_strategy, fallback, trace_id,
-        )
-        effective_strategy = fallback
-
-    if confidence < CONFIDENCE_GATE and not strategy_override:
-        logger.info(
-            "Confidence gate triggered (%.2f < %.2f), overriding strategy to '%s'",
-            confidence, CONFIDENCE_GATE, fallback,
-        )
-        effective_strategy = fallback
-
-    if strategy_override:
-        effective_strategy = strategy_override
+    # Strategy resolution chain (shared with internal pipeline)
+    effective_strategy = resolve_effective_strategy(
+        selected_strategy=analysis.selected_strategy,
+        available=strategy_loader.list_strategies(),
+        blocked_strategies=blocked_strategies,
+        confidence=confidence,
+        strategy_override=strategy_override,
+        trace_id=trace_id,
+    )
 
     # ------------------------------------------------------------------
     # Phase 2: Optimize

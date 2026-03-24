@@ -35,11 +35,11 @@ from app.services.heuristic_scorer import HeuristicScorer
 from app.services.pattern_injection import auto_inject_patterns
 from app.services.pipeline_constants import (
     ANALYZE_MAX_TOKENS,
-    CODING_KEYWORDS,
-    CONFIDENCE_GATE,
     SCORE_MAX_TOKENS,
+    apply_domain_gate,
     compute_optimize_max_tokens,
-    resolve_fallback_strategy,
+    resolve_effective_strategy,
+    semantic_check,
 )
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
@@ -116,17 +116,7 @@ class PipelineOrchestrator:
             return usage
         return TokenUsage()
 
-    @staticmethod
-    def _semantic_check(task_type: str, raw_prompt: str, confidence: float) -> float:
-        """If task_type is 'coding' but no coding keywords found, reduce confidence."""
-        if task_type == "coding":
-            words = set(raw_prompt.lower().split())
-            if not words & CODING_KEYWORDS:
-                logger.warning(
-                    "Semantic check: task_type='coding' but no coding keywords in prompt"
-                )
-                confidence = max(0.0, confidence - 0.2)
-        return confidence
+    # _semantic_check delegated to pipeline_constants.semantic_check()
 
     # ------------------------------------------------------------------
     # Auto-injection helper
@@ -302,18 +292,9 @@ class PipelineOrchestrator:
                     },
                 )
 
-            # Semantic check
-            confidence = self._semantic_check(analysis.task_type, raw_prompt, analysis.confidence)
-
-            # Domain confidence gate — lower threshold than strategy (0.6 vs 0.7)
-            # because wrong domain only affects pattern clustering, not optimization quality.
-            effective_domain = analysis.domain or "general"
-            if confidence < 0.6:
-                logger.info(
-                    "Low confidence (%.2f) — overriding domain to 'general'",
-                    confidence,
-                )
-                effective_domain = "general"
+            # Semantic check + domain confidence gate (shared with sampling pipeline)
+            confidence = semantic_check(analysis.task_type, raw_prompt, analysis.confidence)
+            effective_domain = apply_domain_gate(analysis.domain, confidence)
 
             # ---------------------------------------------------------------
             # Phase 1.5: Domain Mapping (Spec Section 4.2)
@@ -355,37 +336,15 @@ class PipelineOrchestrator:
                     exc, trace_id,
                 )
 
-            # Confidence gate
-            effective_strategy = analysis.selected_strategy
-
-            # Validate analyzer's strategy exists on disk (prevent hallucinated names)
-            available = self.strategy_loader.list_strategies()
-            fallback = resolve_fallback_strategy(available)
-            if effective_strategy and available and effective_strategy not in available:
-                logger.warning(
-                    "Analyzer selected unknown strategy '%s' (available: %s) — "
-                    "falling back to '%s'. trace_id=%s",
-                    effective_strategy, ", ".join(available), fallback, trace_id,
-                )
-                effective_strategy = fallback
-
-            # Enforce adaptation block — override if analyzer picked a blocked strategy
-            if effective_strategy in blocked_strategies and not strategy_override:
-                logger.info(
-                    "Overriding blocked strategy '%s' to '%s' (low approval rate). trace_id=%s",
-                    effective_strategy, fallback, trace_id,
-                )
-                effective_strategy = fallback
-
-            if confidence < CONFIDENCE_GATE and not strategy_override:
-                logger.info(
-                    "Confidence gate triggered (%.2f < %.2f), overriding strategy to '%s'",
-                    confidence, CONFIDENCE_GATE, fallback,
-                )
-                effective_strategy = fallback
-
-            if strategy_override:
-                effective_strategy = strategy_override
+            # Strategy resolution chain (shared with sampling pipeline)
+            effective_strategy = resolve_effective_strategy(
+                selected_strategy=analysis.selected_strategy,
+                available=self.strategy_loader.list_strategies(),
+                blocked_strategies=blocked_strategies,
+                confidence=confidence,
+                strategy_override=strategy_override,
+                trace_id=trace_id,
+            )
 
             # ---------------------------------------------------------------
             # Pre-Phase: Auto-inject cluster meta-patterns

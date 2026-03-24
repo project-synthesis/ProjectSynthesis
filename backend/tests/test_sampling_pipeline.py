@@ -13,9 +13,8 @@ import pytest
 from pydantic import BaseModel
 
 from app.schemas.pipeline_contracts import AnalysisResult, DimensionScores, ScoreResult
+from app.services.pipeline_constants import CODING_KEYWORDS, CONFIDENCE_GATE
 from app.services.sampling_pipeline import (
-    CODING_KEYWORDS,
-    CONFIDENCE_GATE,
     SamplingLLMAdapter,
     _parse_text_response,
     _pydantic_to_mcp_tool,
@@ -135,6 +134,61 @@ def test_model_preferences_unknown_phase():
     """Unknown phase falls back to analyze defaults."""
     prefs = _resolve_model_preferences("nonexistent_phase")
     assert len(prefs.hints) == 1
+
+
+def test_model_preferences_effort_defaults():
+    """Default effort per phase matches internal pipeline defaults."""
+    # analyze defaults to low effort
+    prefs = _resolve_model_preferences("analyze")
+    assert prefs.intelligencePriority == 0.3
+    assert prefs.speedPriority == 0.9
+    assert prefs.costPriority == 0.8
+
+    # optimize defaults to high effort
+    prefs = _resolve_model_preferences("optimize")
+    assert prefs.intelligencePriority == 0.8
+    assert prefs.speedPriority == 0.3
+    assert prefs.costPriority == 0.3
+
+
+def test_model_preferences_effort_override():
+    """User effort preference overrides the default priorities."""
+    snapshot = {"models": {}, "pipeline": {"analyzer_effort": "max"}}
+    prefs = _resolve_model_preferences("analyze", snapshot)
+    assert prefs.intelligencePriority == 1.0
+    assert prefs.speedPriority == 0.0
+    assert prefs.costPriority == 0.0
+
+
+def test_model_preferences_effort_medium():
+    """Medium effort produces balanced priorities."""
+    snapshot = {"models": {}, "pipeline": {"optimizer_effort": "medium"}}
+    prefs = _resolve_model_preferences("optimize", snapshot)
+    assert prefs.intelligencePriority == 0.5
+    assert prefs.speedPriority == 0.5
+    assert prefs.costPriority == 0.5
+
+
+def test_model_preferences_suggest_ignores_effort():
+    """Suggest phase ignores user effort — always uses low preset."""
+    snapshot = {"models": {}, "pipeline": {"scorer_effort": "max"}}
+    prefs = _resolve_model_preferences("suggest", snapshot)
+    # Suggest has no pref_key, so effort override is skipped
+    assert prefs.intelligencePriority == 0.3
+    assert prefs.speedPriority == 0.9
+    assert "haiku" in prefs.hints[0].name.lower()
+
+
+def test_model_preferences_combined_model_and_effort():
+    """Both model and effort can be overridden simultaneously."""
+    snapshot = {
+        "models": {"optimizer": "haiku"},
+        "pipeline": {"optimizer_effort": "low"},
+    }
+    prefs = _resolve_model_preferences("optimize", snapshot)
+    assert "haiku" in prefs.hints[0].name.lower()
+    assert prefs.intelligencePriority == 0.3
+    assert prefs.speedPriority == 0.9
 
 
 # ---------------------------------------------------------------------------

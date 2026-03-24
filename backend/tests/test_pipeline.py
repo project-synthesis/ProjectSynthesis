@@ -12,7 +12,12 @@ from app.schemas.pipeline_contracts import (
     ScoreResult,
 )
 from app.services.pipeline import PipelineOrchestrator
-from app.services.pipeline_constants import resolve_fallback_strategy
+from app.services.pipeline_constants import (
+    apply_domain_gate,
+    resolve_effective_strategy,
+    resolve_fallback_strategy,
+    semantic_check,
+)
 
 
 def _make_analysis(**overrides):
@@ -271,6 +276,85 @@ class TestResolveFallbackStrategy:
     def test_empty_list(self):
         """When no strategies exist, returns 'auto' anyway (graceful degradation)."""
         assert resolve_fallback_strategy([]) == "auto"
+
+
+class TestSemanticCheck:
+    def test_reduces_confidence_for_coding_without_keywords(self):
+        result = semantic_check("coding", "Help me organize my day", 0.8)
+        assert result == pytest.approx(0.6)
+
+    def test_no_reduction_for_coding_with_keywords(self):
+        result = semantic_check("coding", "Write a function to parse JSON", 0.8)
+        assert result == 0.8
+
+    def test_no_reduction_for_non_coding(self):
+        result = semantic_check("writing", "Help me organize my day", 0.8)
+        assert result == 0.8
+
+    def test_floor_at_zero(self):
+        result = semantic_check("coding", "Help me organize my day", 0.1)
+        assert result == 0.0
+
+
+class TestApplyDomainGate:
+    def test_preserves_domain_when_confident(self):
+        assert apply_domain_gate("backend", 0.8) == "backend"
+
+    def test_overrides_to_general_when_low_confidence(self):
+        assert apply_domain_gate("backend", 0.5) == "general"
+
+    def test_null_domain_defaults_to_general(self):
+        assert apply_domain_gate(None, 0.9) == "general"
+
+    def test_boundary_at_0_6(self):
+        assert apply_domain_gate("frontend", 0.6) == "frontend"
+        assert apply_domain_gate("frontend", 0.59) == "general"
+
+
+class TestResolveEffectiveStrategy:
+    def test_valid_strategy_passes_through(self):
+        result = resolve_effective_strategy(
+            "chain-of-thought", ["auto", "chain-of-thought"], set(), 0.9, None, "t1",
+        )
+        assert result == "chain-of-thought"
+
+    def test_unknown_strategy_falls_back(self):
+        result = resolve_effective_strategy(
+            "hallucinated-strategy", ["auto", "chain-of-thought"], set(), 0.9, None, "t1",
+        )
+        assert result == "auto"
+
+    def test_blocked_strategy_falls_back(self):
+        result = resolve_effective_strategy(
+            "chain-of-thought", ["auto", "chain-of-thought"], {"chain-of-thought"}, 0.9, None, "t1",
+        )
+        assert result == "auto"
+
+    def test_low_confidence_triggers_gate(self):
+        result = resolve_effective_strategy(
+            "chain-of-thought", ["auto", "chain-of-thought"], set(), 0.5, None, "t1",
+        )
+        assert result == "auto"
+
+    def test_override_bypasses_all_gates(self):
+        result = resolve_effective_strategy(
+            "chain-of-thought", ["auto", "chain-of-thought"],
+            {"chain-of-thought"},  # blocked
+            0.3,  # low confidence
+            "few-shot",  # explicit override
+            "t1",
+        )
+        assert result == "few-shot"
+
+    def test_blocked_skipped_when_override_set(self):
+        result = resolve_effective_strategy(
+            "chain-of-thought", ["auto", "chain-of-thought"],
+            {"chain-of-thought"},  # blocked
+            0.9,
+            "chain-of-thought",  # override matches blocked
+            "t1",
+        )
+        assert result == "chain-of-thought"
 
 
 class TestStrategyFiltering:
