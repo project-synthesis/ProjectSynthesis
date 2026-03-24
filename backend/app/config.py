@@ -97,6 +97,23 @@ class Settings(BaseSettings):
         default=15000, description="Total line budget across all retrieved files in explore.",
     )
 
+    # --- Index Enrichment ---
+    INDEX_OUTLINE_MAX_CHARS: int = Field(
+        default=500, description="Maximum characters per file outline in RepoIndexService.",
+    )
+    INDEX_CURATED_MAX_CHARS: int = Field(
+        default=8000, description="Maximum characters for curated codebase context in passthrough.",
+    )
+    INDEX_CURATED_MIN_SIMILARITY: float = Field(
+        default=0.3, description="Minimum cosine similarity threshold for curated retrieval.",
+    )
+    INDEX_CURATED_MAX_PER_DIR: int = Field(
+        default=3, description="Maximum files per directory in curated retrieval (diversity cap).",
+    )
+    INDEX_DOMAIN_BOOST: float = Field(
+        default=1.3, description="Similarity multiplier for files matching the detected domain.",
+    )
+
     # --- Network ---
     TRUSTED_PROXIES: str = Field(
         default="127.0.0.1", description="Comma-separated trusted proxy IPs for X-Forwarded-For.",
