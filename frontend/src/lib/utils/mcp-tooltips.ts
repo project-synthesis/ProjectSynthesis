@@ -14,7 +14,6 @@ import { preferencesStore } from '$lib/stores/preferences.svelte';
  */
 export function forceSamplingTooltip(disabled: boolean): string | undefined {
   if (!disabled) return undefined;
-  if (forgeStore.mcpDisconnected) return 'MCP client disconnected';
   if (forgeStore.samplingCapable === null) return 'No sampling-capable MCP client detected';
   if (forgeStore.samplingCapable === false) return 'Your MCP client does not support sampling';
   if (preferencesStore.pipeline.force_passthrough) return 'Disable Force passthrough first';
@@ -28,7 +27,7 @@ export function forceSamplingTooltip(disabled: boolean): string | undefined {
 export function forcePassthroughTooltip(disabled: boolean): string | undefined {
   if (!disabled) return undefined;
   if (preferencesStore.pipeline.force_sampling) return 'Disable Force IDE sampling first';
-  if (forgeStore.samplingCapable === true && !forgeStore.mcpDisconnected) {
+  if (forgeStore.samplingCapable === true) {
     return 'Sampling is available — use Force IDE sampling instead';
   }
   return undefined;

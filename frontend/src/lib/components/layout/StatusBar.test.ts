@@ -98,6 +98,17 @@ describe('StatusBar', () => {
     expect(screen.getByText(/optimizing\.\.\./i)).toBeInTheDocument();
   });
 
+  it('applies green phase color when sampling tier is active', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.provider = null;
+    forgeStore.samplingCapable = true;
+    forgeStore.mcpDisconnected = false;
+    forgeStore.status = 'optimizing';
+    render(StatusBar);
+    const phase = screen.getByText(/optimizing\.\.\./i);
+    expect(phase.classList.contains('status-phase-sampling')).toBe(true);
+  });
+
   it('shows version from health API after load', async () => {
     mockFetch([]);
     forgeStore.version = '1.2.3';

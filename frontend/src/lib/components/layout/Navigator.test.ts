@@ -935,6 +935,30 @@ describe('Navigator', () => {
     expect(annotations).toHaveLength(2);
   });
 
+  it('applies green accent to "Model Hints" heading in sampling mode', () => {
+    setupSamplingMode();
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    const heading = screen.getByText('Model Hints');
+    expect(heading.classList.contains('sub-heading--sampling')).toBe(true);
+  });
+
+  it('applies green accent to "Effort Hints" heading in sampling mode', () => {
+    setupSamplingMode();
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    const heading = screen.getByText('Effort Hints');
+    expect(heading.classList.contains('sub-heading--sampling')).toBe(true);
+  });
+
+  it('uses green VIA MCP SAMPLING badge (not cyan)', () => {
+    setupSamplingMode();
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    const badge = screen.getByText('VIA MCP SAMPLING');
+    expect(badge.style.color).toContain('--color-neon-green');
+  });
+
   it('falls back to passthrough when sampling is disconnected', () => {
     forgeStore.provider = null;
     forgeStore.samplingCapable = true;

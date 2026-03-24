@@ -32,11 +32,11 @@ describe('forceSamplingTooltip', () => {
     expect(tip).toBeTruthy();
   });
 
-  it('returns tooltip when MCP is disconnected', () => {
+  it('returns undefined when MCP is disconnected but capable (toggle allows intent)', () => {
+    forgeStore.samplingCapable = true;
     forgeStore.mcpDisconnected = true;
-    const tip = forceSamplingTooltip(true);
-    expect(tip).toBeTruthy();
-    expect(tip).toContain('disconnected');
+    // Disconnected is NOT a gate — user can express intent; auto-fallback handles the rest
+    expect(forceSamplingTooltip(true)).toBeUndefined();
   });
 
   it('returns undefined when disabled but all conditions are clear', () => {
@@ -82,11 +82,13 @@ describe('forcePassthroughTooltip', () => {
     expect(forcePassthroughTooltip(true)).toBeUndefined();
   });
 
-  it('returns undefined when disabled and MCP disconnected (sampling not available)', () => {
+  it('returns sampling tooltip when disabled and MCP disconnected but capable', () => {
     forgeStore.samplingCapable = true;
     forgeStore.mcpDisconnected = true;
     preferencesStore.prefs.pipeline.force_sampling = false;
-    // MCP disconnected means sampling is effectively not available
-    expect(forcePassthroughTooltip(true)).toBeUndefined();
+    // Disconnected doesn't hide sampling availability — capability was detected
+    const tip = forcePassthroughTooltip(true);
+    expect(tip).toBeTruthy();
+    expect(tip).toContain('sampling');
   });
 });

@@ -9,6 +9,7 @@
   import { formatScore, formatRelativeTime } from '$lib/utils/formatting';
   import { forceSamplingTooltip, forcePassthroughTooltip } from '$lib/utils/mcp-tooltips';
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
+  import { samplingGuide } from '$lib/stores/sampling-guide.svelte';
   import { routing } from '$lib/stores/routing.svelte';
   import { getSettings, getProviders, getHistory, getOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
   import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo } from '$lib/api/client';
@@ -110,13 +111,18 @@
   // ---- Derived disabled states for force toggles ----
   // A toggle that is already ON must always be interactive so the user can turn it OFF.
   // The disabled condition only prevents turning a toggle ON.
+  //
+  // mcpDisconnected is NOT a gate for Force IDE sampling — the toggle expresses
+  // user *intent*.  The auto-fallback mechanism uses the internal provider while
+  // MCP is idle and auto-restores when it reconnects.  The only hard gate is
+  // samplingCapable (was the MCP client ever detected with sampling support?).
   let forceSamplingDisabled = $derived(
     !preferencesStore.pipeline.force_sampling &&
-    (forgeStore.samplingCapable !== true || forgeStore.mcpDisconnected || preferencesStore.pipeline.force_passthrough)
+    (forgeStore.samplingCapable !== true || preferencesStore.pipeline.force_passthrough)
   );
   let forcePassthroughDisabled = $derived(
     !preferencesStore.pipeline.force_passthrough &&
-    ((forgeStore.samplingCapable === true && !forgeStore.mcpDisconnected) || preferencesStore.pipeline.force_sampling)
+    (forgeStore.samplingCapable === true || preferencesStore.pipeline.force_sampling)
   );
 
   // Pre-fetch for settings panel (one-time on mount, best effort)
@@ -478,8 +484,8 @@
         </div>
         {:else}
         <div class="sub-section">
-          <span class="sub-heading">{routing.isSampling ? 'Model Hints' : 'Models'}</span>
-          {#if routing.isSampling}<span class="sub-heading-note">// via IDE</span>{/if}
+          <span class="sub-heading" class:sub-heading--sampling={routing.isSampling}>{routing.isSampling ? 'Model Hints' : 'Models'}</span>
+          {#if routing.isSampling}<span class="sub-heading-note sub-heading-note--sampling">// via IDE</span>{/if}
           <div class="card-terminal">
             {#each [
               { label: 'Analyzer', phase: 'analyzer' },
@@ -518,6 +524,7 @@
                 <span class="data-label">{label}</span>
                 <button
                   class="toggle-track"
+                  class:toggle-track--green={routing.isSampling}
                   class:toggle-track--on={preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline]}
                   onclick={() => preferencesStore.setPipelineToggle(key, !preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline])}
                   role="switch"
@@ -538,9 +545,13 @@
             <div class="data-row">
               <span class="data-label" title="Use IDE's LLM for the 3-phase pipeline via MCP sampling">Force IDE sampling</span>
               <button
-                class="toggle-track"
+                class="toggle-track toggle-track--green"
                 class:toggle-track--on={preferencesStore.pipeline.force_sampling}
-                onclick={() => preferencesStore.setPipelineToggle('force_sampling', !preferencesStore.pipeline.force_sampling)}
+                onclick={() => {
+                  const newVal = !preferencesStore.pipeline.force_sampling;
+                  preferencesStore.setPipelineToggle('force_sampling', newVal);
+                  if (newVal) samplingGuide.show(true);
+                }}
                 role="switch"
                 aria-checked={preferencesStore.pipeline.force_sampling}
                 aria-label="Toggle Force IDE sampling"
@@ -597,8 +608,8 @@
         </div>
         {:else}
         <div class="sub-section">
-          <span class="sub-heading">{routing.isSampling ? 'Effort Hints' : 'Effort'}</span>
-          {#if routing.isSampling}<span class="sub-heading-note">// via IDE</span>{/if}
+          <span class="sub-heading" class:sub-heading--sampling={routing.isSampling}>{routing.isSampling ? 'Effort Hints' : 'Effort'}</span>
+          {#if routing.isSampling}<span class="sub-heading-note sub-heading-note--sampling">// via IDE</span>{/if}
           <div class="card-terminal">
             {#each [
               { label: 'Analyzer', key: 'analyzer_effort' },
@@ -643,7 +654,7 @@
               <div class="data-row">
                 <span
                   class="badge-neon"
-                  style="color: var(--color-neon-cyan); border-color: var(--color-neon-cyan);"
+                  style="color: var(--color-neon-green); border-color: var(--color-neon-green);"
                 >VIA MCP SAMPLING</span>
               </div>
             {:else if routing.isPassthrough}
@@ -1206,6 +1217,16 @@
     background: var(--color-neon-cyan);
   }
 
+  /* Green toggle variant — sampling tier accent */
+  .toggle-track--green.toggle-track--on {
+    background: rgba(34, 255, 136, 0.15);
+    border-color: var(--color-neon-green);
+  }
+
+  .toggle-track--green.toggle-track--on .toggle-thumb {
+    background: var(--color-neon-green);
+  }
+
   /* Yellow toggle variant — passthrough tier accent */
   .toggle-track--yellow.toggle-track--on {
     background: rgba(251, 191, 36, 0.15);
@@ -1219,6 +1240,14 @@
   /* ---- Tier-adaptive utilities ---- */
   .sub-heading--passthrough {
     color: var(--color-neon-yellow);
+  }
+
+  .sub-heading--sampling {
+    color: var(--color-neon-green);
+  }
+
+  .sub-heading-note--sampling {
+    color: var(--color-neon-green);
   }
 
   .degradation-notice {

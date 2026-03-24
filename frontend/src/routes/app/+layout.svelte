@@ -6,6 +6,7 @@
   import CommandPalette from '$lib/components/shared/CommandPalette.svelte';
   import Toast from '$lib/components/shared/Toast.svelte';
   import PassthroughGuide from '$lib/components/shared/PassthroughGuide.svelte';
+  import SamplingGuide from '$lib/components/shared/SamplingGuide.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
@@ -56,6 +57,7 @@
   <CommandPalette />
   <Toast />
   <PassthroughGuide />
+  <SamplingGuide />
 </div>
 
 <style>

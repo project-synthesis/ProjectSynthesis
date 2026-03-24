@@ -63,7 +63,7 @@
     {/if}
     <span class="status-item">{version ? `v${version}` : ''}</span>
     {#if phaseDisplay}
-      <span class="status-phase" class:status-phase-passthrough={phaseDisplay === 'passthrough'}>{phaseDisplay}...</span>
+      <span class="status-phase" class:status-phase-passthrough={phaseDisplay === 'passthrough'} class:status-phase-sampling={routing.isSampling}>{phaseDisplay}...</span>
     {:else if lastScore}
       {#if breadcrumbLabel}
         <span class="status-breadcrumb">
@@ -133,6 +133,10 @@
     font-size: 10px;
     color: var(--color-neon-cyan);
     white-space: nowrap;
+  }
+
+  .status-phase-sampling {
+    color: var(--color-neon-green);
   }
 
   .status-phase-passthrough {
