@@ -263,6 +263,15 @@ class _CapabilityDetectionMiddleware:
                     cls._active_sse_streams += 1
                     if not has_session_id:
                         cls._write_optimistic_session()
+                    else:
+                        # Session-WITH reconnection: reset throttle and
+                        # force immediate activity touch so mcp_reconnect
+                        # event broadcasts without waiting for body chunks
+                        # to pass the 10-second throttle window.
+                        cls._last_activity_write = 0.0
+                        routing = _shared._routing
+                        if routing:
+                            routing.on_mcp_activity()
             elif message["type"] == "http.response.body" and get_is_sse:
                 cls._touch_activity()
             await send(message)

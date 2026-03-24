@@ -10,7 +10,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Literal
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -493,6 +493,62 @@ class TestManagerPersistGating:
         # File should not have been written by _persist()
         assert not session_file.exists()
 
+
+# ---------------------------------------------------------------------------
+# Reconnection edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestManagerReconnectionEdgeCases:
+    """Edge cases around MCP disconnect → reconnect sequences."""
+
+    def test_disconnect_then_activity_broadcasts_reconnect(
+        self, manager: RoutingManager, event_bus: EventBus,
+    ) -> None:
+        """Activity after disconnect must broadcast mcp_reconnect event."""
+        manager.on_mcp_initialize(sampling_capable=True)
+        manager.on_mcp_disconnect()
+        assert manager.state.mcp_connected is False
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        event_bus._subscribers.add(queue)
+
+        manager.on_mcp_activity()
+        assert manager.state.mcp_connected is True
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["event"] == "routing_state_changed"
+        assert event["data"]["trigger"] == "mcp_reconnect"
+
+    def test_disconnect_preserves_sampling_capable(
+        self, manager: RoutingManager,
+    ) -> None:
+        """Disconnect must not clear sampling_capable (optimistic window)."""
+        manager.on_mcp_initialize(sampling_capable=True)
+        assert manager.state.sampling_capable is True
+        manager.on_mcp_disconnect()
+        assert manager.state.sampling_capable is True
+        assert manager.state.mcp_connected is False
+
+    def test_session_invalidation_then_reinitialize_recovers(
+        self, manager: RoutingManager, event_bus: EventBus,
+    ) -> None:
+        """Full recovery: initialize → invalidate → re-initialize."""
+        manager.on_mcp_initialize(sampling_capable=True)
+        manager.on_session_invalidated()
+        assert manager.state.sampling_capable is None
+        assert manager.state.mcp_connected is False
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        event_bus._subscribers.add(queue)
+
+        manager.on_mcp_initialize(sampling_capable=True)
+        assert manager.state.sampling_capable is True
+        assert manager.state.mcp_connected is True
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["data"]["trigger"] == "mcp_initialize"
+
     def test_mcp_process_persists(self, tmp_path: Path, event_bus: EventBus) -> None:
         """MCP process (is_mcp_process=True) should write to session file."""
         mgr = RoutingManager(event_bus=event_bus, data_dir=tmp_path, is_mcp_process=True)
@@ -539,6 +595,15 @@ async def test_optimize_emits_routing_event(tmp_path: Path, db_session) -> None:
     # Create a routing manager with NO provider → passthrough tier
     no_provider_routing = RoutingManager(event_bus=EventBus(), data_dir=tmp_path)
     app.state.routing = no_provider_routing
+
+    # Mock context enrichment service — returns minimal EnrichedContext
+    from app.services.context_enrichment import EnrichedContext
+
+    mock_context_service = MagicMock()
+    mock_context_service.enrich = AsyncMock(
+        return_value=EnrichedContext(raw_prompt="test"),
+    )
+    app.state.context_service = mock_context_service
 
     async def override_get_db():
         yield db_session
