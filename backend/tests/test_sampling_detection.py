@@ -82,13 +82,12 @@ class TestRoutingMcpInitialize:
         assert data["sampling_capable"] is True
         assert "written_at" in data
 
-    def test_optimistic_does_not_downgrade_fresh_true(self, tmp_path):
-        """A False initialize does NOT downgrade a fresh True (optimistic strategy)."""
+    def test_false_overwrites_true(self, tmp_path):
+        """A False initialize immediately downgrades a previous True (no optimistic buffer)."""
         routing = self._make_routing(tmp_path)
         routing.on_mcp_initialize(sampling_capable=True)
         routing.on_mcp_initialize(sampling_capable=False)
-        # Optimistic: should still be True
-        assert routing.state.sampling_capable is True
+        assert routing.state.sampling_capable is False
 
     def test_overwrites_with_sequential_calls(self, tmp_path):
         """False → True updates correctly."""
@@ -609,7 +608,7 @@ class TestCapabilityDetectionMiddleware:
         assert data["sampling_capable"] is False
 
     def test_optimistic_does_not_downgrade_fresh_true(self, mw_data_dir):
-        """A False initialize does NOT overwrite a fresh True (optimistic strategy)."""
+        """A False initialize immediately overwrites True (no optimistic buffer)."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         # First: sampling capable
@@ -618,11 +617,11 @@ class TestCapabilityDetectionMiddleware:
         )
         assert json.loads((mw_data_dir / "mcp_session.json").read_text())["sampling_capable"] is True
 
-        # Second: no sampling — should be ignored because True is fresh
+        # Second: no sampling — immediately overwrites
         _CapabilityDetectionMiddleware._inspect_initialize(
             self._make_initialize_body({"roots": {}})
         )
-        assert json.loads((mw_data_dir / "mcp_session.json").read_text())["sampling_capable"] is True
+        assert json.loads((mw_data_dir / "mcp_session.json").read_text())["sampling_capable"] is False
 
     def test_overwrites_stale_true_with_false(self, mw_data_dir):
         """A False initialize DOES overwrite a stale True (past staleness window)."""
@@ -794,19 +793,18 @@ class TestCapabilityDetectionMiddlewareWithRouting:
         assert routing.state.mcp_connected is True
 
     def test_optimistic_via_routing(self, routing):
-        """Routing's optimistic strategy prevents downgrade."""
+        """A False initialize immediately downgrades routing state (no optimistic buffer)."""
         from app.mcp_server import _CapabilityDetectionMiddleware
         _CapabilityDetectionMiddleware._inspect_initialize(
             self._make_initialize_body({"sampling": {}})
         )
         assert routing.state.sampling_capable is True
 
-        # Second: no sampling — routing's optimistic strategy keeps True
+        # Second: no sampling — immediately overwrites
         _CapabilityDetectionMiddleware._inspect_initialize(
             self._make_initialize_body({"roots": {}})
         )
-        # Routing state should still be True (optimistic)
-        assert routing.state.sampling_capable is True
+        assert routing.state.sampling_capable is False
 
 
 # ---------------------------------------------------------------------------
@@ -823,13 +821,13 @@ class TestRoutingManagerDisconnect:
         from app.services.routing import RoutingManager
         return RoutingManager(event_bus=EventBus(), data_dir=tmp_path, is_mcp_process=True)
 
-    def test_on_mcp_disconnect_sets_connected_false(self, routing):
+    def test_on_mcp_disconnect_clears_both(self, routing):
         routing.on_mcp_initialize(sampling_capable=True)
         assert routing.state.mcp_connected is True
         routing.on_mcp_disconnect()
         assert routing.state.mcp_connected is False
-        # Preserves sampling_capable for quick reconnection
-        assert routing.state.sampling_capable is True
+        # Clears sampling_capable — no stale state after client leaves
+        assert routing.state.sampling_capable is None
 
     def test_on_mcp_disconnect_idempotent(self, routing):
         """Calling on_mcp_disconnect twice does not fire duplicate events."""

@@ -11,10 +11,12 @@ DATA_DIR = PROJECT_ROOT / "data"
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 # MCP session detection windows (shared by mcp_server.py + health.py).
-# Capability window: how long a positive sampling detection stays valid (no new handshake).
-# Activity window: how long since the last MCP POST before we consider the client disconnected.
-# The activity window must be long enough to cover normal idle gaps between tool calls —
-# MCP Streamable HTTP is stateless with no heartbeat, so VS Code sends no POSTs when idle.
+# Capability freshness: how long a session file's sampling_capable field is trusted
+# during restart recovery (read from mcp_session.json).  In-memory state is cleared
+# immediately on disconnect — this only gates the file-based recovery path.
+# Activity staleness: how long since the last MCP POST before we consider the client
+# disconnected.  Must cover normal idle gaps between tool calls — MCP Streamable HTTP
+# is stateless with no heartbeat, so VS Code sends no POSTs when idle.
 MCP_CAPABILITY_STALENESS_MINUTES: float = 30.0
 MCP_ACTIVITY_STALENESS_SECONDS: float = 300.0  # 5 minutes
 

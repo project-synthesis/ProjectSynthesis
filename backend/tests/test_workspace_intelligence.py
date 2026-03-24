@@ -147,10 +147,14 @@ class TestCacheTTLExpiry:
         profile1 = intel.analyze([tmp_path])
         assert profile1 is not None
 
-        # Simulate TTL expiry by backdating the cached timestamp
+        # Simulate TTL expiry by backdating the cached timestamp.
+        # Use monotonic() - TTL - 1 (not 0.0) because monotonic() is relative
+        # to process start — on fresh CI runners with low uptime, 0.0 may
+        # appear "recent" and the cache won't expire.
+        import time
         cache_key = frozenset(str(r) for r in [tmp_path])
         profile_val, _ = intel._cache[cache_key]
-        intel._cache[cache_key] = (profile_val, 0.0)  # epoch = very old
+        intel._cache[cache_key] = (profile_val, time.monotonic() - 301)
 
         # Next call should re-scan (detect_stack called again)
         with patch.object(intel, "_detect_stack", wraps=intel._detect_stack) as mock_detect:

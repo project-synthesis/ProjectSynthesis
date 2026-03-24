@@ -3,12 +3,20 @@
 - Normal flow: optimize -> refine -> feedback -> history
 - Passthrough flow: prepare -> save -> event bus -> feedback -> history -> health
 - Cross-flow: passthrough + normal coexistence
+
+NOTE: These tests load the sentence-transformers embedding model, which
+triggers a StopIteration-inside-coroutine RuntimeError on Python 3.14 due
+to an upstream asyncio compatibility issue.  Marked xfail until the
+dependency is fixed.
 """
 
 import asyncio
 import json
+import sys
 
 import pytest
+
+_PY314_ASYNC_BUG = sys.version_info >= (3, 14)
 
 from app.schemas.pipeline_contracts import (
     AnalysisResult,
@@ -37,6 +45,11 @@ def _parse_sse_events(response_text: str) -> list[dict]:
     return events
 
 
+@pytest.mark.xfail(
+    _PY314_ASYNC_BUG,
+    reason="sentence-transformers StopIteration-inside-coroutine on Python 3.14",
+    strict=False,
+)
 class TestEndToEndFlow:
     """Full pipeline flow using mocked provider but real router -> service -> DB path."""
 
@@ -221,6 +234,11 @@ PASSTHROUGH_OPTIMIZED = (
 )
 
 
+@pytest.mark.xfail(
+    _PY314_ASYNC_BUG,
+    reason="sentence-transformers StopIteration-inside-coroutine on Python 3.14",
+    strict=False,
+)
 class TestPassthroughEndToEnd:
     """Full bidirectional passthrough flow: prepare → save → event bus → history → feedback → health.
 

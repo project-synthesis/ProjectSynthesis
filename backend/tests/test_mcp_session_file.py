@@ -112,12 +112,13 @@ class TestIsActivityStale:
 
 
 class TestShouldSkipDowngrade:
-    def test_skip_when_fresh_true(self, session_file):
+    def test_never_skips(self, session_file):
+        """Optimistic buffering removed — always returns False."""
         session_file.write({
             "sampling_capable": True,
             "written_at": datetime.now(timezone.utc).isoformat(),
         })
-        assert session_file.should_skip_downgrade() is True
+        assert session_file.should_skip_downgrade() is False
 
     def test_no_skip_when_false(self, session_file):
         session_file.write({

@@ -55,6 +55,12 @@ async def app_client(mock_provider, db_session, tmp_path):
     from app.services.routing import RoutingManager
     from app.services.workspace_intelligence import WorkspaceIntelligence
 
+    # Isolate DATA_DIR to tmp_path so tests never read the user's real
+    # preferences (e.g. force_passthrough=true from a previous session).
+    import app.config as _cfg
+    original_data_dir = _cfg.DATA_DIR
+    _cfg.DATA_DIR = tmp_path
+
     # Create a test RoutingManager with mock provider
     test_routing = RoutingManager(event_bus=EventBus(), data_dir=tmp_path)
     test_routing.set_provider(mock_provider)
@@ -63,7 +69,7 @@ async def app_client(mock_provider, db_session, tmp_path):
     # Create a test ContextEnrichmentService
     app.state.context_service = ContextEnrichmentService(
         prompts_dir=PROMPTS_DIR,
-        data_dir=DATA_DIR,
+        data_dir=tmp_path,
         workspace_intel=WorkspaceIntelligence(),
         embedding_service=None,
         heuristic_analyzer=HeuristicAnalyzer(),
@@ -80,3 +86,4 @@ async def app_client(mock_provider, db_session, tmp_path):
         yield client
 
     app.dependency_overrides.clear()
+    _cfg.DATA_DIR = original_data_dir

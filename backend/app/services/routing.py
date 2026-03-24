@@ -258,21 +258,15 @@ class RoutingManager:
             self._broadcast_state_change("provider_changed")
 
     def on_mcp_initialize(self, sampling_capable: bool) -> None:
-        """Called by ASGI middleware when MCP ``initialize`` is intercepted."""
+        """Called by ASGI middleware when MCP ``initialize`` is intercepted.
+
+        Always trusts the incoming value — no optimistic buffering.  Since
+        ``on_mcp_disconnect()`` clears ``sampling_capable`` to ``None`` when
+        the last SSE stream closes, stale True values cannot persist across
+        client restarts.
+        """
         now = datetime.now(timezone.utc)
         old_sampling = self._state.sampling_capable
-
-        # Optimistic strategy: False never overwrites a fresh True
-        if not sampling_capable and self._state.sampling_capable is True:
-            if self._state.last_capability_update:
-                from app.config import MCP_CAPABILITY_STALENESS_MINUTES
-                elapsed = (now - self._state.last_capability_update).total_seconds() / 60
-                if elapsed <= MCP_CAPABILITY_STALENESS_MINUTES:
-                    logger.debug("Optimistic skip: not downgrading fresh sampling_capable=True")
-                    self._update_state(mcp_connected=True, last_activity=now)
-                    self._persist()
-                    return
-
         was_connected = self._state.mcp_connected
         self._update_state(
             sampling_capable=sampling_capable,
@@ -300,19 +294,16 @@ class RoutingManager:
     def on_mcp_disconnect(self) -> None:
         """Called when the last MCP SSE stream closes — client disconnected.
 
-        Sets ``mcp_connected=False`` immediately.  Does NOT clear
-        ``sampling_capable`` — the value is preserved so a quick
-        reconnection (e.g. VS Code restart) can resume without a fresh
-        ``initialize`` handshake during the optimistic window.
+        Clears both ``mcp_connected`` and ``sampling_capable``.  This is a
+        hard signal: no SSE streams remain, so no client can serve sampling
+        requests.  The next ``on_mcp_initialize()`` will set fresh values
+        from the reconnecting client's actual capabilities.
         """
-        if not self._state.mcp_connected:
-            return  # Already disconnected — avoid duplicate events
-        self._update_state(mcp_connected=False)
+        if not self._state.mcp_connected and self._state.sampling_capable is None:
+            return  # Already fully disconnected — avoid duplicate events
+        self._update_state(mcp_connected=False, sampling_capable=None)
         self._persist()
-        logger.info(
-            "routing.disconnect trigger=sse_closed sampling_capable=%s",
-            self._state.sampling_capable,
-        )
+        logger.info("routing.disconnect trigger=sse_closed")
         self._broadcast_state_change("mcp_disconnect")
 
     def on_session_invalidated(self) -> None:
@@ -409,7 +400,12 @@ class RoutingManager:
                 pass
 
     async def _disconnect_loop(self) -> None:
-        """Check every 60s if MCP activity has gone stale."""
+        """Check every 60s if MCP activity has gone stale.
+
+        Clears both ``mcp_connected`` and ``sampling_capable`` — after the
+        staleness window, we cannot assume the client is still alive or that
+        it still supports sampling.
+        """
         from app.config import MCP_ACTIVITY_STALENESS_SECONDS
 
         while True:
@@ -424,7 +420,10 @@ class RoutingManager:
                             "routing.disconnect activity_stale=%.0fs threshold=%ds",
                             elapsed, MCP_ACTIVITY_STALENESS_SECONDS,
                         )
-                        self._update_state(mcp_connected=False)
+                        self._update_state(
+                            mcp_connected=False,
+                            sampling_capable=None,
+                        )
                         self._persist()
                         self._broadcast_state_change("disconnect")
             except asyncio.CancelledError:

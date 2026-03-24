@@ -314,13 +314,12 @@ class TestManagerMcpInitialize:
         assert manager.state.sampling_capable is False
         assert manager.state.mcp_connected is True
 
-    def test_optimistic_skip_no_downgrade(self, manager: RoutingManager) -> None:
-        """Fresh True should not be overwritten by False within staleness window."""
+    def test_false_overwrites_true(self, manager: RoutingManager) -> None:
+        """A False initialize immediately downgrades a previous True (no optimistic buffer)."""
         manager.on_mcp_initialize(sampling_capable=True)
         assert manager.state.sampling_capable is True
         manager.on_mcp_initialize(sampling_capable=False)
-        # Should still be True (optimistic strategy)
-        assert manager.state.sampling_capable is True
+        assert manager.state.sampling_capable is False
 
     def test_initialize_fires_event(self, manager: RoutingManager, event_bus: EventBus) -> None:
         queue: asyncio.Queue = asyncio.Queue(maxsize=10)
@@ -520,14 +519,14 @@ class TestManagerReconnectionEdgeCases:
         assert event["event"] == "routing_state_changed"
         assert event["data"]["trigger"] == "mcp_reconnect"
 
-    def test_disconnect_preserves_sampling_capable(
+    def test_disconnect_clears_sampling_capable(
         self, manager: RoutingManager,
     ) -> None:
-        """Disconnect must not clear sampling_capable (optimistic window)."""
+        """Disconnect clears sampling_capable — no stale capability after client leaves."""
         manager.on_mcp_initialize(sampling_capable=True)
         assert manager.state.sampling_capable is True
         manager.on_mcp_disconnect()
-        assert manager.state.sampling_capable is True
+        assert manager.state.sampling_capable is None
         assert manager.state.mcp_connected is False
 
     def test_session_invalidation_then_reinitialize_recovers(

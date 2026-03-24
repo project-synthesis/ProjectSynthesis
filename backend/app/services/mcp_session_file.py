@@ -114,11 +114,15 @@ class MCPSessionFile:
             return False
 
     def should_skip_downgrade(self) -> bool:
-        """``True`` if the file has a fresh ``sampling_capable=True`` (don't overwrite with False)."""
-        data = self.read()
-        if data is None:
-            return False
-        return data.get("sampling_capable") is True and self.is_capability_fresh(data)
+        """Always returns ``False`` — no optimistic buffering.
+
+        Previously returned ``True`` when the file held a fresh
+        ``sampling_capable=True``, preventing a ``False`` from overwriting
+        it.  Removed because it created stale sampling state after client
+        disconnect.  The caller (``_inspect_initialize``) now always
+        persists the incoming value.
+        """
+        return False
 
     def detect_disconnect(self, data: dict) -> bool:
         """Determine if the MCP client has disconnected.
