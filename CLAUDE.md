@@ -80,6 +80,11 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - `codebase_explorer.py` — semantic retrieval + single-shot Haiku synthesis. SHA-based result caching.
 - `explore_cache.py` — in-memory TTL cache with LRU eviction for explore results
 - `repo_index_service.py` — background repo file indexing with type-aware structured outlines (`FileOutline`) and `query_curated_context()` for token-conscious semantic retrieval with domain boosting and budget packing
+- `passthrough.py` — shared passthrough prompt assembly (strategy resolution, scoring rubric loading, template rendering) used by both REST and MCP passthrough paths
+- `pattern_injection.py` — shared `auto_inject_patterns()` for cluster meta-pattern discovery from taxonomy embedding index (used by internal + sampling pipelines)
+- `pipeline_constants.py` — shared pipeline constants (`CONFIDENCE_GATE`, `FALLBACK_STRATEGY`, `resolve_fallback_strategy()`) for both pipeline implementations
+- `event_notification.py` — cross-process HTTP-based event bus notification for MCP server → backend event publishing
+- `mcp_session_file.py` — stateless `mcp_session.json` read/write/staleness helper (used by MCP server and health endpoint)
 - `github_service.py` — Fernet token encryption/decryption
 - `github_client.py` — raw GitHub API calls; explicit token parameter on every method
 - `event_bus.py` — in-process pub/sub for real-time cross-client notifications
@@ -142,18 +147,21 @@ Provider is detected **once at startup** and stored on `app.state.routing` (a `R
 - `refinement.svelte.ts` — refinement sessions (turns, branches, suggestions, score progression)
 - `preferences.svelte.ts` — persistent user preferences loaded from backend
 - `toast.svelte.ts` — toast notification queue with `addToast()` API
+- `routing.svelte.ts` — unified derived routing state mirroring backend 5-tier priority chain (force_passthrough > force_sampling > internal > auto_sampling > passthrough). Reactive tier resolver for UI adaptation
+- `passthrough-guide.svelte.ts` — passthrough workflow guide modal state (visibility, "don't show again" preference)
 - `clusters.svelte.ts` — cluster state: paste detection (50-char delta, 300ms debounce), suggestion lifecycle (auto-dismiss 10s), cluster tree/stats for topology, cluster detail for Inspector, template spawning, graph invalidation via `taxonomy_changed` SSE
 
 ### Component layout
 ```
 src/lib/components/
   layout/       # ActivityBar, Navigator, ClusterNavigator, EditorGroups, Inspector, StatusBar
-  editor/       # PromptEdit, ForgeArtifact, PatternSuggestion
+  editor/       # PromptEdit, ForgeArtifact, PatternSuggestion, PassthroughView
   taxonomy/     # SemanticTopology, TopologyControls, TopologyRenderer, TopologyData,
                 # TopologyInteraction, TopologyLabels, TopologyWorker
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
-  shared/       # CommandPalette, DiffView, MarkdownRenderer, ProviderBadge, ScoreCard, Toast
+  shared/       # CommandPalette, DiffView, Logo, MarkdownRenderer, PassthroughGuide,
+                # ProviderBadge, ScoreCard, Toast
 ```
 
 ### Shared frontend utilities
@@ -172,6 +180,7 @@ All prompts live in `prompts/`. `{{variable}}` syntax. Hot-reloaded on each call
 | `refine.md` | Refinement optimizer (replaces optimize.md during refinement) |
 | `suggest.md` | Suggestion generator (3 per turn) |
 | `explore.md` | Codebase exploration synthesis (Haiku) |
+| `explore-guidance.md` | Codebase analysis guidance for structured context extraction (static) |
 | `adaptation.md` | Adaptation state formatter |
 | `passthrough.md` | MCP passthrough combined template |
 | `extract_patterns.md` | Meta-pattern extraction from completed optimizations (Haiku) |
@@ -181,7 +190,7 @@ Variable reference: `prompts/manifest.json`
 
 ## MCP server
 
-11 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`). All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients). Tool handlers live in `backend/app/tools/*.py`; `mcp_server.py` is a thin registration layer (~420 lines).
+11 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`). All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients). Tool handlers live in `backend/app/tools/*.py`; `mcp_server.py` is a thin registration layer (~700 lines).
 
 ### Core pipeline tools
 - `synthesis_optimize` — full pipeline execution. Params: `prompt`, `strategy`, `repo_full_name`, `workspace_path`, `applied_pattern_ids` (list of meta-pattern IDs to inject into optimizer context). Returns `OptimizeOutput`.
@@ -283,7 +292,8 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **GitHub token layer**: tokens are Fernet-encrypted at rest. `github_service.encrypt_token` / `decrypt_token` are the only entry points.
 - **API key management**: `GET/PATCH/DELETE /api/provider/api-key`. Key encrypted at rest in `data/.api_credentials`. Provider hot-reloads when key is set.
 - **Explore architecture**: semantic retrieval + single-shot synthesis (not an agentic loop). SHA-based result caching. Background indexing with `all-MiniLM-L6-v2` embeddings.
-- **Roots scanning**: workspace directories scanned for agent guidance files (CLAUDE.md, AGENTS.md, .cursorrules, etc.). Per-file cap: 500 lines / 10K chars. Content wrapped in `<untrusted-context>`.
+- **Context enrichment**: unified `ContextEnrichmentService` replaces 5 scattered context resolution sites. Single `enrich()` entry point resolves workspace guidance, heuristic analysis (passthrough), curated codebase context, adaptation state, and applied patterns. Returns frozen `EnrichedContext` with `MappingProxyType` immutability and accessor properties. All routing tiers (internal, sampling, passthrough) use the same enrichment path.
+- **Roots scanning**: workspace directories scanned for agent guidance files (CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, .clinerules, CONVENTIONS.md, etc.). `discover_project_dirs()` detects manifest-containing subdirectories for monorepo scanning. SHA256 content deduplication (root copy wins). Per-file cap: 500 lines / 10K chars. Content wrapped in `<untrusted-context>`.
 - **Feedback adaptation**: simple strategy affinity counter. Degenerate pattern detection (>90% same rating over 10+ feedbacks).
 - **Refinement**: each turn is a fresh pipeline invocation (not multi-turn accumulation). Rollback creates a branch fork. 3 suggestions generated per turn.
 - **Trace logging**: `trace_logger.py` writes per-phase JSONL traces. Daily rotation with configurable retention (`TRACE_RETENTION_DAYS`).

@@ -106,10 +106,10 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Production diff viewer** — unified and split modes with word-level highlighting
 - **GitHub integration** — link a repo for codebase-aware optimization via semantic embedding search
 - **MCP server** — use from any MCP-compatible IDE (Claude Code, Cursor, etc.)
-- **Passthrough mode** — IDE's own LLM does the optimization; server provides context + bias correction
+- **Passthrough mode** — IDE's own LLM does the optimization; server provides context + heuristic analysis + bias correction. Zero-LLM `HeuristicAnalyzer` classifies task type, domain, weaknesses, and recommends strategy without any LLM calls
 - **Force sampling / passthrough toggles** — pin the MCP pipeline to use the IDE's LLM (`force_sampling`) or always assemble for external processing (`force_passthrough`). Mutually exclusive, enforced server-side and client-side
 - **Sampling capability detection** — ASGI middleware detects MCP client sampling support on `initialize` handshake. Health endpoint surfaces `sampling_capable` with 30-minute staleness window. Frontend polls at fixed 60s interval for display only
-- **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, .cursorrules for context injection
+- **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, .clinerules, CONVENTIONS.md for context injection. Monorepo-aware: `discover_project_dirs()` scans manifest-containing subdirectories with SHA256 deduplication
 - **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution. Dimension-specific weights prevent single-model bias. Divergence flags when LLM and heuristic disagree by >2.5 points
 - **Real-time events** — SSE-based event bus with toast notifications for file changes, MCP operations, and pipeline status
 - **Evolutionary taxonomy engine** — self-organizing hierarchical clustering that groups optimizations into a navigable taxonomy. Three execution paths: hot (per-optimization embedding + nearest-node search), warm (periodic HDBSCAN re-clustering with speculative lifecycle mutations), cold (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Quality-gated: 5-dimension Q_system score (coherence, separation, coverage, DBCV, stability) prevents regressions. Snapshot audit trail for recovery
@@ -119,6 +119,9 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **StatusBar breadcrumb** — shows `[domain] › intent_label` for the active optimization with domain color coding. Editor tabs use intent labels as titles
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation
 - **API key management** — set/update/remove via UI with Fernet encryption at rest
+- **Per-phase effort controls** — configure `low`/`medium`/`high`/`max` effort per pipeline phase (analyzer, optimizer, scorer) via Settings
+- **Structured repo indexing** — type-aware file outlines (Python classes/functions/imports, TypeScript exports, Svelte runes) with domain-boosted semantic retrieval and token-budget packing
+- **Unified context enrichment** — single `ContextEnrichmentService.enrich()` entry point resolves workspace guidance, heuristic analysis, codebase context, adaptation state, and applied patterns for all routing tiers
 - **Trace logging** — per-phase JSONL traces to `data/traces/` with daily rotation and configurable retention
 
 ## MCP Integration
