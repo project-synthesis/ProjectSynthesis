@@ -13,6 +13,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Added shared `semantic_check()`, `apply_domain_gate()`, `resolve_effective_strategy()` helpers in `pipeline_constants.py` — both pipelines now use identical strategy resolution logic (DRY)
 
 ### Changed
+- Removed advisory MCP `ModelPreferences`/`ModelHint` from sampling pipeline — IDE selects model freely; actual model captured per phase
+- Navigator shows actual model IDs used by IDE instead of hint dropdowns in sampling mode
+- Inspector displays per-phase model breakdown for sampling results
+- New `models_by_phase` JSON column persists per-phase model IDs for both internal and sampling pipelines
 - Updated PassthroughGuide feature matrix to reflect v0.3.1 capabilities: score phase now shows "Heuristic / Hybrid", codebase explore shows "Roots + index", and pattern injection is now marked available (✓) instead of unavailable
 - Expanded PassthroughGuide step 1 description to mention codebase context and applied patterns
 - Navigator MODELS section now morphs in-place to a CONTEXT section in passthrough mode, showing read-only indicators for heuristic analysis, codebase index status, auto-injected patterns, and an Adaptation toggle
