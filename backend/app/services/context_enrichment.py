@@ -14,16 +14,13 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.services.heuristic_analyzer import HeuristicAnalysis, HeuristicAnalyzer
 from app.services.workspace_intelligence import WorkspaceIntelligence
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

@@ -189,3 +189,46 @@ class TestAnalysisDataclass:
         assert "Domain:" in summary
         assert "Intent:" in summary
         assert isinstance(summary, str)
+
+
+class TestFullstackDomain:
+    @pytest.mark.asyncio
+    async def test_fullstack_promotion(self, db):
+        """Backend + frontend signals should promote to fullstack domain."""
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Build a FastAPI backend API with authentication and a React frontend "
+            "component using Tailwind CSS for the user dashboard layout",
+            db,
+        )
+        assert result.domain == "fullstack"
+
+
+class TestHistoricalLearning:
+    @pytest.mark.asyncio
+    async def test_strategy_from_history(self, db):
+        """Past successful optimizations should influence strategy selection."""
+        from app.models import Optimization
+
+        # Seed DB with successful coding optimizations using chain-of-thought
+        for i in range(3):
+            opt = Optimization(
+                raw_prompt=f"Implement feature {i} with Python and FastAPI",
+                optimized_prompt=f"Optimized {i}",
+                task_type="coding",
+                strategy_used="chain-of-thought",
+                overall_score=8.5,
+                status="completed",
+            )
+            db.add(opt)
+        await db.commit()
+
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Implement a REST API endpoint for user authentication with JWT tokens",
+            db,
+        )
+        # With historical data for coding tasks, strategy should be influenced
+        assert result.recommended_strategy in (
+            "chain-of-thought", "structured-output", "auto",
+        )

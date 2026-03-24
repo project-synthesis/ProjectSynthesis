@@ -182,7 +182,7 @@ enrichment = await context_service.enrich(
 
 **Note**: `POST /api/optimize/passthrough` is a fourth call site that must also be consolidated. It currently duplicates the same inline context resolution as the main optimize endpoint's passthrough path.
 
-**`ContextResolver` relationship**: The enrichment service delegates prompt validation (length checks) and per-source capping (MAX_GUIDANCE_CHARS, MAX_CODEBASE_CONTEXT_CHARS, MAX_ADAPTATION_CHARS) to `ContextResolver` methods internally. `ContextResolver` is NOT replaced -- it becomes a utility called by the enrichment service for sanitization. The enrichment service owns orchestration; `ContextResolver` owns validation/capping.
+**`ContextResolver` relationship**: The enrichment service implements its own content capping via `_cap_codebase_context()` (MAX_CODEBASE_CONTEXT_CHARS, `<untrusted-context>` wrapping) and `_cap_adaptation_state()` (MAX_ADAPTATION_CHARS) as static methods. `ContextResolver` remains in use by the internal pipeline path (`pipeline.py`) for its own capping needs. The two implementations use the same settings constants but operate independently — the enrichment service owns capping for passthrough/unified paths, `ContextResolver` owns it for the internal pipeline explore path.
 
 ### 2. Enhanced `RootsScanner` -- Manifest-Aware Subdirectory Discovery
 

@@ -84,9 +84,24 @@ def _extract_python_outline(path: str, content: str, lines: list[str]) -> FileOu
         for ln in lines
         if re.match(r"^\s*(class |(?:async )?def )\w+", ln)
     ][:15]
+    # Condensed imports summary
+    imports = [
+        re.sub(r"\s+", " ", ln.strip())
+        for ln in lines
+        if re.match(r"^(import |from \S+ import )", ln)
+    ]
+    imports_summary = "imports: " + ", ".join(
+        re.sub(r"^(?:from \S+ )?import ", "", i) for i in imports[:20]
+    ) if imports else None
+    # __all__ exports
+    all_match = re.search(r"^__all__\s*=\s*\[([^\]]+)\]", content, re.MULTILINE)
+    if all_match:
+        exports = all_match.group(1).replace('"', "").replace("'", "").strip()
+        imports_summary = (imports_summary + f" | __all__: [{exports}]") if imports_summary else f"__all__: [{exports}]"
     return FileOutline(
         file_path=path, file_type="python",
         structural_summary="\n".join(sigs),
+        imports_summary=imports_summary,
         doc_summary=doc,
     )
 
@@ -155,8 +170,15 @@ def _extract_svelte_outline(path: str, content: str, lines: list[str]) -> FileOu
         for ln in lines
         if re.match(r"^\s*export\s+(let|const|function)\s+", ln)
     ][:10]
+    # Svelte 5 runes ($props, $state, $derived)
+    runes = [
+        ln.rstrip()
+        for ln in lines
+        if re.match(r"^\s*let\s+.*\$(?:props|state|derived)\(", ln)
+    ][:10]
     component_name = path.rsplit("/", 1)[-1].replace(".svelte", "")
-    summary = f"Component: {component_name}\n" + "\n".join(exports)
+    all_sigs = exports + runes
+    summary = f"Component: {component_name}\n" + "\n".join(all_sigs)
     return FileOutline(
         file_path=path, file_type="svelte",
         structural_summary=summary,
@@ -243,16 +265,6 @@ _DOMAIN_PATH_PATTERNS: dict[str, list[str]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Legacy simple outline (kept for backward compat with build_index)
-# ---------------------------------------------------------------------------
-
-def _extract_outline(content: str, max_lines: int = 30) -> str:
-    """Return a short outline of the file: first N non-empty lines."""
-    lines = [ln for ln in content.splitlines() if ln.strip()]
-    return "\n".join(lines[:max_lines])
-
-
 def _is_indexable(path: str, size: int | None) -> bool:
     """Return True if the file is worth indexing."""
     if size is not None and size > _MAX_FILE_SIZE:
@@ -321,13 +333,19 @@ class RepoIndexService:
                   for item in indexable]
             )
 
-            # Batch-embed outlines
-            outlines = [
-                _extract_outline(content) if content else ""
-                for _, content in contents
+            # Extract structured outlines and build rich embedding text
+            structured = [
+                _extract_structured_outline(item["path"], content) if content else None
+                for item, content in contents
             ]
-            texts_to_embed = [o if o.strip() else item["path"]
-                              for (item, _), o in zip(contents, outlines)]
+            outlines = [
+                s.structural_summary if s else ""
+                for s in structured
+            ]
+            texts_to_embed = [
+                _build_embedding_text(item["path"], s) if s else item["path"]
+                for (item, _), s in zip(contents, structured)
+            ]
 
             embeddings: list[np.ndarray] = []
             if texts_to_embed:
