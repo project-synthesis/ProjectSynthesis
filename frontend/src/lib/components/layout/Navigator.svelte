@@ -482,10 +482,27 @@
             </div>
           </div>
         </div>
+        {:else if routing.isSampling}
+        <div class="sub-section">
+          <span class="sub-heading sub-heading--sampling">IDE Model</span>
+          <div class="card-terminal">
+            {#each [
+              { label: 'Analyzer', key: 'analyze' },
+              { label: 'Optimizer', key: 'optimize' },
+              { label: 'Scorer', key: 'score' },
+            ] as { label, key }}
+              <div class="data-row">
+                <span class="data-label">{label}</span>
+                <span class="data-value neon-green" class:data-value--dim={!forgeStore.phaseModels[key]}>
+                  {forgeStore.phaseModels[key] || 'pending'}
+                </span>
+              </div>
+            {/each}
+          </div>
+        </div>
         {:else}
         <div class="sub-section">
-          <span class="sub-heading" class:sub-heading--sampling={routing.isSampling}>{routing.isSampling ? 'Model Hints' : 'Models'}</span>
-          {#if routing.isSampling}<span class="sub-heading-note sub-heading-note--sampling">// via IDE</span>{/if}
+          <span class="sub-heading">Models</span>
           <div class="card-terminal">
             {#each [
               { label: 'Analyzer', phase: 'analyzer' },
@@ -606,10 +623,9 @@
             </div>
           </div>
         </div>
-        {:else}
+        {:else if !routing.isSampling}
         <div class="sub-section">
-          <span class="sub-heading" class:sub-heading--sampling={routing.isSampling}>{routing.isSampling ? 'Effort Hints' : 'Effort'}</span>
-          {#if routing.isSampling}<span class="sub-heading-note sub-heading-note--sampling">// via IDE</span>{/if}
+          <span class="sub-heading">Effort</span>
           <div class="card-terminal">
             {#each [
               { label: 'Analyzer', key: 'analyzer_effort' },
@@ -1246,10 +1262,6 @@
     color: var(--color-neon-green);
   }
 
-  .sub-heading-note--sampling {
-    color: var(--color-neon-green);
-  }
-
   .degradation-notice {
     font-family: var(--font-mono);
     font-size: 9px;
@@ -1270,17 +1282,6 @@
     border-left: 2px solid rgba(0, 229, 255, 0.4);
     background: rgba(0, 229, 255, 0.04);
     line-height: 1.4;
-  }
-
-  .sub-heading-note {
-    display: inline-block;
-    font-family: var(--font-mono);
-    font-size: 9px;
-    font-weight: 700;
-    color: var(--color-text-dim);
-    padding: 0 6px;
-    margin-bottom: 2px;
-    user-select: none;
   }
 
   /* ---- Accordion headings (progressive disclosure) ---- */

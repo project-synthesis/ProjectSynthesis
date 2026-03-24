@@ -910,44 +910,36 @@ describe('Navigator', () => {
     preferencesStore.prefs.pipeline.force_sampling = true;
   }
 
-  it('shows "Model Hints" heading in sampling mode', () => {
+  it('shows "IDE Model" heading in sampling mode', () => {
     setupSamplingMode();
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
-    expect(screen.getByText('Model Hints')).toBeInTheDocument();
+    expect(screen.getByText('IDE Model')).toBeInTheDocument();
     expect(screen.queryByText('Models')).not.toBeInTheDocument();
   });
 
-  it('shows "Effort Hints" heading in sampling mode', () => {
+  it('hides Effort section in sampling mode', () => {
     setupSamplingMode();
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
-    expect(screen.getByText('Effort Hints')).toBeInTheDocument();
     expect(screen.queryByText('Effort')).not.toBeInTheDocument();
+    expect(screen.queryByText('Effort Hints')).not.toBeInTheDocument();
   });
 
-  it('shows "// via IDE" annotation in sampling mode', () => {
+  it('shows "pending" for phases without model data in sampling mode', () => {
+    setupSamplingMode();
+    forgeStore.phaseModels = {};
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    const pendingLabels = screen.getAllByText('pending');
+    expect(pendingLabels.length).toBe(3);
+  });
+
+  it('applies green accent to "IDE Model" heading in sampling mode', () => {
     setupSamplingMode();
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
-    const annotations = screen.getAllByText('// via IDE');
-    // One for Model Hints, one for Effort Hints
-    expect(annotations).toHaveLength(2);
-  });
-
-  it('applies green accent to "Model Hints" heading in sampling mode', () => {
-    setupSamplingMode();
-    defaultFetchHandlers();
-    render(Navigator, { props: { active: 'settings' } });
-    const heading = screen.getByText('Model Hints');
-    expect(heading.classList.contains('sub-heading--sampling')).toBe(true);
-  });
-
-  it('applies green accent to "Effort Hints" heading in sampling mode', () => {
-    setupSamplingMode();
-    defaultFetchHandlers();
-    render(Navigator, { props: { active: 'settings' } });
-    const heading = screen.getByText('Effort Hints');
+    const heading = screen.getByText('IDE Model');
     expect(heading.classList.contains('sub-heading--sampling')).toBe(true);
   });
 
@@ -976,7 +968,7 @@ describe('Navigator', () => {
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
     expect(screen.getByText('Models')).toBeInTheDocument();
-    expect(screen.queryByText('Model Hints')).not.toBeInTheDocument();
+    expect(screen.queryByText('IDE Model')).not.toBeInTheDocument();
   });
 
   it('shows standard "Effort" heading in internal mode (regression)', () => {
@@ -984,14 +976,6 @@ describe('Navigator', () => {
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
     expect(screen.getByText('Effort')).toBeInTheDocument();
-    expect(screen.queryByText('Effort Hints')).not.toBeInTheDocument();
-  });
-
-  it('does not show "// via IDE" annotation in internal mode', () => {
-    forgeStore.provider = 'claude_cli';
-    defaultFetchHandlers();
-    render(Navigator, { props: { active: 'settings' } });
-    expect(screen.queryByText('// via IDE')).not.toBeInTheDocument();
   });
 
   it('shows VIA MCP SAMPLING badge in auto-sampling mode (no force toggle)', () => {
