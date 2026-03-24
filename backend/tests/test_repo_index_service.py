@@ -7,7 +7,6 @@ import pytest
 
 from app.models import RepoFileIndex, RepoIndexMeta
 from app.services.repo_index_service import (
-    CuratedCodebaseContext,
     RepoIndexService,
     _extract_structured_outline,
 )
@@ -145,7 +144,16 @@ async def test_is_stale_sha_match(db_session):
 
 class TestStructuredOutlines:
     def test_python_outline_extracts_signatures(self):
-        content = '"""User authentication service."""\n\nimport logging\nfrom pathlib import Path\n\nclass AuthService:\n    """Handles JWT token creation and validation."""\n\n    def create_token(self, user_id: int) -> str:\n        """Create a new JWT token."""\n        pass\n\n    async def validate_token(self, token: str) -> dict:\n        """Validate and decode a JWT token."""\n        pass\n\ndef helper_function(x: int) -> bool:\n    return x > 0\n'
+        content = (
+            '"""User authentication service."""\n\nimport logging\n'
+            "from pathlib import Path\n\nclass AuthService:\n"
+            '    """Handles JWT token creation and validation."""\n\n'
+            "    def create_token(self, user_id: int) -> str:\n"
+            '        """Create a new JWT token."""\n        pass\n\n'
+            "    async def validate_token(self, token: str) -> dict:\n"
+            '        """Validate and decode a JWT token."""\n        pass\n\n'
+            "def helper_function(x: int) -> bool:\n    return x > 0\n"
+        )
         outline = _extract_structured_outline("auth.py", content)
         assert outline.file_type == "python"
         assert "AuthService" in outline.structural_summary
@@ -156,7 +164,14 @@ class TestStructuredOutlines:
         assert len(outline.structural_summary) <= 500
 
     def test_typescript_outline_extracts_exports(self):
-        content = '/** API client for backend communication. */\n\nexport interface User {\n  id: string;\n  name: string;\n}\n\nexport async function fetchUser(id: string): Promise<User> {\n  return await fetch(`/api/users/${id}`).then(r => r.json());\n}\n\nexport class ApiClient {\n  constructor(private baseUrl: string) {}\n}\n'
+        content = (
+            "/** API client for backend communication. */\n\n"
+            "export interface User {\n  id: string;\n  name: string;\n}\n\n"
+            "export async function fetchUser(id: string): Promise<User> {\n"
+            "  return await fetch(`/api/users/${id}`).then(r => r.json());\n"
+            "}\n\nexport class ApiClient {\n"
+            "  constructor(private baseUrl: string) {}\n}\n"
+        )
         outline = _extract_structured_outline("client.ts", content)
         assert outline.file_type == "typescript"
         assert "User" in outline.structural_summary
@@ -164,7 +179,12 @@ class TestStructuredOutlines:
         assert "ApiClient" in outline.structural_summary
 
     def test_markdown_outline_extracts_headings(self):
-        content = '# Project Setup\n\n## Installation\n\nFollow these steps to install...\n\n## Configuration\n\nSet the following environment variables...\n\n## Usage\n\nRun the application with...\n'
+        content = (
+            "# Project Setup\n\n## Installation\n\n"
+            "Follow these steps to install...\n\n## Configuration\n\n"
+            "Set the following environment variables...\n\n## Usage\n\n"
+            "Run the application with...\n"
+        )
         outline = _extract_structured_outline("README.md", content)
         assert outline.file_type == "docs"
         assert "Project Setup" in outline.structural_summary

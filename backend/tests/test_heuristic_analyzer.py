@@ -5,7 +5,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.services.heuristic_analyzer import HeuristicAnalyzer, HeuristicAnalysis
+from app.services.heuristic_analyzer import HeuristicAnalysis, HeuristicAnalyzer
 
 
 @pytest_asyncio.fixture

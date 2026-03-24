@@ -1123,6 +1123,7 @@ class TestSerializeOptimization:
 def _setup_prompts(tmp_path):
     """Copy required template files to tmp_path for unit tests."""
     import shutil
+
     from app.config import PROMPTS_DIR
 
     # Copy the main template files

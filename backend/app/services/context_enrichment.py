@@ -23,9 +23,7 @@ from app.services.heuristic_analyzer import HeuristicAnalysis, HeuristicAnalyzer
 from app.services.workspace_intelligence import WorkspaceIntelligence
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
-    from app.services.embedding_service import EmbeddingService
-    from app.services.github_client import GitHubClient
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -257,8 +255,9 @@ class ContextEnrichmentService:
         """Resolve applied meta-patterns via taxonomy engine or explicit IDs."""
         try:
             if applied_pattern_ids:
-                from app.models import MetaPattern
                 from sqlalchemy import select
+
+                from app.models import MetaPattern
                 result = await db.execute(
                     select(MetaPattern).where(MetaPattern.id.in_(applied_pattern_ids))
                 )

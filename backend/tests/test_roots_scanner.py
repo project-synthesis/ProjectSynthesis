@@ -1,10 +1,8 @@
 """Tests for RootsScanner (Phase 1b — agent guidance file discovery)."""
 
-import hashlib
 from pathlib import Path
 
 from app.services.roots_scanner import (
-    GUIDANCE_FILES,
     MAX_CHARS_PER_FILE,
     MAX_LINES_PER_FILE,
     RootsScanner,
