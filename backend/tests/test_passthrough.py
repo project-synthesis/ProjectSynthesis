@@ -1113,3 +1113,68 @@ class TestSerializeOptimization:
         assert data["optimized_prompt"] is None
         assert data["overall_score"] is None
         assert data["scores"]["clarity"] is None
+
+
+# ---------------------------------------------------------------------------
+# Enriched passthrough assembly (analysis_summary + applied_patterns + codebase_context)
+# ---------------------------------------------------------------------------
+
+
+def _setup_prompts(tmp_path):
+    """Copy required template files to tmp_path for unit tests."""
+    import shutil
+    from app.config import PROMPTS_DIR
+
+    # Copy the main template files
+    for name in ("passthrough.md", "manifest.json", "scoring.md"):
+        src = PROMPTS_DIR / name
+        shutil.copy(src, tmp_path / name)
+
+    # Copy strategies directory
+    strategies_dst = tmp_path / "strategies"
+    strategies_dst.mkdir()
+    strategies_src = PROMPTS_DIR / "strategies"
+    for strat_file in strategies_src.iterdir():
+        if strat_file.suffix == ".md":
+            shutil.copy(strat_file, strategies_dst / strat_file.name)
+
+
+class TestEnrichedPassthrough:
+    def test_assembles_with_analysis_summary(self, tmp_path):
+        """Analysis summary from heuristic analyzer is injected."""
+        from app.services.passthrough import assemble_passthrough_prompt
+
+        _setup_prompts(tmp_path)
+        assembled, strategy = assemble_passthrough_prompt(
+            prompts_dir=tmp_path,
+            raw_prompt="Build a REST API with authentication",
+            analysis_summary="Task type: coding\nDomain: backend\nWeaknesses:\n- lacks constraints",
+        )
+        assert "Task type: coding" in assembled
+        assert "lacks constraints" in assembled
+
+    def test_assembles_with_applied_patterns(self, tmp_path):
+        """Applied patterns from taxonomy engine are injected."""
+        from app.services.passthrough import assemble_passthrough_prompt
+
+        _setup_prompts(tmp_path)
+        assembled, strategy = assemble_passthrough_prompt(
+            prompts_dir=tmp_path,
+            raw_prompt="Build a REST API with authentication",
+            applied_patterns="- Use dependency injection for service layer\n- Validate all inputs with Pydantic",
+        )
+        assert "dependency injection" in assembled
+        assert "Pydantic" in assembled
+
+    def test_assembles_with_codebase_context(self, tmp_path):
+        """Curated index context is injected into codebase_context slot."""
+        from app.services.passthrough import assemble_passthrough_prompt
+
+        _setup_prompts(tmp_path)
+        assembled, strategy = assemble_passthrough_prompt(
+            prompts_dir=tmp_path,
+            raw_prompt="Refactor the auth service",
+            codebase_context="## backend/app/auth.py (relevance: 0.87)\nclass AuthService:",
+        )
+        assert "auth.py" in assembled
+        assert "relevance: 0.87" in assembled

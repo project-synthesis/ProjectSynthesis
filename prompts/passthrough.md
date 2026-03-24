@@ -2,10 +2,18 @@
 {{raw_prompt}}
 </user-prompt>
 
+<analysis-summary>
+{{analysis_summary}}
+</analysis-summary>
+
 <codebase-context>
 {{codebase_guidance}}
 {{codebase_context}}
 </codebase-context>
+
+<applied-patterns>
+{{applied_patterns}}
+</applied-patterns>
 
 <adaptation>
 {{adaptation_state}}
@@ -28,6 +36,8 @@ You are an expert prompt engineer. Optimize the user's prompt above, then score 
 - Add structure, constraints, and specificity
 - Remove filler and redundancy
 - Apply the strategy above (if provided)
+- Use the analysis summary above (if provided) to address identified weaknesses
+- Incorporate proven patterns above (if provided) where applicable
 
 **Output format for the optimized prompt:**
 Always structure the optimized prompt using markdown `##` headers to delineate sections (e.g. `## Task`, `## Requirements`, `## Constraints`, `## Output`). Use bullet lists (`-`) for enumerations, numbered lists (`1.`) for sequential steps, and fenced code blocks for signatures, examples, and schemas. This ensures consistent rendering regardless of which strategy was applied.
