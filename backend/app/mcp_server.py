@@ -25,7 +25,7 @@ import aiosqlite
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
-from app.config import DATA_DIR
+from app.config import DATA_DIR, PROMPTS_DIR
 from app.providers.detector import detect_provider
 from app.schemas.mcp_models import (
     AnalyzeOutput,
@@ -133,8 +133,31 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     except Exception as exc:
         logger.warning("MCP server: TaxonomyEngine init failed (non-fatal): %s", exc)
 
+    # Initialize unified context enrichment service
+    try:
+        from app.services.context_enrichment import ContextEnrichmentService
+        from app.services.embedding_service import EmbeddingService as _ES
+        from app.services.github_client import GitHubClient
+        from app.services.heuristic_analyzer import HeuristicAnalyzer
+        from app.services.workspace_intelligence import WorkspaceIntelligence
+
+        _context_svc = ContextEnrichmentService(
+            prompts_dir=PROMPTS_DIR,
+            data_dir=DATA_DIR,
+            workspace_intel=WorkspaceIntelligence(),
+            embedding_service=_ES(),
+            heuristic_analyzer=HeuristicAnalyzer(),
+            github_client=GitHubClient(),
+            taxonomy_engine=_shared.get_taxonomy_engine(),
+        )
+        _shared.set_context_service(_context_svc)
+        logger.info("MCP server: ContextEnrichmentService initialized")
+    except Exception as exc:
+        logger.warning("MCP server: ContextEnrichmentService init failed (non-fatal): %s", exc)
+
     yield {}
 
+    _shared.set_context_service(None)
     await routing.stop()
     _shared.set_taxonomy_engine(None)
     _shared.set_routing(None)
