@@ -40,6 +40,8 @@ class ForgeStore {
   // Cluster link (set when optimization is linked to a prompt cluster)
   clusterId = $state<string | null>(null);
 
+  phaseModels: Record<string, string> = $state({});
+
   /** Routing decision from the backend's first SSE event per optimize stream. */
   routingDecision = $state<{ tier: string; provider: string | null; reason: string; degraded_from: string | null } | null>(null);
 
@@ -118,6 +120,7 @@ class ForgeStore {
     this.appliedPatternIds = null;
     this.clusterId = null;
     this.routingDecision = null;
+    this.phaseModels = {};
 
     this.status = 'analyzing';
 
@@ -192,6 +195,10 @@ class ForgeStore {
         if (phase === 'analyze' || phase === 'analyzing') this.status = 'analyzing';
         else if (phase === 'optimize' || phase === 'optimizing') this.status = 'optimizing';
         else if (phase === 'score' || phase === 'scoring') this.status = 'scoring';
+        const model = event.model as string | undefined;
+        if (model && phase) {
+          this.phaseModels = { ...this.phaseModels, [phase]: model };
+        }
       }
     } else if (eventType === 'prompt_preview') {
       this.previewPrompt = (event.optimized_prompt || event.prompt) as string;
@@ -210,6 +217,9 @@ class ForgeStore {
       // Capture suggestions from the complete event if not already set via SSE
       if (data.suggestions && this.initialSuggestions.length === 0) {
         this.initialSuggestions = data.suggestions;
+      }
+      if (data.models_by_phase) {
+        this.phaseModels = data.models_by_phase as Record<string, string>;
       }
       this.loadFromRecord(data as OptimizationResult);
     } else if (eventType === 'context_injected') {
@@ -278,6 +288,10 @@ class ForgeStore {
     // Cache the result in the editor store so each result tab has its own data
     if (opt.id) {
       editorStore.cacheResult(opt.id, opt);
+    }
+
+    if (opt.models_by_phase) {
+      this.phaseModels = opt.models_by_phase;
     }
 
     this._saveSession();
@@ -408,6 +422,7 @@ class ForgeStore {
     this.appliedPatternIds = null;
     this.clusterId = null;
     this.routingDecision = null;
+    this.phaseModels = {};
     clustersStore.resetTracking();
     try { localStorage.removeItem('synthesis:passthrough_state'); } catch { /* noop */ }
   }

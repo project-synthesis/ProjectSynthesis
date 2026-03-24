@@ -51,6 +51,7 @@ export interface OptimizationResult {
   status: string;
   created_at: string;
   model_used: string;
+  models_by_phase: Record<string, string> | null;
   context_sources: Record<string, boolean> | null;
   intent_label: string | null;
   domain: string | null;
