@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/github", tags=["github"])
 
 
+def _is_secure() -> bool:
+    """Return True when FRONTEND_URL uses HTTPS (production)."""
+    return bool(settings.FRONTEND_URL and settings.FRONTEND_URL.startswith("https://"))
+
+
 class LoginUrlResponse(BaseModel):
     url: str = Field(description="GitHub OAuth authorization URL to redirect the user to.")
 
@@ -53,7 +58,10 @@ async def _get_session_token(request: Request, db: AsyncSession) -> tuple[str, s
 async def github_login(response: Response) -> LoginUrlResponse:
     """Generate OAuth URL, set state cookie, return URL."""
     state = secrets.token_urlsafe(32)
-    response.set_cookie("github_oauth_state", state, httponly=True, max_age=600)
+    response.set_cookie(
+        "github_oauth_state", state, httponly=True, max_age=600,
+        samesite="lax", secure=_is_secure(),
+    )
     github_svc = GitHubService(
         secret_key=settings.resolve_secret_key(),
         client_id=settings.GITHUB_OAUTH_CLIENT_ID,
@@ -127,7 +135,10 @@ async def github_callback(
         db.add(row)
     await db.commit()
 
-    response.set_cookie("session_id", session_id, httponly=True, max_age=86400 * 30)
+    response.set_cookie(
+        "session_id", session_id, httponly=True, max_age=86400 * 14,
+        samesite="lax", secure=_is_secure(), path="/api",
+    )
     logger.info("GitHub OAuth callback completed: user=%s", user.get("login"))
     return GitHubUserResponse(login=user.get("login"), avatar_url=user.get("avatar_url"))
 
@@ -170,5 +181,5 @@ async def github_logout(
         if token_row:
             await db.delete(token_row)
             await db.commit()
-    response.delete_cookie("session_id")
+    response.delete_cookie("session_id", path="/api")
     return OkResponse()

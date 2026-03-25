@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = Field(
         default="http://localhost:5199", description="Frontend origin URL for CORS.",
     )
+    DEVELOPMENT_MODE: bool = Field(
+        default=False, description="Enable development mode (localhost CORS, relaxed cookie security). NOT FastAPI debug mode.",
+    )
 
     # --- Explore Cache ---
     EXPLORE_RESULT_CACHE_TTL: int = Field(
