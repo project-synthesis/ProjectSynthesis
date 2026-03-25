@@ -290,3 +290,18 @@ class RefinementTurn(Base):
     suggestions = Column(JSON, nullable=True)
     trace_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+
+# --- Security audit trail ---
+
+class AuditLog(Base):
+    """Security audit trail for sensitive operations."""
+    __tablename__ = "audit_log"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    timestamp = Column(DateTime, default=_utcnow, nullable=False, index=True)
+    action = Column(String, nullable=False, index=True)
+    actor_ip = Column(String, nullable=True)
+    actor_session = Column(String, nullable=True)
+    detail = Column(JSON, nullable=True)
+    outcome = Column(String, nullable=False, default="success")

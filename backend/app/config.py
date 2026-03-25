@@ -156,6 +156,11 @@ class Settings(BaseSettings):
         default=30, description="Number of days to retain JSONL trace files before cleanup.",
     )
 
+    # --- Audit ---
+    AUDIT_RETENTION_DAYS: int = Field(
+        default=90, description="Days to retain audit log entries before auto-pruning.",
+    )
+
     # --- Database ---
     DATABASE_URL: str = Field(
         default=f"sqlite+aiosqlite:///{DATA_DIR / 'synthesis.db'}",
