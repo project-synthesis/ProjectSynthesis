@@ -6,14 +6,15 @@ Fully adaptive: strategies are discovered from disk. Adding/removing
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 _MAX_STRATEGY_SIZE = 50_000
 
-from app.config import PROMPTS_DIR
+from app.config import PROMPTS_DIR, settings
+from app.dependencies.rate_limit import RateLimit
 from app.services.strategy_loader import (
     StrategyLoader,
     _parse_frontmatter,
@@ -58,7 +59,10 @@ def _safe_strategy_path(name: str):
 
 
 @router.get("/strategies")
-async def list_strategies() -> list[StrategyMetadata]:
+async def list_strategies(
+    request: Request,
+    _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
+) -> list[StrategyMetadata]:
     """List all available strategies with frontmatter metadata.
 
     Returns name, tagline, description, and validation warnings.
@@ -127,6 +131,21 @@ async def update_strategy(name: str, body: StrategyUpdate) -> StrategyUpdateResp
         raise HTTPException(
             status_code=500, detail="Failed to save strategy.",
         ) from exc
+
+    # Audit log
+    try:
+        from app.database import async_session_factory
+        from app.services.audit_logger import log_event
+
+        async with async_session_factory() as audit_db:
+            await log_event(
+                db=audit_db,
+                action="strategy_updated",
+                detail={"strategy_name": name},
+                outcome="success",
+            )
+    except Exception:
+        logger.debug("Audit log write failed", exc_info=True)
 
     return StrategyUpdateResponse(
         name=name,

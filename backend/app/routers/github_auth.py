@@ -140,6 +140,21 @@ async def github_callback(
         samesite="lax", secure=_is_secure(), path="/api",
     )
     logger.info("GitHub OAuth callback completed: user=%s", user.get("login"))
+
+    # Audit log
+    try:
+        from app.services.audit_logger import log_event
+
+        await log_event(
+            db=db,
+            action="github_login",
+            actor_ip=request.client.host if request.client else None,
+            detail={"github_login": user.get("login")},
+            outcome="success",
+        )
+    except Exception:
+        logger.debug("Audit log write failed", exc_info=True)
+
     return GitHubUserResponse(login=user.get("login"), avatar_url=user.get("avatar_url"))
 
 
@@ -182,4 +197,18 @@ async def github_logout(
             await db.delete(token_row)
             await db.commit()
     response.delete_cookie("session_id", path="/api")
+
+    # Audit log
+    try:
+        from app.services.audit_logger import log_event
+
+        await log_event(
+            db=db,
+            action="github_logout",
+            actor_ip=request.client.host if request.client else None,
+            outcome="success",
+        )
+    except Exception:
+        logger.debug("Audit log write failed", exc_info=True)
+
     return OkResponse()

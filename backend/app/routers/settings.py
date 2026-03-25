@@ -1,9 +1,10 @@
 """Read-only settings endpoint."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.dependencies.rate_limit import RateLimit
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
@@ -20,7 +21,10 @@ class ServerSettings(BaseModel):
 
 
 @router.get("/settings")
-async def get_settings() -> ServerSettings:
+async def get_settings(
+    request: Request,
+    _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
+) -> ServerSettings:
     return ServerSettings(
         max_raw_prompt_chars=settings.MAX_RAW_PROMPT_CHARS,
         max_context_tokens=settings.MAX_CONTEXT_TOKENS,

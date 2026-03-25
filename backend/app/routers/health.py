@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app._version import __version__
+from app.config import settings
 from app.database import get_db
+from app.dependencies.rate_limit import RateLimit
 from app.services.optimization_service import OptimizationService
 
 logger = logging.getLogger(__name__)
@@ -62,7 +64,11 @@ class HealthResponse(BaseModel):
 
 
 @router.get("/health")
-async def health_check(request: Request, db: AsyncSession = Depends(get_db)) -> HealthResponse:
+async def health_check(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
+) -> HealthResponse:
     """Liveness check with provider, version, and pipeline health metrics."""
     # Provider and routing state (live in-memory)
     routing = getattr(request.app.state, "routing", None)

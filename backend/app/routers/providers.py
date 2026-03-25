@@ -116,6 +116,22 @@ async def set_api_key(body: ApiKeyRequest, request: Request) -> ApiKeyStatus:
     except Exception:
         logger.warning("Could not hot-reload provider after API key set", exc_info=True)
 
+    # Audit log
+    try:
+        from app.database import async_session_factory
+        from app.services.audit_logger import log_event
+
+        async with async_session_factory() as audit_db:
+            await log_event(
+                db=audit_db,
+                action="api_key_set",
+                actor_ip=request.client.host if request.client else None,
+                detail={"masked_key": f"sk-...{key[-4:]}"},
+                outcome="success",
+            )
+    except Exception:
+        logger.debug("Audit log write failed", exc_info=True)
+
     return ApiKeyStatus(configured=True, masked_key=f"sk-...{key[-4:]}")
 
 
@@ -134,6 +150,22 @@ async def delete_api_key(request: Request) -> ApiKeyStatus:
         routing.set_provider(None)
     else:
         logger.warning("API key deleted but routing service not available — provider state may be stale")
+
+    # Audit log
+    try:
+        from app.database import async_session_factory
+        from app.services.audit_logger import log_event
+
+        async with async_session_factory() as audit_db:
+            await log_event(
+                db=audit_db,
+                action="api_key_deleted",
+                actor_ip=request.client.host if request.client else None,
+                outcome="success",
+            )
+    except Exception:
+        logger.debug("Audit log write failed", exc_info=True)
+
     return ApiKeyStatus(configured=False, masked_key=None)
 
 

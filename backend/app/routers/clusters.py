@@ -8,6 +8,9 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
+
+from app.config import settings
+from app.dependencies.rate_limit import RateLimit
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -162,6 +165,7 @@ async def get_cluster_detail(
     request: Request,
     cluster_id: str,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
 ) -> ClusterDetail:
     """Single cluster with children, breadcrumb, meta-patterns, and linked optimizations."""
     try:
