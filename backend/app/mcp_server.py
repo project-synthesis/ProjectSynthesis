@@ -73,6 +73,122 @@ try:
 except Exception:
     logger.warning("Could not patch StreamableHTTPServerTransport — SSE reconnection may not work", exc_info=True)
 
+# ---------------------------------------------------------------------------
+# Monkey-patch: release session creation lock before handling SSE streams.
+#
+# MCP SDK bug: StreamableHTTPSessionManager._handle_stateful_request holds
+# _session_creation_lock while calling handle_request().  For GET/SSE streams
+# handle_request() never returns, so the lock is held for the stream lifetime
+# and all subsequent session creation deadlocks.
+#
+# Fix: create the transport under lock, then handle the request outside it.
+# ---------------------------------------------------------------------------
+try:
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    _orig_handle_stateful = StreamableHTTPSessionManager._handle_stateful_request
+
+    async def _patched_handle_stateful(self, scope, receive, send):  # type: ignore[override]
+        """Release _session_creation_lock before handle_request to prevent SSE deadlock."""
+        from http import HTTPStatus
+        from uuid import uuid4
+
+        import anyio
+        from mcp.server.streamable_http import StreamableHTTPServerTransport as _Transport
+        from mcp.types import INVALID_REQUEST, ErrorData, JSONRPCError
+        from starlette.requests import Request as _Req
+        from starlette.responses import Response as _Resp
+
+        if self._task_group is None:
+            raise RuntimeError("Task group is not initialized. Make sure to use run().")
+
+        request = _Req(scope, receive)
+        request_mcp_session_id = request.headers.get("mcp-session-id")
+
+        # Existing session — handle directly (no lock needed)
+        if (
+            request_mcp_session_id is not None
+            and request_mcp_session_id in self._server_instances
+        ):
+            transport = self._server_instances[request_mcp_session_id]
+            await transport.handle_request(scope, receive, send)
+            return
+
+        # New session — create under lock, handle OUTSIDE lock
+        if request_mcp_session_id is None:
+            http_transport: _Transport | None = None
+            async with self._session_creation_lock:
+                new_session_id = uuid4().hex
+                http_transport = _Transport(
+                    mcp_session_id=new_session_id,
+                    is_json_response_enabled=self.json_response,
+                    event_store=self.event_store,
+                    security_settings=self.security_settings,
+                    retry_interval=self.retry_interval,
+                )
+                assert http_transport.mcp_session_id is not None
+                self._server_instances[http_transport.mcp_session_id] = http_transport
+                _instances = self._server_instances  # closure ref
+
+                async def run_server(
+                    *, task_status: anyio.abc.TaskStatus[None] = anyio.TASK_STATUS_IGNORED,
+                ) -> None:
+                    async with http_transport.connect() as streams:  # type: ignore[union-attr]
+                        read_stream, write_stream = streams
+                        task_status.started()
+                        try:
+                            await self.app.run(
+                                read_stream,
+                                write_stream,
+                                self.app.create_initialization_options(),
+                                stateless=False,
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "Session %s crashed: %s",
+                                http_transport.mcp_session_id,  # type: ignore[union-attr]
+                                exc,
+                                exc_info=True,
+                            )
+                        finally:
+                            sid = http_transport.mcp_session_id  # type: ignore[union-attr]
+                            if (
+                                sid
+                                and sid in _instances
+                                and not http_transport.is_terminated  # type: ignore[union-attr]
+                            ):
+                                logger.info("Cleaning up crashed session %s", sid)
+                                del _instances[sid]
+
+                assert self._task_group is not None
+                await self._task_group.start(run_server)
+
+            # ── Handle request OUTSIDE the lock ─────────────────────────
+            # SSE GET streams block here for the connection lifetime;
+            # releasing the lock first lets other sessions be created.
+            await http_transport.handle_request(scope, receive, send)
+            return
+
+        # Unknown / expired session ID — 404
+        error_response = JSONRPCError(
+            jsonrpc="2.0",
+            id="server-error",
+            error=ErrorData(code=INVALID_REQUEST, message="Session not found"),
+        )
+        response = _Resp(
+            content=error_response.model_dump_json(by_alias=True, exclude_none=True),
+            status_code=HTTPStatus.NOT_FOUND,
+            media_type="application/json",
+        )
+        await response(scope, receive, send)
+
+    StreamableHTTPSessionManager._handle_stateful_request = _patched_handle_stateful  # type: ignore[assignment]
+    logger.debug("Patched StreamableHTTPSessionManager._handle_stateful_request — SSE lock fix")
+except Exception:
+    logger.warning(
+        "Could not patch StreamableHTTPSessionManager — SSE lock contention may occur",
+        exc_info=True,
+    )
 
 # ---------------------------------------------------------------------------
 # Lifespan
