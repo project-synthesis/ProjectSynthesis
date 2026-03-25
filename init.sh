@@ -50,7 +50,7 @@ _warn() { echo -e "  ${_YLW}!${_RST} $*"; }
 # Low-level utilities
 # ---------------------------------------------------------------------------
 
-_ensure_dirs() { mkdir -p "$DATA_DIR" "$PID_DIR" "$DATA_DIR/traces"; }
+_ensure_dirs() { mkdir -p "$DATA_DIR" "$PID_DIR" "$DATA_DIR/traces"; chmod 700 "$DATA_DIR"; }
 _pid_file()    { echo "$PID_DIR/$1.pid"; }
 
 _read_pid() {
@@ -108,12 +108,23 @@ _wait_port_free() {
     return 1
 }
 
+MAX_LOG_FILES=5
+
 _rotate_log() {
-    # Rotate if > 10 MB, keeping one generation.
-    local f="$1"
-    if [[ -f "$f" ]]; then
-        local sz; sz=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
-        (( sz > 10485760 )) && mv "$f" "${f}.1"
+    local log_file="$1"
+    local force="${2:-}"
+    if [ -f "$log_file" ]; then
+        local size
+        size=$(stat -c%s "$log_file" 2>/dev/null || stat -f%z "$log_file" 2>/dev/null || echo 0)
+        if [ "$size" -gt 10485760 ] || [ "$force" = "force" ]; then
+            mv "$log_file" "${log_file}.$(date +%Y%m%d_%H%M%S)"
+            # Prune old rotated logs beyond MAX_LOG_FILES
+            local count
+            count=$(ls -1 "${log_file}."* 2>/dev/null | wc -l)
+            if [ "$count" -gt "$MAX_LOG_FILES" ]; then
+                ls -1t "${log_file}."* 2>/dev/null | tail -n +$((MAX_LOG_FILES + 1)) | xargs rm -f 2>/dev/null
+            fi
+        fi
     fi
 }
 
@@ -163,7 +174,7 @@ _launch() {
     fi
     local port; port="$(_svc_port "$name")"
     _check_port_free "$port" "$name" || return 2
-    _rotate_log "$DATA_DIR/${name}.log"
+    _rotate_log "$DATA_DIR/${name}.log" force
 
     case "$name" in
         backend)
@@ -283,9 +294,9 @@ stop_service() {
     # Stale PID file — try pattern match as fallback
     if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
         case "$name" in
-            backend)  pid=$(pgrep -f "uvicorn app.main:asgi_app" 2>/dev/null | head -1) ;;
-            mcp)      pid=$(pgrep -f "python.*app\.mcp_server" 2>/dev/null | head -1) ;;
-            frontend) pid=$(pgrep -f "vite dev.*${FRONTEND_PORT}" 2>/dev/null | head -1) ;;
+            backend)  pid=$(pgrep -f -u "$(id -u)" "uvicorn app.main:asgi_app" 2>/dev/null | head -1) ;;
+            mcp)      pid=$(pgrep -f -u "$(id -u)" "python.*app\.mcp_server" 2>/dev/null | head -1) ;;
+            frontend) pid=$(pgrep -f -u "$(id -u)" "vite dev.*${FRONTEND_PORT}" 2>/dev/null | head -1) ;;
         esac
     fi
 

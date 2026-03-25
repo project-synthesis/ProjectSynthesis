@@ -54,9 +54,9 @@ RUN mkdir -p /app/data/traces /app/data/pids \
 # nginx needs to write to /var/log/nginx and /run
 RUN chown -R synthesis:synthesis /var/log/nginx /var/lib/nginx /run
 
-# Custom error page for when backend is down
+# Generic error page — no application name, version, or tech stack hints
 RUN mkdir -p /usr/share/nginx/html && \
-    echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Service Unavailable</title><style>body{background:#06060c;color:#e4e4f0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}div{text-align:center}h1{color:#00e5ff;font-size:14px;letter-spacing:0.1em;text-transform:uppercase}p{color:#8b8ba8;font-size:12px}</style></head><body><div><h1>Project Synthesis</h1><p>Service temporarily unavailable. Please try again shortly.</p></div></body></html>' > /usr/share/nginx/html/50x.html
+    echo '<!DOCTYPE html><html><head><title>Service Unavailable</title></head><body><h1>Service temporarily unavailable</h1><p>Please try again later.</p></body></html>' > /usr/share/nginx/html/50x.html
 
 EXPOSE 8080 8001
 VOLUME ["/app/data"]
