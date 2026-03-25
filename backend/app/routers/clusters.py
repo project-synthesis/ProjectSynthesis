@@ -107,9 +107,11 @@ async def get_cluster_stats(
 
 @router.get("/api/clusters/templates")
 async def get_cluster_templates(
+    request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
 ) -> ClusterListResponse:
     """List clusters with state=template, sorted by avg_score descending."""
     query = (

@@ -87,7 +87,7 @@ async def refine(
     if not opt:
         raise HTTPException(
             status_code=404,
-            detail="Optimization '%s' not found." % body.optimization_id,
+            detail="Optimization not found.",
         )
 
     logger.info("POST /api/refine: optimization_id=%s branch=%s", body.optimization_id, body.branch_id)
@@ -154,7 +154,7 @@ async def get_versions(
     if not opt:
         raise HTTPException(
             status_code=404,
-            detail="Optimization '%s' not found." % optimization_id,
+            detail="Optimization not found.",
         )
 
     ref_svc = RefinementService(db=db, provider=None, prompts_dir=PROMPTS_DIR)
@@ -198,7 +198,7 @@ async def rollback(
     if not opt:
         raise HTTPException(
             status_code=404,
-            detail="Optimization '%s' not found." % optimization_id,
+            detail="Optimization not found.",
         )
 
     ref_svc = RefinementService(db=db, provider=None, prompts_dir=PROMPTS_DIR)
