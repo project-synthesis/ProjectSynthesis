@@ -105,10 +105,12 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Markdown rendering** — optimized prompts rendered with brand-compliant markdown (headers, code blocks, lists, tables)
 - **Production diff viewer** — unified and split modes with word-level highlighting
 - **GitHub integration** — link a repo for codebase-aware optimization via semantic embedding search
-- **MCP server** — use from any MCP-compatible IDE (Claude Code, Cursor, etc.)
+- **MCP server** — use from any MCP-compatible IDE (VS Code, Claude Code, etc.)
 - **Passthrough mode** — IDE's own LLM does the optimization; server provides context + heuristic analysis + bias correction. Zero-LLM `HeuristicAnalyzer` classifies task type, domain, weaknesses, and recommends strategy without any LLM calls
-- **Force sampling / passthrough toggles** — pin the MCP pipeline to use the IDE's LLM (`force_sampling`) or always assemble for external processing (`force_passthrough`). Mutually exclusive, enforced server-side and client-side
-- **Sampling capability detection** — ASGI middleware detects MCP client sampling support on `initialize` handshake. Health endpoint surfaces `sampling_capable` with 30-minute staleness window. Frontend polls at fixed 60s interval for display only
+- **Force sampling / passthrough toggles** — pin the pipeline to use the IDE's LLM (`force_sampling`) or always assemble for external processing (`force_passthrough`). Mutually exclusive, enforced server-side and client-side
+- **Sampling capability detection** — ASGI middleware detects MCP client sampling support on `initialize` handshake. Cross-process disconnect detection reads session file before clearing state. Frontend receives real-time SSE events for tier changes
+- **Tier-aware UI** — entire UI adapts accent color to active routing tier: cyan for CLI/API, green for sampling, yellow for passthrough. Includes brand logo, activity bar, tabs, buttons, inputs, headings, and all interactive elements. Settings sections (Provider/Connection/Routing, System) morph content per tier
+- **Per-phase model display** — actual model IDs used by the IDE are captured per phase and displayed in real time (Navigator IDE Model section + Inspector metadata). Stored in `models_by_phase` DB column for audit trail
 - **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, .clinerules, CONVENTIONS.md for context injection. Monorepo-aware: `discover_project_dirs()` scans manifest-containing subdirectories with SHA256 deduplication
 - **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution. Dimension-specific weights prevent single-model bias. Divergence flags when LLM and heuristic disagree by >2.5 points
 - **Real-time events** — SSE-based event bus with toast notifications for file changes, MCP operations, and pipeline status
@@ -116,7 +118,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **3D taxonomy visualization** — Three.js interactive topology with LOD tiers (far/mid/near) based on persistence thresholds. Click-to-focus navigation, raycasting hover, billboard labels, force-directed collision resolution, Ctrl+F search, Q_system badge, and recluster controls
 - **Pattern suggestion on paste** — embeds pasted text, cosine-searches active clusters (≥0.72), suggests matching clusters with 1-click apply (50-char delta, 300ms debounce, 10s auto-dismiss). Applied patterns injected into optimizer context
 - **Bidirectional history–clusters navigation** — history items show intent labels and domain badges. Loading an optimization auto-selects its cluster in Inspector. Clicking a linked optimization in a cluster detail loads it in the editor. Live cluster link: background pattern extraction triggers automatic UI sync via SSE
-- **StatusBar breadcrumb** — shows `[domain] › intent_label` for the active optimization with domain color coding. Editor tabs use intent labels as titles
+- **StatusBar breadcrumb** — shows CLI/API/SAMPLING/PASSTHROUGH tier badge + `[domain] › intent_label` for the active optimization with domain color coding. Editor tabs use intent labels as titles
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation
 - **API key management** — set/update/remove via UI with Fernet encryption at rest
 - **Per-phase effort controls** — configure `low`/`medium`/`high`/`max` effort per pipeline phase (analyzer, optimizer, scorer) via Settings

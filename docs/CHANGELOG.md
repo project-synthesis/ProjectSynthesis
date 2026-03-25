@@ -4,34 +4,49 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.2 — 2026-03-25
+
 ### Added
-- Added "Model Hints" / "Effort Hints" headings with "// via IDE" annotation to Navigator in sampling mode
-- Added VIA MCP SAMPLING badge to Navigator Defaults section for active sampling tier
-- Added `TierBadge` component — displays effective execution tier (INTERNAL/SAMPLING/PASSTHROUGH) with color-coded badge and optional struck-through degradation label
-- Added intelligent auto-fallback: when Force IDE sampling is ON but MCP is idle, seamlessly uses internal provider with cyan informational notice instead of orange degradation warning
-- Added effort-to-priority mapping for MCP sampling — user effort preferences (low/medium/high/max) now transmitted as `intelligencePriority`/`speedPriority`/`costPriority` in `ModelPreferences`
-- Added shared `semantic_check()`, `apply_domain_gate()`, `resolve_effective_strategy()` helpers in `pipeline_constants.py` — both pipelines now use identical strategy resolution logic (DRY)
+- Added `TierBadge` component with CLI/API sub-tier labels for internal tier (shows "CLI" or "API" instead of generic "INTERNAL")
+- Added `models_by_phase` JSON column to Optimization model — persists per-phase model IDs for both internal and sampling pipelines
+- Added per-phase model ID capture in SSE events (`model` field on phase-complete status events)
+- Added `tierColor` and `tierColorRgb` getters to routing store — single source of truth for tier accent colors
+- Added `--tier-accent` and `--tier-accent-rgb` CSS custom properties at layout level, inherited by all components
+- Added tier-adaptive Provider/Connection/Routing section in Navigator (passthrough=Routing, sampling=Connection, internal=Provider)
+- Added tier-adaptive System section in Navigator (reduced rows for passthrough/sampling, full for internal)
+- Added IDE Model display section in Navigator for sampling tier — shows actual model IDs per phase in real time
+- Added `.data-value.neon-green` CSS utility class
+- Added shared `semantic_check()`, `apply_domain_gate()`, `resolve_effective_strategy()` helpers in `pipeline_constants.py`
 
 ### Changed
-- Removed advisory MCP `ModelPreferences`/`ModelHint` from sampling pipeline — IDE selects model freely; actual model captured per phase
-- Navigator shows actual model IDs used by IDE instead of hint dropdowns in sampling mode
-- Inspector displays per-phase model breakdown for sampling results
-- New `models_by_phase` JSON column persists per-phase model IDs for both internal and sampling pipelines
-- Updated PassthroughGuide feature matrix to reflect v0.3.1 capabilities: score phase now shows "Heuristic / Hybrid", codebase explore shows "Roots + index", and pattern injection is now marked available (✓) instead of unavailable
-- Expanded PassthroughGuide step 1 description to mention codebase context and applied patterns
-- Navigator MODELS section now morphs in-place to a CONTEXT section in passthrough mode, showing read-only indicators for heuristic analysis, codebase index status, auto-injected patterns, and an Adaptation toggle
-- Navigator EFFORT section now morphs in-place to a SCORING section in passthrough mode, showing read-only "heuristic" mode indicator
-- StatusBar now shows tier badge (INTERNAL/SAMPLING/PASSTHROUGH) instead of raw provider badge (CLI/API)
+- Removed advisory MCP `ModelPreferences`/`ModelHint` from sampling pipeline — IDE selects model freely; actual model captured per phase and displayed in UI
+- Total tier-aware accent branding across entire UI: SYNTHESIZE button, active tab underline, strategy list highlight, activity bar indicator, brand logo SVG, pattern suggestions, feedback buttons, refinement components, command palette, topology controls, score sparkline, markdown headings, global focus rings, selection highlight, and all action buttons adapt to tier color (cyan=CLI/API, green=sampling, yellow=passthrough)
+- Navigator section headings use unified `sub-heading--tier` class (replaces per-tier `sub-heading--sampling`/`sub-heading--passthrough` classes)
+- StatusBar shows CLI/API sub-tier badges instead of generic "INTERNAL" + separate "cli" text; version removed (displayed in System accordion)
+- API key input redesigned as inline data-row with `pref-input`/`pref-btn` classes matching dropdown density
+- SamplingGuide modal updated to remove hint/advisory language
+- PassthroughView interactive elements (COPY button, focus rings) now correctly use yellow instead of cyan
+- MCP disconnect detection reads `mcp_session.json` before disconnecting to detect cross-process activity the backend missed
+- CLAUDE.md sampling detection section updated — replaced stale "optimistic strategy" with accurate "capability trust model" description
+- RoutingManager: improved logging (session invalidation, stale capability recovery, disconnect checker fallback), type hints (`sync_from_event` signature), and docstrings (`_persist`, `RoutingState`)
+- DRY: `prefs.resolve_model()` calls captured once and reused in `pipeline.py` and `tools/analyze.py`
 - Replaced duplicated strategy resolution logic in `pipeline.py` and `sampling_pipeline.py` with shared helpers from `pipeline_constants.py`
-- MCP disconnect toast suppressed when a local provider is available (silent auto-fallback)
 
 ### Fixed
-- MCP session-WITH SSE reconnection not broadcasting routing state changes (activity throttle bypass)
-- Effort preferences silently ignored in MCP sampling mode — now mapped to MCP `ModelPreferences` priority triad
-- Degradation messages hardcoding "fell back to internal provider" when actual fallback was passthrough
+- False MCP disconnect after 5 minutes in cross-process setup — backend disconnect checker now reads session file for fresh activity before clearing sampling state
+- Missing `models_by_phase` in passthrough completion paths (REST save and MCP save_result)
+- Missing `models_by_phase` in analyze tool's internal provider path
+- PassthroughView COPY button and focus rings were incorrectly cyan (now yellow)
+- Stale Navigator tests for removed UI elements (Model Hints, Effort Hints, "// via IDE", passthrough-mode class, "SET KEY"/"REMOVE" labels, version display)
+- Activity throttle preventing routing state change broadcasts during MCP SSE reconnection
+- Degradation messages hardcoding fallback tier
 
 ### Removed
-- Removed deprecated `preparePassthrough()` API function and `PassthroughPrepareResult` type from frontend client (passthrough now handled inline via SSE)
+- Removed `ModelPreferences`, `ModelHint`, `_resolve_model_preferences()`, `_PHASE_PRESETS`, `_PREF_TO_MODEL`, `_EFFORT_PRIORITIES` from sampling pipeline (~95 lines)
+- Removed `.passthrough-mode` class from SYNTHESIZE button (tier accent handles all tiers)
+- Removed per-component `style:--tier-accent` bindings (6 components) — replaced by single layout-level propagation
+- Removed redundant version display from StatusBar (available in System accordion)
+- Removed deprecated `preparePassthrough()` API function and `PassthroughPrepareResult` type from frontend client
 
 ## v0.3.1 — 2026-03-24
 
