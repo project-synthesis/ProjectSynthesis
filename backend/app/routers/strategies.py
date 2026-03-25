@@ -4,8 +4,14 @@ Fully adaptive: strategies are discovered from disk. Adding/removing
 .md files in prompts/strategies/ is auto-detected.
 """
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+_MAX_STRATEGY_SIZE = 50_000
 
 from app.config import PROMPTS_DIR
 from app.services.strategy_loader import (
@@ -71,8 +77,9 @@ async def get_strategy(name: str) -> StrategyDetail:
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
+        logger.error("Failed to read strategy file '%s': %s", name, exc)
         raise HTTPException(
-            status_code=500, detail=f"Failed to read strategy file: {exc}",
+            status_code=500, detail="Failed to read strategy file.",
         ) from exc
     return StrategyDetail(name=name, content=content)
 
@@ -87,6 +94,9 @@ async def update_strategy(name: str, body: StrategyUpdate) -> StrategyUpdateResp
     path = _safe_strategy_path(name)
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+
+    if len(body.content) > _MAX_STRATEGY_SIZE:
+        raise HTTPException(status_code=413, detail="Strategy file exceeds 50KB limit.")
 
     # Validate frontmatter before writing
     meta, content_body = _parse_frontmatter(body.content)
@@ -113,8 +123,9 @@ async def update_strategy(name: str, body: StrategyUpdate) -> StrategyUpdateResp
     try:
         path.write_text(body.content, encoding="utf-8")
     except OSError as exc:
+        logger.error("Failed to write strategy file '%s': %s", name, exc)
         raise HTTPException(
-            status_code=500, detail="Failed to write strategy file: %s" % exc,
+            status_code=500, detail="Failed to save strategy.",
         ) from exc
 
     return StrategyUpdateResponse(

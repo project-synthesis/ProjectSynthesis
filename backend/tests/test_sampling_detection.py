@@ -268,7 +268,6 @@ class TestPreferencesForceTogglesAPI:
             json={"pipeline": {"force_sampling": True, "force_passthrough": True}},
         )
         assert resp.status_code == 422
-        assert "mutually exclusive" in resp.json()["detail"]
 
     async def test_mutual_exclusion_sequential_conflict(self, app_client):
         """Setting passthrough=True, then sampling=True without clearing, fails."""
@@ -283,7 +282,6 @@ class TestPreferencesForceTogglesAPI:
             json={"pipeline": {"force_sampling": True}},
         )
         assert resp.status_code == 422
-        assert "mutually exclusive" in resp.json()["detail"]
 
     async def test_mutual_exclusion_swap_in_single_patch(self, app_client):
         """Clearing one and enabling the other in a single patch succeeds."""

@@ -1,8 +1,8 @@
-"""Tests for security hardening (W1: cookies, W2: MCP auth)."""
+"""Tests for security hardening (W1: cookies, W2: MCP auth, W3: input validation)."""
 
 import asyncio
 import inspect
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -222,3 +222,80 @@ class TestMCPAuthMiddleware:
         send = AsyncMock()
         await middleware(scope, receive, send)
         app_mock.assert_called_once()
+
+
+class TestInputValidation:
+    """W3: Input validation & error handling."""
+
+    @pytest.mark.asyncio
+    async def test_preferences_rejects_unknown_keys(self, app_client):
+        """PATCH /api/preferences must reject unknown keys."""
+        resp = await app_client.patch("/api/preferences", json={"unknown_key": "value"})
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_feedback_comment_max_length(self, app_client):
+        """Feedback comment must not exceed 2000 chars."""
+        resp = await app_client.post("/api/feedback", json={
+            "optimization_id": "nonexistent",
+            "rating": "thumbs_up",
+            "comment": "x" * 2001,
+        })
+        assert resp.status_code == 422
+
+    def test_repo_name_format_validation(self):
+        """Repo full_name must match owner/repo pattern."""
+        import re
+        _REPO_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9._-]+$")
+        # Path traversal attempt must be rejected
+        assert not _REPO_NAME_RE.match("../../etc/passwd")
+        # Spaces must be rejected
+        assert not _REPO_NAME_RE.match("owner /repo")
+        # Valid names must pass
+        assert _REPO_NAME_RE.match("owner/repo")
+        assert _REPO_NAME_RE.match("my-org/my_repo.js")
+
+    @pytest.mark.asyncio
+    async def test_sort_by_rejects_invalid_column(self, app_client):
+        """sort_by must be from VALID_SORT_COLUMNS."""
+        resp = await app_client.get("/api/history?sort_by=;DROP TABLE")
+        assert resp.status_code == 422
+
+
+class TestSSESafety:
+    """W3g: SSE serialization safety."""
+
+    def test_sse_serialization_failure_returns_safe_error(self):
+        """format_sse must not raise on non-serializable data."""
+        from app.utils.sse import format_sse
+        result = format_sse("test", {"value": object()})
+        assert "error" in result
+        assert "Internal error" in result
+
+
+class TestXForwardedFor:
+    """W3h: X-Forwarded-For parsing hardening."""
+
+    def test_strips_whitespace_from_forwarded_ips(self):
+        from app.dependencies.rate_limit import RateLimit
+
+        request = MagicMock()
+        request.client.host = "127.0.0.1"
+        request.headers = {"x-forwarded-for": "  10.0.0.1 , 192.168.1.1  "}
+
+        with patch("app.config.settings") as mock_settings:
+            mock_settings.TRUSTED_PROXIES = "127.0.0.1"
+            ip = RateLimit._get_client_ip(request)
+        assert ip == "10.0.0.1"
+
+    def test_falls_back_on_invalid_ip(self):
+        from app.dependencies.rate_limit import RateLimit
+
+        request = MagicMock()
+        request.client.host = "127.0.0.1"
+        request.headers = {"x-forwarded-for": "not-an-ip, garbage"}
+
+        with patch("app.config.settings") as mock_settings:
+            mock_settings.TRUSTED_PROXIES = "127.0.0.1"
+            ip = RateLimit._get_client_ip(request)
+        assert ip == "127.0.0.1"

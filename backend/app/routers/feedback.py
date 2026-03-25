@@ -48,7 +48,7 @@ class FeedbackRequest(BaseModel):
         ..., pattern="^(thumbs_up|thumbs_down)$",
         description="Feedback rating: 'thumbs_up' or 'thumbs_down'.",
     )
-    comment: str | None = Field(default=None, description="Optional free-text comment.")
+    comment: str | None = Field(default=None, max_length=2000, description="Optional free-text comment.")
 
 
 @router.post("/feedback")
@@ -61,7 +61,8 @@ async def submit_feedback(
     try:
         fb = await svc.create_feedback(body.optimization_id, body.rating, body.comment)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        logger.warning("Feedback submission failed: %s", e)
+        raise HTTPException(status_code=404, detail="Optimization not found.")
     return FeedbackSubmitResponse(
         id=fb.id,
         optimization_id=fb.optimization_id,

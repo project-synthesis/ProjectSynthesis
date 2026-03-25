@@ -2,18 +2,24 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Feedback, OptimizationPattern
-from app.services.optimization_service import OptimizationService
+from app.services.optimization_service import VALID_SORT_COLUMNS, OptimizationService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["history"])
+
+
+def _validate_sort_by(sort_by: str = Query("created_at")) -> str:
+    if sort_by not in VALID_SORT_COLUMNS:
+        raise HTTPException(422, f"Invalid sort column. Must be one of: {', '.join(sorted(VALID_SORT_COLUMNS))}")
+    return sort_by
 
 
 class HistoryItem(BaseModel):
@@ -48,11 +54,7 @@ class HistoryResponse(BaseModel):
 async def get_history(
     offset: int = Query(0, ge=0, description="Pagination offset (items to skip)."),
     limit: int = Query(50, ge=1, le=100, description="Items per page (1-100)."),
-    sort_by: str = Query(
-        "created_at",
-        description="Sort column: 'created_at', 'task_type', 'strategy_used', "
-        "'overall_score', 'duration_ms', 'provider', or 'status'.",
-    ),
+    sort_by: str = Depends(_validate_sort_by),
     sort_order: str = Query("desc", pattern="^(asc|desc)$", description="Sort direction: 'asc' or 'desc'."),
     task_type: str | None = Query(None, description="Filter by task type (optional)."),
     status: str | None = Query(None, description="Filter by status (optional)."),

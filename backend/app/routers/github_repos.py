@@ -1,6 +1,7 @@
 """GitHub repo listing and linking endpoints."""
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -13,6 +14,8 @@ from app.routers.github_auth import _get_session_token
 from app.services.github_client import GitHubClient
 
 logger = logging.getLogger(__name__)
+
+_REPO_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9._-]+$")
 
 router = APIRouter(prefix="/api/github", tags=["github"])
 
@@ -71,6 +74,9 @@ async def link_repo(
 
     full_name = body.full_name
     branch = body.branch
+
+    if not _REPO_NAME_RE.match(full_name):
+        raise HTTPException(422, "Invalid repository name format. Expected 'owner/repo'.")
 
     # Fetch repo info to get default branch and language
     github_client = GitHubClient()
