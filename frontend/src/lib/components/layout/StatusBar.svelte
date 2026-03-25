@@ -12,17 +12,6 @@
   // Tab-aware result: use per-tab cached data when available, fall back to global forge state
   const activeResult = $derived(editorStore.activeResult ?? forgeStore.result);
 
-  // Provider is fed reactively from forgeStore (via health polls + SSE events)
-  const provider = $derived(forgeStore.provider);
-
-  // Short provider label for secondary display (e.g. "cli", "api")
-  const providerShort = $derived.by(() => {
-    if (!provider) return null;
-    const p = provider.toLowerCase();
-    if (p.includes('cli')) return 'cli';
-    if (p.includes('api') || p.includes('anthropic')) return 'api';
-    return null;
-  });
 
   // Cluster count derived from taxonomy stats (loaded by clustersStore.loadTree)
   const clusterCount = $derived(clustersStore.taxonomyStats?.nodes?.active ?? null);
@@ -53,10 +42,7 @@
     <div style="opacity: 0.8; margin-right: 2px;">
       <Logo size={14} variant="mark" />
     </div>
-    <TierBadge tier={routing.tier} degradedFrom={routing.isDegraded ? routing.requestedTier : null} />
-    {#if providerShort && routing.isInternal}
-      <span class="status-provider">{providerShort}</span>
-    {/if}
+    <TierBadge tier={routing.tier} provider={forgeStore.provider} degradedFrom={routing.isDegraded ? routing.requestedTier : null} />
     {#if forgeStore.mcpDisconnected && !routing.isDegraded && !routing.isAutoFallback}
       <span class="status-disconnected" title="MCP client disconnected">disconnected</span>
     {/if}
@@ -187,12 +173,6 @@
     white-space: nowrap;
   }
 
-  .status-provider {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--color-text-dim);
-    white-space: nowrap;
-  }
 
   .status-disconnected {
     font-family: var(--font-mono);

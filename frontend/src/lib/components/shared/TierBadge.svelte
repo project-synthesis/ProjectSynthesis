@@ -3,10 +3,23 @@
 
   interface Props {
     tier: EffectiveTier;
+    provider?: string | null;
     degradedFrom?: EffectiveTier | null;
   }
 
-  let { tier, degradedFrom = null }: Props = $props();
+  let { tier, provider = null, degradedFrom = null }: Props = $props();
+
+  /** Resolve display label — internal tier splits into CLI/API sub-types. */
+  const label = $derived.by(() => {
+    if (tier === 'internal' && provider) {
+      const p = provider.toLowerCase();
+      if (p.includes('cli')) return 'CLI';
+      if (p.includes('api') || p.includes('anthropic')) return 'API';
+    }
+    if (tier === 'internal') return 'INTERNAL';
+    if (tier === 'sampling') return 'SAMPLING';
+    return 'PASSTHROUGH';
+  });
 
   const TIER_LABELS: Record<EffectiveTier, string> = {
     internal: 'INTERNAL',
@@ -14,13 +27,12 @@
     passthrough: 'PASSTHROUGH',
   };
 
-  const label = $derived(TIER_LABELS[tier]);
   const degradedLabel = $derived(degradedFrom ? TIER_LABELS[degradedFrom] : null);
 
   const ariaLabel = $derived(
     degradedFrom
-      ? `Execution tier: ${tier} (degraded from ${degradedFrom})`
-      : `Execution tier: ${tier}`
+      ? `Execution tier: ${label} (degraded from ${degradedFrom})`
+      : `Execution tier: ${label}`
   );
 </script>
 
