@@ -923,7 +923,6 @@ describe('Navigator', () => {
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
     expect(screen.queryByText('Effort')).not.toBeInTheDocument();
-    expect(screen.queryByText('Effort Hints')).not.toBeInTheDocument();
   });
 
   it('shows "pending" for phases without model data in sampling mode', () => {

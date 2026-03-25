@@ -70,6 +70,10 @@ async def handle_analyze(
     loader = PromptLoader(PROMPTS_DIR)
     strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
 
+    # Resolve model IDs once for reuse in calls + persistence
+    analyzer_model = prefs.resolve_model("analyzer", prefs_snapshot)
+    scorer_model = prefs.resolve_model("scorer", prefs_snapshot)
+
     # --- Phase 1: Analyze ---
     system_prompt = loader.load("agent-guidance.md")
     analyze_msg = loader.render("analyze.md", {
@@ -79,7 +83,7 @@ async def handle_analyze(
 
     try:
         analysis: AnalysisResult = await provider.complete_parsed(
-            model=prefs.resolve_model("analyzer", prefs_snapshot),
+            model=analyzer_model,
             system_prompt=system_prompt,
             user_message=analyze_msg,
             output_format=AnalysisResult,
@@ -105,7 +109,7 @@ async def handle_analyze(
 
     try:
         score_result: ScoreResult = await provider.complete_parsed(
-            model=prefs.resolve_model("scorer", prefs_snapshot),
+            model=scorer_model,
             system_prompt=scoring_system,
             user_message=scorer_msg,
             output_format=ScoreResult,
@@ -167,7 +171,11 @@ async def handle_analyze(
             domain_raw=domain_raw,
             cluster_id=cluster_id,
             provider=provider.name,
-            model_used=prefs.resolve_model("analyzer", prefs_snapshot),
+            model_used=analyzer_model,
+            models_by_phase={
+                "analyze": analyzer_model,
+                "score": scorer_model,
+            },
             scoring_mode="baseline",
             status="analyzed",
             trace_id=trace_id,

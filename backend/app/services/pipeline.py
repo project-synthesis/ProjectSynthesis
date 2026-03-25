@@ -275,7 +275,7 @@ class PipelineOrchestrator:
                 system_prompt=system_prompt,
                 user_message=analyze_msg,
                 output_format=AnalysisResult,
-                model=prefs.resolve_model("analyzer", prefs_snapshot),
+                model=analyzer_model,
                 effort=prefs.get("pipeline.analyzer_effort", prefs_snapshot) or "low",
                 max_tokens=ANALYZE_MAX_TOKENS,
             )
@@ -291,7 +291,7 @@ class PipelineOrchestrator:
                     trace_id=trace_id, phase="analyze",
                     duration_ms=analyze_duration,
                     tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
-                    model=prefs.resolve_model("analyzer", prefs_snapshot), provider=provider.name,
+                    model=analyzer_model, provider=provider.name,
                     result={
                         "task_type": analysis.task_type,
                         "strategy": analysis.selected_strategy,
@@ -467,7 +467,7 @@ class PipelineOrchestrator:
                 system_prompt=system_prompt,
                 user_message=optimize_msg,
                 output_format=OptimizationResult,
-                model=prefs.resolve_model("optimizer", prefs_snapshot),
+                model=optimizer_model,
                 effort=prefs.get("pipeline.optimizer_effort", prefs_snapshot) or "high",
                 max_tokens=dynamic_max_tokens,
                 streaming=True,
@@ -487,7 +487,7 @@ class PipelineOrchestrator:
                     trace_id=trace_id, phase="optimize",
                     duration_ms=optimize_duration,
                     tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
-                    model=prefs.resolve_model("optimizer", prefs_snapshot), provider=provider.name,
+                    model=optimizer_model, provider=provider.name,
                     result={
                         "strategy_used": effective_strategy,
                         "effort": prefs.get("pipeline.optimizer_effort", prefs_snapshot) or "high",
@@ -535,7 +535,7 @@ class PipelineOrchestrator:
                     system_prompt=scoring_system,
                     user_message=scorer_msg,
                     output_format=ScoreResult,
-                    model=prefs.resolve_model("scorer", prefs_snapshot),
+                    model=scorer_model,
                     effort=prefs.get("pipeline.scorer_effort", prefs_snapshot) or "low",
                     max_tokens=SCORE_MAX_TOKENS,
                     cache_ttl="1h",
@@ -552,7 +552,7 @@ class PipelineOrchestrator:
                         trace_id=trace_id, phase="score",
                         duration_ms=score_duration,
                         tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
-                        model=prefs.resolve_model("scorer", prefs_snapshot), provider=provider.name,
+                        model=scorer_model, provider=provider.name,
                         result={"effort": prefs.get("pipeline.scorer_effort", prefs_snapshot) or "low"},
                     )
 
