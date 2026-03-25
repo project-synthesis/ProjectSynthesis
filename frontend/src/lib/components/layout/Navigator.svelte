@@ -737,32 +737,30 @@
                   </span>
                 </div>
               {/if}
-            </div>
-            <form class="api-key-form" onsubmit={(e: Event) => { e.preventDefault(); handleSetApiKey(); }} autocomplete="off">
-              <input type="text" name="username" value="anthropic-api-key" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true" />
-              <label for="api-key-input" class="sr-only">Anthropic API key</label>
-              <input
-                id="api-key-input"
-                class="api-key-input"
-                type="password"
-                name="password"
-                placeholder="sk-..."
-                autocomplete="new-password"
-                bind:value={apiKeyInput}
-              />
-              <div class="api-key-actions">
+              <form class="data-row" onsubmit={(e: Event) => { e.preventDefault(); handleSetApiKey(); }} autocomplete="off">
+                <input type="text" name="username" value="anthropic-api-key" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true" />
+                <label for="api-key-input" class="sr-only">Anthropic API key</label>
+                <input
+                  id="api-key-input"
+                  class="pref-input"
+                  type="password"
+                  name="password"
+                  placeholder="sk-..."
+                  autocomplete="new-password"
+                  bind:value={apiKeyInput}
+                />
                 <button
-                  class="action-btn"
+                  class="pref-btn"
                   onclick={handleSetApiKey}
                   disabled={apiKeySaving || !apiKeyInput.trim()}
-                >
-                  {apiKeySaving ? 'SAVING...' : 'SET KEY'}
-                </button>
+                  type="button"
+                >{apiKeySaving ? '...' : 'SET'}</button>
                 {#if apiKeyStatus?.configured}
                   <button
-                    class="action-btn"
+                    class="pref-btn"
+                    class:pref-btn--danger={confirmingDelete}
                     disabled={apiKeyDeleting}
-                    style={confirmingDelete ? 'color: var(--color-neon-red); border-color: var(--color-neon-red);' : ''}
+                    type="button"
                     onclick={() => {
                       if (confirmingDelete) {
                         handleDeleteApiKey();
@@ -771,15 +769,13 @@
                         confirmDeleteTimer = setTimeout(() => { confirmingDelete = false; confirmDeleteTimer = null; }, 3000);
                       }
                     }}
-                  >
-                    {apiKeyDeleting ? 'REMOVING...' : confirmingDelete ? 'CONFIRM?' : 'REMOVE'}
-                  </button>
+                  >{apiKeyDeleting ? '...' : confirmingDelete ? 'OK?' : 'DEL'}</button>
                 {/if}
-              </div>
-            </form>
-            {#if apiKeyError}
-              <p class="empty-note" style="color: var(--color-neon-red);">{apiKeyError}</p>
-            {/if}
+              </form>
+              {#if apiKeyError}
+                <p class="empty-note" style="color: var(--color-neon-red); padding: 0 4px;">{apiKeyError}</p>
+              {/if}
+            </div>
           {/if}
         </div>
 
@@ -1140,44 +1136,59 @@
 
 
 
-  /* ---- API Key form ---- */
-  .api-key-form {
-    padding: 0 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .api-key-input {
-    width: 100%;
+  /* ---- Inline input (API key) — matches pref-select exactly ---- */
+  .pref-input {
+    flex: 1;
+    min-width: 0;
     height: 20px;
-    padding: 0 6px;
-    font-size: 11px;
+    padding: 0 4px;
     font-family: var(--font-mono);
-    color: var(--color-text-primary);
-    background: var(--color-bg-primary);
+    font-size: 11px;
+    background: var(--color-bg-input);
     border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-primary);
     outline: none;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    appearance: none;
+    -webkit-appearance: none;
   }
 
-  .api-key-input:focus {
-    border-color: var(--color-border-accent);
+  .pref-input:focus {
+    border-color: rgba(0, 229, 255, 0.3);
   }
 
-  .api-key-input::placeholder {
+  .pref-input::placeholder {
     color: var(--color-text-dim);
   }
 
-  .api-key-actions {
-    display: flex;
-    gap: 4px;
+  /* ---- Inline button (SET/DEL) — matches pref-select density ---- */
+  .pref-btn {
+    height: 20px;
+    padding: 0 6px;
+    background: var(--color-bg-input);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 18px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .api-key-actions .action-btn {
-    flex: 1;
-    margin: 0;
-    width: auto;
+  .pref-btn:hover {
+    border-color: var(--color-border-accent);
+    color: var(--color-text-primary);
+  }
+
+  .pref-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .pref-btn--danger {
+    color: var(--color-neon-red);
+    border-color: rgba(255, 51, 102, 0.3);
   }
 
   /* ---- Preference selects ---- */
