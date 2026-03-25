@@ -1458,8 +1458,8 @@ class TestValidDomainsConstant:
 
     def test_router_and_tools_use_same_constant(self):
         """Both optimize router and save_result tool import from pipeline_constants."""
-        from app.routers.optimize import VALID_DOMAINS as router_domains
-        from app.services.pipeline_constants import VALID_DOMAINS as canonical
-        from app.tools.save_result import VALID_DOMAINS as tool_domains
-        assert router_domains is canonical
-        assert tool_domains is canonical
+        from app.routers.optimize import VALID_DOMAINS as ROUTER_DOMAINS
+        from app.services.pipeline_constants import VALID_DOMAINS as CANONICAL
+        from app.tools.save_result import VALID_DOMAINS as TOOL_DOMAINS
+        assert ROUTER_DOMAINS is CANONICAL
+        assert TOOL_DOMAINS is CANONICAL
