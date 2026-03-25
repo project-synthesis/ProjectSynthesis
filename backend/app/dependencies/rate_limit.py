@@ -41,10 +41,17 @@ class RateLimit:
 
     @staticmethod
     def _get_client_ip(request: Request) -> str:
+        import ipaddress
         from app.config import settings
 
         client_ip = request.client.host if request.client else "unknown"
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded and client_ip in settings.TRUSTED_PROXIES:
-            return forwarded.split(",")[0].strip()
+            candidate = forwarded.split(",")[0].strip()
+            try:
+                ipaddress.ip_address(candidate)
+                return candidate
+            except ValueError:
+                logger.warning("Invalid IP in X-Forwarded-For: %s", candidate)
+                return client_ip
         return client_ip

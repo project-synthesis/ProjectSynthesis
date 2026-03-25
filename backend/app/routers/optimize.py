@@ -207,7 +207,7 @@ async def get_optimization(
     if not opt:
         raise HTTPException(
             status_code=404,
-            detail="Optimization with trace_id '%s' not found." % trace_id,
+            detail="Optimization not found.",
         )
 
     cluster_id = await _get_cluster_id(db, opt.id)

@@ -103,8 +103,8 @@ async def github_callback(
         error_desc = data.get("error_description", "unknown error")
         logger.warning("GitHub OAuth token exchange failed: %s", error_desc)
         raise HTTPException(
-            400,
-            "GitHub OAuth token exchange failed: %s. Try logging in again." % error_desc,
+            status_code=400,
+            detail="Authentication failed. Please try again.",
         )
 
     github_client = GitHubClient()

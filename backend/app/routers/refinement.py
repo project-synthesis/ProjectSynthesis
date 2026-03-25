@@ -209,7 +209,8 @@ async def rollback(
         # NoResultFound, ValueError, LookupError → 404; others → 400
         from sqlalchemy.exc import NoResultFound
         status = 404 if isinstance(exc, (ValueError, LookupError, NoResultFound)) else 400
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
+        logger.warning("Rollback failed: %s", exc)
+        raise HTTPException(status_code=status, detail="Rollback failed.") from exc
 
     return {
         "id": new_branch.id,
