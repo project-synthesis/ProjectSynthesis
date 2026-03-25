@@ -137,4 +137,16 @@ export const routing = {
     if (!_degradationReason) return null;
     return degradationMsg(_degradationReason);
   },
+  /** CSS variable for the tier accent color. */
+  get tierColor(): string {
+    if (_tier === 'sampling') return 'var(--color-neon-green)';
+    if (_tier === 'passthrough') return 'var(--color-neon-yellow)';
+    return 'var(--color-neon-cyan)';
+  },
+  /** Raw RGB triplet for rgba() usage (hover backgrounds, focus rings). */
+  get tierColorRgb(): string {
+    if (_tier === 'sampling') return '34, 255, 136';
+    if (_tier === 'passthrough') return '251, 191, 36';
+    return '0, 229, 255';
+  },
 };

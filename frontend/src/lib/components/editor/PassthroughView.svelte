@@ -245,8 +245,8 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: var(--color-neon-cyan);
-    border: 1px solid var(--color-neon-cyan);
+    color: var(--color-neon-yellow);
+    border: 1px solid var(--color-neon-yellow);
     background: transparent;
     padding: 0 6px;
     height: 16px;
@@ -257,7 +257,7 @@
   }
 
   .copy-btn:hover:not(:disabled) {
-    background: rgba(0, 229, 255, 0.06);
+    background: rgba(251, 191, 36, 0.06);
     transform: translateY(-1px);
   }
 
@@ -327,7 +327,7 @@
   }
 
   .result-textarea:focus {
-    border-color: rgba(0, 229, 255, 0.3);
+    border-color: rgba(251, 191, 36, 0.3);
   }
 
   .save-bar {
@@ -359,7 +359,7 @@
   }
 
   .summary-input:focus {
-    border-color: rgba(0, 229, 255, 0.3);
+    border-color: rgba(251, 191, 36, 0.3);
   }
 
   .save-btn {

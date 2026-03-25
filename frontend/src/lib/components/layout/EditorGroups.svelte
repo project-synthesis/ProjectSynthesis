@@ -1,6 +1,7 @@
 <script lang="ts">
   import { editorStore } from '$lib/stores/editor.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
+  import { routing } from '$lib/stores/routing.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import PromptEdit from '$lib/components/editor/PromptEdit.svelte';
   import ForgeArtifact from '$lib/components/editor/ForgeArtifact.svelte';
@@ -47,6 +48,7 @@
     class="tab-bar"
     role="tablist"
     aria-label="Editor tabs"
+    style:--tier-accent={routing.tierColor}
     onwheel={(e) => {
       if (e.deltaY !== 0) {
         e.currentTarget.scrollLeft += e.deltaY;
@@ -216,12 +218,12 @@
   .tab.active {
     color: var(--color-text-primary);
     background: var(--color-bg-primary);
-    border-bottom-color: var(--color-neon-cyan);
+    border-bottom-color: var(--tier-accent, var(--color-neon-cyan));
   }
 
   .tab.active:hover {
     background: var(--color-bg-primary);
-    border-bottom-color: var(--color-neon-cyan);
+    border-bottom-color: var(--tier-accent, var(--color-neon-cyan));
   }
 
   .tab-title {

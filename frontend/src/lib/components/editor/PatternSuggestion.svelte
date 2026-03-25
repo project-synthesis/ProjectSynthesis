@@ -1,6 +1,7 @@
 <script lang="ts">
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { formatScore } from '$lib/utils/formatting';
+  import { routing } from '$lib/stores/routing.svelte';
 
   interface Props {
     onApply: (patterns: string[]) => void;
@@ -20,7 +21,7 @@
 
 {#if clustersStore.suggestionVisible && clustersStore.suggestion}
   {@const match = clustersStore.suggestion}
-  <div class="suggestion-banner" role="alert">
+  <div class="suggestion-banner" role="alert" style:--tier-accent={routing.tierColor}>
     <div class="suggestion-content">
       <div class="suggestion-header">
         <span class="suggestion-icon">&#x27E1;</span>
@@ -71,12 +72,12 @@
   }
 
   .suggestion-icon {
-    color: var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
     font-size: 14px;
   }
 
   .suggestion-label strong {
-    color: var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
   }
 
   .suggestion-meta {
@@ -111,12 +112,12 @@
   }
 
   .action-btn--primary {
-    color: var(--color-neon-cyan);
-    border-color: var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
+    border-color: var(--tier-accent, var(--color-neon-cyan));
   }
 
   .action-btn--primary:hover {
-    background: color-mix(in srgb, var(--color-neon-cyan) 8%, transparent);
+    background: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 8%, transparent);
   }
 
 

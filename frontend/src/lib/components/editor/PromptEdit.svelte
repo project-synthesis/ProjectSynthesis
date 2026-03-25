@@ -2,6 +2,7 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { routing } from '$lib/stores/routing.svelte';
   import { getStrategies } from '$lib/api/client';
   import PatternSuggestion from './PatternSuggestion.svelte';
   import { getPhaseLabel } from '$lib/utils/dimensions';
@@ -126,7 +127,7 @@
   </div>
 
   <!-- Action bar (bottom — strategy select + phase label + synthesize button) -->
-  <div class="action-bar">
+  <div class="action-bar" style:--tier-accent={routing.tierColor} style:--tier-accent-rgb={routing.tierColorRgb}>
     <span class="action-label">STRATEGY</span>
     <select
       class="strategy-select"
@@ -146,7 +147,6 @@
 
     <button
       class="synthesize-btn"
-      class:passthrough-mode={isPassthroughMode}
       disabled={isSynthesizing}
       onclick={handleSynthesize}
     >
@@ -225,7 +225,7 @@
   }
 
   .strategy-select:focus {
-    border-color: rgba(0, 229, 255, 0.3);
+    border-color: rgba(var(--tier-accent-rgb, 0, 229, 255), 0.3);
   }
 
   .strategy-select option {
@@ -240,7 +240,7 @@
   .phase-label {
     font-size: 10px;
     font-family: var(--font-mono);
-    color: var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
   }
 
   .synthesize-btn {
@@ -249,8 +249,8 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: var(--color-neon-cyan);
-    border: 1px solid var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
+    border: 1px solid var(--tier-accent, var(--color-neon-cyan));
     background: transparent;
     padding: 0 8px;
     height: 20px;
@@ -262,7 +262,7 @@
 
   .synthesize-btn:hover:not(:disabled) {
     transform: translateY(-1px);
-    background: rgba(0, 229, 255, 0.06);
+    background: rgba(var(--tier-accent-rgb, 0, 229, 255), 0.06);
   }
 
   .synthesize-btn:active:not(:disabled) {
@@ -272,14 +272,5 @@
   .synthesize-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
-  }
-
-  .synthesize-btn.passthrough-mode {
-    color: var(--color-neon-yellow);
-    border-color: var(--color-neon-yellow);
-  }
-
-  .synthesize-btn.passthrough-mode:hover:not(:disabled) {
-    background: rgba(251, 191, 36, 0.06);
   }
 </style>
