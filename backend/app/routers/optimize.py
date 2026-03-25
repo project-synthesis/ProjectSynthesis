@@ -486,6 +486,7 @@ async def passthrough_save(
     opt.scoring_mode = scoring_mode
     opt.status = "completed"
     opt.model_used = body.model or "external"
+    opt.models_by_phase = {"optimize": body.model or "external"}
     await db.commit()
     await db.refresh(opt)
 

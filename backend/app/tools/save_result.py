@@ -181,6 +181,7 @@ async def handle_save_result(
             opt.original_scores = original_scores
             opt.score_deltas = deltas
             opt.model_used = model or "external"
+            opt.models_by_phase = {"optimize": model or "external"}
             opt.scoring_mode = scoring_mode
             opt.status = "completed"
             if context_snapshot:
@@ -206,6 +207,7 @@ async def handle_save_result(
                 overall_score=overall,
                 provider="mcp_passthrough",
                 model_used=model or "external",
+                models_by_phase={"optimize": model or "external"},
                 scoring_mode=scoring_mode,
                 status="completed",
                 trace_id=trace_id,
