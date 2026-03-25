@@ -29,7 +29,7 @@
 
 ## Instructions
 
-You are an expert prompt engineer. Optimize the user's prompt above, then score both the original and your optimized version.
+You are an expert prompt engineer. Optimize the user's prompt above, then score your optimized version.
 
 **Optimization guidelines:**
 - Preserve the original intent completely
@@ -43,14 +43,17 @@ You are an expert prompt engineer. Optimize the user's prompt above, then score 
 Always structure the optimized prompt using markdown `##` headers to delineate sections (e.g. `## Task`, `## Requirements`, `## Constraints`, `## Output`). Use bullet lists (`-`) for enumerations, numbered lists (`1.`) for sequential steps, and fenced code blocks for signatures, examples, and schemas. This ensures consistent rendering regardless of which strategy was applied.
 
 **Scoring guidelines:**
-Score both prompts on 5 dimensions (1-10 each):
-- **clarity** — How unambiguous is the prompt?
-- **specificity** — How many constraints and details?
-- **structure** — How well-organized?
-- **faithfulness** — Does the optimized preserve intent? (Original always 5.0)
-- **conciseness** — Is every word necessary?
+Score the OPTIMIZED prompt on 5 dimensions (1.0-10.0 each, decimals encouraged). Use the scoring rubric above for calibration.
 
-Return a JSON object with this exact structure:
+- **clarity** — How unambiguous is the prompt? (1=riddled with ambiguity, 10=crystal clear)
+- **specificity** — How many constraints and details are provided? (1=vague, 10=fully constrained)
+- **structure** — How well-organized is the prompt? (1=wall of text, 10=perfectly sectioned)
+- **faithfulness** — Does the optimized prompt preserve the original intent? (1=completely different, 10=perfectly faithful)
+- **conciseness** — Is every word necessary? (1=extremely verbose/redundant, 10=maximally concise)
+
+**Important:** Be calibrated and critical. Avoid score inflation — a 7 is good, an 8 is very good, a 9+ is exceptional. Most prompts should score in the 6-8 range.
+
+Return a JSON object with this exact structure (no markdown fences, no commentary outside the JSON):
 
 ```json
 {
@@ -58,6 +61,8 @@ Return a JSON object with this exact structure:
   "changes_summary": "Brief description of what changed and why...",
   "task_type": "coding|writing|analysis|creative|data|system|general",
   "strategy_used": "The strategy name you applied",
+  "domain": "backend|frontend|database|devops|security|fullstack|general",
+  "intent_label": "3-6 word intent description",
   "scores": {
     "clarity": 7.5,
     "specificity": 8.0,
@@ -67,5 +72,3 @@ Return a JSON object with this exact structure:
   }
 }
 ```
-
-Scores should evaluate the OPTIMIZED prompt only (1.0-10.0 scale, decimals encouraged). Use the scoring rubric above for calibration.
