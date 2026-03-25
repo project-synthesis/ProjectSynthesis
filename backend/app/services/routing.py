@@ -63,9 +63,13 @@ logger = logging.getLogger(__name__)
 class RoutingState:
     """Snapshot of the server's capability state at the time of a request.
 
+    Note: ``provider`` and ``provider_name`` are set at startup via
+    ``set_provider()`` and never persisted to ``mcp_session.json``.
+    They live only in memory and are re-detected on each restart.
+
     Attributes:
         provider: The detected LLM provider instance, or None.
-        provider_name: Human-readable provider name (e.g. "claude-cli").
+        provider_name: Human-readable provider name (e.g. "claude_cli").
         sampling_capable: Whether the MCP client supports sampling.
             ``None`` means unknown or stale — treated as ``False``.
         mcp_connected: Whether an MCP client is currently connected.
@@ -315,12 +319,17 @@ class RoutingManager:
         """
         if self._state.sampling_capable is None and not self._state.mcp_connected:
             return  # Already invalidated — avoid duplicate events
+        old_sampling = self._state.sampling_capable
+        old_connected = self._state.mcp_connected
         self._update_state(sampling_capable=None, mcp_connected=False)
         self._persist()
-        logger.info("routing.session_invalidated")
+        logger.info(
+            "routing.session_invalidated old_sampling=%s old_connected=%s",
+            old_sampling, old_connected,
+        )
         self._broadcast_state_change("session_invalidated")
 
-    def sync_from_event(self, data: dict) -> None:
+    def sync_from_event(self, data: RoutingStatePayload | dict) -> None:
         """Update state from a cross-process ``routing_state_changed`` event.
 
         Used by the FastAPI backend to keep its own RoutingManager in sync
@@ -330,6 +339,13 @@ class RoutingManager:
         Uses a sentinel to distinguish "key missing" from ``None`` — the
         ``sampling_capable`` field is legitimately ``None`` after session
         invalidation, and we must sync that.
+
+        Notes:
+            - ``mcp_connected=None`` is coerced to ``False`` (clients always
+              send an explicit bool or omit the field).
+            - ``last_activity`` is only set when ``mcp_connected=True``
+              (connecting), not when disconnecting — this ensures the
+              disconnect checker can detect subsequent staleness.
         """
         _missing = object()
         mcp_connected = data.get("mcp_connected", _missing)
@@ -449,6 +465,11 @@ class RoutingManager:
                                         mcp_connected=True,
                                     )
                                     continue
+                        else:
+                            logger.debug(
+                                "routing.disconnect_check no session file — "
+                                "using in-memory staleness only",
+                            )
                         logger.info(
                             "routing.disconnect activity_stale=%.0fs threshold=%ds",
                             elapsed, MCP_ACTIVITY_STALENESS_SECONDS,
@@ -482,7 +503,10 @@ class RoutingManager:
         """Write-through to ``mcp_session.json`` for restart recovery.
 
         Structurally gated: only executes when ``is_mcp_process=True``
-        (the MCP server is the sole writer per spec).
+        (the MCP server is the sole writer per spec).  On the FastAPI
+        backend (``is_mcp_process=False``), this is a silent no-op —
+        the backend relies on cross-process events and session file
+        reads instead of writing its own state.
         """
         if self._is_mcp_process and self._session_file:
             try:
@@ -552,6 +576,7 @@ class RoutingManager:
             # Apply staleness checks
             sampling = data.get("sampling_capable", False)
             if not self._session_file.is_capability_fresh(data):
+                logger.info("routing.recovery capability stale — discarding sampling_capable")
                 sampling = None  # Stale → unknown
 
             connected = not self._session_file.detect_disconnect(data)
