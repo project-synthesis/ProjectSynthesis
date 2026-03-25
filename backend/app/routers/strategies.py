@@ -9,10 +9,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
-
-_MAX_STRATEGY_SIZE = 50_000
-
 from app.config import PROMPTS_DIR, settings
 from app.dependencies.rate_limit import RateLimit
 from app.services.strategy_loader import (
@@ -20,6 +16,10 @@ from app.services.strategy_loader import (
     _parse_frontmatter,
     validate_frontmatter,
 )
+
+logger = logging.getLogger(__name__)
+
+_MAX_STRATEGY_SIZE = 50_000
 
 router = APIRouter(prefix="/api", tags=["strategies"])
 

@@ -124,7 +124,8 @@ class Settings(BaseSettings):
         default="http://localhost:5199", description="Frontend origin URL for CORS.",
     )
     DEVELOPMENT_MODE: bool = Field(
-        default=False, description="Enable development mode (localhost CORS, relaxed cookie security). NOT FastAPI debug mode.",
+        default=False,
+        description="Enable development mode (localhost CORS, relaxed cookie security).",
     )
 
     # --- MCP Auth ---

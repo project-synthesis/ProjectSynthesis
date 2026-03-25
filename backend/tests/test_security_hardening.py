@@ -1,6 +1,5 @@
 """Tests for security hardening (W1: cookies, W2: MCP auth, W3: input validation)."""
 
-import asyncio
 import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -64,6 +63,7 @@ class TestSessionCookieMaxAge:
     def test_session_max_age_is_14_days(self):
         """Session cookie must use max_age=86400*14."""
         import inspect
+
         from app.routers import github_auth
 
         source = inspect.getsource(github_auth.github_callback)
@@ -246,14 +246,14 @@ class TestInputValidation:
     def test_repo_name_format_validation(self):
         """Repo full_name must match owner/repo pattern."""
         import re
-        _REPO_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9._-]+$")
+        repo_name_re = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9._-]+$")
         # Path traversal attempt must be rejected
-        assert not _REPO_NAME_RE.match("../../etc/passwd")
+        assert not repo_name_re.match("../../etc/passwd")
         # Spaces must be rejected
-        assert not _REPO_NAME_RE.match("owner /repo")
+        assert not repo_name_re.match("owner /repo")
         # Valid names must pass
-        assert _REPO_NAME_RE.match("owner/repo")
-        assert _REPO_NAME_RE.match("my-org/my_repo.js")
+        assert repo_name_re.match("owner/repo")
+        assert repo_name_re.match("my-org/my_repo.js")
 
     @pytest.mark.asyncio
     async def test_sort_by_rejects_invalid_column(self, app_client):
@@ -320,6 +320,7 @@ class TestCORSHardening:
     def test_dev_mode_gates_localhost_origin(self):
         """localhost:5199 CORS origin should only be added in DEVELOPMENT_MODE."""
         import inspect
+
         from app import main as main_mod
 
         source = inspect.getsource(main_mod)

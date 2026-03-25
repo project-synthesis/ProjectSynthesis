@@ -8,14 +8,13 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
-
-from app.config import settings
-from app.dependencies.rate_limit import RateLimit
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
+from app.dependencies.rate_limit import RateLimit
 from app.models import MetaPattern, Optimization, OptimizationPattern, PromptCluster
 from app.schemas.clusters import (
     ClusterDetail,

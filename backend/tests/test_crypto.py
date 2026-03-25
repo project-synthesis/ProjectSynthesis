@@ -48,7 +48,7 @@ class TestCryptoUtility:
         assert new_fernet.decrypt(persisted["data"]) == b"my-api-key"
 
     def test_decrypt_with_migration_new_kdf_first(self):
-        from app.utils.crypto import derive_fernet, decrypt_with_migration
+        from app.utils.crypto import decrypt_with_migration, derive_fernet
 
         secret = "test-secret"
         context = "ctx-v1"

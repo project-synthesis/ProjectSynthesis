@@ -4,13 +4,33 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
-### Changed
-- Replaced SHA256 Fernet key derivation with PBKDF2-SHA256 (600K iterations) and context-specific salts (ADR-002)
-- Added transparent legacy credential migration via `decrypt_with_migration()`
-- Extended API key format validation to require minimum 40 characters
-
 ### Added
+- Added environment-gated MCP server authentication via bearer token (ADR-001)
+- Added PBKDF2-SHA256 key derivation with context-specific salts (ADR-002)
+- Added structured audit logging for sensitive operations (AuditLog model + service)
+- Added Architecture Decision Record (ADR) directory at `docs/adr/`
+- Added `DEVELOPMENT_MODE` config field for environment-gated security controls
+- Added rate limiting on `/api/health`, `/api/settings`, `/api/clusters/{id}`, `/api/strategies`
+- Added input validation: preferences schema, feedback comment limit, strategy file size cap, repo name format, sort column validator
 - Added shared `backend/app/utils/crypto.py` with `derive_fernet()` and `decrypt_with_migration()`
+
+### Changed
+- Hardened cookie security: SameSite=Lax, environment-gated Secure flag, /api path scope, 14-day session lifetime
+- Restricted CORS to explicit method/header allowlists
+- Sanitized error messages across all routers (no exception detail leakage)
+- Validated X-Forwarded-For IPs via `ipaddress` module
+- Hardened SSE `format_sse()` to handle serialization failures gracefully
+- Migrated Fernet encryption from SHA256 to PBKDF2 with transparent legacy fallback
+- Extended API key validation to length check (>=40 chars)
+- Pinned all Python and frontend dependencies to exact versions (ADR-003)
+
+### Fixed
+- Added `wss://` to CSP for secure WebSocket connections
+- Enabled HSTS header in nginx (conditional on TLS)
+- Tightened data directory permissions to 0700
+- Scoped `init.sh` process discovery to current user
+- Genericized nginx 50x error page (no branding/version leakage)
+- Fixed logout cookie deletion to match path-scoped session cookie
 
 ## v0.3.2 — 2026-03-25
 

@@ -1,7 +1,8 @@
 """Security hardening tests — PR 3: audit logging."""
 
-import pytest
 from datetime import datetime, timedelta, timezone
+
+import pytest
 from sqlalchemy import select, update
 
 
@@ -10,8 +11,8 @@ class TestAuditLogger:
 
     @pytest.mark.asyncio
     async def test_log_event_writes_to_db(self, db_session):
-        from app.services.audit_logger import log_event
         from app.models import AuditLog
+        from app.services.audit_logger import log_event
 
         await log_event(
             db=db_session,
@@ -29,8 +30,8 @@ class TestAuditLogger:
 
     @pytest.mark.asyncio
     async def test_prune_deletes_old_entries(self, db_session):
-        from app.services.audit_logger import log_event, prune_audit_log
         from app.models import AuditLog
+        from app.services.audit_logger import log_event, prune_audit_log
 
         await log_event(db=db_session, action="test", actor_ip="1.1.1.1", outcome="success")
 

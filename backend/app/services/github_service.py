@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Callable
 
-from app.utils.crypto import derive_fernet, decrypt_with_migration
+from app.utils.crypto import decrypt_with_migration, derive_fernet
 
 logger = logging.getLogger(__name__)
 

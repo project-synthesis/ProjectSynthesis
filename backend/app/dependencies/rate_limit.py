@@ -42,6 +42,7 @@ class RateLimit:
     @staticmethod
     def _get_client_ip(request: Request) -> str:
         import ipaddress
+
         from app.config import settings
 
         client_ip = request.client.host if request.client else "unknown"

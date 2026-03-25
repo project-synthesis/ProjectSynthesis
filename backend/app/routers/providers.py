@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.config import DATA_DIR, settings
-from app.utils.crypto import derive_fernet, decrypt_with_migration
+from app.utils.crypto import decrypt_with_migration, derive_fernet
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["providers"])
