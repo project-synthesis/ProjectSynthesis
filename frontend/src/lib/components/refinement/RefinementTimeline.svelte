@@ -144,7 +144,7 @@
   .status-indicator {
     font-size: 10px;
     font-family: var(--font-mono);
-    color: var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
     margin-left: auto;
   }
 

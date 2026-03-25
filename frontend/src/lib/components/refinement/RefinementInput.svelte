@@ -67,7 +67,7 @@
   }
 
   .input-field:focus {
-    border-color: var(--color-neon-cyan);
+    border-color: var(--tier-accent, var(--color-neon-cyan));
   }
 
   .input-field:disabled {
@@ -80,8 +80,8 @@
     padding: 0 8px;
     line-height: 18px;
     background: transparent;
-    border: 1px solid var(--color-neon-cyan);
-    color: var(--color-neon-cyan);
+    border: 1px solid var(--tier-accent, var(--color-neon-cyan));
+    color: var(--tier-accent, var(--color-neon-cyan));
     font-family: var(--font-display);
     font-size: 10px;
     text-transform: uppercase;
@@ -94,7 +94,7 @@
   }
 
   .submit-btn:hover:not(:disabled) {
-    background: rgba(0, 229, 255, 0.08);
+    background: rgba(var(--tier-accent-rgb, 0, 229, 255), 0.08);
   }
 
   .submit-btn:disabled {

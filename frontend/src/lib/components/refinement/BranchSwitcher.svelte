@@ -71,7 +71,7 @@
   }
 
   .nav-btn:hover:not(:disabled) {
-    border-color: var(--color-neon-cyan);
+    border-color: var(--tier-accent, var(--color-neon-cyan));
     color: var(--color-text-primary);
   }
 

@@ -109,8 +109,8 @@
   }
 
   .turn-card.selected {
-    border-color: var(--color-neon-cyan);
-    background: rgba(0, 229, 255, 0.03);
+    border-color: var(--tier-accent, var(--color-neon-cyan));
+    background: rgba(var(--tier-accent-rgb, 0, 229, 255), 0.03);
   }
 
   .turn-header {
@@ -124,8 +124,8 @@
   .version-badge {
     font-size: 10px;
     font-family: var(--font-mono);
-    color: var(--color-neon-cyan);
-    border: 1px solid var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
+    border: 1px solid var(--tier-accent, var(--color-neon-cyan));
     padding: 0 4px;
     line-height: 16px;
     flex-shrink: 0;
@@ -237,7 +237,7 @@
   .strategy-value {
     font-size: 10px;
     font-family: var(--font-mono);
-    color: var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
   }
 
   .changes-row {

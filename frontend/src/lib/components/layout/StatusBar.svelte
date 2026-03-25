@@ -131,7 +131,7 @@
   .status-phase {
     font-family: var(--font-mono);
     font-size: 10px;
-    color: var(--color-neon-cyan);
+    color: var(--tier-accent, var(--color-neon-cyan));
     white-space: nowrap;
   }
 

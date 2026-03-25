@@ -55,8 +55,8 @@
   }
 
   .chip:hover {
-    border-color: var(--color-neon-cyan);
-    background: rgba(0, 229, 255, 0.04);
+    border-color: var(--tier-accent, var(--color-neon-cyan));
+    background: rgba(var(--tier-accent-rgb, 0, 229, 255), 0.04);
     color: var(--color-text-primary);
   }
 </style>

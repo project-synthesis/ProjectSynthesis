@@ -37,7 +37,7 @@
     <polyline
       points={points}
       fill="none"
-      stroke="var(--color-neon-cyan)"
+      stroke="var(--tier-accent, var(--color-neon-cyan))"
       stroke-width="1.5"
       stroke-linejoin="round"
       stroke-linecap="round"
