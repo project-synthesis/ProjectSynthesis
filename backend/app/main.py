@@ -363,12 +363,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_origins = [settings.FRONTEND_URL]
+if settings.DEVELOPMENT_MODE and "http://localhost:5199" not in _cors_origins:
+    _cors_origins.append("http://localhost:5199")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:5199"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Cache-Control"],
 )
 
 # Routers (imported lazily — may not exist yet during phased development)

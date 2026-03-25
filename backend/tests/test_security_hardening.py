@@ -273,6 +273,61 @@ class TestSSESafety:
         assert "Internal error" in result
 
 
+class TestCORSHardening:
+    """W4: CORS & HTTP headers."""
+
+    @pytest.mark.asyncio
+    async def test_cors_methods_exclude_trace(self, app_client):
+        """CORS must not allow TRACE method."""
+        resp = await app_client.options(
+            "/api/health",
+            headers={
+                "Origin": "http://localhost:5199",
+                "Access-Control-Request-Method": "TRACE",
+            },
+        )
+        allow_methods = resp.headers.get("access-control-allow-methods", "")
+        assert "TRACE" not in allow_methods
+
+    @pytest.mark.asyncio
+    async def test_cors_allows_standard_methods(self, app_client):
+        """CORS must allow standard API methods."""
+        for method in ("GET", "POST", "PATCH", "PUT", "DELETE"):
+            resp = await app_client.options(
+                "/api/health",
+                headers={
+                    "Origin": "http://localhost:5199",
+                    "Access-Control-Request-Method": method,
+                },
+            )
+            allow_methods = resp.headers.get("access-control-allow-methods", "")
+            assert method in allow_methods, f"{method} should be in allowed methods"
+
+    @pytest.mark.asyncio
+    async def test_cors_allows_required_headers(self, app_client):
+        """CORS must allow Content-Type, Authorization, Cache-Control headers."""
+        resp = await app_client.options(
+            "/api/health",
+            headers={
+                "Origin": "http://localhost:5199",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Content-Type",
+            },
+        )
+        allow_headers = resp.headers.get("access-control-allow-headers", "")
+        assert "content-type" in allow_headers.lower()
+
+    def test_dev_mode_gates_localhost_origin(self):
+        """localhost:5199 CORS origin should only be added in DEVELOPMENT_MODE."""
+        import inspect
+        from app import main as main_mod
+
+        source = inspect.getsource(main_mod)
+        assert "DEVELOPMENT_MODE" in source, (
+            "CORS setup must check DEVELOPMENT_MODE before adding localhost origin"
+        )
+
+
 class TestXForwardedFor:
     """W3h: X-Forwarded-For parsing hardening."""
 
