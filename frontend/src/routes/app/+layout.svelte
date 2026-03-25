@@ -7,6 +7,7 @@
   import Toast from '$lib/components/shared/Toast.svelte';
   import PassthroughGuide from '$lib/components/shared/PassthroughGuide.svelte';
   import SamplingGuide from '$lib/components/shared/SamplingGuide.svelte';
+  import InternalGuide from '$lib/components/shared/InternalGuide.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
@@ -59,6 +60,7 @@
   <Toast />
   <PassthroughGuide />
   <SamplingGuide />
+  <InternalGuide provider={forgeStore.provider} />
 </div>
 
 <style>

@@ -7,11 +7,21 @@
   import { addToast } from '$lib/stores/toast.svelte';
   import { getHealth, connectEventStream } from '$lib/api/client';
   import type { HealthResponse } from '$lib/api/client';
+  import { triggerTierGuide } from '$lib/stores/tier-onboarding.svelte';
+  import { routing } from '$lib/stores/routing.svelte';
 
-  let health = $state<HealthResponse | null>(null);
   let backendError = $state<string | null>(null);
   let eventSource: EventSource | null = null;
   let sseHadError = false;
+  let firstHealthReceived = false;
+
+  /** Shared handler for new MCP sampling capability detection (DRY: SSE + health). */
+  function onSamplingDetected(): void {
+    addToast('created', 'MCP client connected with sampling capability');
+    if (preferencesStore.pipeline.force_passthrough) {
+      preferencesStore.setPipelineToggle('force_passthrough', false);
+    }
+  }
 
   // Real-time event stream
   $effect(() => {
@@ -49,16 +59,12 @@
           provider: d.provider,
         });
         if (delta.reconnected) addToast('created', 'MCP client reconnected');
-        if (delta.samplingChanged) {
-          addToast('created', 'MCP client connected with sampling capability');
-          // Auto-clear force_passthrough so routing resolves to sampling
-          if (preferencesStore.pipeline.force_passthrough) {
-            preferencesStore.setPipelineToggle('force_passthrough', false);
-          }
-        }
+        if (delta.samplingChanged) onSamplingDetected();
         // Only toast on disconnect when no local provider (true degradation).
         // When CLI/API is available, the auto-fallback is silent.
         if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
+        // Trigger onboarding guide for the new tier (dedup guard prevents redundant opens)
+        queueMicrotask(() => triggerTierGuide(routing.tier));
       }
       if (type === 'preferences_changed') {
         preferencesStore.prefs = data as unknown as Preferences;
@@ -95,7 +101,6 @@
   }
 
   function applyHealth(h: HealthResponse) {
-    health = h;
     backendError = null;
     const delta = forgeStore.updateRoutingState({
       sampling_capable: h.sampling_capable ?? null,
@@ -107,12 +112,12 @@
     forgeStore.avgDurationMs = h.avg_duration_ms ?? null;
     forgeStore.scoreHealth = h.score_health ?? null;
     forgeStore.phaseDurations = (h.phase_durations && Object.keys(h.phase_durations).length > 0) ? h.phase_durations : null;
-    if (delta.samplingChanged) {
-      addToast('created', 'MCP client connected with sampling capability');
-      // Auto-clear force_passthrough so routing resolves to sampling
-      if (preferencesStore.pipeline.force_passthrough) {
-        preferencesStore.setPipelineToggle('force_passthrough', false);
-      }
+    if (delta.samplingChanged) onSamplingDetected();
+    // Startup onboarding: after the first health response, the routing store
+    // has all data to derive the tier.  Trigger the appropriate guide once.
+    if (!firstHealthReceived) {
+      firstHealthReceived = true;
+      queueMicrotask(() => triggerTierGuide(routing.tier));
     }
   }
 
@@ -124,7 +129,6 @@
   });
 
   // Derived error states
-  let showNoProvider = $derived(health && !health.provider && !backendError);
   let showRateLimit = $derived(forgeStore.error?.includes('Rate limit'));
   let showForgeError = $derived(
     forgeStore.status === 'error' && forgeStore.error && !showRateLimit
@@ -136,15 +140,6 @@
   <div class="error-banner error-critical">
     <span>{backendError}</span>
     <button onclick={() => location.reload()}>Retry</button>
-  </div>
-{/if}
-
-{#if showNoProvider}
-  <div class="error-banner error-warning">
-    <div class="banner-text">
-      <span>No provider configured — using manual passthrough mode.</span>
-      <span class="banner-subtitle">Prompts will be assembled for external LLM processing. Add an API key in Settings for full automation.</span>
-    </div>
   </div>
 {/if}
 
@@ -184,17 +179,6 @@
   .error-warning {
     border: 1px solid var(--color-neon-yellow);
     background: rgba(251, 191, 36, 0.06);
-  }
-
-  .banner-text {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-
-  .banner-subtitle {
-    font-size: 10px;
-    color: var(--color-text-dim);
   }
 
   .error-banner button {
