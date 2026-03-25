@@ -8,8 +8,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.config import DATA_DIR, settings
-from app.database import async_session_factory
-from app.services.audit_logger import log_event
 from app.utils.crypto import decrypt_with_migration, derive_fernet
 
 logger = logging.getLogger(__name__)
@@ -120,6 +118,9 @@ async def set_api_key(body: ApiKeyRequest, request: Request) -> ApiKeyStatus:
 
     # Audit log
     try:
+        from app.database import async_session_factory
+        from app.services.audit_logger import log_event
+
         async with async_session_factory() as audit_db:
             await log_event(
                 db=audit_db,
@@ -152,6 +153,9 @@ async def delete_api_key(request: Request) -> ApiKeyStatus:
 
     # Audit log
     try:
+        from app.database import async_session_factory
+        from app.services.audit_logger import log_event
+
         async with async_session_factory() as audit_db:
             await log_event(
                 db=audit_db,

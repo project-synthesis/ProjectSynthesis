@@ -89,7 +89,7 @@ async def get_strategy(name: str) -> StrategyDetail:
 
 
 @router.put("/strategies/{name}")
-async def update_strategy(name: str, body: StrategyUpdate) -> StrategyUpdateResponse:
+async def update_strategy(name: str, body: StrategyUpdate, request: Request) -> StrategyUpdateResponse:
     """Update a strategy .md file on disk.
 
     Validates frontmatter before saving. Returns the saved content
@@ -141,6 +141,7 @@ async def update_strategy(name: str, body: StrategyUpdate) -> StrategyUpdateResp
             await log_event(
                 db=audit_db,
                 action="strategy_updated",
+                actor_ip=request.client.host if request.client else None,
                 detail={"strategy_name": name},
                 outcome="success",
             )

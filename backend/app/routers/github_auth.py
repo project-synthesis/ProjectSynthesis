@@ -79,8 +79,10 @@ async def github_callback(
     db: AsyncSession = Depends(get_db),
 ) -> GitHubUserResponse:
     """Exchange code for token, encrypt, store in DB."""
+    import hmac
+
     cookie_state = request.cookies.get("github_oauth_state")
-    if not cookie_state or cookie_state != state:
+    if not cookie_state or not hmac.compare_digest(cookie_state, state):
         raise HTTPException(
             400,
             "Invalid OAuth state. The login link may have expired. Please try logging in again.",

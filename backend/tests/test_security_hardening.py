@@ -212,6 +212,21 @@ class TestMCPAuthMiddleware:
         await middleware(scope, receive, send)
         app_mock.assert_not_called()
 
+    async def test_middleware_rejects_query_token_when_disabled(self):
+        """When allow_query_token=False, ?token= is rejected even if correct."""
+        from app.mcp_server import _MCPAuthMiddleware
+        app_mock = AsyncMock()
+        middleware = _MCPAuthMiddleware(app_mock, auth_token="secret-token", allow_query_token=False)
+        scope = {
+            "type": "http", "method": "GET", "path": "/mcp",
+            "headers": [],
+            "query_string": b"token=secret-token",
+        }
+        receive = AsyncMock()
+        send = AsyncMock()
+        await middleware(scope, receive, send)
+        app_mock.assert_not_called()
+
     async def test_middleware_passes_non_http_scopes(self):
         """Non-HTTP scopes (lifespan, websocket) always pass through."""
         from app.mcp_server import _MCPAuthMiddleware
