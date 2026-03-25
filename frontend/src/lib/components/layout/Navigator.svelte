@@ -612,18 +612,8 @@
           </div>
         </div>
 
-        <!-- Effort / Scoring — morphs by tier -->
-        {#if routing.isPassthrough}
-        <div class="sub-section">
-          <span class="sub-heading sub-heading--passthrough">Scoring</span>
-          <div class="card-terminal">
-            <div class="data-row">
-              <span class="data-label">Mode</span>
-              <span class="data-value neon-yellow">heuristic</span>
-            </div>
-          </div>
-        </div>
-        {:else if !routing.isSampling}
+        <!-- Effort — internal tier only (passthrough + sampling handled by Routing/Connection + System) -->
+        {#if !routing.isPassthrough && !routing.isSampling}
         <div class="sub-section">
           <span class="sub-heading">Effort</span>
           <div class="card-terminal">
@@ -681,7 +671,7 @@
           </div>
         </div>
 
-        <!-- Provider + API Key (collapsible — secondary) -->
+        <!-- Provider / Connection / Routing (collapsible — tier-adaptive) -->
         <div class="sub-section">
           <button
             class="accordion-heading"
@@ -689,97 +679,159 @@
             aria-expanded={showProvider}
           >
             <span class="accordion-arrow" class:accordion-arrow--open={showProvider}>&#x25B8;</span>
-            <span class="sub-heading">Provider</span>
+            <span class="sub-heading"
+              class:sub-heading--sampling={routing.isSampling}
+              class:sub-heading--passthrough={routing.isPassthrough}
+            >{routing.isPassthrough ? 'Routing' : routing.isSampling ? 'Connection' : 'Provider'}</span>
             <span class="accordion-summary">
-              {forgeStore.provider ?? '—'}
-              {#if apiKeyStatus?.configured}
-                <span style="color: var(--color-neon-green);">&#x2713;</span>
+              {#if routing.isPassthrough}
+                manual
+              {:else if routing.isSampling}
+                MCP {forgeStore.mcpDisconnected ? 'idle' : 'active'}
+              {:else}
+                {forgeStore.provider ?? '—'}
+                {#if apiKeyStatus?.configured}
+                  <span style="color: var(--color-neon-green);">&#x2713;</span>
+                {/if}
               {/if}
             </span>
           </button>
           {#if showProvider}
-            <div class="card-terminal">
-              <div class="data-row">
-                <span class="data-label">Active</span>
-                <span class="data-value font-mono" style="color: var(--color-neon-cyan);">
-                  {forgeStore.provider ?? '—'}
-                </span>
+            {#if routing.isPassthrough}
+              <!-- PASSTHROUGH: routing overview — no LLM provider involved -->
+              <div class="card-terminal">
+                <div class="data-row">
+                  <span class="data-label">Execution</span>
+                  <span class="data-value neon-yellow">manual</span>
+                </div>
+                <div class="data-row">
+                  <span class="data-label">Analysis</span>
+                  <span class="data-value neon-yellow">heuristic</span>
+                </div>
+                <div class="data-row">
+                  <span class="data-label">Scoring</span>
+                  <span class="data-value neon-yellow">heuristic</span>
+                </div>
+                {#if providers?.routing_tiers?.length}
+                  <div class="data-row">
+                    <span class="data-label">Tiers</span>
+                    <span class="data-value">{providers.routing_tiers.join(', ')}</span>
+                  </div>
+                {/if}
               </div>
-              {#if providers?.available?.length}
+            {:else if routing.isSampling}
+              <!-- SAMPLING: MCP connection health — IDE is the LLM provider -->
+              <div class="card-terminal">
                 <div class="data-row">
-                  <span class="data-label">Available</span>
-                  <span class="data-value">{providers.available.join(', ')}</span>
-                </div>
-              {/if}
-              {#if providers?.routing_tiers?.length}
-                <div class="data-row">
-                  <span class="data-label">Tiers</span>
-                  <span class="data-value">{providers.routing_tiers.join(', ')}</span>
-                </div>
-              {/if}
-              <div class="data-row">
-                <span class="data-label">API key</span>
-                <span class="data-value font-mono" style="color: {apiKeyStatus?.configured ? 'var(--color-neon-green)' : 'var(--color-text-dim)'};">
-                  {apiKeyStatus?.configured ? apiKeyStatus.masked_key || 'configured' : 'not set'}
-                </span>
-              </div>
-              {#if forgeStore.avgDurationMs != null}
-                <div class="data-row">
-                  <span class="data-label">Avg latency</span>
-                  <span class="data-value font-mono">{forgeStore.avgDurationMs}ms</span>
-                </div>
-              {/if}
-              {#if forgeStore.recentErrors?.last_hour}
-                <div class="data-row">
-                  <span class="data-label">Errors (1h)</span>
-                  <span class="data-value font-mono" style="color: var(--color-neon-red);">
-                    {forgeStore.recentErrors.last_hour}
+                  <span class="data-label">MCP status</span>
+                  <span class="data-value font-mono" style="color: {forgeStore.mcpDisconnected ? 'var(--color-neon-red)' : 'var(--color-neon-green)'};">
+                    {forgeStore.mcpDisconnected ? 'disconnected' : 'connected'}
                   </span>
                 </div>
-              {/if}
-              <form class="data-row" onsubmit={(e: Event) => { e.preventDefault(); handleSetApiKey(); }} autocomplete="off">
-                <input type="text" name="username" value="anthropic-api-key" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true" />
-                <label for="api-key-input" class="sr-only">Anthropic API key</label>
-                <input
-                  id="api-key-input"
-                  class="pref-input"
-                  type="password"
-                  name="password"
-                  placeholder="sk-..."
-                  autocomplete="new-password"
-                  bind:value={apiKeyInput}
-                />
-                <button
-                  class="pref-btn"
-                  onclick={handleSetApiKey}
-                  disabled={apiKeySaving || !apiKeyInput.trim()}
-                  type="button"
-                >{apiKeySaving ? '...' : 'SET'}</button>
-                {#if apiKeyStatus?.configured}
+                <div class="data-row">
+                  <span class="data-label">Sampling</span>
+                  <span class="data-value font-mono" style="color: {forgeStore.samplingCapable === true ? 'var(--color-neon-green)' : 'var(--color-text-dim)'};">
+                    {forgeStore.samplingCapable === true ? 'supported' : forgeStore.samplingCapable === false ? 'not supported' : 'not detected'}
+                  </span>
+                </div>
+                <div class="data-row">
+                  <span class="data-label">Fallback</span>
+                  <span class="data-value font-mono" style="color: {forgeStore.provider ? 'var(--color-neon-cyan)' : 'var(--color-text-dim)'};">
+                    {forgeStore.provider ?? 'none'}
+                  </span>
+                </div>
+                {#if providers?.routing_tiers?.length}
+                  <div class="data-row">
+                    <span class="data-label">Tiers</span>
+                    <span class="data-value">{providers.routing_tiers.join(', ')}</span>
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <!-- INTERNAL: full provider instrumentation -->
+              <div class="card-terminal">
+                <div class="data-row">
+                  <span class="data-label">Active</span>
+                  <span class="data-value font-mono neon-cyan">
+                    {forgeStore.provider ?? '—'}
+                  </span>
+                </div>
+                {#if providers?.available?.length}
+                  <div class="data-row">
+                    <span class="data-label">Available</span>
+                    <span class="data-value">{providers.available.join(', ')}</span>
+                  </div>
+                {/if}
+                {#if providers?.routing_tiers?.length}
+                  <div class="data-row">
+                    <span class="data-label">Tiers</span>
+                    <span class="data-value">{providers.routing_tiers.join(', ')}</span>
+                  </div>
+                {/if}
+                <div class="data-row">
+                  <span class="data-label">API key</span>
+                  <span class="data-value font-mono" style="color: {apiKeyStatus?.configured ? 'var(--color-neon-green)' : 'var(--color-text-dim)'};">
+                    {apiKeyStatus?.configured ? apiKeyStatus.masked_key || 'configured' : 'not set'}
+                  </span>
+                </div>
+                {#if forgeStore.avgDurationMs != null}
+                  <div class="data-row">
+                    <span class="data-label">Avg latency</span>
+                    <span class="data-value font-mono">{forgeStore.avgDurationMs}ms</span>
+                  </div>
+                {/if}
+                {#if forgeStore.recentErrors?.last_hour}
+                  <div class="data-row">
+                    <span class="data-label">Errors (1h)</span>
+                    <span class="data-value font-mono" style="color: var(--color-neon-red);">
+                      {forgeStore.recentErrors.last_hour}
+                    </span>
+                  </div>
+                {/if}
+                <form class="data-row" onsubmit={(e: Event) => { e.preventDefault(); handleSetApiKey(); }} autocomplete="off">
+                  <input type="text" name="username" value="anthropic-api-key" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true" />
+                  <label for="api-key-input" class="sr-only">Anthropic API key</label>
+                  <input
+                    id="api-key-input"
+                    class="pref-input"
+                    type="password"
+                    name="password"
+                    placeholder="sk-..."
+                    autocomplete="new-password"
+                    bind:value={apiKeyInput}
+                  />
                   <button
                     class="pref-btn"
-                    class:pref-btn--danger={confirmingDelete}
-                    disabled={apiKeyDeleting}
+                    onclick={handleSetApiKey}
+                    disabled={apiKeySaving || !apiKeyInput.trim()}
                     type="button"
-                    onclick={() => {
-                      if (confirmingDelete) {
-                        handleDeleteApiKey();
-                      } else {
-                        confirmingDelete = true;
-                        confirmDeleteTimer = setTimeout(() => { confirmingDelete = false; confirmDeleteTimer = null; }, 3000);
-                      }
-                    }}
-                  >{apiKeyDeleting ? '...' : confirmingDelete ? 'OK?' : 'DEL'}</button>
+                  >{apiKeySaving ? '...' : 'SET'}</button>
+                  {#if apiKeyStatus?.configured}
+                    <button
+                      class="pref-btn"
+                      class:pref-btn--danger={confirmingDelete}
+                      disabled={apiKeyDeleting}
+                      type="button"
+                      onclick={() => {
+                        if (confirmingDelete) {
+                          handleDeleteApiKey();
+                        } else {
+                          confirmingDelete = true;
+                          confirmDeleteTimer = setTimeout(() => { confirmingDelete = false; confirmDeleteTimer = null; }, 3000);
+                        }
+                      }}
+                    >{apiKeyDeleting ? '...' : confirmingDelete ? 'OK?' : 'DEL'}</button>
+                  {/if}
+                </form>
+                {#if apiKeyError}
+                  <p class="empty-note" style="color: var(--color-neon-red); padding: 0 4px;">{apiKeyError}</p>
                 {/if}
-              </form>
-              {#if apiKeyError}
-                <p class="empty-note" style="color: var(--color-neon-red); padding: 0 4px;">{apiKeyError}</p>
-              {/if}
-            </div>
+              </div>
+            {/if}
           {/if}
         </div>
 
-        <!-- System config (collapsible — tertiary) -->
+        <!-- System (collapsible — tier-adaptive) -->
         <div class="sub-section">
           <button
             class="accordion-heading"
@@ -787,78 +839,166 @@
             aria-expanded={showSystem}
           >
             <span class="accordion-arrow" class:accordion-arrow--open={showSystem}>&#x25B8;</span>
-            <span class="sub-heading">System</span>
+            <span class="sub-heading"
+              class:sub-heading--sampling={routing.isSampling}
+              class:sub-heading--passthrough={routing.isPassthrough}
+            >System</span>
+            <span class="accordion-summary">v{forgeStore.version ?? '?'}</span>
           </button>
           {#if showSystem}
             {#if settings}
-              <div class="card-terminal">
-                <div class="data-row">
-                  <span class="data-label">Version</span>
-                  <span class="data-value font-mono">{forgeStore.version ?? '—'}</span>
-                </div>
-                <div class="data-row">
-                  <span class="data-label">Max chars</span>
-                  <span class="data-value font-mono">{settings.max_raw_prompt_chars.toLocaleString()}</span>
-                </div>
-                <div class="data-row">
-                  <span class="data-label">Context budget</span>
-                  <span class="data-value font-mono">{settings.max_context_tokens.toLocaleString()} tokens</span>
-                </div>
-                <div class="data-row">
-                  <span class="data-label">Embedding</span>
-                  <span class="data-value font-mono">{settings.embedding_model}</span>
-                </div>
-                <div class="data-row">
-                  <span class="data-label">Database</span>
-                  <span class="data-value font-mono">{settings.database_engine}</span>
-                </div>
-                <div class="data-row">
-                  <span class="data-label">Optimize rate</span>
-                  <span class="data-value font-mono">{settings.optimize_rate_limit}</span>
-                </div>
-                <div class="data-row">
-                  <span class="data-label">Feedback rate</span>
-                  <span class="data-value font-mono">{settings.feedback_rate_limit}</span>
-                </div>
-                <div class="data-row">
-                  <span class="data-label">Refine rate</span>
-                  <span class="data-value font-mono">{settings.refine_rate_limit}</span>
-                </div>
-                <div class="data-row">
-                  <span class="data-label">Retention</span>
-                  <span class="data-value font-mono">{settings.trace_retention_days}d</span>
-                </div>
-                {#if forgeStore.phaseDurations && !routing.isPassthrough}
-                  {#each Object.entries(forgeStore.phaseDurations) as [phase, ms]}
+              {#if routing.isPassthrough}
+                <!-- PASSTHROUGH: minimal system info — no LLM phases -->
+                <div class="card-terminal">
+                  <div class="data-row">
+                    <span class="data-label">Version</span>
+                    <span class="data-value font-mono">{forgeStore.version ?? '—'}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Max chars</span>
+                    <span class="data-value font-mono">{settings.max_raw_prompt_chars.toLocaleString()}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Embedding</span>
+                    <span class="data-value font-mono">{settings.embedding_model}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Database</span>
+                    <span class="data-value font-mono">{settings.database_engine}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Scoring</span>
+                    <span class="data-value neon-yellow" title="Heuristic-only scoring (no LLM scorer in passthrough mode)">heuristic</span>
+                  </div>
+                  {#if forgeStore.scoreHealth}
                     <div class="data-row">
-                      <span class="data-label">{phase}</span>
-                      <span class="data-value font-mono">{ms.toLocaleString()}ms</span>
+                      <span class="data-label">Score mean</span>
+                      <span class="data-value font-mono">{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
                     </div>
-                  {/each}
-                {/if}
-                <div class="data-row">
-                  <span class="data-label">Scoring</span>
-                  <span class="data-value font-mono"
-                    title={routing.isPassthrough
-                      ? 'Heuristic-only scoring (no LLM scorer in passthrough mode)'
-                      : 'LLM + heuristic blended scores'}>
-                    {routing.isPassthrough ? 'heuristic' : 'hybrid'}
-                  </span>
+                    <div class="data-row">
+                      <span class="data-label">Score stddev</span>
+                      <span class="data-value font-mono"
+                        style={forgeStore.scoreHealth.clustering_warning ? 'color: var(--color-neon-red)' : ''}>
+                        {forgeStore.scoreHealth.last_n_stddev.toFixed(2)}
+                      </span>
+                    </div>
+                  {/if}
                 </div>
-                {#if forgeStore.scoreHealth}
+              {:else if routing.isSampling}
+                <!-- SAMPLING: system info + IDE-driven scoring -->
+                <div class="card-terminal">
                   <div class="data-row">
-                    <span class="data-label">Score mean</span>
-                    <span class="data-value font-mono">{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
+                    <span class="data-label">Version</span>
+                    <span class="data-value font-mono">{forgeStore.version ?? '—'}</span>
                   </div>
                   <div class="data-row">
-                    <span class="data-label">Score stddev</span>
-                    <span class="data-value font-mono"
-                      style={forgeStore.scoreHealth.clustering_warning ? 'color: var(--color-neon-red)' : ''}>
-                      {forgeStore.scoreHealth.last_n_stddev.toFixed(2)}
-                    </span>
+                    <span class="data-label">Max chars</span>
+                    <span class="data-value font-mono">{settings.max_raw_prompt_chars.toLocaleString()}</span>
                   </div>
-                {/if}
-              </div>
+                  <div class="data-row">
+                    <span class="data-label">Context budget</span>
+                    <span class="data-value font-mono">{settings.max_context_tokens.toLocaleString()} tokens</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Embedding</span>
+                    <span class="data-value font-mono">{settings.embedding_model}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Database</span>
+                    <span class="data-value font-mono">{settings.database_engine}</span>
+                  </div>
+                  {#if forgeStore.phaseDurations}
+                    {#each Object.entries(forgeStore.phaseDurations) as [phase, ms]}
+                      <div class="data-row">
+                        <span class="data-label">{phase}</span>
+                        <span class="data-value font-mono">{ms.toLocaleString()}ms</span>
+                      </div>
+                    {/each}
+                  {/if}
+                  <div class="data-row">
+                    <span class="data-label">Scoring</span>
+                    <span class="data-value neon-green" title="LLM + heuristic blended scores via IDE sampling">hybrid (via IDE)</span>
+                  </div>
+                  {#if forgeStore.scoreHealth}
+                    <div class="data-row">
+                      <span class="data-label">Score mean</span>
+                      <span class="data-value font-mono">{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
+                    </div>
+                    <div class="data-row">
+                      <span class="data-label">Score stddev</span>
+                      <span class="data-value font-mono"
+                        style={forgeStore.scoreHealth.clustering_warning ? 'color: var(--color-neon-red)' : ''}>
+                        {forgeStore.scoreHealth.last_n_stddev.toFixed(2)}
+                      </span>
+                    </div>
+                  {/if}
+                </div>
+              {:else}
+                <!-- INTERNAL: full system instrumentation -->
+                <div class="card-terminal">
+                  <div class="data-row">
+                    <span class="data-label">Version</span>
+                    <span class="data-value font-mono">{forgeStore.version ?? '—'}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Max chars</span>
+                    <span class="data-value font-mono">{settings.max_raw_prompt_chars.toLocaleString()}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Context budget</span>
+                    <span class="data-value font-mono">{settings.max_context_tokens.toLocaleString()} tokens</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Embedding</span>
+                    <span class="data-value font-mono">{settings.embedding_model}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Database</span>
+                    <span class="data-value font-mono">{settings.database_engine}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Optimize rate</span>
+                    <span class="data-value font-mono">{settings.optimize_rate_limit}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Feedback rate</span>
+                    <span class="data-value font-mono">{settings.feedback_rate_limit}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Refine rate</span>
+                    <span class="data-value font-mono">{settings.refine_rate_limit}</span>
+                  </div>
+                  <div class="data-row">
+                    <span class="data-label">Retention</span>
+                    <span class="data-value font-mono">{settings.trace_retention_days}d</span>
+                  </div>
+                  {#if forgeStore.phaseDurations}
+                    {#each Object.entries(forgeStore.phaseDurations) as [phase, ms]}
+                      <div class="data-row">
+                        <span class="data-label">{phase}</span>
+                        <span class="data-value font-mono">{ms.toLocaleString()}ms</span>
+                      </div>
+                    {/each}
+                  {/if}
+                  <div class="data-row">
+                    <span class="data-label">Scoring</span>
+                    <span class="data-value font-mono" title="LLM + heuristic blended scores">hybrid</span>
+                  </div>
+                  {#if forgeStore.scoreHealth}
+                    <div class="data-row">
+                      <span class="data-label">Score mean</span>
+                      <span class="data-value font-mono">{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
+                    </div>
+                    <div class="data-row">
+                      <span class="data-label">Score stddev</span>
+                      <span class="data-value font-mono"
+                        style={forgeStore.scoreHealth.clustering_warning ? 'color: var(--color-neon-red)' : ''}>
+                        {forgeStore.scoreHealth.last_n_stddev.toFixed(2)}
+                      </span>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             {:else}
               <p class="empty-note">Backend unavailable</p>
             {/if}

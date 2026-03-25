@@ -720,7 +720,7 @@ describe('Navigator', () => {
     });
     await user.click(screen.getByRole('button', { name: /System/i }));
     await waitFor(() => {
-      // CONTEXT (Analysis) + SCORING (Mode) + System accordion = 3 "heuristic" labels
+      // CONTEXT (Analysis) + ROUTING (Analysis, Scoring) + System (Scoring) = 4 "heuristic" labels
       const heuristicEls = screen.getAllByText('heuristic');
       expect(heuristicEls.length).toBeGreaterThanOrEqual(3);
     });
@@ -765,7 +765,7 @@ describe('Navigator', () => {
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
     expect(screen.getByText('Context')).toBeInTheDocument();
-    // Multiple "heuristic" labels in passthrough (CONTEXT Analysis + SCORING Mode)
+    // Multiple "heuristic" labels in passthrough (CONTEXT Analysis + ROUTING Analysis/Scoring)
     expect(screen.getAllByText('heuristic').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('auto-injected')).toBeInTheDocument();
   });
@@ -806,17 +806,15 @@ describe('Navigator', () => {
 
   // ── Settings — passthrough SCORING section ─────────────────────────────────
 
-  it('shows SCORING section with heuristic mode in passthrough mode', () => {
+  it('shows "Routing" section with heuristic labels in passthrough mode', () => {
     forgeStore.provider = null;
     preferencesStore.prefs.pipeline.force_passthrough = true;
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'settings' } });
-    // Scope to sub-heading to avoid ambiguity with System accordion "Scoring" row
-    expect(screen.getByText('Scoring', { selector: '.sub-heading' })).toBeInTheDocument();
-    // Both CONTEXT and SCORING sections show "heuristic"
-    expect(screen.getByText('Mode')).toBeInTheDocument();
-    const modeLabels = screen.getAllByText('heuristic');
-    expect(modeLabels.length).toBeGreaterThanOrEqual(2);
+    // Routing section replaces Provider in passthrough — shows execution + analysis + scoring
+    expect(screen.getByText('Execution')).toBeInTheDocument();
+    const heuristicLabels = screen.getAllByText('heuristic');
+    expect(heuristicLabels.length).toBeGreaterThanOrEqual(2);
   });
 
   it('hides Effort section in passthrough mode', () => {
