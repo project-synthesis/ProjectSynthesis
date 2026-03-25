@@ -66,7 +66,7 @@ class OptimizeOutput(BaseModel):
     scores: dict[str, float] | None = Field(
         default=None,
         description="Dimension scores for the optimized prompt: clarity, "
-        "specificity, structure, faithfulness, conciseness (each 0-10).",
+        "specificity, structure, faithfulness, conciseness (each 1.0-10.0).",
     )
     original_scores: dict[str, float] | None = Field(
         default=None,
@@ -112,11 +112,15 @@ class OptimizeOutput(BaseModel):
     )
     assembled_prompt: str | None = Field(
         default=None,
-        description="Full assembled prompt template (passthrough mode only).",
+        description="Full assembled prompt for your LLM to process (passthrough mode only). "
+        "When present, process this with your LLM, then call synthesis_save_result "
+        "with the trace_id and the optimized output.",
     )
     instructions: str | None = Field(
         default=None,
-        description="Optimization instructions included in assembled prompt (passthrough mode only).",
+        description="Step-by-step instructions for completing the passthrough workflow "
+        "(passthrough mode only). Follow these to process assembled_prompt and "
+        "call synthesis_save_result.",
     )
 
 
@@ -237,7 +241,7 @@ class SaveResultInput(BaseModel):
     scores: dict[str, float] | None = Field(
         default=None,
         description="Self-rated scores dict with keys: clarity, specificity, "
-        "structure, faithfulness, conciseness (each 0-10 float).",
+        "structure, faithfulness, conciseness (each 1.0-10.0 float, clamped to this range).",
     )
     model: str | None = Field(
         default=None,

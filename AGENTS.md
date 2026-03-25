@@ -15,20 +15,40 @@ Universal guidance for AI coding agents (Cursor, Copilot, Windsurf, Gemini CLI, 
 
 ## MCP tools
 
-4 tools available at `http://127.0.0.1:8001/mcp`:
+11 tools available at `http://127.0.0.1:8001/mcp` (all use `structured_output=True`):
+
+### Core pipeline
 
 | Tool | Use when... |
 |------|------------|
-| `synthesis_analyze` | You want a quality assessment without optimization — returns task type, weaknesses, baseline scores, and next steps |
-| `synthesis_optimize` | You want the full pipeline — analyze, optimize, score, persist |
-| `synthesis_prepare_optimization` | Your own LLM should do the optimization — server assembles context + strategy + rubric |
-| `synthesis_save_result` | After your LLM processes the prepared prompt — server applies bias correction and persists |
+| `synthesis_optimize` | Full pipeline — analyze, optimize, score, persist. Auto-routes: internal provider → sampling → passthrough. If `status='pending_external'`, process `assembled_prompt` with your LLM, then call `synthesis_save_result` |
+| `synthesis_analyze` | Quality assessment without optimization — task type, weaknesses, baseline scores, strategy recommendation |
+| `synthesis_prepare_optimization` | Your own LLM should do the optimization — server assembles context + strategy + rubric into a single prompt |
+| `synthesis_save_result` | After your LLM processes the prepared prompt — server applies hybrid scoring (z-score + heuristic blending) and persists |
+
+### Workflow
+
+| Tool | Use when... |
+|------|------------|
+| `synthesis_health` | Check system capabilities at session start — provider, available tiers, strategies, stats |
+| `synthesis_strategies` | List available optimization strategies with descriptions before choosing one |
+| `synthesis_match` | Search knowledge graph for similar prompts — returns reusable patterns to pass as `applied_pattern_ids` to `synthesis_optimize` |
+| `synthesis_feedback` | Rate a completed optimization (thumbs_up/thumbs_down) to drive strategy adaptation |
+| `synthesis_refine` | Iteratively improve an optimized prompt with specific instructions (requires local provider) |
+| `synthesis_history` | Query past optimizations with filtering, sorting, and pagination |
+| `synthesis_get_optimization` | Retrieve full details of a specific optimization by ID or trace_id |
+
+### Recommended workflow
+
+```
+synthesis_health → synthesis_match → synthesis_optimize → synthesis_feedback
+```
 
 ### Passthrough protocol (prepare → process → save)
 
-1. Call `synthesis_prepare_optimization` with the raw prompt → get assembled optimization prompt
-2. Your LLM processes it, producing an optimized version with self-rated scores
-3. Call `synthesis_save_result` with the result → server applies bias correction and persists
+1. Call `synthesis_prepare_optimization` with the raw prompt → get assembled optimization prompt + `trace_id`
+2. Your LLM processes it, producing an optimized version with self-rated scores (1.0-10.0)
+3. Call `synthesis_save_result` with the `trace_id` and result → server applies hybrid scoring (z-score + heuristic blending) and persists
 
 ## Prompt templates
 
@@ -65,7 +85,8 @@ All prompts are in `prompts/`. Edit any file and changes take effect immediately
 - **Pipeline**: 3 phases (analyze → optimize → score), models configurable per phase via preferences
 - **Scoring**: Hybrid — LLM scores blended with model-independent heuristics + z-score normalization
 - **Providers**: Claude CLI (Max subscribers) or Anthropic API (auto-detected at startup)
-- **MCP server**: Standalone on port 8001, 4 tools
+- **MCP server**: Standalone on port 8001, 11 tools with structured output
+- **Routing**: 5-tier priority chain — force_passthrough > force_sampling > internal > auto_sampling > passthrough
 
 ## Key files
 
@@ -77,8 +98,10 @@ All prompts are in `prompts/`. Edit any file and changes take effect immediately
 | `backend/app/services/score_blender.py` | Hybrid scoring: LLM + heuristic blending |
 | `backend/app/services/heuristic_scorer.py` | Model-independent scoring heuristics + `score_prompt()` |
 | `backend/app/services/preferences.py` | Persistent user preferences (`data/preferences.json`) |
+| `backend/app/services/routing.py` | 5-tier routing engine (provider, sampling, passthrough) |
+| `backend/app/services/context_enrichment.py` | Unified context enrichment for all tiers |
 | `backend/app/services/file_watcher.py` | Real-time strategy file watching (watchfiles) |
-| `backend/app/mcp_server.py` | MCP server with 4 tools |
+| `backend/app/mcp_server.py` | MCP server with 11 tools |
 | `backend/app/config.py` | All configuration |
 | `backend/app/providers/detector.py` | LLM provider auto-detection |
 | `prompts/manifest.json` | Template variable specs |
@@ -97,7 +120,7 @@ Services must never import from routers. All GitHub token operations go through 
 ## Development
 
 ```bash
-# Run tests (251 tests)
+# Run tests (~90s, 1036 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Restart services
@@ -113,5 +136,6 @@ docker compose up --build -d
 - **Pagination**: all list endpoints return `{total, count, offset, items, has_more, next_offset}`
 - **Strategies**: file-driven from `prompts/strategies/*.md` — no hardcoded lists
 - **Models**: configurable per phase via `GET/PATCH /api/preferences`
-- **Scoring**: hybrid (LLM + heuristic) with z-score normalization
-- **Events**: real-time SSE at `/api/events` — 6 event types drive UI reactivity
+- **Scoring**: hybrid (LLM + heuristic) with z-score normalization. Passthrough scores clamped to [1.0, 10.0]
+- **Events**: real-time SSE at `/api/events` — event types drive UI reactivity
+- **Domain validation**: `VALID_DOMAINS` whitelist in `pipeline_constants.py` — invalid domains fall back to "general"

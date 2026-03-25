@@ -115,7 +115,7 @@ async def handle_optimize(
                 "with your LLM, then call synthesis_save_result with the trace_id "
                 "and the optimized output. Include optimized_prompt, changes_summary, "
                 "task_type, strategy_used, and optionally scores "
-                "(clarity, specificity, structure, faithfulness, conciseness — each 1-10)."
+                "(clarity, specificity, structure, faithfulness, conciseness — each 1.0-10.0)."
             ),
         )
 

@@ -606,11 +606,16 @@ async def synthesis_optimize(
     and follow-up suggestions.
 
     Five execution paths (auto-selected by routing):
-    1. force_passthrough → assembled template for manual processing
+    1. force_passthrough → returns assembled_prompt for your LLM to process
     2. force_sampling + sampling capable → full pipeline via IDE's LLM
     3. Local provider → full internal pipeline
     4. No provider + MCP sampling → full pipeline via IDE's LLM
-    5. Fallback → assembled template for manual processing
+    5. Fallback → returns assembled_prompt for your LLM to process
+
+    If status='pending_external': process the assembled_prompt with your LLM,
+    then call synthesis_save_result(trace_id=<returned trace_id>,
+    optimized_prompt=<your result>, scores={clarity, specificity, structure,
+    faithfulness, conciseness — each 1.0-10.0}).
 
     Chain: Call synthesis_match BEFORE this tool to get applied_pattern_ids.
     Call synthesis_feedback AFTER using the result to close the learning loop.
@@ -684,7 +689,7 @@ async def synthesis_save_result(
     scores: Annotated[dict | None, Field(
         default=None,
         description="Self-rated scores dict with keys: clarity, specificity, structure, "
-        "faithfulness, conciseness (0-10 float).",
+        "faithfulness, conciseness (1.0-10.0 float, clamped to this range).",
     )] = None,
     model: Annotated[str | None, Field(
         default=None, description="Model ID that produced the optimization.",
@@ -702,11 +707,12 @@ async def synthesis_save_result(
     )] = None,
     ctx: Context | None = None,
 ) -> SaveResultOutput:
-    """Persist an optimization result from an external LLM with bias correction.
+    """Persist an optimization result from an external LLM with hybrid scoring.
 
-    This is step 3 of the passthrough workflow (after synthesis_prepare_optimization).
-    Applies heuristic bias correction to self-rated scores and computes score deltas
-    against the original prompt.
+    This is step 3 of the passthrough workflow (after synthesis_prepare_optimization
+    or after synthesis_optimize returns status='pending_external').
+    Blends self-rated scores with model-independent heuristics (z-score normalization
+    + dimension-specific weights) and computes score deltas against the original prompt.
 
     Chain: Call synthesis_feedback AFTER using the optimized prompt to report quality.
     """

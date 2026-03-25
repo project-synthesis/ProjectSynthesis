@@ -1,4 +1,4 @@
-"""Heuristic scorer for passthrough bias correction and structural analysis.
+"""Heuristic scorer for hybrid scoring and structural analysis.
 
 Used for MCP passthrough mode where the IDE's LLM self-rates optimized prompts.
 Provides lightweight, dependency-free scoring without requiring an LLM call.
