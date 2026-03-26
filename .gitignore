@@ -98,3 +98,15 @@ test_layout.js
 # Separate projects / experiments
 VSGithub/
 backend/.venv
+
+# MCP debugging/test scripts (scratch)
+call_health.py
+e2e_test_workflow.py
+mcp_client.py
+mcp_client_test.py
+mcp_stdio_tool.py
+run_stdio_health.py
+sse_mcp_client*.py
+test_tools.py
+backend/mcp_client.py
+backend/mcp_wrapper_stdio.py

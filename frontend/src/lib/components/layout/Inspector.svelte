@@ -7,6 +7,16 @@
 
   /** Known domains for the domain picker (legacy compat). */
   const KNOWN_DOMAINS = ['backend', 'frontend', 'database', 'security', 'devops', 'fullstack', 'general'];
+
+  /** Deduplicate array by `id` field (prevents Svelte keyed each errors). */
+  function dedupe<T extends { id: string }>(items: T[]): T[] {
+    const seen = new Set<string>();
+    return items.filter(item => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+  }
   import { getOptimization } from '$lib/api/client';
   import { updateCluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
@@ -277,7 +287,7 @@
             <div class="family-section">
               <div class="section-heading" style="margin-bottom: 4px;">Meta-patterns</div>
               <div class="pattern-list">
-                {#each family.meta_patterns as mp (mp.id)}
+                {#each dedupe(family.meta_patterns) as mp (mp.id)}
                   <div class="pattern-item">
                     <span class="pattern-text">{mp.pattern_text}</span>
                     <span class="source-badge">{mp.source_count}</span>
@@ -292,7 +302,7 @@
             <div class="family-section">
               <div class="section-heading" style="margin-bottom: 4px;">Linked optimizations</div>
               <div class="opt-list">
-                {#each family.optimizations.slice(0, 10) as opt (opt.id)}
+                {#each dedupe(family.optimizations).slice(0, 10) as opt (opt.id)}
                   <button
                     class="opt-item"
                     onclick={() => openOptimization(opt.trace_id, opt.id)}
