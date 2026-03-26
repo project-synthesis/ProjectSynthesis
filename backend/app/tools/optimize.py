@@ -19,7 +19,7 @@ from app.services.event_notification import notify_event_bus
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
-from app.services.routing import RoutingContext, RoutingDecision
+from app.services.routing import RoutingContext
 from app.services.sampling_pipeline import run_sampling_pipeline
 from app.tools._shared import (
     DATA_DIR,
@@ -122,53 +122,6 @@ async def handle_optimize(
                 "(clarity, specificity, structure, faithfulness, conciseness — each 1.0-10.0)."
             ),
         )
-
-    if decision.tier == "sampling":
-        # Check if the CALLING session actually supports sampling.
-        # Global state may say sampling=True (bridge connected) but the
-        # calling client may be a different IDE (e.g., Windsurf via Claude Code)
-        # that doesn't support sampling. Fall back to internal with a notification.
-        session_supports_sampling = False
-        if ctx and hasattr(ctx, "session") and ctx.session:
-            try:
-                client_params = getattr(ctx.session, "_client_params", None)
-                if client_params and hasattr(client_params, "capabilities"):
-                    caps = client_params.capabilities
-                    session_supports_sampling = getattr(caps, "sampling", None) is not None
-            except Exception:
-                pass
-
-        if not session_supports_sampling:
-            # This client can't do sampling — fall back to internal if available
-            logger.warning(
-                "synthesis_optimize: tier=sampling but calling session lacks sampling capability "
-                "(different IDE?). Falling back to internal."
-            )
-            if decision.provider is not None or routing.state.provider is not None:
-                # Fall through to internal pipeline below
-                provider = decision.provider or routing.state.provider
-                provider_name = decision.provider_name or routing.state.provider_name
-                decision = RoutingDecision(
-                    tier="internal",
-                    provider=provider,
-                    provider_name=provider_name,
-                    reason="sampling degraded: calling session lacks sampling capability",
-                    degraded_from="sampling",
-                )
-                await notify_event_bus("optimization_status", {
-                    "phase": "routing", "status": "degraded",
-                    "reason": "Your IDE does not support sampling. Using internal provider instead.",
-                })
-            else:
-                return OptimizeOutput(
-                    status="error",
-                    pipeline_mode="sampling",
-                    strategy_used=effective_strategy,
-                    warnings=[
-                        "Your IDE does not support MCP sampling. "
-                        "Use VS Code with the MCP Copilot Bridge, or disable Force IDE Sampling."
-                    ],
-                )
 
     if decision.tier == "sampling":
         # Sampling pipeline: run via IDE's LLM

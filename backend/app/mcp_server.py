@@ -623,21 +623,15 @@ class _CapabilityDetectionMiddleware:
                 # can connect to the same server — only the bridge
                 # declares sampling.  VS Code native reconnects
                 # periodically and would clear sampling on each reconnect.
-                # Guard: never let a non-sampling client downgrade sampling.
-                # Check both the routing state AND registered sampling sessions —
-                # during brief reconnection gaps, routing may be None/False but
-                # the bridge's session ID is still registered from its last init.
-                cls = _CapabilityDetectionMiddleware
-                sampling_active = (
-                    routing.state.sampling_capable is True
-                    or bool(cls._sampling_session_ids)
-                )
-                if not sampling and sampling_active:
+                if not sampling and routing.state.sampling_capable is True:
                     logger.info(
                         "Capability detection middleware: ignoring sampling=False "
-                        "from %s (sampling session registered or active)",
+                        "from %s (sampling already active from another client)",
                         client_info.get("name", "unknown"),
                     )
+                    # Do NOT update activity — non-sampling clients must not
+                    # keep the sampling tier alive. Only the bridge's initialize
+                    # (sampling=True) refreshes the routing state.
                 else:
                     routing.on_mcp_initialize(sampling_capable=sampling)
             else:

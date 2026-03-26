@@ -56,13 +56,10 @@
       // These events are forwarded by the MCP tool handler to the event bus
       // so the web UI shows phase transitions, model IDs, and scores in real time.
       if (type === 'optimization_status') {
-        const d = data as { phase?: string; status?: string; state?: string; model?: string; reason?: string };
+        const d = data as { phase?: string; status?: string; state?: string; model?: string };
         const phase = d.phase;
         const state = d.status || d.state;
-        if (state === 'degraded' && d.reason) {
-          // Non-sampling IDE triggered optimization — degraded to internal
-          addToast('modified', d.reason as string);
-        } else if (state === 'running' || state === 'complete') {
+        if (state === 'running' || state === 'complete') {
           if (phase === 'analyze' || phase === 'analyzing') forgeStore.status = 'analyzing';
           else if (phase === 'optimize' || phase === 'optimizing') forgeStore.status = 'optimizing';
           else if (phase === 'score' || phase === 'scoring') forgeStore.status = 'scoring';
@@ -119,11 +116,11 @@
           preferencesStore.setPipelineToggle('force_sampling', false);
         }
 
-        // Auto-disable force_passthrough ONLY when sampling newly connects.
-        // Passthrough + sampling are mutually exclusive per the routing matrix.
-        // We do NOT auto-disable passthrough when internal provider exists —
-        // the user may intentionally prefer passthrough over internal.
-        // (onSamplingDetected already handles sampling→passthrough clearing.)
+        // Auto-disable force_passthrough when a better tier becomes available.
+        // Passthrough is the fallback — if internal or sampling appear, upgrade.
+        if (preferencesStore.pipeline.force_passthrough && (d.provider || d.sampling_capable === true)) {
+          preferencesStore.setPipelineToggle('force_passthrough', false);
+        }
 
         if (delta.reconnected) addToast('created', 'MCP client reconnected');
         // Only toast on disconnect when no local provider (true degradation).
@@ -190,10 +187,10 @@
     if (preferencesStore.pipeline.force_sampling && h.sampling_capable !== true) {
       preferencesStore.setPipelineToggle('force_sampling', false);
     }
-    // Note: force_passthrough is NOT auto-disabled when internal provider
-    // exists — user may intentionally prefer passthrough over internal.
-    // Passthrough is only auto-disabled when sampling connects (via
-    // onSamplingDetected which already handles this).
+    // Auto-disable force_passthrough when a better tier is available.
+    if (preferencesStore.pipeline.force_passthrough && (h.sampling_capable === true || h.provider)) {
+      preferencesStore.setPipelineToggle('force_passthrough', false);
+    }
 
     if (!firstHealthReceived) {
       firstHealthReceived = true;
