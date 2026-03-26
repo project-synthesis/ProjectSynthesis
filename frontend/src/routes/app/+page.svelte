@@ -112,9 +112,14 @@
         }
 
         // Auto-disable force_sampling INSTANTLY when sampling goes away.
-        // Detect: was sampling capable, now isn't.
         if (wasSamplingCapable && d.sampling_capable !== true && preferencesStore.pipeline.force_sampling) {
           preferencesStore.setPipelineToggle('force_sampling', false);
+        }
+
+        // Auto-disable force_passthrough when a better tier becomes available.
+        // Passthrough is the fallback — if internal or sampling appear, upgrade.
+        if (preferencesStore.pipeline.force_passthrough && (d.provider || d.sampling_capable === true)) {
+          preferencesStore.setPipelineToggle('force_passthrough', false);
         }
 
         if (delta.reconnected) addToast('created', 'MCP client reconnected');
@@ -181,6 +186,10 @@
     // Safety net for startup with stale preferences.json.
     if (preferencesStore.pipeline.force_sampling && h.sampling_capable !== true) {
       preferencesStore.setPipelineToggle('force_sampling', false);
+    }
+    // Auto-disable force_passthrough when a better tier is available.
+    if (preferencesStore.pipeline.force_passthrough && (h.sampling_capable === true || h.provider)) {
+      preferencesStore.setPipelineToggle('force_passthrough', false);
     }
 
     if (!firstHealthReceived) {
