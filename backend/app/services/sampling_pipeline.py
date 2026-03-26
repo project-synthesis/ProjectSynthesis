@@ -153,21 +153,55 @@ def _extract_text(result: CreateMessageResult) -> str:
     raise ValueError("Cannot extract text from sampling result")
 
 
+def _extract_json_block(text: str) -> str | None:
+    """Extract the outermost JSON object from text, handling nested braces.
+
+    Tries markdown code blocks first (most reliable), then falls back to
+    brace-depth counting on bare text.
+    """
+    # Try markdown code blocks first (```json ... ```)
+    blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text)
+    for block in blocks:
+        block = block.strip()
+        if block.startswith("{"):
+            return block
+
+    # Fall back to brace-depth counting (find outermost {...})
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+        if depth == 0:
+            return text[start : i + 1]
+    return None
+
+
 def _parse_text_response(text: str, model_cls: type[T]) -> T:
     """Parse a text response into a Pydantic model.
 
-    Tries direct JSON parse, then markdown code-block extraction.
+    Tries direct JSON parse, then code-block extraction with brace-depth
+    counting to handle nested objects correctly.
     """
-    # Try direct JSON
-    try:
-        return model_cls.model_validate_json(text)
-    except Exception:
-        pass
+    # Try direct JSON parse (LLM returned pure JSON)
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            return model_cls.model_validate_json(stripped)
+        except Exception:
+            pass
 
-    # Try extracting from code block
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if match:
-        return model_cls.model_validate_json(match.group(1))
+    # Try extracting JSON from markdown or surrounding text
+    json_block = _extract_json_block(text)
+    if json_block:
+        try:
+            return model_cls.model_validate_json(json_block)
+        except Exception as exc:
+            logger.debug("JSON block found but validation failed: %s", exc)
 
     raise ValueError(
         f"Cannot parse sampling response as {model_cls.__name__}: {text[:200]}"
@@ -304,6 +338,80 @@ class SamplingLLMAdapter(LLMProvider):
             max_tokens=max_tokens,
         )
         return parsed
+
+
+def _build_analysis_from_text(text: str, default_strategy: str) -> AnalysisResult:
+    """Best-effort analysis extraction from free-text LLM response.
+
+    Searches for keywords and patterns to extract task_type, domain,
+    weaknesses, and strengths instead of returning all-"general" defaults.
+    """
+    lower = text.lower()
+
+    # Infer task_type from keywords
+    task_type = "general"
+    type_keywords = {
+        "coding": ["function", "code", "api", "class", "program", "script", "endpoint", "module"],
+        "writing": ["write", "essay", "article", "blog", "content", "copy", "draft"],
+        "analysis": ["analyze", "evaluate", "assess", "compare", "review", "audit"],
+        "creative": ["creative", "story", "poem", "design", "brainstorm", "imagine"],
+        "data": ["data", "dataset", "sql", "query", "csv", "statistics", "visualization"],
+        "system": ["system", "architecture", "infrastructure", "deploy", "devops", "pipeline"],
+    }
+    best_count = 0
+    for ttype, keywords in type_keywords.items():
+        count = sum(1 for kw in keywords if kw in lower)
+        if count > best_count:
+            best_count = count
+            task_type = ttype
+
+    # Infer domain from keywords
+    domain = "general"
+    domain_keywords = {
+        "backend": ["backend", "server", "api", "database", "endpoint", "fastapi", "django"],
+        "frontend": ["frontend", "react", "svelte", "css", "html", "ui", "component"],
+        "database": ["database", "sql", "query", "schema", "migration", "index"],
+        "security": ["security", "auth", "encryption", "vulnerability", "token"],
+        "devops": ["deploy", "docker", "ci/cd", "kubernetes", "infrastructure"],
+        "fullstack": ["fullstack", "full-stack", "end-to-end"],
+    }
+    for dom, keywords in domain_keywords.items():
+        if any(kw in lower for kw in keywords):
+            domain = dom
+            break
+
+    # Extract weaknesses and strengths from structured sections if present
+    weaknesses: list[str] = []
+    strengths: list[str] = []
+    for marker in ("weakness", "issue", "problem", "lack", "missing", "vague"):
+        if marker in lower:
+            weaknesses.append(f"Detected: {marker} mentioned in analysis")
+    if not weaknesses:
+        weaknesses = ["Analysis could not be fully parsed from sampling response"]
+
+    for marker in ("strength", "clear", "specific", "well-structured", "good"):
+        if marker in lower:
+            strengths.append(f"Detected: {marker} mentioned in analysis")
+    if not strengths:
+        strengths = ["Prompt provided for optimization"]
+
+    # Confidence scales with how much we extracted
+    fields_extracted = sum([
+        task_type != "general",
+        domain != "general",
+        len(weaknesses) > 1,
+        len(strengths) > 1,
+    ])
+    confidence = 0.4 + (fields_extracted * 0.1)  # 0.4 to 0.8
+
+    return AnalysisResult(
+        task_type=task_type,
+        weaknesses=weaknesses[:5],
+        strengths=strengths[:5],
+        selected_strategy=default_strategy,
+        strategy_rationale=f"Strategy from pipeline preferences (text analysis inferred {task_type}/{domain})",
+        confidence=confidence,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -455,14 +563,7 @@ async def run_sampling_pipeline(
         try:
             analysis = _parse_text_response(text, AnalysisResult)
         except Exception:
-            analysis = AnalysisResult(
-                task_type="general",
-                weaknesses=["Could not parse analysis"],
-                strengths=["Prompt provided"],
-                selected_strategy="auto",
-                strategy_rationale="Fallback due to parse failure",
-                confidence=0.5,
-            )
+            analysis = _build_analysis_from_text(text, strategy_override or "auto")
     model_ids["analyze"] = analyze_model
     phase_durations["analyze_ms"] = int((time.monotonic() - phase_t0) * 1000)
     if trace_logger:
@@ -618,9 +719,19 @@ async def run_sampling_pipeline(
         try:
             optimization = _parse_text_response(text, OptimizationResult)
         except Exception:
+            # Extract what we can from the raw text response
+            cleaned = text.strip()
+            # Try to split out a change summary if the LLM included one
+            summary = "Restructured with added specificity and constraints"
+            for marker in ("## Change Summary", "## Changes", "**Changes**", "Changes:"):
+                if marker in cleaned:
+                    parts = cleaned.split(marker, 1)
+                    cleaned = parts[0].strip()
+                    summary = parts[1].strip()[:500]
+                    break
             optimization = OptimizationResult(
-                optimized_prompt=text.strip(),
-                changes_summary="Optimized via sampling (raw response)",
+                optimized_prompt=cleaned,
+                changes_summary=summary,
                 strategy_used=effective_strategy,
             )
     model_ids["optimize"] = optimize_model
@@ -707,6 +818,14 @@ async def run_sampling_pipeline(
                     "Score divergence between LLM and heuristic on: "
                     + ", ".join(blended_optimized.divergence_flags)
                 )
+        else:
+            # LLM scoring failed or was unavailable — use heuristic scores
+            # directly (already computed at lines 652-655).
+            original_scores = DimensionScores.from_dict(heur_original)
+            optimized_scores = DimensionScores.from_dict(heur_optimized)
+            deltas = DimensionScores.compute_deltas(original_scores, optimized_scores)
+            scoring_mode = "heuristic"
+            logger.info("Using heuristic-only scores (LLM scorer unavailable)")
 
         phase_durations["score_ms"] = int((time.monotonic() - phase_t0) * 1000)
         if trace_logger:
