@@ -34,12 +34,14 @@
           const label = type === 'optimization_analyzed' ? 'analyzed' : 'optimized';
           addToast('created', `Prompt ${label}`);
         }
-        // Auto-load sampling result via event bus when the SSE optimize stream
-        // may have dropped (the /api/events SSE has its own keepalive and is
-        // more reliable than the /api/optimize SSE during long MCP calls).
+        // Auto-load sampling result via event bus. Covers two scenarios:
+        // 1. Web UI SYNTHESIZE with sampling proxy — SSE stream may drop during
+        //    the 20-30s MCP call (forgeStore.status = analyzing/optimizing/scoring)
+        // 2. IDE-triggered optimization via MCP bridge — the web UI was idle but
+        //    should show the result (forgeStore.status = idle)
         if (type === 'optimization_created' && data.trace_id && data.status === 'completed') {
-          const isWaiting = ['analyzing', 'optimizing', 'scoring'].includes(forgeStore.status);
-          if (isWaiting) {
+          const shouldLoad = forgeStore.status !== 'complete';
+          if (shouldLoad) {
             import('$lib/api/client').then(({ getOptimization }) => {
               getOptimization(data.trace_id as string).then(opt => {
                 if (opt.status === 'completed' && forgeStore.status !== 'complete') {
