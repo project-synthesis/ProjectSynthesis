@@ -5,8 +5,9 @@
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import type { Preferences } from '$lib/stores/preferences.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
-  import { getHealth, connectEventStream } from '$lib/api/client';
+  import { getHealth, getOptimization, connectEventStream } from '$lib/api/client';
   import type { HealthResponse } from '$lib/api/client';
+  import { editorStore } from '$lib/stores/editor.svelte';
   import { triggerTierGuide } from '$lib/stores/tier-onboarding.svelte';
   import { routing } from '$lib/stores/routing.svelte';
 
@@ -33,6 +34,23 @@
         if (type !== 'refinement_turn' && data.trace_id && !isOwnTrace) {
           const label = type === 'optimization_analyzed' ? 'analyzed' : 'optimized';
           addToast('created', `Prompt ${label}`);
+        }
+        // Auto-load result when forge is in an active state but the forge SSE
+        // stream didn't deliver the result (REST proxy timeout, MCP direct call).
+        // This bridges the gap between the ambient event bus and the forge store.
+        if (
+          type === 'optimization_created' &&
+          data.trace_id &&
+          data.status === 'completed' &&
+          !forgeStore.result &&
+          (forgeStore.status === 'analyzing' || forgeStore.status === 'optimizing' || forgeStore.status === 'scoring')
+        ) {
+          getOptimization(data.trace_id as string).then((opt) => {
+            if (opt.status === 'completed' && !forgeStore.result) {
+              forgeStore.loadFromRecord(opt);
+              editorStore.openResult(opt.id);
+            }
+          }).catch(() => { /* reconnect polling will catch it */ });
         }
       }
       if (type === 'optimization_failed') {
