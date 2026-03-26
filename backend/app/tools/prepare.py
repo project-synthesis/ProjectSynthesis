@@ -61,13 +61,16 @@ async def handle_prepare(
     )
 
     # Unified context enrichment — resolves guidance, adaptation, analysis, patterns
+    from app.config import PROJECT_ROOT
+    effective_workspace = workspace_path or str(PROJECT_ROOT)
+
     context_service = get_context_service()
     async with async_session_factory() as enrich_db:
         enrichment = await context_service.enrich(
             raw_prompt=prompt,
             tier="passthrough",
             db=enrich_db,
-            workspace_path=workspace_path,
+            workspace_path=effective_workspace,
             mcp_ctx=ctx,
             repo_full_name=repo_full_name,
         )

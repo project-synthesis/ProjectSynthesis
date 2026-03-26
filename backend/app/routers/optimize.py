@@ -398,11 +398,13 @@ async def passthrough_prepare(
     if not context_service:
         raise HTTPException(status_code=503, detail="Context enrichment service not initialized.")
 
+    from app.config import PROJECT_ROOT as _PT_ROOT
+    effective_pt_workspace = body.workspace_path or str(_PT_ROOT)
     enrichment = await context_service.enrich(
         raw_prompt=body.prompt,
         tier="passthrough",
         db=db,
-        workspace_path=body.workspace_path,
+        workspace_path=effective_pt_workspace,
         repo_full_name=body.repo_full_name,
         applied_pattern_ids=body.applied_pattern_ids,
     )

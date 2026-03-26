@@ -61,13 +61,17 @@ async def handle_optimize(
     decision = routing.resolve(ctx_routing)
 
     # ---- Unified context enrichment ----
+    # Default workspace_path to PROJECT_ROOT when not provided by the caller.
+    from app.config import PROJECT_ROOT
+    effective_workspace = workspace_path or str(PROJECT_ROOT)
+
     context_service = get_context_service()
     async with async_session_factory() as enrich_db:
         enrichment = await context_service.enrich(
             raw_prompt=prompt,
             tier=decision.tier,
             db=enrich_db,
-            workspace_path=workspace_path,
+            workspace_path=effective_workspace,
             mcp_ctx=ctx,
             repo_full_name=repo_full_name,
             applied_pattern_ids=applied_pattern_ids,
