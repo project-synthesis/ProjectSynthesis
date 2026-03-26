@@ -353,16 +353,40 @@ class _MCPAuthMiddleware:
 
 
 class _CapabilityDetectionMiddleware:
-    """Intercept JSON-RPC ``initialize`` to detect client capabilities."""
+    """Intercept MCP protocol messages to track client capabilities.
+
+    Tracks two categories of MCP clients independently:
+
+    1. **Sampling clients** (e.g., VS Code bridge) — declare ``sampling``
+       in their ``initialize`` capabilities.  Their session IDs and SSE
+       streams are tracked separately so disconnect is instant when they
+       leave, regardless of other clients.
+
+    2. **Non-sampling clients** (e.g., Claude Code) — do NOT affect
+       sampling state.  Their activity keeps the general MCP connection
+       alive but never refreshes the sampling timer.
+
+    Design invariants:
+    - ``routing.on_mcp_initialize(sampling_capable=True)`` fires ONLY
+      when a sampling client sends ``initialize``.
+    - ``routing.on_mcp_activity()`` fires ONLY from sampling client
+      POST requests and SSE body chunks.
+    - ``routing.on_mcp_disconnect()`` fires INSTANTLY when the last
+      sampling SSE stream closes, OR when all SSE streams close.
+    - Non-sampling clients cannot keep sampling alive or prevent
+      disconnect detection.
+    """
 
     _last_activity_write: float = 0.0
     _ACTIVITY_WRITE_THROTTLE: float = 10.0
     _active_sse_streams: int = 0
-    _sampling_session_ids: set[str] = set()  # Sessions that declared sampling
-    _sampling_sse_sessions: set[str] = set()  # SSE streams from sampling sessions
+    _sampling_session_ids: set[str] = set()
+    _sampling_sse_sessions: set[str] = set()
 
     def __init__(self, app):
         self.app = app
+
+    # ── Request dispatch ──────────────────────────────────────────
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -376,13 +400,28 @@ class _CapabilityDetectionMiddleware:
         else:
             await self.app(scope, receive, send)
 
+    # ── POST handler (initialize + tool calls) ────────────────────
+
     async def _handle_post(self, scope, receive, send):
-        self._touch_activity()
         body_chunks: list[bytes] = []
         response_status: int = 0
         is_initialize = False
         sampling_declared = False
         cls = _CapabilityDetectionMiddleware
+
+        # Extract request session ID for per-client activity tracking
+        req_headers = dict(
+            (k.decode() if isinstance(k, bytes) else k,
+             v.decode() if isinstance(v, bytes) else v)
+            for k, v in scope.get("headers", [])
+        )
+        req_session_id = req_headers.get("mcp-session-id", "")
+        is_sampling_client = req_session_id in cls._sampling_session_ids
+
+        # Only refresh routing activity from sampling clients
+        if is_sampling_client:
+            self._touch_routing_activity()
+        self._touch_session_file()
 
         async def _buffered_receive():
             nonlocal is_initialize, sampling_declared
@@ -391,7 +430,6 @@ class _CapabilityDetectionMiddleware:
                 body_chunks.append(message.get("body", b""))
                 if not message.get("more_body", False):
                     body = b"".join(body_chunks)
-                    # Detect if this is an initialize with sampling
                     try:
                         data = _json.loads(body)
                         if isinstance(data, dict) and data.get("method") == "initialize":
@@ -407,20 +445,20 @@ class _CapabilityDetectionMiddleware:
             nonlocal response_status
             if message["type"] == "http.response.start":
                 response_status = message.get("status", 0)
-                # Capture the new session ID from initialize response
                 if is_initialize and response_status == 200:
+                    # Register session ID by capability
                     resp_headers = dict(
                         (k.decode() if isinstance(k, bytes) else k,
                          v.decode() if isinstance(v, bytes) else v)
                         for k, v in message.get("headers", [])
                     )
-                    new_session_id = resp_headers.get("mcp-session-id", "")
-                    if new_session_id:
+                    sid = resp_headers.get("mcp-session-id", "")
+                    if sid:
                         if sampling_declared:
-                            cls._sampling_session_ids.add(new_session_id)
-                            logger.info("Sampling session registered: %s", new_session_id[:12])
+                            cls._sampling_session_ids.add(sid)
+                            logger.info("Sampling session registered: %s", sid[:12])
                         else:
-                            cls._sampling_session_ids.discard(new_session_id)
+                            cls._sampling_session_ids.discard(sid)
             await send(message)
 
         await self.app(scope, _buffered_receive, _capture_send)
@@ -428,20 +466,20 @@ class _CapabilityDetectionMiddleware:
         if response_status in (400, 404):
             self._invalidate_stale_session()
 
+    # ── GET handler (SSE streams) ─────────────────────────────────
+
     async def _handle_get(self, scope, receive, send):
         headers = dict(
-            (k.decode() if isinstance(k, bytes) else k, v.decode() if isinstance(v, bytes) else v)
+            (k.decode() if isinstance(k, bytes) else k,
+             v.decode() if isinstance(v, bytes) else v)
             for k, v in scope.get("headers", [])
         )
-        has_session_id = "mcp-session-id" in headers
         session_id = headers.get("mcp-session-id", "")
+        has_session_id = bool(session_id)
         is_sampling_stream = session_id in self._sampling_session_ids
 
         if not has_session_id:
-            logger.info(
-                "GET /mcp without Mcp-Session-Id — allowing SSE stream "
-                "for seamless reconnection after server restart",
-            )
+            logger.info("GET /mcp without session ID — allowing for reconnection")
 
         get_handled = False
         get_is_sse = False
@@ -459,20 +497,21 @@ class _CapabilityDetectionMiddleware:
                     cls._active_sse_streams += 1
                     if is_sampling_stream:
                         cls._sampling_sse_sessions.add(session_id)
-                        logger.info("Sampling SSE stream opened: %s", session_id[:12])
+                        logger.info("Sampling SSE opened: %s (total=%d, sampling=%d)",
+                                    session_id[:12], cls._active_sse_streams,
+                                    len(cls._sampling_sse_sessions))
                     if not has_session_id:
                         cls._write_optimistic_session()
-                    else:
-                        # Session-WITH reconnection: reset throttle and
-                        # force immediate activity touch so mcp_reconnect
-                        # event broadcasts without waiting for body chunks
-                        # to pass the 10-second throttle window.
-                        cls._last_activity_write = 0.0
+                    elif is_sampling_stream:
+                        # Sampling client reconnect — refresh routing
                         routing = _shared._routing
                         if routing:
                             routing.on_mcp_activity()
             elif message["type"] == "http.response.body" and get_is_sse:
-                cls._touch_activity()
+                # SSE body chunk — only refresh routing from sampling streams
+                if is_sampling_stream:
+                    self._touch_routing_activity()
+                self._touch_session_file()
             await send(message)
 
         try:
@@ -480,53 +519,68 @@ class _CapabilityDetectionMiddleware:
         finally:
             if get_is_sse:
                 cls._active_sse_streams = max(0, cls._active_sse_streams - 1)
-                # Track if THIS was a sampling stream
                 was_sampling = session_id in cls._sampling_sse_sessions
                 if was_sampling:
                     cls._sampling_sse_sessions.discard(session_id)
-                    logger.info(
-                        "Sampling SSE stream closed: %s — INSTANT disconnect",
-                        session_id[:12],
-                    )
-                cls._flush_sse_streams()
+
+                # Update session file
+                try:
+                    _session_file.update(sse_streams=cls._active_sse_streams)
+                except Exception:
+                    pass
+
+                # Disconnect logic
                 if cls._active_sse_streams == 0:
-                    logger.info("Last SSE stream closed — client disconnected")
+                    logger.info("Last SSE stream closed — full disconnect")
                     routing = _shared._routing
                     if routing:
                         routing.on_mcp_disconnect()
-                elif was_sampling:
-                    # The sampling client's stream closed but non-sampling
-                    # clients (Claude Code) remain. Clear sampling IMMEDIATELY.
+                elif was_sampling and not cls._sampling_sse_sessions:
+                    # Last SAMPLING stream closed — instant sampling disconnect
+                    # Non-sampling clients (Claude Code) stay connected
+                    logger.info("Last sampling SSE closed — sampling disconnect (non-sampling streams remain)")
                     routing = _shared._routing
-                    if routing and routing.state.sampling_capable is True:
+                    if routing:
                         routing.on_mcp_disconnect()
 
+    # ── Activity tracking ─────────────────────────────────────────
+
     @classmethod
-    def _flush_sse_streams(cls) -> None:
+    def _touch_routing_activity(cls) -> None:
+        """Refresh routing in-memory state (sampling clients only)."""
+        routing = _shared._routing
+        if routing:
+            routing.on_mcp_activity()
+
+    @classmethod
+    def _touch_session_file(cls) -> None:
+        """Write activity timestamp to session file (throttled, all clients)."""
+        now_mono = time.monotonic()
+        if now_mono - cls._last_activity_write < cls._ACTIVITY_WRITE_THROTTLE:
+            return
+        cls._last_activity_write = now_mono
         try:
-            fields: dict = {"sse_streams": cls._active_sse_streams}
-            if cls._active_sse_streams > 0:
-                fields["last_activity"] = datetime.now(timezone.utc).isoformat()
-                routing = _shared._routing
-                if routing:
-                    routing.on_mcp_activity()
-            _session_file.update(**fields)
+            data = _session_file.read()
+            if data is not None:
+                data["last_activity"] = datetime.now(timezone.utc).isoformat()
+                data["sse_streams"] = cls._active_sse_streams
+                _session_file.write(data)
         except Exception:
-            logger.debug("_flush_sse_streams: could not update mcp_session.json", exc_info=True)
+            logger.debug("_touch_session_file failed", exc_info=True)
+
+    # ── Optimistic session (reconnection) ─────────────────────────
 
     @classmethod
     def _write_optimistic_session(cls) -> None:
+        """Session-less GET succeeded — client reconnecting after server restart."""
         try:
             routing = _shared._routing
             if routing:
                 routing.on_mcp_initialize(sampling_capable=True)
             _session_file.write_session(True, sse_streams=cls._active_sse_streams)
-            logger.info(
-                "Optimistic session write: sampling_capable=True "
-                "(session-less GET succeeded — client reconnecting)",
-            )
+            logger.info("Optimistic session write: sampling_capable=True (reconnection)")
         except Exception:
-            logger.debug("Could not write optimistic mcp_session.json", exc_info=True)
+            logger.debug("Could not write optimistic session", exc_info=True)
 
     @staticmethod
     def _invalidate_stale_session() -> None:
@@ -539,29 +593,6 @@ class _CapabilityDetectionMiddleware:
                 "Stale session cleanup: removed mcp_session.json after failed "
                 "client reconnection (400/404)",
             )
-
-    @classmethod
-    def _touch_activity(cls) -> None:
-        """Update session file only (NOT routing in-memory state).
-
-        The routing manager's ``last_activity`` is set exclusively by
-        ``on_mcp_initialize()`` — this ensures only sampling-capable
-        clients (the bridge) keep the sampling tier alive. Non-sampling
-        clients (Claude Code) write to the session file for general MCP
-        connectivity tracking but do NOT refresh the sampling timer.
-        """
-        now_mono = time.monotonic()
-        if now_mono - cls._last_activity_write < cls._ACTIVITY_WRITE_THROTTLE:
-            return
-        cls._last_activity_write = now_mono
-        try:
-            data = _session_file.read()
-            if data is not None:
-                data["last_activity"] = datetime.now(timezone.utc).isoformat()
-                data["sse_streams"] = cls._active_sse_streams
-                _session_file.write(data)
-        except Exception:
-            logger.debug("_touch_activity: could not update mcp_session.json", exc_info=True)
 
     @staticmethod
     def _inspect_initialize(body: bytes) -> None:

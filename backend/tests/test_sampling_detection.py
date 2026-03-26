@@ -6,7 +6,7 @@ Covers:
 - Preferences REST API: force_passthrough / force_sampling mutual exclusion via HTTP
 - Integration: cross-system consistency (health + preferences + passthrough endpoints)
 - _CapabilityDetectionMiddleware: ASGI middleware intercepts MCP initialize + activity tracking
-- _touch_activity: throttled activity tracking, reconnection detection
+- _touch_session_file: throttled activity tracking, reconnection detection
 - mcp_disconnected: dual-window staleness (30min capability + 5min activity)
 """
 
@@ -955,12 +955,12 @@ class TestRoutingManagerDisconnect:
 
 
 # ---------------------------------------------------------------------------
-# _touch_activity with RoutingManager — primary path
+# _touch_session_file with RoutingManager — primary path
 # ---------------------------------------------------------------------------
 
 
 class TestTouchActivityWithRouting:
-    """Test _touch_activity when RoutingManager is active."""
+    """Test _touch_session_file when RoutingManager is active."""
 
     @pytest.fixture(autouse=True)
     def _reset_throttle(self):
@@ -979,7 +979,7 @@ class TestTouchActivityWithRouting:
         return rm
 
     def test_touch_does_not_update_routing_state(self, routing):
-        """_touch_activity writes to session file only, NOT routing state.
+        """_touch_session_file writes to session file only, NOT routing state.
 
         This ensures non-sampling clients (e.g., Claude Code) don't keep
         the sampling tier alive via routine POST activity.
@@ -992,18 +992,18 @@ class TestTouchActivityWithRouting:
         # Simulate disconnect
         routing._state = _replace(routing._state, mcp_connected=False)
 
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
         # Must NOT reconnect — only on_mcp_initialize does that
         assert routing.state.mcp_connected is False
 
 
 # ---------------------------------------------------------------------------
-# _touch_activity — throttled activity tracking on every MCP POST
+# _touch_session_file — throttled activity tracking on every MCP POST
 # ---------------------------------------------------------------------------
 
 
 class TestTouchActivity:
-    """Tests for the _touch_activity classmethod in the middleware (fallback path).
+    """Tests for the _touch_session_file classmethod in the middleware (fallback path).
 
     Sets ``_routing = None`` so middleware uses the legacy file-write path.
     """
@@ -1041,7 +1041,7 @@ class TestTouchActivity:
         self._write_session(data_dir)
         before = json.loads((data_dir / "mcp_session.json").read_text())
 
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
 
         after = json.loads((data_dir / "mcp_session.json").read_text())
         assert after["last_activity"] != before["last_activity"] or \
@@ -1054,7 +1054,7 @@ class TestTouchActivity:
         self._write_session(data_dir, sampling_capable=True)
         before = json.loads((data_dir / "mcp_session.json").read_text())
 
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
 
         after = json.loads((data_dir / "mcp_session.json").read_text())
         assert after["sampling_capable"] == before["sampling_capable"]
@@ -1065,11 +1065,11 @@ class TestTouchActivity:
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         self._write_session(data_dir)
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
         first = json.loads((data_dir / "mcp_session.json").read_text())["last_activity"]
 
         # Second call — should be throttled (doesn't write)
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
         second = json.loads((data_dir / "mcp_session.json").read_text())["last_activity"]
 
         assert first == second
@@ -1078,7 +1078,7 @@ class TestTouchActivity:
         """No crash when mcp_session.json doesn't exist."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
         # No assertion needed — no crash = success
 
     def test_updates_activity_on_stale_session(self, data_dir):
@@ -1088,7 +1088,7 @@ class TestTouchActivity:
         # Write session with activity 400s ago (> 300s threshold)
         self._write_session(data_dir, sampling_capable=True, activity_age_seconds=400)
 
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
         after = json.loads((data_dir / "mcp_session.json").read_text())
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(after["last_activity"])).total_seconds()
         assert age < 5  # Activity was refreshed
@@ -1100,7 +1100,7 @@ class TestTouchActivity:
         # Write session with activity 60s ago (< 300s threshold)
         self._write_session(data_dir, sampling_capable=True, activity_age_seconds=60)
 
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
         after = json.loads((data_dir / "mcp_session.json").read_text())
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(after["last_activity"])).total_seconds()
         assert age < 5  # Activity was refreshed
@@ -1110,7 +1110,7 @@ class TestTouchActivity:
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         (data_dir / "mcp_session.json").write_text("not json!")
-        _CapabilityDetectionMiddleware._touch_activity()
+        _CapabilityDetectionMiddleware._touch_session_file()
         # No crash = success
 
 
