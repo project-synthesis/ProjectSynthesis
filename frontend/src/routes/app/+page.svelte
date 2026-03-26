@@ -96,45 +96,32 @@
       }
       if (type === 'routing_state_changed') {
         const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
-
-        // Snapshot previous state for transition detection
         const wasSamplingCapable = forgeStore.samplingCapable === true;
-        const hadProvider = !!forgeStore.provider;
-
-        // Apply new state
         const delta = forgeStore.updateRoutingState({
           sampling_capable: d.sampling_capable,
           mcp_disconnected: !d.mcp_connected,
           provider: d.provider,
         });
 
-        // ── Toggle auto-sync (transition-based, not every-event) ──
-        //
-        // Sampling connected (transition: was false/null → now true)
+        // Auto-enable force_sampling when sampling becomes available
         if (delta.samplingChanged) {
           onSamplingDetected();
-          // Enable sampling, which auto-clears passthrough via mutual exclusion
-          preferencesStore.setPipelineToggle('force_sampling', true);
-        }
-
-        // Sampling disconnected (transition: was true → now false/null)
-        if (wasSamplingCapable && d.sampling_capable !== true) {
-          if (preferencesStore.pipeline.force_sampling) {
-            preferencesStore.setPipelineToggle('force_sampling', false);
+          if (!preferencesStore.pipeline.force_sampling) {
+            preferencesStore.setPipelineToggle('force_sampling', true);
           }
         }
 
-        // Internal provider appeared (transition: had none → now have one)
-        // Only auto-clear passthrough when a BETTER tier newly appears.
-        if (!hadProvider && d.provider && preferencesStore.pipeline.force_passthrough) {
-          preferencesStore.setPipelineToggle('force_passthrough', false);
+        // Auto-disable force_sampling INSTANTLY when sampling goes away.
+        // Detect: was sampling capable, now isn't.
+        if (wasSamplingCapable && d.sampling_capable !== true && preferencesStore.pipeline.force_sampling) {
+          preferencesStore.setPipelineToggle('force_sampling', false);
         }
 
-        // ── Toasts ──
         if (delta.reconnected) addToast('created', 'MCP client reconnected');
+        // Only toast on disconnect when no local provider (true degradation).
+        // When CLI/API is available, the auto-fallback is silent.
         if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
-
-        // ── Tier guide ──
+        // Trigger onboarding guide for the new tier (dedup guard prevents redundant opens)
         queueMicrotask(() => triggerTierGuide(routing.tier));
       }
       if (type === 'preferences_changed') {
@@ -185,23 +172,19 @@
     forgeStore.phaseDurations = (h.phase_durations && Object.keys(h.phase_durations).length > 0) ? h.phase_durations : null;
     if (delta.samplingChanged) {
       onSamplingDetected();
+      // Auto-enable force_sampling when detected via health poll
       if (!preferencesStore.pipeline.force_sampling) {
         preferencesStore.setPipelineToggle('force_sampling', true);
       }
     }
+    // Auto-disable force_sampling if sampling is not available.
+    // Safety net for startup with stale preferences.json.
+    if (preferencesStore.pipeline.force_sampling && h.sampling_capable !== true) {
+      preferencesStore.setPipelineToggle('force_sampling', false);
+    }
 
     if (!firstHealthReceived) {
       firstHealthReceived = true;
-      // Startup-only safety net: clear stale toggle preferences that
-      // conflict with actual capabilities. Only runs ONCE on first
-      // health response — never on subsequent polls (which would
-      // override user's explicit toggle choices).
-      if (preferencesStore.pipeline.force_sampling && h.sampling_capable !== true) {
-        preferencesStore.setPipelineToggle('force_sampling', false);
-      }
-      if (preferencesStore.pipeline.force_passthrough && (h.sampling_capable === true || h.provider)) {
-        preferencesStore.setPipelineToggle('force_passthrough', false);
-      }
       queueMicrotask(() => triggerTierGuide(routing.tier));
     }
   }
