@@ -163,7 +163,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~90s, 1036 tests)
+# Backend tests (~90s, 1037 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check (935 files)

@@ -4,8 +4,54 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.5-dev — 2026-03-26
+
 ### Added
+- Added MCP Copilot Bridge VS Code extension with dynamic tool discovery, sampling handler, health check auto-reconnect, roots/list support, and phase-aware schema injection
+- Added `canBeReferencedInPrompt` + `languageModelToolSets` for all 11 MCP tools in bridge manifest — enables Copilot agent mode visibility
+- Added REST→MCP sampling proxy with SSE keepalive (10s heartbeat) for web UI sampling when Force IDE Sampling is ON
+- Added event bus auto-load: frontend loads sampling results via `/api/events` SSE when `/api/optimize` stream drops
+- Added deep workspace scanning: README.md (80 lines), entry point files (40 lines × 3), architecture docs (60 lines × 3) injected alongside guidance files
+- Added `McpError` catch in `_sampling_request_structured` — VS Code MCP client throws McpError (not TypeError) when tool calling is unsupported
+- Added JSON schema injection in sampling text fallback — when tool calling fails, JSON schema appended to user message
+- Added JSON terminal directive to scoring system prompt (sampling only) — forces JSON output from IDE LLM
+- Added `_strip_meta_header`: strips LLM preambles ("Here is the optimized prompt..."), code fence wrappers, meta-headers, trailing orphaned `#`
+- Added `_split_prompt_and_changes`: separates LLM change rationale from optimized prompt via 14 marker patterns
+- Added `_build_analysis_from_text`: keyword-based task_type/domain/intent extraction from free-text LLM responses with confidence scaling
+- Added sampling downgrade prevention — non-sampling MCP clients no longer overwrite `sampling_capable=True` set by the bridge
+- Added `sync-tools.js` build script for bridge extension — queries MCP server `tools/list` and generates `package.json` manifest
 - Added `VALID_DOMAINS` whitelist in `pipeline_constants.py` — shared across MCP and REST passthrough handlers
+
+### Changed
+- Optimize template: unconditionally anchors to workspace context (removed conditional "If the original prompt references a codebase")
+- Optimize template: strategy takes precedence over conciseness rule when they conflict (fixes chain-of-thought/role-playing dissonance)
+- Optimize template: evaluates weaknesses with judgment instead of blind obedience to analyzer checklist
+- Optimize template: changes summary requires rich markdown format (table, numbered list, or nested bullets)
+- Codebase context now available for ALL routing tiers when repo linked (was passthrough-only)
+- All 4 enrichment call sites default `workspace_path` to `PROJECT_ROOT` when not provided
+- Scoring `max_tokens` capped to 1024 for sampling (was 16384 — prevented LLM timeout from verbose chain-of-thought)
+- Heuristic clarity: clamp Flesch to [0, 100] before mapping + structural clarity bonus for headers/bullets
+- Inspector shows Analyzer/Optimizer/Scorer models on separate rows (was single crammed line)
+- Navigator SYSTEM card Scoring row shows actual model ID dynamically (was hardcoded "hybrid (via IDE)")
+- ForgeArtifact section title uses `--tier-accent` color (was static dim)
+- Bridge sampling handler: phase-aware schema injection (JSON schema only for analyze/score, free-text for optimize/suggest)
+- Passthrough template: per-dimension scale anchors, anti-inflation guidance, domain/intent_label fields in JSON spec
+- Hardened cookie security: SameSite=Lax, environment-gated Secure flag, /api path scope, 14-day session lifetime
+
+### Fixed
+- Sampling score phase: caught `McpError` in structured request fallback (VS Code throws McpError, not TypeError)
+- Sampling score phase: `run_sampling_analyze` parity — added fallback error handling + JSON directive + max_tokens cap
+- UI stale after sampling: event bus auto-load fires for ALL forge statuses (was only analyzing/optimizing/scoring)
+- UI horizontal scroll: `min-width: 0` across full flex/grid layout chain (layout → EditorGroups → ForgeArtifact → MarkdownRenderer)
+- LLM code fence wrapper: frontend + backend strip `\`\`\`markdown` wrapping, preamble sentences, trailing `\`\`\``, orphaned `#`
+- Sampling state race: non-sampling client `initialize` no longer clears `sampling_capable=True` from bridge
+- Heuristic scorer: clamped Flesch to [0, 100] (technical text went negative → clarity=1.5)
+- SemanticTopology: `untrack()` on sceneData write prevents `effect_update_depth_exceeded`
+- Inspector: `dedupe()` on keyed each blocks prevents `each_key_duplicate` Svelte errors
+- Clamped external passthrough scores to [1.0, 10.0] before hybrid blending
+- Excluded `hybrid_passthrough` from z-score historical stats to prevent cross-mode contamination
+- Normalized heuristic scorer clamping to consistent `max(1.0, min(10.0, score))` pattern
+- Fixed contradictory scoring instructions in passthrough template
 - Added domain validation against whitelist in passthrough save (invalid domains fall back to "general")
 - Added `intent_label` 100-character cap in passthrough save
 - Added workspace path safety validation in MCP prepare handler (blocks system directories)

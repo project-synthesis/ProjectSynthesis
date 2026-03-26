@@ -120,7 +120,7 @@ Services must never import from routers. All GitHub token operations go through 
 ## Development
 
 ```bash
-# Run tests (~90s, 1036 tests)
+# Run tests (~90s, 1037 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Restart services
