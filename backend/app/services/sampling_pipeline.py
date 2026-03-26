@@ -208,6 +208,49 @@ def _parse_text_response(text: str, model_cls: type[T]) -> T:
     )
 
 
+def _split_prompt_and_changes(text: str) -> tuple[str, str]:
+    """Split an LLM response into optimized prompt and changes summary.
+
+    LLMs in sampling mode often merge their rationale (what changed and why)
+    into the optimized prompt text.  This function detects common section
+    markers and splits them out so ``changes_summary`` is separate from
+    ``optimized_prompt``.
+
+    Returns:
+        (prompt_text, changes_summary) tuple.
+    """
+    # Markers ordered from most specific to least — first match wins.
+    # Case-insensitive search, split on the line containing the marker.
+    change_markers = [
+        "## Summary of Changes",
+        "## What Changed and Why",
+        "## What Changed",
+        "## Change Summary",
+        "## Changes Made",
+        "## Changes",
+        "**Summary of Changes**",
+        "**What Changed and Why**",
+        "**What Changed**",
+        "**Changes Made**",
+        "**Changes**",
+        "**Change Summary**",
+        "Changes:",
+        "What changed:",
+    ]
+
+    for marker in change_markers:
+        idx = text.lower().find(marker.lower())
+        if idx != -1:
+            prompt_part = text[:idx].rstrip()
+            changes_part = text[idx + len(marker):].strip()
+            # Remove leading markdown decoration from changes
+            changes_part = changes_part.lstrip("#").lstrip("*").strip()
+            if changes_part:
+                return prompt_part, changes_part[:500]
+
+    return text, "Restructured with added specificity and constraints"
+
+
 async def _sampling_request_structured(
     ctx: Context,
     system: str,
@@ -340,23 +383,39 @@ class SamplingLLMAdapter(LLMProvider):
         return parsed
 
 
-def _build_analysis_from_text(text: str, default_strategy: str) -> AnalysisResult:
+def _build_analysis_from_text(
+    text: str,
+    default_strategy: str,
+    raw_prompt: str = "",
+) -> AnalysisResult:
     """Best-effort analysis extraction from free-text LLM response.
 
     Searches for keywords and patterns to extract task_type, domain,
     weaknesses, and strengths instead of returning all-"general" defaults.
+
+    Scans BOTH the LLM's analysis text AND the original raw prompt for
+    keywords, since the raw prompt is the most reliable signal for
+    classification when the LLM response is unparseable.
     """
-    lower = text.lower()
+    # Combine both sources for keyword detection
+    lower = (text + "\n" + raw_prompt).lower()
 
     # Infer task_type from keywords
     task_type = "general"
     type_keywords = {
-        "coding": ["function", "code", "api", "class", "program", "script", "endpoint", "module"],
-        "writing": ["write", "essay", "article", "blog", "content", "copy", "draft"],
-        "analysis": ["analyze", "evaluate", "assess", "compare", "review", "audit"],
-        "creative": ["creative", "story", "poem", "design", "brainstorm", "imagine"],
-        "data": ["data", "dataset", "sql", "query", "csv", "statistics", "visualization"],
-        "system": ["system", "architecture", "infrastructure", "deploy", "devops", "pipeline"],
+        "coding": ["function", "code", "api", "class", "program", "script", "endpoint", "module",
+                    "implement", "refactor", "debug", "test", "algorithm"],
+        "writing": ["write", "essay", "article", "blog", "content", "copy", "draft",
+                     "documentation", "readme", "tutorial"],
+        "analysis": ["analyze", "evaluate", "assess", "compare", "review", "audit",
+                      "investigate", "diagnose", "benchmark"],
+        "creative": ["creative", "story", "poem", "design", "brainstorm", "imagine",
+                      "generate ideas", "concept"],
+        "data": ["data", "dataset", "sql", "query", "csv", "statistics", "visualization",
+                  "etl", "transform", "aggregate"],
+        "system": ["system", "architecture", "infrastructure", "deploy", "devops", "pipeline",
+                    "microservice", "scalab", "latency", "bottleneck", "load balanc",
+                    "distributed", "high-traffic", "orchestrat"],
     }
     best_count = 0
     for ttype, keywords in type_keywords.items():
@@ -368,17 +427,26 @@ def _build_analysis_from_text(text: str, default_strategy: str) -> AnalysisResul
     # Infer domain from keywords
     domain = "general"
     domain_keywords = {
-        "backend": ["backend", "server", "api", "database", "endpoint", "fastapi", "django"],
-        "frontend": ["frontend", "react", "svelte", "css", "html", "ui", "component"],
-        "database": ["database", "sql", "query", "schema", "migration", "index"],
-        "security": ["security", "auth", "encryption", "vulnerability", "token"],
-        "devops": ["deploy", "docker", "ci/cd", "kubernetes", "infrastructure"],
+        "backend": ["backend", "server", "api", "endpoint", "fastapi", "django", "flask",
+                     "express", "rest", "graphql", "microservice", "architecture",
+                     "scalab", "latency", "bottleneck", "high-traffic"],
+        "frontend": ["frontend", "react", "svelte", "vue", "css", "html", "ui", "component",
+                      "browser", "responsive", "tailwind"],
+        "database": ["database", "sql", "query", "schema", "migration", "index",
+                      "postgres", "mysql", "mongo", "redis", "orm"],
+        "security": ["security", "auth", "encryption", "vulnerability", "token",
+                      "oauth", "jwt", "cors", "csrf", "xss"],
+        "devops": ["deploy", "docker", "ci/cd", "kubernetes", "infrastructure",
+                    "terraform", "ansible", "monitoring", "observability", "nginx"],
         "fullstack": ["fullstack", "full-stack", "end-to-end"],
     }
+    # Score-based domain selection (not first-match) to handle overlapping keywords
+    best_domain_count = 0
     for dom, keywords in domain_keywords.items():
-        if any(kw in lower for kw in keywords):
+        count = sum(1 for kw in keywords if kw in lower)
+        if count > best_domain_count:
+            best_domain_count = count
             domain = dom
-            break
 
     # Extract weaknesses and strengths from structured sections if present
     weaknesses: list[str] = []
@@ -563,7 +631,7 @@ async def run_sampling_pipeline(
         try:
             analysis = _parse_text_response(text, AnalysisResult)
         except Exception:
-            analysis = _build_analysis_from_text(text, strategy_override or "auto")
+            analysis = _build_analysis_from_text(text, strategy_override or "auto", raw_prompt=prompt)
     model_ids["analyze"] = analyze_model
     phase_durations["analyze_ms"] = int((time.monotonic() - phase_t0) * 1000)
     if trace_logger:
@@ -719,16 +787,7 @@ async def run_sampling_pipeline(
         try:
             optimization = _parse_text_response(text, OptimizationResult)
         except Exception:
-            # Extract what we can from the raw text response
-            cleaned = text.strip()
-            # Try to split out a change summary if the LLM included one
-            summary = "Restructured with added specificity and constraints"
-            for marker in ("## Change Summary", "## Changes", "**Changes**", "Changes:"):
-                if marker in cleaned:
-                    parts = cleaned.split(marker, 1)
-                    cleaned = parts[0].strip()
-                    summary = parts[1].strip()[:500]
-                    break
+            cleaned, summary = _split_prompt_and_changes(text.strip())
             optimization = OptimizationResult(
                 optimized_prompt=cleaned,
                 changes_summary=summary,
