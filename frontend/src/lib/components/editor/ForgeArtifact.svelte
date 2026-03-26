@@ -205,7 +205,7 @@
   .changes-section {
     flex-shrink: 0;
     border-bottom: 1px solid var(--color-border-subtle);
-    max-height: 100px;
+    max-height: 200px;
     overflow: auto;
     display: flex;
     flex-direction: column;
@@ -229,6 +229,27 @@
   .changes-body :global(.changes-md) {
     font-size: 11px;
     color: var(--color-text-secondary);
+  }
+
+  .changes-body :global(.changes-md table) {
+    width: 100%;
+    font-size: 11px;
+    border-collapse: collapse;
+  }
+
+  .changes-body :global(.changes-md th),
+  .changes-body :global(.changes-md td) {
+    padding: 3px 6px;
+    border: 1px solid var(--color-border-subtle);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .changes-body :global(.changes-md th) {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+    font-weight: 600;
+    white-space: nowrap;
   }
 
   .header-divider {

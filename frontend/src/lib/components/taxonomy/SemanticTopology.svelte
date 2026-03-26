@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { TopologyRenderer, type LODTier } from './TopologyRenderer';
   import { buildSceneData, assignLodVisibility, type SceneData } from './TopologyData';
@@ -215,29 +215,32 @@
     }
   }
 
-  // Watch for taxonomy tree changes
+  // Watch for taxonomy tree changes — untrack the write to sceneData
+  // to prevent effect_update_depth_exceeded (reads tree, writes sceneData).
   $effect(() => {
     const tree = clustersStore.taxonomyTree;
     if (tree.length > 0 && renderer) {
-      sceneData = buildSceneData(tree);
-      assignLodVisibility(sceneData.nodes, lodTier);
+      untrack(() => {
+        sceneData = buildSceneData(tree);
+        assignLodVisibility(sceneData.nodes, lodTier);
 
-      // Run force settling inline (Web Worker version for production)
-      const positions = new Float32Array(sceneData.nodes.length * 3);
-      const sizes = new Float32Array(sceneData.nodes.length);
-      sceneData.nodes.forEach((n, i) => {
-        positions[i * 3] = n.position[0];
-        positions[i * 3 + 1] = n.position[1];
-        positions[i * 3 + 2] = n.position[2];
-        sizes[i] = n.size;
+        // Run force settling inline (Web Worker version for production)
+        const positions = new Float32Array(sceneData.nodes.length * 3);
+        const sizes = new Float32Array(sceneData.nodes.length);
+        sceneData.nodes.forEach((n, i) => {
+          positions[i * 3] = n.position[0];
+          positions[i * 3 + 1] = n.position[1];
+          positions[i * 3 + 2] = n.position[2];
+          sizes[i] = n.size;
+        });
+
+        const settled = settleForces({ positions, sizes, iterations: 50 });
+        sceneData.nodes.forEach((n, i) => {
+          n.position = [settled.positions[i * 3], settled.positions[i * 3 + 1], settled.positions[i * 3 + 2]];
+        });
+
+        rebuildScene(sceneData);
       });
-
-      const settled = settleForces({ positions, sizes, iterations: 50 });
-      sceneData.nodes.forEach((n, i) => {
-        n.position = [settled.positions[i * 3], settled.positions[i * 3 + 1], settled.positions[i * 3 + 2]];
-      });
-
-      rebuildScene(sceneData);
     }
   });
 

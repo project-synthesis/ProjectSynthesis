@@ -208,6 +208,34 @@ def _parse_text_response(text: str, model_cls: type[T]) -> T:
     )
 
 
+def _strip_meta_header(text: str) -> str:
+    """Remove LLM-added meta-headers like '# Optimized Prompt' from the top.
+
+    LLMs in sampling mode often prepend a title like '# Optimized Prompt'
+    or '## Optimized Prompt' before the actual content.  This is
+    meta-commentary, not part of the prompt.
+    """
+    lines = text.split("\n")
+    # Strip leading blank lines
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    # Check if first non-blank line is a meta-header
+    if lines:
+        first = lines[0].strip().lower()
+        meta_headers = [
+            "# optimized prompt", "## optimized prompt",
+            "# optimized version", "## optimized version",
+            "# improved prompt", "## improved prompt",
+            "# rewritten prompt", "## rewritten prompt",
+        ]
+        if any(first == h for h in meta_headers):
+            lines.pop(0)
+            # Also strip blank line after removed header
+            while lines and not lines[0].strip():
+                lines.pop(0)
+    return "\n".join(lines)
+
+
 def _split_prompt_and_changes(text: str) -> tuple[str, str]:
     """Split an LLM response into optimized prompt and changes summary.
 
@@ -215,6 +243,8 @@ def _split_prompt_and_changes(text: str) -> tuple[str, str]:
     into the optimized prompt text.  This function detects common section
     markers and splits them out so ``changes_summary`` is separate from
     ``optimized_prompt``.
+
+    Also strips meta-headers like '# Optimized Prompt'.
 
     Returns:
         (prompt_text, changes_summary) tuple.
@@ -246,9 +276,9 @@ def _split_prompt_and_changes(text: str) -> tuple[str, str]:
             # Remove leading markdown decoration from changes
             changes_part = changes_part.lstrip("#").lstrip("*").strip()
             if changes_part:
-                return prompt_part, changes_part[:500]
+                return _strip_meta_header(prompt_part), changes_part[:500]
 
-    return text, "Restructured with added specificity and constraints"
+    return _strip_meta_header(text), "Restructured with added specificity and constraints"
 
 
 async def _sampling_request_structured(
@@ -472,6 +502,13 @@ def _build_analysis_from_text(
     ])
     confidence = 0.4 + (fields_extracted * 0.1)  # 0.4 to 0.8
 
+    # Generate a short intent label from the raw prompt
+    intent_label = "general"
+    if raw_prompt:
+        words = raw_prompt.split()[:8]
+        if len(words) > 3:
+            intent_label = " ".join(words[:6]).rstrip(".,;:!?")
+
     return AnalysisResult(
         task_type=task_type,
         weaknesses=weaknesses[:5],
@@ -479,6 +516,8 @@ def _build_analysis_from_text(
         selected_strategy=default_strategy,
         strategy_rationale=f"Strategy from pipeline preferences (text analysis inferred {task_type}/{domain})",
         confidence=confidence,
+        intent_label=intent_label,
+        domain=domain,
     )
 
 

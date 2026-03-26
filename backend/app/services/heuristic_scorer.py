@@ -173,7 +173,15 @@ class HeuristicScorer:
 
     @staticmethod
     def heuristic_clarity(prompt: str) -> float:
-        """Clarity via readability score and ambiguity markers."""
+        """Clarity via readability score and ambiguity markers.
+
+        Flesch reading ease can go negative for technical text (multi-syllable
+        domain terms like "microservices", "infrastructure").  We clamp Flesch
+        to [0, 100] before mapping to prevent technical prompts from scoring
+        below 3.0.  Structural clarity signals (headers, lists, explicit
+        sections) provide a bonus that compensates for low readability scores
+        in well-structured technical content.
+        """
         try:
             import textstat
             flesch = textstat.flesch_reading_ease(prompt)
@@ -181,9 +189,20 @@ class HeuristicScorer:
             logger.debug("textstat unavailable for clarity heuristic — using default Flesch score")
             flesch = 50.0
 
-        # Map Flesch score (0-100) to our scale (1-10)
+        # Clamp Flesch to [0, 100] — negative values are common for technical
+        # text and would drag the score below 3.0 unfairly.
+        flesch = max(0.0, min(100.0, flesch))
+
+        # Map Flesch score (0-100) to our scale (3-8)
         # Higher Flesch = easier to read = more clear
         score = 3.0 + (flesch / 100.0) * 5.0
+
+        # Structural clarity bonus: well-organized prompts with headers and
+        # lists are clear regardless of readability score.
+        if re.search(r"(?m)^#{1,3}\s+\S", prompt):
+            score += 1.0  # Has markdown headers
+        if re.search(r"(?m)^\s*[-*]\s+\S", prompt):
+            score += 0.5  # Has bullet points
 
         # Penalize ambiguity markers
         ambiguity = ["maybe", "perhaps", "somehow", "something", "stuff", "things", "etc"]
