@@ -68,7 +68,7 @@
   ariaLabel="MCP sampling workflow guide"
   accentColor="var(--color-neon-green)"
   whyTitle="WHY SAMPLING"
-  whyText="Your IDE's LLM runs the full pipeline via MCP sampling — no API key needed. Currently supported in VS Code only."
+  whyText="Your IDE's LLM runs the full pipeline via MCP sampling — no API key needed. Supported in VS Code and Claude Code."
   steps={STEPS}
   comparison={TIER_COMPARISON}
   highlightColumn="sampling"
