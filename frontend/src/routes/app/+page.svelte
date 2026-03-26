@@ -95,24 +95,29 @@
         addToast('created', 'Taxonomy updated');
       }
       if (type === 'routing_state_changed') {
-        const d = data as { provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
+        const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
+        const wasSamplingCapable = forgeStore.samplingCapable === true;
         const delta = forgeStore.updateRoutingState({
           sampling_capable: d.sampling_capable,
-          mcp_disconnected: !d.mcp_connected && d.sampling_capable !== null,
+          mcp_disconnected: !d.mcp_connected,
           provider: d.provider,
         });
-        if (delta.reconnected) addToast('created', 'MCP client reconnected');
+
+        // Auto-enable force_sampling when sampling becomes available
         if (delta.samplingChanged) {
           onSamplingDetected();
-          // Auto-enable force_sampling when sampling becomes available
           if (!preferencesStore.pipeline.force_sampling) {
             preferencesStore.setPipelineToggle('force_sampling', true);
           }
         }
-        // Auto-disable force_sampling when sampling disconnects
-        if (delta.disconnected && preferencesStore.pipeline.force_sampling) {
+
+        // Auto-disable force_sampling INSTANTLY when sampling goes away.
+        // Detect: was sampling capable, now isn't.
+        if (wasSamplingCapable && d.sampling_capable !== true && preferencesStore.pipeline.force_sampling) {
           preferencesStore.setPipelineToggle('force_sampling', false);
         }
+
+        if (delta.reconnected) addToast('created', 'MCP client reconnected');
         // Only toast on disconnect when no local provider (true degradation).
         // When CLI/API is available, the auto-fallback is silent.
         if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
@@ -165,12 +170,15 @@
     forgeStore.avgDurationMs = h.avg_duration_ms ?? null;
     forgeStore.scoreHealth = h.score_health ?? null;
     forgeStore.phaseDurations = (h.phase_durations && Object.keys(h.phase_durations).length > 0) ? h.phase_durations : null;
-    if (delta.samplingChanged) onSamplingDetected();
-    // Startup onboarding: after the first health response, the routing store
-    // has all data to derive the tier.  Trigger the appropriate guide once.
+    if (delta.samplingChanged) {
+      onSamplingDetected();
+      // Auto-enable force_sampling when detected via health poll
+      if (!preferencesStore.pipeline.force_sampling) {
+        preferencesStore.setPipelineToggle('force_sampling', true);
+      }
+    }
     // Auto-disable force_sampling if sampling is not available.
-    // Runs on every health poll — catches startup with stale preference
-    // AND runtime disconnects between SSE events.
+    // Safety net for startup with stale preferences.json.
     if (preferencesStore.pipeline.force_sampling && h.sampling_capable !== true) {
       preferencesStore.setPipelineToggle('force_sampling', false);
     }
