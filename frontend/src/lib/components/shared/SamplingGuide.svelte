@@ -15,42 +15,42 @@
   const STEPS: GuideStep[] = [
     {
       number: 1,
-      title: 'IDE configures MCP sampling',
+      title: 'MCP capability detection',
       description:
-        'Your IDE interfaces with the Project Synthesis MCP server automatically. The system dynamically detects network capabilities to ensure sampling is supported. (*Note: Currently, only VS Code fully supports this pipeline*)',
-      detail: 'Connection detected via ASGI middleware on initialization handshake',
+        'The bridge extension connects to the MCP server and declares sampling capability. ASGI middleware intercepts the initialize handshake and activates the sampling tier. Auto-reconnects on server restart via 10s health check.',
+      detail: 'VS Code bridge: StreamableHTTP transport, roots/list for workspace context',
       accent: 'green',
     },
     {
       number: 2,
-      title: 'LLM self-enhancement',
+      title: 'Prompt enters the pipeline',
       description:
-        'You submit a base prompt. Instead of making standard backend API requests, the server commands your IDE\'s LLM to reflect on and rewrite the prompt. The AI essentially refines the instructions it will eventually execute.',
-      detail: 'Bypasses external API keys by utilizing your existing IDE subscription (e.g., Copilot)',
+        'The 3-phase pipeline (analyze → optimize → score) runs through the IDE\'s LLM via MCP sampling/createMessage. No backend API key required — uses the IDE\'s model subscription directly.',
+      detail: 'Model ID captured per phase and displayed in real time',
       accent: 'cyan',
     },
     {
       number: 3,
-      title: 'Deep context injection',
+      title: 'Context enrichment',
       description:
-        'Despite running remotely through the IDE viewport, the server still meticulously injects structured parameters, taxonomy strategy definitions, and vast workspace context right before the LLM begins rewriting.',
-      detail: 'Full feature parity with internal modes: Analyze → Optimize → Score',
+        'Workspace guidance (CLAUDE.md, README, entry points), codebase index, adaptation state, taxonomy patterns, and strategy instructions are injected into every phase. Same enrichment as internal mode.',
+      detail: 'Deep scanning: README.md + entry points + architecture docs + guidance files',
       accent: 'green',
     },
     {
       number: 4,
-      title: 'Structured validation fallback',
+      title: 'Structured output fallback',
       description:
-        'The IDE\'s LLM receives strict tool-calling procedures to ensure generated outputs are wrapped in perfectly typed JSON schemas. If tools are natively unsupported by the IDE, the pipeline engages a bulletproof markdown-parsing fallback constraint.',
-      detail: 'Avoids syntax degeneration via schema constraint wrappers',
+        'Each phase requests structured JSON via MCP tool calling. If the IDE rejects tools (McpError), the pipeline injects the JSON schema directly into the user message and parses the response with brace-depth extraction.',
+      detail: 'Scoring capped at 1024 tokens with JSON terminal directive',
       accent: 'cyan',
     },
     {
       number: 5,
-      title: 'Zero-friction capability fallback',
+      title: 'Tier degradation',
       description:
-        'Because IDE LLM instances occasionally time out under heavy processing loads, the system constantly monitors execution. If an operation stalls, it seamlessly drops back down to your internal provider without losing data.',
-      detail: 'Automatically restores the pipeline the moment your MCP tunnel clears',
+        'If the MCP connection drops or a phase times out, the system falls back to the internal provider (CLI or API) without data loss. Sampling auto-restores when the bridge reconnects.',
+      detail: 'Taxonomy, history, adaptation, and feedback persist across tier changes',
       accent: 'green',
     },
   ];
@@ -67,8 +67,8 @@
   title="MCP SAMPLING PIPELINE"
   ariaLabel="MCP sampling workflow guide"
   accentColor="var(--color-neon-green)"
-  whyTitle="WHY USE THIS MODE?"
-  whyText="Harness your IDE's built-in LLM to power the entire 3-phase optimization pipeline completely free of backend API costs. This mode turns the LLM onto itself—having the model analyze, critique, and deeply enhance its own prompt in a closed loop before execution. (Note: Currently, only VS Code fully supports MCP sampling capabilities.)"
+  whyTitle="WHY SAMPLING"
+  whyText="The IDE's LLM runs the full 3-phase pipeline (analyze, optimize, score) via MCP sampling. No backend provider or API key needed — uses your IDE subscription directly. Hybrid scoring blends the IDE LLM's evaluation with model-independent heuristics. Workspace context, taxonomy patterns, and adaptation state are injected identically to internal mode."
   steps={STEPS}
   comparison={TIER_COMPARISON}
   highlightColumn="sampling"

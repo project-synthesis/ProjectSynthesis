@@ -557,7 +557,7 @@
   }
 
   .step-connector {
-    width: 2px;
+    width: 1px;
     height: 10px;
     margin-left: 11px;
     transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
