@@ -120,11 +120,7 @@
     !preferencesStore.pipeline.force_sampling &&
     (forgeStore.samplingCapable !== true || preferencesStore.pipeline.force_passthrough)
   );
-  // Pending: user wants sampling (toggle ON) but no sampling IDE connected
-  let forceSamplingPending = $derived(
-    preferencesStore.pipeline.force_sampling &&
-    forgeStore.samplingCapable !== true
-  );
+  // No pending state needed — toggle auto-syncs with sampling capability
   let forcePassthroughDisabled = $derived(
     !preferencesStore.pipeline.force_passthrough &&
     (forgeStore.samplingCapable === true || preferencesStore.pipeline.force_sampling)
@@ -567,9 +563,7 @@
             <div class="data-row">
               <span class="data-label" title="Use IDE's LLM for the 3-phase pipeline via MCP sampling">Force IDE sampling</span>
               <button
-                class="toggle-track"
-                class:toggle-track--green={!forceSamplingPending}
-                class:toggle-track--pending={forceSamplingPending}
+                class="toggle-track toggle-track--green"
                 class:toggle-track--on={preferencesStore.pipeline.force_sampling}
                 onclick={() => {
                   const newVal = !preferencesStore.pipeline.force_sampling;
@@ -580,7 +574,7 @@
                 aria-checked={preferencesStore.pipeline.force_sampling}
                 aria-label="Toggle Force IDE sampling"
                 disabled={forceSamplingDisabled}
-                title={forceSamplingTooltip(forceSamplingDisabled, forceSamplingPending)}
+                title={forceSamplingTooltip(forceSamplingDisabled)}
                 style={forceSamplingDisabled ? 'opacity: 0.4; cursor: not-allowed;' : undefined}
               >
                 <span class="toggle-thumb"></span>
@@ -1400,17 +1394,6 @@
 
   .toggle-track--green.toggle-track--on .toggle-thumb {
     background: var(--color-neon-green);
-  }
-
-  /* Pending toggle variant — force_sampling ON but no IDE connected */
-  .toggle-track--pending.toggle-track--on {
-    background: rgba(251, 191, 36, 0.08);
-    border-color: rgba(251, 191, 36, 0.5);
-  }
-
-  .toggle-track--pending.toggle-track--on .toggle-thumb {
-    background: var(--color-neon-yellow);
-    opacity: 0.6;
   }
 
   /* Yellow toggle variant — passthrough tier accent */

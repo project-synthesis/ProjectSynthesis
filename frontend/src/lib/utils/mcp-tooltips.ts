@@ -12,8 +12,7 @@ import { preferencesStore } from '$lib/stores/preferences.svelte';
  * Returns tooltip text for the "Force IDE sampling" toggle when disabled,
  * or `undefined` when the toggle is enabled (no tooltip needed).
  */
-export function forceSamplingTooltip(disabled: boolean, pending?: boolean): string | undefined {
-  if (pending) return 'Sampling unavailable — activates when IDE connects';
+export function forceSamplingTooltip(disabled: boolean): string | undefined {
   if (!disabled) return undefined;
   if (forgeStore.samplingCapable === null) return 'No sampling-capable MCP client detected';
   if (forgeStore.samplingCapable === false) return 'Your MCP client does not support sampling';

@@ -76,7 +76,17 @@
           provider: d.provider,
         });
         if (delta.reconnected) addToast('created', 'MCP client reconnected');
-        if (delta.samplingChanged) onSamplingDetected();
+        if (delta.samplingChanged) {
+          onSamplingDetected();
+          // Auto-enable force_sampling when sampling becomes available
+          if (!preferencesStore.pipeline.force_sampling) {
+            preferencesStore.setPipelineToggle('force_sampling', true);
+          }
+        }
+        // Auto-disable force_sampling when sampling disconnects
+        if (delta.disconnected && preferencesStore.pipeline.force_sampling) {
+          preferencesStore.setPipelineToggle('force_sampling', false);
+        }
         // Only toast on disconnect when no local provider (true degradation).
         // When CLI/API is available, the auto-fallback is silent.
         if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
