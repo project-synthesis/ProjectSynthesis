@@ -493,22 +493,26 @@ class _CapabilityDetectionMiddleware:
 
     @classmethod
     def _touch_activity(cls) -> None:
+        """Update session file only (NOT routing in-memory state).
+
+        The routing manager's ``last_activity`` is set exclusively by
+        ``on_mcp_initialize()`` — this ensures only sampling-capable
+        clients (the bridge) keep the sampling tier alive. Non-sampling
+        clients (Claude Code) write to the session file for general MCP
+        connectivity tracking but do NOT refresh the sampling timer.
+        """
         now_mono = time.monotonic()
         if now_mono - cls._last_activity_write < cls._ACTIVITY_WRITE_THROTTLE:
             return
         cls._last_activity_write = now_mono
-        routing = _shared._routing
-        if routing:
-            routing.on_mcp_activity()
-        else:
-            try:
-                data = _session_file.read()
-                if data is not None:
-                    data["last_activity"] = datetime.now(timezone.utc).isoformat()
-                    data["sse_streams"] = cls._active_sse_streams
-                    _session_file.write(data)
-            except Exception:
-                logger.debug("_touch_activity: could not update mcp_session.json", exc_info=True)
+        try:
+            data = _session_file.read()
+            if data is not None:
+                data["last_activity"] = datetime.now(timezone.utc).isoformat()
+                data["sse_streams"] = cls._active_sse_streams
+                _session_file.write(data)
+        except Exception:
+            logger.debug("_touch_activity: could not update mcp_session.json", exc_info=True)
 
     @staticmethod
     def _inspect_initialize(body: bytes) -> None:
@@ -545,8 +549,9 @@ class _CapabilityDetectionMiddleware:
                         "from %s (sampling already active from another client)",
                         client_info.get("name", "unknown"),
                     )
-                    # Still update activity/connected state
-                    routing.on_mcp_activity()
+                    # Do NOT update activity — non-sampling clients must not
+                    # keep the sampling tier alive. Only the bridge's initialize
+                    # (sampling=True) refreshes the routing state.
                 else:
                     routing.on_mcp_initialize(sampling_capable=sampling)
             else:

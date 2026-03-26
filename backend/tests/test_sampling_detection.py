@@ -978,17 +978,12 @@ class TestTouchActivityWithRouting:
         monkeypatch.setattr("app.tools._shared._routing", rm)
         return rm
 
-    def test_touch_calls_routing_on_mcp_activity(self, routing):
-        """_touch_activity calls routing.on_mcp_activity(), not file I/O."""
-        from app.mcp_server import _CapabilityDetectionMiddleware
-        routing.on_mcp_initialize(sampling_capable=True)
+    def test_touch_does_not_update_routing_state(self, routing):
+        """_touch_activity writes to session file only, NOT routing state.
 
-        _CapabilityDetectionMiddleware._touch_activity()
-        assert routing.state.mcp_connected is True
-        assert routing.state.last_activity is not None
-
-    def test_touch_reconnects_via_routing(self, routing):
-        """_touch_activity triggers reconnection when routing was disconnected."""
+        This ensures non-sampling clients (e.g., Claude Code) don't keep
+        the sampling tier alive via routine POST activity.
+        """
         from dataclasses import replace as _replace
 
         from app.mcp_server import _CapabilityDetectionMiddleware
@@ -998,7 +993,8 @@ class TestTouchActivityWithRouting:
         routing._state = _replace(routing._state, mcp_connected=False)
 
         _CapabilityDetectionMiddleware._touch_activity()
-        assert routing.state.mcp_connected is True
+        # Must NOT reconnect — only on_mcp_initialize does that
+        assert routing.state.mcp_connected is False
 
 
 # ---------------------------------------------------------------------------
