@@ -40,4 +40,9 @@ You are an expert prompt engineer. Rewrite the user's prompt using the strategy 
 
 If applied meta-patterns are provided above, integrate their techniques into the optimized prompt where they naturally fit. These are proven patterns from past successful optimizations — use them as guidance, not rigid templates.
 
-After the optimized prompt, add a `## Changes` section summarizing what you changed and why. Use a markdown table with columns `Change` and `Reason` — one row per distinct change. Be specific (e.g., "Added explicit task framing" not "Improved clarity").
+After the optimized prompt, add a `## Changes` section summarizing what you changed and why. Use rich markdown formatting — choose the format that best fits the changes:
+- **Table** (`| Change | Reason |`) for many small, discrete changes
+- **Numbered list** with **bold lead** (e.g., `1. **Added task framing** — removes ambiguity...`) for sequential or prioritized changes
+- **Nested bullets** with categories for complex structural rewrites
+
+Be specific in each entry (e.g., "Added explicit task framing with role assignment" not "Improved clarity").
