@@ -56,10 +56,13 @@
       // These events are forwarded by the MCP tool handler to the event bus
       // so the web UI shows phase transitions, model IDs, and scores in real time.
       if (type === 'optimization_status') {
-        const d = data as { phase?: string; status?: string; state?: string; model?: string };
+        const d = data as { phase?: string; status?: string; state?: string; model?: string; reason?: string };
         const phase = d.phase;
         const state = d.status || d.state;
-        if (state === 'running' || state === 'complete') {
+        if (state === 'degraded' && d.reason) {
+          // Non-sampling IDE triggered optimization — degraded to internal
+          addToast('modified', d.reason as string);
+        } else if (state === 'running' || state === 'complete') {
           if (phase === 'analyze' || phase === 'analyzing') forgeStore.status = 'analyzing';
           else if (phase === 'optimize' || phase === 'optimizing') forgeStore.status = 'optimizing';
           else if (phase === 'score' || phase === 'scoring') forgeStore.status = 'scoring';
