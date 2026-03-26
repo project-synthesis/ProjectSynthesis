@@ -26,51 +26,49 @@
       number: 1,
       title: 'Provider detected',
       description: isCli
-        ? 'Claude CLI detected on PATH. Your Claude Code subscription powers the full pipeline at zero marginal cost — no API key or per-token billing required.'
-        : 'Anthropic API key configured. Direct API access with prompt caching and streaming. Per-token billing applies.',
-      detail: isCli
-        ? 'CLI subprocess with OS sandbox. Supports --effort for thinking control.'
-        : 'SDK client with automatic retries, prompt caching (cache_control: ephemeral), and streaming via messages.stream().',
+        ? 'Claude CLI detected. Your subscription powers the full pipeline at zero marginal cost — no API key needed.'
+        : 'Anthropic API key configured. Direct access with prompt caching and streaming.',
+      detail: '',
       accent: 'cyan',
     },
     {
       number: 2,
       title: 'Full 3-phase pipeline',
       description:
-        'Analyze classifies your prompt and detects weaknesses. Optimize rewrites using the selected strategy. Score evaluates 5 dimensions independently. Each phase runs server-side via the detected provider.',
-      detail: 'Phases execute sequentially with fresh context windows. Optimizer streams to prevent timeouts on long outputs.',
+        'Analyze detects weaknesses. Optimize rewrites using the selected strategy. Score evaluates 5 quality dimensions independently.',
+      detail: '',
       accent: 'green',
     },
     {
       number: 3,
-      title: 'Streaming with real-time feedback',
+      title: 'Real-time progress',
       description:
-        'SSE events show each phase as it progresses. The model used per phase is captured and displayed live. Analysis, optimization, and scoring results appear incrementally.',
-      detail: 'Per-phase effort configurable (low / medium / high / max) in the Navigator panel.',
+        'Each phase streams results as it completes. Model selection per phase is configurable in Settings.',
+      detail: '',
       accent: 'cyan',
     },
     {
       number: 4,
       title: 'All features enabled',
       description:
-        'Hybrid scoring (LLM + heuristic blend), taxonomy clustering, strategy adaptation, refinement sessions, suggestion generation, and intent drift detection — all active in internal mode.',
-      detail: 'Lean mode available: disable scoring + explore for 2 LLM calls only.',
+        'Hybrid scoring, taxonomy clustering, strategy adaptation, refinement, suggestions, and codebase explore — all active.',
+      detail: '',
       accent: 'green',
     },
     {
       number: 5,
-      title: 'Codebase explore + pattern injection',
+      title: 'Codebase context + patterns',
       description:
-        'Link a GitHub repo for semantic codebase context — file outlines, domain boosting, and token-conscious retrieval. Meta-patterns from your prompt library auto-inject into the optimizer.',
-      detail: 'Explore uses all-MiniLM-L6-v2 embeddings with SHA-based result caching.',
+        'Link a GitHub repo for codebase-aware optimization. Proven patterns from your prompt library auto-inject into the optimizer.',
+      detail: '',
       accent: 'cyan',
     },
   ]);
 
   const whyText = $derived(
     isCli
-      ? 'Full pipeline powered by your Claude Code subscription at zero marginal cost. The CLI handles authentication, sandboxing, and model selection — just install it and go. All features enabled: scoring, taxonomy, adaptation, refinement, explore, and pattern injection.'
-      : 'Full pipeline powered by direct Anthropic API access. Prompt caching reduces cost on repeated patterns. Streaming prevents timeouts on long Opus outputs. All features enabled: scoring, taxonomy, adaptation, refinement, explore, and pattern injection.',
+      ? 'Full pipeline at zero marginal cost via Claude CLI. All features enabled.'
+      : 'Full pipeline via Anthropic API with prompt caching. All features enabled.',
   );
 
   // Dev-mode guard — inside $effect because STEPS is $derived (reactive)

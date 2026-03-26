@@ -15,42 +15,42 @@
   const STEPS: GuideStep[] = [
     {
       number: 1,
-      title: 'MCP capability detection',
+      title: 'IDE connects',
       description:
-        'The bridge extension connects to the MCP server and declares sampling capability. ASGI middleware intercepts the initialize handshake and activates the sampling tier. Auto-reconnects on server restart via 10s health check.',
-      detail: 'VS Code bridge: StreamableHTTP transport, roots/list for workspace context',
+        'The MCP bridge detects your IDE and activates the sampling tier automatically. Auto-reconnects on restart.',
+      detail: '',
       accent: 'green',
     },
     {
       number: 2,
-      title: 'Prompt enters the pipeline',
+      title: 'Pipeline runs through your IDE',
       description:
-        'The 3-phase pipeline (analyze → optimize → score) runs through the IDE\'s LLM via MCP sampling/createMessage. No backend API key required — uses the IDE\'s model subscription directly.',
-      detail: 'Model ID captured per phase and displayed in real time',
+        'All 3 phases (analyze → optimize → score) run through your IDE\'s LLM. No API key needed — uses your IDE subscription.',
+      detail: '',
       accent: 'cyan',
     },
     {
       number: 3,
-      title: 'Context enrichment',
+      title: 'Full context injected',
       description:
-        'Workspace guidance (CLAUDE.md, README, entry points), codebase index, adaptation state, taxonomy patterns, and strategy instructions are injected into every phase. Same enrichment as internal mode.',
-      detail: 'Deep scanning: README.md + entry points + architecture docs + guidance files',
+        'Workspace guidance, codebase context, strategy, and patterns are injected into every phase — same enrichment as internal mode.',
+      detail: '',
       accent: 'green',
     },
     {
       number: 4,
-      title: 'Structured output fallback',
+      title: 'Hybrid scoring',
       description:
-        'Each phase requests structured JSON via MCP tool calling. If the IDE rejects tools (McpError), the pipeline injects the JSON schema directly into the user message and parses the response with brace-depth extraction.',
-      detail: 'Scoring capped at 1024 tokens with JSON terminal directive',
+        'Your IDE\'s LLM scores the result, then the system blends it with model-independent heuristics for calibrated quality metrics.',
+      detail: '',
       accent: 'cyan',
     },
     {
       number: 5,
-      title: 'Tier degradation',
+      title: 'Auto-fallback',
       description:
-        'If the MCP connection drops or a phase times out, the system falls back to the internal provider (CLI or API) without data loss. Sampling auto-restores when the bridge reconnects.',
-      detail: 'Taxonomy, history, adaptation, and feedback persist across tier changes',
+        'If the IDE disconnects, the system falls back to the internal provider without data loss. Sampling restores when the IDE reconnects.',
+      detail: '',
       accent: 'green',
     },
   ];

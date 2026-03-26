@@ -209,9 +209,6 @@
                 {#if isActive}
                   <div class="step-content" id="step-content-{i}">
                     <p class="step-desc">{step.description}</p>
-                    <p class="step-note">
-                      <span class="step-note-prefix" style="color: {color};">//</span> {step.detail}
-                    </p>
                   </div>
                 {/if}
 
@@ -539,22 +536,7 @@
     margin: 0 0 4px;
   }
 
-  .step-note {
-    font-size: 10px;
-    font-family: var(--font-mono);
-    color: var(--color-text-dim);
-    line-height: 1.4;
-    margin: 0;
-    padding: 0;
-    opacity: 0.7;
-  }
-
-  .step-note-prefix {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    font-weight: 700;
-    user-select: none;
-  }
+  /* step-note removed — detail subtext was internal jargon that confused users */
 
   .step-connector {
     width: 1px;

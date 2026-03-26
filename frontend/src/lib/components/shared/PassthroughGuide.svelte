@@ -15,47 +15,47 @@
   const STEPS: GuideStep[] = [
     {
       number: 1,
-      title: 'System assembles your prompt',
+      title: 'Prompt assembled',
       description:
-        'Strategy template, scoring rubric, workspace context, codebase context, applied patterns, and adaptation state are assembled into a single optimized instruction.',
-      detail: 'All context enrichment happens server-side. The assembled prompt appears in the editor.',
+        'Strategy, workspace context, patterns, and scoring rubric are assembled into one instruction.',
+      detail: '',
       accent: 'yellow',
     },
     {
       number: 2,
       title: 'Copy the assembled prompt',
-      description: 'Click COPY or select all text from the assembled prompt panel.',
-      detail: 'The full prompt is designed to work with any instruction-following LLM.',
+      description: 'Click COPY to grab the full assembled prompt.',
+      detail: '',
       accent: 'cyan',
     },
     {
       number: 3,
-      title: 'Paste into your LLM',
+      title: 'Paste into any LLM',
       description:
-        'Open ChatGPT, Claude.ai, Gemini, or any LLM interface and submit the assembled prompt.',
-      detail: 'Strategy and rubric are embedded — the LLM receives full optimization instructions.',
+        'ChatGPT, Claude.ai, Gemini, or any LLM — paste and submit.',
+      detail: '',
       accent: 'cyan',
     },
     {
       number: 4,
-      title: 'Copy the LLM response',
-      description: "Copy the optimized prompt text from your LLM's output.",
-      detail: "Only the optimized prompt text — not the LLM's preamble or commentary.",
+      title: 'Copy the response',
+      description: "Copy the optimized prompt from your LLM's output.",
+      detail: '',
       accent: 'cyan',
     },
     {
       number: 5,
       title: 'Paste result back',
-      description: 'Paste into the OPTIMIZED RESULT textarea and click SAVE.',
-      detail: 'Optional: add a changes summary to track what the LLM modified.',
+      description: 'Paste into the result area and click SAVE.',
+      detail: '',
       accent: 'cyan',
     },
     {
       number: 6,
-      title: 'System scores and persists',
+      title: 'Scored and saved',
       description:
-        'Heuristic scoring evaluates 5 dimensions. Result enters the taxonomy engine and history.',
-      detail: 'Hybrid blending applies when historical data exists. Scores feed strategy adaptation.',
+        'The system scores 5 quality dimensions and saves to history and taxonomy.',
+      detail: '',
       accent: 'green',
     },
   ];
@@ -73,7 +73,7 @@
   ariaLabel="Passthrough workflow guide"
   accentColor="var(--color-neon-yellow)"
   whyTitle="WHY PASSTHROUGH"
-  whyText="Zero-dependency fallback. No API key, no CLI, no MCP client required. The system assembles a rich optimization prompt — you run it through whatever LLM you have access to, then paste the result back. Scores, taxonomy, and adaptation all still work."
+  whyText="No API key or CLI needed. The system assembles the prompt — you run it through any LLM and paste the result back."
   steps={STEPS}
   comparison={TIER_COMPARISON}
   highlightColumn="passthrough"
