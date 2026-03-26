@@ -26,7 +26,7 @@
       number: 1,
       title: 'Provider detected',
       description: isCli
-        ? 'Claude CLI detected on PATH. Your Max subscription powers the full pipeline at zero marginal cost — no API key or per-token billing required.'
+        ? 'Claude CLI detected on PATH. Your Claude Code subscription powers the full pipeline at zero marginal cost — no API key or per-token billing required.'
         : 'Anthropic API key configured. Direct API access with prompt caching and streaming. Per-token billing applies.',
       detail: isCli
         ? 'CLI subprocess with OS sandbox. Supports --effort for thinking control.'
@@ -69,7 +69,7 @@
 
   const whyText = $derived(
     isCli
-      ? 'Full pipeline powered by your Claude Max subscription at zero marginal cost. The CLI handles authentication, sandboxing, and model selection — just install it and go. All features enabled: scoring, taxonomy, adaptation, refinement, explore, and pattern injection.'
+      ? 'Full pipeline powered by your Claude Code subscription at zero marginal cost. The CLI handles authentication, sandboxing, and model selection — just install it and go. All features enabled: scoring, taxonomy, adaptation, refinement, explore, and pattern injection.'
       : 'Full pipeline powered by direct Anthropic API access. Prompt caching reduces cost on repeated patterns. Streaming prevents timeouts on long Opus outputs. All features enabled: scoring, taxonomy, adaptation, refinement, explore, and pattern injection.',
   );
 

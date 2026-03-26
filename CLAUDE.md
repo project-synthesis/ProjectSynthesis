@@ -100,7 +100,7 @@ Model IDs are centralized in `config.py` as `MODEL_SONNET`, `MODEL_OPUS`, `MODEL
 
 ### Providers (`backend/app/providers/`)
 - `detector.py` — auto-selects: Claude CLI → Anthropic API
-- `claude_cli.py` — CLI subprocess (Max subscription, zero cost). Gates `--effort` for Haiku
+- `claude_cli.py` — CLI subprocess (Claude Code subscription, zero marginal cost). Gates `--effort` for Haiku
 - `anthropic_api.py` — direct API via `anthropic` SDK with prompt caching (`cache_control: ephemeral`), streaming via `messages.stream()`, `max_retries=0` (app-level retry is sole controller)
 - `base.py` — `LLMProvider` abstract base with `complete_parsed()`, `complete_parsed_streaming()` (default falls back to non-streaming), `thinking_config()`, and `call_provider_with_retry()` (dispatches to streaming/non-streaming with smart retryable classification)
 

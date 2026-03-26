@@ -84,7 +84,7 @@ All prompts are in `prompts/`. Edit any file and changes take effect immediately
 - **Frontend**: SvelteKit 2, Svelte 5 runes, Tailwind CSS 4
 - **Pipeline**: 3 phases (analyze → optimize → score), models configurable per phase via preferences
 - **Scoring**: Hybrid — LLM scores blended with model-independent heuristics + z-score normalization
-- **Providers**: Claude CLI (Max subscribers) or Anthropic API (auto-detected at startup)
+- **Providers**: Claude CLI (Claude Code subscription) or Anthropic API (auto-detected at startup)
 - **MCP server**: Standalone on port 8001, 11 tools with structured output
 - **Routing**: 5-tier priority chain — force_passthrough > force_sampling > internal > auto_sampling > passthrough
 

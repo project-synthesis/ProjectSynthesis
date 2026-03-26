@@ -21,7 +21,7 @@ After optimization, you can **refine iteratively** — click suggestions or type
 **Prerequisites:**
 - Python 3.12+
 - Node.js 22+
-- Either Claude CLI (`claude` on PATH — free for Max subscribers) or an Anthropic API key
+- Either Claude CLI (`claude` on PATH — included with Claude Code subscriptions) or an Anthropic API key
 
 ```bash
 # Set up backend
@@ -37,7 +37,7 @@ cd .. && ./init.sh start
 open http://localhost:5199
 ```
 
-The backend auto-detects your provider (Claude CLI first, then API key). No configuration needed for Max subscribers.
+The backend auto-detects your provider (Claude CLI first, then API key). No configuration needed if Claude CLI is installed.
 
 ### With an API key
 
