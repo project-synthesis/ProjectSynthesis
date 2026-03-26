@@ -225,17 +225,14 @@ def _strip_meta_header(text: str) -> str:
     )
 
     # 1. Strip markdown code fence wrapping the entire content.
-    #    LLMs sometimes return: ```markdown\n<actual prompt>\n```\n\n# ...
+    #    LLMs sometimes return: ```markdown\n<actual prompt>\n```
     stripped = text.strip()
     if re.match(r"^```(?:markdown|md)?\s*\n", stripped, re.IGNORECASE):
         # Remove opening fence
         stripped = re.sub(r"^```(?:markdown|md)?\s*\n", "", stripped, count=1, flags=re.IGNORECASE)
-        # Remove closing fence and anything after it (trailing # headers, whitespace)
-        stripped = re.sub(r"\n```\s*(?:\n.*)?$", "", stripped)
+        # Remove closing fence (at end)
+        stripped = re.sub(r"\n```\s*$", "", stripped)
         text = stripped
-
-    # 1b. Strip orphaned trailing markers (e.g., lone "#" or "##" from truncated sections)
-    text = re.sub(r"\n#{1,3}\s*$", "", text)
 
     # 2. Strip meta-header line
     lines = text.split("\n")
@@ -254,7 +251,13 @@ def _strip_meta_header(text: str) -> str:
             lines.pop(0)
             while lines and not lines[0].strip():
                 lines.pop(0)
-    return "\n".join(lines)
+
+    # 3. Strip trailing closing fence + orphaned heading markers left by
+    #    truncated LLM output (e.g., "```\n\n#" at the end).
+    result = "\n".join(lines).rstrip()
+    result = re.sub(r"\n```\s*$", "", result)           # trailing ```
+    result = re.sub(r"\n#{1,3}\s*$", "", result.rstrip())  # trailing orphaned #/##/###
+    return result
 
 
 def _split_prompt_and_changes(text: str) -> tuple[str, str]:

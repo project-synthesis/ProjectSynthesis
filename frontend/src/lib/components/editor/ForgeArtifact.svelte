@@ -24,9 +24,10 @@
     text = text.replace(/^(?:here\s+is|below\s+is)[^`\n]*(?:prompt|version)[^`\n]*:?\s*\n+/i, '');
     // 2. Remove meta-headers like "# Optimized Prompt"
     text = text.replace(/^#{1,3}\s+(?:optimized|improved|rewritten|enhanced)\s+(?:prompt|version)\s*:?\s*\n*/i, '');
-    // 3. Unwrap markdown code fences wrapping the entire prompt (and trailing content after fence)
-    text = text.replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```[\s\S]*$/i, '$1');
-    // 4. Strip orphaned trailing # markers from truncated sections
+    // 3. Unwrap markdown code fences wrapping the entire prompt
+    text = text.replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)```\s*$/i, '$1');
+    // 4. Strip trailing closing fence + orphaned # from truncated LLM output
+    text = text.replace(/\n```\s*$/, '');
     text = text.replace(/\n#{1,3}\s*$/, '');
     return text.trim();
   });
