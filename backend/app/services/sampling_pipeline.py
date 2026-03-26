@@ -358,12 +358,19 @@ async def _sampling_request_structured(
 
     except (TypeError, AttributeError) as exc:
         # Client doesn't support tools in sampling — fall back to plain text
+        # with explicit JSON schema instruction appended to the user message.
         logger.info(
-            "Structured sampling not supported (client raised %s: %s), falling back to text",
+            "Structured sampling not supported (client raised %s: %s), falling back to text + schema",
             type(exc).__name__, exc,
         )
+        schema_json = _json.dumps(output_model.model_json_schema(), indent=2)
+        json_instruction = (
+            "\n\n---\nIMPORTANT: Respond with ONLY a valid JSON object matching "
+            "this exact schema. No markdown fences, no commentary, no reasoning "
+            "text — just the raw JSON:\n" + schema_json
+        )
         text, model_id = await _sampling_request_plain(
-            ctx, system, user,
+            ctx, system, user + json_instruction,
             max_tokens=max_tokens,
         )
         return _parse_text_response(text, output_model), model_id
@@ -894,6 +901,13 @@ async def run_sampling_pipeline(
         phase_t0 = time.monotonic()
         logger.info("Sampling pipeline Phase 3: Score")
         scoring_system = loader.load("scoring.md")
+        # For sampling: append explicit JSON output directive so the IDE LLM
+        # doesn't write a markdown essay. This does NOT modify scoring.md
+        # (which is shared with the internal pipeline).
+        scoring_system += (
+            "\n\nYou MUST output ONLY valid JSON matching the ScoreResult schema. "
+            "No markdown, no reasoning text, no commentary outside the JSON structure."
+        )
 
         original_first = random.choice([True, False])
         if original_first:
@@ -910,6 +924,7 @@ async def run_sampling_pipeline(
         try:
             scores, score_model = await _sampling_request_structured(
                 ctx, scoring_system, scorer_msg, ScoreResult,
+                max_tokens=1024,
             )
             model_ids["score"] = score_model
         except Exception:
