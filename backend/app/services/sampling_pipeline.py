@@ -29,6 +29,7 @@ import uuid
 from typing import Any, TypeVar
 
 from mcp.server.fastmcp import Context
+from mcp.shared.exceptions import McpError
 from mcp.types import (
     CreateMessageResult,
     SamplingMessage,
@@ -356,9 +357,10 @@ async def _sampling_request_structured(
         text = _extract_text(result)
         return _parse_text_response(text, output_model), model_id
 
-    except (TypeError, AttributeError) as exc:
-        # Client doesn't support tools in sampling — fall back to plain text
-        # with explicit JSON schema instruction appended to the user message.
+    except (TypeError, AttributeError, McpError) as exc:
+        # Client doesn't support tools in sampling (McpError from VS Code,
+        # TypeError/AttributeError from other clients) — fall back to plain
+        # text with explicit JSON schema instruction appended.
         logger.info(
             "Structured sampling not supported (client raised %s: %s), falling back to text + schema",
             type(exc).__name__, exc,
@@ -929,7 +931,7 @@ async def run_sampling_pipeline(
             model_ids["score"] = score_model
         except Exception:
             scoring_mode = "heuristic"
-            logger.warning("Score parsing failed, falling back to heuristic-only")
+            logger.warning("Score parsing failed, falling back to heuristic-only", exc_info=True)
 
         if scores:
             if original_first:
