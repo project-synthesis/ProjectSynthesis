@@ -127,9 +127,11 @@ class ContextEnrichmentService:
                 )
                 task_type = "general"
 
-        # 3. Codebase context — tier-dependent
+        # 3. Codebase context — available for ALL tiers when repo is linked.
+        #    Previously gated to passthrough only, but the curated index provides
+        #    deep structural context that benefits all optimization paths.
         codebase_context: str | None = None
-        if tier == "passthrough" and repo_full_name:
+        if repo_full_name:
             branch = repo_branch or "main"
             codebase_context = await self._query_index_context(
                 repo_full_name, branch, raw_prompt,

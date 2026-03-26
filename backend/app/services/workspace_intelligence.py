@@ -62,7 +62,7 @@ class WorkspaceIntelligence:
         logger.debug("Analyzing %d workspace roots: %s", len(roots), [str(r) for r in roots])
         guidance = self._scanner.scan_roots(roots)
         stack = self._detect_stack(roots)
-        profile = self._build_profile(stack, guidance)
+        profile = self._build_profile(stack, guidance, roots=roots)
 
         if profile:
             self._cache[cache_key] = (profile, time.monotonic())
@@ -163,8 +163,72 @@ class WorkspaceIntelligence:
             "tools": sorted(tools),
         }
 
-    def _build_profile(self, stack: dict, guidance: str | None) -> str | None:
-        """Format stack detection + guidance into a <workspace-profile> block."""
+    def _scan_readme(self, roots: list[Path]) -> str | None:
+        """Extract the first 80 lines of README.md for project intent/overview."""
+        for root in roots:
+            for name in ("README.md", "readme.md", "Readme.md"):
+                readme = root / name
+                if readme.is_file():
+                    try:
+                        text = readme.read_text(errors="replace")
+                        lines = text.split("\n")[:80]
+                        content = "\n".join(lines).strip()
+                        if content:
+                            logger.debug("README.md found: %d lines from %s", len(lines), readme)
+                            return content
+                    except Exception:
+                        logger.debug("Failed to read %s", readme, exc_info=True)
+        return None
+
+    def _scan_entry_points(self, roots: list[Path]) -> str | None:
+        """Extract first 40 lines of key entry point files for architecture signals."""
+        entry_points = [
+            "backend/app/main.py", "app/main.py", "main.py", "src/main.py",
+            "src/index.ts", "src/app.ts", "src/index.js", "src/app.js",
+            "frontend/src/routes/+layout.svelte", "src/routes/+layout.svelte",
+            "manage.py", "wsgi.py", "asgi.py",
+        ]
+        found = []
+        for root in roots:
+            for ep in entry_points:
+                path = root / ep
+                if path.is_file():
+                    try:
+                        text = path.read_text(errors="replace")
+                        lines = text.split("\n")[:40]
+                        preview = "\n".join(lines).strip()
+                        if preview:
+                            rel = str(path.relative_to(root))
+                            found.append(f"## {rel}\n{preview}")
+                            logger.debug("Entry point: %s (%d lines)", rel, len(lines))
+                    except Exception:
+                        pass
+                if len(found) >= 3:  # Cap at 3 entry points
+                    break
+        return "\n\n".join(found) if found else None
+
+    def _scan_architecture_docs(self, roots: list[Path]) -> str | None:
+        """Scan docs/ or architecture/ for design documents (first 60 lines each)."""
+        doc_dirs = ["docs", "doc", "architecture", "design"]
+        found = []
+        for root in roots:
+            for doc_dir in doc_dirs:
+                d = root / doc_dir
+                if d.is_dir():
+                    for md in sorted(d.glob("*.md"))[:3]:  # Top 3 docs
+                        try:
+                            text = md.read_text(errors="replace")
+                            lines = text.split("\n")[:60]
+                            preview = "\n".join(lines).strip()
+                            if preview:
+                                rel = str(md.relative_to(root))
+                                found.append(f"## {rel}\n{preview}")
+                        except Exception:
+                            pass
+        return "\n\n".join(found) if found else None
+
+    def _build_profile(self, stack: dict, guidance: str | None, roots: list[Path] | None = None) -> str | None:
+        """Format stack detection + guidance + deep context into a <workspace-profile> block."""
         if not stack["languages"] and not stack["frameworks"] and not guidance:
             return None
 
@@ -182,6 +246,30 @@ class WorkspaceIntelligence:
             parts.append("<guidance-files>")
             parts.append(guidance)
             parts.append("</guidance-files>")
+
+        # Deep context: README, entry points, architecture docs
+        # These provide structural understanding beyond manifest metadata.
+        if roots:
+            readme = self._scan_readme(roots)
+            if readme:
+                parts.append("")
+                parts.append("<project-readme>")
+                parts.append(readme)
+                parts.append("</project-readme>")
+
+            entry_points = self._scan_entry_points(roots)
+            if entry_points:
+                parts.append("")
+                parts.append("<entry-points>")
+                parts.append(entry_points)
+                parts.append("</entry-points>")
+
+            arch_docs = self._scan_architecture_docs(roots)
+            if arch_docs:
+                parts.append("")
+                parts.append("<architecture-docs>")
+                parts.append(arch_docs)
+                parts.append("</architecture-docs>")
 
         parts.append("</workspace-profile>")
         return "\n".join(parts)
