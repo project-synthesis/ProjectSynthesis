@@ -451,6 +451,40 @@ class _CapabilityDetectionMiddleware:
                     routing = _shared._routing
                     if routing:
                         routing.on_mcp_disconnect()
+                else:
+                    # An SSE stream closed but others remain (e.g., Claude Code).
+                    # If sampling was active, the closed stream may be the bridge.
+                    # Schedule a deferred check: if no sampling-capable initialize
+                    # arrives within 15s, clear sampling state.
+                    routing = _shared._routing
+                    if routing and routing.state.sampling_capable is True:
+                        logger.info(
+                            "SSE stream closed (remaining=%d) — scheduling sampling revalidation",
+                            cls._active_sse_streams,
+                        )
+                        asyncio.create_task(cls._deferred_sampling_check(routing))
+
+    @classmethod
+    async def _deferred_sampling_check(cls, routing) -> None:
+        """After an SSE stream closes, wait then check if sampling is still alive.
+
+        When the bridge disconnects but Claude Code stays connected,
+        ``_active_sse_streams`` drops from 2→1 (not 0), so the normal
+        disconnect path doesn't fire. This deferred check waits 15s
+        for a fresh sampling ``initialize`` — if none arrives, the
+        bridge is gone and sampling should be cleared.
+        """
+        await asyncio.sleep(15)
+        if routing.state.sampling_capable is not True:
+            return  # Already cleared by another path
+        if routing.state.last_capability_update:
+            elapsed = (
+                datetime.now(timezone.utc) - routing.state.last_capability_update
+            ).total_seconds()
+            if elapsed < 30:
+                return  # Fresh sampling init received — bridge is still alive
+        logger.info("Sampling revalidation: no fresh sampling init after SSE close — clearing")
+        routing.on_mcp_disconnect()
 
     @classmethod
     def _flush_sse_streams(cls) -> None:
