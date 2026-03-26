@@ -19,6 +19,7 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 # is stateless with no heartbeat, so VS Code sends no POSTs when idle.
 MCP_CAPABILITY_STALENESS_MINUTES: float = 30.0
 MCP_ACTIVITY_STALENESS_SECONDS: float = 300.0  # 5 minutes
+MCP_PORT: int = 8001  # Standalone MCP server port (used by REST→MCP proxy)
 
 
 class Settings(BaseSettings):

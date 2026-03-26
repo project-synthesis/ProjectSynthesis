@@ -117,6 +117,60 @@ async def optimize(
         preferences_snapshot=prefs_snapshot,
     )
 
+    # Sampling proxy: when force_sampling degrades to internal/passthrough
+    # because REST callers can't use MCP sampling directly, proxy through
+    # the MCP server which owns the sampling session with the IDE bridge.
+    if decision.degraded_from == "sampling" and routing.state.sampling_capable is True:
+        from app.services.mcp_proxy import call_mcp_tool
+
+        async def sampling_proxy_stream():
+            yield format_sse("routing", {
+                "tier": "sampling", "provider": None,
+                "reason": "force_sampling via MCP proxy",
+                "degraded_from": None,
+            })
+            yield format_sse("status", {"phase": "analyze", "status": "running"})
+            try:
+                result = await call_mcp_tool("synthesis_optimize", {
+                    "prompt": body.prompt,
+                    "strategy": body.strategy,
+                    "workspace_path": body.workspace_path,
+                    "repo_full_name": body.repo_full_name,
+                    "applied_pattern_ids": body.applied_pattern_ids,
+                })
+                # The MCP tool persists the optimization and returns OptimizeOutput.
+                # Fetch the full record from DB so the SSE event matches the
+                # OptimizationDetail shape the frontend expects (id, raw_prompt, etc.)
+                trace_id = result.get("trace_id")
+                if trace_id:
+                    yield format_sse("optimization_start", {"trace_id": trace_id})
+                    opt_result = await db.execute(
+                        select(Optimization).where(Optimization.trace_id == trace_id)
+                    )
+                    opt = opt_result.scalar_one_or_none()
+                    if opt:
+                        cluster_id = await _get_cluster_id(db, opt.id)
+                        detail = _serialize_optimization(opt, cluster_id=cluster_id)
+                        yield format_sse("optimization_complete", detail.model_dump())
+                    else:
+                        # Fallback: emit raw MCP result (partial shape)
+                        logger.warning("Sampling proxy: optimization not found for trace_id=%s", trace_id)
+                        yield format_sse("optimization_complete", result)
+                else:
+                    yield format_sse("optimization_complete", result)
+            except Exception as exc:
+                logger.error("Sampling proxy failed: %s", exc, exc_info=True)
+                yield format_sse("error", {"error": f"Sampling proxy error: {exc}"})
+
+        logger.info(
+            "POST /api/optimize: sampling proxy — force_sampling degraded, proxying through MCP server",
+        )
+        return StreamingResponse(
+            sampling_proxy_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
     if decision.tier == "passthrough":
         # Inline passthrough — stream assembled template via SSE
         assembled, strategy_name = assemble_passthrough_prompt(

@@ -416,25 +416,57 @@ class RoutingManager:
                 pass
 
     async def _disconnect_loop(self) -> None:
-        """Check every 60s if MCP activity has gone stale.
+        """Check every 60s for MCP state changes.
 
-        Clears both ``mcp_connected`` and ``sampling_capable`` — after the
-        staleness window, we cannot assume the client is still alive or that
-        it still supports sampling.
+        Two modes:
+        1. **Connected** — detect staleness and disconnect if activity gap
+           exceeds threshold.
+        2. **Disconnected** — poll ``mcp_session.json`` for reconnection.
+           This is a fallback safety net — the primary reconnection path is
+           real-time via the cross-process HTTP event from the MCP server's
+           ``on_mcp_initialize()`` → ``_broadcast_state_change()`` →
+           ``POST /api/events/_publish`` → ``sync_from_event()``.
+           The polling here catches edge cases where the HTTP notification
+           is lost (e.g., backend restarted between MCP init and HTTP POST).
 
         **Cross-process awareness:** The MCP server writes ``last_activity``
         to ``mcp_session.json`` on every POST, but only broadcasts
         cross-process events on state *changes* (connect/disconnect), not on
-        routine activity.  Before declaring disconnect, we read the session
-        file to check whether the MCP server has seen recent activity that
-        the backend doesn't know about.  If the file shows fresh activity,
-        we sync our in-memory state instead of disconnecting.
+        routine activity.
         """
         from app.config import MCP_ACTIVITY_STALENESS_SECONDS
 
         while True:
             try:
                 await asyncio.sleep(60)
+
+                # ── Reconnection detection (when disconnected) ────────
+                if not self._state.mcp_connected and self._session_file:
+                    data = self._session_file.read()
+                    if data and not self._session_file.is_activity_stale(data):
+                        sampling = data.get("sampling_capable", False)
+                        try:
+                            fresh_activity = datetime.fromisoformat(
+                                data["last_activity"],
+                            )
+                        except (KeyError, ValueError, TypeError):
+                            fresh_activity = None
+                        if fresh_activity:
+                            logger.info(
+                                "routing.reconnect_detected "
+                                "sampling_capable=%s "
+                                "session_file_fresh=True",
+                                sampling,
+                            )
+                            self._update_state(
+                                mcp_connected=True,
+                                sampling_capable=sampling if sampling else None,
+                                last_activity=fresh_activity,
+                            )
+                            self._broadcast_state_change("reconnect_detected")
+                    continue
+
+                # ── Disconnect detection (when connected) ─────────────
                 if self._state.mcp_connected and self._state.last_activity:
                     elapsed = (
                         datetime.now(timezone.utc) - self._state.last_activity
@@ -445,8 +477,6 @@ class RoutingManager:
                         if self._session_file:
                             data = self._session_file.read()
                             if data and not self._session_file.is_activity_stale(data):
-                                # Session file has fresh activity — sync
-                                # our state from it instead of disconnecting.
                                 try:
                                     fresh_activity = datetime.fromisoformat(
                                         data["last_activity"],
