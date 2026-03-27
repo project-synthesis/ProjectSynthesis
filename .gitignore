@@ -48,7 +48,8 @@ coverage/
 *.orig
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .idea/
 *.swp
 *.swo
@@ -95,8 +96,13 @@ fix_*.py
 get_sizes.js
 test_layout.js
 
-# Separate projects / experiments
-VSGithub/
+# VS Code bridge extension — track source only
+VSGithub/*
+!VSGithub/mcp-copilot-extension/
+VSGithub/mcp-copilot-extension/node_modules/
+VSGithub/mcp-copilot-extension/out/
+VSGithub/mcp-copilot-extension/*.vsix
+VSGithub/mcp-copilot-extension/package-lock.json
 backend/.venv
 
 # MCP debugging/test scripts (scratch)

@@ -1,0 +1,654 @@
+{
+  "name": "mcp-copilot-bridge",
+  "publisher": "local",
+  "displayName": "MCP Copilot Bridge",
+  "description": "Bridge MCP Server to Copilot",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languageModelTools": [
+      {
+        "name": "synthesis_optimize",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "optimize"
+        ],
+        "toolReferenceName": "synthesis_optimize",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "prompt": {
+              "description": "The raw prompt text to optimize (20–200k chars).",
+              "title": "Prompt",
+              "type": "string"
+            },
+            "strategy": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optimization strategy name (e.g. 'auto', 'chain-of-thought', 'few-shot', 'meta-prompting', 'role-playing', 'structured-output'). Defaults to user preference or 'auto'.",
+              "title": "Strategy"
+            },
+            "repo_full_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "GitHub repo in 'owner/repo' format for codebase-aware optimization.",
+              "title": "Repo Full Name"
+            },
+            "workspace_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Absolute path to the workspace root for context injection.",
+              "title": "Workspace Path"
+            },
+            "applied_pattern_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "List of MetaPattern IDs to inject into the optimizer context. Get these from synthesis_match results.",
+              "title": "Applied Pattern Ids"
+            }
+          },
+          "required": [
+            "prompt"
+          ],
+          "title": "synthesis_optimizeArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis optimize",
+        "userDescription": "Run the full optimization pipeline on a prompt.",
+        "modelDescription": "Run the full optimization pipeline on a prompt.\n\n    Call this to optimize any prompt. Returns the improved prompt, quality scores,\n    and follow-up suggestions.\n\n    Five execution paths (auto-selected by routing):\n    1. force_passthrough → returns assembled_prompt for your LLM to process\n    2. force_sampling + sampling capable → full pipeline via IDE's LLM\n    3. Local provider → full internal pipeline\n    4. No provider + MCP sampling → full pipeline via IDE's LLM\n    5. Fallback → returns assembled_prompt for your LLM to process\n\n    If status='pending_external': process the assembled_prompt with your LLM,\n    then call synthesis_save_result(trace_id=<returned trace_id>,\n    optimized_prompt=<your result>, scores={clarity, specificity, structure,\n    faithfulness, conciseness — each 1.0-10.0}).\n\n    Chain: Call synthesis_match BEFORE this tool to get applied_pattern_ids.\n    Call synthesis_feedback AFTER using the result to close the learning loop.\n    ",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "name": "synthesis_analyze",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "analyze"
+        ],
+        "toolReferenceName": "synthesis_analyze",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "prompt": {
+              "description": "The raw prompt text to analyze (min 20 chars).",
+              "title": "Prompt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "prompt"
+          ],
+          "title": "synthesis_analyzeArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis analyze",
+        "userDescription": "Analyze a prompt and generate baseline quality scores.",
+        "modelDescription": "Analyze a prompt and generate baseline quality scores.\n\n    Call BEFORE synthesis_optimize to understand prompt weaknesses and get a\n    strategy recommendation. Returns task classification, strengths, weaknesses,\n    recommended strategy, and baseline scores (5 dimensions).\n\n    Chain: Use the returned selected_strategy when calling synthesis_optimize.\n    ",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "name": "synthesis_prepare_optimization",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "prepare_optimization"
+        ],
+        "toolReferenceName": "synthesis_prepare_optimization",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "prompt": {
+              "description": "The raw prompt text to prepare for external optimization (min 20 chars).",
+              "title": "Prompt",
+              "type": "string"
+            },
+            "strategy": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optimization strategy name. Defaults to user preference or 'auto'.",
+              "title": "Strategy"
+            },
+            "max_context_tokens": {
+              "default": 128000,
+              "description": "Maximum context window budget in tokens.",
+              "title": "Max Context Tokens",
+              "type": "integer"
+            },
+            "workspace_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Absolute path to the workspace root for context injection.",
+              "title": "Workspace Path"
+            },
+            "repo_full_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "GitHub repo in 'owner/repo' format for codebase-aware optimization.",
+              "title": "Repo Full Name"
+            }
+          },
+          "required": [
+            "prompt"
+          ],
+          "title": "synthesis_prepare_optimizationArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis prepare_optimization",
+        "userDescription": "Assemble the full optimization prompt for processing by YOUR LLM.",
+        "modelDescription": "Assemble the full optimization prompt for processing by YOUR LLM.\n\n    This is step 1 of the passthrough workflow:\n    (1) Call this tool to get assembled_prompt and trace_id.\n    (2) Process assembled_prompt with your LLM to produce an optimized version.\n    (3) Call synthesis_save_result with the trace_id and the optimized output.\n\n    Use when you want your own LLM to perform the optimization instead of\n    the server's provider.\n    ",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "name": "synthesis_save_result",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "save_result"
+        ],
+        "toolReferenceName": "synthesis_save_result",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "trace_id": {
+              "description": "Trace ID from synthesis_prepare_optimization.",
+              "title": "Trace Id",
+              "type": "string"
+            },
+            "optimized_prompt": {
+              "description": "The optimized prompt text produced by your LLM.",
+              "title": "Optimized Prompt",
+              "type": "string"
+            },
+            "changes_summary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Brief summary of changes made during optimization.",
+              "title": "Changes Summary"
+            },
+            "task_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Task classification: 'coding', 'writing', 'analysis', 'creative', 'data', 'system', or 'general'.",
+              "title": "Task Type"
+            },
+            "strategy_used": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Strategy name used. Normalized to known strategies if verbose.",
+              "title": "Strategy Used"
+            },
+            "scores": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Self-rated scores dict with keys: clarity, specificity, structure, faithfulness, conciseness (1.0-10.0 float, clamped to this range).",
+              "title": "Scores"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Model ID that produced the optimization.",
+              "title": "Model"
+            },
+            "codebase_context": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "IDE-provided codebase context snapshot to store alongside the result.",
+              "title": "Codebase Context"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Domain category: 'backend', 'frontend', 'database', 'devops', 'security', 'fullstack', or 'general'. Defaults to 'general' if not provided.",
+              "title": "Domain"
+            },
+            "intent_label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Short 3-6 word intent classification label. Defaults to 'general'.",
+              "title": "Intent Label"
+            }
+          },
+          "required": [
+            "trace_id",
+            "optimized_prompt"
+          ],
+          "title": "synthesis_save_resultArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis save_result",
+        "userDescription": "Persist an optimization result from an external LLM with hybrid scoring.",
+        "modelDescription": "Persist an optimization result from an external LLM with hybrid scoring.\n\n    This is step 3 of the passthrough workflow (after synthesis_prepare_optimization\n    or after synthesis_optimize returns status='pending_external').\n    Blends self-rated scores with model-independent heuristics (z-score normalization\n    + dimension-specific weights) and computes score deltas against the original prompt.\n\n    Chain: Call synthesis_feedback AFTER using the optimized prompt to report quality.\n    ",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "name": "synthesis_health",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "health"
+        ],
+        "toolReferenceName": "synthesis_health",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {},
+          "title": "synthesis_healthArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis health",
+        "userDescription": "Check system capabilities and health before starting a workflow.",
+        "modelDescription": "Check system capabilities and health before starting a workflow.\n\n    Call at the START of any optimization session. Returns available routing\n    tiers (internal/sampling/passthrough), active provider, and loaded strategies.\n    Use this to decide whether synthesis_optimize will work or if you need\n    synthesis_prepare_optimization (passthrough fallback).\n    ",
+        "icon": "$(pulse)"
+      },
+      {
+        "name": "synthesis_strategies",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "strategies"
+        ],
+        "toolReferenceName": "synthesis_strategies",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {},
+          "title": "synthesis_strategiesArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis strategies",
+        "userDescription": "List available optimization strategies with descriptions.",
+        "modelDescription": "List available optimization strategies with descriptions.\n\n    Call BEFORE synthesis_optimize to choose the best strategy for your prompt\n    instead of defaulting to 'auto'. Returns strategy names, taglines, and\n    descriptions. Pass the returned name to synthesis_optimize's strategy parameter.\n    ",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "name": "synthesis_history",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "history"
+        ],
+        "toolReferenceName": "synthesis_history",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "default": 10,
+              "description": "Number of results to return (1-50).",
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "description": "Pagination offset.",
+              "title": "Offset",
+              "type": "integer"
+            },
+            "sort_by": {
+              "default": "created_at",
+              "description": "Sort column: 'created_at', 'overall_score', 'task_type', 'strategy_used', 'duration_ms'.",
+              "title": "Sort By",
+              "type": "string"
+            },
+            "sort_order": {
+              "default": "desc",
+              "description": "Sort direction: 'asc' or 'desc'.",
+              "title": "Sort Order",
+              "type": "string"
+            },
+            "task_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Filter by task type: 'coding', 'writing', 'analysis', 'creative', 'data', 'system', 'general'.",
+              "title": "Task Type"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Filter by status: 'completed', 'failed', 'analyzed', 'pending'.",
+              "title": "Status"
+            }
+          },
+          "title": "synthesis_historyArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis history",
+        "userDescription": "Query optimization history with filtering and sorting.",
+        "modelDescription": "Query optimization history with filtering and sorting.\n\n    Use to find past optimizations by task type, check which strategies\n    performed well (sort by overall_score desc), or find an optimization\n    to refine. Returns paginated summaries with 200-char prompt previews.\n\n    Chain: Call synthesis_get_optimization with a returned ID to get full details.\n    ",
+        "icon": "$(history)"
+      },
+      {
+        "name": "synthesis_get_optimization",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "get_optimization"
+        ],
+        "toolReferenceName": "synthesis_get_optimization",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "optimization_id": {
+              "description": "ID of the optimization to retrieve.",
+              "title": "Optimization Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "optimization_id"
+          ],
+          "title": "synthesis_get_optimizationArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis get_optimization",
+        "userDescription": "Retrieve full details of a specific optimization by ID.",
+        "modelDescription": "Retrieve full details of a specific optimization by ID.\n\n    Call after browsing synthesis_history to get the complete optimized prompt\n    text, or before synthesis_refine to understand what needs improving.\n    Returns full prompt texts, scores, feedback status, and refinement count.\n    ",
+        "icon": "$(file-text)"
+      },
+      {
+        "name": "synthesis_match",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "match"
+        ],
+        "toolReferenceName": "synthesis_match",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "prompt_text": {
+              "description": "Prompt text to match against the knowledge graph (min 10 chars).",
+              "title": "Prompt Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "prompt_text"
+          ],
+          "title": "synthesis_matchArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis match",
+        "userDescription": "Search the knowledge graph for clusters and reusable patterns similar to a prompt.",
+        "modelDescription": "Search the knowledge graph for clusters and reusable patterns similar to a prompt.\n\n    Call BEFORE synthesis_optimize to leverage past optimization knowledge.\n    Returns match quality (family/cluster/none), similarity score, cluster info,\n    and meta-pattern IDs.\n\n    Chain: Pass returned meta_patterns[].id values as applied_pattern_ids to\n    synthesis_optimize for knowledge-informed optimization.\n    ",
+        "icon": "$(search)"
+      },
+      {
+        "name": "synthesis_feedback",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "feedback"
+        ],
+        "toolReferenceName": "synthesis_feedback",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "optimization_id": {
+              "description": "ID of the optimization to rate.",
+              "title": "Optimization Id",
+              "type": "string"
+            },
+            "rating": {
+              "description": "Quality rating: 'thumbs_up' if the optimized prompt worked well, 'thumbs_down' if it underperformed.",
+              "title": "Rating",
+              "type": "string"
+            },
+            "comment": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional explanation of what worked or didn't.",
+              "title": "Comment"
+            }
+          },
+          "required": [
+            "optimization_id",
+            "rating"
+          ],
+          "title": "synthesis_feedbackArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis feedback",
+        "userDescription": "Submit quality feedback on a completed optimization to drive strategy adaptation.",
+        "modelDescription": "Submit quality feedback on a completed optimization to drive strategy adaptation.\n\n    Call AFTER using an optimized prompt and observing its effectiveness.\n    Use 'thumbs_up' when the result produced good outcomes, 'thumbs_down'\n    when it underperformed. The system learns which strategies work best\n    for each task type based on accumulated feedback.\n    ",
+        "icon": "$(thumbsup)"
+      },
+      {
+        "name": "synthesis_refine",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "refine"
+        ],
+        "toolReferenceName": "synthesis_refine",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "optimization_id": {
+              "description": "ID of the optimization to refine.",
+              "title": "Optimization Id",
+              "type": "string"
+            },
+            "refinement_request": {
+              "description": "Specific refinement instruction (e.g., 'add more concrete examples', 'strengthen the error handling section', 'make it more concise').",
+              "title": "Refinement Request",
+              "type": "string"
+            },
+            "branch_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Branch ID to refine on. Omit to use the latest branch.",
+              "title": "Branch Id"
+            },
+            "workspace_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Absolute path to workspace root for codebase context.",
+              "title": "Workspace Path"
+            }
+          },
+          "required": [
+            "optimization_id",
+            "refinement_request"
+          ],
+          "title": "synthesis_refineArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis refine",
+        "userDescription": "Iteratively improve an optimized prompt with specific instructions.",
+        "modelDescription": "Iteratively improve an optimized prompt with specific instructions.\n\n    Call after synthesis_optimize when the result needs targeted improvement.\n    Each call is a fresh pipeline invocation (not multi-turn accumulation).\n    Returns the refined prompt, updated scores, score deltas, and suggestions.\n\n    Chain: Call synthesis_feedback after the final refinement to close the loop.\n    ",
+        "icon": "$(edit)"
+      }
+    ],
+    "languageModelToolSets": [
+      {
+        "name": "synthesis",
+        "displayName": "Synthesis",
+        "description": "Prompt optimization and analysis tools from Project Synthesis",
+        "icon": "$(beaker)",
+        "tools": [
+          "synthesis_optimize",
+          "synthesis_analyze",
+          "synthesis_prepare_optimization",
+          "synthesis_save_result",
+          "synthesis_health",
+          "synthesis_strategies",
+          "synthesis_history",
+          "synthesis_get_optimization",
+          "synthesis_match",
+          "synthesis_feedback",
+          "synthesis_refine"
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "echo skip",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.0",
+    "eventsource-parser": "^1.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "18.x",
+    "@types/vscode": "^1.96.0",
+    "esbuild": "^0.27.4",
+    "typescript": "^5.3.3"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "chat.mcp.discovery.enabled": {
+    "claude-desktop": true,
+    "windsurf": true,
+    "cursor-global": true,
+    "cursor-workspace": true
+  },
+  "chat.mcp.serverSampling": {
+    "PromptForge_v2/.vscode/mcp.json: synthesis_mcp": {
+      "allowedDuringChat": true
+    }
+  }
+}
