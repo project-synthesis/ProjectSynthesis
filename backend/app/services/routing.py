@@ -296,7 +296,7 @@ class RoutingManager:
             self._broadcast_state_change("mcp_reconnect")
 
     def on_mcp_disconnect(self) -> None:
-        """Called when the last MCP SSE stream closes — client disconnected.
+        """Called when the last MCP SSE stream closes — all clients disconnected.
 
         Clears both ``mcp_connected`` and ``sampling_capable``.  This is a
         hard signal: no SSE streams remain, so no client can serve sampling
@@ -309,6 +309,21 @@ class RoutingManager:
         self._persist()
         logger.info("routing.disconnect trigger=sse_closed")
         self._broadcast_state_change("mcp_disconnect")
+
+    def on_sampling_disconnect(self) -> None:
+        """Called when the last sampling SSE closes but non-sampling clients remain.
+
+        Only clears ``sampling_capable`` — keeps ``mcp_connected=True`` since
+        non-sampling clients (e.g. Claude Code) are still actively connected.
+        This prevents incorrectly degrading the general MCP connection state
+        when only the sampling bridge disconnects.
+        """
+        if self._state.sampling_capable is None:
+            return  # Already cleared — avoid duplicate events
+        self._update_state(sampling_capable=None)
+        self._persist()
+        logger.info("routing.sampling_disconnect trigger=last_sampling_sse_closed")
+        self._broadcast_state_change("sampling_disconnect")
 
     def on_session_invalidated(self) -> None:
         """Called when a stale MCP session is detected (400/404 from transport).
@@ -538,8 +553,9 @@ class RoutingManager:
         """Replace specific fields in the current state.
 
         Thread-safety note: all callers (``set_provider``, ``on_mcp_initialize``,
-        ``on_mcp_activity``, ``on_mcp_disconnect``, ``on_session_invalidated``,
-        ``sync_from_event``, ``_disconnect_loop``) are synchronous between
+        ``on_mcp_activity``, ``on_mcp_disconnect``, ``on_sampling_disconnect``,
+        ``on_session_invalidated``, ``sync_from_event``, ``_disconnect_loop``)
+        are synchronous between
         their read of ``self._state`` and this write — no ``await`` between
         read and replace.  This is safe under asyncio's cooperative scheduling.
         Do not add ``await`` calls between state reads and this method.

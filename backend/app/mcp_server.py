@@ -191,103 +191,116 @@ except Exception:
     )
 
 # ---------------------------------------------------------------------------
-# Lifespan
+# Lifespan — process-level singletons, initialized once
 # ---------------------------------------------------------------------------
+
+# FastMCP's Streamable HTTP transport calls Server.run() per session, which
+# enters the lifespan for each new client connection.  To prevent
+# RoutingManager replacement (which destroys sampling state from other
+# clients), all singletons are initialized exactly once on the first session
+# and never torn down per-session.
+#
+# Stale session file is cleared in __main__ (process startup), NOT here —
+# clearing per-session would race with the middleware writing the file.
+#
+# Safety invariant: the flag + guard below rely on asyncio's cooperative
+# scheduling (no preemption between the check and assignment).  If the
+# server were ever embedded in a threaded ASGI host, a threading.Lock
+# would be needed instead.
+_process_initialized = False
 
 
 @asynccontextmanager
 async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
-    """Detect the LLM provider and initialize routing at startup."""
-    _clear_stale_session()
+    """Per-session lifespan — initializes process singletons on first call only."""
+    global _process_initialized
 
-    # Enable WAL mode for SQLite
-    db_path = DATA_DIR / "synthesis.db"
-    if db_path.exists():
-        async with aiosqlite.connect(str(db_path)) as db:
-            await db.execute("PRAGMA journal_mode=WAL")
-            await db.execute("PRAGMA busy_timeout=5000")
-        logger.info("MCP lifespan: SQLite WAL mode enabled")
+    if not _process_initialized:
+        _process_initialized = True
 
-    # Initialize routing with cross-process notification bridge.
-    from app.services.event_bus import EventBus as _EventBus
+        # Enable WAL mode for SQLite
+        db_path = DATA_DIR / "synthesis.db"
+        if db_path.exists():
+            async with aiosqlite.connect(str(db_path)) as db:
+                await db.execute("PRAGMA journal_mode=WAL")
+                await db.execute("PRAGMA busy_timeout=5000")
+            logger.info("MCP lifespan: SQLite WAL mode enabled")
 
-    def _cross_process_notifier(event_type: str, payload: dict) -> None:
-        try:
-            asyncio.create_task(notify_event_bus(event_type, payload))
-        except RuntimeError:
-            logger.debug("Cross-process notifier: no running event loop (shutdown)")
+        # Initialize routing with cross-process notification bridge.
+        from app.services.event_bus import EventBus as _EventBus
 
-    _mcp_event_bus = _EventBus()
-    routing = RoutingManager(
-        event_bus=_mcp_event_bus,
-        data_dir=DATA_DIR,
-        is_mcp_process=True,
-        cross_process_notify=_cross_process_notifier,
-    )
-    _shared.set_routing(routing)
+        def _cross_process_notifier(event_type: str, payload: dict) -> None:
+            try:
+                asyncio.create_task(notify_event_bus(event_type, payload))
+            except RuntimeError:
+                logger.debug("Cross-process notifier: no running event loop (shutdown)")
 
-    _detected_provider = detect_provider()
-    if _detected_provider:
-        routing.set_provider(_detected_provider)
-        logger.info("MCP routing: provider=%s tiers=%s", _detected_provider.name, routing.available_tiers)
-    else:
-        logger.warning("MCP routing: no provider, tiers=%s", routing.available_tiers)
-
-    await routing.start_disconnect_checker()
-
-    # Shared EmbeddingService singleton — reused by taxonomy engine and context service
-    from app.services.embedding_service import EmbeddingService
-    _mcp_embedding_service = EmbeddingService()
-
-    # Hot-path-only taxonomy engine for domain mapping (Spec 6.7)
-    try:
-        from app.services.taxonomy import TaxonomyEngine
-
-        engine = TaxonomyEngine(
-            embedding_service=_mcp_embedding_service,
-            provider_resolver=lambda: routing.state.provider,
-        )
-        _shared.set_taxonomy_engine(engine)
-        logger.info("MCP server: TaxonomyEngine initialized (hot-path only)")
-    except Exception as exc:
-        logger.warning("MCP server: TaxonomyEngine init failed (non-fatal): %s", exc)
-
-    # Initialize unified context enrichment service
-    try:
-        from app.services.context_enrichment import ContextEnrichmentService
-        from app.services.github_client import GitHubClient
-        from app.services.heuristic_analyzer import HeuristicAnalyzer
-        from app.services.workspace_intelligence import WorkspaceIntelligence
-
-        _context_svc = ContextEnrichmentService(
-            prompts_dir=PROMPTS_DIR,
+        _mcp_event_bus = _EventBus()
+        routing = RoutingManager(
+            event_bus=_mcp_event_bus,
             data_dir=DATA_DIR,
-            workspace_intel=WorkspaceIntelligence(),
-            embedding_service=_mcp_embedding_service,
-            heuristic_analyzer=HeuristicAnalyzer(),
-            github_client=GitHubClient(),
-            taxonomy_engine=_shared.get_taxonomy_engine(),
+            is_mcp_process=True,
+            cross_process_notify=_cross_process_notifier,
         )
-        _shared.set_context_service(_context_svc)
-        logger.info("MCP server: ContextEnrichmentService initialized")
-    except Exception as exc:
-        logger.warning(
-            "MCP server: ContextEnrichmentService init failed — passthrough "
-            "and pattern resolution will be unavailable: %s", exc,
-        )
+        _shared.set_routing(routing)
+
+        _detected_provider = detect_provider()
+        if _detected_provider:
+            routing.set_provider(_detected_provider)
+            logger.info("MCP routing: provider=%s tiers=%s", _detected_provider.name, routing.available_tiers)
+        else:
+            logger.warning("MCP routing: no provider, tiers=%s", routing.available_tiers)
+
+        await routing.start_disconnect_checker()
+
+        # Shared EmbeddingService singleton — reused by taxonomy engine and context service
+        from app.services.embedding_service import EmbeddingService
+        _mcp_embedding_service = EmbeddingService()
+
+        # Hot-path-only taxonomy engine for domain mapping (Spec 6.7)
+        try:
+            from app.services.taxonomy import TaxonomyEngine
+
+            engine = TaxonomyEngine(
+                embedding_service=_mcp_embedding_service,
+                provider_resolver=lambda: routing.state.provider,
+            )
+            _shared.set_taxonomy_engine(engine)
+            logger.info("MCP server: TaxonomyEngine initialized (hot-path only)")
+        except Exception as exc:
+            logger.warning("MCP server: TaxonomyEngine init failed (non-fatal): %s", exc)
+
+        # Initialize unified context enrichment service
+        try:
+            from app.services.context_enrichment import ContextEnrichmentService
+            from app.services.github_client import GitHubClient
+            from app.services.heuristic_analyzer import HeuristicAnalyzer
+            from app.services.workspace_intelligence import WorkspaceIntelligence
+
+            _context_svc = ContextEnrichmentService(
+                prompts_dir=PROMPTS_DIR,
+                data_dir=DATA_DIR,
+                workspace_intel=WorkspaceIntelligence(),
+                embedding_service=_mcp_embedding_service,
+                heuristic_analyzer=HeuristicAnalyzer(),
+                github_client=GitHubClient(),
+                taxonomy_engine=_shared.get_taxonomy_engine(),
+            )
+            _shared.set_context_service(_context_svc)
+            logger.info("MCP server: ContextEnrichmentService initialized")
+        except Exception as exc:
+            logger.warning(
+                "MCP server: ContextEnrichmentService init failed — passthrough "
+                "and pattern resolution will be unavailable: %s", exc,
+            )
 
     yield {}
-
-    _shared.set_context_service(None)
-    await routing.stop()
-    _shared.set_taxonomy_engine(None)
-    _shared.set_routing(None)
-
-    try:
-        from app.database import dispose
-        await dispose()
-    except Exception as exc:
-        logger.warning("MCP database disposal failed: %s", exc)
+    # No per-session cleanup — singletons are process-level.
+    # The disconnect checker task is cancelled when the event loop shuts down.
+    # Database connections are released on process exit.
+    # Note: if the MCP server is ever embedded in a larger ASGI app (mounted
+    # via app.mount()), explicit shutdown would be needed since the event loop
+    # outlives the server.  Current deployment is standalone (__main__).
 
 
 mcp = FastMCP(
@@ -530,18 +543,21 @@ class _CapabilityDetectionMiddleware:
                     pass
 
                 # Disconnect logic
+                routing = _shared._routing
                 if cls._active_sse_streams == 0:
                     logger.info("Last SSE stream closed — full disconnect")
-                    routing = _shared._routing
                     if routing:
                         routing.on_mcp_disconnect()
                 elif was_sampling and not cls._sampling_sse_sessions:
-                    # Last SAMPLING stream closed — instant sampling disconnect
-                    # Non-sampling clients (Claude Code) stay connected
-                    logger.info("Last sampling SSE closed — sampling disconnect (non-sampling streams remain)")
-                    routing = _shared._routing
+                    # Last SAMPLING stream closed — non-sampling clients remain.
+                    # Only clear sampling_capable; keep mcp_connected=True.
+                    logger.info(
+                        "Last sampling SSE closed — sampling-only disconnect "
+                        "(non-sampling streams remain: %d)",
+                        cls._active_sse_streams,
+                    )
                     if routing:
-                        routing.on_mcp_disconnect()
+                        routing.on_sampling_disconnect()
 
     # ── Activity tracking ─────────────────────────────────────────
 
@@ -615,6 +631,7 @@ class _CapabilityDetectionMiddleware:
                 params.get("protocolVersion", "?"),
             )
 
+            cls = _CapabilityDetectionMiddleware
             routing = _shared._routing
             if routing:
                 # Don't downgrade sampling when a non-sampling client
@@ -623,20 +640,38 @@ class _CapabilityDetectionMiddleware:
                 # can connect to the same server — only the bridge
                 # declares sampling.  VS Code native reconnects
                 # periodically and would clear sampling on each reconnect.
-                if not sampling and routing.state.sampling_capable is True:
+                if not sampling:
+                    # Primary: authoritative RoutingManager state.
+                    if routing.state.sampling_capable is True:
+                        logger.info(
+                            "Capability detection middleware: ignoring sampling=False "
+                            "from %s (sampling already active from another client)",
+                            client_info.get("name", "unknown"),
+                        )
+                        return
+                    # Defense in depth: class-level SSE tracking proves a
+                    # sampling client is connected even during brief startup
+                    # races before RoutingManager state is fully populated.
+                    if cls._sampling_sse_sessions:
+                        logger.info(
+                            "Capability detection middleware: ignoring sampling=False "
+                            "from %s (sampling SSE streams still active)",
+                            client_info.get("name", "unknown"),
+                        )
+                        return
+                routing.on_mcp_initialize(sampling_capable=sampling)
+            else:
+                # RoutingManager not yet initialized (first-session race).
+                # Don't write sampling=False if a sampling SSE is active.
+                if not sampling and cls._sampling_sse_sessions:
                     logger.info(
                         "Capability detection middleware: ignoring sampling=False "
-                        "from %s (sampling already active from another client)",
+                        "from %s (sampling SSE active, routing not yet initialized)",
                         client_info.get("name", "unknown"),
                     )
-                    # Do NOT update activity — non-sampling clients must not
-                    # keep the sampling tier alive. Only the bridge's initialize
-                    # (sampling=True) refreshes the routing state.
-                else:
-                    routing.on_mcp_initialize(sampling_capable=sampling)
-            else:
-                if not sampling and _session_file.should_skip_downgrade():
                     return
+                # Write to session file — RoutingManager._recover_state() will
+                # read this during the singleton init moments later.
                 _session_file.write_session(sampling)
         except Exception:
             logger.debug("Capability detection middleware: could not parse initialize", exc_info=True)

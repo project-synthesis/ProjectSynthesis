@@ -559,6 +559,84 @@ class TestManagerReconnectionEdgeCases:
         assert session_file.exists()
 
 
+class TestManagerSamplingDisconnect:
+    """on_sampling_disconnect: partial disconnect when bridge leaves but CC stays."""
+
+    def test_clears_sampling_keeps_connected(self, manager: RoutingManager) -> None:
+        """Only sampling_capable is cleared; mcp_connected stays True."""
+        manager.on_mcp_initialize(sampling_capable=True)
+        assert manager.state.sampling_capable is True
+        assert manager.state.mcp_connected is True
+
+        manager.on_sampling_disconnect()
+
+        assert manager.state.sampling_capable is None
+        assert manager.state.mcp_connected is True  # NOT cleared
+
+    def test_fires_event(self, manager: RoutingManager, event_bus: EventBus) -> None:
+        """Broadcasts sampling_disconnect trigger."""
+        manager.on_mcp_initialize(sampling_capable=True)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        event_bus._subscribers.add(queue)
+
+        manager.on_sampling_disconnect()
+
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["event"] == "routing_state_changed"
+        assert event["data"]["trigger"] == "sampling_disconnect"
+        assert event["data"]["sampling_capable"] is None
+        assert event["data"]["mcp_connected"] is True
+
+    def test_idempotent_when_already_cleared(
+        self, manager: RoutingManager, event_bus: EventBus,
+    ) -> None:
+        """Calling twice does NOT emit a duplicate event."""
+        manager.on_mcp_initialize(sampling_capable=True)
+        manager.on_sampling_disconnect()
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        event_bus._subscribers.add(queue)
+
+        # Second call — already None, should be a no-op
+        manager.on_sampling_disconnect()
+        assert queue.empty()
+
+    def test_tiers_lose_sampling(self, manager: RoutingManager) -> None:
+        """Available tiers must drop 'sampling' after partial disconnect."""
+        mock_provider = MagicMock()
+        mock_provider.name = "claude_cli"
+        manager.set_provider(mock_provider)
+        manager.on_mcp_initialize(sampling_capable=True)
+        assert "sampling" in manager.available_tiers
+
+        manager.on_sampling_disconnect()
+        assert "sampling" not in manager.available_tiers
+        assert "internal" in manager.available_tiers
+
+    def test_persists_to_session_file(self, tmp_path: Path, event_bus: EventBus) -> None:
+        """MCP process should persist the cleared sampling state to disk."""
+        mgr = RoutingManager(event_bus=event_bus, data_dir=tmp_path, is_mcp_process=True)
+        mgr.on_mcp_initialize(sampling_capable=True)
+        mgr.on_sampling_disconnect()
+        session_file = tmp_path / "mcp_session.json"
+        assert session_file.exists()
+        data = json.loads(session_file.read_text())
+        assert data["sampling_capable"] is False  # None → persisted as False
+
+    def test_full_disconnect_after_sampling_disconnect(
+        self, manager: RoutingManager,
+    ) -> None:
+        """Full disconnect after partial disconnect also clears mcp_connected."""
+        manager.on_mcp_initialize(sampling_capable=True)
+        manager.on_sampling_disconnect()
+        assert manager.state.mcp_connected is True  # still connected (CC)
+
+        manager.on_mcp_disconnect()
+        assert manager.state.mcp_connected is False
+        assert manager.state.sampling_capable is None
+
+
 class TestManagerAvailableTiers:
     def test_only_passthrough_when_nothing(self, manager: RoutingManager) -> None:
         assert manager.available_tiers == ["passthrough"]
