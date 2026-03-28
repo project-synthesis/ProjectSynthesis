@@ -50,10 +50,12 @@ export interface SceneData {
   edges: SceneEdge[];
 }
 
-// LOD persistence thresholds: nodes below these are hidden
+// LOD persistence thresholds: nodes below these are hidden.
+// Default persistence is 0.5 (from hot-path cluster creation), so FAR
+// threshold must be <= 0.5 to show new clusters before cold-path runs.
 const LOD_THRESHOLDS: Record<LODTier, number> = {
-  far: 0.6,
-  mid: 0.3,
+  far: 0.4,
+  mid: 0.2,
   near: 0.0,
 };
 

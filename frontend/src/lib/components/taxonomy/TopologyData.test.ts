@@ -110,11 +110,11 @@ describe('assignLodVisibility', () => {
   it('shows nodes with threshold-level persistence at mid LOD', () => {
     const nodes: SceneNode[] = [
       { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.3, state: 'active', label: 'A', visible: false },
-      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.2, state: 'active', label: 'B', visible: false },
+      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'B', visible: false },
     ];
     assignLodVisibility(nodes, 'mid');
-    expect(nodes[0].visible).toBe(true);   // 0.3 >= 0.3
-    expect(nodes[1].visible).toBe(false);  // 0.2 < 0.3
+    expect(nodes[0].visible).toBe(true);   // 0.3 >= 0.2
+    expect(nodes[1].visible).toBe(false);  // 0.1 < 0.2
   });
 });
 
