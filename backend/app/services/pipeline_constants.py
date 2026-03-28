@@ -11,12 +11,27 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Domain whitelist — used by passthrough save handlers to validate input
+# Domain discovery thresholds (ADR-004)
 # ---------------------------------------------------------------------------
+DOMAIN_DISCOVERY_MIN_MEMBERS = 5
+DOMAIN_DISCOVERY_MIN_COHERENCE = 0.6
+DOMAIN_DISCOVERY_CONSISTENCY = 0.60  # 60% of members share the same domain_raw primary
 
-VALID_DOMAINS: set[str] = {
-    "backend", "frontend", "database", "devops", "security", "fullstack", "general",
-}
+# Domain quality
+DOMAIN_COHERENCE_FLOOR = 0.3
+
+# Domain proliferation ceiling (ADR-004 Risk 1)
+DOMAIN_COUNT_CEILING = 30
+
+# Signal staleness ratio (ADR-004 Risk 2) — refresh when member_count doubles
+SIGNAL_REFRESH_MEMBER_RATIO = 2.0
+
+# Domain archival suggestion thresholds (ADR-004 Risk 1 self-correction)
+DOMAIN_ARCHIVAL_IDLE_DAYS = 90
+DOMAIN_ARCHIVAL_MIN_USAGE = 3
+
+# Color constraints — domain colors must avoid perceptual proximity to tier accents
+TIER_ACCENTS = ["#00e5ff", "#22ff88", "#fbbf24"]  # internal, sampling, passthrough
 
 # ---------------------------------------------------------------------------
 # Thresholds
@@ -77,21 +92,6 @@ def semantic_check(task_type: str, raw_prompt: str, confidence: float) -> float:
             )
             confidence = max(0.0, confidence - 0.2)
     return confidence
-
-
-def apply_domain_gate(domain: str | None, confidence: float) -> str:
-    """Override domain to ``general`` when confidence is below the domain gate.
-
-    Returns the effective domain string.
-    """
-    effective = domain or "general"
-    if confidence < DOMAIN_CONFIDENCE_GATE:
-        logger.info(
-            "Low confidence (%.2f) — overriding domain to 'general'",
-            confidence,
-        )
-        effective = "general"
-    return effective
 
 
 def resolve_effective_strategy(
