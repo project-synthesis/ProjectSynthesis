@@ -49,10 +49,12 @@ export function taxonomyColor(color: string | null | undefined): string {
   if (!color) return FALLBACK_COLOR;
   // If it's a hex color, return directly
   if (color.startsWith('#')) return color;
+  // Parse "primary: qualifier" format — use primary for color lookup
+  const primary = color.includes(':') ? color.split(':')[0].trim() : color;
   // Exact match first
-  if (color in DOMAIN_COLORS) return DOMAIN_COLORS[color];
-  // Keyword match: check if any known domain keyword appears in the string
-  const lower = color.toLowerCase();
+  if (primary in DOMAIN_COLORS) return DOMAIN_COLORS[primary];
+  // Keyword fallback for legacy free-form strings
+  const lower = primary.toLowerCase();
   for (const [domain, hex] of Object.entries(DOMAIN_COLORS)) {
     if (domain !== 'general' && lower.includes(domain)) return hex;
   }

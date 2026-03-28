@@ -72,6 +72,12 @@ describe('taxonomyColor', () => {
   it('returns fallback for empty string', () => {
     expect(taxonomyColor('')).toBe('#7a7a9e');
   });
+
+  it('resolves primary:qualifier format to primary domain color', () => {
+    expect(taxonomyColor('backend: security')).toBe('#b44aff');
+    expect(taxonomyColor('frontend: accessibility')).toBe('#ff4895');
+    expect(taxonomyColor('database: migration')).toBe('#36b5ff');
+  });
 });
 
 describe('qHealthColor', () => {

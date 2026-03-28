@@ -8,6 +8,13 @@ import type { ClusterNode } from '$lib/api/clusters';
 import type { LODTier } from './TopologyRenderer';
 import { taxonomyColor, stateColor } from '$lib/utils/colors';
 
+/** Extract primary domain from "primary: qualifier" format. */
+function parsePrimaryDomain(domain: string | null): string {
+  if (!domain) return 'general';
+  const idx = domain.indexOf(':');
+  return idx >= 0 ? domain.substring(0, idx).trim().toLowerCase() : domain.toLowerCase();
+}
+
 export interface SceneNode {
   id: string;
   position: [number, number, number];
@@ -104,8 +111,8 @@ export function buildSceneData(flatNodes: ClusterNode[]): SceneData {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = flatNodes[i];
       const b = flatNodes[j];
-      const domA = (a.domain ?? 'general').toLowerCase();
-      const domB = (b.domain ?? 'general').toLowerCase();
+      const domA = parsePrimaryDomain(a.domain);
+      const domB = parsePrimaryDomain(b.domain);
       if (domA !== 'general' && domB !== 'general' && domA === domB) {
         edges.push({ from: nodes[i].id, to: nodes[j].id, type: 'similarity' });
       }
