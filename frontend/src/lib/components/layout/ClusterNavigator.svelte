@@ -48,6 +48,13 @@
   // Expanded family — uses store's clusterDetail state
   let expandedId = $state<string | null>(null);
 
+  // Sync: when Inspector dismisses (selectCluster(null)), collapse here too
+  $effect(() => {
+    if (clustersStore.selectedClusterId === null) {
+      expandedId = null;
+    }
+  });
+
   // Proven Templates section — shown when no filter or template filter active
   let showTemplates = $derived(stateFilter === null || stateFilter === 'template');
   let templateClusters = $derived(
