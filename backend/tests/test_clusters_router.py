@@ -142,6 +142,20 @@ class TestClusterUpdate:
         assert resp.json()["domain"] == "frontend"
 
     @pytest.mark.asyncio
+    async def test_update_cluster_domain_invalid_422(self, app_client, db_session):
+        """PATCH /api/clusters/{id} returns 422 for an unknown domain."""
+        cluster = PromptCluster(
+            id="c2b", label="test", state="active", domain="backend",
+            task_type="coding", centroid_embedding=b'\x00' * 384,
+        )
+        db_session.add(cluster)
+        await db_session.commit()
+
+        resp = await app_client.patch("/api/clusters/c2b", json={"domain": "notadomain"})
+        assert resp.status_code == 422
+        assert "notadomain" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
     async def test_update_cluster_state(self, app_client, db_session):
         """PATCH /api/clusters/{id} updates state."""
         cluster = PromptCluster(

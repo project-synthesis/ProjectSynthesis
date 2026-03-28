@@ -230,6 +230,7 @@ async def get_cluster_detail(
 async def update_cluster(
     cluster_id: str,
     body: ClusterUpdateRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> UpdateClusterResponse:
     """Update a cluster's label, domain, and/or state."""
@@ -249,6 +250,12 @@ async def update_cluster(
         logger.info("Cluster renamed: id=%s '%s' -> '%s'", cluster_id, old_label, body.intent_label)
 
     if body.domain is not None:
+        resolver = request.app.state.domain_resolver
+        if body.domain not in resolver.domain_labels:
+            raise HTTPException(
+                422,
+                f"Unknown domain: '{body.domain}'. Use GET /api/domains for valid options.",
+            )
         old_domain = cluster.domain
         cluster.domain = body.domain
         logger.info("Cluster domain changed: id=%s '%s' -> '%s'", cluster_id, old_domain, body.domain)
