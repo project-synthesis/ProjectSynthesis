@@ -57,6 +57,7 @@ export interface OptimizationResult {
   domain: string | null;
   cluster_id: string | null;
   heuristic_flags: string[];
+  suggestions: Array<{ text: string; source: string }>;
 }
 
 export interface SSEEvent {

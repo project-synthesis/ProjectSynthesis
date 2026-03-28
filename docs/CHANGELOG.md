@@ -36,8 +36,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Added `McpError` catch in `_sampling_request_structured` — VS Code MCP client throws McpError (not TypeError) when tool calling is unsupported
 - Added JSON schema injection in sampling text fallback — when tool calling fails, JSON schema appended to user message
 - Added JSON terminal directive to scoring system prompt (sampling only) — forces JSON output from IDE LLM
-- Added `_strip_meta_header`: strips LLM preambles ("Here is the optimized prompt..."), code fence wrappers, meta-headers, trailing orphaned `#`
-- Added `_split_prompt_and_changes`: separates LLM change rationale from optimized prompt via 14 marker patterns
+- Added `strip_meta_header` (in `app/utils/text_cleanup`): strips LLM preambles ("Here is the optimized prompt..."), code fence wrappers, meta-headers, trailing orphaned `#`
+- Added `split_prompt_and_changes` (in `app/utils/text_cleanup`): separates LLM change rationale from optimized prompt via 14 marker patterns
 - Added `_build_analysis_from_text`: keyword-based task_type/domain/intent extraction from free-text LLM responses with confidence scaling
 - Added sampling downgrade prevention — non-sampling MCP clients no longer overwrite `sampling_capable=True` set by the bridge
 - Added `sync-tools.js` build script for bridge extension — queries MCP server `tools/list` and generates `package.json` manifest
