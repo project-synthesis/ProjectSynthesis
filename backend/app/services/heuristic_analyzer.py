@@ -506,9 +506,11 @@ class HeuristicAnalyzer:
             label = f"{first_verb} {domain} {task_type} task"
         else:
             label = f"{first_verb} {task_type} task"
-        # Cap at 6 words
+        # Cap at 6 words, title-case for display consistency
+        from app.utils.text_cleanup import title_case_label
+
         words = label.split()[:6]
-        return " ".join(words)
+        return title_case_label(" ".join(words))
 
     @staticmethod
     def _extract_first_verb(text: str) -> str | None:

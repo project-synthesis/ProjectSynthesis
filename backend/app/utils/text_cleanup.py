@@ -11,7 +11,33 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["strip_meta_header", "split_prompt_and_changes"]
+__all__ = ["strip_meta_header", "split_prompt_and_changes", "title_case_label"]
+
+# Words that should stay uppercase (acronyms, initialisms)
+_UPPERCASE_WORDS = frozenset({
+    "api", "css", "html", "js", "ts", "sql", "ui", "ux", "cli", "sdk",
+    "ssr", "ssg", "jwt", "oauth", "crud", "rest", "graphql", "db", "ai",
+    "llm", "mcp", "http", "https", "json", "yaml", "xml", "csv", "pdf",
+    "aws", "gcp", "ci", "cd", "devops", "gpu", "cpu", "ram", "ssd",
+})
+
+
+def title_case_label(text: str) -> str:
+    """Title-case a short label, preserving known acronyms.
+
+    Examples:
+        >>> title_case_label("design auth API service")
+        'Design Auth API Service'
+        >>> title_case_label("refactor CSS architecture")
+        'Refactor CSS Architecture'
+    """
+    words: list[str] = []
+    for w in text.split():
+        if w.lower() in _UPPERCASE_WORDS:
+            words.append(w.upper())
+        else:
+            words.append(w.capitalize())
+    return " ".join(words)
 
 
 def strip_meta_header(text: str) -> str:

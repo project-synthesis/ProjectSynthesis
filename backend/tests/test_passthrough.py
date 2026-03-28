@@ -1307,7 +1307,7 @@ class TestIntentLabelValidation:
         assert len(opt.intent_label) == 100
 
     async def test_save_short_intent_label_unchanged(self, app_client, db_session):
-        """Short intent labels pass through unmodified."""
+        """Short intent labels are title-cased for display consistency."""
         label = "refactor auth middleware"
         prep = await self._prepare(app_client)
         resp = await app_client.post(
@@ -1323,7 +1323,7 @@ class TestIntentLabelValidation:
             select(Optimization).where(Optimization.trace_id == prep["trace_id"])
         )
         opt = result.scalar_one()
-        assert opt.intent_label == label
+        assert opt.intent_label == "Refactor Auth Middleware"
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ from app.services.preferences import PreferencesService
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.tools._shared import DATA_DIR
-from app.utils.text_cleanup import split_prompt_and_changes
+from app.utils.text_cleanup import split_prompt_and_changes, title_case_label
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +203,7 @@ async def handle_save_result(
             )
             opt.domain = validated_domain
             opt.domain_raw = domain or opt.domain_raw or "general"
-            opt.intent_label = (intent_label or opt.intent_label or "general")[:100]
+            opt.intent_label = title_case_label((intent_label or opt.intent_label or "general")[:100])
             opt.score_clarity = final_scores.get("clarity")
             opt.score_specificity = final_scores.get("specificity")
             opt.score_structure = final_scores.get("structure")
@@ -232,7 +232,7 @@ async def handle_save_result(
                 changes_summary=changes_summary or "",
                 domain=domain if domain in VALID_DOMAINS else "general",
                 domain_raw=domain or "general",
-                intent_label=(intent_label or "general")[:100],
+                intent_label=title_case_label((intent_label or "general")[:100]),
                 score_clarity=final_scores.get("clarity"),
                 score_specificity=final_scores.get("specificity"),
                 score_structure=final_scores.get("structure"),

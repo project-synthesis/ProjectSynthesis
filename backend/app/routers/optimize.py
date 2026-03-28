@@ -23,7 +23,7 @@ from app.services.pipeline_constants import VALID_DOMAINS
 from app.services.preferences import PreferencesService
 from app.services.taxonomy import get_engine as get_taxonomy_engine
 from app.utils.sse import format_sse
-from app.utils.text_cleanup import split_prompt_and_changes
+from app.utils.text_cleanup import split_prompt_and_changes, title_case_label
 
 logger = logging.getLogger(__name__)
 
@@ -588,7 +588,7 @@ async def passthrough_save(
     )
     opt.domain = validated_domain
     opt.domain_raw = body.domain or opt.domain_raw or "general"
-    opt.intent_label = (body.intent_label or opt.intent_label or "general")[:100]
+    opt.intent_label = title_case_label((body.intent_label or opt.intent_label or "general")[:100])
     if optimized_scores:
         opt.score_clarity = optimized_scores["clarity"]
         opt.score_specificity = optimized_scores["specificity"]

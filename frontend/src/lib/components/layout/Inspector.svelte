@@ -20,6 +20,7 @@
   import { getOptimization } from '$lib/api/client';
   import { updateCluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
+  import MarkdownRenderer from '$lib/components/shared/MarkdownRenderer.svelte';
   import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
   import ScoreSparkline from '$lib/components/refinement/ScoreSparkline.svelte';
   import { PHASE_LABELS } from '$lib/utils/dimensions';
@@ -481,7 +482,9 @@
         {#if activeResult?.changes_summary}
           <div class="changes-section">
             <div class="section-heading">Changes</div>
-            <p class="changes-text">{activeResult.changes_summary}</p>
+            <div class="changes-text">
+              <MarkdownRenderer content={activeResult.changes_summary} />
+            </div>
           </div>
         {/if}
 
@@ -634,14 +637,15 @@
   }
 
   .changes-text {
-    font-size: 9px;
-    font-family: var(--font-sans);
-    color: var(--color-text-secondary);
-    line-height: 1.3;
     padding: 3px 6px;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
-    margin: 0;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  .changes-text :global(.md-render) {
+    font-size: 9px;
   }
 
   /* Suggestions */
