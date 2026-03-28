@@ -98,6 +98,35 @@ async def lifespan(app: FastAPI):
             app.state.taxonomy_engine = engine
             set_engine(engine)
 
+            # Initialize domain services
+            from app.services.domain_resolver import DomainResolver
+            from app.services.domain_signal_loader import DomainSignalLoader
+
+            domain_resolver = DomainResolver()
+            signal_loader = DomainSignalLoader()
+            async with async_session_factory() as _init_db:
+                await domain_resolver.load(_init_db)
+                await signal_loader.load(_init_db)
+            app.state.domain_resolver = domain_resolver
+            app.state.signal_loader = signal_loader
+            logger.info("Domain services initialized")
+
+            # Subscribe to domain events for cache invalidation
+            async def _on_domain_changed(event: dict) -> None:
+                try:
+                    async with async_session_factory() as _reload_db:
+                        await app.state.domain_resolver.load(_reload_db)
+                        await app.state.signal_loader.load(_reload_db)
+                    logger.info(
+                        "Domain caches reloaded: %s",
+                        event.get("label", "taxonomy_changed"),
+                    )
+                except Exception:
+                    logger.error("Domain cache reload failed", exc_info=True)
+
+            event_bus.subscribe("domain_created", _on_domain_changed)
+            event_bus.subscribe("taxonomy_changed", _on_domain_changed)
+
             # Warm-load embedding index from active cluster centroids
             try:
                 import numpy as _np

@@ -21,10 +21,14 @@ __all__ = [
     "async_session_factory",
     "build_scores_dict",
     "get_context_service",
+    "get_domain_resolver",
     "get_routing",
+    "get_signal_loader",
     "get_taxonomy_engine",
     "set_context_service",
+    "set_domain_resolver",
     "set_routing",
+    "set_signal_loader",
     "set_taxonomy_engine",
 ]
 
@@ -78,6 +82,34 @@ def get_context_service() -> ContextEnrichmentService:
     if _context_service is None:
         raise ValueError("Context enrichment service not initialized")
     return _context_service
+
+
+_domain_resolver = None  # DomainResolver | None
+_signal_loader = None    # DomainSignalLoader | None
+
+
+def set_domain_resolver(resolver) -> None:
+    """Set the module-level domain resolver (called by lifespan)."""
+    global _domain_resolver
+    _domain_resolver = resolver
+
+
+def get_domain_resolver():
+    """Return domain resolver or raise if not initialized."""
+    if _domain_resolver is None:
+        raise ValueError("DomainResolver not initialized")
+    return _domain_resolver
+
+
+def set_signal_loader(loader) -> None:
+    """Set the module-level signal loader (called by lifespan)."""
+    global _signal_loader
+    _signal_loader = loader
+
+
+def get_signal_loader():
+    """Return signal loader (may be None if init failed)."""
+    return _signal_loader
 
 
 # ---------------------------------------------------------------------------
