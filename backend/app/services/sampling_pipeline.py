@@ -445,11 +445,13 @@ def _build_analysis_from_text(
     confidence = 0.4 + (fields_extracted * 0.1)  # 0.4 to 0.8
 
     # Generate a short intent label from the raw prompt
-    intent_label = "general"
+    from app.utils.text_cleanup import title_case_label
+
+    intent_label = "General"
     if raw_prompt:
         words = raw_prompt.split()[:8]
         if len(words) > 3:
-            intent_label = " ".join(words[:6]).rstrip(".,;:!?")
+            intent_label = title_case_label(" ".join(words[:6]).rstrip(".,;:!?"))
 
     return AnalysisResult(
         task_type=task_type,
