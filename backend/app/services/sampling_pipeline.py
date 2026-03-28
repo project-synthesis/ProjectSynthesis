@@ -983,6 +983,7 @@ async def run_sampling_pipeline(
             original_scores=original_scores.model_dump() if original_scores else None,
             score_deltas=deltas,
             heuristic_flags=_divergence_flags or None,
+            suggestions=suggestions,
         )
         db.add(db_opt)
 

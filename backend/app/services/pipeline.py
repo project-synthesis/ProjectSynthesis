@@ -729,6 +729,7 @@ class PipelineOrchestrator:
                 tokens_by_phase=phase_durations,
                 models_by_phase=model_ids,
                 heuristic_flags=_divergence_flags or None,
+                suggestions=suggestions,
             )
             db.add(db_opt)
 
