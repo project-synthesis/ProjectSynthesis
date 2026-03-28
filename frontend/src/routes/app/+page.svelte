@@ -14,6 +14,7 @@
   let eventSource: EventSource | null = null;
   let sseHadError = false;
   let firstHealthReceived = false;
+  let pendingGuide = false;
 
   /** Shared handler for new MCP sampling capability detection (DRY: SSE + health). */
   function onSamplingDetected(): void {
@@ -185,7 +186,10 @@
 
     if (!firstHealthReceived) {
       firstHealthReceived = true;
-      queueMicrotask(() => triggerTierGuide(routing.tier));
+      // Don't trigger yet — wait for preferences to load so the tier
+      // reflects force_passthrough/force_sampling, not stale defaults.
+      // The $effect below handles the deferred trigger.
+      pendingGuide = true;
     }
   }
 
@@ -194,6 +198,17 @@
     healthPoll();
     const timer = setInterval(healthPoll, POLL_INTERVAL);
     return () => clearInterval(timer);
+  });
+
+  // Gate: trigger tier guide only after BOTH health AND preferences have loaded.
+  // Without this, health resolves first (provider=cli → tier=internal) before
+  // preferences arrive (force_passthrough=true → tier=passthrough), showing
+  // the wrong onboarding modal.
+  $effect(() => {
+    if (pendingGuide && !preferencesStore.loading) {
+      pendingGuide = false;
+      queueMicrotask(() => triggerTierGuide(routing.tier));
+    }
   });
 
   // Derived error states
