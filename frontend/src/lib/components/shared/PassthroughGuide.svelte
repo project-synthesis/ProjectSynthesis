@@ -54,7 +54,7 @@
       number: 6,
       title: 'Scored and saved',
       description:
-        'The system scores 5 quality dimensions and saves to history and taxonomy.',
+        'The system scores 5 quality dimensions, generates improvement suggestions, and saves to history and taxonomy.',
       detail: '',
       accent: 'green',
     },

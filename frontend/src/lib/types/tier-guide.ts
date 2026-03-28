@@ -28,7 +28,7 @@ export const TIER_COMPARISON: ComparisonRow[] = [
   { feature: 'Score phase', internal: 'LLM', sampling: 'LLM', passthrough: 'Heuristic / Hybrid' },
   { feature: 'Codebase explore', internal: '\u2713', sampling: '\u2713', passthrough: 'Roots + index' },
   { feature: 'Pattern injection', internal: '\u2713', sampling: '\u2713', passthrough: '\u2713' },
-  { feature: 'Suggestions', internal: '\u2713', sampling: '\u2713', passthrough: '\u2717' },
+  { feature: 'Suggestions', internal: '\u2713', sampling: '\u2713', passthrough: '\u2713' },
   { feature: 'Intent drift', internal: '\u2713', sampling: '\u2713', passthrough: '\u2717' },
   { feature: 'Adaptation state', internal: '\u2713', sampling: '\u2713', passthrough: 'Injected' },
   { feature: 'Strategy template', internal: '\u2713', sampling: '\u2713', passthrough: 'Injected' },
