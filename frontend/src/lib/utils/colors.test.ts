@@ -51,18 +51,18 @@ describe('taxonomyColor', () => {
 
   it('resolves known domain names to hex colors', () => {
     expect(taxonomyColor('backend')).toBe('#b44aff');
-    expect(taxonomyColor('frontend')).toBe('#ff6a00');
-    expect(taxonomyColor('database')).toBe('#00e0d0');
+    expect(taxonomyColor('frontend')).toBe('#ff4895');
+    expect(taxonomyColor('database')).toBe('#36b5ff');
     expect(taxonomyColor('security')).toBe('#ff2255');
-    expect(taxonomyColor('devops')).toBe('#3d9eff');
+    expect(taxonomyColor('devops')).toBe('#6366f1');
     expect(taxonomyColor('fullstack')).toBe('#d946ef');
     expect(taxonomyColor('general')).toBe('#7a7a9e');
   });
 
   it('resolves free-form domain strings via keyword matching', () => {
-    expect(taxonomyColor('frontend CSS architecture')).toBe('#ff6a00');
+    expect(taxonomyColor('frontend CSS architecture')).toBe('#ff4895');
     expect(taxonomyColor('backend API service')).toBe('#b44aff');
-    expect(taxonomyColor('database optimization')).toBe('#00e0d0');
+    expect(taxonomyColor('database optimization')).toBe('#36b5ff');
   });
 
   it('returns fallback for unknown domain name', () => {
