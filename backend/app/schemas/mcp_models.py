@@ -296,6 +296,10 @@ class SaveResultOutput(BaseModel):
     heuristic_flags: list[str] = Field(
         description="Quality issues flagged by heuristic analysis.",
     )
+    suggestions: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Follow-up improvement suggestions, each with 'text' and 'source' keys.",
+    )
 
 
 # ---------------------------------------------------------------------------

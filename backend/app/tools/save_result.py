@@ -18,6 +18,7 @@ from app.schemas.mcp_models import SaveResultOutput
 from app.schemas.pipeline_contracts import DimensionScores
 from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
+from app.services.heuristic_suggestions import generate_heuristic_suggestions
 from app.services.pipeline_constants import VALID_DOMAINS
 from app.services.preferences import PreferencesService
 from app.services.score_blender import blend_scores
@@ -175,6 +176,17 @@ async def handle_save_result(
                 orig_ds = DimensionScores.from_dict(original_scores)
                 deltas = DimensionScores.compute_deltas(orig_ds, opt_ds)
 
+        # Generate heuristic suggestions (zero-LLM)
+        from app.services.heuristic_analyzer import HeuristicAnalyzer
+        _analyzer = HeuristicAnalyzer()
+        raw_for_analysis = opt.raw_prompt if opt and opt.raw_prompt else ""
+        _analysis = await _analyzer.analyze(raw_for_analysis, db)
+        suggestions = generate_heuristic_suggestions(
+            dimension_scores=final_scores,
+            weaknesses=_analysis.weaknesses,
+            strategy_used=strategy_used or (opt.strategy_used if opt else "auto") or "auto",
+        )
+
         # Truncate codebase context if provided
         context_snapshot = None
         if codebase_context:
@@ -204,6 +216,7 @@ async def handle_save_result(
             opt.models_by_phase = {"optimize": model or "external"}
             opt.scoring_mode = scoring_mode
             opt.heuristic_flags = heuristic_flags if heuristic_flags else None
+            opt.suggestions = suggestions
             opt.status = "completed"
             if context_snapshot:
                 opt.codebase_context_snapshot = context_snapshot
@@ -231,6 +244,7 @@ async def handle_save_result(
                 models_by_phase={"optimize": model or "external"},
                 scoring_mode=scoring_mode,
                 heuristic_flags=heuristic_flags if heuristic_flags else None,
+                suggestions=suggestions,
                 status="completed",
                 trace_id=trace_id,
                 codebase_context_snapshot=context_snapshot,
@@ -266,4 +280,5 @@ async def handle_save_result(
         overall_score=overall,
         strategy_compliance=strategy_compliance,
         heuristic_flags=heuristic_flags,
+        suggestions=suggestions,
     )

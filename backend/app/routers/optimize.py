@@ -16,6 +16,7 @@ from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.models import Optimization, OptimizationPattern
 from app.services.heuristic_scorer import HeuristicScorer
+from app.services.heuristic_suggestions import generate_heuristic_suggestions
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
 from app.services.pipeline_constants import VALID_DOMAINS
@@ -65,6 +66,10 @@ class OptimizationDetail(BaseModel):
     heuristic_flags: list[str] = Field(
         default_factory=list,
         description="Dimensions where LLM and heuristic scores diverge significantly.",
+    )
+    suggestions: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Follow-up improvement suggestions, each with 'text' and 'source' keys.",
     )
 
 
@@ -346,6 +351,7 @@ def _serialize_optimization(opt: Optimization, *, cluster_id: str | None = None)
         domain=opt.domain,
         cluster_id=cluster_id,
         heuristic_flags=opt.heuristic_flags or [],
+        suggestions=opt.suggestions or [],
     )
 
 
@@ -594,6 +600,18 @@ async def passthrough_save(
     opt.score_deltas = deltas
     opt.scoring_mode = scoring_mode
     opt.heuristic_flags = heuristic_flags if heuristic_flags else None
+
+    # Generate heuristic suggestions (zero-LLM)
+    from app.services.heuristic_analyzer import HeuristicAnalyzer
+    _analyzer = HeuristicAnalyzer()
+    _analysis = await _analyzer.analyze(opt.raw_prompt, db)
+    suggestions = generate_heuristic_suggestions(
+        dimension_scores=optimized_scores or {},
+        weaknesses=_analysis.weaknesses,
+        strategy_used=effective_strategy,
+    )
+    opt.suggestions = suggestions
+
     opt.status = "completed"
     opt.model_used = body.model or "external"
     opt.models_by_phase = {"optimize": body.model or "external"}

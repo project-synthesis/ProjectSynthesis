@@ -269,6 +269,147 @@ async def assign_cluster(
 # ---------------------------------------------------------------------------
 
 
+def extract_structural_patterns(
+    raw_prompt: str,
+    optimized_prompt: str,
+) -> list[str]:
+    """Extract meta-patterns from structural diff between raw and optimized prompts.
+
+    Zero-LLM alternative to Haiku-based extraction.  Detects formatting
+    additions, score dimension improvements, and structural transformations
+    using the same regex patterns as :class:`HeuristicScorer`.
+
+    Two detection mechanisms applied in sequence:
+
+    **Mechanism A — Score delta**: Score both prompts on 5 dimensions,
+    emit a pattern when improvement crosses a threshold.
+
+    **Mechanism B — Structural regex**: Detect formatting elements
+    present in the optimized prompt but absent from the raw prompt.
+
+    Args:
+        raw_prompt: Original user prompt text.
+        optimized_prompt: Cleaned optimization output.
+
+    Returns:
+        List of 1-5 pattern description strings.
+    """
+    import re
+
+    from app.services.heuristic_scorer import HeuristicScorer
+
+    patterns: list[str] = []
+
+    def _add(text: str) -> None:
+        """Append pattern if not a substring duplicate of an existing one."""
+        for existing in patterns:
+            if text in existing or existing in text:
+                return
+        if len(patterns) < 5:
+            patterns.append(text)
+
+    # --- Mechanism A: Score delta detection ---
+    raw_scores = HeuristicScorer.score_prompt(raw_prompt)
+    opt_scores = HeuristicScorer.score_prompt(optimized_prompt, original=raw_prompt)
+
+    delta_rules: list[tuple[str, float, str]] = [
+        ("structure", 1.5, (
+            "Organize prompts with hierarchical headers and numbered "
+            "step sequences for clear task decomposition"
+        )),
+        ("specificity", 2.0, (
+            "Add explicit constraints and type-level specifications to "
+            "transform vague requests into precise instructions"
+        )),
+        ("clarity", 1.5, (
+            "Simplify sentence structure and eliminate ambiguous "
+            "references to improve readability and reduce misinterpretation"
+        )),
+        ("conciseness", 1.5, (
+            "Remove filler phrases and redundant qualifiers to increase "
+            "information density without losing essential detail"
+        )),
+    ]
+
+    for dim, threshold, pattern_text in delta_rules:
+        delta = opt_scores.get(dim, 0.0) - raw_scores.get(dim, 0.0)
+        if delta >= threshold:
+            _add(pattern_text)
+
+    # Faithfulness drop — cautionary pattern
+    faith_delta = opt_scores.get("faithfulness", 0.0) - raw_scores.get("faithfulness", 0.0)
+    if faith_delta <= -1.5:
+        _add(
+            "Preserve original intent by anchoring optimizations to the "
+            "user's stated requirements and avoiding unsolicited scope expansion"
+        )
+
+    # --- Mechanism B: Structural regex detection ---
+    re_headers = re.compile(r"(?m)^#{1,6}\s+\S")
+    re_lists = re.compile(r"(?m)^\s*[-*+]\s+\S|^\s*\d+\.\s+\S")
+    re_xml = re.compile(r"</?[A-Za-z][A-Za-z0-9_-]*\s*/?>")
+    re_format = re.compile(r"\b(?:format|schema|json|yaml|xml|csv|markdown)\b", re.IGNORECASE)
+    re_examples = re.compile(r"\bfor example\b|\be\.g\.\b|\bsuch as\b|\bexample:", re.IGNORECASE)
+    re_modals = re.compile(r"\b(?:must|shall|should)\b", re.IGNORECASE)
+
+    raw_lower = raw_prompt.lower()
+    opt_lower = optimized_prompt.lower()
+
+    # Headers added
+    if len(re_headers.findall(optimized_prompt)) >= 2 and len(re_headers.findall(raw_prompt)) == 0:
+        _add(
+            "Use markdown headers to create clear visual hierarchy "
+            "and separate distinct sections of the prompt"
+        )
+
+    # Lists added
+    if len(re_lists.findall(optimized_prompt)) >= 2 and len(re_lists.findall(raw_prompt)) == 0:
+        _add(
+            "Structure requirements as bulleted or numbered lists to "
+            "make individual items scannable and unambiguous"
+        )
+
+    # XML tags added
+    if len(re_xml.findall(optimized_prompt)) >= 2 and len(re_xml.findall(raw_prompt)) == 0:
+        _add(
+            "Wrap semantic sections in XML tags to create "
+            "machine-parseable boundaries between context, "
+            "instructions, and output format"
+        )
+
+    # Format keywords added
+    if re_format.search(opt_lower) and not re_format.search(raw_lower):
+        _add(
+            "Specify an explicit output format (JSON schema, YAML "
+            "template, or markdown structure) to constrain response shape"
+        )
+
+    # Example keywords added
+    if re_examples.search(opt_lower) and not re_examples.search(raw_lower):
+        _add(
+            "Include concrete examples to anchor the expected output "
+            "format and reduce interpretation ambiguity"
+        )
+
+    # Constraint modals added
+    raw_modals = len(re_modals.findall(raw_prompt))
+    opt_modals = len(re_modals.findall(optimized_prompt))
+    if opt_modals > raw_modals + 1:
+        _add(
+            "Add modal obligation keywords (must, shall, should) to "
+            "enforce non-negotiable requirements"
+        )
+
+    # Fallback: always return at least 1 pattern
+    if not patterns:
+        patterns.append(
+            "Apply targeted structural improvements based on the "
+            "prompt's weakest quality dimension"
+        )
+
+    return patterns
+
+
 async def extract_meta_patterns(
     opt: Optimization,
     db: AsyncSession,
@@ -291,8 +432,11 @@ async def extract_meta_patterns(
         List of meta-pattern strings (at most 5).
     """
     if not provider:
-        logger.debug("No LLM provider — skipping meta-pattern extraction")
-        return []
+        logger.debug("No LLM provider — using structural pattern extraction")
+        return extract_structural_patterns(
+            raw_prompt=opt.raw_prompt[:PROMPT_TRUNCATION_LIMIT],
+            optimized_prompt=(opt.optimized_prompt or "")[:PROMPT_TRUNCATION_LIMIT],
+        )
 
     try:
         # Build taxonomy context string (Spec 7.6)
