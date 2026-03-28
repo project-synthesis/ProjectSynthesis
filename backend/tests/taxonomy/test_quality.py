@@ -163,3 +163,17 @@ class TestSuggestionThreshold:
     def test_mid_coherence(self):
         t = suggestion_threshold(base=0.72, coherence=0.5)
         assert t == pytest.approx(0.72 + 0.15 * 0.5)
+
+
+class TestCoherenceThreshold:
+    def test_domain_node_gets_lower_floor(self):
+        from app.models import PromptCluster
+        from app.services.taxonomy.quality import coherence_threshold
+        domain = PromptCluster(label="backend", state="domain")
+        assert coherence_threshold(domain) == pytest.approx(0.3)
+
+    def test_regular_cluster_gets_standard_floor(self):
+        from app.models import PromptCluster
+        from app.services.taxonomy.quality import coherence_threshold
+        cluster = PromptCluster(label="test", state="active")
+        assert coherence_threshold(cluster) == pytest.approx(0.6)

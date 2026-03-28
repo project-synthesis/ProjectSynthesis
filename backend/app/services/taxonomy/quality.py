@@ -13,6 +13,8 @@ import math
 import statistics
 from dataclasses import dataclass
 
+from app.services.pipeline_constants import DOMAIN_COHERENCE_FLOOR
+
 logger = logging.getLogger(__name__)
 
 # Default weight targets (when DBCV is fully active)
@@ -184,3 +186,15 @@ def suggestion_threshold(
     Low coherence → threshold rises (centroid is blurred).
     """
     return base + alpha * (1.0 - max(0.0, min(1.0, coherence)))
+
+
+CLUSTER_COHERENCE_FLOOR = 0.6
+
+
+def coherence_threshold(node) -> float:
+    """Return the coherence floor for a node based on its state.
+
+    Domain nodes use a lower threshold because they span multiple
+    sub-topics — lower coherence is expected and correct.
+    """
+    return DOMAIN_COHERENCE_FLOOR if node.state == "domain" else CLUSTER_COHERENCE_FLOOR
