@@ -831,6 +831,7 @@ async def run_sampling_pipeline(
             f"<prompt-b>\n{prompt_b}\n</prompt-b>"
         )
 
+        _divergence_flags: list[str] = []
         scores: ScoreResult | None = None
         try:
             scores, score_model = await _sampling_request_structured(
@@ -861,10 +862,11 @@ async def run_sampling_pipeline(
             deltas = DimensionScores.compute_deltas(original_scores, optimized_scores)
             scoring_mode = "hybrid"
 
-            if blended_optimized.divergence_flags:
+            _divergence_flags = blended_optimized.divergence_flags or []
+            if _divergence_flags:
                 warnings.append(
                     "Score divergence between LLM and heuristic on: "
-                    + ", ".join(blended_optimized.divergence_flags)
+                    + ", ".join(_divergence_flags)
                 )
         else:
             # LLM scoring failed or was unavailable — use heuristic scores
@@ -980,6 +982,7 @@ async def run_sampling_pipeline(
             trace_id=trace_id,
             original_scores=original_scores.model_dump() if original_scores else None,
             score_deltas=deltas,
+            heuristic_flags=_divergence_flags or None,
         )
         db.add(db_opt)
 

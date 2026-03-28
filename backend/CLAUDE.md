@@ -199,8 +199,10 @@ The bridge extension checks `params.tools[0].inputSchema.title` against `FREE_TE
 
 When LLM returns free-text (optimizer phase), output is cleaned before storage:
 
-1. `_strip_meta_header(text)` — removes "Here is the optimized prompt...", markdown fences, meta-headers like "# Optimized Prompt"
-2. `_split_prompt_and_changes(text)` — splits on 14 marker patterns ("## Summary of Changes", "**Changes**", table formats, etc.). Returns `(clean_prompt, changes_summary)`
+1. `strip_meta_header(text)` — removes "Here is the optimized prompt...", markdown fences, meta-headers like "# Optimized Prompt"
+2. `split_prompt_and_changes(text)` — splits on 14 marker patterns ("## Summary of Changes", "**Changes**", table formats, etc.). Returns `(clean_prompt, changes_summary)`
+
+Both live in `app/utils/text_cleanup.py` — shared by sampling pipeline, MCP save_result, and REST passthrough save. Cleanup runs BEFORE heuristic scoring so scores reflect clean text.
 
 ### SamplingLLMAdapter
 

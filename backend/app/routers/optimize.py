@@ -494,13 +494,19 @@ async def passthrough_save(
     scoring_mode = "skipped"
     heuristic_flags: list[str] = []
 
+    # Clean external LLM output — strip preambles, fences, meta-headers,
+    # and extract changes summary if the caller didn't provide one.
+    # Must run BEFORE heuristic scoring so scores reflect clean text.
+    cleaned_prompt, extracted_changes = split_prompt_and_changes(body.optimized_prompt)
+    effective_changes = body.changes_summary or extracted_changes
+
     if scoring_enabled:
         from app.schemas.pipeline_contracts import DimensionScores
         from app.services.score_blender import blend_scores
 
-        # Heuristic baseline — always computed
+        # Heuristic baseline — always computed (on cleaned text)
         heur_optimized = HeuristicScorer.score_prompt(
-            body.optimized_prompt, original=opt.raw_prompt,
+            cleaned_prompt, original=opt.raw_prompt,
         )
         heur_original = HeuristicScorer.score_prompt(opt.raw_prompt)
 
@@ -564,11 +570,6 @@ async def passthrough_save(
         from app.services.strategy_loader import StrategyLoader
         strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
         effective_strategy = strategy_loader.normalize_strategy(body.strategy_used)
-
-    # Clean external LLM output — strip preambles, fences, meta-headers,
-    # and extract changes summary if the caller didn't provide one.
-    cleaned_prompt, extracted_changes = split_prompt_and_changes(body.optimized_prompt)
-    effective_changes = body.changes_summary or extracted_changes
 
     # Update record
     opt.optimized_prompt = cleaned_prompt

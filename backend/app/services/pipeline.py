@@ -502,6 +502,7 @@ class PipelineOrchestrator:
             # ---------------------------------------------------------------
             # Phase 3: Score
             # ---------------------------------------------------------------
+            _divergence_flags: list[str] = []
             if prefs.get("pipeline.enable_scoring", prefs_snapshot):
                 yield PipelineEvent(event="status", data={"stage": "score", "state": "running"})
 
@@ -623,10 +624,11 @@ class PipelineOrchestrator:
                 # Intent drift gate
                 # ---------------------------------------------------------------
                 warnings: list[str] = []
-                if blended_optimized.divergence_flags:
+                _divergence_flags = blended_optimized.divergence_flags or []
+                if _divergence_flags:
                     warnings.append(
                         "Score divergence between LLM and heuristic on: "
-                        + ", ".join(blended_optimized.divergence_flags)
+                        + ", ".join(_divergence_flags)
                     )
 
                 try:
@@ -726,6 +728,7 @@ class PipelineOrchestrator:
                 score_deltas=deltas,
                 tokens_by_phase=phase_durations,
                 models_by_phase=model_ids,
+                heuristic_flags=_divergence_flags or None,
             )
             db.add(db_opt)
 

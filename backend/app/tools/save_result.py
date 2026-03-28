@@ -97,6 +97,13 @@ async def handle_save_result(
         elif strategy_used:
             strategy_compliance = "matched"
 
+        # Clean external LLM output — strip preambles, fences, meta-headers,
+        # and extract changes summary if the caller didn't provide one.
+        # Must run BEFORE heuristic scoring so scores reflect clean text.
+        optimized_prompt, extracted_changes = split_prompt_and_changes(optimized_prompt)
+        if not changes_summary and extracted_changes:
+            changes_summary = extracted_changes
+
         # Compute scores
         heuristic_scores: dict[str, float] = {}
         final_scores: dict[str, float] = {}
@@ -167,12 +174,6 @@ async def handle_save_result(
                     original_scores = original_heur
                 orig_ds = DimensionScores.from_dict(original_scores)
                 deltas = DimensionScores.compute_deltas(orig_ds, opt_ds)
-
-        # Clean external LLM output — strip preambles, fences, meta-headers,
-        # and extract changes summary if the caller didn't provide one.
-        optimized_prompt, extracted_changes = split_prompt_and_changes(optimized_prompt)
-        if not changes_summary and extracted_changes:
-            changes_summary = extracted_changes
 
         # Truncate codebase context if provided
         context_snapshot = None
