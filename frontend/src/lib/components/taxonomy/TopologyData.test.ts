@@ -17,7 +17,7 @@ function makeNode(overrides: Partial<ClusterNode> = {}): ClusterNode {
     member_count: 10,
     usage_count: 5,
     avg_score: null,
-    color_hex: '#a855f7',
+    color_hex: '#c084fc',
     umap_x: 1.0,
     umap_y: 2.0,
     umap_z: 3.0,
@@ -78,7 +78,7 @@ describe('buildSceneData', () => {
   it('uses domain color as fallback when color_hex is null', () => {
     const tree = [makeNode({ color_hex: null, domain: 'backend' })];
     const result = buildSceneData(tree);
-    expect(result.nodes[0].color).toBe('#a855f7'); // backend domain color
+    expect(result.nodes[0].color).toBe('#c084fc'); // backend domain color
   });
 
   it('uses general fallback for unknown domain with null color_hex', () => {
@@ -158,7 +158,7 @@ describe('buildSceneData — state-based visual encoding', () => {
   });
 
   it('template state nodes get color #00e5ff regardless of color_hex', () => {
-    const withHex = makeNode({ id: 'a', state: 'template', color_hex: '#a855f7' });
+    const withHex = makeNode({ id: 'a', state: 'template', color_hex: '#c084fc' });
     const withNull = makeNode({ id: 'b', state: 'template', color_hex: null });
 
     const { nodes } = buildSceneData([withHex, withNull]);
