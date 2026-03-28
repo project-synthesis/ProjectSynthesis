@@ -145,17 +145,35 @@ _precompile_keyword_patterns()
 
 
 def _classify_domain(scored: dict[str, float]) -> str:
-    """Classify domain with fullstack promotion when both backend + frontend score high."""
+    """Classify domain with optional cross-cutting qualifier.
+
+    Returns "primary: qualifier" when a secondary domain scores above
+    a minimum threshold (1.0), indicating a cross-cutting concern.
+    Example: "backend: security" when backend is primary but security
+    keywords are also present.
+    """
     if not scored:
         return "general"
-    best = max(scored, key=scored.get)
-    # Promote to fullstack when both backend and frontend score significantly
-    if (
-        scored.get("backend", 0) >= 1.5
-        and scored.get("frontend", 0) >= 1.5
-    ):
+
+    # Fullstack promotion
+    if scored.get("backend", 0) >= 1.5 and scored.get("frontend", 0) >= 1.5:
         return "fullstack"
-    return best if scored[best] >= 1.0 else "general"
+
+    sorted_domains = sorted(scored.items(), key=lambda x: x[1], reverse=True)
+    if not sorted_domains or sorted_domains[0][1] < 1.0:
+        return "general"
+
+    primary = sorted_domains[0][0]
+
+    # Check for cross-cutting secondary domain
+    if len(sorted_domains) >= 2:
+        secondary = sorted_domains[1][0]
+        secondary_score = sorted_domains[1][1]
+        # Secondary must score >= 1.0 AND be a different domain
+        if secondary_score >= 1.0 and secondary != primary:
+            return f"{primary}: {secondary}"
+
+    return primary
 
 
 _DEFAULT_STRATEGY_MAP: dict[str, str] = {

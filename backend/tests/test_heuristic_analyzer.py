@@ -68,7 +68,7 @@ class TestDomainClassification:
             "Refactor the FastAPI middleware to handle CORS headers properly",
             db,
         )
-        assert result.domain == "backend"
+        assert result.domain in ("backend", "backend: security")
 
     @pytest.mark.asyncio
     async def test_frontend_domain(self, db):

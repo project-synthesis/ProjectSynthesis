@@ -203,7 +203,7 @@ class TestDBPersistenceCompat:
         # Heuristic analysis should classify — not default to "general"
         assert enrichment.analysis is not None
         assert enrichment.analysis.task_type == "coding"
-        assert enrichment.analysis.domain in ("backend", "fullstack")
+        assert enrichment.analysis.domain in ("backend", "fullstack", "backend: security")
         assert enrichment.analysis.intent_label != ""
 
         # context_sources should track what was resolved
