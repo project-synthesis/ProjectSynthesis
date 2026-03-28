@@ -488,4 +488,10 @@ try:
 except ImportError:
     pass
 
+try:
+    from app.routers.domains import router as domains_router
+    app.include_router(domains_router)
+except ImportError:
+    pass
+
 asgi_app = app
