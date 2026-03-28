@@ -1139,6 +1139,474 @@ async def _validate_domain_nodes(db: AsyncSession) -> None:
 
 ---
 
+## 8B. Strategic Risk Detection & Self-Correction
+
+Section 8 covers operational failures (DB errors, computation failures, startup races). This section covers the five strategic risks identified in [ADR-004](../../adr/ADR-004-unified-domain-taxonomy.md) — systemic problems that develop over time and require active monitoring, alerting, and automated or guided correction.
+
+### Risk 1: Domain Proliferation
+
+**What:** Too many domains created, cluttering navigation and diluting domain identity.
+
+**Detection — health endpoint metric + warm path guard:**
+
+```python
+# In engine.py — warm path, before _propose_domains()
+DOMAIN_COUNT_CEILING = 30  # pipeline_constants.py
+
+async def _check_domain_ceiling(self, db: AsyncSession) -> bool:
+    """Gate domain discovery when ceiling is reached."""
+    count = await db.scalar(
+        select(func.count()).where(PromptCluster.state == "domain")
+    )
+    if count >= DOMAIN_COUNT_CEILING:
+        logger.warning(
+            "Domain ceiling reached (%d/%d) — skipping domain discovery. "
+            "Consider archiving low-usage domains or raising the ceiling.",
+            count, DOMAIN_COUNT_CEILING,
+        )
+        return False
+    return True
+```
+
+**Logging:**
+```
+WARNING  "Domain ceiling reached (30/30) — skipping domain discovery"
+INFO     "Domain count: %d/%d (%.0f%% of ceiling)" — logged every warm path cycle
+```
+
+**Health endpoint exposure:**
+```python
+# In GET /api/health response
+"domain_count": 18,
+"domain_ceiling": 30,
+"domain_utilization": 0.6,  # count / ceiling
+```
+
+**Frontend alerting:** When `domain_utilization >= 0.8`, StatusBar shows amber domain count badge. Toast on first breach: "Domain ceiling approaching — consider archiving unused domains."
+
+**Self-correction — usage-based archival suggestions:**
+
+```python
+async def _suggest_domain_archival(self, db: AsyncSession) -> list[str]:
+    """Identify low-activity domains for potential archival.
+
+    A domain is suggested for archival when:
+    - member_count == 0 (no child clusters)
+    - OR last_used_at is >90 days ago AND usage_count < 3
+    - AND source == "discovered" (seed domains are never suggested)
+    """
+    stale = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            or_(
+                PromptCluster.member_count == 0,
+                and_(
+                    PromptCluster.last_used_at < utcnow() - timedelta(days=90),
+                    PromptCluster.usage_count < 3,
+                ),
+            ),
+        )
+    )
+    suggestions = []
+    for domain in stale.scalars():
+        meta = domain.metadata or {}
+        if meta.get("source") == "seed":
+            continue  # Never suggest archiving seed domains
+        suggestions.append(domain.label)
+        logger.info(
+            "Domain archival suggested: '%s' (members=%d, usage=%d, last_used=%s)",
+            domain.label, domain.member_count, domain.usage_count, domain.last_used_at,
+        )
+    return suggestions
+```
+
+**Event:** `domain_archival_suggested` with `{labels: [...]}` payload. Frontend shows actionable toast with archive buttons per domain.
+
+### Risk 2: Stale Learned Signals
+
+**What:** TF-IDF keywords extracted at domain creation become outdated as the domain's membership evolves.
+
+**Detection — signal staleness tracking:**
+
+```python
+# In domain node metadata
+{
+    "signal_keywords": [...],
+    "signal_generated_at": "2026-03-28T14:30:00Z",
+    "signal_member_count_at_generation": 12,  # snapshot of member_count when signals were last computed
+}
+```
+
+**Warm path staleness check:**
+
+```python
+SIGNAL_REFRESH_MEMBER_RATIO = 2.0  # Refresh when member_count doubles since last generation
+
+async def _check_signal_staleness(self, db: AsyncSession) -> list[PromptCluster]:
+    """Identify domains whose signals need regeneration."""
+    stale = []
+    domains = await db.execute(
+        select(PromptCluster).where(PromptCluster.state == "domain")
+    )
+    for domain in domains.scalars():
+        meta = domain.metadata or {}
+        if meta.get("source") == "seed":
+            continue  # Seed signals are curated, not auto-refreshed
+
+        gen_count = meta.get("signal_member_count_at_generation", 0)
+        if gen_count == 0:
+            continue  # No signals to refresh
+
+        if domain.member_count >= gen_count * SIGNAL_REFRESH_MEMBER_RATIO:
+            stale.append(domain)
+            logger.info(
+                "Signal staleness detected: domain '%s' generated at %d members, now has %d",
+                domain.label, gen_count, domain.member_count,
+            )
+    return stale
+```
+
+**Self-correction — automatic signal regeneration:**
+
+```python
+async def _refresh_domain_signals(self, db: AsyncSession, domain: PromptCluster) -> None:
+    """Regenerate TF-IDF keywords for a domain with stale signals."""
+    keywords = await self._extract_domain_keywords(db, domain)
+    meta = dict(domain.metadata or {})
+    meta["signal_keywords"] = keywords
+    meta["signal_generated_at"] = utcnow().isoformat()
+    meta["signal_member_count_at_generation"] = domain.member_count
+    domain.metadata = meta
+
+    logger.info(
+        "Signals refreshed for domain '%s': %d keywords from %d members",
+        domain.label, len(keywords), domain.member_count,
+    )
+```
+
+Called in warm path after domain discovery, before signal loader reload. Ensures heuristic classifier always has current signals.
+
+**Logging:**
+```
+INFO   "Signal staleness detected: domain '%s' generated at %d members, now has %d"
+INFO   "Signals refreshed for domain '%s': %d keywords from %d members"
+DEBUG  "Signal staleness check: %d domains checked, %d stale"
+```
+
+### Risk 3: Guardrail Bypass
+
+**What:** Future code changes accidentally skip `state="domain"` checks in lifecycle operations, breaking domain stability (color drift, unintended retirement, auto-merge).
+
+**Detection — runtime assertions in lifecycle operations:**
+
+```python
+# In lifecycle.py — added to every lifecycle mutation function
+
+def _assert_domain_guardrails(operation: str, node: PromptCluster) -> None:
+    """Runtime assertion that domain guardrails are enforced.
+
+    Called at the START of every lifecycle mutation. Raises AssertionError
+    in debug mode, logs CRITICAL in production. This is a safety net —
+    the caller should have already checked, but this catches regressions.
+    """
+    if node.state != "domain":
+        return
+
+    violations = {
+        "retire": "Domain nodes cannot be retired — use manual archival",
+        "merge": "Domain nodes cannot be auto-merged — requires approval event",
+        "color_assign": "Domain colors are pinned — cold path must skip",
+    }
+    if operation in violations:
+        msg = f"GUARDRAIL VIOLATION: {operation} attempted on domain node '{node.label}'. {violations[operation]}"
+        logger.critical(msg)
+        raise GuardrailViolationError(msg)
+```
+
+```python
+class GuardrailViolationError(RuntimeError):
+    """Raised when a lifecycle operation violates domain stability guardrails.
+
+    This exception should never occur in production — it indicates a code
+    regression that bypassed the guardrail checks.
+    """
+    pass
+```
+
+**Placement in lifecycle.py:**
+
+```python
+async def attempt_retire(db, node, warm_path_age) -> bool:
+    _assert_domain_guardrails("retire", node)  # Line 1 of function body
+    # ... existing logic ...
+
+async def attempt_merge(db, node_a, node_b, warm_path_age) -> PromptCluster | None:
+    _assert_domain_guardrails("merge", node_a)  # Both nodes checked
+    _assert_domain_guardrails("merge", node_b)
+    # ... existing logic ...
+```
+
+**Placement in coloring.py:**
+
+```python
+async def assign_colors(nodes: list[PromptCluster]) -> None:
+    for node in nodes:
+        _assert_domain_guardrails("color_assign", node)  # Catches if skip was removed
+        if node.state == "domain":
+            continue
+        # ... existing logic ...
+```
+
+**Test coverage requirement:**
+
+```python
+# In test_lifecycle.py — one test per guardrail
+def test_retire_domain_raises_guardrail_violation():
+    domain_node = make_cluster(state="domain", label="backend")
+    with pytest.raises(GuardrailViolationError, match="retire"):
+        await attempt_retire(db, domain_node, warm_path_age=1)
+
+def test_merge_domain_raises_guardrail_violation():
+    domain_a = make_cluster(state="domain", label="backend")
+    domain_b = make_cluster(state="domain", label="frontend")
+    with pytest.raises(GuardrailViolationError, match="merge"):
+        await attempt_merge(db, domain_a, domain_b, warm_path_age=1)
+
+def test_cold_path_skips_domain_colors():
+    domain_node = make_cluster(state="domain", label="backend", color_hex="#b44aff")
+    await assign_colors([domain_node])
+    assert domain_node.color_hex == "#b44aff"  # Unchanged
+```
+
+**Logging:**
+```
+CRITICAL "GUARDRAIL VIOLATION: retire attempted on domain node 'backend'"
+```
+
+This is a circuit-breaker — the warm path catches `GuardrailViolationError` and halts the current lifecycle cycle (not the entire warm path), logging the violation for investigation. The domain node is unmodified.
+
+### Risk 4: "General" Never Shrinks
+
+**What:** Discovery thresholds are too conservative, so "general" accumulates diverse prompts without ever spawning new domains.
+
+**Detection — warm path monitoring metrics:**
+
+```python
+async def _monitor_general_health(self, db: AsyncSession) -> None:
+    """Log diagnostic metrics for the 'general' domain after each warm path."""
+    general = await self._get_domain_node(db, "general")
+    if not general:
+        return
+
+    # Count child clusters
+    child_count = await db.scalar(
+        select(func.count()).where(
+            PromptCluster.parent_id == general.id,
+            PromptCluster.state.in_(["active", "mature"]),
+        )
+    )
+
+    # Count children that ALMOST meet discovery thresholds
+    near_threshold = await db.scalar(
+        select(func.count()).where(
+            PromptCluster.parent_id == general.id,
+            PromptCluster.state.in_(["active", "mature"]),
+            PromptCluster.member_count >= DOMAIN_DISCOVERY_MIN_MEMBERS - 2,  # within 2 of threshold
+            PromptCluster.coherence >= DOMAIN_DISCOVERY_MIN_COHERENCE - 0.1,  # within 0.1
+        )
+    )
+
+    # Count total optimizations under general
+    opt_count = await db.scalar(
+        select(func.count()).where(Optimization.domain == "general")
+    )
+
+    logger.info(
+        "General domain health: %d child clusters, %d near discovery threshold, "
+        "%d total optimizations, member_count=%d",
+        child_count, near_threshold, opt_count, general.member_count,
+    )
+
+    # Alert if general is accumulating without discovery
+    if opt_count > 50 and child_count > 5 and near_threshold == 0:
+        logger.warning(
+            "General domain stagnation: %d optimizations across %d clusters "
+            "but none near discovery threshold. Consider lowering "
+            "DOMAIN_DISCOVERY_MIN_MEMBERS (current=%d) or "
+            "DOMAIN_DISCOVERY_MIN_COHERENCE (current=%.2f).",
+            opt_count, child_count,
+            DOMAIN_DISCOVERY_MIN_MEMBERS, DOMAIN_DISCOVERY_MIN_COHERENCE,
+        )
+```
+
+**Health endpoint exposure:**
+```python
+# In GET /api/health response
+"general_domain": {
+    "child_clusters": 12,
+    "near_threshold": 3,
+    "total_optimizations": 87,
+},
+```
+
+**Logging:**
+```
+INFO     "General domain health: %d child clusters, %d near discovery threshold, %d total optimizations"
+WARNING  "General domain stagnation: %d optimizations across %d clusters but none near discovery threshold"
+```
+
+**Self-correction:** The warning message includes the current threshold values and a suggestion to lower them. This is a human-in-the-loop correction — the thresholds are configurable constants in `pipeline_constants.py` and can be adjusted without code changes (environment variable override or config file).
+
+### Risk 5: Migration Data Corruption
+
+**What:** The migration creates domain nodes, re-parents clusters, and backfills optimizations. A failure partway through can leave the tree in an inconsistent state.
+
+**Detection — post-migration integrity check:**
+
+```python
+async def verify_domain_tree_integrity(db: AsyncSession) -> list[str]:
+    """Post-migration (and periodic warm-path) integrity check.
+
+    Returns a list of violation descriptions. Empty list = healthy.
+    """
+    violations = []
+
+    # 1. Every domain node must have state="domain" and a unique label
+    domain_labels = await db.execute(
+        select(PromptCluster.label, func.count()).where(
+            PromptCluster.state == "domain"
+        ).group_by(PromptCluster.label)
+    )
+    for label, count in domain_labels:
+        if count > 1:
+            violations.append(f"Duplicate domain label: '{label}' appears {count} times")
+
+    # 2. Every non-domain cluster with parent_id must point to an existing node
+    orphans = await db.execute(text("""
+        SELECT c.id, c.label, c.parent_id
+        FROM prompt_cluster c
+        LEFT JOIN prompt_cluster p ON c.parent_id = p.id
+        WHERE c.parent_id IS NOT NULL AND p.id IS NULL
+    """))
+    for row in orphans:
+        violations.append(f"Orphan cluster: '{row.label}' (id={row.id}) references missing parent {row.parent_id}")
+
+    # 3. Every non-domain cluster's domain field must match a domain node label
+    mismatched = await db.execute(text("""
+        SELECT c.id, c.label, c.domain
+        FROM prompt_cluster c
+        WHERE c.state != 'domain'
+          AND c.domain NOT IN (SELECT label FROM prompt_cluster WHERE state = 'domain')
+    """))
+    for row in mismatched:
+        violations.append(f"Domain mismatch: cluster '{row.label}' has domain='{row.domain}' which is not a domain node")
+
+    # 4. No circular parent references
+    # (lightweight check: no node is its own parent)
+    self_refs = await db.execute(text("""
+        SELECT id, label FROM prompt_cluster WHERE parent_id = id
+    """))
+    for row in self_refs:
+        violations.append(f"Self-referencing parent: '{row.label}' (id={row.id})")
+
+    # 5. Domain nodes must have persistence=1.0
+    weak_domains = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            or_(PromptCluster.persistence < 1.0, PromptCluster.persistence.is_(None)),
+        )
+    )
+    for d in weak_domains.scalars():
+        violations.append(f"Domain node '{d.label}' has persistence={d.persistence} (expected 1.0)")
+
+    if violations:
+        for v in violations:
+            logger.error("Tree integrity violation: %s", v)
+    else:
+        logger.info("Domain tree integrity check passed")
+
+    return violations
+```
+
+**When it runs:**
+1. **Post-migration** — called at the end of the Alembic `upgrade()`. If violations found, migration raises `RuntimeError` and rolls back.
+2. **App startup** — called in `lifespan()` after `DomainResolver.load()`. Violations logged at ERROR level but do not block startup (self-healing may fix them).
+3. **Warm path** — called after domain discovery and re-parenting. Violations logged and included in `TaxonomySnapshot.operations` for audit trail.
+
+**Self-correction — warm path auto-repair:**
+
+```python
+async def _repair_tree_violations(self, db: AsyncSession, violations: list[str]) -> int:
+    """Attempt to repair detected tree integrity violations.
+
+    Returns count of repairs made. Logs each repair.
+    """
+    repaired = 0
+
+    # Repair orphaned clusters: re-parent under "general"
+    general = await self._get_domain_node(db, "general")
+    if general:
+        orphan_result = await db.execute(text("""
+            UPDATE prompt_cluster
+            SET parent_id = :general_id, domain = 'general'
+            WHERE parent_id IS NOT NULL
+              AND parent_id NOT IN (SELECT id FROM prompt_cluster)
+              AND state != 'domain'
+        """), {"general_id": general.id})
+        if orphan_result.rowcount > 0:
+            logger.info("Auto-repaired %d orphaned clusters → 'general'", orphan_result.rowcount)
+            repaired += orphan_result.rowcount
+
+    # Repair domain mismatch: set domain to parent's domain (or "general")
+    mismatch_result = await db.execute(text("""
+        UPDATE prompt_cluster c
+        SET domain = COALESCE(
+            (SELECT p.domain FROM prompt_cluster p WHERE p.id = c.parent_id),
+            'general'
+        )
+        WHERE c.state != 'domain'
+          AND c.domain NOT IN (SELECT label FROM prompt_cluster WHERE state = 'domain')
+    """))
+    if mismatch_result.rowcount > 0:
+        logger.info("Auto-repaired %d domain mismatches", mismatch_result.rowcount)
+        repaired += mismatch_result.rowcount
+
+    # Repair weak domain persistence
+    weak_result = await db.execute(
+        update(PromptCluster)
+        .where(PromptCluster.state == "domain", PromptCluster.persistence < 1.0)
+        .values(persistence=1.0)
+    )
+    if weak_result.rowcount > 0:
+        logger.info("Auto-repaired %d domain nodes with weak persistence", weak_result.rowcount)
+        repaired += weak_result.rowcount
+
+    return repaired
+```
+
+**Logging:**
+```
+ERROR    "Tree integrity violation: %s"  (one per violation)
+INFO     "Domain tree integrity check passed"
+INFO     "Auto-repaired %d orphaned clusters → 'general'"
+INFO     "Auto-repaired %d domain mismatches"
+INFO     "Auto-repaired %d domain nodes with weak persistence"
+WARNING  "Tree integrity: %d violations detected, %d auto-repaired, %d remaining"
+```
+
+**Snapshot audit trail:** Integrity check results and repairs are recorded in `TaxonomySnapshot.operations`:
+```json
+{
+    "type": "integrity_check",
+    "violations_found": 3,
+    "violations_repaired": 2,
+    "violations_remaining": ["Duplicate domain label: 'marketing' appears 2 times"],
+    "timestamp": "2026-03-28T15:00:00Z"
+}
+```
+
+---
+
 ## 9. New Services
 
 ### 9.1 DomainSignalLoader (`backend/app/services/domain_signal_loader.py`)
@@ -1375,6 +1843,17 @@ DOMAIN_DISCOVERY_CONSISTENCY = 0.60  # 60% of members share the same domain_raw 
 
 # Domain quality
 DOMAIN_COHERENCE_FLOOR = 0.3
+DOMAIN_CONFIDENCE_GATE = 0.6  # Retained from current system — override domain to "general" below this
+
+# Domain proliferation ceiling (Risk 1)
+DOMAIN_COUNT_CEILING = 30
+
+# Signal staleness ratio (Risk 2) — refresh when member_count doubles since last generation
+SIGNAL_REFRESH_MEMBER_RATIO = 2.0
+
+# Domain archival suggestion thresholds (Risk 1 self-correction)
+DOMAIN_ARCHIVAL_IDLE_DAYS = 90
+DOMAIN_ARCHIVAL_MIN_USAGE = 3
 
 # Color constraints
 TIER_ACCENTS = ["#00e5ff", "#22ff88", "#fbbf24"]  # internal, sampling, passthrough — avoid proximity
@@ -1390,27 +1869,59 @@ New SSE event types:
 |-------|---------|---------|
 | `domain_created` | `{label, color_hex, source}` | Warm path creates a new domain node |
 | `domain_merge_proposed` | `{survivor, loser, similarity}` | Warm path detects two domains should merge |
+| `domain_archival_suggested` | `{labels: [...]}` | Warm path identifies low-usage discovered domains |
+| `domain_signals_refreshed` | `{label, keyword_count}` | Warm path regenerates stale TF-IDF signals |
+| `domain_ceiling_reached` | `{count, ceiling}` | Domain count hits `DOMAIN_COUNT_CEILING` |
 
 Frontend handlers:
-- `domain_created` → refresh domain store, show toast, invalidate topology
+- `domain_created` → refresh domain store, show toast ("New domain discovered: {label}"), invalidate topology
 - `domain_merge_proposed` → show actionable toast with approve/reject buttons
+- `domain_archival_suggested` → show toast with archive buttons per domain
+- `domain_signals_refreshed` → silent refresh of domain store (no toast — internal maintenance)
+- `domain_ceiling_reached` → amber badge on StatusBar domain count, toast on first occurrence
 
 ---
 
 ## 15. Testing Strategy
 
 ### Unit tests
-- `DomainSignalLoader`: load from domain metadata, classify with dynamic signals, hot-reload on event
-- `compute_max_distance_color()`: produces valid hex, avoids tier accents, maximizes distance
+
+**Core services:**
+- `DomainResolver`: resolve known domain, resolve unknown → "general", confidence gate, cache invalidation, empty DB
+- `DomainSignalLoader`: load from domain metadata, classify with dynamic signals, hot-reload on event, empty signals → "general"
+- `compute_max_distance_color()`: produces valid hex, avoids tier accents, maximizes distance, handles empty input
 - `_propose_domains()`: discovers domains when thresholds met, skips when not, handles edge cases (empty clusters, conflicting primaries)
-- Guardrails: retire skips domains, merge blocks domain-domain, split creates candidates, cold path skips domain colors
+
+**Guardrails (Section 4):**
+- `test_retire_domain_raises_guardrail_violation`: retire on `state="domain"` raises `GuardrailViolationError`
+- `test_merge_two_domains_raises_guardrail_violation`: merge with either node as domain raises
+- `test_cold_path_skips_domain_colors`: domain `color_hex` unchanged after `assign_colors()`
+- `test_split_domain_creates_candidate_children`: split children have `state="candidate"`, inherit parent domain label
+- `test_domain_coherence_floor_applied`: quality threshold uses 0.3 for domain nodes, 0.6 for clusters
+
+**Risk detection (Section 8B):**
+- `test_domain_ceiling_blocks_discovery`: with 30 domain nodes, `_propose_domains()` returns empty and logs warning
+- `test_signal_staleness_detected`: domain with `signal_member_count_at_generation=5` and `member_count=10` flagged as stale
+- `test_signal_refresh_updates_metadata`: `_refresh_domain_signals()` updates keywords, timestamp, and member count snapshot
+- `test_general_stagnation_warning`: 50+ optimizations under general, 5+ clusters, 0 near threshold → warning logged
+- `test_tree_integrity_detects_orphans`: cluster with non-existent `parent_id` → violation reported
+- `test_tree_integrity_detects_domain_mismatch`: cluster with `domain="marketing"` but no "marketing" domain node → violation
+- `test_tree_integrity_detects_duplicate_domain_labels`: two domain nodes with same label → violation
+- `test_tree_integrity_detects_weak_persistence`: domain node with `persistence=0.5` → violation
+- `test_auto_repair_orphans`: orphaned clusters re-parented to "general"
+- `test_auto_repair_domain_mismatch`: mismatched domains corrected to parent's domain
+- `test_archival_suggestion_skips_seeds`: seed domains never suggested for archival regardless of usage
 
 ### Integration tests
-- Full warm path cycle with domain discovery: seed data → HDBSCAN → domain proposal → re-parent → backfill → event emission
-- Migration: create sample clusters + optimizations, run migration, validate tree structure
-- API: `GET /api/domains` returns seed domains, `POST /api/domains/{id}/promote` validates preconditions
+- Full warm path cycle with domain discovery: seed data → HDBSCAN → domain proposal → re-parent → backfill → signal extraction → event emission → resolver/loader reload
+- Domain ceiling enforcement: create 30 domains, verify discovery blocked, verify event emitted
+- Signal lifecycle: create domain → accumulate members → trigger staleness → verify refresh → verify classifier uses new signals
+- Migration: create sample clusters + optimizations, run migration, validate tree structure via `verify_domain_tree_integrity()`
+- API: `GET /api/domains` returns seed domains, `POST /api/domains/{id}/promote` validates preconditions, `PATCH /api/clusters/{id}` rejects unknown domains
 
 ### Frontend tests
-- Domain store: fetches from API, caches, refreshes on SSE
-- `taxonomyColor()`: resolves from store, handles unknown domains, handles hex passthrough
-- Inspector picker: renders dynamic domain list, handles empty state during load
+- Domain store: fetches from API, caches, refreshes on `domain_created` SSE, refreshes on `taxonomy_changed` SSE
+- `taxonomyColor()`: resolves from store, handles unknown domains (returns fallback), handles hex passthrough
+- Inspector picker: renders dynamic domain list from store, handles empty state during load, shows retry button on API failure
+- StatusBar: shows domain count, amber badge when `domain_utilization >= 0.8`
+- Toast notifications: `domain_created` shows discovery toast, `domain_archival_suggested` shows actionable archive buttons, `domain_ceiling_reached` shows warning
