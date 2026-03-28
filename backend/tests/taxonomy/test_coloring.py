@@ -68,3 +68,25 @@ class TestEnforceMinimumDeltaE:
     def test_single_color(self):
         colors = [("a", "#ff0000")]
         assert enforce_minimum_delta_e(colors, min_delta_e=0.04) == colors
+
+
+def test_compute_max_distance_color_returns_valid_hex():
+    from app.services.taxonomy.coloring import compute_max_distance_color
+    existing = ["#b44aff", "#ff4895", "#36b5ff"]
+    result = compute_max_distance_color(existing)
+    assert result.startswith("#")
+    assert len(result) == 7
+
+
+def test_compute_max_distance_color_avoids_existing():
+    from app.services.taxonomy.coloring import compute_max_distance_color
+    existing = ["#b44aff"]
+    result = compute_max_distance_color(existing)
+    assert result != "#b44aff"
+
+
+def test_compute_max_distance_color_empty_existing():
+    from app.services.taxonomy.coloring import compute_max_distance_color
+    result = compute_max_distance_color([])
+    assert result.startswith("#")
+    assert len(result) == 7

@@ -14,6 +14,8 @@ import logging
 import math
 from typing import Sequence
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -212,3 +214,50 @@ def enforce_minimum_delta_e(
         result.append((node_id, new_hex))
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Domain color pinning — max-distance selection
+# ---------------------------------------------------------------------------
+
+def compute_max_distance_color(existing_hex: list[str]) -> str:
+    """Find the OKLab color maximally distant from all existing domain colors.
+
+    Also avoids tier accent colors to prevent perceptual confusion with the
+    tier badges (internal=#00e5ff, sampling=#22ff88, passthrough=#fbbf24).
+
+    The search is performed over a 50×50 grid in the (a, b) plane of OKLab
+    space with fixed lightness L=0.7 for neon readability on dark backgrounds.
+
+    Args:
+        existing_hex: List of hex color strings already in use (may be empty).
+
+    Returns:
+        Hex color string like ``#rrggbb``.
+    """
+    from app.services.pipeline_constants import TIER_ACCENTS  # avoid circular import
+
+    all_hex = [h for h in existing_hex + TIER_ACCENTS if h and h.startswith("#")]
+    if not all_hex:
+        return "#a855f7"  # Default purple when no reference colors exist
+
+    existing_lab = [hex_to_oklab(h) for h in all_hex]
+
+    best_color: tuple[float, float, float] | None = None
+    best_min_dist = 0.0
+
+    # Sample candidates in OKLab (a, b) plane; L=0.7 gives neon brightness
+    for a_val in np.linspace(-0.15, 0.15, 50):
+        for b_val in np.linspace(-0.15, 0.15, 50):
+            candidate = (0.7, float(a_val), float(b_val))
+            min_dist = min(
+                delta_e_oklab(candidate, e) for e in existing_lab
+            )
+            if min_dist > best_min_dist:
+                best_min_dist = min_dist
+                best_color = candidate
+
+    if best_color is None:
+        return "#7a7a9e"
+
+    return oklab_to_hex(best_color[0], best_color[1], best_color[2])
