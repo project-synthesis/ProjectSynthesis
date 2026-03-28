@@ -32,6 +32,7 @@ from app.models import (
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.services.embedding_service import EmbeddingService
 from app.services.prompt_loader import PromptLoader
+from app.utils.text_cleanup import parse_domain
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,9 @@ async def assign_cluster(
                 matched = valid_clusters[idx]
 
                 # Cross-domain merge prevention
-                if matched.domain != domain:
+                matched_primary, _ = parse_domain(matched.domain)
+                incoming_primary, _ = parse_domain(domain)
+                if matched_primary != incoming_primary:
                     logger.info(
                         "Cross-domain merge prevented: cluster '%s' domain=%s != "
                         "incoming domain=%s (cosine=%.3f). Creating new cluster.",
