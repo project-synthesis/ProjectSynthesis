@@ -7,6 +7,50 @@ import pytest
 import pytest_asyncio
 
 from app.services.context_enrichment import ContextEnrichmentService, EnrichedContext
+from app.services.domain_signal_loader import DomainSignalLoader
+from app.services.heuristic_analyzer import set_signal_loader
+
+# Legacy domain signals — identical to the old hardcoded _DOMAIN_SIGNALS so
+# tests that assert specific domain classifications continue to pass.
+_TEST_DOMAIN_SIGNALS: dict[str, list[tuple[str, float]]] = {
+    "backend": [
+        ("api", 0.8), ("endpoint", 0.9), ("server", 0.8),
+        ("middleware", 0.9), ("fastapi", 1.0), ("django", 1.0),
+        ("flask", 1.0), ("database", 0.6), ("authentication", 0.7),
+        ("route", 0.6),
+    ],
+    "frontend": [
+        ("react", 1.0), ("svelte", 1.0), ("component", 0.8),
+        ("css", 0.9), ("ui", 0.8), ("layout", 0.7),
+        ("responsive", 0.8), ("tailwind", 0.9), ("vue", 1.0),
+    ],
+    "database": [
+        ("sql", 1.0), ("migration", 0.9), ("schema", 0.8),
+        ("query", 0.7), ("index", 0.6), ("postgresql", 1.0),
+        ("sqlite", 1.0), ("orm", 0.8), ("table", 0.6),
+    ],
+    "devops": [
+        ("docker", 1.0), ("ci/cd", 1.0), ("kubernetes", 1.0),
+        ("terraform", 1.0), ("nginx", 0.9), ("monitoring", 0.7),
+        ("deploy", 0.8), ("pipeline", 0.5),
+    ],
+    "security": [
+        ("auth", 0.7), ("encryption", 1.0), ("vulnerability", 1.0),
+        ("cors", 0.9), ("jwt", 0.9), ("oauth", 0.9), ("sanitize", 0.8),
+        ("injection", 0.9), ("xss", 1.0), ("csrf", 1.0),
+    ],
+}
+
+
+@pytest.fixture(autouse=True)
+def _seed_signal_loader():
+    """Inject a DomainSignalLoader with legacy keyword signals."""
+    loader = DomainSignalLoader()
+    loader._signals = dict(_TEST_DOMAIN_SIGNALS)
+    loader._precompile_patterns()
+    set_signal_loader(loader)
+    yield
+    set_signal_loader(None)
 
 
 @pytest_asyncio.fixture

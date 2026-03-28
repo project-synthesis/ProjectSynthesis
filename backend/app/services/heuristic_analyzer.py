@@ -12,11 +12,30 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+if TYPE_CHECKING:
+    from app.services.domain_signal_loader import DomainSignalLoader
+
 logger = logging.getLogger(__name__)
+
+# --- Module-level DomainSignalLoader reference ---
+
+_signal_loader: DomainSignalLoader | None = None
+
+
+def set_signal_loader(loader: DomainSignalLoader) -> None:
+    """Inject the DomainSignalLoader at startup (called from main.py lifespan)."""
+    global _signal_loader
+    _signal_loader = loader
+
+
+def get_signal_loader() -> DomainSignalLoader | None:
+    """Return the current DomainSignalLoader, or None if not yet initialized."""
+    return _signal_loader
 
 
 @dataclass(frozen=True)
@@ -94,86 +113,35 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
     ],
 }
 
-_DOMAIN_SIGNALS: dict[str, list[tuple[str, float]]] = {
-    "backend": [
-        ("api", 0.8), ("endpoint", 0.9), ("server", 0.8),
-        ("middleware", 0.9), ("fastapi", 1.0), ("django", 1.0),
-        ("flask", 1.0), ("database", 0.6), ("authentication", 0.7),
-        ("route", 0.6),
-    ],
-    "frontend": [
-        ("react", 1.0), ("svelte", 1.0), ("component", 0.8),
-        ("css", 0.9), ("ui", 0.8), ("layout", 0.7),
-        ("responsive", 0.8), ("tailwind", 0.9), ("vue", 1.0),
-    ],
-    "database": [
-        ("sql", 1.0), ("migration", 0.9), ("schema", 0.8),
-        ("query", 0.7), ("index", 0.6), ("postgresql", 1.0),
-        ("sqlite", 1.0), ("orm", 0.8), ("table", 0.6),
-    ],
-    "devops": [
-        ("docker", 1.0), ("ci/cd", 1.0), ("kubernetes", 1.0),
-        ("terraform", 1.0), ("nginx", 0.9), ("monitoring", 0.7),
-        ("deploy", 0.8), ("pipeline", 0.5),
-    ],
-    "security": [
-        ("auth", 0.7), ("encryption", 1.0), ("vulnerability", 1.0),
-        ("cors", 0.9), ("jwt", 0.9), ("oauth", 0.9), ("sanitize", 0.8),
-        ("injection", 0.9), ("xss", 1.0), ("csrf", 1.0),
-    ],
-}
-
-
-# Pre-compiled word-boundary patterns for all single-word keywords.
+# Pre-compiled word-boundary patterns for task_type keywords.
 # Built once at import time to avoid recompilation in hot loops.
+# Domain patterns are managed by DomainSignalLoader._precompile_patterns().
 _KEYWORD_PATTERNS: dict[str, re.Pattern[str]] = {}
 
 
 def _precompile_keyword_patterns() -> None:
-    """Pre-compile regex for all single-word signals at module load."""
-    for signal_dict in (_TASK_TYPE_SIGNALS, _DOMAIN_SIGNALS):
-        for keywords in signal_dict.values():
-            for keyword, _weight in keywords:
-                kw = keyword.lower()
-                if " " not in kw and kw not in _KEYWORD_PATTERNS:
-                    _KEYWORD_PATTERNS[kw] = re.compile(
-                        r"\b" + re.escape(kw) + r"\b",
-                    )
+    """Pre-compile regex for all single-word task_type signals at module load."""
+    for keywords in _TASK_TYPE_SIGNALS.values():
+        for keyword, _weight in keywords:
+            kw = keyword.lower()
+            if " " not in kw and kw not in _KEYWORD_PATTERNS:
+                _KEYWORD_PATTERNS[kw] = re.compile(
+                    r"\b" + re.escape(kw) + r"\b",
+                )
 
 
 _precompile_keyword_patterns()
 
 
 def _classify_domain(scored: dict[str, float]) -> str:
-    """Classify domain with optional cross-cutting qualifier.
+    """Classify domain by delegating to the DomainSignalLoader.
 
-    Returns "primary: qualifier" when a secondary domain scores above
-    a minimum threshold (1.0), indicating a cross-cutting concern.
-    Example: "backend: security" when backend is primary but security
-    keywords are also present.
+    Returns ``"general"`` when no signal loader is configured (e.g. during
+    early startup or in tests that don't seed domain nodes).
     """
-    if not scored:
+    if _signal_loader is None:
         return "general"
-
-    # Fullstack promotion
-    if scored.get("backend", 0) >= 1.5 and scored.get("frontend", 0) >= 1.5:
-        return "fullstack"
-
-    sorted_domains = sorted(scored.items(), key=lambda x: x[1], reverse=True)
-    if not sorted_domains or sorted_domains[0][1] < 1.0:
-        return "general"
-
-    primary = sorted_domains[0][0]
-
-    # Check for cross-cutting secondary domain
-    if len(sorted_domains) >= 2:
-        secondary = sorted_domains[1][0]
-        secondary_score = sorted_domains[1][1]
-        # Secondary must score >= 1.0 AND be a different domain
-        if secondary_score >= 1.0 and secondary != primary:
-            return f"{primary}: {secondary}"
-
-    return primary
+    return _signal_loader.classify(scored)
 
 
 _DEFAULT_STRATEGY_MAP: dict[str, str] = {
@@ -242,12 +210,12 @@ class HeuristicAnalyzer:
         task_type, task_confidence = self._classify(
             prompt_lower, first_sentence, _TASK_TYPE_SIGNALS,
         )
-        # Domain classification with fullstack promotion
-        domain_scores: dict[str, float] = {}
-        for category, keywords in _DOMAIN_SIGNALS.items():
-            domain_scores[category] = self._score_category(
-                prompt_lower, first_sentence, keywords,
-            )
+        # Domain classification via DomainSignalLoader (dynamic signals)
+        word_set = set(words)
+        if _signal_loader is not None:
+            domain_scores = _signal_loader.score(word_set)
+        else:
+            domain_scores = {}
         domain = _classify_domain(domain_scores)
         domain_confidence = min(1.0, max(domain_scores.values())) if domain_scores else 0.0
 

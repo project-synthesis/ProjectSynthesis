@@ -109,6 +109,11 @@ async def lifespan(app: FastAPI):
                 await signal_loader.load(_init_db)
             app.state.domain_resolver = domain_resolver
             app.state.signal_loader = signal_loader
+
+            # Wire signal loader into heuristic analyzer for dynamic domain signals
+            from app.services.heuristic_analyzer import set_signal_loader as set_analyzer_signal_loader
+            set_analyzer_signal_loader(signal_loader)
+
             logger.info("Domain services initialized")
 
             # Subscribe to domain events for cache invalidation
