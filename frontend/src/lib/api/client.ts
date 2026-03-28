@@ -18,6 +18,8 @@ export interface HealthResponse {
   sampling_capable?: boolean | null;
   mcp_disconnected?: boolean;
   available_tiers?: string[];
+  domain_count?: number | null;
+  domain_ceiling?: number | null;
 }
 
 export interface ApiKeyStatus {
@@ -455,8 +457,8 @@ export function connectEventStream(onEvent: EventHandler): EventSource {
         'optimization_created', 'optimization_analyzed',
         'feedback_submitted', 'refinement_turn',
         'optimization_failed', 'strategy_changed',
-        'taxonomy_changed', 'routing_state_changed',
-        'preferences_changed',
+        'taxonomy_changed', 'domain_created',
+        'routing_state_changed', 'preferences_changed',
     ];
     for (const type of eventTypes) {
         es.addEventListener(type, (e: MessageEvent) => {

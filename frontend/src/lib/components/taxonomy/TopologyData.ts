@@ -33,8 +33,9 @@ function stateOpacity(state: string): number {
   return state === 'candidate' ? 0.4 : 1.0;
 }
 
-/** Size multiplier by lifecycle state — templates and mature nodes are larger. */
+/** Size multiplier by lifecycle state — domain hub nodes are 2x, templates 1.5x, mature 1.2x. */
 function stateSizeMultiplier(state: string): number {
+  if (state === 'domain') return 2.0;
   if (state === 'template') return 1.5;
   if (state === 'mature') return 1.2;
   return 1.0;

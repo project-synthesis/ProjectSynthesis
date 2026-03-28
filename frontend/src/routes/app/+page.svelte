@@ -2,6 +2,7 @@
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { domainStore } from '$lib/stores/domains.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import type { Preferences } from '$lib/stores/preferences.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
@@ -112,7 +113,11 @@
       }
       if (type === 'taxonomy_changed') {
         clustersStore.invalidateClusters();
+        domainStore.invalidate();
         addToast('created', 'Taxonomy updated');
+      }
+      if (type === 'domain_created') {
+        domainStore.invalidate();
       }
       if (type === 'routing_state_changed') {
         const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
@@ -158,6 +163,7 @@
         sseHadError = false;
         healthPoll();
         clustersStore.invalidateClusters();
+        domainStore.invalidate();
         window.dispatchEvent(new CustomEvent('strategy-changed'));
       }
     });
@@ -190,6 +196,8 @@
     forgeStore.avgDurationMs = h.avg_duration_ms ?? null;
     forgeStore.scoreHealth = h.score_health ?? null;
     forgeStore.phaseDurations = (h.phase_durations && Object.keys(h.phase_durations).length > 0) ? h.phase_durations : null;
+    forgeStore.domainCount = h.domain_count ?? null;
+    forgeStore.domainCeiling = h.domain_ceiling ?? null;
     if (!firstHealthReceived) {
       firstHealthReceived = true;
       // Defer ALL toggle auto-sync and guide trigger until preferences load.
@@ -207,6 +215,7 @@
   // Initial poll + fixed interval
   $effect(() => {
     healthPoll();
+    domainStore.load();
     const timer = setInterval(healthPoll, POLL_INTERVAL);
     return () => clearInterval(timer);
   });

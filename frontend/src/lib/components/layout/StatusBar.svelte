@@ -65,8 +65,15 @@
     {/if}
   </div>
 
-  <!-- Right side: pattern count + keyboard shortcut hint -->
+  <!-- Right side: domain count + cluster count + keyboard shortcut hint -->
   <div class="status-right">
+    {#if forgeStore.domainCount != null}
+      <span
+        class="statusbar-item"
+        title="{forgeStore.domainCount} active domain nodes (ceiling: {forgeStore.domainCeiling ?? 30})"
+        style="color: {forgeStore.domainCount >= (forgeStore.domainCeiling ?? 30) * 0.8 ? 'var(--color-neon-yellow)' : 'var(--color-text-dim)'};"
+      >{forgeStore.domainCount} domains</span>
+    {/if}
     {#if clusterCount !== null && clusterCount > 0}
       <span class="status-patterns" title="{clusterCount} active clusters">{clusterCount} clusters</span>
     {/if}

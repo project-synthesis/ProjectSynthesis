@@ -62,6 +62,10 @@ class ForgeStore {
   scoreHealth = $state<{ last_n_mean: number; last_n_stddev: number; count: number; clustering_warning: boolean } | null>(null);
   /** Per-phase average durations in ms from health polling. */
   phaseDurations = $state<Record<string, number> | null>(null);
+  /** Domain node count from health polling. */
+  domainCount = $state<number | null>(null);
+  /** Domain ceiling (max allowed domains) from health polling. */
+  domainCeiling = $state<number | null>(null);
 
   /** Canonical routing state updater — both SSE and health poll MUST use this. */
   updateRoutingState(input: {
@@ -419,6 +423,8 @@ class ForgeStore {
     this.avgDurationMs = null;
     this.scoreHealth = null;
     this.phaseDurations = null;
+    this.domainCount = null;
+    this.domainCeiling = null;
   }
 
   reset() {

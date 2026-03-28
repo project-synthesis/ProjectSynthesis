@@ -222,6 +222,44 @@ describe('StatusBar', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Domain count display
+  // -----------------------------------------------------------------------
+
+  it('shows domain count when forgeStore.domainCount is set', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.domainCount = 5;
+    forgeStore.domainCeiling = 30;
+    render(StatusBar);
+    expect(screen.getByText('5 domains')).toBeInTheDocument();
+  });
+
+  it('does not show domain count when forgeStore.domainCount is null', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.domainCount = null;
+    render(StatusBar);
+    expect(screen.queryByText(/domains/)).not.toBeInTheDocument();
+  });
+
+  it('shows domain count in amber when near ceiling (>=80%)', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.domainCount = 25;
+    forgeStore.domainCeiling = 30;
+    render(StatusBar);
+    const el = screen.getByText('25 domains');
+    expect(el).toBeInTheDocument();
+    expect(el.getAttribute('style')).toContain('var(--color-neon-yellow)');
+  });
+
+  it('shows domain count in dim color when well below ceiling', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    forgeStore.domainCount = 5;
+    forgeStore.domainCeiling = 30;
+    render(StatusBar);
+    const el = screen.getByText('5 domains');
+    expect(el.getAttribute('style')).toContain('var(--color-text-dim)');
+  });
+
+  // -----------------------------------------------------------------------
   // TierBadge integration
   // -----------------------------------------------------------------------
 
