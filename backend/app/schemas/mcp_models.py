@@ -215,6 +215,10 @@ class PrepareOutput(BaseModel):
     strategy_requested: str = Field(
         description="The strategy name that was requested.",
     )
+    was_truncated: bool = Field(
+        default=False,
+        description="True if the assembled prompt was truncated to fit max_context_tokens.",
+    )
 
 
 class SaveResultInput(BaseModel):

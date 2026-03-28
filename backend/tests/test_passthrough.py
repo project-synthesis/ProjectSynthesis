@@ -226,7 +226,7 @@ class TestPassthroughSave:
         assert data["scoring_mode"] == "heuristic"
 
         # Has optimized prompt and summary
-        assert data["optimized_prompt"] == LONG_OPTIMIZED
+        assert data["optimized_prompt"] == LONG_OPTIMIZED.rstrip()
         assert data["changes_summary"] == "Added structure and constraints"
 
         # Has scores
@@ -278,7 +278,7 @@ class TestPassthroughSave:
         )
         opt = result.scalar_one()
         assert opt.status == "completed"
-        assert opt.optimized_prompt == LONG_OPTIMIZED
+        assert opt.optimized_prompt == LONG_OPTIMIZED.rstrip()
         assert opt.changes_summary == "Restructured"
         assert opt.scoring_mode == "heuristic"
         assert opt.model_used == "external"
@@ -352,19 +352,20 @@ class TestPassthroughSave:
         assert resp.status_code == 422
 
     async def test_save_optional_changes_summary(self, app_client):
-        """changes_summary is optional and defaults to empty string."""
+        """changes_summary is optional — cleanup extracts default when omitted."""
         prep = await self._prepare(app_client)
         resp = await app_client.post(
             "/api/optimize/passthrough/save",
             json={
                 "trace_id": prep["trace_id"],
                 "optimized_prompt": LONG_OPTIMIZED,
-                # No changes_summary
+                # No changes_summary — cleanup extracts default
             },
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["changes_summary"] == ""
+        # Cleanup provides a default summary when no change markers found
+        assert len(data["changes_summary"]) > 0
 
     async def test_save_returns_standard_optimization_shape(self, app_client):
         """Response matches the same shape as GET /api/optimize/{trace_id}."""
@@ -455,7 +456,7 @@ class TestPassthroughSave:
         )
         assert resp2.status_code == 200
         data = resp2.json()
-        assert data["optimized_prompt"] == LONG_OPTIMIZED
+        assert data["optimized_prompt"] == LONG_OPTIMIZED.rstrip()
         assert data["changes_summary"] == "Second save"
 
         # Only one record in DB for this trace_id
@@ -715,7 +716,7 @@ class TestPassthroughGetOptimization:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "completed"
-        assert data["optimized_prompt"] == LONG_OPTIMIZED
+        assert data["optimized_prompt"] == LONG_OPTIMIZED.rstrip()
         assert data["overall_score"] is not None
 
     async def test_get_and_save_shapes_match(self, app_client):
@@ -878,7 +879,7 @@ class TestPassthroughEndToEnd:
         # Step 3: Verify via GET
         resp = await app_client.get(f"/api/optimize/{prep['trace_id']}")
         assert resp.status_code == 200
-        assert resp.json()["optimized_prompt"] == LONG_OPTIMIZED
+        assert resp.json()["optimized_prompt"] == LONG_OPTIMIZED.rstrip()
 
         # Step 4: Appears in history
         resp = await app_client.get("/api/history")

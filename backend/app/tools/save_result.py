@@ -23,6 +23,7 @@ from app.services.preferences import PreferencesService
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.tools._shared import DATA_DIR
+from app.utils.text_cleanup import split_prompt_and_changes
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,13 @@ async def handle_save_result(
 ) -> SaveResultOutput:
     """Persist an optimization result from an external LLM."""
     logger.info("synthesis_save_result called: trace_id=%s model=%s", trace_id, model)
+
+    # Validate output length — reject excessively large prompts early
+    if len(optimized_prompt) > settings.MAX_RAW_PROMPT_CHARS:
+        raise ValueError(
+            f"optimized_prompt too long ({len(optimized_prompt)} chars). "
+            f"Maximum is {settings.MAX_RAW_PROMPT_CHARS} characters."
+        )
 
     # Normalize strategy_used — external LLMs often return verbose rationales
     if strategy_used:
@@ -160,6 +168,12 @@ async def handle_save_result(
                 orig_ds = DimensionScores.from_dict(original_scores)
                 deltas = DimensionScores.compute_deltas(orig_ds, opt_ds)
 
+        # Clean external LLM output — strip preambles, fences, meta-headers,
+        # and extract changes summary if the caller didn't provide one.
+        optimized_prompt, extracted_changes = split_prompt_and_changes(optimized_prompt)
+        if not changes_summary and extracted_changes:
+            changes_summary = extracted_changes
+
         # Truncate codebase context if provided
         context_snapshot = None
         if codebase_context:
@@ -188,6 +202,7 @@ async def handle_save_result(
             opt.model_used = model or "external"
             opt.models_by_phase = {"optimize": model or "external"}
             opt.scoring_mode = scoring_mode
+            opt.heuristic_flags = heuristic_flags if heuristic_flags else None
             opt.status = "completed"
             if context_snapshot:
                 opt.codebase_context_snapshot = context_snapshot
@@ -214,6 +229,7 @@ async def handle_save_result(
                 model_used=model or "external",
                 models_by_phase={"optimize": model or "external"},
                 scoring_mode=scoring_mode,
+                heuristic_flags=heuristic_flags if heuristic_flags else None,
                 status="completed",
                 trace_id=trace_id,
                 codebase_context_snapshot=context_snapshot,

@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import DATA_DIR, PROMPTS_DIR, settings
+import app.config as _cfg
+from app.config import PROMPTS_DIR, settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.models import Optimization, OptimizationPattern
@@ -21,6 +22,7 @@ from app.services.pipeline_constants import VALID_DOMAINS
 from app.services.preferences import PreferencesService
 from app.services.taxonomy import get_engine as get_taxonomy_engine
 from app.utils.sse import format_sse
+from app.utils.text_cleanup import split_prompt_and_changes
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,10 @@ class OptimizationDetail(BaseModel):
     intent_label: str | None = Field(default=None, description="Short intent classification label (3-6 words).")
     domain: str | None = Field(default=None, description="Domain category (backend, frontend, database, etc.).")
     cluster_id: str | None = Field(default=None, description="Pattern family ID this optimization belongs to.")
+    heuristic_flags: list[str] = Field(
+        default_factory=list,
+        description="Dimensions where LLM and heuristic scores diverge significantly.",
+    )
 
 
 class PassthroughPrepareResponse(BaseModel):
@@ -90,7 +96,7 @@ async def optimize(
     if not routing:
         raise HTTPException(status_code=503, detail="Routing service not initialized.")
 
-    _prefs = PreferencesService(DATA_DIR)
+    _prefs = PreferencesService(_cfg.DATA_DIR)
     prefs_snapshot = _prefs.load()
 
     ctx = RoutingContext(preferences=prefs_snapshot, caller="rest")
@@ -339,6 +345,7 @@ def _serialize_optimization(opt: Optimization, *, cluster_id: str | None = None)
         intent_label=opt.intent_label,
         domain=opt.domain,
         cluster_id=cluster_id,
+        heuristic_flags=opt.heuristic_flags or [],
     )
 
 
@@ -390,7 +397,7 @@ async def passthrough_prepare(
     """
     logger.info("POST /api/optimize/passthrough: prompt_len=%d strategy=%s", len(body.prompt), body.strategy)
 
-    _prefs = PreferencesService(DATA_DIR)
+    _prefs = PreferencesService(_cfg.DATA_DIR)
     requested_strategy = body.strategy or _prefs.get("defaults.strategy") or "auto"
 
     # Unified context enrichment
@@ -466,7 +473,15 @@ async def passthrough_save(
     if not opt:
         raise HTTPException(404, "No pending optimization for this trace_id")
 
-    _prefs = PreferencesService(DATA_DIR)
+    # Validate output length — reject excessively large prompts early
+    if len(body.optimized_prompt) > settings.MAX_RAW_PROMPT_CHARS:
+        raise HTTPException(
+            422,
+            f"optimized_prompt too long ({len(body.optimized_prompt)} chars). "
+            f"Maximum is {settings.MAX_RAW_PROMPT_CHARS} characters.",
+        )
+
+    _prefs = PreferencesService(_cfg.DATA_DIR)
     scoring_enabled = _prefs.get("pipeline.enable_scoring")
     # Default to True if preference is not set (first-run, no preferences file)
     if scoring_enabled is None:
@@ -477,6 +492,7 @@ async def passthrough_save(
     deltas: dict[str, float] | None = None
     overall: float | None = None
     scoring_mode = "skipped"
+    heuristic_flags: list[str] = []
 
     if scoring_enabled:
         from app.schemas.pipeline_contracts import DimensionScores
@@ -513,6 +529,7 @@ async def passthrough_save(
                 )
                 opt_dims = blended_opt.to_dimension_scores()
                 scoring_mode = "hybrid_passthrough"
+                heuristic_flags = blended_opt.divergence_flags or []
             except Exception as exc:
                 logger.warning(
                     "Hybrid blending failed, falling back to heuristic: %s", exc,
@@ -548,9 +565,14 @@ async def passthrough_save(
         strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
         effective_strategy = strategy_loader.normalize_strategy(body.strategy_used)
 
+    # Clean external LLM output — strip preambles, fences, meta-headers,
+    # and extract changes summary if the caller didn't provide one.
+    cleaned_prompt, extracted_changes = split_prompt_and_changes(body.optimized_prompt)
+    effective_changes = body.changes_summary or extracted_changes
+
     # Update record
-    opt.optimized_prompt = body.optimized_prompt
-    opt.changes_summary = body.changes_summary or ""
+    opt.optimized_prompt = cleaned_prompt
+    opt.changes_summary = effective_changes or ""
     opt.task_type = body.task_type or opt.task_type or "general"
     opt.strategy_used = effective_strategy
     validated_domain = (
@@ -570,6 +592,7 @@ async def passthrough_save(
     opt.original_scores = original_scores
     opt.score_deltas = deltas
     opt.scoring_mode = scoring_mode
+    opt.heuristic_flags = heuristic_flags if heuristic_flags else None
     opt.status = "completed"
     opt.model_used = body.model or "external"
     opt.models_by_phase = {"optimize": body.model or "external"}

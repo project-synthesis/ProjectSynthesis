@@ -88,7 +88,8 @@ async def handle_prepare(
 
     # Enforce max_context_tokens budget
     estimated_tokens = len(assembled) // 4
-    if estimated_tokens > max_context_tokens:
+    was_truncated = estimated_tokens > max_context_tokens
+    if was_truncated:
         max_chars = max_context_tokens * 4
         assembled = assembled[:max_chars]
         context_size_tokens = max_context_tokens
@@ -125,4 +126,5 @@ async def handle_prepare(
         assembled_prompt=assembled,
         context_size_tokens=context_size_tokens,
         strategy_requested=strategy_name,
+        was_truncated=was_truncated,
     )

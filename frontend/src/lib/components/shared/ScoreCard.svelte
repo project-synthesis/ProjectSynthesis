@@ -8,9 +8,10 @@
     originalScores?: DimensionScores | null;
     deltas?: Record<string, number> | null;
     overallScore?: number | null;
+    heuristicFlags?: string[];
   }
 
-  let { scores, originalScores = null, deltas = null, overallScore = null }: Props = $props();
+  let { scores, originalScores = null, deltas = null, overallScore = null, heuristicFlags = [] }: Props = $props();
 
   const dimensionEntries = $derived(Object.entries(scores) as [string, number][]);
 </script>
@@ -43,6 +44,15 @@
       </li>
     {/each}
   </ul>
+
+  {#if heuristicFlags && heuristicFlags.length > 0}
+    <div class="divergence-warning" role="alert">
+      <span class="divergence-icon" aria-hidden="true">!</span>
+      <span class="divergence-text">
+        Score divergence: {heuristicFlags.join(', ')}
+      </span>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -126,5 +136,27 @@
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--color-text-dim);
+  }
+
+  .divergence-warning {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px;
+    border: 1px solid var(--color-neon-yellow);
+    margin-top: 4px;
+  }
+
+  .divergence-icon {
+    color: var(--color-neon-yellow);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+  }
+
+  .divergence-text {
+    font-size: 9px;
+    color: var(--color-neon-yellow);
+    font-family: var(--font-sans);
   }
 </style>

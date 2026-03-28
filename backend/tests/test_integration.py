@@ -332,7 +332,7 @@ class TestPassthroughEndToEnd:
         assert saved["model_used"] == "external"
         assert saved["scoring_mode"] == "heuristic"
         assert saved["strategy_used"] == "chain-of-thought"
-        assert saved["optimized_prompt"] == PASSTHROUGH_OPTIMIZED
+        assert saved["optimized_prompt"] == PASSTHROUGH_OPTIMIZED.rstrip()
         assert saved["changes_summary"] == "Added structure, constraints, and type hints"
         assert saved["raw_prompt"] == PASSTHROUGH_RAW
         assert saved["created_at"] is not None

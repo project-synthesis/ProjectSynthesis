@@ -68,6 +68,7 @@ class Optimization(Base):
     embedding = Column(LargeBinary, nullable=True)
     cluster_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=True)
     domain_raw = Column(String, nullable=True)
+    heuristic_flags = Column(JSON, nullable=True)
 
 
 class Feedback(Base):

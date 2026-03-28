@@ -391,6 +391,7 @@
             originalScores={activeResult?.original_scores ?? (viewingCachedTab ? null : forgeStore.originalScores)}
             deltas={activeResult?.score_deltas ?? (viewingCachedTab ? null : forgeStore.scoreDeltas)}
             overallScore={activeResult?.overall_score ?? null}
+            heuristicFlags={activeResult?.heuristic_flags ?? []}
           />
         {:else}
           <div class="scoring-disabled">

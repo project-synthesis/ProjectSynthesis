@@ -56,6 +56,7 @@ export interface OptimizationResult {
   intent_label: string | null;
   domain: string | null;
   cluster_id: string | null;
+  heuristic_flags: string[];
 }
 
 export interface SSEEvent {

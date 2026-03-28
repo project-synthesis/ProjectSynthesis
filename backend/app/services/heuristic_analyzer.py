@@ -13,7 +13,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -447,9 +447,23 @@ class HeuristicAnalyzer:
     async def _learn_from_history(
         self, db: AsyncSession, task_type: str,
     ) -> str | None:
-        """Query historical strategy performance for this task_type."""
+        """Query historical strategy performance for this task_type.
+
+        Includes passthrough results that have at least one thumbs_up feedback,
+        since user validation confirms quality regardless of the scoring source.
+        Unvalidated passthrough and heuristic-only results are excluded.
+        """
         try:
-            from app.models import Optimization
+            from app.models import Feedback, Optimization
+
+            # Correlated subquery: optimization has ≥1 thumbs_up feedback
+            has_positive_feedback = exists(
+                select(Feedback.id).where(
+                    Feedback.optimization_id == Optimization.id,
+                    Feedback.rating == "thumbs_up",
+                ).correlate(Optimization)
+            )
+
             result = await db.execute(
                 select(
                     Optimization.strategy_used,
@@ -460,7 +474,12 @@ class HeuristicAnalyzer:
                     Optimization.task_type == task_type,
                     Optimization.status == "completed",
                     Optimization.overall_score.isnot(None),
-                    Optimization.scoring_mode.notin_(["heuristic", "hybrid_passthrough"]),
+                    or_(
+                        # Include non-passthrough results (internal, sampling, hybrid)
+                        Optimization.scoring_mode.notin_(["heuristic", "hybrid_passthrough"]),
+                        # Include passthrough results validated by user thumbs_up
+                        has_positive_feedback,
+                    ),
                 )
                 .group_by(Optimization.strategy_used)
                 .having(func.count() >= 3)
