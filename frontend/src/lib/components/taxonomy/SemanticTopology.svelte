@@ -98,41 +98,41 @@
       renderer.scene.remove(renderer.scene.children[0]);
     }
 
-    // Build nodes — neon glow aesthetic: bright core + additive glow halo
-    const coreGeo = new THREE.IcosahedronGeometry(1, 2);
-    const glowGeo = new THREE.IcosahedronGeometry(1, 1);
+    // Build nodes — sharp neon contour aesthetic (brand: 1px borders, zero effects)
+    // Dark fill + bright wireframe ring = the 3D equivalent of the UI's
+    // `border: 1px solid var(--color-neon-*)` on dark `--color-bg-card` cards.
+    const sphereGeo = new THREE.IcosahedronGeometry(1, 2);
+    const wireGeo = new THREE.IcosahedronGeometry(1, 1);
     for (const node of data.nodes) {
       if (!node.visible) continue;
 
       const group = new THREE.Group();
       group.position.set(...node.position);
 
-      // Core: bright solid node
-      const coreMat = new THREE.MeshBasicMaterial({
-        color: node.color,
+      // Fill: dark, slightly tinted with the domain color
+      const fillMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(node.color).multiplyScalar(0.15),
         transparent: true,
-        opacity: node.opacity * 0.95,
+        opacity: node.opacity * 0.9,
       });
-      const core = new THREE.Mesh(coreGeo, coreMat);
-      core.scale.setScalar(node.size);
-      group.add(core);
+      const fill = new THREE.Mesh(sphereGeo, fillMat);
+      fill.scale.setScalar(node.size);
+      group.add(fill);
 
-      // Glow halo: larger, additive-blended, low opacity
-      const glowMat = new THREE.MeshBasicMaterial({
+      // Contour: sharp wireframe ring in full neon color
+      const wireMat = new THREE.MeshBasicMaterial({
         color: node.color,
+        wireframe: true,
         transparent: true,
-        opacity: node.opacity * 0.25,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
+        opacity: node.opacity * 0.85,
       });
-      const glow = new THREE.Mesh(glowGeo, glowMat);
-      glow.scale.setScalar(node.size * 1.8);
-      group.add(glow);
+      const wire = new THREE.Mesh(wireGeo, wireMat);
+      wire.scale.setScalar(node.size);
+      group.add(wire);
 
       renderer.scene.add(group);
-      // Register core mesh for raycasting (not the glow)
-      nodeMeshes.set(node.id, core);
-      interaction?.registerNode(node.id, core, node);
+      nodeMeshes.set(node.id, fill);
+      interaction?.registerNode(node.id, fill, node);
     }
 
     // Build edges

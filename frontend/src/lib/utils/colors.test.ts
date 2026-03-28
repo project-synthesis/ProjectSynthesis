@@ -50,19 +50,19 @@ describe('taxonomyColor', () => {
   });
 
   it('resolves known domain names to hex colors', () => {
-    expect(taxonomyColor('backend')).toBe('#c084fc');
-    expect(taxonomyColor('frontend')).toBe('#ff8c00');
-    expect(taxonomyColor('database')).toBe('#00bcd4');
-    expect(taxonomyColor('security')).toBe('#ff3366');
-    expect(taxonomyColor('devops')).toBe('#4d8eff');
-    expect(taxonomyColor('fullstack')).toBe('#bf5af2');
+    expect(taxonomyColor('backend')).toBe('#b44aff');
+    expect(taxonomyColor('frontend')).toBe('#ff6a00');
+    expect(taxonomyColor('database')).toBe('#00e0d0');
+    expect(taxonomyColor('security')).toBe('#ff2255');
+    expect(taxonomyColor('devops')).toBe('#3d9eff');
+    expect(taxonomyColor('fullstack')).toBe('#d946ef');
     expect(taxonomyColor('general')).toBe('#7a7a9e');
   });
 
   it('resolves free-form domain strings via keyword matching', () => {
-    expect(taxonomyColor('frontend CSS architecture')).toBe('#ff8c00');
-    expect(taxonomyColor('backend API service')).toBe('#c084fc');
-    expect(taxonomyColor('database optimization')).toBe('#00bcd4');
+    expect(taxonomyColor('frontend CSS architecture')).toBe('#ff6a00');
+    expect(taxonomyColor('backend API service')).toBe('#b44aff');
+    expect(taxonomyColor('database optimization')).toBe('#00e0d0');
   });
 
   it('returns fallback for unknown domain name', () => {

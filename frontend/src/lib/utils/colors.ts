@@ -14,15 +14,15 @@ const FALLBACK_COLOR = '#7a7a9e';
  * instead of a hex color (e.g. PatternFamily.domain for Navigator dots
  * and Inspector badges). Must stay in sync with backend OKLab palette.
  */
-// Domain colors — vibrant neon palette, must NOT overlap with tier accents:
+// Domain colors — electric neon palette, must NOT overlap with tier accents:
 //   internal=#00e5ff (cyan), sampling=#22ff88 (green), passthrough=#fbbf24 (yellow)
 const DOMAIN_COLORS: Record<string, string> = {
-  backend: '#c084fc',   // neon violet
-  frontend: '#ff8c00',  // neon orange
-  database: '#00bcd4',  // neon teal
-  security: '#ff3366',  // neon pink-red
-  devops: '#4d8eff',    // neon blue
-  fullstack: '#bf5af2',  // neon purple
+  backend: '#b44aff',   // electric violet
+  frontend: '#ff6a00',  // electric orange
+  database: '#00e0d0',  // electric teal
+  security: '#ff2255',  // electric red-pink
+  devops: '#3d9eff',    // electric blue
+  fullstack: '#d946ef',  // electric magenta
   general: '#7a7a9e',   // dim gray
 };
 
