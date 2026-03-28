@@ -265,9 +265,15 @@ class PipelineOrchestrator:
                 blocked=blocked_strategies,
             )
 
+            known_domains = (
+                ", ".join(sorted(domain_resolver.domain_labels))
+                if domain_resolver is not None and domain_resolver.domain_labels
+                else "backend, frontend, database, devops, security, fullstack, general"
+            )
             analyze_msg = self.prompt_loader.render("analyze.md", {
                 "raw_prompt": raw_prompt,
                 "available_strategies": available_strategies,
+                "known_domains": known_domains,
             })
 
             phase_start = time.monotonic()

@@ -1,6 +1,6 @@
 {
   "agent-guidance.md": {"required": [], "optional": []},
-  "analyze.md": {"required": ["raw_prompt", "available_strategies"], "optional": []},
+  "analyze.md": {"required": ["raw_prompt", "available_strategies", "known_domains"], "optional": []},
   "optimize.md": {"required": ["raw_prompt", "strategy_instructions", "analysis_summary"], "optional": ["codebase_guidance", "codebase_context", "adaptation_state", "applied_patterns"]},
   "scoring.md": {"required": [], "optional": []},
   "explore.md": {"required": ["raw_prompt", "file_contents", "file_paths"], "optional": []},

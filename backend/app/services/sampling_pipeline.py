@@ -595,9 +595,20 @@ async def run_sampling_pipeline(
             logger.debug("Sampling adaptation pre-filter unavailable: %s", exc)
 
     available_strategies = strategy_loader.format_available(blocked=blocked_strategies)
+    try:
+        from app.tools._shared import get_domain_resolver as _get_dr_early
+        _early_resolver = _get_dr_early()
+        known_domains = (
+            ", ".join(sorted(_early_resolver.domain_labels))
+            if _early_resolver.domain_labels
+            else "backend, frontend, database, devops, security, fullstack, general"
+        )
+    except Exception:
+        known_domains = "backend, frontend, database, devops, security, fullstack, general"
     analyze_msg = loader.render("analyze.md", {
         "raw_prompt": prompt,
         "available_strategies": available_strategies,
+        "known_domains": known_domains,
     })
 
     try:
@@ -1081,9 +1092,20 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
     # --- Phase 1: Analyze ---
     phase_t0 = time.monotonic()
     system_prompt = loader.load("agent-guidance.md")
+    try:
+        from app.tools._shared import get_domain_resolver as _get_dr_analyze
+        _analyze_resolver = _get_dr_analyze()
+        _analyze_known_domains = (
+            ", ".join(sorted(_analyze_resolver.domain_labels))
+            if _analyze_resolver.domain_labels
+            else "backend, frontend, database, devops, security, fullstack, general"
+        )
+    except Exception:
+        _analyze_known_domains = "backend, frontend, database, devops, security, fullstack, general"
     analyze_msg = loader.render("analyze.md", {
         "raw_prompt": prompt,
         "available_strategies": strategy_loader.format_available(),
+        "known_domains": _analyze_known_domains,
     })
 
     try:
