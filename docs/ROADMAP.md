@@ -17,6 +17,21 @@ Living document tracking planned improvements. Items are prioritized but not sch
 **Context:** The scoring orchestration (heuristic compute → historical stats fetch → hybrid blend → delta compute) is repeated across `pipeline.py`, `sampling_pipeline.py`, `save_result.py`, and `optimize.py` with divergent error handling. A shared `ScoringService` would eliminate duplication and ensure consistent behavior across all tiers.
 **Spec:** Code quality audit (2026-03-27) identified this as the #3 finding
 
+### Domain FK on Optimization table
+**Status:** Exploring
+**Context:** `Optimization.domain` is currently a `String` column storing the domain node's label (e.g., `"backend"`). Resolution uses a label lookup against `PromptCluster` rows where `state='domain'`. This works correctly via `DomainResolver` but requires subqueries for domain-level aggregations. Adding an optional `domain_cluster_id` FK to `PromptCluster.id` would enable direct JOINs without changing the existing `domain` string column (additive, non-breaking).
+
+**Trigger:** Implement when any of these three scenarios becomes a priority:
+
+1. **Domain-level analytics dashboard** — average score improvement per domain over time, member count trends, strategy effectiveness. Today requires `WHERE domain IN (SELECT label ... WHERE state='domain')` subqueries. A FK enables a single JOIN with the domain node's metrics, color, and `preferred_strategy` in one query.
+
+2. **Domain-scoped strategy affinity** — the adaptation tracker currently tracks `(task_type, strategy)` pairs. Domain-scoped tracking — `(domain, strategy)` — would enable insights like "chain-of-thought works best for security prompts." A FK lets us aggregate feedback by domain node efficiently and drive `preferred_strategy` on the domain node itself. This is the most likely trigger — it's the natural evolution of the adaptation system.
+
+3. **Cross-domain relationship graph** — weighted edges between domain nodes in the topology (not just between clusters). A FK enables `GROUP BY domain_cluster_id` aggregations to compute inter-domain traffic patterns, showing which domains users frequently switch between or combine.
+
+**Migration:** Add nullable `domain_cluster_id` FK alongside existing `domain` String. Backfill from label lookup. Both columns coexist — string for display/filtering, FK for joins. No breaking changes.
+**Decision:** ADR-004 deferred this as YAGNI. Revisit when a concrete feature requires domain-level JOINs.
+
 ### Conciseness heuristic calibration for technical prompts
 **Status:** Exploring
 **Context:** The heuristic conciseness scorer uses Type-Token Ratio which penalizes repeated domain terminology (e.g., "scoring", "heuristic", "pipeline" across sections). Technical specification prompts score artificially low on conciseness despite being well-structured. Needs a domain-aware TTR adjustment or alternative metric.
