@@ -137,6 +137,69 @@ async def test_split_domain_node_children_inherit_label(db):
 
 
 @pytest.mark.asyncio
+async def test_attempt_retire_domain_node_raises(db):
+    """attempt_retire() must raise GuardrailViolationError for domain nodes."""
+    from app.services.taxonomy.lifecycle import attempt_retire
+
+    domain_node = PromptCluster(
+        label="backend", state="domain", domain="backend", persistence=1.0,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        member_count=0,
+    )
+    db.add(domain_node)
+    await db.flush()
+
+    with pytest.raises(GuardrailViolationError, match="retire"):
+        await attempt_retire(db, domain_node, warm_path_age=1)
+
+
+@pytest.mark.asyncio
+async def test_attempt_merge_domain_node_a_raises(db):
+    """attempt_merge() must raise GuardrailViolationError when node_a is a domain."""
+    from app.services.taxonomy.lifecycle import attempt_merge
+
+    domain_node = PromptCluster(
+        label="backend", state="domain", domain="backend", persistence=1.0,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        member_count=5,
+    )
+    regular_node = PromptCluster(
+        label="other", state="active", domain="backend",
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        member_count=3,
+    )
+    db.add(domain_node)
+    db.add(regular_node)
+    await db.flush()
+
+    with pytest.raises(GuardrailViolationError, match="merge"):
+        await attempt_merge(db, domain_node, regular_node, warm_path_age=1)
+
+
+@pytest.mark.asyncio
+async def test_attempt_merge_domain_node_b_raises(db):
+    """attempt_merge() must raise GuardrailViolationError when node_b is a domain."""
+    from app.services.taxonomy.lifecycle import attempt_merge
+
+    regular_node = PromptCluster(
+        label="other", state="active", domain="backend",
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        member_count=3,
+    )
+    domain_node = PromptCluster(
+        label="frontend", state="domain", domain="frontend", persistence=1.0,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        member_count=5,
+    )
+    db.add(regular_node)
+    db.add(domain_node)
+    await db.flush()
+
+    with pytest.raises(GuardrailViolationError, match="merge"):
+        await attempt_merge(db, regular_node, domain_node, warm_path_age=1)
+
+
+@pytest.mark.asyncio
 async def test_emerge_node_inherits_majority_domain(db):
     """Emerged node should inherit domain from the majority of member clusters."""
     from app.services.taxonomy.lifecycle import attempt_emerge

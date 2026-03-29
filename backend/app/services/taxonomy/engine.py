@@ -523,6 +523,18 @@ class TaxonomyEngine:
         except Exception as risk_exc:
             logger.warning("Risk monitoring failed (non-fatal): %s", risk_exc)
 
+        # --- Tree integrity check + auto-repair (ADR-004 Risk 5) ---
+        try:
+            violations = await self.verify_domain_tree_integrity(db)
+            if violations:
+                repaired = await self._repair_tree_violations(db, violations)
+                logger.warning(
+                    "Tree integrity: %d violations, %d repaired",
+                    len(violations), repaired,
+                )
+        except Exception as integrity_exc:
+            logger.warning("Tree integrity check failed (non-fatal): %s", integrity_exc)
+
         # 4. Update per-node separation and compute Q_after
         result = await db.execute(
             select(PromptCluster).where(PromptCluster.state == "active")
