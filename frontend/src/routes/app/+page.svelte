@@ -132,23 +132,29 @@
         if (delta.samplingChanged) {
           onSamplingDetected();
           if (!preferencesStore.pipeline.force_sampling) {
-            preferencesStore.setPipelineToggle('force_sampling', true);
+            // Await the toggle so routing.tier reflects sampling BEFORE
+            // triggering the guide. Without await, the guide reads the stale
+            // tier (internal) because the preference hasn't persisted yet.
+            preferencesStore.setPipelineToggle('force_sampling', true).then(() => {
+              triggerTierGuide(routing.tier);
+            });
+          } else {
+            triggerTierGuide(routing.tier);
           }
         }
 
         // Auto-disable force_sampling INSTANTLY when sampling goes away.
-        // Detect: was sampling capable, now isn't.
         if (wasSamplingCapable && d.sampling_capable !== true && preferencesStore.pipeline.force_sampling) {
           preferencesStore.setPipelineToggle('force_sampling', false);
         }
 
         if (delta.reconnected) addToast('created', 'MCP client reconnected');
-        // Only toast on disconnect when no local provider (true degradation).
-        // When CLI/API is available, the auto-fallback is silent.
         if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
-        // Trigger onboarding guide for the new tier.
-        // triggerTierGuide handles startup settle + dedup internally.
-        queueMicrotask(() => triggerTierGuide(routing.tier));
+
+        // Non-sampling tier changes (disconnect, passthrough toggle) — trigger immediately
+        if (!delta.samplingChanged) {
+          triggerTierGuide(routing.tier);
+        }
       }
       if (type === 'preferences_changed') {
         preferencesStore.prefs = data as unknown as Preferences;
