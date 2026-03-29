@@ -271,7 +271,7 @@ class PipelineOrchestrator:
             known_domains = (
                 ", ".join(sorted(domain_resolver.domain_labels))
                 if domain_resolver is not None and domain_resolver.domain_labels
-                else "backend, frontend, database, devops, security, general"
+                else "backend, frontend, database, devops, security, fullstack, general"
             )
             analyze_msg = self.prompt_loader.render("analyze.md", {
                 "raw_prompt": raw_prompt,

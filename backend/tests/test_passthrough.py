@@ -1279,9 +1279,9 @@ class TestDomainValidation:
         """Every valid domain value is accepted without fallback."""
         from app.dependencies.rate_limit import _storage
 
-        valid_domains = ["backend", "frontend", "database", "devops", "security", "general"]
+        valid_domains = ["backend", "frontend", "database", "devops", "security", "fullstack", "general"]
         for domain in valid_domains:
-            _storage.reset()  # Avoid 429 across 6 iterations
+            _storage.reset()  # Avoid 429 across 7 iterations
             prep = await self._prepare(app_client)
             resp = await app_client.post(
                 "/api/optimize/passthrough/save",

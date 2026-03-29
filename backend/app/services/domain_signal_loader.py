@@ -182,6 +182,10 @@ class DomainSignalLoader:
         if not scored:
             return "general"
 
+        # Fullstack promotion: both backend AND frontend score significantly
+        if scored.get("backend", 0) >= 1.5 and scored.get("frontend", 0) >= 1.5:
+            return "fullstack"
+
         sorted_domains = sorted(scored.items(), key=lambda x: x[1], reverse=True)
         if not sorted_domains or sorted_domains[0][1] < 1.0:
             return "general"

@@ -214,7 +214,7 @@ class RefinementService:
             _resolver = get_domain_resolver()
             _known_domains = ", ".join(sorted(_resolver.domain_labels))
         except (ValueError, ImportError):
-            _known_domains = "backend, frontend, database, devops, security, general"
+            _known_domains = "backend, frontend, database, devops, security, fullstack, general"
 
         analyze_msg = self.prompt_loader.render("analyze.md", {
             "raw_prompt": current_prompt,

@@ -370,7 +370,7 @@ async def test_analyze_sampling_fallback(db_session) -> None:
 
     # Seed domain resolver so "backend" is recognized
     _resolver = DomainResolver()
-    _resolver._domain_labels = {"backend", "frontend", "database", "devops", "security", "general"}
+    _resolver._domain_labels = {"backend", "frontend", "database", "devops", "security", "fullstack", "general"}
     set_domain_resolver(_resolver)
 
     analysis_json = AnalysisResult(

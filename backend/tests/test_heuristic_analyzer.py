@@ -241,17 +241,15 @@ class TestAnalysisDataclass:
 
 class TestFullstackDomain:
     @pytest.mark.asyncio
-    async def test_cross_cutting_backend_frontend(self, db):
-        """Backend + frontend signals produce cross-cutting domain format."""
+    async def test_fullstack_promotion(self, db):
+        """Backend + frontend signals should promote to fullstack domain."""
         analyzer = HeuristicAnalyzer()
         result = await analyzer.analyze(
             "Build a FastAPI backend API with authentication and a React frontend "
             "component using Tailwind CSS for the user dashboard layout",
             db,
         )
-        # With fullstack removed as a seed domain, cross-cutting prompts
-        # use "primary: secondary" format instead of "fullstack" promotion
-        assert ":" in result.domain or result.domain in ("backend", "frontend")
+        assert result.domain == "fullstack"
 
 
 class TestHistoricalLearning:

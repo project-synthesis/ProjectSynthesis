@@ -82,7 +82,7 @@ async def handle_analyze(
         resolver = get_domain_resolver()
         known_domains = ", ".join(sorted(resolver.domain_labels))
     except ValueError:
-        known_domains = "backend, frontend, database, devops, security, general"
+        known_domains = "backend, frontend, database, devops, security, fullstack, general"
 
     analyze_msg = loader.render("analyze.md", {
         "raw_prompt": prompt,

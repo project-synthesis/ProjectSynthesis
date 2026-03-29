@@ -412,6 +412,8 @@ def _build_analysis_from_text(
                       "oauth", "jwt", "cors", "csrf", "xss"],
         "devops": ["deploy", "docker", "ci/cd", "kubernetes", "infrastructure",
                     "terraform", "ansible", "monitoring", "observability", "nginx"],
+        "fullstack": ["fullstack", "full-stack", "full stack", "end-to-end",
+                      "system-wide"],
     }
     # Score-based domain selection (not first-match) to handle overlapping keywords
     best_domain_count = 0
@@ -603,10 +605,10 @@ async def run_sampling_pipeline(
         known_domains = (
             ", ".join(sorted(_early_resolver.domain_labels))
             if _early_resolver.domain_labels
-            else "backend, frontend, database, devops, security, general"
+            else "backend, frontend, database, devops, security, fullstack, general"
         )
     except Exception:
-        known_domains = "backend, frontend, database, devops, security, general"
+        known_domains = "backend, frontend, database, devops, security, fullstack, general"
     analyze_msg = loader.render("analyze.md", {
         "raw_prompt": prompt,
         "available_strategies": available_strategies,
@@ -1106,10 +1108,10 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
         _analyze_known_domains = (
             ", ".join(sorted(_analyze_resolver.domain_labels))
             if _analyze_resolver.domain_labels
-            else "backend, frontend, database, devops, security, general"
+            else "backend, frontend, database, devops, security, fullstack, general"
         )
     except Exception:
-        _analyze_known_domains = "backend, frontend, database, devops, security, general"
+        _analyze_known_domains = "backend, frontend, database, devops, security, fullstack, general"
     analyze_msg = loader.render("analyze.md", {
         "raw_prompt": prompt,
         "available_strategies": strategy_loader.format_available(),

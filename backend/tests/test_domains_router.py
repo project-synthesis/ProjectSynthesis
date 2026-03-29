@@ -31,7 +31,7 @@ class TestListDomains:
         assert resp.status_code == 200
         data = resp.json()
         # conftest seeds 6 domain nodes (fullstack is discovered, not seeded)
-        assert len(data) == 6
+        assert len(data) == 7
         labels = {d["label"] for d in data}
         assert "backend" in labels
         assert "frontend" in labels
