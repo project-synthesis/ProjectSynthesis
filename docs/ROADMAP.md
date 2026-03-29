@@ -75,15 +75,24 @@ A project workspace model would provide isolated contexts:
 
 ### LLM domain classification accuracy
 **Status:** Exploring
-**Context:** The LLM analyzer inconsistently classifies prompt domains despite explicit decision rules in `analyze.md`. A database audit prompt was classified as "fullstack" across multiple runs with different models (Sonnet, Opus). The "fullstack" seed domain was removed as a mitigation — it will now only exist if organically discovered by the warm path. The underlying problem is that prompt-based steering of domain classification has limits: the LLM makes its own judgment call regardless of instructions.
+**Context:** E2E testing revealed three systemic domain classification failures — all traced to infrastructure bugs, not LLM limitations:
 
-**Future approaches to explore:**
-- **Constrained decoding** — force the LLM's domain output to one of the known domain labels via structured output enum (not free-form string)
-- **Two-pass classification** — first pass generates domain candidates with reasoning, second pass validates against decision rules
+1. **Schema vs template contradiction** (v0.3.8-dev fix) — `AnalysisResult.domain` Pydantic field description said "Be specific — 'REST API design' is better than 'backend'", steering the LLM to write free-form strings that didn't match any domain node. Fixed: description now says "Primary domain from the known domains list."
+
+2. **Confidence gate rejecting known domains** (v0.3.8-dev fix) — `DomainResolver.resolve()` applied the confidence gate (0.6) BEFORE checking domain node membership. Known labels like "backend" were rejected when the analyzer's overall confidence was low. Fixed: known domains bypass the gate; gate only applies to unknown domains.
+
+3. **Manual gate in sampling_analyze** (v0.3.8-dev fix) — `run_sampling_analyze()` had a hardcoded `if confidence < 0.6: domain = "general"` that bypassed the resolver entirely. Fixed: all three pipeline paths now use `DomainResolver.resolve()`.
+
+**Key insight:** The LLM was outputting correct domain labels all along (`domain_raw=backend`, `domain_raw=security`, `domain_raw=devops`). The infrastructure was silently overriding them to "general."
+
+**Remaining future optimizations:**
+- **Constrained decoding** — `Literal` enum on `AnalysisResult.domain` field to restrict LLM output to known domain labels at the schema level
+- **Dynamic text fallback keywords** — `_build_analysis_from_text()` uses hardcoded keywords instead of loading from domain node metadata via `DomainSignalLoader`
+- **DomainResolver cache key** — cache currently stores `primary → resolved` without confidence context. An unknown domain cached as "general" at low confidence persists even if a later request has high confidence. Self-corrects on `load()` calls but could be improved with confidence-aware caching
 - **Hybrid override** — run heuristic classifier in parallel with LLM, prefer heuristic when confidence is high and LLM disagrees
 - **Agentic verification** — post-classification agent reviews the domain assignment against the prompt content and corrects mismatches
 
-**Removed (v0.3.8-dev):** "fullstack" seed domain. Will be discovered organically when users optimize prompts that genuinely span both frontend and backend equally.
+**Removed (v0.3.8-dev):** "fullstack" seed domain — was causing LLM misclassification. Will be discovered organically when users optimize prompts that genuinely span both frontend and backend equally.
 
 ### Pipeline progress visualization
 **Status:** Planned
