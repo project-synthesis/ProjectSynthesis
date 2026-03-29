@@ -115,9 +115,9 @@ class AnalysisResult(BaseModel):
     )
     domain: str = Field(
         default="general",
-        description="Development domain in 1-3 words. Be specific — "
-        "'REST API design' is better than 'backend'. Use 'general' only for "
-        "non-development prompts.",
+        description="Primary domain from the known domains list. "
+        "Use format 'primary: qualifier' for cross-cutting concerns "
+        "(e.g., 'backend: auth'). Pick the most specific matching domain.",
     )
 
 
