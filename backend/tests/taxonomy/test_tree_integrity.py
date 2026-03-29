@@ -1,8 +1,7 @@
 """Tests for domain tree integrity verification and auto-repair."""
 
 import pytest
-import numpy as np
-from sqlalchemy import select
+
 from app.models import PromptCluster
 from app.services.taxonomy.engine import TaxonomyEngine
 

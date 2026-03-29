@@ -19,11 +19,10 @@ from app.schemas.pipeline_contracts import DimensionScores
 from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.heuristic_suggestions import generate_heuristic_suggestions
-from app.tools._shared import get_domain_resolver
 from app.services.preferences import PreferencesService
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
-from app.tools._shared import DATA_DIR
+from app.tools._shared import DATA_DIR, get_domain_resolver
 from app.utils.text_cleanup import split_prompt_and_changes, title_case_label
 
 logger = logging.getLogger(__name__)

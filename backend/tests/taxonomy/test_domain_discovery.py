@@ -1,11 +1,12 @@
 """Tests for warm-path domain discovery."""
 
-import pytest
+
 import numpy as np
-from sqlalchemy import select, func
-from app.models import PromptCluster, Optimization
+import pytest
+from sqlalchemy import select
+
+from app.models import Optimization, PromptCluster
 from app.services.taxonomy.engine import TaxonomyEngine
-from unittest.mock import AsyncMock, MagicMock
 
 
 # Helper to create a "general" domain node
