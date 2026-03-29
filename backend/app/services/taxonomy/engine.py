@@ -1153,7 +1153,7 @@ class TaxonomyEngine:
         children_q = await db.execute(
             select(PromptCluster).where(
                 PromptCluster.parent_id == general_node.id,
-                PromptCluster.state == "active",
+                PromptCluster.state.in_(["active", "mature"]),
                 PromptCluster.member_count >= DOMAIN_DISCOVERY_MIN_MEMBERS,
                 PromptCluster.coherence >= DOMAIN_DISCOVERY_MIN_COHERENCE,
             )
@@ -1215,6 +1215,7 @@ class TaxonomyEngine:
                 # Create the domain node
                 await self._create_domain_node(
                     db, top_primary, existing_domains, candidate,
+                    general_node_id=general_node.id,
                 )
                 created.append(top_primary)
                 existing_domains.add(top_primary)
@@ -1266,6 +1267,7 @@ class TaxonomyEngine:
         label: str,
         existing_domains: set[str],
         seed_cluster: PromptCluster | None = None,
+        general_node_id: str | None = None,
     ) -> PromptCluster:
         """Create a new domain node with a maximally distant color.
 
@@ -1273,7 +1275,8 @@ class TaxonomyEngine:
             db: Async DB session.
             label: Domain label (e.g. "marketing").
             existing_domains: Set of existing domain labels (for color computation).
-            seed_cluster: The cluster that triggered this domain discovery (optional).
+            seed_cluster: The cluster that triggered this domain discovery.
+            general_node_id: ID of the "general" domain node (avoids re-query).
 
         Returns:
             The newly created PromptCluster domain node.
@@ -1283,17 +1286,13 @@ class TaxonomyEngine:
         from app.services.taxonomy.coloring import compute_max_distance_color
 
         # Gather existing domain colors for max-distance computation
-        if existing_domains:
-            color_q = await db.execute(
-                select(PromptCluster.color_hex).where(
-                    PromptCluster.state == "domain",
-                    PromptCluster.color_hex.isnot(None),
-                )
+        color_q = await db.execute(
+            select(PromptCluster.color_hex).where(
+                PromptCluster.state == "domain",
+                PromptCluster.color_hex.isnot(None),
             )
-            existing_colors = [row[0] for row in color_q.all() if row[0]]
-        else:
-            existing_colors = []
-
+        )
+        existing_colors = [row[0] for row in color_q.all() if row[0]]
         color_hex = compute_max_distance_color(existing_colors)
 
         # Extract TF-IDF keywords from seed cluster
@@ -1307,6 +1306,7 @@ class TaxonomyEngine:
             label=label,
             state="domain",
             domain=label,
+            task_type="general",
             persistence=1.0,
             color_hex=color_hex,
             cluster_metadata={
@@ -1326,16 +1326,9 @@ class TaxonomyEngine:
         )
 
         # Re-parent matching clusters from "general" to the new domain
-        general_q = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state == "domain",
-                PromptCluster.label == "general",
-            )
-        )
-        general_node = general_q.scalar_one_or_none()
-        if general_node:
+        if general_node_id:
             reparented = await self._reparent_to_domain(
-                db, node, label, general_node.id,
+                db, node, label, general_node_id,
             )
             if reparented:
                 await self._backfill_optimization_domain(db, node)
@@ -1344,6 +1337,7 @@ class TaxonomyEngine:
             from app.services.event_bus import event_bus
             event_bus.publish("domain_created", {
                 "label": label,
+                "color_hex": color_hex,
                 "node_id": node.id,
                 "source": "discovered",
             })

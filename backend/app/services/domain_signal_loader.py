@@ -23,6 +23,23 @@ from app.models import PromptCluster
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Process-level singleton — mirrors DomainResolver pattern
+# ---------------------------------------------------------------------------
+
+_instance: DomainSignalLoader | None = None
+
+
+def get_signal_loader() -> DomainSignalLoader | None:
+    """Return the process-level DomainSignalLoader, or None if not initialized."""
+    return _instance
+
+
+def set_signal_loader(loader: DomainSignalLoader | None) -> None:
+    """Set the process-level DomainSignalLoader (called by lifespan)."""
+    global _instance
+    _instance = loader
+
 
 class DomainSignalLoader:
     """Loads domain keyword signals from taxonomy domain nodes.

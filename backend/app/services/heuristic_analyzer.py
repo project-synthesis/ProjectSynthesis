@@ -12,30 +12,33 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-if TYPE_CHECKING:
-    from app.services.domain_signal_loader import DomainSignalLoader
-
 logger = logging.getLogger(__name__)
 
-# --- Module-level DomainSignalLoader reference ---
 
-_signal_loader: DomainSignalLoader | None = None
+def _get_signal_loader():
+    """Resolve the signal loader from the service-level singleton.
+
+    Returns None if not yet initialized (startup race, tests without seeding).
+    """
+    from app.services.domain_signal_loader import get_signal_loader
+    return get_signal_loader()
 
 
-def set_signal_loader(loader: DomainSignalLoader) -> None:
-    """Inject the DomainSignalLoader at startup (called from main.py lifespan)."""
-    global _signal_loader
-    _signal_loader = loader
+# Legacy aliases — main.py and mcp_server.py call set_signal_loader().
+# Delegates to the service module singleton so there's one source of truth.
+def set_signal_loader(loader) -> None:
+    """Set the DomainSignalLoader singleton (called from lifespan)."""
+    from app.services.domain_signal_loader import set_signal_loader as _set
+    _set(loader)
 
 
-def get_signal_loader() -> DomainSignalLoader | None:
-    """Return the current DomainSignalLoader, or None if not yet initialized."""
-    return _signal_loader
+def get_signal_loader():
+    """Return the DomainSignalLoader singleton."""
+    return _get_signal_loader()
 
 
 @dataclass(frozen=True)
@@ -139,9 +142,10 @@ def _classify_domain(scored: dict[str, float]) -> str:
     Returns ``"general"`` when no signal loader is configured (e.g. during
     early startup or in tests that don't seed domain nodes).
     """
-    if _signal_loader is None:
+    loader = _get_signal_loader()
+    if loader is None:
         return "general"
-    return _signal_loader.classify(scored)
+    return loader.classify(scored)
 
 
 _DEFAULT_STRATEGY_MAP: dict[str, str] = {
@@ -212,8 +216,9 @@ class HeuristicAnalyzer:
         )
         # Domain classification via DomainSignalLoader (dynamic signals)
         word_set = set(words)
-        if _signal_loader is not None:
-            domain_scores = _signal_loader.score(word_set)
+        loader = _get_signal_loader()
+        if loader is not None:
+            domain_scores = loader.score(word_set)
         else:
             domain_scores = {}
         domain = _classify_domain(domain_scores)

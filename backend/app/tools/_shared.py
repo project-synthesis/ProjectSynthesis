@@ -84,9 +84,6 @@ def get_context_service() -> ContextEnrichmentService:
     return _context_service
 
 
-_signal_loader = None    # DomainSignalLoader | None
-
-
 def get_domain_resolver():
     """Return domain resolver or raise if not initialized.
 
@@ -102,15 +99,16 @@ def set_domain_resolver(resolver) -> None:
     _set(resolver)
 
 
-def set_signal_loader(loader) -> None:
-    """Set the module-level signal loader (called by lifespan)."""
-    global _signal_loader
-    _signal_loader = loader
-
-
 def get_signal_loader():
-    """Return signal loader (may be None if init failed)."""
-    return _signal_loader
+    """Return signal loader (delegates to service module singleton)."""
+    from app.services.domain_signal_loader import get_signal_loader as _get
+    return _get()
+
+
+def set_signal_loader(loader) -> None:
+    """Set the signal loader (delegates to service module singleton)."""
+    from app.services.domain_signal_loader import set_signal_loader as _set
+    _set(loader)
 
 
 # ---------------------------------------------------------------------------
