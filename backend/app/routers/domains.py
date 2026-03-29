@@ -98,6 +98,7 @@ async def promote_to_domain(
         "signal_keywords": [],
         "discovered_at": None,
         "proposed_by_snapshot": None,
+        "signal_member_count_at_generation": 0,
     }
     await db.commit()
 

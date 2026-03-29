@@ -122,11 +122,11 @@ class TestParseDomain:
     def test_colon_no_space(self) -> None:
         primary, qualifier = parse_domain("frontend:React")
         assert primary == "frontend"
-        assert qualifier == "React"
+        assert qualifier == "react"
 
     def test_free_form_legacy(self) -> None:
         primary, qualifier = parse_domain("REST API design")
-        assert primary == "REST API design"
+        assert primary == "rest api design"
         assert qualifier is None
 
     def test_empty_string(self) -> None:
@@ -147,4 +147,14 @@ class TestParseDomain:
     def test_multiple_colons(self) -> None:
         primary, qualifier = parse_domain("backend: REST: v2")
         assert primary == "backend"
-        assert qualifier == "REST: v2"
+        assert qualifier == "rest: v2"
+
+    def test_mixed_case_normalization(self) -> None:
+        primary, qualifier = parse_domain("Backend: Security")
+        assert primary == "backend"
+        assert qualifier == "security"
+
+    def test_uppercase_simple(self) -> None:
+        primary, qualifier = parse_domain("DEVOPS")
+        assert primary == "devops"
+        assert qualifier is None

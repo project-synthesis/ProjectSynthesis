@@ -31,7 +31,7 @@ async def test_generate_label_fallback_on_error(mock_provider):
         member_texts=["test text"],
         model="claude-haiku-4-5",
     )
-    assert label == "Unnamed cluster"
+    assert label == "Unnamed Cluster"
 
 
 @pytest.mark.asyncio
@@ -42,4 +42,4 @@ async def test_generate_label_no_provider():
         member_texts=["test text"],
         model="claude-haiku-4-5",
     )
-    assert label == "Unnamed cluster"
+    assert label == "Unnamed Cluster"

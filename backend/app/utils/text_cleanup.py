@@ -140,10 +140,15 @@ def split_prompt_and_changes(text: str) -> tuple[str, str]:
 def parse_domain(raw: str | None) -> tuple[str, str | None]:
     """Parse a domain string into (primary, qualifier).
 
-    Supports three formats:
-    - ``"backend"`` → ``("backend", None)``
-    - ``"backend: security"`` → ``("backend", "security")``
-    - ``"REST API design"`` → ``("REST API design", None)``  (legacy free-form)
+    Both primary and qualifier are **lowercased** to match domain node
+    labels (which are always lowercase).
+
+    Examples::
+
+        parse_domain("backend")           → ("backend", None)
+        parse_domain("Backend: Security") → ("backend", "security")
+        parse_domain("REST API design")   → ("rest api design", None)
+        parse_domain(None)                → ("general", None)
 
     Returns ``("general", None)`` for empty/None input.
     """
@@ -152,5 +157,5 @@ def parse_domain(raw: str | None) -> tuple[str, str | None]:
     raw = raw.strip()
     if ":" in raw:
         primary, _, qualifier = raw.partition(":")
-        return (primary.strip(), qualifier.strip() or None)
-    return (raw, None)
+        return (primary.strip().lower(), qualifier.strip().lower() or None)
+    return (raw.lower(), None)

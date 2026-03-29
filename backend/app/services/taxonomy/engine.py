@@ -202,15 +202,17 @@ class TaxonomyEngine:
             opt.embedding = embedding.astype(np.float32).tobytes()
 
             # 2. Find or create PromptCluster
-            # Use domain_raw (free-text from analyzer) as the canonical domain.
-            # The taxonomy engine does NOT constrain domains to a hardcoded list —
-            # domains are emergent properties discovered through clustering.
+            # Extract lowercase primary domain for cluster assignment.
+            # domain_raw is the full analyzer output (e.g., "Backend: Security");
+            # parse_domain() extracts and lowercases the primary ("backend").
+            from app.utils.text_cleanup import parse_domain as _parse_domain
+            domain_primary, _ = _parse_domain(opt.domain_raw or opt.domain or "general")
             async with self._lock:
                 cluster = await assign_cluster(
                     db=db,
                     embedding=embedding,
                     label=opt.intent_label or "general",
-                    domain=opt.domain_raw or opt.domain or "general",
+                    domain=domain_primary,
                     task_type=opt.task_type or "general",
                     overall_score=opt.overall_score,
                     embedding_index=self._embedding_index,
