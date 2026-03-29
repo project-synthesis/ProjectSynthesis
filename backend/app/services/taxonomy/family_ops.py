@@ -242,10 +242,20 @@ async def assign_cluster(
                     return matched
 
     # No match — create new cluster
+    # Find the parent domain node to link under
+    domain_node_q = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            PromptCluster.label == domain,
+        )
+    )
+    domain_node = domain_node_q.scalar_one_or_none()
+
     new_cluster = PromptCluster(
         label=label,
         domain=domain,
         task_type=task_type,
+        parent_id=domain_node.id if domain_node else None,
         centroid_embedding=embedding.astype(np.float32).tobytes(),
         member_count=1,
         usage_count=0,
@@ -254,15 +264,20 @@ async def assign_cluster(
     db.add(new_cluster)
     await db.flush()  # populate ID
 
+    # Increment domain node's child count
+    if domain_node is not None:
+        domain_node.member_count = (domain_node.member_count or 0) + 1
+
     # Update embedding index with new centroid
     if embedding_index is not None:
         await embedding_index.upsert(new_cluster.id, embedding)
 
     logger.debug(
-        "Created new PromptCluster: id=%s label='%s' domain=%s",
+        "Created new PromptCluster: id=%s label='%s' domain=%s parent=%s",
         new_cluster.id,
         label,
         domain,
+        domain_node.label if domain_node else None,
     )
     return new_cluster
 
