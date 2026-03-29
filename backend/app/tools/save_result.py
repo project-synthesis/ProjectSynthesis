@@ -19,6 +19,7 @@ from app.schemas.pipeline_contracts import DimensionScores
 from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.heuristic_suggestions import generate_heuristic_suggestions
+from app.services.pipeline_constants import MAX_DOMAIN_RAW_LENGTH
 from app.services.preferences import PreferencesService
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
@@ -201,13 +202,15 @@ async def handle_save_result(
             opt.changes_summary = changes_summary or ""
             try:
                 _resolver = get_domain_resolver()
+                # confidence=1.0: passthrough has no analyzer confidence — domain trusted from external LLM or heuristic
                 validated_domain = await _resolver.resolve(
                     domain or opt.domain or "general", confidence=1.0,
                 )
             except (ValueError, Exception):
                 validated_domain = "general"
             opt.domain = validated_domain
-            opt.domain_raw = domain or opt.domain_raw or "general"
+            # cluster_id is set asynchronously via optimization_created event → taxonomy hot path
+            opt.domain_raw = (domain or opt.domain_raw or "general")[:MAX_DOMAIN_RAW_LENGTH]
             opt.intent_label = title_case_label((intent_label or opt.intent_label or "general")[:100])
             opt.score_clarity = final_scores.get("clarity")
             opt.score_specificity = final_scores.get("specificity")
@@ -243,7 +246,7 @@ async def handle_save_result(
                 strategy_used=strategy_used or "auto",
                 changes_summary=changes_summary or "",
                 domain=_new_domain,
-                domain_raw=domain or "general",
+                domain_raw=(domain or "general")[:MAX_DOMAIN_RAW_LENGTH],
                 intent_label=title_case_label((intent_label or "general")[:100]),
                 score_clarity=final_scores.get("clarity"),
                 score_specificity=final_scores.get("specificity"),

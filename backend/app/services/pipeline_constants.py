@@ -33,6 +33,9 @@ DOMAIN_ARCHIVAL_MIN_USAGE = 3
 # Color constraints — domain colors must avoid perceptual proximity to tier accents
 TIER_ACCENTS = ["#00e5ff", "#22ff88", "#fbbf24"]  # internal, sampling, passthrough
 
+# Domain raw field truncation — caps Optimization.domain_raw at persistence sites
+MAX_DOMAIN_RAW_LENGTH = 200
+
 # ---------------------------------------------------------------------------
 # Thresholds
 # ---------------------------------------------------------------------------

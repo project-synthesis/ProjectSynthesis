@@ -58,6 +58,7 @@ from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.pattern_injection import auto_inject_patterns
 from app.services.pipeline_constants import (
+    MAX_DOMAIN_RAW_LENGTH,
     compute_optimize_max_tokens,
     resolve_effective_strategy,
     semantic_check,
@@ -653,7 +654,7 @@ async def run_sampling_pipeline(
         effective_domain = "general"
 
     # Domain mapping (Spec Section 4.2, 4.4)
-    domain_raw = getattr(analysis, "domain", None) or "general"  # pre-gate
+    domain_raw = (getattr(analysis, "domain", None) or "general")[:MAX_DOMAIN_RAW_LENGTH]  # pre-gate, truncated
     cluster_id = None
 
     try:
@@ -1148,7 +1149,7 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
         effective_domain = "general"
 
     # Domain mapping (Spec Section 4.2, 4.4)
-    domain_raw = getattr(analysis, "domain", None) or "general"  # pre-gate
+    domain_raw = (getattr(analysis, "domain", None) or "general")[:MAX_DOMAIN_RAW_LENGTH]  # pre-gate, truncated
     cluster_id: str | None = None
 
     try:

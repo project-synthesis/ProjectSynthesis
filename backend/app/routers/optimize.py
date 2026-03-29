@@ -19,6 +19,7 @@ from app.services.heuristic_scorer import HeuristicScorer
 from app.services.heuristic_suggestions import generate_heuristic_suggestions
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
+from app.services.pipeline_constants import MAX_DOMAIN_RAW_LENGTH
 from app.services.preferences import PreferencesService
 from app.services.taxonomy import get_engine as get_taxonomy_engine
 from app.utils.sse import format_sse
@@ -585,11 +586,13 @@ async def passthrough_save(
     opt.strategy_used = effective_strategy
     _domain_resolver = getattr(request.app.state, "domain_resolver", None)
     if _domain_resolver is not None:
+        # confidence=1.0: passthrough has no analyzer confidence — domain trusted from external LLM or heuristic
         validated_domain = await _domain_resolver.resolve(body.domain, confidence=1.0)
     else:
         validated_domain = "general"
     opt.domain = validated_domain
-    opt.domain_raw = body.domain or opt.domain_raw or "general"
+    # cluster_id is set asynchronously via optimization_created event → taxonomy hot path
+    opt.domain_raw = (body.domain or opt.domain_raw or "general")[:MAX_DOMAIN_RAW_LENGTH]
     opt.intent_label = title_case_label((body.intent_label or opt.intent_label or "general")[:100])
     if optimized_scores:
         opt.score_clarity = optimized_scores["clarity"]

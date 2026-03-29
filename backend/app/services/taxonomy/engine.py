@@ -1324,6 +1324,7 @@ class TaxonomyEngine:
             keywords = await self._extract_domain_keywords(db, seed_cluster)
             signal_member_count = seed_cluster.member_count or 0
 
+        label = label.lower()  # Domain labels are always lowercase
         node = PromptCluster(
             label=label,
             state="domain",

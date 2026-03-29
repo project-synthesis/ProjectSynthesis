@@ -88,6 +88,13 @@ async def promote_to_domain(
     existing_colors = [row[0] for row in colors_result if row[0]]
     color_hex = compute_max_distance_color(existing_colors)
 
+    # Domain labels must be lowercase
+    if cluster.label != cluster.label.lower():
+        raise HTTPException(
+            422,
+            f"Domain labels must be lowercase. Rename cluster to '{cluster.label.lower()}' first.",
+        )
+
     # Promote
     cluster.state = "domain"
     cluster.domain = cluster.label
