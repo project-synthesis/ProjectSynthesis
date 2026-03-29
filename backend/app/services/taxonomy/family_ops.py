@@ -264,9 +264,16 @@ async def assign_cluster(
     db.add(new_cluster)
     await db.flush()  # populate ID
 
-    # Increment domain node's child count
+    # Recount domain node's members (all clusters with matching domain, not just direct children)
     if domain_node is not None:
-        domain_node.member_count = (domain_node.member_count or 0) + 1
+        from sqlalchemy import func as _func
+        count_q = await db.execute(
+            select(_func.count()).where(
+                PromptCluster.state != "domain",
+                PromptCluster.domain == domain,
+            )
+        )
+        domain_node.member_count = count_q.scalar() or 0
 
     # Update embedding index with new centroid
     if embedding_index is not None:
