@@ -89,18 +89,18 @@ describe('StatusBar', () => {
     expect(screen.queryByText('disconnected')).not.toBeInTheDocument();
   });
 
-  it('shows phase label while forge is analyzing', () => {
+  it('shows phase progress while forge is analyzing', () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     forgeStore.status = 'analyzing';
     render(StatusBar);
-    expect(screen.getByText(/analyzing\.\.\./i)).toBeInTheDocument();
+    expect(screen.getByText(/analyzing \[1\/3\]/i)).toBeInTheDocument();
   });
 
-  it('shows phase label while forge is optimizing', () => {
+  it('shows phase progress while forge is optimizing', () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     forgeStore.status = 'optimizing';
     render(StatusBar);
-    expect(screen.getByText(/optimizing\.\.\./i)).toBeInTheDocument();
+    expect(screen.getByText(/optimizing \[2\/3\]/i)).toBeInTheDocument();
   });
 
   it('applies green phase color when sampling tier is active', () => {
@@ -110,7 +110,7 @@ describe('StatusBar', () => {
     forgeStore.mcpDisconnected = false;
     forgeStore.status = 'optimizing';
     render(StatusBar);
-    const phase = screen.getByText(/optimizing\.\.\./i);
+    const phase = screen.getByText(/optimizing \[2\/3\]/i);
     expect(phase.classList.contains('status-phase-sampling')).toBe(true);
   });
 

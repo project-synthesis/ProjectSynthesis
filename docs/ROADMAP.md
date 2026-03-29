@@ -46,6 +46,11 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 **Prerequisite:** Refactor `tier-onboarding.svelte.ts`, merge 3 guide components into 1, new `onboarding-dismissed` preference field, update `triggerTierGuide()` to emit toast instead of modal after initial onboarding, update `+page.svelte` startup gate.
 
+### Pipeline progress visualization
+**Status:** Planned
+**Context:** During optimization (2+ minutes for Opus), the web UI shows only a 3-step phase indicator (Analyzing → Optimizing → Scoring) with step counters. The internal tier streams SSE phase events correctly, but there's no rich progress experience — no estimated time remaining, no streaming preview, no per-phase timing. The sampling and passthrough tiers have different progress patterns that should also be visualized distinctly. A unified pipeline progress component would adapt to the active tier and show meaningful real-time feedback.
+**Quick fixes shipped (v0.3.8-dev):** Replaced spinning cube with 3-step phase indicator in Inspector, added step counter `[1/3]` in StatusBar, tier-aware accent colors, model ID display during processing.
+
 ### Passthrough refinement UX
 **Status:** Deferred
 **Context:** Passthrough results cannot be refined (returns 503). Refinement requires an LLM provider to rewrite the prompt. The user already has their external LLM — refinement would need a different interaction model (e.g., show the assembled refinement prompt for copy-paste like the initial passthrough flow).

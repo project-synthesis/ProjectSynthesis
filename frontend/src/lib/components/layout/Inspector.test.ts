@@ -642,31 +642,35 @@ describe('Inspector', () => {
 
   // ── 11. Active phase states ──────────────────────────────────────────────────
 
-  it('shows spinner when forge is analyzing', () => {
+  it('shows phase steps when forge is analyzing', () => {
     forgeStore.status = 'analyzing';
     mockFetch([]);
 
     render(Inspector);
 
-    expect(screen.getByRole('status', { name: 'Processing' })).toBeInTheDocument();
+    expect(screen.getByText('Analyzing')).toBeInTheDocument();
+    expect(screen.getByText('Optimizing')).toBeInTheDocument();
+    expect(screen.getByText('Scoring')).toBeInTheDocument();
   });
 
-  it('shows spinner when forge is optimizing', () => {
+  it('shows phase steps when forge is optimizing', () => {
     forgeStore.status = 'optimizing';
     mockFetch([]);
 
     render(Inspector);
 
-    expect(screen.getByRole('status', { name: 'Processing' })).toBeInTheDocument();
+    // Analyzing should show checkmark (done), Optimizing active
+    expect(screen.getByText('Analyzing')).toBeInTheDocument();
+    expect(screen.getByText('Optimizing')).toBeInTheDocument();
   });
 
-  it('shows spinner when forge is scoring', () => {
+  it('shows phase steps when forge is scoring', () => {
     forgeStore.status = 'scoring';
     mockFetch([]);
 
     render(Inspector);
 
-    expect(screen.getByRole('status', { name: 'Processing' })).toBeInTheDocument();
+    expect(screen.getByText('Scoring')).toBeInTheDocument();
   });
 
   // ── 12. Error state ──────────────────────────────────────────────────────────
@@ -726,8 +730,8 @@ describe('Inspector', () => {
 
     // Family detail hidden — forge is active
     expect(screen.queryByText('API patterns')).not.toBeInTheDocument();
-    // Spinner shown instead
-    expect(screen.getByRole('status', { name: 'Processing' })).toBeInTheDocument();
+    // Phase steps shown instead
+    expect(screen.getByText('Analyzing')).toBeInTheDocument();
   });
 
   // ── 15. State badge ──────────────────────────────────────────────────────────

@@ -365,14 +365,29 @@
       {/if}
 
     {:else if !viewingCachedTab && forgeActive}
-      <!-- Active phase -->
+      <!-- Pipeline phase indicator -->
+      {@const phases = ['analyzing', 'optimizing', 'scoring']}
+      {@const currentIdx = phases.indexOf(forgeStore.status)}
       <div class="phase-state">
-        <div class="spinner" aria-label="Processing" role="status"></div>
-        <span class="phase-label">
-          {PHASE_LABELS[forgeStore.status] ?? forgeStore.status}
-        </span>
-        {#if forgeStore.currentPhase}
-          <span class="phase-detail">{forgeStore.currentPhase}</span>
+        <div class="phase-steps">
+          {#each phases as phase, i (phase)}
+            {@const isDone = i < currentIdx}
+            {@const isActive = i === currentIdx}
+            <div class="phase-step" class:phase-step--done={isDone} class:phase-step--active={isActive}>
+              <span class="phase-dot" class:phase-dot--done={isDone} class:phase-dot--active={isActive}>
+                {#if isDone}&#10003;{:else}{i + 1}{/if}
+              </span>
+              <span class="phase-step-label">{PHASE_LABELS[phase]}</span>
+            </div>
+            {#if i < phases.length - 1}
+              <span class="phase-connector" class:phase-connector--done={isDone}></span>
+            {/if}
+          {/each}
+        </div>
+        {#if forgeStore.phaseModels && Object.keys(forgeStore.phaseModels).length > 0}
+          <div class="phase-model">
+            {Object.values(forgeStore.phaseModels).slice(-1)[0]}
+          </div>
         {/if}
       </div>
 
@@ -577,29 +592,92 @@
     padding: 6px 0;
   }
 
-  .spinner {
-    width: 20px;
-    height: 20px;
-    border: 1px solid var(--color-border-subtle);
-    border-top-color: var(--tier-accent, var(--color-neon-cyan));
-    animation: spin 800ms linear infinite;
-    flex-shrink: 0;
+  .phase-steps {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 8px 0;
   }
 
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+  .phase-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .phase-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid var(--color-border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--color-text-dim);
+    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .phase-dot--active {
+    border-color: var(--tier-accent, var(--color-neon-cyan));
+    color: var(--tier-accent, var(--color-neon-cyan));
+    animation: phase-active 1.5s ease-in-out infinite;
+  }
+
+  .phase-dot--done {
+    border-color: var(--color-neon-green);
+    color: var(--color-neon-green);
+    font-size: 10px;
+  }
+
+  @keyframes phase-active {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .phase-step-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .phase-step--active .phase-step-label {
+    color: var(--tier-accent, var(--color-neon-cyan));
+  }
+
+  .phase-step--done .phase-step-label {
+    color: var(--color-neon-green);
+  }
+
+  .phase-connector {
+    width: 16px;
+    height: 1px;
+    background: var(--color-border-subtle);
+    margin: 0 2px;
+    margin-bottom: 16px;
+  }
+
+  .phase-connector--done {
+    background: var(--color-neon-green);
+  }
+
+  .phase-model {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+    text-align: center;
+    margin-top: 2px;
   }
 
   .phase-label {
     font-size: 11px;
     color: var(--color-text-secondary);
     font-family: var(--font-sans);
-  }
-
-  .phase-detail {
-    font-size: 10px;
-    color: var(--color-text-dim);
-    font-family: var(--font-mono);
   }
 
   /* Passthrough state */

@@ -17,7 +17,14 @@
   // Cluster count derived from taxonomy stats (loaded by clustersStore.loadTree)
   const clusterCount = $derived(clustersStore.taxonomyStats?.nodes?.active ?? null);
 
+  const PIPELINE_PHASES = ['analyzing', 'optimizing', 'scoring'];
   const phaseDisplay = $derived(getPhaseLabel(forgeStore.status)?.toLowerCase() ?? null);
+  const phaseStep = $derived(PIPELINE_PHASES.indexOf(forgeStore.status) + 1);
+  const phaseProgress = $derived.by(() => {
+    if (!phaseDisplay) return null;
+    if (phaseStep > 0) return `${phaseDisplay} [${phaseStep}/3]`;
+    return `${phaseDisplay}...`;  // passthrough or other non-pipeline status
+  });
 
   const lastScore = $derived(
     activeResult?.overall_score
@@ -47,8 +54,8 @@
     {#if forgeStore.mcpDisconnected && !routing.isDegraded && !routing.isAutoFallback}
       <span class="status-disconnected" title="MCP client disconnected">disconnected</span>
     {/if}
-    {#if phaseDisplay}
-      <span class="status-phase" class:status-phase-passthrough={phaseDisplay === 'passthrough'} class:status-phase-sampling={routing.isSampling}>{phaseDisplay}...</span>
+    {#if phaseProgress}
+      <span class="status-phase" class:status-phase-passthrough={phaseDisplay === 'passthrough'} class:status-phase-sampling={routing.isSampling}>{phaseProgress}</span>
     {:else if lastScore}
       {#if breadcrumbLabel}
         <span class="status-breadcrumb">
