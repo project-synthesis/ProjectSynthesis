@@ -115,9 +115,10 @@ class AnalysisResult(BaseModel):
     )
     domain: str = Field(
         default="general",
-        description="Primary domain from the known domains list. "
-        "Use format 'primary: qualifier' for cross-cutting concerns "
-        "(e.g., 'backend: auth'). Pick the most specific matching domain.",
+        description="Domain classification. Use a known domain if it matches "
+        "(backend, frontend, database, data, devops, security, fullstack). "
+        "If none match, use a descriptive domain name (e.g., 'marketing', "
+        "'finance', 'saas'). Only use 'general' if truly domain-agnostic.",
     )
 
 

@@ -24,7 +24,7 @@ Analyze the prompt above and determine:
    - Docker, CI/CD, Kubernetes, Terraform, deployment, monitoring, nginx → **devops**
    - Auth, encryption, JWT, OAuth, XSS, CSRF, injection, vulnerabilities, CORS → **security**
    - Prompt equally requires BOTH frontend UI AND backend server work → **fullstack**
-   - None of the above match → **general**
+   - None of the above match → **use a descriptive domain name** (e.g., "marketing", "finance", "education", "legal", "saas", "design"). Only use "general" if the prompt is truly domain-agnostic with no identifiable subject area.
 
    A prompt can mention APIs, services, and data flow while being primarily about the database — classify by the **primary concern**, not by every keyword present.
 4. **Weaknesses** — List specific, actionable problems. Be concrete: "no output format specified" not "could be improved."
