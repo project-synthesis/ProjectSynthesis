@@ -1716,7 +1716,7 @@ class TaxonomyEngine:
         # Mature and template nodes are valid topology members — excluding
         # them would create inconsistency with stats panel node counts.
         query = select(PromptCluster).where(
-            PromptCluster.state.in_(["active", "candidate", "mature", "template", "domain"])
+            PromptCluster.state.in_(["active", "candidate", "mature", "template", "domain", "archived"])
         )
         if min_persistence > 0:
             query = query.where(PromptCluster.persistence >= min_persistence)

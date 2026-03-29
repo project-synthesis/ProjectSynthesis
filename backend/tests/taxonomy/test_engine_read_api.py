@@ -37,7 +37,7 @@ async def test_get_tree_returns_confirmed_and_candidate(db, mock_embedding, mock
     labels = [n["label"] for n in tree]
     assert "node-active" in labels
     assert "node-candidate" in labels
-    assert "node-archived" not in labels
+    assert "node-archived" in labels  # archived included for navigator filter tab
 
 
 @pytest.mark.asyncio
