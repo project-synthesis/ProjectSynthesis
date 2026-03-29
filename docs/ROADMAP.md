@@ -60,6 +60,18 @@ A project workspace model would provide isolated contexts:
 
 **Prerequisite:** Project CRUD endpoints, frontend project switcher, scoped query layer, per-project taxonomy engine instances.
 
+### LLM domain classification accuracy
+**Status:** Exploring
+**Context:** The LLM analyzer inconsistently classifies prompt domains despite explicit decision rules in `analyze.md`. A database audit prompt was classified as "fullstack" across multiple runs with different models (Sonnet, Opus). The "fullstack" seed domain was removed as a mitigation — it will now only exist if organically discovered by the warm path. The underlying problem is that prompt-based steering of domain classification has limits: the LLM makes its own judgment call regardless of instructions.
+
+**Future approaches to explore:**
+- **Constrained decoding** — force the LLM's domain output to one of the known domain labels via structured output enum (not free-form string)
+- **Two-pass classification** — first pass generates domain candidates with reasoning, second pass validates against decision rules
+- **Hybrid override** — run heuristic classifier in parallel with LLM, prefer heuristic when confidence is high and LLM disagrees
+- **Agentic verification** — post-classification agent reviews the domain assignment against the prompt content and corrects mismatches
+
+**Removed (v0.3.8-dev):** "fullstack" seed domain. Will be discovered organically when users optimize prompts that genuinely span both frontend and backend equally.
+
 ### Pipeline progress visualization
 **Status:** Planned
 **Context:** During optimization (2+ minutes for Opus), the web UI shows only a 3-step phase indicator (Analyzing → Optimizing → Scoring) with step counters. The internal tier streams SSE phase events correctly, but there's no rich progress experience — no estimated time remaining, no streaming preview, no per-phase timing. The sampling and passthrough tiers have different progress patterns that should also be visualized distinctly. A unified pipeline progress component would adapt to the active tier and show meaningful real-time feedback.

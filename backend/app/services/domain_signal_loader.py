@@ -166,12 +166,11 @@ class DomainSignalLoader:
     def classify(self, scored: dict[str, float]) -> str:
         """Return the most-likely domain label given pre-computed domain scores.
 
-        Rules (mirrors ``_classify_domain`` in ``heuristic_analyzer.py``):
+        Rules:
 
         - Empty or no-signal signals dict → ``"general"``
         - No domain scores at all → ``"general"``
         - Top domain score < 1.0 → ``"general"``
-        - Both ``backend`` and ``frontend`` score ≥ 1.5 → ``"fullstack"``
         - Secondary domain also ≥ 1.0 → ``"primary: secondary"``
         - Otherwise → primary domain label
 
@@ -182,10 +181,6 @@ class DomainSignalLoader:
             return "general"
         if not scored:
             return "general"
-
-        # Fullstack promotion
-        if scored.get("backend", 0) >= 1.5 and scored.get("frontend", 0) >= 1.5:
-            return "fullstack"
 
         sorted_domains = sorted(scored.items(), key=lambda x: x[1], reverse=True)
         if not sorted_domains or sorted_domains[0][1] < 1.0:

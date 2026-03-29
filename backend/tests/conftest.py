@@ -70,7 +70,7 @@ async def app_client(mock_provider, db_session, tmp_path):
     from app.models import PromptCluster
     from app.services.domain_resolver import DomainResolver
 
-    for domain_label in ("backend", "frontend", "database", "devops", "security", "fullstack", "general"):
+    for domain_label in ("backend", "frontend", "database", "devops", "security", "general"):
         db_session.add(PromptCluster(
             label=domain_label,
             state="domain",

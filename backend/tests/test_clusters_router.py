@@ -40,7 +40,7 @@ class TestClusterTree:
         assert non_domain[0]["label"] == "Test"
         # Domain nodes should also be present in the tree (C2 fix)
         domain_nodes = [n for n in data["nodes"] if n.get("state") == "domain"]
-        assert len(domain_nodes) == 7
+        assert len(domain_nodes) == 6
 
     @pytest.mark.asyncio
     async def test_get_cluster_tree_min_persistence(self, app_client, db_session):

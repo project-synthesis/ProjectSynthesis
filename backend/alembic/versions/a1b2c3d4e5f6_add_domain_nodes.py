@@ -84,11 +84,10 @@ SEED_DOMAINS: list[dict] = [
             ["injection", 0.9], ["xss", 1.0], ["csrf", 1.0],
         ],
     },
-    {
-        "label": "fullstack",
-        "color_hex": "#d946ef",
-        "signal_keywords": [],
-    },
+    # "fullstack" intentionally NOT seeded — it should be discovered organically
+    # by the warm path when users actually optimize prompts spanning both
+    # frontend and backend equally. Seeding it caused the LLM analyzer to
+    # misclassify backend/database prompts as "fullstack".
     {
         "label": "general",
         "color_hex": "#7a7a9e",
