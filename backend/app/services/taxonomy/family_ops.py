@@ -264,12 +264,12 @@ async def assign_cluster(
     db.add(new_cluster)
     await db.flush()  # populate ID
 
-    # Recount domain node's members (all clusters with matching domain, not just direct children)
+    # Recount domain node's visible members (excludes archived and domain nodes)
     if domain_node is not None:
         from sqlalchemy import func as _func
         count_q = await db.execute(
             select(_func.count()).where(
-                PromptCluster.state != "domain",
+                PromptCluster.state.notin_(["domain", "archived"]),
                 PromptCluster.domain == domain,
             )
         )
