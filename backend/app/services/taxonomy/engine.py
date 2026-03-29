@@ -1906,11 +1906,12 @@ class TaxonomyEngine:
             )
 
         # 5. Every non-domain cluster's domain field must match a domain node label
+        #    Case-insensitive: analyzer may emit "Backend" while domain label is "backend"
         mismatch_result = await db.execute(text("""
             SELECT c.id, c.label, c.domain
             FROM prompt_cluster c
             WHERE c.state != 'domain'
-              AND c.domain NOT IN (SELECT label FROM prompt_cluster WHERE state = 'domain')
+              AND LOWER(c.domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
               AND c.domain IS NOT NULL
         """))
         for row in mismatch_result:
@@ -1972,12 +1973,12 @@ class TaxonomyEngine:
                 )
                 repaired += orphan_result.rowcount
 
-        # Repair domain mismatches → reset to "general"
+        # Repair domain mismatches → reset to "general" (case-insensitive)
         mismatch_result = await db.execute(text("""
             UPDATE prompt_cluster
             SET domain = 'general'
             WHERE state != 'domain'
-              AND domain NOT IN (SELECT label FROM prompt_cluster WHERE state = 'domain')
+              AND LOWER(domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
               AND domain IS NOT NULL
         """))
         if mismatch_result.rowcount > 0:
@@ -1987,7 +1988,9 @@ class TaxonomyEngine:
             )
             repaired += mismatch_result.rowcount
 
-        await db.commit()
+        # NOTE: do NOT commit here — the warm path handles commit/rollback
+        # after the Q_system non-regression gate.  Committing prematurely
+        # would bypass the quality gate rollback mechanism.
         return repaired
 
     @staticmethod
