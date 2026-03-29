@@ -27,15 +27,25 @@ async def test_integrity_passes_clean_tree(db, mock_embedding):
 
 
 @pytest.mark.asyncio
-async def test_integrity_detects_duplicate_domain_labels(db, mock_embedding):
-    """Two domain nodes with the same label is a violation."""
-    db.add(PromptCluster(label="backend", state="domain", domain="backend", persistence=1.0))
+async def test_duplicate_domain_labels_blocked_by_db(db, mock_embedding):
+    """Partial unique index prevents two domain nodes with the same label."""
+    from sqlalchemy.exc import IntegrityError
+
     db.add(PromptCluster(label="backend", state="domain", domain="backend", persistence=1.0))
     await db.commit()
 
-    engine = TaxonomyEngine(embedding_service=mock_embedding, provider_resolver=lambda: None)
-    violations = await engine.verify_domain_tree_integrity(db)
-    assert any("Duplicate" in v and "backend" in v for v in violations)
+    db.add(PromptCluster(label="backend", state="domain", domain="backend", persistence=1.0))
+    with pytest.raises(IntegrityError):
+        await db.flush()
+    await db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_non_domain_duplicate_labels_allowed(db, mock_embedding):
+    """Non-domain clusters can share a label with a domain node."""
+    db.add(PromptCluster(label="backend", state="domain", domain="backend", persistence=1.0))
+    db.add(PromptCluster(label="backend", state="active", domain="backend"))
+    await db.commit()  # Should not raise
 
 
 @pytest.mark.asyncio

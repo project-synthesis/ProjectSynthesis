@@ -15,6 +15,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, backref, relationship
 
@@ -139,6 +140,12 @@ class PromptCluster(Base):
         Index("ix_prompt_cluster_state_label", "state", "label"),
         Index("ix_prompt_cluster_persistence", "persistence"),
         Index("ix_prompt_cluster_created_at", created_at.desc()),
+        Index(
+            "uq_prompt_cluster_domain_label",
+            "label",
+            unique=True,
+            sqlite_where=text("state = 'domain'"),
+        ),
     )
 
 
