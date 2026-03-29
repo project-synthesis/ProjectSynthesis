@@ -435,10 +435,10 @@
               <span class="meta-value meta-value--cyan">{activeResult.strategy_used}</span>
             </div>
           {/if}
-          {#if activeResult?.domain && activeResult.domain !== 'general'}
+          {#if activeResult?.domain}
             <div class="meta-row">
               <span class="meta-label">Domain</span>
-              <span class="meta-value">{activeResult.domain}</span>
+              <span class="meta-value" style={activeResult.domain === 'general' ? 'opacity: 0.5' : ''}>{activeResult.domain}</span>
             </div>
           {/if}
           {#if activeResult?.provider}
