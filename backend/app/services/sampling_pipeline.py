@@ -1143,10 +1143,14 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
         analyze_ms, analysis.task_type, analysis.selected_strategy,
     )
 
-    # Domain confidence gate (mirrors pipeline.py)
-    effective_domain = getattr(analysis, "domain", None) or "general"
-    if analysis.confidence < 0.6:
-        logger.info("Low confidence (%.2f) — overriding domain to 'general'", analysis.confidence)
+    # Domain resolution via DomainResolver (mirrors pipeline.py)
+    _analyze_domain_raw = getattr(analysis, "domain", None) or "general"
+    _analyze_confidence = semantic_check(analysis.task_type, prompt, analysis.confidence)
+    try:
+        from app.tools._shared import get_domain_resolver
+        _analyze_resolver = get_domain_resolver()
+        effective_domain = await _analyze_resolver.resolve(_analyze_domain_raw, _analyze_confidence)
+    except (ValueError, Exception):
         effective_domain = "general"
 
     # Domain mapping (Spec Section 4.2, 4.4)

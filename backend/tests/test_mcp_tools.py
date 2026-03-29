@@ -366,6 +366,12 @@ def _make_text_result(text: str, model: str = "claude-sonnet-4-6"):
 async def test_analyze_sampling_fallback(db_session) -> None:
     """When no provider, synthesis_analyze falls back to sampling."""
     from app.schemas.pipeline_contracts import AnalysisResult, DimensionScores, ScoreResult
+    from app.services.domain_resolver import DomainResolver, set_domain_resolver
+
+    # Seed domain resolver so "backend" is recognized
+    _resolver = DomainResolver()
+    _resolver._domain_labels = {"backend", "frontend", "database", "devops", "security", "general"}
+    set_domain_resolver(_resolver)
 
     analysis_json = AnalysisResult(
         task_type="coding",
