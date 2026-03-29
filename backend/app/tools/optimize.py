@@ -166,6 +166,13 @@ async def handle_optimize(
         forward_events = {"status", "score_card", "prompt_preview", "optimization_start", "suggestions"}
 
         result = None
+        # Resolve domain resolver for the internal pipeline
+        try:
+            from app.tools._shared import get_domain_resolver
+            _mcp_domain_resolver = get_domain_resolver()
+        except (ValueError, Exception):
+            _mcp_domain_resolver = None
+
         async for event in orchestrator.run(
             raw_prompt=prompt,
             provider=decision.provider,
@@ -178,6 +185,7 @@ async def handle_optimize(
             repo_full_name=repo_full_name,
             applied_pattern_ids=applied_pattern_ids,
             taxonomy_engine=get_taxonomy_engine(),
+            domain_resolver=_mcp_domain_resolver,
         ):
             if event.event in forward_events:
                 await notify_event_bus(f"optimization_{event.event}", event.data)
