@@ -252,14 +252,27 @@
         </div>
       {/if}
 
+      <!-- Column headers — widths match badge min-widths below -->
+      <div class="column-headers">
+        <span class="col-label col-label--name"></span>
+        <span class="col-label col-label--members">mbr</span>
+        <span class="col-label col-label--usage">use</span>
+        <span class="col-label col-label--score">score</span>
+      </div>
+
       <!-- Domain groups (filtered) -->
       {#each domains as domain (domain)}
         <div class="domain-group">
-          <div class="domain-header">
+          <button
+            class="domain-header"
+            class:domain-header--highlighted={clustersStore.highlightedDomain === domain}
+            onclick={() => clustersStore.toggleHighlightDomain(domain)}
+            title="Click to highlight in graph"
+          >
             <span class="domain-dot" style="background: {taxonomyColor(domain)};"></span>
             <span class="domain-label">{domain}</span>
             <span class="domain-count">{grouped[domain].length}</span>
-          </div>
+          </button>
           {#each grouped[domain] as family (family.id)}
             <button
               class="family-row"
@@ -269,8 +282,12 @@
             >
               <span class="family-label">{family.label}</span>
               <span class="family-badges">
-                <span class="member-count font-mono" title="{family.member_count} members">{family.member_count}m</span>
-                <span class="badge-neon" title="Usage count">{family.usage_count}</span>
+                <span class="member-count font-mono" title="{family.member_count} {family.member_count === 1 ? 'member' : 'members'}">{family.member_count}m</span>
+                <span
+                  class="badge-usage font-mono"
+                  class:badge-usage--active={family.usage_count > 0}
+                  title="Pattern usage count"
+                >{family.usage_count}</span>
                 <span
                   class="badge-score font-mono"
                   style="color: {scoreColor(family.avg_score)};"
@@ -583,6 +600,58 @@
     background: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 8%, transparent);
   }
 
+  /* ---- Column headers ---- */
+  .column-headers {
+    display: flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 6px 0 16px;
+    gap: 6px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    margin-bottom: 2px;
+  }
+
+  .col-label {
+    font-size: 8px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+    text-align: right;
+  }
+
+  .col-label--name {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+  }
+
+  .col-label--members {
+    width: 22px;
+  }
+
+  .col-label--usage {
+    width: 14px;
+  }
+
+  .col-label--score {
+    width: 24px;
+  }
+
+  /* ---- Usage badge ---- */
+  .badge-usage {
+    font-size: 9px;
+    color: var(--color-text-dim);
+    flex-shrink: 0;
+    width: 14px;
+    text-align: right;
+  }
+
+  .badge-usage--active {
+    color: var(--color-neon-teal);
+  }
+
   /* ---- Domain groups ---- */
   .domain-group {
     margin-bottom: 4px;
@@ -594,6 +663,22 @@
     gap: 4px;
     height: 20px;
     padding: 0 6px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .domain-header:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .domain-header--highlighted {
+    box-shadow: inset 0 0 0 1px var(--color-border-accent);
+    background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
   }
 
   .domain-dot {
@@ -603,11 +688,12 @@
   }
 
   .domain-label {
-    font-size: 9px;
-    font-family: var(--font-mono);
+    font-size: 10px;
+    font-family: var(--font-display, var(--font-sans));
+    font-weight: 700;
     color: var(--color-text-dim);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     flex: 1;
   }
 
@@ -675,7 +761,7 @@
 
   .badge-score {
     font-size: 9px;
-    min-width: 20px;
+    width: 24px;
     text-align: right;
   }
 
@@ -723,9 +809,11 @@
   }
 
   .member-count {
-    font-size: 8px;
+    font-size: 9px;
     color: var(--color-text-dim);
     flex-shrink: 0;
+    width: 22px;
+    text-align: right;
   }
 
   .detail-stats {

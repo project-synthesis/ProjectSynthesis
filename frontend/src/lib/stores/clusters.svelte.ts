@@ -38,12 +38,19 @@ class ClusterStore {
   // Templates
   templates = $state<ClusterNode[]>([]);
 
+  // Domain highlighting for cross-component filtering
+  highlightedDomain = $state<string | null>(null);
+
   // Internal
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _dismissTimer: ReturnType<typeof setTimeout> | null = null;
   private _lastLength = 0;
   private _loadGeneration = 0;
   private _clusterGeneration = 0;
+
+  toggleHighlightDomain(domain: string): void {
+    this.highlightedDomain = this.highlightedDomain === domain ? null : domain;
+  }
 
   /**
    * Called on paste/input — checks if content delta exceeds threshold,
@@ -216,6 +223,7 @@ class ClusterStore {
     this.taxonomyLoading = false;
     this.taxonomyError = null;
     this.templates = [];
+    this.highlightedDomain = null;
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     if (this._dismissTimer) clearTimeout(this._dismissTimer);
     this._debounceTimer = null;
