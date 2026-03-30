@@ -28,6 +28,7 @@ export class TopologyRenderer {
   private _focusAnimId: number | null = null;
   private _disposed = false;
   private _onLodChange: ((tier: LODTier) => void) | null = null;
+  private _onAnimate: (() => void) | null = null;
   private _currentLod: LODTier = 'far';
 
   constructor(canvas: HTMLCanvasElement, opts?: RendererOptions) {
@@ -68,6 +69,11 @@ export class TopologyRenderer {
     this._onLodChange = cb;
   }
 
+  /** Register a per-frame callback (called before render). */
+  set onAnimate(cb: (() => void) | null) {
+    this._onAnimate = cb;
+  }
+
   /** Start the render loop. */
   start(): void {
     if (this._disposed) return;
@@ -75,6 +81,7 @@ export class TopologyRenderer {
       if (this._disposed) return;
       this._animationId = requestAnimationFrame(loop);
       this.controls.update();
+      this._onAnimate?.();
       this.renderer.render(this.scene, this.camera);
     };
     loop();
@@ -137,8 +144,9 @@ export class TopologyRenderer {
     }
     this.controls.dispose();
     this.renderer.dispose();
+    this._onAnimate = null;
     this.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) {
+      if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments || obj instanceof THREE.Points) {
         obj.geometry.dispose();
         if (Array.isArray(obj.material)) {
           obj.material.forEach((m: THREE.Material) => m.dispose());

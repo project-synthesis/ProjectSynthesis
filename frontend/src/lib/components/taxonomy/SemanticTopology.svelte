@@ -11,6 +11,8 @@
   import { triggerRecluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
   import { stateColor } from '$lib/utils/colors';
+  import { parsePrimaryDomain } from '$lib/utils/formatting';
+  import type { ClusterNode } from '$lib/api/clusters';
 
   // Resolved at module level to avoid per-frame allocations
   const HIGHLIGHT_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
@@ -29,6 +31,9 @@
 
   // Node meshes for raycasting
   let nodeMeshes: Map<string, THREE.Mesh> = new Map();
+
+  // Flat node lookup for mid-LOD label logic and domain highlight
+  let flatNodeMap: Map<string, ClusterNode> = new Map();
 
   // External highlight tracking (for family selection sync)
   let _highlightedId: string | null = null;
@@ -98,42 +103,103 @@
       renderer.scene.remove(renderer.scene.children[0]);
     }
 
-    // Build nodes — sharp neon contour aesthetic (brand: 1px borders, zero effects)
-    // Dark fill + bright wireframe ring = the 3D equivalent of the UI's
-    // `border: 1px solid var(--color-neon-*)` on dark `--color-bg-card` cards.
-    const sphereGeo = new THREE.IcosahedronGeometry(1, 2);
-    const wireGeo = new THREE.IcosahedronGeometry(1, 1);
+    // Build nodes — two distinct visual tiers:
+    //
+    // CLUSTERS: Icosahedron — dark fill + triangular wireframe contour.
+    //   Standard neon-contour card aesthetic.
+    //
+    // DOMAIN NODES: Dodecahedron — dark fill + EdgesGeometry (clean pentagonal
+    //   outlines only) + vertex anchor points + slow Y-axis rotation.
+    //   Three complementary effects form one coherent "precision container" look:
+    //   structural edges, bright vertex markers, mechanical motion.
+    const clusterFillGeo = new THREE.IcosahedronGeometry(1, 2);
+    const clusterWireGeo = new THREE.IcosahedronGeometry(1, 1);
+    const domainFillGeo = new THREE.DodecahedronGeometry(1, 2);
+    // EdgesGeometry on subdiv-0 dodecahedron: extracts only the 30 structural
+    // edges (pentagonal outlines), ignoring subdivision diagonals.
+    const domainEdgesBase = new THREE.DodecahedronGeometry(1, 0);
+    const domainEdgesGeo = new THREE.EdgesGeometry(domainEdgesBase, 1);
+    // Vertex points: extract the 20 unique vertices of the base dodecahedron
+    const domainVertPositions = domainEdgesBase.getAttribute('position');
+    const uniqueVerts = new Map<string, [number, number, number]>();
+    for (let i = 0; i < domainVertPositions.count; i++) {
+      const x = domainVertPositions.getX(i);
+      const y = domainVertPositions.getY(i);
+      const z = domainVertPositions.getZ(i);
+      const key = `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`;
+      if (!uniqueVerts.has(key)) uniqueVerts.set(key, [x, y, z]);
+    }
+    const vertArray = new Float32Array([...uniqueVerts.values()].flat());
+    const domainPointsGeo = new THREE.BufferGeometry();
+    domainPointsGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertArray, 3));
+
+    const domainGroups: THREE.Group[] = [];
     for (const node of data.nodes) {
       if (!node.visible) continue;
 
       const group = new THREE.Group();
       group.position.set(...node.position);
+      const isDomain = node.state === 'domain';
+      group.userData = { isDomain };
 
-      // Fill: dark, slightly tinted with the domain color
+      // Fill: dark tinted interior (domains slightly darker = edge-dominant)
       const fillMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(node.color).multiplyScalar(0.15),
+        color: new THREE.Color(node.color).multiplyScalar(isDomain ? 0.08 : 0.15),
         transparent: true,
         opacity: node.opacity * 0.9,
       });
-      const fill = new THREE.Mesh(sphereGeo, fillMat);
+      const fill = new THREE.Mesh(isDomain ? domainFillGeo : clusterFillGeo, fillMat);
       fill.scale.setScalar(node.size);
-      group.add(fill);
+      group.add(fill); // child 0: fill
 
-      // Contour: sharp wireframe ring in full neon color
-      const wireMat = new THREE.MeshBasicMaterial({
-        color: node.color,
-        wireframe: true,
-        transparent: true,
-        opacity: node.opacity * 0.85,
-      });
-      const wire = new THREE.Mesh(wireGeo, wireMat);
-      wire.scale.setScalar(node.size);
-      group.add(wire);
+      if (isDomain) {
+        // Domain: EdgesGeometry — clean pentagonal structural outlines
+        const edgeMat = new THREE.LineBasicMaterial({
+          color: node.color,
+          transparent: true,
+          opacity: node.opacity * 0.9,
+        });
+        const edges = new THREE.LineSegments(domainEdgesGeo, edgeMat);
+        edges.scale.setScalar(node.size);
+        group.add(edges); // child 1: edges
+
+        // Domain: vertex anchor points — bright dots at each structural corner
+        const pointsMat = new THREE.PointsMaterial({
+          color: node.color,
+          size: 0.12,
+          transparent: true,
+          opacity: node.opacity * 0.95,
+          sizeAttenuation: true,
+        });
+        const points = new THREE.Points(domainPointsGeo, pointsMat);
+        points.scale.setScalar(node.size);
+        group.add(points); // child 2: vertex points
+
+        domainGroups.push(group);
+      } else {
+        // Cluster: dense triangular wireframe contour
+        const wireMat = new THREE.MeshBasicMaterial({
+          color: node.color,
+          wireframe: true,
+          transparent: true,
+          opacity: node.opacity * 0.85,
+        });
+        const wire = new THREE.Mesh(clusterWireGeo, wireMat);
+        wire.scale.setScalar(node.size);
+        group.add(wire); // child 1: wire
+      }
 
       renderer.scene.add(group);
       nodeMeshes.set(node.id, fill);
       interaction?.registerNode(node.id, fill, node);
     }
+
+    // Domain rotation: ~1 revolution per 50s at 60fps
+    renderer.onAnimate = () => {
+      for (const g of domainGroups) {
+        g.rotation.y += 0.002;
+      }
+    };
 
     // Build edges
     const edgePositions: number[] = [];
@@ -158,19 +224,36 @@
       renderer.scene.add(lines);
     }
 
-    // Labels — always visible for small graphs (≤ 8 nodes), otherwise near LOD only
+    // Labels — always visible for small graphs (≤ 8 nodes), near = all, mid = large clusters
     if (labels) {
-      const alwaysShowLabels = data.nodes.filter(n => n.visible).length <= 8;
+      const visibleNodes = data.nodes.filter(n => n.visible);
+      const alwaysShowLabels = visibleNodes.length <= 8;
       const templateSprites: import('three').Sprite[] = [];
+      // Mid-LOD: truncate labels to 14 chars for readability at distance
+      const isMid = !alwaysShowLabels && lodTier === 'mid';
+      const truncLabel = (text: string) =>
+        isMid && text.length > 14 ? text.slice(0, 14).trimEnd() + '\u2026' : text;
       for (const node of data.nodes) {
         if (!node.visible) continue;
-        const sprite = labels.getOrCreate(node.id, node.label, node.color);
+        const sprite = labels.getOrCreate(node.id, truncLabel(node.label), node.color);
         sprite.position.set(node.position[0], node.position[1] + node.size + 0.5, node.position[2]);
         if (node.state === 'template') {
           templateSprites.push(sprite);
         }
       }
-      labels.setVisible(lodTier === 'near' || alwaysShowLabels);
+      if (alwaysShowLabels || lodTier === 'near') {
+        labels.setVisible(true);
+      } else if (isMid) {
+        // Show labels for clusters with 5+ members, domains, and templates at mid zoom
+        const midLabelIds = new Set(
+          visibleNodes
+            .filter(n => n.state === 'template' || n.state === 'domain' || (flatNodeMap.get(n.id)?.member_count ?? 0) >= 5)
+            .map(n => n.id)
+        );
+        labels.setVisibleFor(midLabelIds);
+      } else {
+        labels.setVisible(false);
+      }
       // Template nodes: labels always visible regardless of LOD or count
       for (const sprite of templateSprites) {
         sprite.visible = true;
@@ -241,6 +324,7 @@
     const tree = clustersStore.taxonomyTree;
     if (tree.length > 0 && renderer) {
       untrack(() => {
+        flatNodeMap = new Map(tree.map(n => [n.id, n]));
         sceneData = buildSceneData(tree);
         assignLodVisibility(sceneData.nodes, lodTier);
 
@@ -262,6 +346,53 @@
         rebuildScene(sceneData);
       });
     }
+  });
+
+  // Domain highlight dimming — when a domain is highlighted in the navigator,
+  // dim all non-matching nodes and edges. Restores original opacities on clear.
+  $effect(() => {
+    const highlightDomain = clustersStore.highlightedDomain;
+    if (!renderer || !sceneData) return;
+
+    for (const node of sceneData.nodes) {
+      if (!node.visible) continue;
+      const mesh = nodeMeshes.get(node.id);
+      if (!mesh) continue;
+      const group = mesh.parent as THREE.Group | null;
+      if (!group) continue;
+
+      const flatNode = flatNodeMap.get(node.id);
+      const nodeDomain = parsePrimaryDomain(flatNode?.domain);
+      const dimmed = highlightDomain != null && nodeDomain !== highlightDomain;
+      const dimFactor = dimmed ? 0.15 : 1.0;
+
+      // Apply dim factor to all materials in the group.
+      // Cluster: fill (0.9) + wire (0.85). Domain: fill (0.9) + edges (0.9) + points (0.95).
+      const isDomain = group.userData?.isDomain === true;
+      for (let i = 0; i < group.children.length; i++) {
+        const child = group.children[i];
+        const mat = (child as THREE.Mesh | THREE.LineSegments | THREE.Points).material as
+          THREE.MeshBasicMaterial | THREE.LineBasicMaterial | THREE.PointsMaterial;
+        if (!mat || mat.opacity === undefined) continue;
+        let baseOpacity: number;
+        if (i === 0) {
+          baseOpacity = node.opacity * 0.9;              // fill (both types)
+        } else if (isDomain) {
+          baseOpacity = node.opacity * (i === 2 ? 0.95 : 0.9); // edges or points
+        } else {
+          baseOpacity = node.opacity * 0.85;             // cluster wire
+        }
+        mat.opacity = baseOpacity * dimFactor;
+      }
+    }
+
+    // Dim edges
+    renderer.scene.traverse((obj) => {
+      if (obj instanceof THREE.LineSegments) {
+        const mat = obj.material as THREE.LineBasicMaterial;
+        mat.opacity = highlightDomain != null ? 0.1 : 0.4;
+      }
+    });
   });
 
   // Sync external family selection → highlight node

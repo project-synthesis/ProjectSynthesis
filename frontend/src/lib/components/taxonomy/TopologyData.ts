@@ -27,9 +27,9 @@ function stateOpacity(state: string): number {
   return state === 'candidate' ? 0.4 : 1.0;
 }
 
-/** Size multiplier by lifecycle state — domain hub nodes are 2x, templates 1.5x, mature 1.2x. */
+/** Size multiplier by lifecycle state — domain hub nodes are 2.5x, templates 1.5x, mature 1.2x. */
 function stateSizeMultiplier(state: string): number {
-  if (state === 'domain') return 2.0;
+  if (state === 'domain') return 2.5;
   if (state === 'template') return 1.5;
   if (state === 'mature') return 1.2;
   return 1.0;
@@ -79,7 +79,14 @@ export function buildSceneData(flatNodes: ClusterNode[]): SceneData {
 
     // Size: blend member_count and usage_count, clamped
     const raw = Math.log2(Math.max(1, node.member_count + node.usage_count * 0.5));
-    const size = Math.max(0.6, Math.min(3.0, raw * 0.5));
+    let size = Math.max(0.6, Math.min(3.0, raw * 0.5));
+
+    // GENERAL domain: vary size by score to reduce uniform gray blob appearance
+    const primaryDomain = parsePrimaryDomain(node.domain);
+    if (primaryDomain === 'general' && node.avg_score != null) {
+      const scoreBonus = (node.avg_score - 5) * 0.1; // +/-0.5 range centered on score 5
+      size = Math.max(0.6, Math.min(3.0, size + scoreBonus));
+    }
 
     nodes.push({
       id: node.id,
@@ -97,20 +104,6 @@ export function buildSceneData(flatNodes: ClusterNode[]): SceneData {
     // Hierarchical edges from parent_id
     if (node.parent_id) {
       edges.push({ from: node.parent_id, to: node.id, type: 'hierarchical' });
-    }
-  }
-
-  // Same-domain edges — connect nodes that share a domain keyword
-  // (visual grouping for related clusters)
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const a = flatNodes[i];
-      const b = flatNodes[j];
-      const domA = parsePrimaryDomain(a.domain);
-      const domB = parsePrimaryDomain(b.domain);
-      if (domA !== 'general' && domB !== 'general' && domA === domB) {
-        edges.push({ from: nodes[i].id, to: nodes[j].id, type: 'similarity' });
-      }
     }
   }
 

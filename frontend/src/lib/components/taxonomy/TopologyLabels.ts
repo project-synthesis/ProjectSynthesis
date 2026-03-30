@@ -66,6 +66,15 @@ export class TopologyLabels {
     this._group.visible = visible;
   }
 
+  /** Show labels for specific node IDs only. Group stays visible. */
+  setVisibleFor(nodeIds: Set<string>): void {
+    this._group.visible = true;
+    for (const [key, sprite] of this._cache) {
+      const id = key.split(':')[0];
+      sprite.visible = nodeIds.has(id);
+    }
+  }
+
   dispose(): void {
     this.clear();
   }
