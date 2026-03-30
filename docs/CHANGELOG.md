@@ -4,6 +4,28 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- Column headers (Name/Members/Used/Score) above cluster family rows in ClusterNavigator
+- Mid-LOD label visibility for large clusters (5+ members) and domain nodes in topology graph
+- Domain wireframe ring (1.3x outer contour) differentiating domain hub nodes in topology
+- Score-based size variation for GENERAL domain nodes in topology graph
+- Optimization timestamps in Inspector linked optimizations list
+- Domain highlight interaction: click domain header in navigator to dim non-matching nodes in graph
+- `highlightedDomain` state and `toggleHighlightDomain()` method on cluster store
+- `setVisibleFor()` method on TopologyLabels for per-node label visibility control
+
+### Changed
+- Lowered auto-inject cosine threshold from 0.72 to 0.60 and increased candidate count from 3 to 5 for broader pattern matching
+- Enriched auto-injected patterns with structured metadata (domain, similarity score, source cluster label) in optimizer context
+- Replaced generic meta-pattern instruction in optimizer prompt with precision application block requiring per-pattern evaluation and an Applied Patterns summary section
+- Added diagnostic logging for empty embedding index and zero-match scenarios in pattern injection
+- Domain headers in ClusterNavigator use display font (Syne) at 10px/700 weight with 0.1em letter-spacing
+- Usage count badge uses conditional teal color when count > 0 (replaces uniform badge-neon styling)
+- Domain size multiplier increased from 2.0x to 2.5x in topology graph
+- Removed same-domain similarity edges from topology graph for cleaner visual hierarchy
+- Promote to Template button gated: requires 3+ members or 1+ pattern usage
+- Usage metric row in Inspector shows explanatory tooltip on hover
+
 ## v0.3.8-dev — 2026-03-29
 
 ### Added
