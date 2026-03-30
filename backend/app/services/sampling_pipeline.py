@@ -56,7 +56,7 @@ from app.schemas.pipeline_contracts import (
 )
 from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
-from app.services.pattern_injection import auto_inject_patterns
+from app.services.pattern_injection import InjectedPattern, auto_inject_patterns
 from app.services.pipeline_constants import (
     MAX_DOMAIN_RAW_LENGTH,
     MAX_INTENT_LABEL_LENGTH,
@@ -693,7 +693,7 @@ async def run_sampling_pipeline(
     # ------------------------------------------------------------------
     # Pre-Phase: Auto-inject cluster meta-patterns
     # ------------------------------------------------------------------
-    auto_injected_patterns: list[str] = []
+    auto_injected_patterns: list[InjectedPattern] = []
     auto_injected_cluster_ids: list[str] = []
     if not applied_pattern_ids:
         try:
@@ -754,7 +754,12 @@ async def run_sampling_pipeline(
 
     # Merge auto-injected patterns (when no explicit applied_pattern_ids)
     if auto_injected_patterns and not applied_patterns_text:
-        lines = [f"- {p}" for p in auto_injected_patterns]
+        lines = []
+        for ip in auto_injected_patterns:
+            lines.append(
+                f"- [{ip.domain} | {ip.similarity:.2f}] {ip.pattern_text}\n"
+                f"  Source: \"{ip.cluster_label}\" cluster"
+            )
         applied_patterns_text = (
             "The following proven patterns from past optimizations "
             "should be applied where relevant:\n"
@@ -762,7 +767,12 @@ async def run_sampling_pipeline(
         )
         context_sources["patterns"] = True
     elif auto_injected_patterns and applied_patterns_text:
-        lines = [f"- {p}" for p in auto_injected_patterns]
+        lines = []
+        for ip in auto_injected_patterns:
+            lines.append(
+                f"- [{ip.domain} | {ip.similarity:.2f}] {ip.pattern_text}\n"
+                f"  Source: \"{ip.cluster_label}\" cluster"
+            )
         applied_patterns_text += "\n" + "\n".join(lines)
 
     # Merge auto-injected cluster IDs for usage tracking

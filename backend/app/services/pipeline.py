@@ -32,7 +32,7 @@ from app.schemas.pipeline_contracts import (
     SuggestionsOutput,
 )
 from app.services.heuristic_scorer import HeuristicScorer
-from app.services.pattern_injection import auto_inject_patterns
+from app.services.pattern_injection import InjectedPattern, auto_inject_patterns
 from app.services.pipeline_constants import (
     ANALYZE_MAX_TOKENS,
     MAX_DOMAIN_RAW_LENGTH,
@@ -131,7 +131,7 @@ class PipelineOrchestrator:
         taxonomy_engine: Any,
         db: AsyncSession,
         trace_id: str,
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[InjectedPattern], list[str]]:
         """Auto-inject cluster meta-patterns based on prompt embedding similarity.
 
         Delegates to the shared ``pattern_injection.auto_inject_patterns()``
@@ -382,7 +382,7 @@ class PipelineOrchestrator:
             # ---------------------------------------------------------------
             # Pre-Phase: Auto-inject cluster meta-patterns
             # ---------------------------------------------------------------
-            auto_injected_patterns: list[str] = []
+            auto_injected_patterns: list[InjectedPattern] = []
             auto_injected_cluster_ids: list[str] = []
             if taxonomy_engine is not None and not applied_pattern_ids:
                 try:
@@ -465,14 +465,24 @@ class PipelineOrchestrator:
 
             # Combine explicit applied_patterns_text with auto-injected patterns
             if auto_injected_patterns and not applied_patterns_text:
-                lines = [f"- {p}" for p in auto_injected_patterns]
+                lines = []
+                for ip in auto_injected_patterns:
+                    lines.append(
+                        f"- [{ip.domain} | {ip.similarity:.2f}] {ip.pattern_text}\n"
+                        f"  Source: \"{ip.cluster_label}\" cluster"
+                    )
                 applied_patterns_text = (
                     "The following proven patterns from past optimizations "
                     "should be applied where relevant:\n"
                     + "\n".join(lines)
                 )
             elif auto_injected_patterns and applied_patterns_text:
-                lines = [f"- {p}" for p in auto_injected_patterns]
+                lines = []
+                for ip in auto_injected_patterns:
+                    lines.append(
+                        f"- [{ip.domain} | {ip.similarity:.2f}] {ip.pattern_text}\n"
+                        f"  Source: \"{ip.cluster_label}\" cluster"
+                    )
                 applied_patterns_text += "\n" + "\n".join(lines)
 
             optimize_msg = self.prompt_loader.render("optimize.md", {

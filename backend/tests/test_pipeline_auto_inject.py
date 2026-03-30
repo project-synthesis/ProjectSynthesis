@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from app.services.pattern_injection import InjectedPattern
 from app.services.pipeline import PipelineOrchestrator
 
 # ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ class TestAutoInjectPatterns:
         return PipelineOrchestrator(prompts_dir=prompts)
 
     async def test_returns_patterns_when_matches_found(self, orchestrator, db_session):
-        """When index finds matches and DB has MetaPatterns, returns pattern texts."""
+        """When index finds matches and DB has MetaPatterns, returns InjectedPattern objects."""
         cluster_id = "cluster-abc"
         mp = _make_meta_pattern(cluster_id, "Use concise verbs in prompts")
         engine = _make_taxonomy_engine(
@@ -76,22 +77,40 @@ class TestAutoInjectPatterns:
         )
 
         fake_embedding = _rand_emb()
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = [mp]
-        db_session.execute = AsyncMock(return_value=mock_result)
+
+        # First execute call: PromptCluster metadata query
+        cluster_row = MagicMock()
+        cluster_row.id = cluster_id
+        cluster_row.label = "Verb Patterns"
+        cluster_row.domain = "writing"
+        mock_cluster_result = MagicMock()
+        mock_cluster_result.__iter__ = MagicMock(return_value=iter([cluster_row]))
+
+        # Second execute call: MetaPattern query
+        mock_pattern_result = MagicMock()
+        mock_pattern_result.scalars.return_value.all.return_value = [mp]
+
+        db_session.execute = AsyncMock(
+            side_effect=[mock_cluster_result, mock_pattern_result]
+        )
 
         with patch(
             "app.services.embedding_service.EmbeddingService.aembed_single",
             new=AsyncMock(return_value=fake_embedding),
         ):
-            texts, ids = await orchestrator._auto_inject_patterns(
+            patterns, ids = await orchestrator._auto_inject_patterns(
                 raw_prompt="Write a function to sort a list",
                 taxonomy_engine=engine,
                 db=db_session,
                 trace_id="trace-001",
             )
 
-        assert texts == ["Use concise verbs in prompts"]
+        assert len(patterns) == 1
+        assert isinstance(patterns[0], InjectedPattern)
+        assert patterns[0].pattern_text == "Use concise verbs in prompts"
+        assert patterns[0].cluster_label == "Verb Patterns"
+        assert patterns[0].domain == "writing"
+        assert patterns[0].similarity == 0.85
         assert ids == [cluster_id]
 
     async def test_returns_empty_when_index_is_empty(self, orchestrator, db_session):
@@ -133,22 +152,34 @@ class TestAutoInjectPatterns:
         cluster_id = "cluster-xyz"
         engine = _make_taxonomy_engine(size=1, matches=[(cluster_id, 0.80)])
 
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        db_session.execute = AsyncMock(return_value=mock_result)
+        # First execute call: PromptCluster metadata query
+        cluster_row = MagicMock()
+        cluster_row.id = cluster_id
+        cluster_row.label = "Some Cluster"
+        cluster_row.domain = "general"
+        mock_cluster_result = MagicMock()
+        mock_cluster_result.__iter__ = MagicMock(return_value=iter([cluster_row]))
+
+        # Second execute call: MetaPattern query — no patterns
+        mock_pattern_result = MagicMock()
+        mock_pattern_result.scalars.return_value.all.return_value = []
+
+        db_session.execute = AsyncMock(
+            side_effect=[mock_cluster_result, mock_pattern_result]
+        )
 
         with patch(
             "app.services.embedding_service.EmbeddingService.aembed_single",
             new=AsyncMock(return_value=_rand_emb()),
         ):
-            texts, ids = await orchestrator._auto_inject_patterns(
+            patterns, ids = await orchestrator._auto_inject_patterns(
                 raw_prompt="Write something",
                 taxonomy_engine=engine,
                 db=db_session,
                 trace_id="trace-004",
             )
 
-        assert texts == []
+        assert patterns == []
         assert ids == [cluster_id]
 
 
@@ -229,11 +260,18 @@ class TestPipelineAutoInjectionIntegration:
         mock_result.scalars.return_value.all.return_value = [mp]
         db_session.execute = AsyncMock(return_value=mock_result)
 
+        injected_pattern = InjectedPattern(
+            pattern_text="Be explicit about return types",
+            cluster_label="Return Types",
+            domain="coding",
+            similarity=0.88,
+        )
+
         events = []
         with (
             patch(
                 "app.services.pipeline.PipelineOrchestrator._auto_inject_patterns",
-                new=AsyncMock(return_value=(["Be explicit about return types"], [cluster_id])),
+                new=AsyncMock(return_value=([injected_pattern], [cluster_id])),
             ),
         ):
             async for event in orchestrator.run(
@@ -289,8 +327,15 @@ class TestPipelineAutoInjectionIntegration:
         ]
         engine = _make_taxonomy_engine(size=5, matches=[("c1", 0.9)])
 
+        injected_pattern = InjectedPattern(
+            pattern_text="some pattern",
+            cluster_label="Test",
+            domain="general",
+            similarity=0.9,
+        )
+
         events = []
-        inject_mock = AsyncMock(return_value=(["some pattern"], ["c1"]))
+        inject_mock = AsyncMock(return_value=([injected_pattern], ["c1"]))
         with patch(
             "app.services.pipeline.PipelineOrchestrator._auto_inject_patterns",
             new=inject_mock,
@@ -321,10 +366,17 @@ class TestPipelineAutoInjectionIntegration:
         cluster_id = "cluster-007"
         engine = _make_taxonomy_engine(size=1, matches=[(cluster_id, 0.82)])
 
+        injected_pattern = InjectedPattern(
+            pattern_text="Use numbered steps",
+            cluster_label="Step Patterns",
+            domain="writing",
+            similarity=0.82,
+        )
+
         events = []
         with patch(
             "app.services.pipeline.PipelineOrchestrator._auto_inject_patterns",
-            new=AsyncMock(return_value=(["Use numbered steps"], [cluster_id])),
+            new=AsyncMock(return_value=([injected_pattern], [cluster_id])),
         ):
             async for event in orchestrator.run(
                 raw_prompt="Explain how to make coffee",

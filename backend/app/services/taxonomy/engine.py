@@ -932,6 +932,10 @@ class TaxonomyEngine:
             except (ValueError, TypeError):
                 continue
         await self._embedding_index.rebuild(index_centroids)
+        logger.info(
+            "Taxonomy embedding index loaded with %d vectors",
+            self._embedding_index.size,
+        )
 
         # 9. Create snapshot — commits all pending node updates AND the
         # snapshot in a single transaction (matching the warm-path pattern).

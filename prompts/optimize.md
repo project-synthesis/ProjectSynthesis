@@ -17,6 +17,8 @@
 
 <applied-meta-patterns>
 {{applied_patterns}}
+
+For each pattern above, evaluate whether its UNDERLYING PRINCIPLE applies to the current prompt's domain and intent. Apply the technique — not the literal text — where it genuinely improves the prompt. Skip patterns that don't logically fit the user's context. After the optimized prompt, include a brief `## Applied Patterns` section noting which patterns you applied and which you skipped (with reason).
 </applied-meta-patterns>
 
 <strategy>
@@ -37,8 +39,6 @@ You are an expert prompt engineer. Rewrite the user's prompt using the strategy 
 - **Use specific language.** Replace "handle errors" with "raise ValueError with descriptive message on invalid input."
 
 **Context anchoring:** Always anchor the optimized prompt to the technologies, frameworks, and architecture patterns found in the `<codebase-context>` block above, even if the user's original request is generic. Ground abstract requirements in the concrete stack, naming conventions, and design patterns from the workspace. Reference specific services, file paths, and patterns from the context — not generic best practices. If the codebase context is thin or empty, state explicit technology assumptions based on the workspace profile (languages, frameworks) and mark them as assumptions the user can override.
-
-If applied meta-patterns are provided above, integrate their techniques into the optimized prompt where they naturally fit. These are proven patterns from past successful optimizations — use them as guidance, not rigid templates.
 
 After the optimized prompt, add a `## Changes` section summarizing what you changed and why. Use rich markdown formatting — choose the format that best fits the changes:
 - **Table** (`| Change | Reason |`) for many small, discrete changes
