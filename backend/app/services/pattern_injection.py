@@ -107,10 +107,16 @@ async def auto_inject_patterns(
             similarity=round(sim, 2),
         ))
 
+    # Detailed injection chain log for observability
+    cluster_summary = ", ".join(
+        f"{label} ({domain}, sim={similarity_map.get(cid, 0):.2f})"
+        for cid, (label, domain) in cluster_meta.items()
+    )
     logger.info(
-        "Auto-injected %d patterns from %d clusters. trace_id=%s",
+        "Auto-injected %d patterns from %d clusters [%s]. trace_id=%s",
         len(injected),
         len(cluster_ids),
+        cluster_summary,
         trace_id,
     )
     return injected, cluster_ids

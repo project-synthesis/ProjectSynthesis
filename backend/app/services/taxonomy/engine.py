@@ -2105,6 +2105,10 @@ class TaxonomyEngine:
             parent_id = parent.parent_id
 
         await db.flush()
+        logger.info(
+            "Usage incremented: '%s' (usage=%d, domain=%s)",
+            cluster.label, cluster.usage_count, cluster.domain,
+        )
         logger.debug(
             "Usage incremented: cluster=%s (usage=%d)",
             cluster_id,
