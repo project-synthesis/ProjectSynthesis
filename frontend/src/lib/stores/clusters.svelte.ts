@@ -47,11 +47,15 @@ class ClusterStore {
   stateFilter = $state<StateFilter>(null);
 
   filteredTaxonomyTree = $derived(
-    this.stateFilter === null
-      ? this.taxonomyTree
-      : this.taxonomyTree.filter(node =>
-          node.state === 'domain' || node.state === this.stateFilter
-        )
+    this.taxonomyTree.filter(node => {
+      // Domain nodes always visible (structural hubs)
+      if (node.state === 'domain') return true;
+      // Zombie filter: exclude empty archived shells from graph
+      // (0 members + 0 usage = no content, just visual noise)
+      if (node.state === 'archived' && node.member_count === 0 && node.usage_count === 0) return false;
+      // State filter: null = all, otherwise match specific state
+      return this.stateFilter === null || node.state === this.stateFilter;
+    })
   );
 
   // Internal

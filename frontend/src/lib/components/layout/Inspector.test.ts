@@ -229,7 +229,7 @@ describe('Inspector', () => {
     render(Inspector);
 
     await waitFor(() => {
-      expect(screen.getByText('Linked optimizations')).toBeInTheDocument();
+      expect(screen.getByText(/Linked optimizations/)).toBeInTheDocument();
     });
     // The optimization uses intent_label when present
     expect(screen.getByText('Write API')).toBeInTheDocument();

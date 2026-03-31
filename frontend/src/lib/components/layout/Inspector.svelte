@@ -327,10 +327,11 @@
 
           <!-- Linked optimizations -->
           {#if family.optimizations.length > 0}
+            {@const allOpts = dedupe(family.optimizations)}
             <div class="family-section">
-              <div class="section-heading" style="margin-bottom: 4px;">Linked optimizations</div>
+              <div class="section-heading" style="margin-bottom: 4px;">Linked optimizations{#if allOpts.length < family.member_count} ({allOpts.length} of {family.member_count}){/if}</div>
               <div class="opt-list">
-                {#each dedupe(family.optimizations).slice(0, 10) as opt (opt.id)}
+                {#each allOpts as opt (opt.id)}
                   <button
                     class="opt-item"
                     onclick={() => openOptimization(opt.trace_id, opt.id)}

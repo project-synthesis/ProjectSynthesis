@@ -217,7 +217,7 @@ async def get_cluster_detail(
             select(Optimization)
             .where(Optimization.cluster_id == cluster_id)
             .order_by(Optimization.created_at.desc())
-            .limit(20)
+            .limit(50)
         )
         optimizations = opt_result.scalars().all()
 
