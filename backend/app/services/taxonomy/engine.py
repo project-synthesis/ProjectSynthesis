@@ -367,6 +367,11 @@ class TaxonomyEngine:
             # Scale: +0.05 per doubling above 6 members
             dynamic_floor = SPLIT_COHERENCE_FLOOR + max(0, math.log2(max(member_count, 6) / 6)) * 0.05
             if coherence < dynamic_floor and member_count >= SPLIT_MIN_MEMBERS:
+                # Cooldown: skip if this cluster already failed to split 3+ times
+                node_meta = node.cluster_metadata or {}
+                split_failures = node_meta.get("split_failures", 0)
+                if split_failures >= 3:
+                    continue
                 ops_attempted += 1
                 logger.info(
                     "Split candidate: '%s' (members=%d, coherence=%.3f, threshold=%.3f)",
@@ -406,7 +411,22 @@ class TaxonomyEngine:
                             split_clusters = batch_cluster(
                                 child_embs, min_cluster_size=3
                             )
-                            if split_clusters.n_clusters >= 2:
+                            if split_clusters.n_clusters < 2:
+                                # Track failed attempt for cooldown
+                                node.cluster_metadata = {
+                                    **(node.cluster_metadata or {}),
+                                    "split_failures": split_failures + 1,
+                                }
+                                logger.info(
+                                    "Leaf split failed: HDBSCAN found %d clusters (need 2+), attempt %d/3",
+                                    split_clusters.n_clusters, split_failures + 1,
+                                )
+                            else:
+                                # Reset failure counter on success
+                                node.cluster_metadata = {
+                                    **(node.cluster_metadata or {}),
+                                    "split_failures": 0,
+                                }
                                 logger.info(
                                     "Leaf split: HDBSCAN found %d sub-clusters from %d optimizations",
                                     split_clusters.n_clusters, len(child_embs),
@@ -484,6 +504,46 @@ class TaxonomyEngine:
                                     for child in new_children:
                                         centroid_emb = np.frombuffer(child.centroid_embedding, dtype=np.float32)
                                         await self._embedding_index.upsert(child.id, centroid_emb)
+                                    # Reassign noise optimizations to nearest sub-cluster
+                                    noise_ids = [
+                                        child_fam_ids[i]
+                                        for i in range(len(child_fam_ids))
+                                        if split_clusters.labels[i] == -1
+                                    ]
+                                    if noise_ids:
+                                        reassigned = 0
+                                        for nid in noise_ids:
+                                            n_emb_q = await db.execute(
+                                                select(Optimization.embedding).where(
+                                                    Optimization.id == nid,
+                                                )
+                                            )
+                                            n_bytes = n_emb_q.scalar()
+                                            if not n_bytes:
+                                                continue
+                                            n_emb = np.frombuffer(n_bytes, dtype=np.float32)
+                                            best_c, best_s = None, -1.0
+                                            for ch in new_children:
+                                                c_emb = np.frombuffer(
+                                                    ch.centroid_embedding, dtype=np.float32,
+                                                )
+                                                norm = np.linalg.norm(n_emb) * np.linalg.norm(c_emb) + 1e-9
+                                                s = float(np.dot(n_emb, c_emb) / norm)
+                                                if s > best_s:
+                                                    best_s, best_c = s, ch
+                                            if best_c:
+                                                await db.execute(
+                                                    sa_update(Optimization)
+                                                    .where(Optimization.id == nid)
+                                                    .values(cluster_id=best_c.id)
+                                                )
+                                                best_c.member_count = (best_c.member_count or 0) + 1
+                                                reassigned += 1
+                                        logger.info(
+                                            "Reassigned %d noise optimizations to nearest sub-clusters",
+                                            reassigned,
+                                        )
+
                                     # Commit leaf split independently of Q_system gate.
                                     # The dynamic threshold IS the quality gate for splits.
                                     await db.commit()
@@ -747,7 +807,7 @@ class TaxonomyEngine:
         # generated for 2 members doesn't describe 25). Re-extract from a
         # recent sample of the cluster's actual members.
         refresh_growth_factor = 3  # trigger when member_count >= 3× last extraction
-        refresh_min_members = 5   # don't refresh tiny clusters
+        refresh_min_members = 3   # matches domain discovery threshold
         refresh_sample_size = 8   # representative sample for re-extraction
         try:
             from app.models import MetaPattern as MetaPatternModel
