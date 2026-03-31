@@ -18,6 +18,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 from sqlalchemy import func, select
@@ -581,6 +582,24 @@ class TaxonomyEngine:
                 await db.flush()
         except Exception as recon_exc:
             logger.warning("Reconciliation failed (non-fatal): %s", recon_exc)
+
+        # --- Zombie cluster cleanup ---
+        # After cold-path reassignment, clusters may have 0 linked optimizations
+        # and no score data. Archive these to reduce navigator/graph noise.
+        try:
+            zombie_count = 0
+            for node in active_nodes:
+                if (node.member_count or 0) == 0 and node.avg_score is None:
+                    node.state = "archived"
+                    node.archived_at = datetime.utcnow()
+                    zombie_count += 1
+                    # Remove from embedding index
+                    await self._embedding_index.remove(node.id)
+            if zombie_count:
+                logger.info("Archived %d zombie clusters (0 members, no score)", zombie_count)
+                await db.flush()
+        except Exception as zombie_exc:
+            logger.warning("Zombie cleanup failed (non-fatal): %s", zombie_exc)
 
         # --- Domain discovery (ADR-004) ---
         # After lifecycle mutations, before quality gate.  Domain nodes have
