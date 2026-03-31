@@ -509,9 +509,12 @@ class TaxonomyEngine:
 
                                 if len(new_children) >= 2:
                                     # Archive the original mega-cluster
+                                    # Clear usage — it's stale from before the split
                                     node.state = "archived"
                                     node.archived_at = datetime.now(timezone.utc)
                                     node.member_count = 0
+                                    node.usage_count = 0
+                                    node.avg_score = None
                                     await self._embedding_index.remove(node.id)
                                     for child in new_children:
                                         centroid_emb = np.frombuffer(child.centroid_embedding, dtype=np.float32)
