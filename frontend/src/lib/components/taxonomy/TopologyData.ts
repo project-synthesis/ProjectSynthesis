@@ -69,6 +69,19 @@ export function buildSceneData(flatNodes: ClusterNode[]): SceneData {
   const nodes: SceneNode[] = [];
   const edges: SceneEdge[] = [];
 
+  // Pre-compute aggregate member count per domain node (sum of children's members).
+  // Domain nodes' own member_count is child-cluster count, not optimization count,
+  // so a domain with 1 child cluster of 25 members would render tiny without this.
+  const domainChildMembers = new Map<string, number>();
+  for (const node of flatNodes) {
+    if (node.state === 'domain') {
+      const childSum = flatNodes
+        .filter(n => n.parent_id === node.id && n.state !== 'domain')
+        .reduce((sum, n) => sum + n.member_count + n.usage_count * 0.5, 0);
+      domainChildMembers.set(node.id, childSum);
+    }
+  }
+
   for (const node of flatNodes) {
     // Position: UMAP coords scaled to scene units, or hash-based fallback.
     // UMAP outputs ~[-1, 1]; multiply by 10 for comfortable spacing.
@@ -77,13 +90,16 @@ export function buildSceneData(flatNodes: ClusterNode[]): SceneData {
     const y = node.umap_y != null ? node.umap_y * UMAP_SCALE : hashFloat(node.id, 1) * 20 - 10;
     const z = node.umap_z != null ? node.umap_z * UMAP_SCALE : hashFloat(node.id, 2) * 20 - 10;
 
-    // Size: blend member_count and usage_count, clamped
-    const raw = Math.log2(Math.max(1, node.member_count + node.usage_count * 0.5));
+    // Size: domain nodes aggregate children's members; clusters use their own.
+    const memberInput = node.state === 'domain'
+      ? domainChildMembers.get(node.id) ?? 1
+      : node.member_count + node.usage_count * 0.5;
+    const raw = Math.log2(Math.max(1, memberInput));
     let size = Math.max(0.6, Math.min(3.0, raw * 0.5));
 
     // GENERAL domain: vary size by score to reduce uniform gray blob appearance
     const primaryDomain = parsePrimaryDomain(node.domain);
-    if (primaryDomain === 'general' && node.avg_score != null) {
+    if (primaryDomain === 'general' && node.state !== 'domain' && node.avg_score != null) {
       const scoreBonus = (node.avg_score - 5) * 0.1; // +/-0.5 range centered on score 5
       size = Math.max(0.6, Math.min(3.0, size + scoreBonus));
     }
