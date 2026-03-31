@@ -34,13 +34,13 @@ export interface WorkerOutput {
 // Tuned for 20-200 nodes in UMAP-scaled space (~[-10, 10] per axis).
 
 /** Pull toward UMAP rest position. Preserves semantic meaning. */
-const ANCHOR = 0.004;
+const ANCHOR = 0.007;
 /** Parent-child spring strength. Creates solar-system groupings. */
-const PARENT_SPRING = 0.05;
+const PARENT_SPRING = 0.04;
 /** Desired parent-child distance. Children orbit at this radius. */
-const PARENT_REST_LEN = 7.0;
+const PARENT_REST_LEN = 9.0;
 /** Same-domain mutual attraction. Gentle — groups neighborhoods, not blobs. */
-const DOMAIN_ATTRACT = 0.008;
+const DOMAIN_ATTRACT = 0.006;
 /** Max distance for domain attraction. */
 const DOMAIN_RANGE = 25;
 /** Inverse-square repulsion. Dominant force — creates spatial spread. */
