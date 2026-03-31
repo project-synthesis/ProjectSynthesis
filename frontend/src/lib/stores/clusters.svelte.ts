@@ -18,6 +18,8 @@ const SUGGESTION_AUTO_DISMISS_MS = 10_000;
 /** Shape of a match result from the cluster match endpoint. */
 export type ClusterMatch = NonNullable<ClusterMatchResponse['match']>;
 
+export type StateFilter = null | 'active' | 'mature' | 'template' | 'archived';
+
 class ClusterStore {
   // Suggestion state
   suggestion = $state<ClusterMatch | null>(null);
@@ -41,12 +43,27 @@ class ClusterStore {
   // Domain highlighting for cross-component filtering
   highlightedDomain = $state<string | null>(null);
 
+  // State filter — shared between ClusterNavigator tabs and SemanticTopology
+  stateFilter = $state<StateFilter>(null);
+
+  filteredTaxonomyTree = $derived(
+    this.stateFilter === null
+      ? this.taxonomyTree
+      : this.taxonomyTree.filter(node =>
+          node.state === 'domain' || node.state === this.stateFilter
+        )
+  );
+
   // Internal
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _dismissTimer: ReturnType<typeof setTimeout> | null = null;
   private _lastLength = 0;
   private _loadGeneration = 0;
   private _clusterGeneration = 0;
+
+  setStateFilter(filter: StateFilter): void {
+    this.stateFilter = filter;
+  }
 
   toggleHighlightDomain(domain: string): void {
     this.highlightedDomain = this.highlightedDomain === domain ? null : domain;
@@ -224,6 +241,7 @@ class ClusterStore {
     this.taxonomyError = null;
     this.templates = [];
     this.highlightedDomain = null;
+    this.stateFilter = null;
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     if (this._dismissTimer) clearTimeout(this._dismissTimer);
     this._debounceTimer = null;

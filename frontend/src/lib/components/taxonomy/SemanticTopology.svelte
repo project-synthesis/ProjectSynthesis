@@ -321,7 +321,7 @@
   // Watch for taxonomy tree changes — untrack the write to sceneData
   // to prevent effect_update_depth_exceeded (reads tree, writes sceneData).
   $effect(() => {
-    const tree = clustersStore.taxonomyTree;
+    const tree = clustersStore.filteredTaxonomyTree;
     if (tree.length > 0 && renderer) {
       untrack(() => {
         flatNodeMap = new Map(tree.map(n => [n.id, n]));

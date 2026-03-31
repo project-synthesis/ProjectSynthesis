@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ClusterNode } from '$lib/api/clusters';
-  import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { clustersStore, type StateFilter } from '$lib/stores/clusters.svelte';
   import { editorStore, PROMPT_TAB_ID } from '$lib/stores/editor.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
@@ -12,11 +12,10 @@
   // Pagination state — families are derived from the store's tree (no redundant API calls)
   let pageLimit = $state(PAGE_SIZE);
 
-  // State filter — null = All
+  // State filter — reads from shared store (drives both navigator tabs and topology graph)
   // Candidate state intentionally excluded — candidates are transient internal nodes
   // not yet promoted to user-visible states by the lifecycle service.
-  type StateFilter = null | 'active' | 'mature' | 'template' | 'archived';
-  let stateFilter = $state<StateFilter>(null);
+  const stateFilter = $derived(clustersStore.stateFilter);
 
   // Derive families directly from the store's taxonomy tree (already in memory)
   const allFamilies = $derived(clustersStore.taxonomyTree);
@@ -142,7 +141,7 @@
   }
 
   function setStateFilter(f: StateFilter) {
-    stateFilter = f;
+    clustersStore.setStateFilter(f);
   }
 
   async function useTemplate(clusterId: string) {
