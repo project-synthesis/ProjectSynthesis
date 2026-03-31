@@ -5,6 +5,57 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- Semantic gravity n-body force simulation with 5 forces: UMAP anchor, parent-child spring, same-domain affinity, universal repulsion, collision resolution
+- Domain node visual overhaul: dodecahedron geometry with EdgesGeometry pentagonal outlines, vertex anchor points, slow Y-axis rotation
+- Pattern graph reactive to navigator state filter tabs (clicking active/archived/template filters the 3D graph)
+- Same-domain duplicate merge detection: two-signal system (label match + centroid >0.40, same-domain embedding >=0.65)
+- Warm-path stale label/pattern refresh when cluster grows 3x+ since last extraction
+- Warm-path member count + coherence reconciliation from actual Optimization rows
+- Warm-path zombie cluster cleanup (archives 0-member clusters, clears stale usage)
+- Warm-path post-discovery re-parenting sweep for general-domain stragglers
+- Tree integrity checks #6 (non-domain parents) and #7 (archived with usage) with auto-repair
+- `InjectedPattern` dataclass with cluster_label, domain, similarity metadata
+- `format_injected_patterns()` shared utility (eliminates pipeline duplication)
+- `StateFilter` type and `filteredTaxonomyTree` derived on cluster store
+- Enhanced injection chain observability: cluster names, domains, similarity scores in logs
+- Embedding index top-score diagnostic logging on search miss
+- Root logger configuration for app.services.* INFO propagation
+- Score dimension CSS Grid alignment with column headers (score/delta/orig)
+- Navigator column headers (MBR/USE/SCORE) outside scrollable area (sticky)
+- Domain dots enlarged 6px to 8px with inset box-shadow contrast ring
+
+### Changed
+- Auto-inject threshold lowered 0.72 to 0.45 for broad post-merge centroids
+- Domain discovery thresholds: MIN_MEMBERS 5 to 3, MIN_COHERENCE 0.6 to 0.3
+- Domain node size multiplier 2.5x to 1.6x (aggregate child-member sizing makes 2.5x overkill)
+- Domain nodes aggregate children's member_count for sizing (not own member_count)
+- Domains sorted by cluster count descending in navigator (most populated first)
+- Navigator badge reflects filtered view count, not raw total
+- Unarchive button hidden for 0-member clusters
+- Promote button: removed pointer-events:none from disabled state (was blocking tooltip)
+- Extract patterns prompt: domain-aware extraction replaces framework-agnostic directive
+- Optimizer prompt: precision pattern application with per-pattern relevance evaluation
+- `attempt_merge()` now reassigns Optimizations and MetaPatterns from loser to survivor
+- Linked optimizations query uses Optimization.cluster_id instead of OptimizationPattern join table
+- TopologyControls node counts computed from filteredTaxonomyTree (respects state filter)
+- Inspector clears selection on state filter tab change
+
+### Fixed
+- Auto-injected cluster IDs now included in usage_count increment (was missing from internal pipeline)
+- Coherence recomputation from actual member embeddings (cold path left values at 0.0)
+- Organic domain discovery blocked by uncomputed coherence
+- Self-referencing parent_id cycles (3 detected and repaired)
+- 28 non-domain parent relationships repaired (clusters parented under other clusters instead of domain nodes)
+- `datetime.utcnow()` replaced with `datetime.now(timezone.utc)` (deprecated Python 3.12+)
+- Domain highlight dimming preserves domain node EdgesGeometry outlines (userData.isInterClusterEdge marker)
+- Same-domain merge breaks after first merge per domain group per cycle (prevents stale-centroid reads)
+- Removed duplicate DEBUG log in increment_usage
+- Navigator pluralization fixes (1 member/cluster singular)
+- Topology test updated for removed similarity edges
+
+## v0.3.8-dev — 2026-03-29
+
+### Added
 - Column headers (Name/Members/Used/Score) above cluster family rows in ClusterNavigator
 - Mid-LOD label visibility for large clusters (5+ members) and domain nodes in topology graph
 - Domain wireframe ring (1.3x outer contour) differentiating domain hub nodes in topology
@@ -13,22 +64,6 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - Domain highlight interaction: click domain header in navigator to dim non-matching nodes in graph
 - `highlightedDomain` state and `toggleHighlightDomain()` method on cluster store
 - `setVisibleFor()` method on TopologyLabels for per-node label visibility control
-
-### Changed
-- Lowered auto-inject cosine threshold from 0.72 to 0.60 and increased candidate count from 3 to 5 for broader pattern matching
-- Enriched auto-injected patterns with structured metadata (domain, similarity score, source cluster label) in optimizer context
-- Replaced generic meta-pattern instruction in optimizer prompt with precision application block requiring per-pattern evaluation and an Applied Patterns summary section
-- Added diagnostic logging for empty embedding index and zero-match scenarios in pattern injection
-- Domain headers in ClusterNavigator use display font (Syne) at 10px/700 weight with 0.1em letter-spacing
-- Usage count badge uses conditional teal color when count > 0 (replaces uniform badge-neon styling)
-- Domain size multiplier increased from 2.0x to 2.5x in topology graph
-- Removed same-domain similarity edges from topology graph for cleaner visual hierarchy
-- Promote to Template button gated: requires 3+ members or 1+ pattern usage
-- Usage metric row in Inspector shows explanatory tooltip on hover
-
-## v0.3.8-dev — 2026-03-29
-
-### Added
 - Unified domain taxonomy — domains are now first-class taxonomy nodes discovered organically from user behavior (ADR-004)
 - `GET /api/domains` endpoint for dynamic domain palette
 - `POST /api/domains/{id}/promote` for manual cluster-to-domain promotion
@@ -50,6 +85,16 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - `trendInfo()` and `parsePrimaryDomain()` formatting utilities
 
 ### Changed
+- Lowered auto-inject cosine threshold from 0.72 to 0.60 and increased candidate count from 3 to 5 for broader pattern matching
+- Enriched auto-injected patterns with structured metadata (domain, similarity score, source cluster label) in optimizer context
+- Replaced generic meta-pattern instruction in optimizer prompt with precision application block requiring per-pattern evaluation and an Applied Patterns summary section
+- Added diagnostic logging for empty embedding index and zero-match scenarios in pattern injection
+- Domain headers in ClusterNavigator use display font (Syne) at 10px/700 weight with 0.1em letter-spacing
+- Usage count badge uses conditional teal color when count > 0 (replaces uniform badge-neon styling)
+- Domain size multiplier increased from 2.0x to 2.5x in topology graph
+- Removed same-domain similarity edges from topology graph for cleaner visual hierarchy
+- Promote to Template button gated: requires 3+ members or 1+ pattern usage
+- Usage metric row in Inspector shows explanatory tooltip on hover
 - Analyzer prompt template uses dynamic `{{known_domains}}` variable instead of hardcoded list
 - `taxonomyColor()` resolves from API-driven domain store instead of compile-time map
 - Inspector domain picker loads domains dynamically from API
