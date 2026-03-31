@@ -610,6 +610,89 @@ class TaxonomyEngine:
         except Exception as zombie_exc:
             logger.warning("Zombie cleanup failed (non-fatal): %s", zombie_exc)
 
+        # --- Stale label & pattern refresh ---
+        # When a cluster grows significantly since its last extraction,
+        # the label and meta-patterns become unrepresentative (e.g., a label
+        # generated for 2 members doesn't describe 25). Re-extract from a
+        # recent sample of the cluster's actual members.
+        refresh_growth_factor = 3  # trigger when member_count >= 3× last extraction
+        refresh_min_members = 5   # don't refresh tiny clusters
+        refresh_sample_size = 8   # representative sample for re-extraction
+        try:
+            from app.models import MetaPattern as MetaPatternModel
+            from app.services.taxonomy.family_ops import extract_meta_patterns, merge_meta_pattern
+            from app.services.taxonomy.labeling import generate_label
+
+            refreshed = 0
+            for node in active_nodes:
+                if node.state == "domain" or (node.member_count or 0) < refresh_min_members:
+                    continue
+                meta = node.cluster_metadata or {}
+                last_count = meta.get("pattern_member_count", 0)
+                if last_count > 0 and node.member_count < last_count * refresh_growth_factor:
+                    continue  # not stale enough
+
+                # Gather representative sample of recent members
+                sample_q = await db.execute(
+                    select(Optimization)
+                    .where(Optimization.cluster_id == node.id)
+                    .order_by(Optimization.created_at.desc())
+                    .limit(refresh_sample_size)
+                )
+                sample_opts = sample_q.scalars().all()
+                if len(sample_opts) < 3:
+                    continue
+
+                # Regenerate label from member intent labels
+                member_texts = [
+                    o.intent_label or (o.raw_prompt or "")[:200]
+                    for o in sample_opts
+                ]
+                new_label = await generate_label(
+                    provider=self._provider,
+                    member_texts=member_texts,
+                    model=settings.MODEL_HAIKU,
+                )
+                if new_label and new_label != "Unnamed Cluster":
+                    node.label = new_label
+
+                # Re-extract meta-patterns from sample
+                # Delete old patterns first so we get fresh ones
+                old_patterns = await db.execute(
+                    select(MetaPatternModel).where(MetaPatternModel.cluster_id == node.id)
+                )
+                for old_mp in old_patterns.scalars():
+                    await db.delete(old_mp)
+
+                for opt in sample_opts[:5]:  # extract from top 5 recent
+                    try:
+                        new_texts = await extract_meta_patterns(
+                            opt, db, self._provider, self._prompt_loader,
+                        )
+                        for text in new_texts:
+                            await merge_meta_pattern(
+                                db, node.id, text, self._embedding,
+                            )
+                    except Exception:
+                        pass  # non-fatal per-optimization
+
+                # Track extraction state
+                node.cluster_metadata = {
+                    **(node.cluster_metadata or {}),
+                    "pattern_member_count": node.member_count,
+                    "label_refreshed_at": datetime.utcnow().isoformat(),
+                }
+                refreshed += 1
+                logger.info(
+                    "Refreshed label+patterns for '%s' (members: %d→%d, old_count=%d)",
+                    node.label, last_count, node.member_count, last_count,
+                )
+
+            if refreshed:
+                await db.flush()
+        except Exception as refresh_exc:
+            logger.warning("Stale label/pattern refresh failed (non-fatal): %s", refresh_exc)
+
         # --- Domain discovery (ADR-004) ---
         # After lifecycle mutations, before quality gate.  Domain nodes have
         # state="domain" so they don't affect Q_system (computed from active
