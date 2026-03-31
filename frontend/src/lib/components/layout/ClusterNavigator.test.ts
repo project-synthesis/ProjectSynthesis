@@ -615,13 +615,14 @@ describe('ClusterNavigator', () => {
     });
   });
 
-  // ── 12. Domains sorted alphabetically ─────────────────────────────────────
+  // ── 12. Domains sorted by cluster count (descending) ──────────────────────
 
-  it('renders domain headers in alphabetical order', async () => {
+  it('renders domain headers sorted by cluster count descending', async () => {
     defaultHandlers([
       mockPatternFamily({ id: 'fam-1', domain: 'security', intent_label: 'Security patterns' }),
       mockPatternFamily({ id: 'fam-2', domain: 'backend', intent_label: 'API patterns' }),
-      mockPatternFamily({ id: 'fam-3', domain: 'frontend', intent_label: 'UI patterns' }),
+      mockPatternFamily({ id: 'fam-3', domain: 'backend', intent_label: 'API patterns 2' }),
+      mockPatternFamily({ id: 'fam-4', domain: 'frontend', intent_label: 'UI patterns' }),
     ]);
     render(ClusterNavigator);
 
@@ -631,8 +632,8 @@ describe('ClusterNavigator', () => {
 
     const domainHeaders = screen.getAllByText(/^(backend|frontend|security)$/);
     const labels = domainHeaders.map(el => el.textContent);
-    const sorted = [...labels].sort();
-    expect(labels).toEqual(sorted);
+    // backend has 2 clusters → first; frontend and security have 1 each
+    expect(labels[0]).toBe('backend');
   });
 
   // ── 13. State filter tabs ─────────────────────────────────────────────────

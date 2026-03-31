@@ -21,7 +21,6 @@
   // Derive families directly from the store's taxonomy tree (already in memory)
   const allFamilies = $derived(clustersStore.taxonomyTree);
   const families = $derived(allFamilies.slice(0, pageLimit));
-  const totalFamilies = $derived(allFamilies.filter(f => f.state !== 'domain').length);
   const hasMore = $derived(pageLimit < allFamilies.length);
   const loaded = $derived(!clustersStore.taxonomyLoading || allFamilies.length > 0);
   const error = $derived(clustersStore.taxonomyError);
@@ -72,11 +71,15 @@
     families.filter(f => {
       if (f.state === 'domain') return false;
       if (showTemplates && f.state === 'template') return false;
-      // Hide zombie clusters (no members AND no score data)
-      if (f.member_count === 0 && f.avg_score == null) return false;
+      // Hide orphaned clusters — 0 members means all optimizations were
+      // reassigned by cold-path. Keep only if patterns are actively used.
+      if (f.member_count === 0 && f.usage_count === 0) return false;
       return !stateFilter || f.state === stateFilter;
     })
   );
+
+  // Badge count reflects the filtered view (what the user actually sees)
+  const totalFamilies = $derived(filteredFamilies.length);
 
   // Group filtered families by primary domain (ignores qualifier from "primary: qualifier")
   let grouped = $derived(
@@ -88,7 +91,10 @@
     }, {})
   );
 
-  let domains = $derived(Object.keys(grouped).sort());
+  // Sort domains by cluster count (descending) — most populated first
+  let domains = $derived(
+    Object.keys(grouped).sort((a, b) => grouped[b].length - grouped[a].length)
+  );
 
   // Ensure tree is loaded on mount (idempotent — store uses generation counter)
   let _mountLoaded = $state(false);
@@ -231,7 +237,7 @@
       <p class="empty-note" style="color: var(--color-neon-red);">{error}</p>
     {:else if !loaded}
       <p class="empty-note">Loading...</p>
-    {:else if totalFamilies === 0}
+    {:else if totalFamilies === 0 && templateClusters.length === 0}
       <p class="empty-note">Optimize your first prompt to start building your pattern library.</p>
     {:else}
       <!-- Proven Templates section -->
