@@ -262,6 +262,45 @@ async def attempt_merge(
         for family in loser_families:
             family.parent_id = survivor.id
 
+        # Reassign loser's Optimizations to survivor.
+        from sqlalchemy import update
+
+        from app.models import Optimization
+
+        opt_result = await db.execute(
+            update(Optimization)
+            .where(Optimization.cluster_id == loser.id)
+            .values(cluster_id=survivor.id)
+        )
+        if opt_result.rowcount:
+            logger.info(
+                "merge: reassigned %d optimizations from '%s' to '%s'",
+                opt_result.rowcount, loser.label, survivor.label,
+            )
+
+        # Move loser's MetaPatterns to survivor (deduplicate via embedding similarity).
+        from app.models import MetaPattern
+
+        loser_patterns = (await db.execute(
+            select(MetaPattern).where(MetaPattern.cluster_id == loser.id)
+        )).scalars().all()
+        if loser_patterns:
+            from app.services.embedding_service import EmbeddingService
+            from app.services.taxonomy.family_ops import merge_meta_pattern
+
+            embedding_svc = EmbeddingService()
+            moved = 0
+            for mp in loser_patterns:
+                try:
+                    await merge_meta_pattern(
+                        db, survivor.id, mp.pattern_text, embedding_svc,
+                    )
+                    moved += 1
+                except Exception:
+                    pass  # non-fatal per pattern
+                await db.delete(mp)
+            logger.info("merge: moved %d meta-patterns to survivor", moved)
+
         await db.flush()
         logger.info(
             "merge: '%s' (id=%s) absorbed '%s' (id=%s) → %d members",

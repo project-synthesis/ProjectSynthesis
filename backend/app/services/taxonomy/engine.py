@@ -693,6 +693,110 @@ class TaxonomyEngine:
         except Exception as refresh_exc:
             logger.warning("Stale label/pattern refresh failed (non-fatal): %s", refresh_exc)
 
+        # --- Same-domain duplicate merge ---
+        # Two signals: (A) identical labels within a domain + centroid sanity >0.40,
+        # (B) same-domain centroid similarity >= 0.65 (lower than global 0.78 because
+        # siblings are semantically related by definition).
+        same_domain_merge_threshold = 0.65
+        label_merge_sanity = 0.40
+        try:
+            from app.services.taxonomy.lifecycle import attempt_merge
+            from app.utils.text_cleanup import parse_domain
+
+            # Reload active nodes (may have changed from stale refresh)
+            active_q = await db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.state == "active",
+                )
+            )
+            current_active = list(active_q.scalars().all())
+
+            # Group by primary domain
+            domain_groups: dict[str, list[PromptCluster]] = {}
+            for node in current_active:
+                primary, _ = parse_domain(node.domain or "general")
+                domain_groups.setdefault(primary, []).append(node)
+
+            domain_merges = 0
+            for domain, siblings in domain_groups.items():
+                if len(siblings) < 2:
+                    continue
+
+                # Signal A: identical labels
+                label_groups: dict[str, list[PromptCluster]] = {}
+                for s in siblings:
+                    label_groups.setdefault(s.label, []).append(s)
+                for label, group in label_groups.items():
+                    if len(group) < 2:
+                        continue
+                    # Sort by member_count descending — biggest survives
+                    group.sort(key=lambda n: n.member_count or 0, reverse=True)
+                    survivor = group[0]
+                    for loser in group[1:]:
+                        # Centroid sanity check
+                        try:
+                            emb_a = np.frombuffer(survivor.centroid_embedding, dtype=np.float32)
+                            emb_b = np.frombuffer(loser.centroid_embedding, dtype=np.float32)
+                            sim = float(np.dot(emb_a, emb_b) / (np.linalg.norm(emb_a) * np.linalg.norm(emb_b) + 1e-9))
+                        except (ValueError, TypeError):
+                            sim = 0.0
+                        if sim >= label_merge_sanity:
+                            merged = await attempt_merge(db, survivor, loser, self._warm_path_age)
+                            if merged:
+                                domain_merges += 1
+                                logger.info(
+                                    "Same-domain label merge: '%s' absorbed duplicate (sim=%.2f, domain=%s)",
+                                    label, sim, domain,
+                                )
+                                # Update embedding index
+                                winner_centroid = np.frombuffer(merged.centroid_embedding, dtype=np.float32)
+                                await self._embedding_index.upsert(merged.id, winner_centroid)
+                                await self._embedding_index.remove(loser.id)
+
+                # Signal B: high centroid similarity within domain
+                # (skip pairs already merged via Signal A)
+                remaining = [s for s in siblings if s.state == "active"]
+                if len(remaining) >= 2:
+                    for i in range(len(remaining)):
+                        for j in range(i + 1, len(remaining)):
+                            try:
+                                emb_i = np.frombuffer(
+                                    remaining[i].centroid_embedding, dtype=np.float32,
+                                )
+                                emb_j = np.frombuffer(
+                                    remaining[j].centroid_embedding, dtype=np.float32,
+                                )
+                                denom = np.linalg.norm(emb_i) * np.linalg.norm(emb_j) + 1e-9
+                                sim = float(np.dot(emb_i, emb_j) / denom)
+                            except (ValueError, TypeError):
+                                continue
+                            both_active = (
+                                remaining[i].state == "active"
+                                and remaining[j].state == "active"
+                            )
+                            if sim >= same_domain_merge_threshold and both_active:
+                                ni, nj = remaining[i], remaining[j]
+                                big = ni if (ni.member_count or 0) >= (nj.member_count or 0) else nj
+                                small = nj if big is ni else ni
+                                merged = await attempt_merge(db, big, small, self._warm_path_age)
+                                if merged:
+                                    domain_merges += 1
+                                    logger.info(
+                                        "Same-domain embedding merge: '%s' + '%s' (sim=%.2f, domain=%s)",
+                                        big.label, small.label, sim, domain,
+                                    )
+                                    winner_centroid = np.frombuffer(merged.centroid_embedding, dtype=np.float32)
+                                    await self._embedding_index.upsert(merged.id, winner_centroid)
+                                    await self._embedding_index.remove(small.id)
+
+            if domain_merges:
+                ops_accepted += domain_merges
+                ops_attempted += domain_merges
+                logger.info("Same-domain merge: %d merges completed", domain_merges)
+                await db.flush()
+        except Exception as merge_exc:
+            logger.warning("Same-domain merge failed (non-fatal): %s", merge_exc)
+
         # --- Domain discovery (ADR-004) ---
         # After lifecycle mutations, before quality gate.  Domain nodes have
         # state="domain" so they don't affect Q_system (computed from active
