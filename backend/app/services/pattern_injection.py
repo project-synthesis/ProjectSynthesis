@@ -63,10 +63,13 @@ async def auto_inject_patterns(
         return [], []
 
     prompt_embedding = await embedding_svc.aembed_single(raw_prompt)
-    matches = embedding_index.search(prompt_embedding, k=5, threshold=0.60)
+    # Threshold 0.45: broad clusters (post-cold-path merge) have averaged
+    # centroids that score ~0.45-0.55 against specific prompts. The
+    # optimizer prompt's precision instructions handle relevance filtering.
+    matches = embedding_index.search(prompt_embedding, k=5, threshold=0.45)
     if not matches:
         logger.info(
-            "No pattern matches above threshold (0.60). trace_id=%s",
+            "No pattern matches above threshold (0.45). trace_id=%s",
             trace_id,
         )
         return [], []
