@@ -484,7 +484,9 @@ class TaxonomyEngine:
                                     for child in new_children:
                                         centroid_emb = np.frombuffer(child.centroid_embedding, dtype=np.float32)
                                         await self._embedding_index.upsert(child.id, centroid_emb)
-                                    ops_accepted += 1
+                                    # Commit leaf split independently of Q_system gate.
+                                    # The dynamic threshold IS the quality gate for splits.
+                                    await db.commit()
                                     operations_log.append({
                                         "type": "leaf_split",
                                         "parent_id": node.id,
