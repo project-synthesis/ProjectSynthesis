@@ -795,6 +795,10 @@ class PipelineOrchestrator:
 
             await db.commit()
 
+            # Include auto-injected cluster IDs in usage propagation
+            if auto_injected_cluster_ids:
+                applied_cluster_ids.update(auto_injected_cluster_ids)
+
             # Propagate usage counts AFTER successful commit (Spec 7.8)
             # Use a fresh session — the original db session may be expired post-commit
             if applied_cluster_ids and taxonomy_engine:
