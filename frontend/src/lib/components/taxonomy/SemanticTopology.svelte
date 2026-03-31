@@ -221,6 +221,7 @@
         opacity: 0.4,
       });
       const lines = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+      lines.userData = { isInterClusterEdge: true };
       renderer.scene.add(lines);
     }
 
@@ -415,9 +416,9 @@
       }
     }
 
-    // Dim edges
+    // Dim inter-cluster edges only (preserve domain node EdgesGeometry outlines)
     renderer.scene.traverse((obj) => {
-      if (obj instanceof THREE.LineSegments) {
+      if (obj instanceof THREE.LineSegments && obj.userData?.isInterClusterEdge) {
         const mat = obj.material as THREE.LineBasicMaterial;
         mat.opacity = highlightDomain != null ? 0.1 : 0.4;
       }

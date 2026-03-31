@@ -118,7 +118,6 @@ button:active, [role="button"]:active {
 button:disabled, [role="button"][aria-disabled="true"] {
   opacity: 0.4;
   cursor: not-allowed;
-  pointer-events: none;
 }
 
 input, textarea, select {
