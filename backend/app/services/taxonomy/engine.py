@@ -368,13 +368,134 @@ class TaxonomyEngine:
             dynamic_floor = SPLIT_COHERENCE_FLOOR + max(0, math.log2(max(member_count, 6) / 6)) * 0.05
             if coherence < dynamic_floor and member_count >= SPLIT_MIN_MEMBERS:
                 ops_attempted += 1
+                logger.info(
+                    "Split candidate: '%s' (members=%d, coherence=%.3f, threshold=%.3f)",
+                    node.label, member_count, coherence, dynamic_floor,
+                )
                 # Gather families assigned to this node
                 fam_q = await db.execute(
                     select(PromptCluster).where(
-                        PromptCluster.parent_id == node.id
+                        PromptCluster.parent_id == node.id,
+                        PromptCluster.state != "domain",
                     )
                 )
                 node_families = list(fam_q.scalars().all())
+
+                # For leaf clusters (no child clusters), gather member
+                # Optimization embeddings directly for HDBSCAN splitting.
+                if len(node_families) < SPLIT_MIN_MEMBERS and member_count >= SPLIT_MIN_MEMBERS:
+                    opt_emb_q = await db.execute(
+                        select(Optimization.id, Optimization.embedding).where(
+                            Optimization.cluster_id == node.id,
+                            Optimization.embedding.isnot(None),
+                        )
+                    )
+                    opt_rows = opt_emb_q.all()
+                    if len(opt_rows) >= SPLIT_MIN_MEMBERS:
+                        child_embs = []
+                        child_fam_ids = []
+                        for opt_id, emb_bytes in opt_rows:
+                            try:
+                                emb = np.frombuffer(emb_bytes, dtype=np.float32).copy()
+                                child_embs.append(emb)
+                                child_fam_ids.append(opt_id)
+                            except (ValueError, TypeError):
+                                continue
+
+                        if len(child_embs) >= SPLIT_MIN_MEMBERS:
+                            split_clusters = batch_cluster(
+                                child_embs, min_cluster_size=3
+                            )
+                            if split_clusters.n_clusters >= 2:
+                                logger.info(
+                                    "Leaf split: HDBSCAN found %d sub-clusters from %d optimizations",
+                                    split_clusters.n_clusters, len(child_embs),
+                                )
+                                from app.services.taxonomy.coloring import generate_color
+                                from app.services.taxonomy.labeling import generate_label
+
+                                parent_domain = node.domain or "general"
+                                parent_id_for_children = node.parent_id or node.id
+                                new_children = []
+                                for cid in range(split_clusters.n_clusters):
+                                    mask = split_clusters.labels == cid
+                                    group_opt_ids = [child_fam_ids[i] for i in range(len(child_fam_ids)) if mask[i]]
+                                    group_embs = [child_embs[i] for i in range(len(child_embs)) if mask[i]]
+                                    if not group_embs:
+                                        continue
+
+                                    centroid = (
+                                        split_clusters.centroids[cid]
+                                        if cid < len(split_clusters.centroids) else None
+                                    )
+                                    if centroid is None:
+                                        from app.services.taxonomy.clustering import l2_normalize_1d
+                                        centroid = l2_normalize_1d(
+                                            np.mean(np.stack(group_embs), axis=0).astype(np.float32)
+                                        )
+                                    from app.services.taxonomy.clustering import compute_pairwise_coherence
+                                    child_coherence = compute_pairwise_coherence(group_embs)
+
+                                    # Generate label from member intent labels
+                                    opt_labels_q = await db.execute(
+                                        select(Optimization.intent_label).where(
+                                            Optimization.id.in_(group_opt_ids)
+                                        ).limit(10)
+                                    )
+                                    member_texts = [r[0] for r in opt_labels_q.all() if r[0]]
+                                    label = await generate_label(
+                                        provider=self._provider,
+                                        member_texts=member_texts,
+                                        model=settings.MODEL_HAIKU,
+                                    )
+
+                                    child_node = PromptCluster(
+                                        label=label,
+                                        centroid_embedding=centroid.astype(np.float32).tobytes(),
+                                        member_count=len(group_opt_ids),
+                                        coherence=child_coherence,
+                                        state="active",
+                                        domain=parent_domain,
+                                        parent_id=parent_id_for_children,
+                                        color_hex=generate_color(0.0, 0.0, 0.0),
+                                    )
+                                    db.add(child_node)
+                                    await db.flush()
+
+                                    # Reassign optimizations to the new child cluster
+                                    from sqlalchemy import update as sa_update
+                                    await db.execute(
+                                        sa_update(Optimization)
+                                        .where(Optimization.id.in_(group_opt_ids))
+                                        .values(cluster_id=child_node.id)
+                                    )
+                                    new_children.append(child_node)
+                                    logger.info(
+                                        "  Created sub-cluster '%s' (%d members, coherence=%.3f)",
+                                        label, len(group_opt_ids), child_coherence,
+                                    )
+
+                                if len(new_children) >= 2:
+                                    # Archive the original mega-cluster
+                                    node.state = "archived"
+                                    node.archived_at = datetime.now(timezone.utc)
+                                    node.member_count = 0
+                                    await self._embedding_index.remove(node.id)
+                                    for child in new_children:
+                                        centroid_emb = np.frombuffer(child.centroid_embedding, dtype=np.float32)
+                                        await self._embedding_index.upsert(child.id, centroid_emb)
+                                    ops_accepted += 1
+                                    operations_log.append({
+                                        "type": "leaf_split",
+                                        "parent_id": node.id,
+                                        "children": [c.id for c in new_children],
+                                    })
+                                    logger.info(
+                                        "Leaf split complete: '%s' → %d sub-clusters",
+                                        node.label, len(new_children),
+                                    )
+                                    continue  # skip the family-based split below
+
                 if len(node_families) >= SPLIT_MIN_MEMBERS:
                     child_embs = []
                     child_fam_ids = []
