@@ -557,6 +557,21 @@ class TaxonomyEngine:
                     except Exception:
                         pass  # non-fatal, skip this node
 
+            # Reconcile domain node member_counts (count of non-archived child clusters)
+            domain_q = await db.execute(
+                select(PromptCluster).where(PromptCluster.state == "domain")
+            )
+            for domain_node in domain_q.scalars().all():
+                child_count = (await db.execute(
+                    select(sa_func.count()).where(
+                        PromptCluster.parent_id == domain_node.id,
+                        PromptCluster.state.notin_(["domain", "archived"]),
+                    )
+                )).scalar() or 0
+                if domain_node.member_count != child_count:
+                    domain_node.member_count = child_count
+                    reconciled += 1
+
             if reconciled or coherence_updated:
                 logger.info(
                     "Reconciled %d member_counts, recomputed %d coherence values",
