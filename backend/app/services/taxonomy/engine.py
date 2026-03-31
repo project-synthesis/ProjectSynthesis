@@ -589,7 +589,7 @@ class TaxonomyEngine:
         try:
             zombie_count = 0
             for node in active_nodes:
-                if (node.member_count or 0) == 0 and node.avg_score is None:
+                if (node.member_count or 0) == 0 and node.avg_score is None and (node.usage_count or 0) == 0:
                     node.state = "archived"
                     node.archived_at = datetime.utcnow()
                     zombie_count += 1
@@ -2092,6 +2092,36 @@ class TaxonomyEngine:
                 f"which is not a domain node"
             )
 
+        # 6. Non-domain clusters must only have domain node parents
+        non_domain_parent_q = await db.execute(
+            select(PromptCluster.id, PromptCluster.label, PromptCluster.parent_id).where(
+                PromptCluster.state != "domain",
+                PromptCluster.parent_id.isnot(None),
+            )
+        )
+        domain_ids = {n.id for n in (await db.execute(
+            select(PromptCluster.id).where(PromptCluster.state == "domain")
+        )).scalars()}
+        for row in non_domain_parent_q:
+            if row.parent_id not in domain_ids:
+                violations.append(
+                    f"Non-domain parent: '{row.label}' (id={row.id[:8]}) "
+                    f"has parent {row.parent_id[:8]} which is not a domain node"
+                )
+
+        # 7. Archived clusters should not have active usage
+        archived_used_q = await db.execute(
+            select(PromptCluster.id, PromptCluster.label, PromptCluster.usage_count).where(
+                PromptCluster.state == "archived",
+                PromptCluster.usage_count > 0,
+            )
+        )
+        for row in archived_used_q:
+            violations.append(
+                f"Archived with usage: '{row.label}' (id={row.id[:8]}) "
+                f"has usage_count={row.usage_count}"
+            )
+
         if violations:
             for v in violations:
                 logger.error("Tree integrity violation: %s", v)
@@ -2159,6 +2189,63 @@ class TaxonomyEngine:
                 mismatch_result.rowcount,
             )
             repaired += mismatch_result.rowcount
+
+        # Repair self-referencing parents → re-parent under matching domain node
+        self_ref_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.parent_id == PromptCluster.id,
+            )
+        )
+        for node in self_ref_q.scalars():
+            domain_label = (node.domain or "general").lower().split(":")[0].strip()
+            domain_node = (await db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.state == "domain",
+                    func.lower(PromptCluster.label) == domain_label,
+                )
+            )).scalar()
+            if domain_node and domain_node.id != node.id:
+                node.parent_id = domain_node.id
+                repaired += 1
+                logger.info("Repaired self-ref parent: '%s' → domain '%s'", node.label, domain_label)
+
+        # Repair non-domain clusters with non-domain parents
+        domain_id_map: dict[str, str] = {}
+        for dn in (await db.execute(
+            select(PromptCluster.id, PromptCluster.label).where(PromptCluster.state == "domain")
+        )):
+            domain_id_map[dn.label.lower()] = dn.id
+
+        non_domain_parent_q2 = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state != "domain",
+                PromptCluster.parent_id.isnot(None),
+                PromptCluster.parent_id.notin_(list(domain_id_map.values())),
+            )
+        )
+        reparented = 0
+        for node in non_domain_parent_q2.scalars():
+            domain_label = (node.domain or "general").lower().split(":")[0].strip()
+            target = domain_id_map.get(domain_label) or domain_id_map.get("general")
+            if target and target != node.parent_id:
+                node.parent_id = target
+                reparented += 1
+        if reparented:
+            repaired += reparented
+            logger.info("Repaired %d non-domain parent relationships", reparented)
+
+        # Unarchive clusters with active usage
+        archived_used = (await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state == "archived",
+                PromptCluster.usage_count > 0,
+            )
+        )).scalars().all()
+        for node in archived_used:
+            node.state = "active"
+            node.archived_at = None
+            repaired += 1
+            logger.info("Unarchived cluster with usage: '%s' (usage=%d)", node.label, node.usage_count)
 
         # NOTE: do NOT commit here — the warm path handles commit/rollback
         # after the Q_system non-regression gate.  Committing prematurely
