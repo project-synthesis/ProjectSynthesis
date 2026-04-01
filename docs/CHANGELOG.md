@@ -10,6 +10,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - `interpolate_position()` in `projection.py` — cosine-weighted sibling interpolation for UMAP coordinates between cold path runs
 - Hot-path position interpolation: new clusters created by `assign_cluster()` inherit interpolated UMAP positions from positioned siblings in the same domain
 - Warm-path position interpolation: child clusters from `attempt_split()` placed at parent position + random 2.0-unit radial offset
+- Visual quality encoding in 3D topology: wireframe brightness mapped to cluster coherence [0,1], fill color saturation mapped to avg_score [1,10], with legend tooltip in controls
 
 ## v0.3.10-dev — 2026-04-01
 
