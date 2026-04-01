@@ -1,266 +1,140 @@
 # Backend — Internal Reference
 
-Low-level patterns and invariants for `backend/app/`. For high-level architecture, services list, and API surface, see the root `CLAUDE.md`.
+Everything backend developers need. For project overview, see root `CLAUDE.md`. **Keep this file under 200 lines.**
 
-## Routing system internals
+## Layer rules
 
-### Process-level singleton pattern
+- `routers/` → `services/` → `models/` only. Services must never import from routers.
+- `PromptLoader.load()` for static templates (no variables). `PromptLoader.render()` for templates with `{{variables}}`.
+- `AnalysisResult.task_type` is a `Literal`: `coding`, `writing`, `analysis`, `creative`, `data`, `system`, `general`. `selected_strategy` is a plain `str` validated at runtime against `prompts/strategies/`. `intent_label` (3-6 words) and `domain` (resolved via `DomainResolver`) default to `"general"`.
 
-FastMCP's Streamable HTTP transport calls `Server.run()` per client session, which re-enters the MCP lifespan each time. All singletons (RoutingManager, provider, taxonomy engine, context service) are initialized once via a `_process_initialized` module-level flag in `mcp_server.py`. The lifespan exit path has **no cleanup** — singletons survive all sessions and are reclaimed on process exit.
+## Key services (`app/services/`)
 
-**Critical invariants:**
-- `_process_initialized` guard relies on asyncio cooperative scheduling (no preemption between check and assignment). If the server were ever embedded in a threaded host, a `threading.Lock` would be needed.
-- `_clear_stale_session()` runs in `__main__` (process startup), never in the lifespan. Clearing per-session would race with the middleware writing the session file.
-- Per-session lifespan exit must never call `_shared.set_routing(None)` or `_shared.set_taxonomy_engine(None)` — that would destroy state set by other sessions.
+**Pipeline**: `pipeline.py` (3-phase orchestrator), `sampling_pipeline.py` (MCP sampling — full parity), `passthrough.py` (shared passthrough assembly), `pipeline_constants.py` (shared constants: `CONFIDENCE_GATE=0.7`, `FALLBACK_STRATEGY="auto"`)
+**Analysis**: `heuristic_analyzer.py` (zero-LLM classifier, 6-layer), `context_enrichment.py` (unified `enrich()` for all tiers → frozen `EnrichedContext`), `context_resolver.py` (per-source char caps, untrusted wrapping)
+**Scoring**: `heuristic_scorer.py` (5-dimension heuristics, `score_prompt()` facade, clamped [1.0, 10.0]), `score_blender.py` (hybrid LLM+heuristic, z-score normalization, divergence detection)
+**Optimization**: `optimization_service.py` (CRUD, sort/filter, `VALID_SORT_COLUMNS`), `refinement_service.py` (sessions, branching, rollback, suggestions)
+**Prompts & Strategies**: `prompt_loader.py` (template loading, startup validation), `strategy_loader.py` (file discovery, YAML frontmatter, hot-reload), `file_watcher.py` (watchfiles.awatch, publishes `strategy_changed`)
+**Routing**: `routing.py` (RoutingManager singleton, `resolve_route()` pure function — see Routing Internals below)
+**Taxonomy**: `taxonomy/` package (see Taxonomy Engine below)
+**Workspace**: `workspace_intelligence.py` (manifest-based stack detection + deep scanning), `roots_scanner.py` (agent guidance file discovery, SHA256 dedup), `codebase_explorer.py` (semantic retrieval + Haiku synthesis, SHA cache), `explore_cache.py` (TTL+LRU), `repo_index_service.py` (background indexing, `query_curated_context()`)
+**Embeddings**: `embedding_service.py` (singleton `all-MiniLM-L6-v2`, 384-dim), `embedding_index.py` (numpy index, O(1) upsert, batch cosine)
+**Domain**: `domain_resolver.py` (cached DB lookup, replaces `VALID_DOMAINS`), `domain_signal_loader.py` (keyword signals from domain metadata)
+**Patterns**: `pattern_injection.py` (`auto_inject_patterns()` from embedding index), `prompt_lifecycle.py` (state promotion, quality pruning, usage decay, orphan backfill)
+**Infrastructure**: `event_bus.py` (in-process pub/sub), `event_notification.py` (cross-process HTTP POST), `trace_logger.py` (per-phase JSONL, daily rotation), `mcp_session_file.py` (read/write/staleness), `mcp_proxy.py` (REST→MCP sampling proxy)
+**Feedback**: `feedback_service.py` (CRUD + adaptation update), `adaptation_tracker.py` (strategy affinity, degenerate detection)
+**GitHub**: `github_service.py` (Fernet encrypt/decrypt), `github_client.py` (raw API, explicit token param)
+**Preferences**: `preferences.py` (file-based JSON, frozen snapshot per pipeline run, effort levels: `low`|`medium`|`high`|`max`)
 
-### Tier decision — `resolve_route()`
+## Model configuration
 
-Pure function in `services/routing.py`. No I/O, no side effects, deterministic.
+Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MODEL_OPUS` (`claude-opus-4-6`), `MODEL_HAIKU` (`claude-haiku-4-5`). Never hardcode — use `PreferencesService.resolve_model(phase, snapshot)`.
 
-```
-Input:  RoutingState (frozen dataclass) + RoutingContext (caller, preferences)
-Output: RoutingDecision (tier, provider, reason, degraded_from)
-```
+## Providers (`app/providers/`)
 
-Priority chain (first match wins):
+- `base.py` — `LLMProvider` ABC: `complete_parsed()`, `complete_parsed_streaming()`, `thinking_config()`, `call_provider_with_retry()`
+- `detector.py` — auto-selects: Claude CLI → Anthropic API. Detected **once at startup**, stored on `app.state.routing`
+- `claude_cli.py` — CLI subprocess (zero marginal cost). Gates `--effort` for Haiku
+- `anthropic_api.py` — SDK with prompt caching (`cache_control: ephemeral`), streaming, `max_retries=0` (app-level retry only)
+
+## Routers (`app/routers/`)
+
+| Router | Endpoints |
+|--------|-----------|
+| `optimize.py` | `POST /api/optimize` (SSE), `GET /api/optimize/{trace_id}` |
+| `history.py` | `GET /api/history` (sort/filter, pagination envelope) |
+| `feedback.py` | `POST /api/feedback`, `GET /api/feedback?optimization_id=X` |
+| `refinement.py` | `POST /api/refine` (SSE), `GET /api/refine/{id}/versions`, `POST /api/refine/{id}/rollback` |
+| `providers.py` | `GET /api/providers`, `GET/PATCH/DELETE /api/provider/api-key` |
+| `preferences.py` | `GET/PATCH /api/preferences` |
+| `strategies.py` | `GET /api/strategies`, `GET /api/strategies/{name}`, `PUT /api/strategies/{name}` |
+| `settings.py` | `GET /api/settings` (read-only) |
+| `github_auth.py` | OAuth: login, callback, me, logout |
+| `github_repos.py` | `GET /api/repos`, link, linked, unlink |
+| `health.py` | `GET /api/health` (provider, tiers, scores, errors, domain_count) |
+| `events.py` | `GET /api/events` (SSE), `POST /api/events/_publish` (cross-process) |
+| `domains.py` | `GET /api/domains`, `POST /api/domains/{id}/promote` |
+| `clusters.py` | CRUD, match, tree, stats, templates, recluster. Legacy 301 for `/api/patterns/*`, `/api/taxonomy/*` |
+
+Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (in-memory via `limits`).
+
+## Data models (`app/models.py`)
+
+- `Optimization` — raw/optimized prompt, scores, clustering info, domain, per-phase model IDs
+- `PromptCluster` — UUID PK, self-join `parent_id`, L2-normalized centroid (384-dim), lifecycle state (`candidate`|`active`|`mature`|`template`|`archived`|`domain`), metrics, `cluster_metadata` JSON
+- `TaxonomySnapshot` — audit trail (trigger, Q metrics, operation log, tree_state)
+- `MetaPattern` — reusable techniques (`embedding`, `pattern_text`, `cluster_id` FK)
+- `OptimizationPattern` — join: Optimization→PromptCluster with similarity + relationship type
+- `Feedback`, `StrategyAffinity`, `RefinementBranch`, `RefinementTurn`, `GitHubToken`, `LinkedRepo`, `RepoFileIndex`, `AuditLog`
+
+## Pipeline architecture
+
+- **3 phases**: analyze → optimize → score. Each is an independent LLM call with fresh context. Orchestrated by `pipeline.py`
+- **Streaming**: optimize/refine use `messages.stream()` to prevent HTTP timeouts (up to 128K tokens)
+- **Explore**: runs when GitHub repo linked AND `enable_explore=True`. Semantic retrieval + single-shot Haiku synthesis
+- **Scoring**: skippable via `enable_scoring` preference (lean mode = 2 LLM calls). A/B randomized presentation + hybrid scoring
+- **Hybrid scoring**: LLM + heuristic blended with dimension weights (structure 50%, conciseness/specificity 40%, clarity 30%, faithfulness 20%). Z-score normalization when ≥10 samples. Divergence flags at >2.5pt gap. Passthrough clamped [1.0, 10.0], excluded from z-score distribution
+- **Passthrough**: `prepare_optimization` assembles prompt → external LLM processes → `save_result` persists with heuristic-only scoring
+
+## Routing internals
+
+Process-level singleton `RoutingManager`. `resolve_route()` is a pure function (no I/O):
 
 | Priority | Tier | Condition | Degrade path |
 |----------|------|-----------|--------------|
 | 1 | `passthrough` | `force_passthrough=True` | none |
-| 2 | `sampling` | `force_sampling=True` + MCP caller + sampling capable + connected | internal, then passthrough |
-| 3 | `internal` | Provider detected (CLI or API) | none |
-| 4 | `sampling` | MCP caller + sampling capable + connected (auto) | passthrough |
+| 2 | `sampling` | `force_sampling=True` + MCP caller + sampling capable | → internal → passthrough |
+| 3 | `internal` | Provider detected | none |
+| 4 | `sampling` | MCP caller + sampling capable (auto) | → passthrough |
 | 5 | `passthrough` | Fallback | none |
 
-**Caller gating:** REST callers (`caller="rest"`) never reach sampling tiers (2 or 4). Only MCP tool invocations (`caller="mcp"`) can route to sampling because the sampling request must flow back through the MCP session to the IDE.
+REST callers never reach sampling tiers — only MCP tool invocations can route to sampling.
 
-### RoutingState fields
+**Singleton pattern**: all singletons guarded by `_process_initialized` in `mcp_server.py`. Lifespan exit has **no cleanup** — singletons survive all sessions. `_clear_stale_session()` runs at process startup only.
 
-| Field | Type | Set by | Semantics |
-|-------|------|--------|-----------|
-| `provider` | `LLMProvider \| None` | `set_provider()` at startup, API key hot-reload | Never persisted — re-detected each restart |
-| `sampling_capable` | `bool \| None` | `on_mcp_initialize()`, `on_sampling_disconnect()`, `on_mcp_disconnect()` | `None` = unknown/stale, treated as `False` |
-| `mcp_connected` | `bool` | `on_mcp_initialize()`, `on_mcp_activity()`, disconnect methods | General MCP connection (any client) |
-| `last_activity` | `datetime \| None` | `on_mcp_initialize()`, `on_mcp_activity()` | Only sampling clients refresh this |
+**Disconnect signals**: `on_mcp_disconnect()` (all SSE closed → clears both `mcp_connected` + `sampling_capable`) vs `on_sampling_disconnect()` (sampling SSE closed, non-sampling remain → clears only `sampling_capable`). Both persist to `mcp_session.json` and broadcast `routing_state_changed`.
 
-### State transitions
+**Middleware** (`_CapabilityDetectionMiddleware`): intercepts `initialize` JSON-RPC. Dual-layer guard prevents non-sampling clients from overwriting `sampling_capable=True`: primary check on RoutingManager state + secondary on `_sampling_sse_sessions` set. Activity tracking: sampling clients refresh `last_activity`; all clients keep session file fresh.
 
-```
-                    on_mcp_initialize(True)
-    [disconnected] ──────────────────────────> [sampling connected]
-         ^                                           │
-         │ on_mcp_disconnect()                       │ on_sampling_disconnect()
-         │ (all SSE closed)                          │ (bridge SSE closed, CC remains)
-         │                                           v
-         └────────────── on_mcp_disconnect() ── [non-sampling connected]
-                         (CC also leaves)        sampling_capable=None
-                                                 mcp_connected=True
-```
+**Disconnect checker**: 30s poll. Connected mode: check `last_activity` staleness (>60s), read `mcp_session.json` before disconnecting. Disconnected mode: poll file for reconnection.
 
-### Disconnect signals — two distinct methods
-
-| Method | Trigger | Clears `sampling_capable` | Clears `mcp_connected` | When |
-|--------|---------|---------------------------|------------------------|------|
-| `on_mcp_disconnect()` | Last SSE stream of ANY kind closes | Yes (→ `None`) | Yes (→ `False`) | All clients gone |
-| `on_sampling_disconnect()` | Last SAMPLING SSE closes, but non-sampling SSEs remain | Yes (→ `None`) | No (stays `True`) | Bridge leaves, Claude Code stays |
-
-Both persist to `mcp_session.json` and broadcast `routing_state_changed`.
-
-### Middleware — `_CapabilityDetectionMiddleware`
-
-Class-level state on the ASGI middleware (survives RoutingManager lifecycle):
-
-| Attribute | Type | Purpose |
-|-----------|------|---------|
-| `_sampling_session_ids` | `set[str]` | Session IDs that declared `sampling` in their `initialize` |
-| `_sampling_sse_sessions` | `set[str]` | Subset with active SSE streams (proof of live connection) |
-| `_active_sse_streams` | `int` | Total SSE count across all clients |
-| `_last_activity_write` | `float` | Monotonic timestamp for 10s session-file write throttle |
-
-**`_inspect_initialize` guard logic** (prevents non-sampling clients from overwriting sampling state):
-
-```
-if sampling=False:
-    1. Check routing.state.sampling_capable is True → block (primary)
-    2. Check _sampling_sse_sessions is non-empty  → block (defense in depth)
-    3. Neither → allow on_mcp_initialize(False)
-if sampling=True:
-    Always allow on_mcp_initialize(True)
-```
-
-The secondary check (step 2) covers the brief startup race window before the RoutingManager is fully populated, using class-level SSE tracking that exists independently of the RoutingManager.
-
-**Activity tracking rules:**
-- `_touch_routing_activity()` — sampling clients ONLY (keeps routing `last_activity` fresh)
-- `_touch_session_file()` — ALL clients (keeps `mcp_session.json` fresh for disconnect checker fallback)
-
-### Cross-process communication
-
-```
-MCP server RoutingManager
-  → _broadcast_state_change()
-    → local EventBus.publish("routing_state_changed")
-    → _cross_process_notify() → asyncio.create_task(notify_event_bus())
-      → HTTP POST /api/events/_publish
-        → FastAPI backend RoutingManager.sync_from_event()
-          → local EventBus.publish("routing_state_changed")
-            → Frontend SSE stream
-```
-
-`sync_from_event()` uses a `_missing` sentinel to distinguish "key absent" from `None` (since `sampling_capable=None` is a legitimate value after disconnect).
-
-### Disconnect checker background task
-
-Runs every 30s in the RoutingManager. Two modes:
-
-**Connected mode** (`mcp_connected=True`):
-- Check if `last_activity` is stale (>60s)
-- Before disconnecting, read `mcp_session.json` — if file has fresh activity (from a client the RoutingManager missed), avert disconnect and update `last_activity` from file
-- If both stale → disconnect
-
-**Disconnected mode** (`mcp_connected=False`):
-- Poll `mcp_session.json` for reconnection (fallback for lost HTTP events)
-- If file has fresh activity → `reconnect_detected` event
-
-### Persistence — `mcp_session.json`
-
-Written by MCP server only (`is_mcp_process=True`). Read by both processes.
-
-```json
-{
-  "sampling_capable": true,
-  "written_at": "2026-03-27T19:00:00+00:00",
-  "last_activity": "2026-03-27T19:05:00+00:00",
-  "sse_streams": 2
-}
-```
-
-**Staleness windows** (in `config.py`):
-- `MCP_CAPABILITY_STALENESS_MINUTES` (30 min) — startup recovery only; discards stale `sampling_capable`
-- `MCP_ACTIVITY_STALENESS_SECONDS` (300s) — legacy fallback for disconnect detection when `sse_streams` is absent
-
-### `_update_state` thread-safety contract
-
-All callers (`set_provider`, `on_mcp_initialize`, `on_mcp_activity`, `on_mcp_disconnect`, `on_sampling_disconnect`, `on_session_invalidated`, `sync_from_event`, `_disconnect_loop`) are synchronous between their read of `self._state` and the `_update_state()` write. No `await` between read and replace. Safe under asyncio cooperative scheduling. Do not add `await` calls between state reads and `_update_state()`.
+**Thread-safety**: no `await` between `_state` read and `_update_state()` write. Safe under asyncio cooperative scheduling. See `docs/routing-architecture.md` for diagrams.
 
 ## Sampling pipeline internals
 
-### End-to-end flow: MCP tool call → sampling → result
+End-to-end: MCP tool call → `handle_optimize()` → `routing.resolve()` → `sampling_pipeline.run_sampling_pipeline()` → Phase 0: Explore (optional, `SamplingLLMAdapter`) → Phase 1: Analyze → Phase 2: Optimize → Phase 3: Score → Phase 4: Suggest → persist + events.
 
-```
-MCP client calls synthesis_optimize
-  → tools/optimize.py: handle_optimize()
-    → routing.resolve(ctx) → RoutingDecision(tier="sampling")
-    → context_service.enrich(tier="sampling")
-    → sampling_pipeline.run_sampling_pipeline(ctx, prompt, ...)
-      → Phase 0: Explore (optional, via SamplingLLMAdapter)
-      → Phase 1: Analyze (structured tool calling → AnalysisResult)
-      → Phase 2: Optimize (structured → OptimizationResult, free-text mode)
-      → Phase 3: Score (structured → ScoreResult, hybrid blend)
-      → Phase 4: Suggest (structured → SuggestionsOutput, free-text mode)
-      → Persist to DB, emit events, return result
-```
+**Structured output fallback**: (1) Tool calling via `create_message(tools=..., tool_choice=required)` → parse `tool_use` block. (2) On `McpError`: inject JSON schema as text → `_parse_text_response()` (direct JSON, code block, brace-depth). (3) Analyze-only: `_build_analysis_from_text()` keyword classification.
 
-### Structured output fallback chain
+**Free-text phases**: `OptimizationResult` and `SuggestionsOutput` skip JSON schema to preserve markdown quality. All others get explicit schema.
 
-Each phase tries structured output first, then degrades:
+**Text cleaning** (`app/utils/text_cleanup.py`): `strip_meta_header()` + `split_prompt_and_changes()` (14 marker patterns). Runs before heuristic scoring. Shared by sampling, MCP save_result, REST passthrough.
 
-```
-1. Tool calling: create_message(tools=[pydantic_schema], tool_choice=required)
-   → Extract tool_use block from response
-   → Parse tool_input via model_validate()
+**Per-phase model capture**: `result.model` from each `create_message()` persisted to DB. IDE selects model freely — no advisory hints sent.
 
-2. Tool calling fails (McpError/TypeError/AttributeError):
-   → Append JSON schema as text instruction to user message
-   → Call create_message() without tools
-   → _parse_text_response():
-     a. Direct JSON parse (starts with '{')
-     b. Markdown code block extraction (```json...```)
-     c. Brace-depth counting for bare JSON in prose
+## MCP server monkey patches
 
-3. All parsing fails (analyze only):
-   → _build_analysis_from_text(): keyword-based classification
-   → Scans raw prompt for task_type/domain signals
-   → Confidence: 0.4–0.8 based on matched keywords
+Two SDK bug fixes in `mcp_server.py`:
+1. **SSE reconnection**: allows GET without session ID for fast bridge reconnection
+2. **SSE deadlock**: creates transport under `_session_creation_lock`, handles request outside — prevents infinite lock hold on SSE streams
+
+## Taxonomy engine (`services/taxonomy/`)
+
+Process singleton (`get_engine()`/`set_engine()`). Three paths: **hot** (per-optimization embed + cosine nearest-node), **warm** (periodic HDBSCAN + speculative lifecycle mutations gated by Q_system non-regression + domain discovery + reconciliation + zombie cleanup), **cold** (full refit + UMAP 3D + OKLab coloring + Haiku labeling).
+
+**Quality**: 5-dimension Q_system (coherence, separation, coverage, DBCV, stability) with adaptive weights. Domain floor: coherence ≥0.3.
+
+**Domain discovery**: `_propose_domains()` from coherent "general" sub-populations (≥3 members, ≥0.3 coherence, ≥60% consistent `domain_raw`). Five guardrails: color pinning, retire exemption, merge gate, coherence floor, split→candidates. Ceiling at 30.
+
+**Modules**: `engine.py`, `clustering.py`, `lifecycle.py`, `quality.py`, `projection.py`, `coloring.py`, `labeling.py`, `snapshot.py`, `sparkline.py`, `family_ops.py`, `matching.py`, `embedding_index.py`.
+
+## Testing
+
+```bash
+cd backend && source .venv/bin/activate && pytest --cov=app -v
 ```
 
-### Free-text vs JSON phases
-
-| Phase | Output model | JSON forced? | Why |
-|-------|-------------|-------------|-----|
-| Analyze | `AnalysisResult` | Yes | Structured classification needed |
-| Optimize | `OptimizationResult` | No | Free-text preserves markdown quality |
-| Score | `ScoreResult` | Yes (1024 token cap) | Numeric scores need exact parsing |
-| Suggest | `SuggestionsOutput` | No | Natural language suggestions |
-
-The bridge extension checks `params.tools[0].inputSchema.title` against `FREE_TEXT_SCHEMAS = {"OptimizationResult", "SuggestionsOutput"}` to decide whether to inject JSON schema instructions.
-
-### Text cleaning pipeline
-
-When LLM returns free-text (optimizer phase), output is cleaned before storage:
-
-1. `strip_meta_header(text)` — removes "Here is the optimized prompt...", markdown fences, meta-headers like "# Optimized Prompt"
-2. `split_prompt_and_changes(text)` — splits on 14 marker patterns ("## Summary of Changes", "**Changes**", table formats, etc.). Returns `(clean_prompt, changes_summary)`
-
-Both live in `app/utils/text_cleanup.py` — shared by sampling pipeline, MCP save_result, and REST passthrough save. Cleanup runs BEFORE heuristic scoring so scores reflect clean text.
-
-### SamplingLLMAdapter
-
-Minimal `LLMProvider` wrapper for `CodebaseExplorer` compatibility. Only implements `complete_parsed()`. Ignores `model` parameter — IDE controls selection. Used exclusively in the explore phase when a repo is linked.
-
-### Bridge system prompt workaround
-
-VS Code's Language Model API has no native system role. The bridge works around this by:
-1. Prepending system prompt as a user message wrapped in `<system-instructions>` tags
-2. Following with an assistant message: "Understood. I will follow these instructions precisely."
-3. Then appending the actual conversation messages
-
-This establishes system context without breaking the user/assistant turn structure.
-
-### Per-phase model capture
-
-Each `create_message()` result includes `result.model` (the actual model ID used by the IDE). These are collected in a `model_ids` dict and persisted to the DB `Optimization` record. The health endpoint and history list display the per-phase model breakdown.
-
-### Passthrough workflow (`services/passthrough.py`)
-
-Used by `synthesis_prepare_optimization` (MCP) and `POST /api/optimize` when tier=passthrough:
-
-1. `resolve_strategy()` — validates requested strategy, falls back to "auto"
-2. `assemble_passthrough_prompt()` — renders `prompts/passthrough.md` with:
-   - Raw prompt, strategy instructions, scoring rubric (4K char cap)
-   - Optional: codebase guidance, codebase context, adaptation state, analysis summary, applied patterns
-3. Returns `(assembled_prompt, resolved_strategy_name)` for external LLM processing
-
-The external LLM's output is then saved via `synthesis_save_result` with hybrid scoring (heuristic + z-score normalization, no LLM scoring in passthrough).
-
-### Pipeline constants (`services/pipeline_constants.py`)
-
-Shared between internal and sampling pipelines:
-
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `CONFIDENCE_GATE` | 0.7 | Trust analyzer's strategy selection above this |
-| `DOMAIN_CONFIDENCE_GATE` | 0.6 | Trust domain classification above this |
-| `FALLBACK_STRATEGY` | "auto" | Default when confidence is low |
-| `ANALYZE_MAX_TOKENS` | 4096 | Analyze phase budget |
-| `SCORE_MAX_TOKENS` | 4096 | Score phase budget |
-
-`compute_optimize_max_tokens(prompt_len)`: scales dynamically from 16K to 128K based on input length.
-
-### MCP server monkey patches
-
-Two production patches in `mcp_server.py` fix SDK bugs:
-
-1. **SSE reconnection patch** (lines 56-74): Allows GET requests without session ID. Enables fast bridge reconnection after server restarts without full re-handshake.
-
-2. **SSE deadlock fix** (lines 86-191): `StreamableHTTPSessionManager._handle_stateful_request` holds `_session_creation_lock` during `handle_request()`. SSE GET streams never return → lock held forever → all new sessions deadlock. Fix: create transport under lock, handle request outside lock.
-
-## Testing patterns
-
-### Routing tests (`tests/test_routing.py`)
-
-- `_state()` helper builds `RoutingState` with optional provider mock
-- `_ctx()` helper builds `RoutingContext` with force flags
-- `manager` fixture creates a `RoutingManager` with `tmp_path` (no file persistence unless `is_mcp_process=True`)
+- `_state()` / `_ctx()` helpers build `RoutingState`/`RoutingContext` in routing tests
+- `manager` fixture creates `RoutingManager` with `tmp_path`
 - Event assertions use `asyncio.Queue` subscribed to `EventBus._subscribers`
-- Disconnect checker tests (`TestManagerDisconnectLoop`) use real `asyncio.sleep` with short intervals
+- Disconnect checker tests use real `asyncio.sleep` with short intervals

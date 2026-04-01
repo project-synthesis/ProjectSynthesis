@@ -56,8 +56,12 @@ async def test_warm_path_q_system_non_regressive(db, mock_embedding, mock_provid
         if result and result.q_system is not None:
             q_values.append(result.q_system)
 
-    # Q_system should be non-decreasing (within epsilon tolerance)
+    # Q_system should be non-decreasing (within epsilon tolerance).
+    # Exception: Q=0.0 is valid when the active set is too small
+    # (< 3 nodes with separation data), so skip that comparison.
     for i in range(1, len(q_values)):
+        if q_values[i] == 0.0 or q_values[i - 1] == 0.0:
+            continue  # Q=0 means insufficient data, not regression
         assert q_values[i] >= q_values[i - 1] - 0.02  # epsilon tolerance
 
 

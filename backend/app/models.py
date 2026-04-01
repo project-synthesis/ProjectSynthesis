@@ -108,6 +108,7 @@ class PromptCluster(Base):
 
     centroid_embedding = Column(LargeBinary, nullable=True)
     member_count = Column(Integer, nullable=False, default=0)
+    scored_count = Column(Integer, nullable=False, default=0)
     usage_count = Column(Integer, nullable=False, default=0)
     avg_score = Column(Float, nullable=True)
 

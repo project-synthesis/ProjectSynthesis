@@ -330,6 +330,33 @@ stop_service() {
     fi
 
     rm -f "$(_pid_file "$name")"
+
+    # Phase 3: Kill orphaned workers still holding the port.
+    # uvicorn --reload runs supervisor + worker in the same process group
+    # (via setsid).  If the supervisor exits before the worker finishes
+    # its async lifespan shutdown, the port stays in use.  Catch these
+    # strays by checking the port after the PID is gone.
+    local port; port="$(_svc_port "$name")"
+    if _probe_port "$port" && command -v lsof &>/dev/null; then
+        local stray
+        stray=$(lsof -ti :"$port" -sTCP:LISTEN 2>/dev/null | head -1)
+        if [[ -n "$stray" ]]; then
+            # Re-verify the PID still holds the port (avoid TOCTOU race)
+            local verify
+            verify=$(lsof -ti :"$port" -sTCP:LISTEN 2>/dev/null | head -1)
+            if [[ "$verify" == "$stray" ]]; then
+                kill "$stray" 2>/dev/null
+                local w=0
+                while (( w < 3 )) && kill -0 "$stray" 2>/dev/null; do
+                    sleep 0.5; (( w++ ))
+                done
+                if kill -0 "$stray" 2>/dev/null; then
+                    kill -9 "$stray" 2>/dev/null
+                fi
+                _warn "$name orphan worker killed (PID $stray, port $port)"
+            fi
+        fi
+    fi
 }
 
 stop_services() {

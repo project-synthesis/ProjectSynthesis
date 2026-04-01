@@ -138,4 +138,4 @@ docker compose up --build -d
 - **Models**: configurable per phase via `GET/PATCH /api/preferences`
 - **Scoring**: hybrid (LLM + heuristic) with z-score normalization. Passthrough scores clamped to [1.0, 10.0]
 - **Events**: real-time SSE at `/api/events` — event types drive UI reactivity
-- **Domain validation**: `VALID_DOMAINS` whitelist in `pipeline_constants.py` — invalid domains fall back to "general"
+- **Domain validation**: `DomainResolver` (cached DB lookup in `domain_resolver.py`) — domains are `PromptCluster` nodes with `state="domain"`. `DomainSignalLoader` provides keyword signals from domain metadata. Invalid domains fall back to "general"

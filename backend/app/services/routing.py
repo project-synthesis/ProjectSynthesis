@@ -306,7 +306,11 @@ class RoutingManager:
         if not self._state.mcp_connected and self._state.sampling_capable is None:
             return  # Already fully disconnected — avoid duplicate events
         self._update_state(mcp_connected=False, sampling_capable=None)
-        self._persist()
+        # Delete session file on disconnect — do NOT _persist(), which
+        # writes a fresh last_activity that the reconnect detector reads
+        # as evidence of a new connection, creating infinite loops.
+        if self._session_file:
+            self._session_file.delete()
         logger.info("routing.disconnect trigger=sse_closed")
         self._broadcast_state_change("mcp_disconnect")
 
@@ -337,7 +341,9 @@ class RoutingManager:
         old_sampling = self._state.sampling_capable
         old_connected = self._state.mcp_connected
         self._update_state(sampling_capable=None, mcp_connected=False)
-        self._persist()
+        # Delete session file — same rationale as on_mcp_disconnect.
+        if self._session_file:
+            self._session_file.delete()
         logger.info(
             "routing.session_invalidated old_sampling=%s old_connected=%s",
             old_sampling, old_connected,
@@ -451,12 +457,24 @@ class RoutingManager:
         """
         from app.config import MCP_ACTIVITY_STALENESS_SECONDS
 
+        # Grace period: skip reconnection detection for the first 2
+        # polling cycles (~60s) to avoid false reconnect_detected from
+        # stale session files left by the previous MCP server process.
+        _skip_remaining = 2
+
         while True:
             try:
                 await asyncio.sleep(30)
 
+                if _skip_remaining > 0:
+                    _skip_remaining -= 1
+                    # Still run disconnect detection (for connected state),
+                    # just skip reconnection detection (for disconnected state).
+                    # Fall through to the disconnect check below.
+                    pass
+
                 # ── Reconnection detection (when disconnected) ────────
-                if not self._state.mcp_connected and self._session_file:
+                if not self._state.mcp_connected and self._session_file and _skip_remaining <= 0:
                     data = self._session_file.read()
                     if data and not self._session_file.is_activity_stale(data):
                         sampling = data.get("sampling_capable", False)
@@ -540,7 +558,13 @@ class RoutingManager:
                             mcp_connected=False,
                             sampling_capable=None,
                         )
-                        self._persist()
+                        # Delete session file on disconnect instead of
+                        # persisting.  _persist() writes a fresh last_activity
+                        # timestamp, which the reconnect detector then reads
+                        # as evidence of a new session — creating an infinite
+                        # disconnect → reconnect → disconnect cycle.
+                        if self._session_file:
+                            self._session_file.delete()
                         self._broadcast_state_change("disconnect")
             except asyncio.CancelledError:
                 raise

@@ -345,12 +345,16 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         asyncio.create_task(_domain_event_listener())
 
     yield {}
-    # No per-session cleanup — singletons are process-level.
-    # The disconnect checker task is cancelled when the event loop shuts down.
-    # Database connections are released on process exit.
-    # Note: if the MCP server is ever embedded in a larger ASGI app (mounted
-    # via app.mount()), explicit shutdown would be needed since the event loop
-    # outlives the server.  Current deployment is standalone (__main__).
+    # Clean up session file on shutdown so the next startup doesn't
+    # see a stale file and trigger false reconnect_detected events.
+    # Without this, `init.sh restart` leaves mcp_session.json from the
+    # previous run, and the new backend's disconnect checker reads it as
+    # evidence of a connected MCP client → spurious reconnect toasts.
+    try:
+        _session_file.delete()
+        logger.info("Shutdown: deleted mcp_session.json")
+    except Exception:
+        pass
 
 
 mcp = FastMCP(

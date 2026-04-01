@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization, OptimizationPattern, PromptCluster
@@ -46,7 +46,11 @@ DECAY_FACTOR = 0.9
 # ---------------------------------------------------------------------------
 # Backfill settings
 # ---------------------------------------------------------------------------
-BACKFILL_THRESHOLD = 0.72
+# Backfill uses a lower threshold than the hot-path merge (0.72) because
+# cluster centroids are averaged embeddings — a single prompt-to-centroid
+# cosine similarity is naturally lower than prompt-to-prompt similarity.
+# 0.45 matches the auto-injection threshold in pattern_injection.py.
+BACKFILL_THRESHOLD = 0.45
 
 
 def _utcnow() -> datetime:
@@ -86,7 +90,13 @@ class PromptLifecycleService:
 
         new_state: str | None = None
 
-        if cluster.state == "active":
+        # Safety net: promote any legacy candidates to active.
+        # Warm-path emerge/split now create as "active" directly, but
+        # older candidates may exist from before this fix.
+        if cluster.state == "candidate":
+            new_state = "active"
+
+        elif cluster.state == "active":
             if (
                 (cluster.member_count or 0) >= ACTIVE_TO_MATURE_MEMBER_COUNT
                 and (cluster.coherence or 0) >= ACTIVE_TO_MATURE_COHERENCE
@@ -151,7 +161,11 @@ class PromptLifecycleService:
     # Curation
     # ------------------------------------------------------------------
 
-    async def curate(self, db: AsyncSession) -> dict:
+    async def curate(
+        self,
+        db: AsyncSession,
+        embedding_index: object | None = None,
+    ) -> dict:
         """Run curation checks on all clusters.
 
         Curation checks:
@@ -161,16 +175,26 @@ class PromptLifecycleService:
           increment prune_flag_count. If prune_flag_count >= 2 -> archived
         - Reset prune_flag_count to 0 for clusters above quality threshold
 
+        On archival, clears stale metrics and removes the cluster from the
+        embedding index so the hot path doesn't merge new prompts into
+        defunct clusters.
+
+        Args:
+            db: Async database session.
+            embedding_index: EmbeddingIndex instance for cleanup (optional).
+
         Returns dict with summary:
             {"archived": [cluster_ids], "flagged": [cluster_ids], "unflagged": [cluster_ids]}
         """
         now = _utcnow()
         stale_cutoff = now - timedelta(days=STALE_DAYS)
 
-        # Fetch all non-archived clusters
+        # Exclude archived AND domain nodes.  Domain nodes have
+        # usage_count=0 and could be old enough to trigger stale
+        # detection, but they're structural and must never be curated.
         result = await db.execute(
             select(PromptCluster).where(
-                PromptCluster.state.notin_(["archived"])
+                PromptCluster.state.notin_(["archived", "domain"])
             )
         )
         clusters = list(result.scalars().all())
@@ -186,8 +210,7 @@ class PromptLifecycleService:
             is_unused = (cluster.usage_count or 0) == 0
 
             if is_stale and is_unused:
-                cluster.state = "archived"
-                cluster.archived_at = now
+                self._archive_cluster(cluster, now, embedding_index)
                 archived.append(cluster.id)
                 continue
 
@@ -201,8 +224,7 @@ class PromptLifecycleService:
             if has_low_score and has_enough_members:
                 cluster.prune_flag_count = (cluster.prune_flag_count or 0) + 1
                 if cluster.prune_flag_count >= PRUNE_FLAG_ARCHIVE_THRESHOLD:
-                    cluster.state = "archived"
-                    cluster.archived_at = now
+                    self._archive_cluster(cluster, now, embedding_index)
                     archived.append(cluster.id)
                 else:
                     flagged.append(cluster.id)
@@ -225,6 +247,32 @@ class PromptLifecycleService:
             "flagged": flagged,
             "unflagged": unflagged,
         }
+
+    @staticmethod
+    def _archive_cluster(
+        cluster: PromptCluster,
+        now: datetime,
+        embedding_index: object | None,
+    ) -> None:
+        """Centralized archival: state + metrics + embedding index cleanup.
+
+        Every archival path (curate stale, curate quality, retire, split,
+        zombie) should use this or match its behavior to avoid stale
+        phantom metrics and embedding index divergence.
+        """
+        cluster.state = "archived"
+        cluster.archived_at = now
+        cluster.member_count = 0
+        cluster.usage_count = 0
+        cluster.avg_score = None
+        cluster.scored_count = 0
+        # Remove from embedding index so hot-path assign_cluster
+        # doesn't return this archived cluster as a nearest match.
+        if embedding_index is not None:
+            try:
+                embedding_index.remove(cluster.id)
+            except Exception:
+                pass  # non-fatal — index rebuilt on cold path
 
     # ------------------------------------------------------------------
     # Backfill orphans
@@ -256,11 +304,22 @@ class PromptLifecycleService:
 
             embedding_svc = EmbeddingService()
 
+        # Find optimizations with NULL cluster_id OR stale cluster_id
+        # pointing to archived/non-existent clusters.  The hot path now
+        # writes back opt.cluster_id (RC1 fix), but older optimizations
+        # may still reference archived clusters from cold-path splits or
+        # warm-path retirements that didn't reassign.
+        active_cluster_ids = select(PromptCluster.id).where(
+            PromptCluster.state.in_(["active", "candidate", "mature", "template"])
+        )
         result = await db.execute(
             select(Optimization).where(
-                Optimization.cluster_id.is_(None),
-                Optimization.raw_prompt.isnot(None),
                 Optimization.status == "completed",
+                Optimization.raw_prompt.isnot(None),
+                or_(
+                    Optimization.cluster_id.is_(None),
+                    ~Optimization.cluster_id.in_(active_cluster_ids),
+                ),
             )
         )
         orphans = list(result.scalars().all())
@@ -277,12 +336,45 @@ class PromptLifecycleService:
                 logger.warning("Failed to embed orphan %s, skipping", orphan.id)
                 continue
 
-            # Search for nearest cluster
+            # Search for nearest cluster.
+            # First try the standard threshold; if no match, fall back to
+            # a same-domain search with a lower floor.  This handles edge
+            # cases where an optimization's centroid distance is low but
+            # it clearly belongs to a specific domain.
             matches = embedding_index.search(
                 embedding, k=1, threshold=BACKFILL_THRESHOLD
             )
             if not matches:
-                continue
+                # Fallback: find the nearest active cluster in the same domain
+                domain = orphan.domain or "general"
+                domain_clusters = await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.state.in_(["active", "candidate", "mature", "template"]),
+                        PromptCluster.domain == domain,
+                    )
+                )
+                import numpy as _np
+
+                best_id, best_sim = None, -1.0
+                for cl in domain_clusters.scalars().all():
+                    if cl.centroid_embedding:
+                        try:
+                            cl_emb = _np.frombuffer(cl.centroid_embedding, dtype=_np.float32)
+                            sim = float(_np.dot(embedding, cl_emb) / (
+                                _np.linalg.norm(embedding) * _np.linalg.norm(cl_emb) + 1e-9
+                            ))
+                            if sim > best_sim:
+                                best_sim, best_id = sim, cl.id
+                        except (ValueError, TypeError):
+                            continue
+                if best_id and best_sim > 0.25:
+                    matches = [(best_id, best_sim)]
+                    logger.info(
+                        "Backfill domain fallback: '%s' → cluster %s (sim=%.3f, domain=%s)",
+                        orphan.intent_label, best_id[:8], best_sim, domain,
+                    )
+                else:
+                    continue
 
             cluster_id, similarity = matches[0]
 

@@ -122,6 +122,7 @@
       if (type === 'routing_state_changed') {
         const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
         const wasSamplingCapable = forgeStore.samplingCapable === true;
+        const prevTier = routing.tier;
         const delta = forgeStore.updateRoutingState({
           sampling_capable: d.sampling_capable,
           mcp_disconnected: !d.mcp_connected,
@@ -151,8 +152,11 @@
         if (delta.reconnected) addToast('created', 'MCP client reconnected');
         if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
 
-        // Non-sampling tier changes (disconnect, passthrough toggle) — trigger immediately
-        if (!delta.samplingChanged) {
+        // Only trigger tier guide when the effective tier actually CHANGED.
+        // Without this guard, startup provider_changed events and benign
+        // routing broadcasts (e.g. during recluster) pop the internal
+        // pipeline modal even though the tier hasn't changed.
+        if (!delta.samplingChanged && routing.tier !== prevTier) {
           triggerTierGuide(routing.tier);
         }
       }

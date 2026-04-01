@@ -91,7 +91,7 @@ async def test_split_children_inherit_parent_domain(db):
     )
     assert len(children) == 2
     for child in children:
-        assert child.state == "candidate"
+        assert child.state == "active"
         assert child.domain == "backend"  # Inherited from parent
 
 
@@ -132,7 +132,7 @@ async def test_split_domain_node_children_inherit_label(db):
         db, parent, sub_clusters, warm_path_age=1, provider=None, model="test",
     )
     for child in children:
-        assert child.state == "candidate"   # Never "domain"
+        assert child.state == "active"   # Never "domain"
         assert child.domain == "backend"    # Inherited from parent label
 
 
@@ -234,5 +234,5 @@ async def test_emerge_node_inherits_majority_domain(db):
         db, member_ids, embeddings, warm_path_age=1, provider=None, model="test",
     )
     assert node is not None
-    assert node.state == "candidate"
+    assert node.state == "active"
     assert node.domain == "backend"  # Majority domain wins

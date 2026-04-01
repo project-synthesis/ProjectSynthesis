@@ -43,20 +43,32 @@ class ClusterStore {
   // Domain highlighting for cross-component filtering
   highlightedDomain = $state<string | null>(null);
 
-  // State filter — shared between ClusterNavigator tabs and SemanticTopology
-  stateFilter = $state<StateFilter>(null);
+  // State filter — shared between ClusterNavigator tabs and SemanticTopology.
+  // Default to 'active' so the working set is visible on load.
+  // Users can switch to 'all' or 'archived' to view history.
+  stateFilter = $state<StateFilter>('active');
 
-  filteredTaxonomyTree = $derived(
-    this.taxonomyTree.filter(node => {
-      // Domain nodes always visible (structural hubs)
-      if (node.state === 'domain') return true;
-      // Zombie filter: exclude empty archived shells from graph
-      // (0 members + 0 usage = no content, just visual noise)
+  filteredTaxonomyTree = $derived.by(() => {
+    const filter = this.stateFilter;
+    const tree = this.taxonomyTree;
+
+    // First pass: collect non-domain nodes that pass the filter
+    const childNodes = tree.filter(node => {
+      if (node.state === 'domain') return false;
       if (node.state === 'archived' && node.member_count === 0 && node.usage_count === 0) return false;
-      // State filter: null = all, otherwise match specific state
-      return this.stateFilter === null || node.state === this.stateFilter;
-    })
-  );
+      return filter === null || node.state === filter;
+    });
+
+    // Second pass: include domain nodes only if they have visible children.
+    // Without this, empty domains (e.g. "devops" with 0 active clusters)
+    // show as orphan headers in the active tab and topology graph.
+    const childDomains = new Set(childNodes.map(n => (n.domain ?? 'general').split(':')[0].trim().toLowerCase()));
+    const domainNodes = tree.filter(
+      node => node.state === 'domain' && childDomains.has(node.label?.toLowerCase() ?? '')
+    );
+
+    return [...domainNodes, ...childNodes];
+  });
 
   // Internal
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -248,7 +260,7 @@ class ClusterStore {
     this.taxonomyError = null;
     this.templates = [];
     this.highlightedDomain = null;
-    this.stateFilter = null;
+    this.stateFilter = 'active';
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     if (this._dismissTimer) clearTimeout(this._dismissTimer);
     this._debounceTimer = null;

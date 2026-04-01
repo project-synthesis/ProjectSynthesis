@@ -42,7 +42,7 @@ async def test_emerge_creates_candidate_node(db, mock_embedding):
     )
 
     assert result is not None
-    assert result.state == "candidate"
+    assert result.state == "active"
     assert result.member_count == 5
 
 
@@ -258,7 +258,7 @@ async def test_split_creates_child_nodes(db, mock_embedding):
     )
 
     assert len(children) == 2
-    assert all(c.state == "candidate" for c in children)
+    assert all(c.state == "active" for c in children)
     assert all(c.parent_id == parent.id for c in children)
     # Parent member count should have been reduced
     assert parent.member_count == 0
