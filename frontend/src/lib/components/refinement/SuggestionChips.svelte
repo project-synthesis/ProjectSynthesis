@@ -4,6 +4,8 @@
     onSelect: (text: string) => void;
   }
 
+  import { tooltip } from '$lib/actions/tooltip';
+
   let { suggestions, onSelect }: Props = $props();
 
   function chipText(chip: Record<string, string>): string {
@@ -20,7 +22,7 @@
     {#each suggestions.slice(0, 3) as chip}
       <button
         class="chip"
-        title={chipSource(chip)}
+        use:tooltip={chipSource(chip)}
         onclick={() => onSelect(chipText(chip))}
       >
         {chipText(chip)}

@@ -49,16 +49,16 @@ describe('ProviderBadge', () => {
     expect(badge).toBeInTheDocument();
   });
 
-  it('shows title attribute with provider value', () => {
+  it('has aria-label conveying provider value for CLI', () => {
     render(ProviderBadge, { props: { provider: 'claude-cli' } });
     const badge = screen.getByLabelText('Active provider: CLI');
-    expect(badge).toHaveAttribute('title', 'Provider: claude-cli');
+    expect(badge).toBeInTheDocument();
   });
 
-  it('shows title "Provider: None" when provider is null', () => {
+  it('has aria-label conveying provider value for PASSTHROUGH', () => {
     render(ProviderBadge, { props: { provider: null } });
     const badge = screen.getByLabelText('Active provider: PASSTHROUGH');
-    expect(badge).toHaveAttribute('title', 'Provider: None');
+    expect(badge).toBeInTheDocument();
   });
 
   it('truncates unknown provider to 4 uppercase chars', () => {

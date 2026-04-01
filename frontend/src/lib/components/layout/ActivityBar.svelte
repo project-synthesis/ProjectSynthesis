@@ -1,5 +1,7 @@
 <script lang="ts">
   import Logo from '$lib/components/shared/Logo.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
+  import { ACTIVITY_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
   type Activity = 'editor' | 'history' | 'clusters' | 'github' | 'settings';
 
@@ -20,7 +22,7 @@
   aria-label="Activity bar"
 >
   <!-- Brand mark at top of activity bar -->
-  <div class="brand-mark" title="Project Synthesis">
+  <div class="brand-mark" use:tooltip={ACTIVITY_TOOLTIPS.brand}>
     <Logo size={24} variant="mark" />
   </div>
 
@@ -29,7 +31,7 @@
       class="activity-icon"
       class:active={active === act.id}
       onclick={() => (active = act.id)}
-      title={act.label}
+      use:tooltip={act.label}
       aria-label={act.label}
       aria-pressed={active === act.id}
     >

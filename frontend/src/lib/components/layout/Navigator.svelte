@@ -9,6 +9,7 @@
   import { formatScore, formatRelativeTime } from '$lib/utils/formatting';
   import { forceSamplingTooltip, forcePassthroughTooltip } from '$lib/utils/mcp-tooltips';
   import { STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
+  import { ROUTING_TOOLTIPS, SCORING_TOOLTIPS, STRATEGY_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import { tooltip } from '$lib/actions/tooltip';
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
   import { samplingGuide } from '$lib/stores/sampling-guide.svelte';
@@ -294,14 +295,15 @@
             tabindex="0"
             onclick={() => selectStrategy(strat.name)}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStrategy(strat.name); } }}
-            title={strat.description}
+            use:tooltip={strat.description}
           >
             <span class="strat-name">{strat.name}</span>
             <span class="strat-tag">{strat.tagline ?? ''}</span>
             <button
               class="strat-edit"
               onclick={(e: MouseEvent) => { e.stopPropagation(); openStrategyEditor(strat.name); }}
-              title="Edit template"
+              use:tooltip={STRATEGY_TOOLTIPS.edit_template}
+              aria-label="Edit template"
             >
               {editingStrategy === strat.name ? '×' : '⋮'}
             </button>
@@ -375,7 +377,7 @@
                   <span
                     class="row-feedback font-mono"
                     style="color: {item.feedback_rating === 'thumbs_up' ? 'var(--color-neon-cyan)' : 'var(--color-neon-red)'};"
-                    title={item.feedback_rating === 'thumbs_up' ? 'Positive' : 'Negative'}
+                    use:tooltip={item.feedback_rating === 'thumbs_up' ? STRATEGY_TOOLTIPS.feedback_positive : STRATEGY_TOOLTIPS.feedback_negative}
                   >{item.feedback_rating === 'thumbs_up' ? '\u2191' : '\u2193'}</span>
                 {/if}
               </div>
@@ -563,7 +565,7 @@
             {/if}
             <!-- Force sampling — rendered separately for disabled-state support -->
             <div class="data-row">
-              <span class="data-label" title="Use IDE's LLM for the 3-phase pipeline via MCP sampling">Force IDE sampling</span>
+              <span class="data-label" use:tooltip={ROUTING_TOOLTIPS.force_sampling_label}>Force IDE sampling</span>
               <button
                 class="toggle-track toggle-track--green"
                 class:toggle-track--on={preferencesStore.pipeline.force_sampling}
@@ -576,7 +578,7 @@
                 aria-checked={preferencesStore.pipeline.force_sampling}
                 aria-label="Toggle Force IDE sampling"
                 disabled={forceSamplingDisabled}
-                title={forceSamplingTooltip(forceSamplingDisabled)}
+                use:tooltip={forceSamplingTooltip(forceSamplingDisabled)}
                 style={forceSamplingDisabled ? 'opacity: 0.4; cursor: not-allowed;' : undefined}
               >
                 <span class="toggle-thumb"></span>
@@ -593,7 +595,7 @@
             {/if}
             <!-- Force passthrough — manual override, always available except when sampling works -->
             <div class="data-row">
-              <span class="data-label" title="Bypass all pipelines — returns assembled template for manual processing">Force passthrough</span>
+              <span class="data-label" use:tooltip={ROUTING_TOOLTIPS.force_passthrough_label}>Force passthrough</span>
               <button
                 class="toggle-track toggle-track--yellow"
                 class:toggle-track--on={preferencesStore.pipeline.force_passthrough}
@@ -606,7 +608,7 @@
                 aria-checked={preferencesStore.pipeline.force_passthrough}
                 aria-label="Toggle Force passthrough"
                 disabled={forcePassthroughDisabled}
-                title={forcePassthroughTooltip(forcePassthroughDisabled)}
+                use:tooltip={forcePassthroughTooltip(forcePassthroughDisabled)}
                 style={forcePassthroughDisabled ? 'opacity: 0.4; cursor: not-allowed;' : undefined}
               >
                 <span class="toggle-thumb"></span>
@@ -866,7 +868,7 @@
                   </div>
                   <div class="data-row">
                     <span class="data-label">Scoring</span>
-                    <span class="data-value neon-yellow" title="Heuristic-only scoring (no LLM scorer in passthrough mode)">heuristic</span>
+                    <span class="data-value neon-yellow" use:tooltip={SCORING_TOOLTIPS.heuristic}>heuristic</span>
                   </div>
                   {#if forgeStore.scoreHealth}
                     <div class="data-row">
@@ -918,7 +920,7 @@
                     <span
                       class="data-value neon-green"
                       class:data-value--dim={!forgeStore.phaseModels['score'] && !forgeStore.result?.scoring_mode}
-                      title={forgeStore.result?.scoring_mode || 'pending'}
+                      use:tooltip={forgeStore.result?.scoring_mode || 'pending'}
                     >
                       {forgeStore.phaseModels['score'] || forgeStore.result?.scoring_mode || 'pending'}
                     </span>
@@ -986,7 +988,7 @@
                   {/if}
                   <div class="data-row">
                     <span class="data-label">Scoring</span>
-                    <span class="data-value font-mono" title="LLM + heuristic blended scores">hybrid</span>
+                    <span class="data-value font-mono" use:tooltip={SCORING_TOOLTIPS.hybrid}>hybrid</span>
                   </div>
                   {#if forgeStore.scoreHealth}
                     <div class="data-row">

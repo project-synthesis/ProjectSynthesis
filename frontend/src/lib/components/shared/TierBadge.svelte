@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { EffectiveTier } from '$lib/stores/routing.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
+  import { TIER_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
   interface Props {
     tier: EffectiveTier;
@@ -46,7 +48,7 @@
     {label}
   </span>
   {#if degradedLabel}
-    <span class="tier-degraded" title="Requested tier unavailable">{degradedLabel}</span>
+    <span class="tier-degraded" use:tooltip={TIER_TOOLTIPS.degraded}>{degradedLabel}</span>
   {/if}
 </span>
 

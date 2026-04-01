@@ -4,6 +4,8 @@
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import MarkdownRenderer from '$lib/components/shared/MarkdownRenderer.svelte';
   import { copyToClipboard } from '$lib/utils/formatting';
+  import { tooltip } from '$lib/actions/tooltip';
+  import { ARTIFACT_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
   let copied = $state(false);
   let showOriginal = $state(false);
@@ -66,7 +68,7 @@
           class="action-btn"
           class:action-btn--active={showOriginal}
           onclick={() => showOriginal = !showOriginal}
-          title={showOriginal ? "Show optimized" : "Show original"}
+          use:tooltip={showOriginal ? ARTIFACT_TOOLTIPS.show_optimized : ARTIFACT_TOOLTIPS.show_original}
         >
           {showOriginal ? 'OPTIMIZED' : 'ORIGINAL'}
         </button>
@@ -74,14 +76,14 @@
           class="action-btn"
           class:action-btn--active={renderMarkdown}
           onclick={() => renderMarkdown = !renderMarkdown}
-          title={renderMarkdown ? "Show raw text" : "Render markdown"}
+          use:tooltip={renderMarkdown ? ARTIFACT_TOOLTIPS.show_raw : ARTIFACT_TOOLTIPS.render_markdown}
         >
           {renderMarkdown ? 'RAW' : 'RENDER'}
         </button>
         <button
           class="action-btn"
           onclick={viewDiff}
-          title="View diff"
+          use:tooltip={ARTIFACT_TOOLTIPS.view_diff}
         >
           DIFF
         </button>
@@ -91,7 +93,7 @@
           class:feedback-btn--active={forgeStore.feedback === 'thumbs_up'}
           onclick={() => forgeStore.submitFeedback('thumbs_up')}
           aria-label="Thumbs up"
-          title="Good result"
+          use:tooltip={ARTIFACT_TOOLTIPS.good_result}
         >
           <span class="feedback-icon">&#9650;</span>
         </button>
@@ -100,7 +102,7 @@
           class:feedback-btn--active={forgeStore.feedback === 'thumbs_down'}
           onclick={() => forgeStore.submitFeedback('thumbs_down')}
           aria-label="Thumbs down"
-          title="Poor result"
+          use:tooltip={ARTIFACT_TOOLTIPS.poor_result}
         >
           <span class="feedback-icon">&#9660;</span>
         </button>
@@ -108,7 +110,7 @@
         <button
           class="action-btn action-btn--primary"
           onclick={handleCopy}
-          title="Copy to clipboard"
+          use:tooltip={ARTIFACT_TOOLTIPS.copy}
         >
           {copied ? 'COPIED' : 'COPY'}
         </button>

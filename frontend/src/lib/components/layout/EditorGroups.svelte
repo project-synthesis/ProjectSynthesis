@@ -10,6 +10,8 @@
   import RefinementTimeline from '$lib/components/refinement/RefinementTimeline.svelte';
   import SemanticTopology from '$lib/components/taxonomy/SemanticTopology.svelte';
   import { isPassthroughResult } from '$lib/utils/formatting';
+  import { tooltip } from '$lib/actions/tooltip';
+  import { EDITOR_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
   // Initialize refinement when result tab is active and forge is complete.
   // Skip for passthrough results — refinement requires a local provider.
@@ -62,7 +64,7 @@
         role="tab"
         aria-selected={editorStore.activeTabId === tab.id}
         aria-controls="editor-panel-{tab.id}"
-        title={tab.title}
+        use:tooltip={tab.title}
         onclick={() => editorStore.setActive(tab.id)}
       >
         <span class="tab-title">{tab.title}</span>
@@ -84,7 +86,7 @@
     <button
       class="tab-new"
       aria-label="New prompt"
-      title="New prompt — reset and start fresh"
+      use:tooltip={EDITOR_TOOLTIPS.new_prompt}
       onclick={handleNewPrompt}
     >+</button>
   </div>

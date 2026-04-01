@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tooltip } from '$lib/actions/tooltip';
+
   interface Props {
     provider?: string | null;
   }
@@ -34,7 +36,7 @@
   class:variant-passthrough={variant === 'passthrough'}
   class:variant-none={variant === 'none'}
   aria-label="Active provider: {label}"
-  title="Provider: {provider ?? 'None'}"
+  use:tooltip={`Provider: ${provider ?? 'None'}`}
 >
   {label}
 </span>

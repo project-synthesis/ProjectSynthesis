@@ -496,7 +496,7 @@ describe('Navigator', () => {
     });
 
     // Find and click the edit button (the ⋮ button)
-    const editBtn = screen.getByTitle('Edit template');
+    const editBtn = screen.getByRole('button', { name: 'Edit template' });
     await user.click(editBtn);
 
     await waitFor(() => {
@@ -890,7 +890,7 @@ describe('Navigator', () => {
       expect(screen.getByText('chain-of-thought')).toBeInTheDocument();
     });
 
-    const editBtn = screen.getByTitle('Edit template');
+    const editBtn = screen.getByRole('button', { name: 'Edit template' });
     await user.click(editBtn);
 
     await waitFor(() => {

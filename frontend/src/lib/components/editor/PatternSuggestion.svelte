@@ -96,7 +96,7 @@
   .action-btn {
     padding: 2px 8px;
     background: transparent;
-    border: 1px solid var(--color-contour);
+    border: 1px solid var(--color-border-subtle);
     color: var(--color-text-dim);
     font-family: var(--font-mono);
     font-size: 10px;

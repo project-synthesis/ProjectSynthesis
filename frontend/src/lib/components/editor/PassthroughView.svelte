@@ -4,6 +4,8 @@
   import { addToast } from '$lib/stores/toast.svelte';
   import { formatScore, copyToClipboard } from '$lib/utils/formatting';
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
+  import { PASSTHROUGH_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
   let optimizedPrompt = $state('');
   let changesSummary = $state('');
@@ -60,7 +62,7 @@
       class="guide-btn"
       onclick={() => passthroughGuide.show(false)}
       aria-label="Open passthrough workflow guide"
-      title="How passthrough works"
+      use:tooltip={PASSTHROUGH_TOOLTIPS.guide_btn}
     >?</button>
     <button class="cancel-btn" onclick={() => forgeStore.cancel()}>CANCEL</button>
   </div>
