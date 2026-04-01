@@ -312,3 +312,37 @@ def compute_separation(centroids: list[np.ndarray]) -> float:
     # Ignore the diagonal (self-distance = 0)
     np.fill_diagonal(dist_matrix, np.inf)
     return float(dist_matrix.min())
+
+
+def compute_mean_separation(centroids: list[np.ndarray]) -> float:
+    """Mean of per-centroid minimum cosine distances.
+
+    For each centroid, finds the minimum distance to any other centroid,
+    then returns the mean of those values.  This reflects the typical
+    separation quality rather than the single worst-case pair.
+
+    Mirrors the per-node separation logic in
+    ``TaxonomyEngine._update_per_node_separation`` which Q_system
+    averages via ``statistics.mean(separations)``.
+
+    Args:
+        centroids: List of 1-D float32 centroid arrays.
+
+    Returns:
+        Mean of per-centroid min distances, or ``1.0`` for fewer than
+        two centroids (perfect separation — no siblings to conflict with).
+    """
+    if len(centroids) < 2:
+        return 1.0
+
+    mat = np.stack(centroids, axis=0).astype(np.float32)
+    mat = _l2_normalize(mat)
+    sim_matrix = mat @ mat.T  # (K, K), similarities in [−1, 1]
+    dist_matrix = 1.0 - sim_matrix  # distances
+
+    # Ignore the diagonal (self-distance = 0)
+    np.fill_diagonal(dist_matrix, np.inf)
+
+    # Per-centroid minimum distance, then take the mean
+    per_centroid_min = dist_matrix.min(axis=1)
+    return float(per_centroid_min.mean())

@@ -6,6 +6,7 @@ import pytest
 from app.services.taxonomy.clustering import (
     ClusterResult,
     batch_cluster,
+    compute_mean_separation,
     compute_pairwise_coherence,
     compute_separation,
     l2_normalize_1d,
@@ -124,6 +125,52 @@ class TestComputeSeparation:
         centroids = [rng.randn(EMBEDDING_DIM).astype(np.float32) for _ in range(3)]
         result = compute_separation(centroids)
         assert result > 0.5  # high-dim random vectors are far apart
+
+
+class TestComputeMeanSeparation:
+    """Tests for mean per-centroid minimum cosine distance."""
+
+    def test_fewer_than_two_returns_one(self):
+        vec = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+        assert compute_mean_separation([]) == 1.0
+        assert compute_mean_separation([vec]) == 1.0
+
+    def test_identical_centroids_zero_separation(self):
+        vec = np.random.randn(EMBEDDING_DIM).astype(np.float32)
+        vec = vec / np.linalg.norm(vec)
+        result = compute_mean_separation([vec, vec])
+        assert result == pytest.approx(0.0, abs=1e-5)
+
+    def test_distant_centroids_high_separation(self):
+        """Random high-dim vectors should have high mean separation."""
+        rng = np.random.RandomState(42)
+        centroids = [rng.randn(EMBEDDING_DIM).astype(np.float32) for _ in range(3)]
+        result = compute_mean_separation(centroids)
+        assert result > 0.5
+
+    def test_mean_higher_than_global_min_with_one_close_pair(self):
+        """With one close pair among many distant centroids, mean separation
+        should be significantly higher than global minimum separation.
+
+        This is the core scenario that triggered the user-visible bug:
+        37 groups with one close pair causing global-min to drop below 0.3
+        while mean separation stays healthy.
+        """
+        rng = np.random.RandomState(42)
+        # Create 10 well-separated random centroids
+        centroids = [rng.randn(EMBEDDING_DIM).astype(np.float32) for _ in range(10)]
+        # Make one pair very close (nearly identical)
+        centroids.append(centroids[0] + rng.randn(EMBEDDING_DIM).astype(np.float32) * 0.01)
+
+        global_min = compute_separation(centroids)
+        mean_sep = compute_mean_separation(centroids)
+
+        # Global min should be very low (the close pair)
+        assert global_min < 0.1
+        # Mean separation should be much higher (most pairs are distant)
+        assert mean_sep > global_min * 3
+        # Mean should still be above the warning threshold
+        assert mean_sep > 0.3
 
 
 class TestL2Normalize1d:

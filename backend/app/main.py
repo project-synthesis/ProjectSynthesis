@@ -360,28 +360,37 @@ async def lifespan(app: FastAPI):
                             await lifecycle.decay_usage(db)
                             await db.commit()
 
-                        # Auto-trigger cold path when active nodes lack UMAP coordinates.
-                        # Hot-path creates clusters with NULL umap_x/y/z (hash fallback).
-                        # Cold-path runs UMAP to give them semantic 3D positions.
+                        # Auto-trigger cold path when:
+                        # 1. Deadlock breaker signaled _cold_path_needed, OR
+                        # 2. Active nodes lack UMAP coordinates (hot-path
+                        #    creates clusters with NULL umap_x/y/z).
                         try:
-                            from sqlalchemy import func, select
+                            need_cold = getattr(engine, "_cold_path_needed", False)
 
-                            from app.models import PromptCluster
+                            if not need_cold:
+                                from sqlalchemy import func, select
 
-                            async with async_session_factory() as umap_db:
-                                no_umap = (await umap_db.execute(
-                                    select(func.count()).where(
-                                        PromptCluster.state == "active",
-                                        PromptCluster.umap_x.is_(None),
-                                    )
-                                )).scalar() or 0
-                                if no_umap >= 5:
-                                    logger.info(
-                                        "Auto cold-path: %d active nodes lack UMAP coordinates",
-                                        no_umap,
-                                    )
-                                    async with async_session_factory() as cold_db:
-                                        await engine.run_cold_path(cold_db)
+                                from app.models import PromptCluster
+
+                                async with async_session_factory() as umap_db:
+                                    no_umap = (await umap_db.execute(
+                                        select(func.count()).where(
+                                            PromptCluster.state == "active",
+                                            PromptCluster.umap_x.is_(None),
+                                        )
+                                    )).scalar() or 0
+                                    need_cold = no_umap >= 5
+                                    if need_cold:
+                                        logger.info(
+                                            "Auto cold-path: %d active nodes lack UMAP coordinates",
+                                            no_umap,
+                                        )
+
+                            if need_cold:
+                                if getattr(engine, "_cold_path_needed", False):
+                                    logger.info("Auto cold-path: deadlock breaker requested rebuild")
+                                async with async_session_factory() as cold_db:
+                                    await engine.run_cold_path(cold_db)
                         except Exception as cold_exc:
                             logger.warning("Auto cold-path check failed: %s", cold_exc)
                 except Exception as exc:
