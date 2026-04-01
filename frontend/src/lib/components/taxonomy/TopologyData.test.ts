@@ -68,16 +68,55 @@ describe('buildSceneData', () => {
     expect(result.edges[0]).toEqual({ from: 'parent', to: 'child', type: 'hierarchical' });
   });
 
-  it('does not create same-domain similarity edges (removed for visual clarity)', () => {
+  it('produces no similarity or injection edges when not passed', () => {
     const flat = [
       makeNode({ id: 'a', domain: 'backend' }),
       makeNode({ id: 'b', domain: 'backend' }),
       makeNode({ id: 'c', domain: 'frontend' }),
     ];
     const result = buildSceneData(flat);
-    // Only hierarchical edges — similarity edges were removed to eliminate
-    // the O(n²) edge mesh that obscured the graph at scale.
+    // Without explicit similarity/injection edge arrays, only hierarchical edges appear
     expect(result.edges).toHaveLength(0);
+    expect(result.edges.filter(e => e.type === 'similarity')).toHaveLength(0);
+    expect(result.edges.filter(e => e.type === 'injection')).toHaveLength(0);
+  });
+
+  it('adds similarity edges when passed and both nodes exist in scene', () => {
+    const flat = [
+      makeNode({ id: 'a', domain: 'backend' }),
+      makeNode({ id: 'b', domain: 'frontend' }),
+    ];
+    const simEdges = [{ from_id: 'a', to_id: 'b', similarity: 0.75 }];
+    const result = buildSceneData(flat, simEdges);
+    const sim = result.edges.filter(e => e.type === 'similarity');
+    expect(sim).toHaveLength(1);
+    expect(sim[0]).toEqual({ from: 'a', to: 'b', type: 'similarity' });
+  });
+
+  it('filters similarity edges where a node is missing from scene', () => {
+    const flat = [makeNode({ id: 'a' })];
+    const simEdges = [{ from_id: 'a', to_id: 'missing', similarity: 0.8 }];
+    const result = buildSceneData(flat, simEdges);
+    expect(result.edges.filter(e => e.type === 'similarity')).toHaveLength(0);
+  });
+
+  it('adds injection edges when passed and both nodes exist in scene', () => {
+    const flat = [
+      makeNode({ id: 'src' }),
+      makeNode({ id: 'tgt' }),
+    ];
+    const injEdges = [{ source_id: 'src', target_id: 'tgt', weight: 3 }];
+    const result = buildSceneData(flat, undefined, injEdges);
+    const inj = result.edges.filter(e => e.type === 'injection');
+    expect(inj).toHaveLength(1);
+    expect(inj[0]).toEqual({ from: 'src', to: 'tgt', type: 'injection' });
+  });
+
+  it('filters injection edges where a node is missing from scene', () => {
+    const flat = [makeNode({ id: 'src' })];
+    const injEdges = [{ source_id: 'src', target_id: 'missing', weight: 1 }];
+    const result = buildSceneData(flat, undefined, injEdges);
+    expect(result.edges.filter(e => e.type === 'injection')).toHaveLength(0);
   });
 
   it('defaults persistence to 0.5 when node has null persistence', () => {
@@ -194,5 +233,30 @@ describe('buildSceneData — state-based visual encoding', () => {
     const { nodes } = buildSceneData([makeNode()]);
     expect(nodes[0]).toHaveProperty('opacity');
     expect(typeof nodes[0].opacity).toBe('number');
+  });
+});
+
+describe('buildSceneData — quality encoding', () => {
+  beforeEach(() => {
+    domainStore._reset();
+    domainStore.domains = [
+      { id: 'd1', label: 'backend', color_hex: '#b44aff', member_count: 0, avg_score: null, source: 'seed' },
+    ];
+  });
+
+  it('populates coherence from ClusterNode, defaults to 0.5 when null', () => {
+    const withCoherence = makeNode({ id: 'a', coherence: 0.9 });
+    const withNull = makeNode({ id: 'b', coherence: null });
+    const { nodes } = buildSceneData([withCoherence, withNull]);
+    expect(nodes.find(n => n.id === 'a')!.coherence).toBe(0.9);
+    expect(nodes.find(n => n.id === 'b')!.coherence).toBe(0.5);
+  });
+
+  it('populates avgScore from ClusterNode, preserves null', () => {
+    const withScore = makeNode({ id: 'a', avg_score: 7.5 });
+    const withNull = makeNode({ id: 'b', avg_score: null });
+    const { nodes } = buildSceneData([withScore, withNull]);
+    expect(nodes.find(n => n.id === 'a')!.avgScore).toBe(7.5);
+    expect(nodes.find(n => n.id === 'b')!.avgScore).toBeNull();
   });
 });

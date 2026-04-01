@@ -55,6 +55,8 @@ vi.mock('./TopologyControls.svelte', () => ({
 vi.mock('$lib/api/clusters', () => ({
   getClusterTree: vi.fn().mockResolvedValue([]),
   getClusterStats: vi.fn().mockResolvedValue(null),
+  getClusterSimilarityEdges: vi.fn().mockResolvedValue([]),
+  getClusterInjectionEdges: vi.fn().mockResolvedValue([]),
   triggerRecluster: vi.fn().mockResolvedValue({ status: 'completed', message: 'ok' }),
   matchPattern: vi.fn().mockResolvedValue({ match: null }),
   getClusterDetail: vi.fn().mockResolvedValue(null),
