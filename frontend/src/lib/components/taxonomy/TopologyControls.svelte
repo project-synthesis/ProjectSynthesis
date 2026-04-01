@@ -121,6 +121,12 @@
     <span class="stats-sep">|</span>
     <span>{filteredCounts.template} templates</span>
   </div>
+
+  <!-- Visual encoding legend -->
+  <div class="legend">
+    <span>Bright wireframe = high coherence</span>
+    <span>Vivid color = high score</span>
+  </div>
 </div>
 
 <style>
@@ -231,5 +237,14 @@
   .stats-sep {
     margin: 0 4px;
     opacity: 0.4;
+  }
+
+  .legend {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-dim);
   }
 </style>

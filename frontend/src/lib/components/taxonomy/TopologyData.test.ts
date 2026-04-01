@@ -121,8 +121,8 @@ describe('buildSceneData', () => {
 describe('assignLodVisibility', () => {
   it('hides low-persistence nodes at far LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.9, state: 'active', label: 'A', visible: true },
-      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.2, state: 'active', label: 'B', visible: true },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.9, state: 'active', label: 'A', visible: true, coherence: 0.5, avgScore: null },
+      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.2, state: 'active', label: 'B', visible: true, coherence: 0.5, avgScore: null },
     ];
     assignLodVisibility(nodes, 'far');
     expect(nodes[0].visible).toBe(true);
@@ -131,7 +131,7 @@ describe('assignLodVisibility', () => {
 
   it('shows all nodes at near LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'A', visible: false },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'A', visible: false, coherence: 0.5, avgScore: null },
     ];
     assignLodVisibility(nodes, 'near');
     expect(nodes[0].visible).toBe(true);
@@ -139,8 +139,8 @@ describe('assignLodVisibility', () => {
 
   it('shows nodes with threshold-level persistence at mid LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.3, state: 'active', label: 'A', visible: false },
-      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'B', visible: false },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.3, state: 'active', label: 'A', visible: false, coherence: 0.5, avgScore: null },
+      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'B', visible: false, coherence: 0.5, avgScore: null },
     ];
     assignLodVisibility(nodes, 'mid');
     expect(nodes[0].visible).toBe(true);   // 0.3 >= 0.2

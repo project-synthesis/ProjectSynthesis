@@ -20,6 +20,8 @@ export interface SceneNode {
   label: string;
   visible: boolean;
   parentId?: string;
+  coherence: number;      // [0, 1] → wireframe brightness
+  avgScore: number | null; // [1, 10] → color saturation
 }
 
 /** Opacity by lifecycle state — candidates are translucent. */
@@ -118,6 +120,8 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
       label: node.label ?? '',
       visible: true,
       parentId: node.parent_id ?? undefined,
+      coherence: node.coherence ?? 0.5,
+      avgScore: node.avg_score ?? null,
     });
 
     // Hierarchical edges from parent_id

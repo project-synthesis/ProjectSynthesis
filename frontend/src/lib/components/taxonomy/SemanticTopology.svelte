@@ -147,8 +147,13 @@
       group.userData = { isDomain };
 
       // Fill: dark tinted interior (domains slightly darker = edge-dominant)
+      // Non-domain nodes: modulate fill scalar by avgScore for saturation encoding
+      let fillScalar = isDomain ? 0.08 : 0.15;
+      if (!isDomain && node.avgScore != null) {
+        fillScalar *= 0.7 + 0.3 * Math.min(1, Math.max(0, node.avgScore / 10));
+      }
       const fillMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(node.color).multiplyScalar(isDomain ? 0.08 : 0.15),
+        color: new THREE.Color(node.color).multiplyScalar(fillScalar),
         transparent: true,
         opacity: node.opacity * 0.9,
       });
@@ -182,11 +187,12 @@
         domainGroups.push(group);
       } else {
         // Cluster: dense triangular wireframe contour
+        // Coherence maps [0,1] to opacity multiplier [0.5, 1.0]
         const wireMat = new THREE.MeshBasicMaterial({
           color: node.color,
           wireframe: true,
           transparent: true,
-          opacity: node.opacity * 0.85,
+          opacity: node.opacity * (0.5 + 0.5 * node.coherence),
         });
         const wire = new THREE.Mesh(clusterWireGeo, wireMat);
         wire.scale.setScalar(node.size);
@@ -525,7 +531,7 @@
       const dimFactor = dimmed ? 0.15 : 1.0;
 
       // Apply dim factor to all materials in the group.
-      // Cluster: fill (0.9) + wire (0.85). Domain: fill (0.9) + edges (0.9) + points (0.95).
+      // Cluster: fill (0.9) + wire (coherence-based). Domain: fill (0.9) + edges (0.9) + points (0.95).
       const isDomain = group.userData?.isDomain === true;
       for (let i = 0; i < group.children.length; i++) {
         const child = group.children[i];
@@ -538,7 +544,7 @@
         } else if (isDomain) {
           baseOpacity = node.opacity * (i === 2 ? 0.95 : 0.9); // edges or points
         } else {
-          baseOpacity = node.opacity * 0.85;             // cluster wire
+          baseOpacity = node.opacity * (0.5 + 0.5 * node.coherence); // cluster wire (coherence)
         }
         mat.opacity = baseOpacity * dimFactor;
       }
