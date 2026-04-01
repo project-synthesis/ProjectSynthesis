@@ -83,8 +83,8 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
         ("function", 0.7), ("api", 0.8), ("endpoint", 0.8),
         ("bug", 0.9), ("test", 0.7), ("deploy", 0.6),
         ("class", 0.6), ("module", 0.6), ("code", 0.5),
-        ("fix", 0.6), ("build", 0.5), ("migrate", 0.7),
-        ("database", 0.5),
+        ("fix", 0.6), ("build", 0.7), ("migrate", 0.7),
+        ("database", 0.5), ("calculate", 0.6),
     ],
     "writing": [
         ("write", 0.6), ("draft", 0.9), ("blog", 1.0),

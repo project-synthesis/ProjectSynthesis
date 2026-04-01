@@ -46,6 +46,7 @@ from app.services.pipeline_constants import (
     compute_optimize_max_tokens,
     resolve_effective_strategy,
     semantic_check,
+    semantic_upgrade_general,
 )
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
@@ -315,6 +316,12 @@ class PipelineOrchestrator:
 
             # Semantic check + domain confidence gate (shared with sampling pipeline)
             confidence = semantic_check(analysis.task_type, raw_prompt, analysis.confidence)
+
+            # Upgrade "general" to a specific type when strong keywords are present
+            effective_task_type = semantic_upgrade_general(analysis.task_type, raw_prompt)
+            if effective_task_type != analysis.task_type:
+                analysis.task_type = effective_task_type
+
             logger.info(
                 "Domain resolution: raw='%s' confidence=%.2f (analyzer=%.2f) trace_id=%s",
                 analysis.domain, confidence, analysis.confidence, trace_id,

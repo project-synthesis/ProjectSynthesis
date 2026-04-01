@@ -68,6 +68,7 @@ from app.services.pipeline_constants import (
     compute_optimize_max_tokens,
     resolve_effective_strategy,
     semantic_check,
+    semantic_upgrade_general,
 )
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
@@ -653,6 +654,11 @@ async def run_sampling_pipeline(
     # Semantic check + domain confidence gate (shared with internal pipeline)
     confidence = semantic_check(analysis.task_type, prompt, analysis.confidence)
 
+    # Upgrade "general" to a specific type when strong keywords are present
+    effective_task_type = semantic_upgrade_general(analysis.task_type, prompt)
+    if effective_task_type != analysis.task_type:
+        analysis.task_type = effective_task_type
+
     # Resolve domain via domain nodes (replaces hardcoded VALID_DOMAINS whitelist)
     _raw_domain = getattr(analysis, "domain", None) or "general"
     try:
@@ -1156,6 +1162,12 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
     # Domain resolution via DomainResolver (mirrors pipeline.py)
     _analyze_domain_raw = getattr(analysis, "domain", None) or "general"
     _analyze_confidence = semantic_check(analysis.task_type, prompt, analysis.confidence)
+
+    # Upgrade "general" to a specific type when strong keywords are present
+    _upgraded_task_type = semantic_upgrade_general(analysis.task_type, prompt)
+    if _upgraded_task_type != analysis.task_type:
+        analysis.task_type = _upgraded_task_type
+
     try:
         from app.tools._shared import get_domain_resolver
         _analyze_resolver = get_domain_resolver()

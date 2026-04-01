@@ -123,6 +123,96 @@ def semantic_check(task_type: str, raw_prompt: str, confidence: float) -> float:
     return confidence
 
 
+# ---------------------------------------------------------------------------
+# Keyword sets for upgrading ``general`` to a specific task_type.
+#
+# Kept intentionally conservative — only high-signal keywords that almost
+# always indicate a particular task_type.  Each set has a "strong" subset
+# where a single match suffices, and a broader set where 2+ matches are
+# required.
+# ---------------------------------------------------------------------------
+
+_UPGRADE_SIGNALS: dict[str, tuple[set[str], set[str]]] = {
+    # (strong_keywords — 1 match enough, broad_keywords — need 2+)
+    "coding": (
+        {"implement", "refactor", "debug", "deploy", "migrate"},
+        {"build", "api", "endpoint", "function", "code", "module", "fix",
+         "database", "schema", "test", "class", "calculate"},
+    ),
+    "analysis": (
+        {"analyze", "evaluate", "diagnose"},
+        {"compare", "assess", "metrics", "framework", "review", "benchmark",
+         "trade-off", "tradeoff", "investigate"},
+    ),
+    "writing": (
+        {"draft", "blog", "article", "essay"},
+        {"write", "copy", "email", "editorial", "narrative", "publish",
+         "document", "template"},
+    ),
+    "data": (
+        {"etl", "dataframe", "pandas"},
+        {"dataset", "csv", "pipeline", "aggregate", "visualization",
+         "transform"},
+    ),
+    "system": (
+        {"orchestrate", "prompt engineer"},
+        {"automate", "agent", "workflow", "infrastructure"},
+    ),
+}
+
+
+def semantic_upgrade_general(task_type: str, raw_prompt: str) -> str:
+    """Upgrade ``general`` to a specific task_type when keywords are strong.
+
+    Called after the LLM / heuristic analyzer returns a task_type.  When the
+    result is ``"general"`` but the prompt contains clear signals for a
+    specific type, overrides to that type.  Two thresholds:
+
+    * **Strong**: a single keyword from the strong set is enough.
+    * **Broad**: requires 2+ keyword matches from the broad set.
+
+    If multiple types qualify, the one with the highest combined match
+    count wins.  On tie, the first in declaration order wins.
+
+    Used by both internal and sampling pipelines after ``semantic_check()``.
+    """
+    if task_type != "general":
+        return task_type
+
+    prompt_lower = raw_prompt.lower()
+    words = set(prompt_lower.split())
+
+    best_type: str | None = None
+    best_score: int = 0
+
+    for candidate, (strong, broad) in _UPGRADE_SIGNALS.items():
+        # Strong keywords: check both word-boundary (single words) and
+        # substring (multi-word phrases like "prompt engineer")
+        strong_hits = len(words & strong)
+        # Multi-word strong keywords need substring check
+        for kw in strong:
+            if " " in kw and kw in prompt_lower:
+                strong_hits += 1
+
+        broad_hits = len(words & broad)
+
+        if strong_hits >= 1 or broad_hits >= 2:
+            score = strong_hits * 3 + broad_hits
+            if score > best_score:
+                best_score = score
+                best_type = candidate
+
+    if best_type:
+        logger.info(
+            "Semantic upgrade: task_type 'general' → '%s' "
+            "(strong keyword or 2+ broad matches found in prompt)",
+            best_type,
+        )
+        return best_type
+
+    return task_type
+
+
 def resolve_effective_strategy(
     selected_strategy: str,
     available: list[str],
