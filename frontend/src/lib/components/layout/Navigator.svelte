@@ -8,6 +8,8 @@
   import { scoreColor, taxonomyColor } from '$lib/utils/colors';
   import { formatScore, formatRelativeTime } from '$lib/utils/formatting';
   import { forceSamplingTooltip, forcePassthroughTooltip } from '$lib/utils/mcp-tooltips';
+  import { STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
+  import { tooltip } from '$lib/actions/tooltip';
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
   import { samplingGuide } from '$lib/stores/sampling-guide.svelte';
   import { routing } from '$lib/stores/routing.svelte';
@@ -869,10 +871,10 @@
                   {#if forgeStore.scoreHealth}
                     <div class="data-row">
                       <span class="data-label">Score mean</span>
-                      <span class="data-value font-mono">{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
+                      <span class="data-value font-mono" use:tooltip={STAT_TOOLTIPS.mean}>{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
                     </div>
                     <div class="data-row">
-                      <span class="data-label">Score stddev</span>
+                      <span class="data-label" use:tooltip={STAT_TOOLTIPS.stddev}>Score stddev</span>
                       <span class="data-value font-mono"
                         style={forgeStore.scoreHealth.clustering_warning ? 'color: var(--color-neon-red)' : ''}>
                         {forgeStore.scoreHealth.last_n_stddev.toFixed(2)}
@@ -924,10 +926,10 @@
                   {#if forgeStore.scoreHealth}
                     <div class="data-row">
                       <span class="data-label">Score mean</span>
-                      <span class="data-value font-mono">{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
+                      <span class="data-value font-mono" use:tooltip={STAT_TOOLTIPS.mean}>{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
                     </div>
                     <div class="data-row">
-                      <span class="data-label">Score stddev</span>
+                      <span class="data-label" use:tooltip={STAT_TOOLTIPS.stddev}>Score stddev</span>
                       <span class="data-value font-mono"
                         style={forgeStore.scoreHealth.clustering_warning ? 'color: var(--color-neon-red)' : ''}>
                         {forgeStore.scoreHealth.last_n_stddev.toFixed(2)}
@@ -989,10 +991,10 @@
                   {#if forgeStore.scoreHealth}
                     <div class="data-row">
                       <span class="data-label">Score mean</span>
-                      <span class="data-value font-mono">{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
+                      <span class="data-value font-mono" use:tooltip={STAT_TOOLTIPS.mean}>{forgeStore.scoreHealth.last_n_mean.toFixed(1)}</span>
                     </div>
                     <div class="data-row">
-                      <span class="data-label">Score stddev</span>
+                      <span class="data-label" use:tooltip={STAT_TOOLTIPS.stddev}>Score stddev</span>
                       <span class="data-value font-mono"
                         style={forgeStore.scoreHealth.clustering_warning ? 'color: var(--color-neon-red)' : ''}>
                         {forgeStore.scoreHealth.last_n_stddev.toFixed(2)}

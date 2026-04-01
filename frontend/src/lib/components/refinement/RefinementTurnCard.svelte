@@ -2,6 +2,8 @@
   import type { RefinementTurn } from '$lib/api/client';
   import { DIMENSION_LABELS } from '$lib/utils/dimensions';
   import { formatScore, formatDelta } from '$lib/utils/formatting';
+  import { DIMENSION_TOOLTIPS, REFINEMENT_TOOLTIPS } from '$lib/utils/metric-tooltips';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
     turn: RefinementTurn;
@@ -47,13 +49,14 @@
     </span>
     <span class="turn-spacer"></span>
     {#if overallScore !== null}
-      <span class="overall-score">{formatScore(overallScore)}</span>
+      <span class="overall-score" use:tooltip={DIMENSION_TOOLTIPS.overall}>{formatScore(overallScore)}</span>
     {/if}
     {#each topDeltas as [dim, delta]}
       <span
         class="delta-badge"
         class:positive={delta > 0}
         class:negative={delta < 0}
+        use:tooltip={REFINEMENT_TOOLTIPS.turn_delta}
       >{formatDelta(delta)} {(DIMENSION_LABELS[dim] ?? dim).slice(0, 4)}</span>
     {/each}
   </div>
@@ -67,12 +70,13 @@
             {@const delta = turn.deltas?.[dim] ?? null}
             <li class="score-item">
               <span class="dim-name">{DIMENSION_LABELS[dim] ?? dim}</span>
-              <span class="dim-score">{formatScore(value)}</span>
+              <span class="dim-score" use:tooltip={DIMENSION_TOOLTIPS[dim] ?? ''}>{formatScore(value)}</span>
               {#if delta !== null && delta !== 0}
                 <span
                   class="dim-delta"
                   class:positive={delta > 0}
                   class:negative={delta < 0}
+                  use:tooltip={REFINEMENT_TOOLTIPS.turn_delta}
                 >{formatDelta(delta)}</span>
               {/if}
             </li>

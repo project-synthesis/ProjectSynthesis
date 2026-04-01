@@ -6,6 +6,7 @@
   import { addToast } from '$lib/stores/toast.svelte';
   import { scoreColor, taxonomyColor, stateColor } from '$lib/utils/colors';
   import { formatScore, parsePrimaryDomain } from '$lib/utils/formatting';
+  import { tooltip } from '$lib/actions/tooltip';
 
   const PAGE_SIZE = 50;
 
@@ -229,7 +230,7 @@
           >
             <span class="domain-dot" style="background: {taxonomyColor(result.domain)};"></span>
             <span class="search-label">{result.label}</span>
-            <span class="search-score font-mono">{(result.score * 100).toFixed(0)}%</span>
+            <span class="search-score font-mono" use:tooltip={'Centroid cosine similarity to search text'}>{(result.score * 100).toFixed(0)}%</span>
           </button>
         {/each}
       {/if}

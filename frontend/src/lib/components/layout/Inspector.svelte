@@ -5,6 +5,8 @@
   import { domainStore } from '$lib/stores/domains.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { taxonomyColor, scoreColor, qHealthColor, stateColor, DIMENSION_COLORS } from '$lib/utils/colors';
+  import { TAXONOMY_TOOLTIPS, CLUSTER_TOOLTIPS, STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
+  import { tooltip } from '$lib/actions/tooltip';
 
   /** Deduplicate array by `id` field (prevents Svelte keyed each errors). */
   function dedupe<T extends { id: string }>(items: T[]): T[] {
@@ -247,20 +249,20 @@
 
           <!-- Stats row -->
           <div class="meta-section">
-            <div class="meta-row" title="Times this cluster's patterns were applied to new optimizations">
+            <div class="meta-row" use:tooltip={CLUSTER_TOOLTIPS.usage_count}>
               <span class="meta-label">Usage</span>
               <span class="meta-value meta-value--cyan">{family.usage_count}</span>
             </div>
-            <div class="meta-row">
+            <div class="meta-row" use:tooltip={CLUSTER_TOOLTIPS.member_count}>
               <span class="meta-label">Members</span>
               <span class="meta-value">{family.member_count}</span>
             </div>
-            <div class="meta-row">
+            <div class="meta-row" use:tooltip={CLUSTER_TOOLTIPS.avg_score}>
               <span class="meta-label">Avg Score</span>
               <span class="meta-value meta-value--cyan">{formatScore(family.avg_score)}</span>
             </div>
             {#if family.preferred_strategy}
-              <div class="meta-row">
+              <div class="meta-row" use:tooltip={CLUSTER_TOOLTIPS.preferred_strategy}>
                 <span class="meta-label">Strategy</span>
                 <span class="meta-value meta-value--cyan">{family.preferred_strategy}</span>
               </div>
@@ -302,7 +304,7 @@
                 {#each dedupe(family.meta_patterns) as mp (mp.id)}
                   <div class="pattern-item">
                     <span class="pattern-text">{mp.pattern_text}</span>
-                    <span class="source-badge">{mp.source_count}</span>
+                    <span class="source-badge" use:tooltip={CLUSTER_TOOLTIPS.source_count}>{mp.source_count}</span>
                   </div>
                 {/each}
               </div>
@@ -357,15 +359,15 @@
         {@const stats = clustersStore.taxonomyStats}
         <div class="health-panel">
           <div class="health-title">TAXONOMY HEALTH</div>
-          <div class="health-metric">
+          <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.q_system}>
             <span class="metric-label">Q_system</span>
             <span class="metric-value" style="color: {qHealthColor(stats.q_system)}">{stats.q_system?.toFixed(3) ?? '—'}</span>
           </div>
-          <div class="health-metric">
+          <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.coherence}>
             <span class="metric-label">Coherence</span>
             <span class="metric-value">{stats.q_coherence?.toFixed(3) ?? '—'}</span>
           </div>
-          <div class="health-metric">
+          <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.separation}>
             <span class="metric-label">Separation</span>
             <span class="metric-value">{stats.q_separation?.toFixed(3) ?? '—'}</span>
           </div>
@@ -379,11 +381,11 @@
             </div>
           {/if}
           <div class="health-counts">
-            <span>{stats.nodes?.active ?? 0} active</span>
+            <span use:tooltip={TAXONOMY_TOOLTIPS.active}>{stats.nodes?.active ?? 0} active</span>
             <span class="dot-sep">·</span>
-            <span>{stats.nodes?.candidate ?? 0} candidate</span>
+            <span use:tooltip={TAXONOMY_TOOLTIPS.candidate}>{stats.nodes?.candidate ?? 0} candidate</span>
             <span class="dot-sep">·</span>
-            <span>{stats.nodes?.template ?? 0} template</span>
+            <span use:tooltip={TAXONOMY_TOOLTIPS.template}>{stats.nodes?.template ?? 0} template</span>
           </div>
         </div>
       {:else}
@@ -513,7 +515,7 @@
             {/each}
           {/if}
           {#if activeResult?.duration_ms}
-            <div class="meta-row">
+            <div class="meta-row" use:tooltip={STAT_TOOLTIPS.duration(activeResult.duration_ms)}>
               <span class="meta-label">Duration</span>
               <span class="meta-value">{(activeResult.duration_ms / 1000).toFixed(1)}s</span>
             </div>

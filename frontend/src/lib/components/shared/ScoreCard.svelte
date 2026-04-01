@@ -2,6 +2,8 @@
   import type { DimensionScores } from '$lib/api/client';
   import { DIMENSION_LABELS } from '$lib/utils/dimensions';
   import { formatScore, formatDelta } from '$lib/utils/formatting';
+  import { DIMENSION_TOOLTIPS, SCORE_TOOLTIPS } from '$lib/utils/metric-tooltips';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
     scores: DimensionScores;
@@ -22,7 +24,7 @@
   {#if overallScore !== null && overallScore !== undefined}
     <div class="overall-row">
       <span class="overall-label">Overall</span>
-      <span class="overall-value">{formatScore(overallScore)}</span>
+      <span class="overall-value" use:tooltip={DIMENSION_TOOLTIPS.overall}>{formatScore(overallScore)}</span>
     </div>
   {/if}
 
@@ -43,16 +45,17 @@
       {@const delta = deltas?.[dim] ?? null}
       {@const orig = (originalScores as Record<string, number> | null)?.[dim] ?? null}
       <span class="dim-label">{DIMENSION_LABELS[dim] ?? dim}</span>
-      <span class="dim-cell dim-value">{formatScore(value)}</span>
+      <span class="dim-cell dim-value" use:tooltip={DIMENSION_TOOLTIPS[dim] ?? ''}>{formatScore(value)}</span>
       {#if hasDelta}
         <span
           class="dim-cell dim-delta"
           class:positive={delta != null && delta > 0}
           class:negative={delta != null && delta < 0}
+          use:tooltip={delta != null ? SCORE_TOOLTIPS.delta(DIMENSION_LABELS[dim] ?? dim) : ''}
         >{delta != null ? formatDelta(delta) : ''}</span>
       {/if}
       {#if hasOrig}
-        <span class="dim-cell dim-orig">{orig != null ? formatScore(orig) : ''}</span>
+        <span class="dim-cell dim-orig" use:tooltip={orig != null ? SCORE_TOOLTIPS.original(DIMENSION_LABELS[dim] ?? dim) : ''}>{orig != null ? formatScore(orig) : ''}</span>
       {/if}
     {/each}
   </div>

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { qHealthColor } from '$lib/utils/colors';
+  import { TAXONOMY_TOOLTIPS } from '$lib/utils/metric-tooltips';
+  import { tooltip } from '$lib/actions/tooltip';
   import type { LODTier } from './TopologyRenderer';
 
   interface Props {
@@ -69,7 +71,7 @@
 <div class="topology-controls">
   <!-- Q_system badge -->
   {#if qSystem != null}
-    <div class="q-badge" style="border-color: {qColor}">
+    <div class="q-badge" style="border-color: {qColor}" use:tooltip={TAXONOMY_TOOLTIPS.q_system}>
       <span class="q-label">Q</span>
       <span class="q-value" style="color: {qColor}">{qSystem.toFixed(3)}</span>
     </div>
@@ -125,11 +127,11 @@
 
   <!-- Node counts (reflects state filter) -->
   <div class="stats-row">
-    <span>{filteredCounts.active} active</span>
+    <span use:tooltip={TAXONOMY_TOOLTIPS.active}>{filteredCounts.active} active</span>
     <span class="stats-sep">|</span>
-    <span>{filteredCounts.candidate} candidates</span>
+    <span use:tooltip={TAXONOMY_TOOLTIPS.candidate}>{filteredCounts.candidate} candidates</span>
     <span class="stats-sep">|</span>
-    <span>{filteredCounts.template} templates</span>
+    <span use:tooltip={TAXONOMY_TOOLTIPS.template}>{filteredCounts.template} templates</span>
   </div>
 
   <!-- Visual encoding legend -->
