@@ -381,7 +381,7 @@ async def assign_cluster(
         pos = interpolate_position(embedding, sibling_data)
         if pos is not None:
             new_cluster.umap_x, new_cluster.umap_y, new_cluster.umap_z = pos
-            new_cluster.cluster_metadata = {"position_source": "interpolated"}
+            new_cluster.cluster_metadata = {**(new_cluster.cluster_metadata or {}), "position_source": "interpolated"}
             logger.debug(
                 "Interpolated position for new cluster '%s': (%.2f, %.2f, %.2f)",
                 label, pos[0], pos[1], pos[2],

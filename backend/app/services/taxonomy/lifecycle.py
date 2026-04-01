@@ -17,6 +17,7 @@ Reference: Spec Sections 3.1–3.5.
 from __future__ import annotations
 
 import logging
+import math
 import random
 from collections import Counter
 from datetime import datetime, timezone
@@ -400,14 +401,17 @@ async def attempt_split(
                 and parent_node.umap_y is not None
                 and parent_node.umap_z is not None
             ):
+                # Split children positioned near parent (not sibling-weighted) because
+                # they emerge from decomposing the parent — proximity to parent preserves
+                # the visual continuity of the split operation.
                 # Random direction on a sphere, fixed radius
-                theta = random.uniform(0, 2 * 3.141592653589793)
-                phi = random.uniform(0, 3.141592653589793)
+                theta = random.uniform(0, 2 * math.pi)
+                phi = random.uniform(0, math.pi)
                 radius = 2.0
                 child.umap_x = parent_node.umap_x + radius * np.sin(phi) * np.cos(theta)
                 child.umap_y = parent_node.umap_y + radius * np.sin(phi) * np.sin(theta)
                 child.umap_z = parent_node.umap_z + radius * np.cos(phi)
-                child.cluster_metadata = {"position_source": "interpolated"}
+                child.cluster_metadata = {**(child.cluster_metadata or {}), "position_source": "interpolated"}
 
             db.add(child)
             await db.flush()
