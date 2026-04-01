@@ -93,6 +93,26 @@
     </div>
   {/if}
 
+  <!-- Similarity toggle -->
+  <button
+    class="similarity-btn"
+    class:similarity-active={clustersStore.showSimilarityEdges}
+    onclick={() => { clustersStore.showSimilarityEdges = !clustersStore.showSimilarityEdges; }}
+    title="Toggle similarity edges"
+  >
+    Similarity
+  </button>
+
+  <!-- Injection toggle -->
+  <button
+    class="injection-btn"
+    class:injection-active={clustersStore.showInjectionEdges}
+    onclick={() => { clustersStore.showInjectionEdges = !clustersStore.showInjectionEdges; }}
+    title="Toggle injection provenance edges"
+  >
+    Injection
+  </button>
+
   <!-- Recluster button -->
   <button
     class="recluster-btn"
@@ -110,6 +130,12 @@
     <span>{filteredCounts.candidate} candidates</span>
     <span class="stats-sep">|</span>
     <span>{filteredCounts.template} templates</span>
+  </div>
+
+  <!-- Visual encoding legend -->
+  <div class="legend">
+    <span>Bright wireframe = high coherence</span>
+    <span>Vivid color = high score</span>
   </div>
 </div>
 
@@ -172,6 +198,46 @@
     border-color: var(--tier-accent, var(--color-neon-cyan));
   }
 
+  .similarity-btn {
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-dim);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .similarity-btn:hover {
+    border-color: var(--color-neon-cyan);
+    color: var(--color-neon-cyan);
+  }
+
+  .similarity-btn.similarity-active {
+    border-color: var(--color-neon-cyan);
+    color: var(--color-neon-cyan);
+  }
+
+  .injection-btn {
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-dim);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .injection-btn:hover {
+    border-color: #ff9500;
+    color: #ff9500;
+  }
+
+  .injection-btn.injection-active {
+    border-color: #ff9500;
+    color: #ff9500;
+  }
+
   .recluster-btn {
     padding: 2px 8px;
     background: transparent;
@@ -201,5 +267,14 @@
   .stats-sep {
     margin: 0 4px;
     opacity: 0.4;
+  }
+
+  .legend {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-dim);
   }
 </style>

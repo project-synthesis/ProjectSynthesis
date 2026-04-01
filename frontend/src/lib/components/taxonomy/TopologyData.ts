@@ -4,7 +4,7 @@
  * Pure functions — no Three.js dependency (just typed arrays and interfaces).
  * The renderer consumes SceneData to build Three.js objects.
  */
-import type { ClusterNode } from '$lib/api/clusters';
+import type { ClusterNode, SimilarityEdge, InjectionEdge } from '$lib/api/clusters';
 import type { LODTier } from './TopologyRenderer';
 import { taxonomyColor, stateColor } from '$lib/utils/colors';
 import { parsePrimaryDomain } from '$lib/utils/formatting';
@@ -20,6 +20,8 @@ export interface SceneNode {
   label: string;
   visible: boolean;
   parentId?: string;
+  coherence: number;      // [0, 1] → wireframe brightness
+  avgScore: number | null; // [1, 10] → color saturation
 }
 
 /** Opacity by lifecycle state — candidates are translucent. */
@@ -47,7 +49,7 @@ function stateNodeColor(state: string, oklabColor: string | null): string {
 export interface SceneEdge {
   from: string;
   to: string;
-  type: 'hierarchical' | 'similarity';
+  type: 'hierarchical' | 'similarity' | 'injection';
 }
 
 export interface SceneData {
@@ -68,7 +70,7 @@ const LOD_THRESHOLDS: Record<LODTier, number> = {
  * Convert flat taxonomy node list into scene-ready nodes and edges.
  * Backend `get_tree` returns a flat list — we build edges from `parent_id`.
  */
-export function buildSceneData(flatNodes: ClusterNode[]): SceneData {
+export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: SimilarityEdge[], injectionEdges?: InjectionEdge[]): SceneData {
   const nodes: SceneNode[] = [];
   const edges: SceneEdge[] = [];
 
@@ -118,11 +120,36 @@ export function buildSceneData(flatNodes: ClusterNode[]): SceneData {
       label: node.label ?? '',
       visible: true,
       parentId: node.parent_id ?? undefined,
+      coherence: node.coherence ?? 0.5,
+      avgScore: node.avg_score ?? null,
     });
 
     // Hierarchical edges from parent_id
     if (node.parent_id) {
       edges.push({ from: node.parent_id, to: node.id, type: 'hierarchical' });
+    }
+  }
+
+  // Optional edge layers — build node lookup once for both
+  const nodeIdSet = (similarityEdges || injectionEdges)
+    ? new Set(nodes.map(n => n.id))
+    : null;
+
+  // Similarity edges from embedding index pairwise similarities
+  if (similarityEdges && nodeIdSet) {
+    for (const edge of similarityEdges) {
+      if (nodeIdSet.has(edge.from_id) && nodeIdSet.has(edge.to_id)) {
+        edges.push({ from: edge.from_id, to: edge.to_id, type: 'similarity' });
+      }
+    }
+  }
+
+  // Injection provenance edges (directed: source cluster → target cluster)
+  if (injectionEdges && nodeIdSet) {
+    for (const edge of injectionEdges) {
+      if (nodeIdSet.has(edge.source_id) && nodeIdSet.has(edge.target_id)) {
+        edges.push({ from: edge.source_id, to: edge.target_id, type: 'injection' });
+      }
     }
   }
 

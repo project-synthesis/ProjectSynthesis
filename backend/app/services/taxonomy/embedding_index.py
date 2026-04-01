@@ -28,6 +28,54 @@ class EmbeddingIndex:
     def size(self) -> int:
         return len(self._ids)
 
+    def pairwise_similarities(
+        self, threshold: float = 0.50, k: int = 100
+    ) -> list[tuple[str, str, float]]:
+        """All pairwise cosine similarities above threshold. Lock-free — reads current snapshot.
+
+        Returns list of (id_a, id_b, score) sorted descending, truncated to k.
+        Each pair appears once (upper triangle only).
+        """
+        matrix = self._matrix  # snapshot reference
+        ids = self._ids
+        n = len(ids)
+        if n < 2:
+            return []
+        if n > 2000:
+            logger.warning("pairwise_similarities skipped: index too large (%d)", n)
+            return []
+
+        # (n, n) cosine similarity — rows are L2-normalized
+        scores = matrix @ matrix.T
+
+        # Zero diagonal
+        np.fill_diagonal(scores, 0.0)
+
+        # Upper triangle only (avoid duplicates)
+        rows, cols = np.triu_indices(n, k=1)
+        upper_scores = scores[rows, cols]
+
+        # Filter by threshold
+        mask = upper_scores >= threshold
+        if not mask.any():
+            return []
+
+        valid_rows = rows[mask]
+        valid_cols = cols[mask]
+        valid_scores = upper_scores[mask]
+
+        # Sort descending, truncate to k
+        if len(valid_scores) <= k:
+            order = np.argsort(-valid_scores)
+        else:
+            partition_idx = np.argpartition(-valid_scores, k)[:k]
+            order = partition_idx[np.argsort(-valid_scores[partition_idx])]
+
+        return [
+            (ids[int(valid_rows[i])], ids[int(valid_cols[i])], float(valid_scores[i]))
+            for i in order
+        ]
+
     def search(
         self, embedding: np.ndarray, k: int = 5, threshold: float = 0.72
     ) -> list[tuple[str, float]]:

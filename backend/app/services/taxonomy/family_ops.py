@@ -33,6 +33,7 @@ from app.models import (
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.services.embedding_service import EmbeddingService
 from app.services.prompt_loader import PromptLoader
+from app.services.taxonomy.projection import interpolate_position
 from app.utils.text_cleanup import parse_domain
 
 logger = logging.getLogger(__name__)
@@ -356,6 +357,35 @@ async def assign_cluster(
     )
     db.add(new_cluster)
     await db.flush()  # populate ID
+
+    # Interpolate UMAP position from positioned siblings (same parent/domain)
+    if domain_node is not None:
+        sibling_data: list[tuple[np.ndarray, float, float, float]] = []
+        for c_row in clusters:
+            if (
+                c_row.parent_id == domain_node.id
+                and c_row.umap_x is not None
+                and c_row.umap_y is not None
+                and c_row.umap_z is not None
+            ):
+                try:
+                    sib_emb = np.frombuffer(
+                        c_row.centroid_embedding, dtype=np.float32
+                    )
+                    sibling_data.append(
+                        (sib_emb, c_row.umap_x, c_row.umap_y, c_row.umap_z)
+                    )
+                except (ValueError, TypeError):
+                    continue
+
+        pos = interpolate_position(embedding, sibling_data)
+        if pos is not None:
+            new_cluster.umap_x, new_cluster.umap_y, new_cluster.umap_z = pos
+            new_cluster.cluster_metadata = {**(new_cluster.cluster_metadata or {}), "position_source": "interpolated"}
+            logger.debug(
+                "Interpolated position for new cluster '%s': (%.2f, %.2f, %.2f)",
+                label, pos[0], pos[1], pos[2],
+            )
 
     # Recount domain node's visible members (excludes archived and domain nodes)
     if domain_node is not None:

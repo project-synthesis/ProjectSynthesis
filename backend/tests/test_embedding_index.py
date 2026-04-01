@@ -73,3 +73,92 @@ async def test_scale_500_clusters(index):
     elapsed_ms = (time.perf_counter() - start) * 1000
     assert elapsed_ms < 10, f"Search took {elapsed_ms:.1f}ms, expected <10ms"
     assert len(results) <= 5
+
+
+# ---------------------------------------------------------------------------
+# pairwise_similarities tests
+# ---------------------------------------------------------------------------
+
+
+def test_pairwise_empty(index):
+    """Empty index returns no edges."""
+    assert index.pairwise_similarities(threshold=0.5, k=10) == []
+
+
+@pytest.mark.asyncio
+async def test_pairwise_single_item(index):
+    """Single item returns no edges (need at least 2)."""
+    await index.upsert("a", _rand_emb())
+    assert index.pairwise_similarities(threshold=0.0, k=10) == []
+
+
+@pytest.mark.asyncio
+async def test_pairwise_identical_vectors(index):
+    """Two identical vectors should have similarity ~1.0."""
+    emb = _rand_emb()
+    await index.upsert("a", emb)
+    await index.upsert("b", emb)
+    pairs = index.pairwise_similarities(threshold=0.9, k=10)
+    assert len(pairs) == 1
+    assert pairs[0][0] == "a"
+    assert pairs[0][1] == "b"
+    assert pairs[0][2] > 0.99
+
+
+@pytest.mark.asyncio
+async def test_pairwise_threshold_filtering(index):
+    """Random vectors should mostly be below high threshold."""
+    for i in range(10):
+        await index.upsert(f"c{i}", _rand_emb())
+    # Very high threshold should yield few or no edges (random 384-dim vectors)
+    pairs = index.pairwise_similarities(threshold=0.95, k=100)
+    for _, _, score in pairs:
+        assert score >= 0.95
+
+
+@pytest.mark.asyncio
+async def test_pairwise_k_truncation(index):
+    """Result list is truncated to k."""
+    emb = _rand_emb()
+    # Insert 5 near-identical vectors
+    for i in range(5):
+        noise = np.random.randn(384).astype(np.float32) * 0.01
+        await index.upsert(f"c{i}", emb + noise)
+    # 5 items = 10 upper-triangle pairs; request k=3
+    pairs = index.pairwise_similarities(threshold=0.0, k=3)
+    assert len(pairs) <= 3
+
+
+@pytest.mark.asyncio
+async def test_pairwise_sorted_descending(index):
+    """Edges are sorted by similarity descending."""
+    emb = _rand_emb()
+    await index.upsert("a", emb)
+    await index.upsert("b", emb + np.random.randn(384).astype(np.float32) * 0.01)
+    await index.upsert("c", emb + np.random.randn(384).astype(np.float32) * 0.5)
+    pairs = index.pairwise_similarities(threshold=0.0, k=100)
+    scores = [s for _, _, s in pairs]
+    assert scores == sorted(scores, reverse=True)
+
+
+@pytest.mark.asyncio
+async def test_pairwise_no_duplicates(index):
+    """Each pair appears only once (upper triangle)."""
+    for i in range(5):
+        await index.upsert(f"c{i}", _rand_emb())
+    pairs = index.pairwise_similarities(threshold=0.0, k=100)
+    pair_set = set()
+    for a, b, _ in pairs:
+        key = tuple(sorted([a, b]))
+        assert key not in pair_set, f"Duplicate pair: {key}"
+        pair_set.add(key)
+
+
+@pytest.mark.asyncio
+async def test_pairwise_no_self_edges(index):
+    """Diagonal is zeroed — no self-similarity edges."""
+    for i in range(5):
+        await index.upsert(f"c{i}", _rand_emb())
+    pairs = index.pairwise_similarities(threshold=0.0, k=100)
+    for a, b, _ in pairs:
+        assert a != b

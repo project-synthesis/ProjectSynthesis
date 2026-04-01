@@ -27,6 +27,7 @@ class InjectedPattern:
     cluster_label: str
     domain: str
     similarity: float
+    cluster_id: str = ""
 
 
 def format_injected_patterns(
@@ -62,6 +63,7 @@ async def auto_inject_patterns(
     taxonomy_engine: Any,
     db: AsyncSession,
     trace_id: str,
+    optimization_id: str | None = None,
 ) -> tuple[list[InjectedPattern], list[str]]:
     """Auto-inject cluster meta-patterns based on prompt embedding similarity.
 
@@ -74,6 +76,10 @@ async def auto_inject_patterns(
         taxonomy_engine: A ``TaxonomyEngine`` instance with an ``embedding_index``.
         db: Active async DB session for querying MetaPattern records.
         trace_id: Pipeline trace ID for log correlation.
+        optimization_id: Optional optimization ID for persisting injection
+            provenance as ``OptimizationPattern`` records with
+            ``relationship="injected"``.  When ``None`` (default), no records
+            are written — backward compatible with callers that lack an ID.
 
     Returns:
         ``(injected_patterns, cluster_ids)`` — both empty lists if no match or error.
@@ -133,7 +139,30 @@ async def auto_inject_patterns(
             cluster_label=label,
             domain=domain,
             similarity=round(sim, 2),
+            cluster_id=p.cluster_id,
         ))
+
+    # Persist injection provenance when optimization_id is available
+    if optimization_id and cluster_ids:
+        try:
+            from app.models import OptimizationPattern
+
+            for cid in cluster_ids:
+                db.add(OptimizationPattern(
+                    optimization_id=optimization_id,
+                    cluster_id=cid,
+                    relationship="injected",
+                    similarity=similarity_map.get(cid),
+                ))
+            logger.debug(
+                "Recorded %d injection provenance records for opt=%s. trace_id=%s",
+                len(cluster_ids), optimization_id, trace_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to record injection provenance: %s trace_id=%s",
+                exc, trace_id,
+            )
 
     # Detailed injection chain log for observability
     cluster_summary = ", ".join(

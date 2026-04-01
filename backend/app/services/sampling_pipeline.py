@@ -712,6 +712,10 @@ async def run_sampling_pipeline(
             _inject_engine = _get_inject_engine()
             if _inject_engine is not None:
                 async with async_session_factory() as _inject_db:
+                    # NOTE: optimization_id is intentionally NOT passed here.
+                    # Injection provenance records are written explicitly in the
+                    # persist block below (~line 1031) using the same DB session
+                    # as the Optimization record, avoiding FK violations.
                     auto_injected_patterns, auto_injected_cluster_ids = (
                         await auto_inject_patterns(
                             raw_prompt=prompt,
@@ -1027,6 +1031,29 @@ async def run_sampling_pipeline(
         # Track applied patterns in join table
         if applied_pattern_ids:
             await _track_applied_patterns(db, opt_id, applied_pattern_ids)
+
+        # Record injection provenance (which clusters influenced this optimization)
+        if auto_injected_cluster_ids:
+            try:
+                from app.models import OptimizationPattern
+
+                _inj_sim_map = {
+                    ip.cluster_id: ip.similarity
+                    for ip in auto_injected_patterns
+                    if ip.cluster_id
+                }
+                for _cid in auto_injected_cluster_ids:
+                    db.add(OptimizationPattern(
+                        optimization_id=opt_id,
+                        cluster_id=_cid,
+                        relationship="injected",
+                        similarity=_inj_sim_map.get(_cid),
+                    ))
+            except Exception as _inj_exc:
+                logger.warning(
+                    "Failed to record injection provenance (sampling): %s",
+                    _inj_exc,
+                )
 
         await db.commit()
 

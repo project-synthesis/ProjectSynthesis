@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
-from app.models import MetaPattern, Optimization, PromptCluster
+from app.models import MetaPattern, Optimization, OptimizationPattern, PromptCluster
 from app.schemas.clusters import (
     ClusterDetail,
     ClusterMatchResponse,
@@ -23,9 +23,13 @@ from app.schemas.clusters import (
     ClusterStats,
     ClusterTreeResponse,
     ClusterUpdateRequest,
+    InjectionEdge,
+    InjectionEdgesResponse,
     LinkedOptimization,
     MetaPatternItem,
     ReclusterResponse,
+    SimilarityEdge,
+    SimilarityEdgesResponse,
 )
 from app.services.taxonomy import TaxonomyEngine
 from app.services.taxonomy import get_engine as get_taxonomy_engine
@@ -105,6 +109,86 @@ async def get_cluster_stats(
     except Exception as exc:
         logger.error("GET /api/clusters/stats failed: %s", exc, exc_info=True)
         raise HTTPException(500, "Failed to load cluster stats") from exc
+
+
+@router.get("/api/clusters/similarity-edges")
+async def get_similarity_edges(
+    request: Request,
+    threshold: float = Query(0.50, ge=0.0, le=1.0),
+    max_edges: int = Query(100, ge=1, le=1000),
+) -> SimilarityEdgesResponse:
+    """Pairwise cosine similarity edges above threshold for topology overlay."""
+    try:
+        engine = _get_engine(request)
+        pairs = engine.embedding_index.pairwise_similarities(threshold, max_edges)
+        return SimilarityEdgesResponse(
+            edges=[
+                SimilarityEdge(from_id=a, to_id=b, similarity=s)
+                for a, b, s in pairs
+            ]
+        )
+    except Exception as exc:
+        logger.error("GET /api/clusters/similarity-edges failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Failed to compute similarity edges") from exc
+
+
+@router.get("/api/clusters/injection-edges")
+async def get_injection_edges(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InjectionEdgesResponse:
+    """Directed injection provenance edges: source cluster → target cluster.
+
+    Aggregates ``OptimizationPattern`` records with ``relationship="injected"``
+    and joins with ``Optimization`` to resolve each optimization's assigned
+    ``cluster_id`` (the target).  Returns weighted directed edges where weight
+    is the number of injection events along that source→target pair.
+
+    Only includes edges where both source and target clusters are non-archived.
+    """
+    try:
+        db.autoflush = False
+        stmt = (
+            select(
+                OptimizationPattern.cluster_id.label("source_id"),
+                Optimization.cluster_id.label("target_id"),
+                func.count().label("weight"),
+            )
+            .join(
+                Optimization,
+                OptimizationPattern.optimization_id == Optimization.id,
+            )
+            .where(
+                OptimizationPattern.relationship == "injected",
+                Optimization.cluster_id.isnot(None),
+                # Source cluster must still exist and be non-archived
+                OptimizationPattern.cluster_id.in_(
+                    select(PromptCluster.id).where(PromptCluster.state != "archived")
+                ),
+                # Target cluster must still exist and be non-archived
+                Optimization.cluster_id.in_(
+                    select(PromptCluster.id).where(PromptCluster.state != "archived")
+                ),
+            )
+            .group_by(
+                OptimizationPattern.cluster_id,
+                Optimization.cluster_id,
+            )
+        )
+
+        result = await db.execute(stmt)
+        rows = result.all()
+
+        edges = [
+            InjectionEdge(source_id=row.source_id, target_id=row.target_id, weight=row.weight)
+            for row in rows
+            if row.source_id != row.target_id  # exclude self-loops
+        ]
+
+        return InjectionEdgesResponse(edges=edges)
+    except Exception as exc:
+        logger.error("GET /api/clusters/injection-edges failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Failed to load injection edges") from exc
 
 
 @router.get("/api/clusters/templates")

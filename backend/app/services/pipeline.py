@@ -136,13 +136,17 @@ class PipelineOrchestrator:
         taxonomy_engine: Any,
         db: AsyncSession,
         trace_id: str,
+        optimization_id: str | None = None,
     ) -> tuple[list[InjectedPattern], list[str]]:
         """Auto-inject cluster meta-patterns based on prompt embedding similarity.
 
         Delegates to the shared ``pattern_injection.auto_inject_patterns()``
         helper so the same logic is reused by the sampling pipeline.
         """
-        return await auto_inject_patterns(raw_prompt, taxonomy_engine, db, trace_id)
+        return await auto_inject_patterns(
+            raw_prompt, taxonomy_engine, db, trace_id,
+            optimization_id=optimization_id,
+        )
 
     # ------------------------------------------------------------------
     # Main pipeline
@@ -403,6 +407,7 @@ class PipelineOrchestrator:
                             taxonomy_engine=taxonomy_engine,
                             db=db,
                             trace_id=trace_id,
+                            optimization_id=opt_id,
                         )
                     )
                     if auto_injected_patterns:

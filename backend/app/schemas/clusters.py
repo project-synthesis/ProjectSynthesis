@@ -125,3 +125,23 @@ class ClusterUpdateRequest(BaseModel):
     intent_label: str | None = None
     domain: str | None = None
     state: str | None = None
+
+
+class SimilarityEdge(BaseModel):
+    from_id: str
+    to_id: str
+    similarity: float
+
+
+class SimilarityEdgesResponse(BaseModel):
+    edges: list[SimilarityEdge]
+
+
+class InjectionEdge(BaseModel):
+    source_id: str  # cluster that provided patterns
+    target_id: str  # cluster the optimization was assigned to
+    weight: int     # number of injection events
+
+
+class InjectionEdgesResponse(BaseModel):
+    edges: list[InjectionEdge]
