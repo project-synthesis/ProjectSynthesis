@@ -20,11 +20,55 @@
   const SIMILARITY_EDGE_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
   const INJECTION_EDGE_COLOR = 0xff9500; // warm gold/amber
 
-  // Similarity edge group — persisted across rebuilds for visibility toggle
+  // Edge groups — persisted across rebuilds for visibility toggle
   let similarityEdgeGroup: THREE.Group | null = null;
-
-  // Injection edge group — persisted across rebuilds for visibility toggle
   let injectionEdgeGroup: THREE.Group | null = null;
+
+  // Opacity lookup caches — rebuilt per rebuildScene call
+  let _simScoreCache: Map<string, number> | null = null;
+  let _injWeightCache: { map: Map<string, number>; max: number } | null = null;
+
+  interface EdgeGroupOptions {
+    type: 'similarity' | 'injection';
+    color: number;
+    dashed: boolean;
+    tag: string;
+    opacityFn: (edge: import('./TopologyData').SceneEdge) => number;
+  }
+
+  /** Build a THREE.Group of line segments for a given edge type. */
+  function buildEdgeGroup(
+    data: SceneData,
+    nodeMap: Map<string, import('./TopologyData').SceneNode>,
+    opts: EdgeGroupOptions,
+  ): THREE.Group {
+    const group = new THREE.Group();
+    group.userData = { [opts.tag]: true };
+    const edges = data.edges.filter(e => e.type === opts.type);
+    for (const edge of edges) {
+      const from = nodeMap.get(edge.from);
+      const to = nodeMap.get(edge.to);
+      if (!from || !to) continue;
+      const opacity = opts.opacityFn(edge);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(
+        [...from.position, ...to.position], 3,
+      ));
+      const mat = opts.dashed
+        ? new THREE.LineDashedMaterial({
+            color: opts.color, transparent: true, opacity,
+            dashSize: 0.3, gapSize: 0.2,
+          })
+        : new THREE.LineBasicMaterial({
+            color: opts.color, transparent: true, opacity,
+          });
+      const line = new THREE.LineSegments(geo, mat);
+      if (opts.dashed) line.computeLineDistances();
+      line.userData = { [opts.tag]: true, baseOpacity: opacity };
+      group.add(line);
+    }
+    return group;
+  }
 
   let canvas: HTMLCanvasElement;
   let container: HTMLDivElement;
@@ -87,6 +131,8 @@
     labels?.clear();  // disposes label sprites + textures
     nodeMeshes.clear();
     clearHighlight();
+    _simScoreCache = null;
+    _injWeightCache = null;
 
     // Dispose GPU resources before clearing scene.
     // Track disposed geometries to avoid duplicate dispose on shared instances.
@@ -244,87 +290,47 @@
       renderer.scene.add(lines);
     }
 
-    // Similarity edges — separate group controlled by toggle
-    similarityEdgeGroup = new THREE.Group();
-    similarityEdgeGroup.userData = { isSimilarityEdge: true };
+    // Similarity + injection edges — shared builder, separate groups with toggles
+    similarityEdgeGroup = buildEdgeGroup(data, nodeMap, {
+      type: 'similarity',
+      color: SIMILARITY_EDGE_COLOR,
+      dashed: true,
+      tag: 'isSimilarityEdge',
+      opacityFn: (edge) => {
+        // Build lookup (bidirectional for undirected similarity edges)
+        if (!_simScoreCache) {
+          _simScoreCache = new Map<string, number>();
+          for (const se of clustersStore.similarityEdges) {
+            _simScoreCache.set(`${se.from_id}:${se.to_id}`, se.similarity);
+            _simScoreCache.set(`${se.to_id}:${se.from_id}`, se.similarity);
+          }
+        }
+        const sim = _simScoreCache.get(`${edge.from}:${edge.to}`) ?? 0.5;
+        return Math.max(0.1, Math.min(0.4, 0.1 + (sim - 0.5) * 0.6));
+      },
+    });
     similarityEdgeGroup.visible = clustersStore.showSimilarityEdges;
-
-    const simEdges = data.edges.filter(e => e.type === 'similarity');
-    if (simEdges.length > 0) {
-      // Build a lookup from similarity edge data to get the score
-      const simEdgeScores = new Map<string, number>();
-      for (const se of clustersStore.similarityEdges) {
-        simEdgeScores.set(`${se.from_id}:${se.to_id}`, se.similarity);
-        simEdgeScores.set(`${se.to_id}:${se.from_id}`, se.similarity);
-      }
-
-      for (const edge of simEdges) {
-        const from = nodeMap.get(edge.from);
-        const to = nodeMap.get(edge.to);
-        if (!from || !to) continue;
-
-        const similarity = simEdgeScores.get(`${edge.from}:${edge.to}`) ?? 0.5;
-        // Opacity proportional to similarity: 0.1 at threshold (0.5) to 0.4 at 1.0
-        const opacity = 0.1 + (similarity - 0.5) * 0.6;
-
-        const simGeo = new THREE.BufferGeometry();
-        simGeo.setAttribute('position', new THREE.Float32BufferAttribute(
-          [...from.position, ...to.position], 3,
-        ));
-        const simMat = new THREE.LineDashedMaterial({
-          color: SIMILARITY_EDGE_COLOR,
-          transparent: true,
-          opacity: Math.max(0.1, Math.min(0.4, opacity)),
-          dashSize: 0.3,
-          gapSize: 0.2,
-        });
-        const simLine = new THREE.LineSegments(simGeo, simMat);
-        simLine.computeLineDistances();
-        simLine.userData = { isSimilarityEdge: true, baseOpacity: opacity };
-        similarityEdgeGroup.add(simLine);
-      }
-    }
     renderer.scene.add(similarityEdgeGroup);
 
-    // Injection provenance edges — directed, warm gold/amber, separate group
-    injectionEdgeGroup = new THREE.Group();
-    injectionEdgeGroup.userData = { isInjectionEdge: true };
+    injectionEdgeGroup = buildEdgeGroup(data, nodeMap, {
+      type: 'injection',
+      color: INJECTION_EDGE_COLOR,
+      dashed: false,
+      tag: 'isInjectionEdge',
+      opacityFn: (edge) => {
+        if (!_injWeightCache) {
+          _injWeightCache = { map: new Map<string, number>(), max: 1 };
+          for (const ie of clustersStore.injectionEdges) {
+            const key = `${ie.source_id}:${ie.target_id}`;
+            _injWeightCache.map.set(key, ie.weight);
+            if (ie.weight > _injWeightCache.max) _injWeightCache.max = ie.weight;
+          }
+        }
+        const w = _injWeightCache.map.get(`${edge.from}:${edge.to}`) ?? 1;
+        return Math.max(0.15, Math.min(0.5, 0.15 + (w / _injWeightCache.max) * 0.35));
+      },
+    });
     injectionEdgeGroup.visible = clustersStore.showInjectionEdges;
-
-    // Build injection edge weight lookup from store data
-    const injEdgeWeights = new Map<string, number>();
-    let maxInjWeight = 1;
-    for (const ie of clustersStore.injectionEdges) {
-      const key = `${ie.source_id}:${ie.target_id}`;
-      injEdgeWeights.set(key, ie.weight);
-      if (ie.weight > maxInjWeight) maxInjWeight = ie.weight;
-    }
-
-    const injEdges = data.edges.filter(e => e.type === 'injection');
-    if (injEdges.length > 0) {
-      for (const edge of injEdges) {
-        const from = nodeMap.get(edge.from);
-        const to = nodeMap.get(edge.to);
-        if (!from || !to) continue;
-
-        const weight = injEdgeWeights.get(`${edge.from}:${edge.to}`) ?? 1;
-        // Opacity proportional to weight: min 0.15, max 0.5
-        const opacity = 0.15 + (weight / maxInjWeight) * 0.35;
-
-        const injGeo = new THREE.BufferGeometry();
-        injGeo.setAttribute('position', new THREE.Float32BufferAttribute(
-          [...from.position, ...to.position], 3,
-        ));
-        const injMat = new THREE.LineBasicMaterial({
-          color: INJECTION_EDGE_COLOR,
-          transparent: true,
-          opacity: Math.max(0.15, Math.min(0.5, opacity)),
-        });
-        const injLine = new THREE.LineSegments(injGeo, injMat);
-        injLine.userData = { isInjectionEdge: true, baseOpacity: opacity };
-        injectionEdgeGroup.add(injLine);
-      }
-    }
     renderer.scene.add(injectionEdgeGroup);
 
     // Labels — always visible for small graphs (≤ 8 nodes), near = all, mid = large clusters
@@ -603,22 +609,17 @@
       }
     }
 
-    // Dim inter-cluster edges and similarity edges (preserve domain node EdgesGeometry outlines)
+    // Dim all edge types (preserve domain node EdgesGeometry outlines)
     const dimActive = highlightDomain != null;
     renderer.scene.traverse((obj) => {
-      if (obj instanceof THREE.LineSegments && obj.userData?.isInterClusterEdge) {
+      if (!(obj instanceof THREE.LineSegments)) return;
+      const ud = obj.userData;
+      if (ud?.isInterClusterEdge) {
+        (obj.material as THREE.LineBasicMaterial).opacity = dimActive ? 0.1 : 0.4;
+      } else if (ud?.isSimilarityEdge || ud?.isInjectionEdge) {
         const mat = obj.material as THREE.LineBasicMaterial;
-        mat.opacity = dimActive ? 0.1 : 0.4;
-      }
-      if (obj instanceof THREE.LineSegments && obj.userData?.isSimilarityEdge) {
-        const mat = obj.material as THREE.LineDashedMaterial;
-        const baseOpacity = obj.userData.baseOpacity as number;
-        mat.opacity = dimActive ? baseOpacity * 0.25 : baseOpacity;
-      }
-      if (obj instanceof THREE.LineSegments && obj.userData?.isInjectionEdge) {
-        const mat = obj.material as THREE.LineBasicMaterial;
-        const baseOpacity = obj.userData.baseOpacity as number;
-        mat.opacity = dimActive ? baseOpacity * 0.25 : baseOpacity;
+        const base = ud.baseOpacity as number;
+        mat.opacity = dimActive ? base * 0.25 : base;
       }
     });
   });

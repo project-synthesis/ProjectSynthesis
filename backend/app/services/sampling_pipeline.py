@@ -1032,7 +1032,9 @@ async def run_sampling_pipeline(
         if applied_pattern_ids:
             await _track_applied_patterns(db, opt_id, applied_pattern_ids)
 
-        # Record injection provenance (which clusters influenced this optimization)
+        # Record injection provenance (which clusters influenced this optimization).
+        # Uses flush() to eagerly detect constraint violations — expunges on
+        # failure so the main Optimization commit is not affected.
         if auto_injected_cluster_ids:
             try:
                 from app.models import OptimizationPattern
@@ -1042,17 +1044,30 @@ async def run_sampling_pipeline(
                     for ip in auto_injected_patterns
                     if ip.cluster_id
                 }
+                _inj_pending: list = []
                 for _cid in auto_injected_cluster_ids:
-                    db.add(OptimizationPattern(
+                    _rec = OptimizationPattern(
                         optimization_id=opt_id,
                         cluster_id=_cid,
                         relationship="injected",
                         similarity=_inj_sim_map.get(_cid),
-                    ))
+                    )
+                    db.add(_rec)
+                    _inj_pending.append(_rec)
+                await db.flush()
+                logger.info(
+                    "Injection provenance (sampling): %d records for opt=%s. trace_id=%s",
+                    len(_inj_pending), opt_id[:8], trace_id,
+                )
             except Exception as _inj_exc:
+                for _rec in _inj_pending:
+                    try:
+                        db.expunge(_rec)
+                    except Exception:
+                        pass
                 logger.warning(
-                    "Failed to record injection provenance (sampling): %s",
-                    _inj_exc,
+                    "Injection provenance failed (sampling, non-fatal, expunged): %s trace_id=%s",
+                    _inj_exc, trace_id,
                 )
 
         await db.commit()

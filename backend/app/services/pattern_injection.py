@@ -142,25 +142,39 @@ async def auto_inject_patterns(
             cluster_id=p.cluster_id,
         ))
 
-    # Persist injection provenance when optimization_id is available
+    # Persist injection provenance when optimization_id is available.
+    # Uses flush() to eagerly detect constraint violations — if provenance
+    # fails, the pending objects are expunged so the main Optimization
+    # commit is not affected.
     if optimization_id and cluster_ids:
         try:
             from app.models import OptimizationPattern
 
+            pending: list[OptimizationPattern] = []
             for cid in cluster_ids:
-                db.add(OptimizationPattern(
+                record = OptimizationPattern(
                     optimization_id=optimization_id,
                     cluster_id=cid,
                     relationship="injected",
                     similarity=similarity_map.get(cid),
-                ))
-            logger.debug(
-                "Recorded %d injection provenance records for opt=%s. trace_id=%s",
-                len(cluster_ids), optimization_id, trace_id,
+                )
+                db.add(record)
+                pending.append(record)
+            await db.flush()
+            logger.info(
+                "Injection provenance: %d records for opt=%s clusters=[%s]. trace_id=%s",
+                len(pending), optimization_id[:8],
+                ", ".join(cid[:8] for cid in cluster_ids), trace_id,
             )
         except Exception as exc:
+            # Expunge failed records so they don't poison the main commit
+            for record in pending:
+                try:
+                    db.expunge(record)
+                except Exception:
+                    pass
             logger.warning(
-                "Failed to record injection provenance: %s trace_id=%s",
+                "Injection provenance failed (non-fatal, expunged): %s trace_id=%s",
                 exc, trace_id,
             )
 
