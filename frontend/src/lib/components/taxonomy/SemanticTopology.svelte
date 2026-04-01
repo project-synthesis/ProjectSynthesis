@@ -201,13 +201,18 @@
       }
     };
 
-    // Build edges
+    // Build edges — hierarchical edges (parent→child) are always drawn
+    // if both endpoints exist in the scene, regardless of LOD visibility.
+    // This prevents child clusters from appearing "orphaned" when their
+    // domain parent is at the edge of a visibility threshold.
     const edgePositions: number[] = [];
     const nodeMap = new Map(data.nodes.map(n => [n.id, n]));
     for (const edge of data.edges) {
       const from = nodeMap.get(edge.from);
       const to = nodeMap.get(edge.to);
-      if (from?.visible && to?.visible) {
+      if (!from || !to) continue;
+      const isHierarchical = edge.type === 'hierarchical';
+      if (isHierarchical || (from.visible && to.visible)) {
         edgePositions.push(...from.position, ...to.position);
       }
     }
@@ -364,8 +369,12 @@
         // UMAP rest positions (copy before force modification)
         const restPositions = new Float32Array(positions);
 
-        // Cache key: hash of sorted node IDs (tree structure fingerprint)
-        const cacheKey = 'topology_settled_' + sceneData.nodes.map(n => n.id).sort().join(',').split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0).toString(36);
+        // Cache key: hash of node IDs + positions (invalidates when UMAP changes)
+        const fingerprint = sceneData.nodes
+          .map(n => `${n.id}:${n.position[0].toFixed(2)},${n.position[1].toFixed(2)},${n.position[2].toFixed(2)}`)
+          .sort()
+          .join('|');
+        const cacheKey = 'topology_settled_' + fingerprint.split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0).toString(36);
 
         let settledPositions: Float32Array;
         try {
@@ -406,6 +415,39 @@
         });
 
         rebuildScene(sceneData);
+
+        // Auto-focus on the largest domain cluster on initial load.
+        // Without this, the camera starts at origin (0,0,80) which may
+        // be void space if the largest cluster's UMAP coords are elsewhere.
+        if (!focusedNodeId && sceneData.nodes.length > 0) {
+          // Find the domain with the most visible children
+          const domainSizes = new Map<string, { count: number; cx: number; cy: number; cz: number }>();
+          for (const n of sceneData.nodes) {
+            if (n.state === 'domain' || !n.visible) continue;
+            const dom = (flatNodeMap.get(n.id)?.domain ?? 'general').split(':')[0].trim().toLowerCase();
+            const entry = domainSizes.get(dom) ?? { count: 0, cx: 0, cy: 0, cz: 0 };
+            entry.count++;
+            entry.cx += n.position[0];
+            entry.cy += n.position[1];
+            entry.cz += n.position[2];
+            domainSizes.set(dom, entry);
+          }
+          let bestDomain = '';
+          let bestCount = 0;
+          for (const [dom, entry] of domainSizes) {
+            if (entry.count > bestCount) {
+              bestCount = entry.count;
+              bestDomain = dom;
+            }
+          }
+          if (bestDomain && bestCount > 0) {
+            const entry = domainSizes.get(bestDomain)!;
+            const cx = entry.cx / entry.count;
+            const cy = entry.cy / entry.count;
+            const cz = entry.cz / entry.count;
+            renderer?.focusOn(new THREE.Vector3(cx, cy, cz), 40, 800);
+          }
+        }
       });
     }
   });

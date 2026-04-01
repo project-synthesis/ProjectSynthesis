@@ -650,14 +650,14 @@ describe('ClusterNavigator', () => {
     expect(screen.getByRole('tab', { name: 'archived' })).toBeInTheDocument();
   });
 
-  it('"All" tab is selected by default (aria-selected=true)', async () => {
+  it('"active" tab is selected by default (aria-selected=true)', async () => {
     defaultHandlers([]);
     render(ClusterNavigator);
 
-    const allTab = screen.getByRole('tab', { name: 'All' });
-    expect(allTab).toHaveAttribute('aria-selected', 'true');
+    const activeTab = screen.getByRole('tab', { name: 'active' });
+    expect(activeTab).toHaveAttribute('aria-selected', 'true');
     // Other tabs should not be selected
-    expect(screen.getByRole('tab', { name: 'active' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'All' })).toHaveAttribute('aria-selected', 'false');
   });
 
   it('clicking a state tab filters families to that state only', async () => {

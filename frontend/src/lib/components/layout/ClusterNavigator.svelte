@@ -53,8 +53,9 @@
     }
   });
 
-  // Proven Templates section — shown when no filter or template filter active
-  let showTemplates = $derived(stateFilter === null || stateFilter === 'template');
+  // Proven Templates section — pinned regardless of state filter.
+  // Templates are a curated showcase, always visible when they exist.
+  let showTemplates = $derived(stateFilter === null || stateFilter === 'active' || stateFilter === 'template');
   let templateClusters = $derived(
     showTemplates
       ? families

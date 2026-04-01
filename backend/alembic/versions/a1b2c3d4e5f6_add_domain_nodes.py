@@ -99,7 +99,7 @@ SEED_DOMAINS: list[dict] = [
     },
     {
         "label": "data",
-        "color_hex": "#06b6d4",
+        "color_hex": "#b49982",
         "signal_keywords": [
             ["data science", 1.0], ["machine learning", 1.0], ["dataset", 1.0],
             ["pandas", 0.9], ["numpy", 0.9], ["sklearn", 0.9], ["jupyter", 0.9],
