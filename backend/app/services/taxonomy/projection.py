@@ -8,11 +8,80 @@ Spec Section 8.5.
 from __future__ import annotations
 
 import logging
+import random
 
 import numpy as np
 from scipy.linalg import orthogonal_procrustes
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Position interpolation for hot/warm paths
+# ---------------------------------------------------------------------------
+
+
+def interpolate_position(
+    centroid: np.ndarray,
+    siblings: list[tuple[np.ndarray, float, float, float]],
+    jitter: float = 0.3,
+) -> tuple[float, float, float] | None:
+    """Interpolate UMAP position for a new cluster from positioned siblings.
+
+    Computes cosine similarity between *centroid* and each sibling's
+    centroid embedding, then takes a weighted average of sibling UMAP
+    coordinates (weights = clamped cosine similarities).  Random jitter
+    is added per axis to prevent overlap.
+
+    This is a pure function — no I/O, no DB access.
+
+    Parameters
+    ----------
+    centroid:
+        L2-normalized embedding of the new cluster (1-D float32).
+    siblings:
+        List of ``(centroid_embedding, umap_x, umap_y, umap_z)`` tuples
+        from sibling clusters that already have UMAP positions.
+    jitter:
+        Maximum random offset per axis (uniform ±jitter).
+
+    Returns
+    -------
+    ``(x, y, z)`` tuple, or ``None`` if *siblings* is empty.
+    """
+    if not siblings:
+        return None
+
+    weights: list[float] = []
+    positions: list[tuple[float, float, float]] = []
+
+    for sib_centroid, ux, uy, uz in siblings:
+        # Cosine similarity between unit vectors = dot product
+        sim = float(np.dot(centroid, sib_centroid))
+        # Clamp negative similarities to 0
+        w = max(sim, 0.0)
+        weights.append(w)
+        positions.append((ux, uy, uz))
+
+    total_weight = sum(weights)
+
+    if total_weight == 0.0:
+        # All similarities were negative or zero — equal-weight fallback
+        n = len(positions)
+        x = sum(p[0] for p in positions) / n
+        y = sum(p[1] for p in positions) / n
+        z = sum(p[2] for p in positions) / n
+    else:
+        x = sum(w * p[0] for w, p in zip(weights, positions)) / total_weight
+        y = sum(w * p[1] for w, p in zip(weights, positions)) / total_weight
+        z = sum(w * p[2] for w, p in zip(weights, positions)) / total_weight
+
+    # Add random jitter to prevent overlap
+    x += random.uniform(-jitter, jitter)
+    y += random.uniform(-jitter, jitter)
+    z += random.uniform(-jitter, jitter)
+
+    return (x, y, z)
 
 
 class UMAPProjector:

@@ -7,6 +7,9 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ### Added
 - Similarity edge layer for 3D topology visualization: `GET /api/clusters/similarity-edges` endpoint + frontend toggle overlay with dashed neon-cyan lines (opacity proportional to cosine similarity)
 - `EmbeddingIndex.pairwise_similarities()` method for batch cosine similarity computation from the L2-normalized centroid matrix
+- `interpolate_position()` in `projection.py` — cosine-weighted sibling interpolation for UMAP coordinates between cold path runs
+- Hot-path position interpolation: new clusters created by `assign_cluster()` inherit interpolated UMAP positions from positioned siblings in the same domain
+- Warm-path position interpolation: child clusters from `attempt_split()` placed at parent position + random 2.0-unit radial offset
 
 ## v0.3.10-dev — 2026-04-01
 
