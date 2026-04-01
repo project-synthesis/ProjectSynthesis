@@ -111,7 +111,7 @@ async def attempt_emerge(
       2. Compute coherence (mean pairwise cosine similarity).
       3. Generate a label from family labels via Haiku.
       4. Generate a placeholder color (UMAP not run yet — use 0,0,0).
-      5. Persist PromptCluster (state="candidate").
+      5. Persist PromptCluster (state="active").
       6. Link each family to the new node.
 
     Args:
@@ -160,7 +160,7 @@ async def attempt_emerge(
             centroid_embedding=centroid.tobytes(),
             member_count=len(member_cluster_ids),
             coherence=coherence,
-            state="candidate",
+            state="active",
             color_hex=color_hex,
             domain=inherited_domain,
         )
@@ -250,9 +250,12 @@ async def attempt_merge(
         survivor.member_count = total
         survivor.coherence = merged_coherence
 
-        # Retire the loser.
+        # Retire the loser — zero out counters to match attempt_retire().
         loser.state = "archived"
         loser.archived_at = datetime.now(timezone.utc)
+        loser.member_count = 0
+        loser.scored_count = 0
+        loser.avg_score = None
 
         # Reassign loser's families to survivor.
         result = await db.execute(
@@ -385,7 +388,7 @@ async def attempt_split(
                 centroid_embedding=centroid.tobytes(),
                 member_count=len(cluster_ids),
                 coherence=coherence,
-                state="candidate",
+                state="active",
                 color_hex=color_hex,
                 domain=child_domain,
             )
@@ -477,9 +480,47 @@ async def attempt_retire(
             family.parent_id = target_sibling.id
             target_sibling.member_count = (target_sibling.member_count or 0) + 1
 
-        # Mark node as retired.
+        # Reassign optimizations that still reference the retiring node.
+        # Without this, Optimization.cluster_id becomes a stale pointer
+        # to an archived cluster and is never repaired.
+        from sqlalchemy import update as sa_update
+
+        from app.models import Optimization
+
+        opt_result = await db.execute(
+            sa_update(Optimization)
+            .where(Optimization.cluster_id == node.id)
+            .values(cluster_id=target_sibling.id)
+        )
+        if opt_result.rowcount:
+            target_sibling.member_count = (
+                (target_sibling.member_count or 0) + opt_result.rowcount
+            )
+            logger.info(
+                "retire: reassigned %d optimizations to '%s' (member_count now %d)",
+                opt_result.rowcount, target_sibling.label,
+                target_sibling.member_count,
+            )
+
+        # Mark node as retired and clear stale metrics.
+        # Without clearing, archived clusters show phantom member counts
+        # and scores in the "all" filter, confusing the UI.
         node.state = "archived"
         node.archived_at = datetime.now(timezone.utc)
+        node.member_count = 0
+        node.usage_count = 0
+        node.avg_score = None
+        node.scored_count = 0
+
+        # Remove from embedding index so hot-path assign_cluster doesn't
+        # merge new prompts into this archived cluster.
+        try:
+            from app.services.taxonomy import get_engine
+            _engine = get_engine()
+            if _engine and _engine.embedding_index:
+                _engine.embedding_index.remove(node.id)
+        except Exception:
+            pass  # non-fatal — index rebuilt on cold path
 
         await db.flush()
         logger.info(

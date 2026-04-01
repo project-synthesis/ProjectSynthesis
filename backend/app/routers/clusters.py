@@ -79,6 +79,7 @@ async def get_cluster_tree(
 ) -> ClusterTreeResponse:
     """Flat node list for 3D topology visualization."""
     try:
+        db.autoflush = False
         engine = _get_engine(request)
         nodes = await engine.get_tree(db, min_persistence=min_persistence)
         return ClusterTreeResponse(nodes=[ClusterNode(**n) for n in nodes])
@@ -94,6 +95,7 @@ async def get_cluster_stats(
 ) -> ClusterStats:
     """System quality metrics and snapshot history."""
     try:
+        db.autoflush = False
         engine = _get_engine(request)
         data = await engine.get_stats(db)
 
@@ -170,6 +172,10 @@ async def get_cluster_detail(
 ) -> ClusterDetail:
     """Single cluster with children, breadcrumb, meta-patterns, and linked optimizations."""
     try:
+        # Prevent autoflush during read — avoids 500 when a concurrent
+        # recluster/reassign has dirty state in a shared session scope.
+        db.autoflush = False
+
         engine = _get_engine(request)
         node = await engine.get_node(cluster_id, db)
         if node is None:
@@ -362,6 +368,98 @@ async def trigger_recluster(
     except Exception as exc:
         logger.error("Manual recluster failed: %s", exc, exc_info=True)
         raise HTTPException(500, "Recluster failed") from exc
+
+
+@router.post("/api/clusters/repair")
+async def repair_integrity(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Repair orphaned join records, meta-patterns, and missing coherence."""
+    engine = _get_engine(request)
+    try:
+        result = await engine.repair_data_integrity(db)
+        await db.commit()
+        return {"status": "completed", **result}
+    except Exception as exc:
+        logger.error("Data integrity repair failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Repair failed") from exc
+
+
+@router.post("/api/clusters/reassign")
+async def reassign_clusters(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Replay hot-path cluster assignment for all optimizations.
+
+    Archives existing active clusters and rebuilds them from scratch using
+    the current adaptive merge threshold.  Use this after changing threshold
+    constants to apply the new logic to existing data.
+    """
+    engine = _get_engine(request)
+    try:
+        result = await engine.reassign_all_clusters(db)
+        await db.commit()
+        return {"status": "completed", **result}
+    except Exception as exc:
+        logger.error("Cluster reassignment failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Cluster reassignment failed") from exc
+
+
+@router.post("/api/clusters/backfill-scores")
+async def backfill_scores(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Recompute avg_score and scored_count for all clusters from member data.
+
+    One-time fix for clusters whose running mean drifted due to the
+    member_count/scored_count mismatch or warm-path score clearing.
+    """
+    engine = _get_engine(request)
+    try:
+        # Reuse the same grouped-query pattern as warm path reconciliation
+        from sqlalchemy import func as sa_func
+
+        from app.models import Optimization
+
+        score_q = await db.execute(
+            select(
+                Optimization.cluster_id,
+                sa_func.avg(Optimization.overall_score),
+                sa_func.count(Optimization.overall_score),
+            ).where(
+                Optimization.cluster_id.isnot(None),
+                Optimization.overall_score.isnot(None),
+            ).group_by(Optimization.cluster_id)
+        )
+        score_map = {
+            row[0]: (round(row[1], 2), row[2])
+            for row in score_q.all()
+        }
+
+        from app.models import PromptCluster
+
+        cluster_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.in_(["active", "candidate", "mature", "template"])
+            )
+        )
+        updated = 0
+        for cluster in cluster_q.scalars().all():
+            avg, scored = score_map.get(cluster.id, (None, 0))
+            if cluster.avg_score != avg or (cluster.scored_count or 0) != scored:
+                cluster.avg_score = avg
+                cluster.scored_count = scored
+                updated += 1
+
+        await db.commit()
+        logger.info("Score backfill completed: %d clusters updated", updated)
+        return {"status": "completed", "clusters_updated": updated}
+    except Exception as exc:
+        logger.error("Score backfill failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Score backfill failed") from exc
 
 
 # ---------------------------------------------------------------------------

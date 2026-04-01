@@ -12,6 +12,7 @@ engine state.  The TaxonomyEngine delegates to these functions from
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -40,8 +41,38 @@ logger = logging.getLogger(__name__)
 # Constants — imported from engine for consistency
 # ---------------------------------------------------------------------------
 
+# Adaptive merge threshold (replaces static 0.78).
+# Empirical analysis: all-MiniLM-L6-v2 pairwise similarity mean=0.27,
+# only 4/1711 pairs exceed 0.78 (all duplicates).  Static 0.78 blocks
+# all legitimate merges while centroid drift causes mega-cluster snowball.
+#
+# Formula: BASE + GROWTH_PENALTY * log2(1 + member_count)
+# member_count=1 → 0.59, =3 → 0.63, =7 → 0.67, =14 → 0.71, =30 → 0.75
+BASE_MERGE_THRESHOLD = 0.55
+MERGE_GROWTH_PENALTY = 0.04
+
+# Legacy constant — kept for tests that reference the old static value.
 FAMILY_MERGE_THRESHOLD = 0.78
+
 PATTERN_MERGE_THRESHOLD = 0.82
+
+# Task-type mismatch penalty — reduces effective similarity when incoming
+# task_type differs from the cluster's.  Soft signal (not a hard block
+# like cross-domain prevention) so genuinely related prompts can still
+# merge, but mixed-type clusters require higher raw similarity.
+TASK_TYPE_MISMATCH_PENALTY = 0.05
+
+
+def adaptive_merge_threshold(member_count: int) -> float:
+    """Compute merge threshold that grows with cluster size.
+
+    Small clusters accept new members easily (base=0.55), while large
+    clusters require increasingly similar prompts — preventing the
+    centroid-drift mega-cluster snowball effect.
+    """
+    return BASE_MERGE_THRESHOLD + MERGE_GROWTH_PENALTY * math.log2(
+        1 + max(member_count, 1)
+    )
 
 # Warm path operational limits
 MAX_META_PATTERNS_PER_EXTRACTION = 5
@@ -112,6 +143,48 @@ async def build_breadcrumb(
 # ---------------------------------------------------------------------------
 
 
+async def _recompute_cluster_task_type(
+    db: AsyncSession, cluster: PromptCluster,
+) -> None:
+    """Recompute cluster task_type as the statistical mode of its members.
+
+    Only updates if the mode has >50% share among members to avoid
+    flipping on ambiguous clusters.  Skips domain-state clusters
+    (those always keep task_type='general').
+    """
+    if cluster.state == "domain":
+        return
+
+    from sqlalchemy import func as _func
+
+    result = await db.execute(
+        select(
+            Optimization.task_type,
+            _func.count().label("cnt"),
+        )
+        .where(Optimization.cluster_id == cluster.id)
+        .group_by(Optimization.task_type)
+        .order_by(_func.count().desc())
+    )
+    rows = result.all()
+    if not rows:
+        return
+
+    mode_type, mode_count = rows[0]
+    total = sum(r[1] for r in rows)
+
+    # Only update if mode has majority (>50%)
+    if mode_type and total > 0 and mode_count / total > 0.5:
+        if cluster.task_type != mode_type:
+            logger.info(
+                "Recomputed cluster '%s' task_type: '%s' → '%s' "
+                "(mode=%d/%d members)",
+                cluster.label, cluster.task_type, mode_type,
+                mode_count, total,
+            )
+            cluster.task_type = mode_type
+
+
 async def assign_cluster(
     db: AsyncSession,
     embedding: np.ndarray,
@@ -123,7 +196,7 @@ async def assign_cluster(
 ) -> PromptCluster:
     """Find nearest PromptCluster or create a new one.
 
-    Nearest centroid search with FAMILY_MERGE_THRESHOLD guard and
+    Nearest centroid search with adaptive threshold guard and
     cross-domain merge prevention.  Updates centroid as running mean
     ``(old * n + new) / (n+1)`` on merge.
 
@@ -174,72 +247,91 @@ async def assign_cluster(
 
         if centroids:
             matches = EmbeddingService.cosine_search(embedding, centroids, top_k=1)
-            if matches and matches[0][1] >= FAMILY_MERGE_THRESHOLD:
+            if matches and matches[0][1] > 0:
                 idx, score = matches[0]
                 matched = valid_clusters[idx]
+                threshold = adaptive_merge_threshold(matched.member_count or 1)
 
-                # Cross-domain merge prevention
-                matched_primary, _ = parse_domain(matched.domain)
-                incoming_primary, _ = parse_domain(domain)
-                if matched_primary != incoming_primary:
-                    logger.info(
-                        "Cross-domain merge prevented: cluster '%s' domain=%s != "
-                        "incoming domain=%s (cosine=%.3f). Creating new cluster.",
-                        matched.label,
-                        matched.domain,
-                        domain,
-                        score,
-                    )
-                    # Fall through to creation
-                else:
-                    # Merge: update centroid as running mean, re-normalize
-                    old_centroid = np.frombuffer(
-                        matched.centroid_embedding, dtype=np.float32
-                    )
-                    new_centroid = (old_centroid * matched.member_count + embedding) / (
-                        matched.member_count + 1
-                    )
-                    # Re-normalize to unit norm — running mean drifts
-                    # from unit sphere without this (critical for cosine
-                    # similarity accuracy on subsequent merges).
-                    c_norm = np.linalg.norm(new_centroid)
-                    if c_norm > 0:
-                        new_centroid = new_centroid / c_norm
-                    matched.centroid_embedding = new_centroid.astype(
-                        np.float32
-                    ).tobytes()
-                    matched.member_count += 1
+                # Penalize cross-task_type merges — soft signal, not hard block
+                effective_score = score
+                if task_type and matched.task_type and task_type != matched.task_type:
+                    effective_score -= TASK_TYPE_MISMATCH_PENALTY
 
-                    # avg_score tracks the running mean over members that
-                    # have a score.  Members with overall_score=None are
-                    # excluded intentionally — we cannot average with None.
-                    # When the first scored member arrives, avg_score is
-                    # seeded with that single score.
-                    if overall_score is not None and matched.avg_score is not None:
-                        matched.avg_score = round(
-                            (
-                                matched.avg_score * (matched.member_count - 1)
-                                + overall_score
+                if effective_score >= threshold:
+                    # Cross-domain merge prevention
+                    matched_primary, _ = parse_domain(matched.domain)
+                    incoming_primary, _ = parse_domain(domain)
+                    if matched_primary != incoming_primary:
+                        logger.info(
+                            "Cross-domain merge prevented: cluster '%s' domain=%s != "
+                            "incoming domain=%s (cosine=%.3f). Creating new cluster.",
+                            matched.label,
+                            matched.domain,
+                            domain,
+                            score,
+                        )
+                        # Fall through to creation
+                    else:
+                        # Merge: update centroid as running mean, re-normalize
+                        old_centroid = np.frombuffer(
+                            matched.centroid_embedding, dtype=np.float32
+                        )
+                        new_centroid = (old_centroid * matched.member_count + embedding) / (
+                            matched.member_count + 1
+                        )
+                        # Re-normalize to unit norm — running mean drifts
+                        # from unit sphere without this (critical for cosine
+                        # similarity accuracy on subsequent merges).
+                        c_norm = np.linalg.norm(new_centroid)
+                        if c_norm > 0:
+                            new_centroid = new_centroid / c_norm
+                        matched.centroid_embedding = new_centroid.astype(
+                            np.float32
+                        ).tobytes()
+                        matched.member_count += 1
+
+                        # avg_score tracks the running mean over SCORED members
+                        # only.  scored_count is the denominator — not
+                        # member_count (which includes unscored members and
+                        # would dilute the average).
+                        if overall_score is not None:
+                            old_scored = matched.scored_count or 0
+                            if matched.avg_score is not None and old_scored > 0:
+                                matched.avg_score = round(
+                                    (matched.avg_score * old_scored + overall_score)
+                                    / (old_scored + 1),
+                                    2,
+                                )
+                            else:
+                                matched.avg_score = overall_score
+                            matched.scored_count = old_scored + 1
+
+                        # Update embedding index with new centroid
+                        if embedding_index is not None:
+                            await embedding_index.upsert(
+                                matched.id, new_centroid
                             )
-                            / matched.member_count,
-                            2,
-                        )
-                    elif overall_score is not None:
-                        matched.avg_score = overall_score
 
-                    # Update embedding index with new centroid
-                    if embedding_index is not None:
-                        await embedding_index.upsert(
-                            matched.id, new_centroid
-                        )
+                        # Recompute cluster task_type as majority of members
+                        await _recompute_cluster_task_type(db, matched)
 
+                        logger.debug(
+                            "Merged into cluster '%s' (cosine=%.3f, effective=%.3f, "
+                            "threshold=%.3f, members=%d)",
+                            matched.label,
+                            score,
+                            effective_score,
+                            threshold,
+                            matched.member_count,
+                        )
+                        return matched
+                else:
                     logger.debug(
-                        "Merged into cluster '%s' (cosine=%.3f, members=%d)",
-                        matched.label,
-                        score,
-                        matched.member_count,
+                        "Below adaptive threshold: cluster '%s' "
+                        "cosine=%.3f effective=%.3f < threshold=%.3f (members=%d)",
+                        matched.label, score, effective_score, threshold,
+                        matched.member_count or 0,
                     )
-                    return matched
 
     # No match — create new cluster
     # Find the parent domain node to link under
@@ -258,6 +350,7 @@ async def assign_cluster(
         parent_id=domain_node.id if domain_node else None,
         centroid_embedding=embedding.astype(np.float32).tobytes(),
         member_count=1,
+        scored_count=1 if overall_score is not None else 0,
         usage_count=0,
         avg_score=overall_score,
     )

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import PROMPTS_DIR, settings
 from app.models import (
+    MetaPattern,
     Optimization,
     OptimizationPattern,
     PromptCluster,
@@ -36,7 +37,7 @@ from app.services.embedding_service import EmbeddingService
 from app.services.prompt_loader import PromptLoader
 from app.services.taxonomy.embedding_index import EmbeddingIndex
 from app.services.taxonomy.family_ops import (
-    FAMILY_MERGE_THRESHOLD,
+    adaptive_merge_threshold,
     assign_cluster,
     build_breadcrumb,
     extract_meta_patterns,
@@ -45,11 +46,7 @@ from app.services.taxonomy.family_ops import (
 from app.services.taxonomy.matching import (
     PatternMatch,
     TaxonomyMapping,
-)
-from app.services.taxonomy.matching import (
     map_domain as _map_domain,
-)
-from app.services.taxonomy.matching import (
     match_prompt as _match_prompt,
 )
 from app.services.taxonomy.sparkline import compute_sparkline_data
@@ -218,6 +215,27 @@ class TaxonomyEngine:
                     overall_score=opt.overall_score,
                     embedding_index=self._embedding_index,
                 )
+
+            # Write back the definitive cluster assignment.
+            # The pipeline's Phase 1.5 domain mapping sets a preliminary
+            # cluster_id (often NULL); this is the canonical assignment.
+            old_cluster_id = opt.cluster_id
+            if old_cluster_id and old_cluster_id != cluster.id:
+                old_cluster_q = await db.execute(
+                    select(PromptCluster).where(PromptCluster.id == old_cluster_id)
+                )
+                old_cluster = old_cluster_q.scalar_one_or_none()
+                if old_cluster and old_cluster.state != "archived":
+                    old_cluster.member_count = max(0, (old_cluster.member_count or 1) - 1)
+                    if opt.overall_score is not None and (old_cluster.scored_count or 0) > 0:
+                        old_cluster.scored_count = max(0, old_cluster.scored_count - 1)
+                    logger.info(
+                        "Decremented old cluster '%s' member_count to %d "
+                        "(reassigned to '%s')",
+                        old_cluster.label, old_cluster.member_count,
+                        cluster.label,
+                    )
+            opt.cluster_id = cluster.id
 
             # 3. Extract meta-patterns
             meta_texts = await extract_meta_patterns(
@@ -469,14 +487,19 @@ class TaxonomyEngine:
                                         model=settings.MODEL_HAIKU,
                                     )
 
-                                    # Compute avg_score from member optimizations
+                                    # Compute avg_score and scored_count from member optimizations
                                     score_q = await db.execute(
-                                        select(func.avg(Optimization.overall_score)).where(
+                                        select(
+                                            func.avg(Optimization.overall_score),
+                                            func.count(Optimization.overall_score),
+                                        ).where(
                                             Optimization.id.in_(group_opt_ids),
                                             Optimization.overall_score.isnot(None),
                                         )
                                     )
-                                    child_avg_score = score_q.scalar()
+                                    score_row = score_q.one()
+                                    child_avg_score = score_row[0]
+                                    child_scored_count = score_row[1] or 0
                                     if child_avg_score is not None:
                                         child_avg_score = round(child_avg_score, 2)
 
@@ -484,6 +507,7 @@ class TaxonomyEngine:
                                         label=label,
                                         centroid_embedding=centroid.astype(np.float32).tobytes(),
                                         member_count=len(group_opt_ids),
+                                        scored_count=child_scored_count,
                                         avg_score=child_avg_score,
                                         coherence=child_coherence,
                                         state="active",
@@ -553,6 +577,14 @@ class TaxonomyEngine:
                                                     .values(cluster_id=best_c.id)
                                                 )
                                                 best_c.member_count = (best_c.member_count or 0) + 1
+                                                # Check if this noise optimization has a score
+                                                n_score_q = await db.execute(
+                                                    select(Optimization.overall_score).where(
+                                                        Optimization.id == nid,
+                                                    )
+                                                )
+                                                if n_score_q.scalar() is not None:
+                                                    best_c.scored_count = (best_c.scored_count or 0) + 1
                                                 reassigned += 1
                                         logger.info(
                                             "Reassigned %d noise optimizations to nearest sub-clusters",
@@ -670,12 +702,14 @@ class TaxonomyEngine:
                 best_i, best_j = np.unravel_index(np.argmax(sim), sim.shape)
                 best_score = float(sim[best_i, best_j])
 
-                if best_score >= FAMILY_MERGE_THRESHOLD:
+                merge_node_a = valid_nodes[int(best_i)]
+                merge_node_b = valid_nodes[int(best_j)]
+                merge_threshold = adaptive_merge_threshold(
+                    max(merge_node_a.member_count or 1, merge_node_b.member_count or 1),
+                )
+                if best_score >= merge_threshold:
                     ops_attempted += 1
                     from app.services.taxonomy.lifecycle import attempt_merge
-
-                    merge_node_a = valid_nodes[int(best_i)]
-                    merge_node_b = valid_nodes[int(best_j)]
                     merged = await attempt_merge(
                         db=db,
                         node_a=merge_node_a,
@@ -764,14 +798,51 @@ class TaxonomyEngine:
                     except Exception:
                         pass  # non-fatal, skip this node
 
-            # Reconcile domain node member_counts (count of non-archived child clusters)
+            # Reconcile avg_score and scored_count from actual member data.
+            # A single grouped query regardless of cluster count.
+            score_q = await db.execute(
+                select(
+                    Optimization.cluster_id,
+                    sa_func.avg(Optimization.overall_score),
+                    sa_func.count(Optimization.overall_score),
+                ).where(
+                    Optimization.cluster_id.isnot(None),
+                    Optimization.overall_score.isnot(None),
+                ).group_by(Optimization.cluster_id)
+            )
+            score_map: dict[str, tuple[float, int]] = {
+                row[0]: (round(row[1], 2), row[2])
+                for row in score_q.all()
+            }
+            scores_reconciled = 0
+            for node in active_nodes:
+                avg, scored = score_map.get(node.id, (None, 0))
+                if node.avg_score != avg or (node.scored_count or 0) != scored:
+                    node.avg_score = avg
+                    node.scored_count = scored
+                    scores_reconciled += 1
+
+            # Reconcile domain node member_counts and parent_id links.
+            # Use domain field matching (not parent_id) because the cold
+            # path can create self-referencing parent_id links.
             domain_q = await db.execute(
                 select(PromptCluster).where(PromptCluster.state == "domain")
             )
             for domain_node in domain_q.scalars().all():
+                # Domain nodes are root — parent_id must be null.
+                # Cold path can accidentally set it via HDBSCAN reassignment.
+                if domain_node.parent_id is not None:
+                    logger.info(
+                        "Clearing stale parent_id on domain '%s' (was %s)",
+                        domain_node.label, domain_node.parent_id,
+                    )
+                    domain_node.parent_id = None
+                    reconciled += 1
+
+                # Count children by domain field (robust to broken parent_id)
                 child_count = (await db.execute(
                     select(sa_func.count()).where(
-                        PromptCluster.parent_id == domain_node.id,
+                        PromptCluster.domain == domain_node.label,
                         PromptCluster.state.notin_(["domain", "archived"]),
                     )
                 )).scalar() or 0
@@ -779,12 +850,37 @@ class TaxonomyEngine:
                     domain_node.member_count = child_count
                     reconciled += 1
 
-            if reconciled or coherence_updated:
-                logger.info(
-                    "Reconciled %d member_counts, recomputed %d coherence values",
-                    reconciled, coherence_updated,
+                # Repair self-referencing parent_id links on children.
+                # Only fix nodes where parent_id == own id (corruption from
+                # cold path).  Don't force all children to point to the
+                # domain node — valid hierarchical parent links should be
+                # preserved.
+                self_ref_q = await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.domain == domain_node.label,
+                        PromptCluster.state.notin_(["domain", "archived"]),
+                        PromptCluster.id == PromptCluster.parent_id,
+                    )
                 )
-                # Flush so domain discovery query sees updated values
+                for child in self_ref_q.scalars().all():
+                    child.parent_id = domain_node.id
+                    reconciled += 1
+
+                # Fix domain nodes missing UMAP coordinates
+                if (domain_node.umap_x is None
+                        or domain_node.umap_y is None
+                        or domain_node.umap_z is None):
+                    await self._set_domain_umap_from_children(db, domain_node)
+
+            if reconciled or coherence_updated or scores_reconciled:
+                logger.info(
+                    "Reconciled %d member_counts, %d coherence, %d scores",
+                    reconciled, coherence_updated, scores_reconciled,
+                )
+                # Flush (not commit) — reconciliation happens BEFORE
+                # Q_before is computed, so it becomes part of the
+                # baseline.  The Q-gate rollback won't undo it because
+                # Q_before already includes the reconciled state.
                 await db.flush()
         except Exception as recon_exc:
             logger.warning("Reconciliation failed (non-fatal): %s", recon_exc)
@@ -798,6 +894,22 @@ class TaxonomyEngine:
             zombie_count = 0
             for node in active_nodes:
                 if (node.member_count or 0) == 0:
+                    # Verify no optimizations still reference this cluster.
+                    # member_count can drift from Optimization.cluster_id
+                    # if the hot path or cold path didn't update it.
+                    actual_refs = (await db.execute(
+                        select(sa_func.count()).where(
+                            Optimization.cluster_id == node.id,
+                        )
+                    )).scalar() or 0
+                    if actual_refs > 0:
+                        node.member_count = actual_refs
+                        logger.info(
+                            "Zombie guard: '%s' has %d optimization refs — correcting member_count, not archiving",
+                            node.label, actual_refs,
+                        )
+                        continue  # Don't archive — has real members
+
                     # Clear stale data from before cold-path reassignment
                     if node.usage_count and node.usage_count > 0:
                         logger.info(
@@ -895,7 +1007,16 @@ class TaxonomyEngine:
                 )
 
             if refreshed:
+                # Flush within the main session — patterns become part
+                # of the warm path transaction.  The Q-gate rollback
+                # will undo these if Q regresses, but that's acceptable:
+                # the next warm cycle will re-extract since
+                # pattern_member_count won't have been updated.
                 await db.flush()
+                logger.info(
+                    "Refreshed label+patterns for %d clusters",
+                    refreshed,
+                )
         except Exception as refresh_exc:
             logger.warning("Stale label/pattern refresh failed (non-fatal): %s", refresh_exc)
 
@@ -1148,6 +1269,265 @@ class TaxonomyEngine:
         return result
 
     # ------------------------------------------------------------------
+    # Backfill: replay hot-path assignment for all optimizations
+    # ------------------------------------------------------------------
+
+    async def reassign_all_clusters(
+        self, db: AsyncSession,
+    ) -> dict:
+        """Replay hot-path cluster assignment for every optimization.
+
+        Clears all non-domain, non-archived PromptCluster records and
+        re-runs ``assign_cluster()`` for every optimization that has an
+        embedding.  This is the correct way to apply a new merge threshold
+        to existing data — unlike ``run_cold_path()`` which only
+        rearranges the cluster hierarchy without changing
+        ``Optimization.cluster_id``.
+
+        Returns:
+            Dict with ``reassigned``, ``clusters_before``, ``clusters_after``.
+        """
+        from sqlalchemy import func as sa_func
+
+        # Count clusters before
+        before_q = await db.execute(
+            select(sa_func.count()).where(
+                PromptCluster.state.notin_(["domain", "archived"]),
+            )
+        )
+        clusters_before = before_q.scalar() or 0
+
+        # Load all optimizations with embeddings
+        opt_result = await db.execute(
+            select(Optimization)
+            .where(Optimization.embedding.isnot(None))
+            .order_by(Optimization.created_at.asc())
+        )
+        optimizations = list(opt_result.scalars().all())
+        if not optimizations:
+            return {"reassigned": 0, "clusters_before": clusters_before, "clusters_after": 0}
+
+        # Archive all non-domain active clusters — we'll rebuild from scratch
+        active_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.notin_(["domain", "archived"]),
+            )
+        )
+        for cluster in active_q.scalars().all():
+            cluster.state = "archived"
+            cluster.member_count = 0
+            cluster.scored_count = 0
+            cluster.avg_score = None
+
+        # Reset embedding index by replacing internal arrays
+        if self._embedding_index is not None:
+            async with self._embedding_index._lock:
+                self._embedding_index._matrix = np.empty(
+                    (0, self._embedding_index._dim), dtype=np.float32,
+                )
+                self._embedding_index._ids = []
+
+        await db.flush()
+
+        # Replay hot-path assignment for each optimization (chronological order)
+        reassigned = 0
+        for opt in optimizations:
+            embedding = np.frombuffer(opt.embedding, dtype=np.float32)
+            domain_primary, _ = parse_domain(opt.domain or "general")
+
+            async with self._lock:
+                cluster = await assign_cluster(
+                    db=db,
+                    embedding=embedding,
+                    label=opt.intent_label or "general",
+                    domain=domain_primary,
+                    task_type=opt.task_type or "general",
+                    overall_score=opt.overall_score,
+                    embedding_index=self._embedding_index,
+                )
+
+            opt.cluster_id = cluster.id
+            reassigned += 1
+
+        await db.flush()
+
+        # Count clusters after
+        after_q = await db.execute(
+            select(sa_func.count()).where(
+                PromptCluster.state.notin_(["domain", "archived"]),
+            )
+        )
+        clusters_after = after_q.scalar() or 0
+
+        # Rebuild join table, meta-patterns, and coherence
+        repair = await self.repair_data_integrity(db)
+
+        logger.info(
+            "Reassign complete: %d optimizations, %d→%d clusters",
+            reassigned, clusters_before, clusters_after,
+        )
+        return {
+            "reassigned": reassigned,
+            "clusters_before": clusters_before,
+            "clusters_after": clusters_after,
+            **repair,
+        }
+
+    # ------------------------------------------------------------------
+    # Data integrity repair
+    # ------------------------------------------------------------------
+
+    async def repair_data_integrity(self, db: AsyncSession) -> dict:
+        """Rebuild optimization_patterns, meta-patterns, and coherence.
+
+        Repairs three classes of integrity issues:
+
+        1. **Orphaned optimization_patterns** — deletes join records
+           pointing to archived/missing clusters, recreates ``source``
+           records for every optimization with a valid ``cluster_id``.
+
+        2. **Orphaned meta_patterns** — deletes patterns pointing to
+           archived/missing clusters, re-extracts structural patterns
+           for every optimization and merges into current clusters.
+
+        3. **Missing coherence** — computes pairwise coherence from
+           member embeddings for every active cluster with 2+ members.
+
+        Safe to call multiple times (idempotent).
+        """
+        from sqlalchemy import delete as sa_delete
+        from sqlalchemy import func as sa_func
+
+        from app.services.taxonomy.clustering import compute_pairwise_coherence
+        from app.services.taxonomy.family_ops import (
+            extract_structural_patterns,
+            merge_meta_pattern,
+        )
+
+        stats: dict[str, int] = {}
+
+        # --- 1. Rebuild optimization_patterns ---
+        # Delete ALL existing (they may be orphaned)
+        del_op = await db.execute(sa_delete(OptimizationPattern))
+        stats["join_deleted"] = del_op.rowcount
+
+        # Recreate source records for every optimization with a cluster
+        opts = (await db.execute(
+            select(Optimization).where(
+                Optimization.cluster_id.isnot(None),
+            )
+        )).scalars().all()
+
+        join_created = 0
+        for opt in opts:
+            # Verify cluster exists and is active
+            cluster_q = await db.execute(
+                select(PromptCluster.id).where(
+                    PromptCluster.id == opt.cluster_id,
+                    PromptCluster.state.notin_(["archived"]),
+                )
+            )
+            if cluster_q.scalar_one_or_none():
+                db.add(OptimizationPattern(
+                    optimization_id=opt.id,
+                    cluster_id=opt.cluster_id,
+                    relationship="source",
+                ))
+                join_created += 1
+        stats["join_created"] = join_created
+        await db.flush()
+
+        # --- 2. Rebuild meta-patterns ---
+        # Delete orphaned meta-patterns (pointing to archived/missing clusters)
+        del_mp = await db.execute(
+            sa_delete(MetaPattern).where(
+                MetaPattern.cluster_id.notin_(
+                    select(PromptCluster.id).where(
+                        PromptCluster.state.notin_(["archived"]),
+                    )
+                )
+            )
+        )
+        stats["meta_patterns_deleted"] = del_mp.rowcount
+
+        # Re-extract structural patterns for each optimization
+        patterns_created = 0
+        for opt in opts:
+            if not opt.raw_prompt or not opt.optimized_prompt:
+                continue
+            try:
+                pattern_texts = extract_structural_patterns(
+                    raw_prompt=opt.raw_prompt[:2000],
+                    optimized_prompt=opt.optimized_prompt[:2000],
+                )
+                for text in pattern_texts:
+                    await merge_meta_pattern(
+                        db, opt.cluster_id, text, self._embedding,
+                    )
+                    patterns_created += 1
+            except Exception as exc:
+                logger.debug(
+                    "Pattern extraction failed for opt=%s: %s", opt.id, exc,
+                )
+        stats["meta_patterns_created"] = patterns_created
+        await db.flush()
+
+        # --- 3. Compute coherence ---
+        active_clusters = (await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.notin_(["domain", "archived"]),
+            )
+        )).scalars().all()
+
+        coherence_computed = 0
+        for cluster in active_clusters:
+            emb_rows = (await db.execute(
+                select(Optimization.embedding).where(
+                    Optimization.cluster_id == cluster.id,
+                    Optimization.embedding.isnot(None),
+                )
+            )).scalars().all()
+
+            if len(emb_rows) < 2:
+                cluster.coherence = 1.0 if len(emb_rows) == 1 else 0.0
+            else:
+                embs = [
+                    np.frombuffer(e, dtype=np.float32)
+                    for e in emb_rows
+                ]
+                cluster.coherence = compute_pairwise_coherence(embs)
+            coherence_computed += 1
+
+        stats["coherence_computed"] = coherence_computed
+
+        # --- 4. Reconcile member_count from Optimization rows ---
+        from sqlalchemy import func as _sa_func
+
+        mc_q = await db.execute(
+            select(Optimization.cluster_id, _sa_func.count().label("ct"))
+            .where(Optimization.cluster_id.isnot(None))
+            .group_by(Optimization.cluster_id)
+        )
+        mc_map = dict(mc_q.all())
+        mc_fixed = 0
+        for cluster in active_clusters:
+            expected = mc_map.get(cluster.id, 0)
+            if cluster.member_count != expected:
+                cluster.member_count = expected
+                mc_fixed += 1
+        stats["member_count_fixed"] = mc_fixed
+        await db.flush()
+
+        logger.info(
+            "Data integrity repair: join=%d created/%d deleted, "
+            "meta=%d created/%d deleted, coherence=%d computed",
+            stats["join_created"], stats["join_deleted"],
+            stats["meta_patterns_created"], stats["meta_patterns_deleted"],
+            stats["coherence_computed"],
+        )
+        return stats
+
+    # ------------------------------------------------------------------
     # Cold path (Spec Section 2.3, 8.5)
     # ------------------------------------------------------------------
 
@@ -1210,8 +1590,13 @@ class TaxonomyEngine:
         nodes_created = 0
         nodes_updated = 0
 
-        # 1. Load all PromptCluster embeddings
-        fam_result = await db.execute(select(PromptCluster))
+        # 1. Load non-domain PromptCluster embeddings.
+        #    Domain nodes are structural anchors — they must NOT participate
+        #    in HDBSCAN, or the algorithm will reassign parent_ids to point
+        #    at HDBSCAN group leaders instead of domain nodes.
+        fam_result = await db.execute(
+            select(PromptCluster).where(PromptCluster.state != "domain")
+        )
         families = list(fam_result.scalars().all())
 
         embeddings: list[np.ndarray] = []
@@ -1300,17 +1685,28 @@ class TaxonomyEngine:
                     except (ValueError, TypeError):
                         continue
 
-                if best_match_id and best_sim >= FAMILY_MERGE_THRESHOLD:
-                    matched_node = existing_nodes.pop(best_match_id)
+                if best_match_id:
+                    candidate = existing_nodes[best_match_id]
+                    cold_threshold = adaptive_merge_threshold(
+                        candidate.member_count or 1,
+                    )
+                    if best_sim >= cold_threshold:
+                        matched_node = existing_nodes.pop(best_match_id)
 
             if matched_node:
-                # Update existing node
+                # Update existing node — preserve higher lifecycle states.
+                # Without this guard, a mature/template cluster matched by
+                # HDBSCAN would be demoted back to "active".
                 matched_node.centroid_embedding = centroid.astype(
                     np.float32
                 ).tobytes()
-                matched_node.member_count = len(cluster_fam_ids)
+                # Do NOT set member_count from HDBSCAN group size —
+                # HDBSCAN groups PromptCluster nodes, not Optimizations.
+                # member_count is reconciled from Optimization rows below.
                 matched_node.coherence = coherence
-                matched_node.state = "active"
+                if matched_node.state in ("candidate",):
+                    matched_node.state = "active"
+                # mature, template, active — keep as-is
                 nodes_updated += 1
                 node = matched_node
             else:
@@ -1330,7 +1726,7 @@ class TaxonomyEngine:
                 node = PromptCluster(
                     label=label,
                     centroid_embedding=centroid.astype(np.float32).tobytes(),
-                    member_count=len(cluster_fam_ids),
+                    member_count=0,  # reconciled from Optimization rows below
                     coherence=coherence,
                     state="active",
                     color_hex=generate_color(0.0, 0.0, 0.0),
@@ -1339,14 +1735,125 @@ class TaxonomyEngine:
                 await db.flush()
                 nodes_created += 1
 
-            # Link families to this node (O(k) via dict lookup)
+            # Link families to this node (O(k) via dict lookup).
+            # Skip self-references — a node cannot be its own parent.
             for fid in cluster_fam_ids:
                 fam = family_by_id.get(fid)
-                if fam:
+                if fam and fam.id != node.id:
                     fam.parent_id = node.id
 
             node_embeddings.append(centroid)
             all_nodes.append(node)
+
+        # Include active/candidate nodes that HDBSCAN did not match so
+        # they still receive UMAP coordinates.  Without this, hot-path
+        # created clusters stay at null UMAP → hash fallback forever.
+        #
+        # NOTE: Do NOT reassign their optimizations.  HDBSCAN operates on
+        # cluster centroids (not individual optimizations), so it naturally
+        # produces fewer groups than the hot path created.  Reassigning
+        # leftover nodes' optimizations to matched clusters collapses the
+        # fine-grained clustering into mega-clusters.  The zombie cleanup
+        # guard (RC5) prevents archiving nodes that still have optimization
+        # references.
+        for leftover_node in existing_nodes.values():
+            if leftover_node.centroid_embedding:
+                try:
+                    emb = np.frombuffer(
+                        leftover_node.centroid_embedding, dtype=np.float32,
+                    ).copy()
+                    node_embeddings.append(emb)
+                    all_nodes.append(leftover_node)
+                except (ValueError, TypeError):
+                    pass  # skip corrupt embeddings
+
+        # 3.5 Restore domain→cluster parent_id links.
+        # HDBSCAN may have set parent_ids to HDBSCAN group leaders or
+        # created self-references.  Every non-domain cluster must have
+        # parent_id pointing to its domain node (looked up by domain field).
+        domain_node_map: dict[str, str] = {}  # domain_label → domain_node_id
+        domain_q = await db.execute(
+            select(PromptCluster).where(PromptCluster.state == "domain")
+        )
+        for dn in domain_q.scalars().all():
+            domain_node_map[dn.label] = dn.id
+
+        parent_repairs = 0
+        for node in all_nodes:
+            if node.state == "domain":
+                continue
+            correct_parent = domain_node_map.get(node.domain)
+            if correct_parent and node.parent_id != correct_parent:
+                node.parent_id = correct_parent
+                parent_repairs += 1
+            elif not correct_parent and node.parent_id != domain_node_map.get("general"):
+                # Fallback: unknown domain → general
+                node.parent_id = domain_node_map.get("general")
+                parent_repairs += 1
+        if parent_repairs:
+            logger.info(
+                "Cold path: repaired %d parent_id links to domain nodes",
+                parent_repairs,
+            )
+
+        # 3.6 Reconcile member_count from actual Optimization rows.
+        # The cold path operates on PromptCluster centroids, not individual
+        # optimizations.  member_count must reflect Optimization.cluster_id
+        # counts, not HDBSCAN group sizes.
+        from sqlalchemy import func as sa_func
+
+        count_q = await db.execute(
+            select(Optimization.cluster_id, sa_func.count().label("ct"))
+            .where(Optimization.cluster_id.isnot(None))
+            .group_by(Optimization.cluster_id)
+        )
+        actual_counts = dict(count_q.all())
+
+        score_q = await db.execute(
+            select(
+                Optimization.cluster_id,
+                sa_func.avg(Optimization.overall_score),
+                sa_func.count(Optimization.overall_score),
+            )
+            .where(
+                Optimization.cluster_id.isnot(None),
+                Optimization.overall_score.isnot(None),
+            )
+            .group_by(Optimization.cluster_id)
+        )
+        score_map = {row[0]: (round(row[1], 2), row[2]) for row in score_q.all()}
+
+        mc_repairs = 0
+        for node in all_nodes:
+            expected = actual_counts.get(node.id, 0)
+            if node.member_count != expected:
+                node.member_count = expected
+                mc_repairs += 1
+            avg, scored = score_map.get(node.id, (None, 0))
+            node.avg_score = avg
+            node.scored_count = scored
+
+        # Also reconcile domain node member_counts (child cluster count)
+        for dn_label, dn_id in domain_node_map.items():
+            dn_q = await db.execute(
+                select(PromptCluster).where(PromptCluster.id == dn_id)
+            )
+            dn = dn_q.scalar_one_or_none()
+            if dn:
+                child_count = (await db.execute(
+                    select(sa_func.count()).where(
+                        PromptCluster.domain == dn_label,
+                        PromptCluster.state.notin_(["domain", "archived"]),
+                    )
+                )).scalar() or 0
+                dn.member_count = child_count
+
+        if mc_repairs:
+            logger.info(
+                "Cold path: reconciled %d member_counts from Optimization rows",
+                mc_repairs,
+            )
+        await db.flush()
 
         # 4. UMAP 3D projection
         umap_fitted = False
@@ -1377,6 +1884,19 @@ class TaxonomyEngine:
                     node.umap_y = float(positions[i, 1])
                     node.umap_z = float(positions[i, 2])
             umap_fitted = True
+
+            # Set domain node UMAP positions from children centroids.
+            # Domain nodes are excluded from HDBSCAN (state="domain") so
+            # they never receive UMAP coordinates directly.  Position
+            # each domain at the centroid of its child clusters.
+            try:
+                domain_q = await db.execute(
+                    select(PromptCluster).where(PromptCluster.state == "domain")
+                )
+                for dnode in domain_q.scalars().all():
+                    await self._set_domain_umap_from_children(db, dnode)
+            except Exception as dom_umap_exc:
+                logger.warning("Domain UMAP centroid failed (non-fatal): %s", dom_umap_exc)
 
         # 5. Regenerate OKLab colors from UMAP positions
         color_pairs: list[tuple[str, str]] = []
@@ -1980,6 +2500,10 @@ class TaxonomyEngine:
             )
             if reparented:
                 await self._backfill_optimization_domain(db, node)
+                # Position the new domain node near its children so the
+                # topology visualization starts from a meaningful location
+                # instead of a random hash-based fallback.
+                await self._set_domain_umap_from_children(db, node)
 
         try:
             from app.services.event_bus import event_bus
@@ -2057,6 +2581,63 @@ class TaxonomyEngine:
                 result.rowcount, domain_node.label,
             )
         return result.rowcount
+
+    async def _set_domain_umap_from_children(
+        self, db: AsyncSession, domain_node: PromptCluster,
+    ) -> None:
+        """Set a domain node's UMAP position as the centroid of its children.
+
+        Called after domain creation + reparenting so the topology
+        visualization starts from a semantically meaningful position
+        instead of a hash-based random fallback.  Also called during
+        warm-path reconciliation and cold-path refit for domain nodes
+        that still lack UMAP coordinates.
+
+        Uses ``domain`` field matching (not ``parent_id``) because the
+        cold path can reassign parent_id during HDBSCAN re-clustering,
+        leaving tree links stale.
+        """
+        from sqlalchemy import func as sa_func
+
+        row = (await db.execute(
+            select(
+                sa_func.avg(PromptCluster.umap_x),
+                sa_func.avg(PromptCluster.umap_y),
+                sa_func.avg(PromptCluster.umap_z),
+                sa_func.count(),
+            ).where(
+                PromptCluster.domain == domain_node.label,
+                PromptCluster.state.notin_(["domain", "archived"]),
+                PromptCluster.umap_x.isnot(None),
+                PromptCluster.umap_y.isnot(None),
+                PromptCluster.umap_z.isnot(None),
+            )
+        )).one_or_none()
+
+        if row and row[0] is not None:
+            domain_node.umap_x = float(row[0])
+            domain_node.umap_y = float(row[1])
+            domain_node.umap_z = float(row[2])
+
+            # Single-child domains: offset the domain node so it doesn't
+            # sit at the exact same UMAP position as its only child.
+            # Without this, the force simulation's parent-child spring and
+            # UMAP anchor cancel out, rendering both nodes on top of each
+            # other in the topology graph.
+            # Offset of 1.0 in UMAP space = 10.0 scene units after
+            # UMAP_SCALE (frontend TopologyData.ts), which is slightly
+            # above the PARENT_REST_LEN (9.0) — enough for the spring
+            # to find equilibrium at a visible distance.
+            child_count = int(row[3])
+            if child_count == 1:
+                domain_node.umap_x += 1.0
+                domain_node.umap_y += 0.5
+
+            logger.info(
+                "Set domain '%s' UMAP from %d children: (%.3f, %.3f, %.3f)",
+                domain_node.label, child_count,
+                domain_node.umap_x, domain_node.umap_y, domain_node.umap_z,
+            )
 
     # ------------------------------------------------------------------
     # Risk detection (ADR-004 Section 8B)
