@@ -2,6 +2,9 @@
 
 Public API:
     TaxonomyEngine — unified orchestrator
+    WarmPathResult — warm path execution result (from warm_path module)
+    ColdPathResult — cold path execution result (from cold_path module)
+    IndexSnapshot — embedding index snapshot for rollback (from embedding_index)
     TaxonomyMapping — domain mapping result
     PatternMatch — pattern matching result
     QWeights — quality metric weights
@@ -17,7 +20,8 @@ import threading
 from typing import Any
 
 from app.services.taxonomy.cluster_meta import ClusterMeta, read_meta, write_meta
-from app.services.taxonomy.embedding_index import EmbeddingIndex
+from app.services.taxonomy.cold_path import ColdPathResult
+from app.services.taxonomy.embedding_index import EmbeddingIndex, IndexSnapshot
 from app.services.taxonomy.engine import TaxonomyEngine
 from app.services.taxonomy.matching import (
     PatternMatch,
@@ -25,15 +29,19 @@ from app.services.taxonomy.matching import (
 )
 from app.services.taxonomy.quality import QWeights
 from app.services.taxonomy.sparkline import SparklineData, compute_sparkline_data
+from app.services.taxonomy.warm_path import WarmPathResult
 
 __all__ = [
     "ClusterMeta",
+    "ColdPathResult",
     "EmbeddingIndex",
+    "IndexSnapshot",
     "PatternMatch",
     "QWeights",
     "SparklineData",
     "TaxonomyEngine",
     "TaxonomyMapping",
+    "WarmPathResult",
     "compute_sparkline_data",
     "get_engine",
     "read_meta",
