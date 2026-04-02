@@ -5,6 +5,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- `warm_path.py` orchestrator module with `execute_warm_path()` — sequential 7-phase warm path with per-phase Q gates, embedding index snapshot/restore on speculative rollback, per-phase deadlock breaker counters, and `WarmPathResult` aggregated dataclass
 - `warm_phases.py` module extracting 7 warm-path phase functions from engine.py monolith — reconcile, split_emerge, merge, retire, refresh, discover, audit — each independently callable with dependency-injected engine and fresh AsyncSession
 - `PhaseResult`, `ReconcileResult`, `RefreshResult`, `DiscoverResult`, `AuditResult` dataclasses for structured phase return values
 
