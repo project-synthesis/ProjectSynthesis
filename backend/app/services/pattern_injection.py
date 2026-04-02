@@ -10,9 +10,11 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -103,63 +105,140 @@ async def auto_inject_patterns(
 
     embedding_svc = EmbeddingService()
     embedding_index = taxonomy_engine.embedding_index
+
+    injected: list[InjectedPattern] = []
+    cluster_ids: list[str] = []
+    similarity_map: dict[str, float] = {}
+    cluster_meta: dict[str, tuple[str, str]] = {}
+    topic_pattern_ids: set[str] = set()
+    prompt_embedding = None
+
+    # ------------------------------------------------------------------
+    # Topic-based injection: search embedding index for nearest clusters
+    # ------------------------------------------------------------------
     if embedding_index.size == 0:
         logger.info(
-            "Taxonomy embedding index empty, skipping auto-injection. trace_id=%s",
+            "Taxonomy embedding index empty, skipping topic-based injection. trace_id=%s",
             trace_id,
         )
-        return [], []
+    else:
+        prompt_embedding = await embedding_svc.aembed_single(raw_prompt)
+        # Threshold 0.45: broad clusters (post-cold-path merge) have averaged
+        # centroids that score ~0.45-0.55 against specific prompts. The
+        # optimizer prompt's precision instructions handle relevance filtering.
+        matches = embedding_index.search(prompt_embedding, k=5, threshold=0.45)
+        if not matches:
+            logger.info(
+                "No pattern matches above threshold (0.45). trace_id=%s",
+                trace_id,
+            )
+        else:
+            cluster_ids = [m[0] for m in matches]
+            similarity_map = {m[0]: m[1] for m in matches}
 
-    prompt_embedding = await embedding_svc.aembed_single(raw_prompt)
-    # Threshold 0.45: broad clusters (post-cold-path merge) have averaged
-    # centroids that score ~0.45-0.55 against specific prompts. The
-    # optimizer prompt's precision instructions handle relevance filtering.
-    matches = embedding_index.search(prompt_embedding, k=5, threshold=0.45)
-    if not matches:
-        logger.info(
-            "No pattern matches above threshold (0.45). trace_id=%s",
-            trace_id,
+            # Fetch cluster metadata (label, domain) for context
+            cluster_result = await db.execute(
+                select(PromptCluster.id, PromptCluster.label, PromptCluster.domain).where(
+                    PromptCluster.id.in_(cluster_ids)
+                )
+            )
+            cluster_meta = {
+                row.id: (row.label or "unnamed", row.domain or "general")
+                for row in cluster_result
+            }
+
+            # Fetch meta-patterns
+            result = await db.execute(
+                select(MetaPattern).where(MetaPattern.cluster_id.in_(cluster_ids))
+            )
+            patterns = result.scalars().all()
+
+            for p in patterns:
+                label, domain = cluster_meta.get(p.cluster_id, ("unnamed", "general"))
+                sim = similarity_map.get(p.cluster_id, 0.0)
+                injected.append(InjectedPattern(
+                    pattern_text=p.pattern_text,
+                    cluster_label=label,
+                    domain=domain,
+                    similarity=round(sim, 2),
+                    cluster_id=p.cluster_id,
+                ))
+                topic_pattern_ids.add(p.id)
+
+    # ------------------------------------------------------------------
+    # Cross-cluster injection: fetch universal patterns by global_source_count
+    # even when topic-based matching found nothing or few patterns.
+    # ------------------------------------------------------------------
+    try:
+        from app.services.pipeline_constants import (
+            CROSS_CLUSTER_MAX_PATTERNS,
+            CROSS_CLUSTER_MIN_SOURCE_COUNT,
+            CROSS_CLUSTER_RELEVANCE_FLOOR,
         )
-        return [], []
 
-    cluster_ids = [m[0] for m in matches]
-    similarity_map = {m[0]: m[1] for m in matches}
+        # Ensure we have a prompt embedding for relevance scoring
+        if prompt_embedding is None:
+            prompt_embedding = await embedding_svc.aembed_single(raw_prompt)
 
-    # Fetch cluster metadata (label, domain) for context
-    cluster_result = await db.execute(
-        select(PromptCluster.id, PromptCluster.label, PromptCluster.domain).where(
-            PromptCluster.id.in_(cluster_ids)
-        )
-    )
-    cluster_meta = {
-        row.id: (row.label or "unnamed", row.domain or "general")
-        for row in cluster_result
-    }
-
-    # Fetch meta-patterns
-    result = await db.execute(
-        select(MetaPattern).where(MetaPattern.cluster_id.in_(cluster_ids))
-    )
-    patterns = result.scalars().all()
-    if not patterns:
-        return [], cluster_ids
-
-    injected = []
-    for p in patterns:
-        label, domain = cluster_meta.get(p.cluster_id, ("unnamed", "general"))
-        sim = similarity_map.get(p.cluster_id, 0.0)
-        injected.append(InjectedPattern(
-            pattern_text=p.pattern_text,
-            cluster_label=label,
-            domain=domain,
-            similarity=round(sim, 2),
-            cluster_id=p.cluster_id,
+        remaining_slots = max(0, CROSS_CLUSTER_MAX_PATTERNS - len(
+            [p for p in injected if "(cross-cluster)" in (p.cluster_label or "")]
         ))
 
+        if remaining_slots > 0 and prompt_embedding is not None:
+            cc_q = await db.execute(
+                select(
+                    MetaPattern,
+                    PromptCluster.label,
+                    PromptCluster.domain,
+                    PromptCluster.avg_score,
+                )
+                .join(PromptCluster, MetaPattern.cluster_id == PromptCluster.id)
+                .where(
+                    MetaPattern.global_source_count >= CROSS_CLUSTER_MIN_SOURCE_COUNT,
+                    MetaPattern.embedding.isnot(None),
+                )
+                .order_by(MetaPattern.global_source_count.desc())
+                .limit(remaining_slots * 3)  # fetch extra for filtering
+            )
+
+            for mp, cluster_label, cluster_domain, cluster_avg_score in cc_q.all():
+                if len([p for p in injected if "(cross-cluster)" in (p.cluster_label or "")]) >= CROSS_CLUSTER_MAX_PATTERNS:
+                    break
+                # Skip if already injected via topic match
+                if mp.id in topic_pattern_ids:
+                    continue
+                try:
+                    pat_emb = np.frombuffer(mp.embedding, dtype=np.float32)
+                    sim = float(np.dot(prompt_embedding, pat_emb) / (
+                        np.linalg.norm(prompt_embedding) * np.linalg.norm(pat_emb) + 1e-9
+                    ))
+                    # Full relevance formula with cluster_avg_score_factor
+                    cluster_score_factor = max(0.1, (cluster_avg_score or 5.0) / 10.0)
+                    relevance = sim * math.log2(1 + mp.global_source_count) * cluster_score_factor
+
+                    if relevance >= CROSS_CLUSTER_RELEVANCE_FLOOR:
+                        injected.append(InjectedPattern(
+                            pattern_text=mp.pattern_text,
+                            cluster_label=f"{cluster_label} (cross-cluster)",
+                            domain=cluster_domain or "general",
+                            similarity=round(relevance, 2),
+                            cluster_id=mp.cluster_id,
+                        ))
+                except (ValueError, TypeError):
+                    continue
+
+            cc_count = len([p for p in injected if "(cross-cluster)" in (p.cluster_label or "")])
+            if cc_count:
+                logger.info("Cross-cluster injection: added %d universal patterns. trace_id=%s", cc_count, trace_id)
+    except Exception as cc_exc:
+        logger.warning("Cross-cluster injection failed (non-fatal): %s trace_id=%s", cc_exc, trace_id)
+
+    # ------------------------------------------------------------------
     # Persist injection provenance when optimization_id is available.
     # Uses flush() to eagerly detect constraint violations — if provenance
     # fails, the pending objects are expunged so the main Optimization
     # commit is not affected.
+    # ------------------------------------------------------------------
     if optimization_id and cluster_ids:
         try:
             from app.models import OptimizationPattern
@@ -197,15 +276,23 @@ async def auto_inject_patterns(
             )
 
     # Detailed injection chain log for observability
-    cluster_summary = ", ".join(
-        f"{label} ({domain}, sim={similarity_map.get(cid, 0):.2f})"
-        for cid, (label, domain) in cluster_meta.items()
-    )
-    logger.info(
-        "Auto-injected %d patterns from %d clusters [%s]. trace_id=%s",
-        len(injected),
-        len(cluster_ids),
-        cluster_summary,
-        trace_id,
-    )
+    if cluster_meta:
+        cluster_summary = ", ".join(
+            f"{label} ({domain}, sim={similarity_map.get(cid, 0):.2f})"
+            for cid, (label, domain) in cluster_meta.items()
+        )
+        logger.info(
+            "Auto-injected %d patterns from %d clusters [%s]. trace_id=%s",
+            len(injected),
+            len(cluster_ids),
+            cluster_summary,
+            trace_id,
+        )
+    elif injected:
+        logger.info(
+            "Auto-injected %d patterns (cross-cluster only). trace_id=%s",
+            len(injected),
+            trace_id,
+        )
+
     return injected, cluster_ids

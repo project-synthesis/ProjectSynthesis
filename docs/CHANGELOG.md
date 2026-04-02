@@ -5,6 +5,13 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- Cross-cluster pattern injection in `auto_inject_patterns()` — universal patterns with high `global_source_count` are now injected alongside topic-based matches, ranked by `cosine_similarity * log2(1 + global_source_count) * cluster_avg_score_factor`
+- `CROSS_CLUSTER_RELEVANCE_FLOOR` (0.35) gates low-relevance cross-cluster candidates; deduplication prevents double-injection of patterns already found via topic match
+
+### Changed
+- `auto_inject_patterns()` restructured to eliminate early returns that blocked cross-cluster injection — topic-based search now produces an empty list instead of short-circuiting
+
+### Added
 - `cold_path.py` module with `execute_cold_path()` and `ColdPathResult` — extracted cold path from engine.py with quality gate via `is_cold_path_non_regressive()` to reject regressive HDBSCAN refits instead of committing unconditionally
 - `warm_path.py` orchestrator module with `execute_warm_path()` — sequential 7-phase warm path with per-phase Q gates, embedding index snapshot/restore on speculative rollback, per-phase deadlock breaker counters, and `WarmPathResult` aggregated dataclass
 - `warm_phases.py` module extracting 7 warm-path phase functions from engine.py monolith — reconcile, split_emerge, merge, retire, refresh, discover, audit — each independently callable with dependency-injected engine and fresh AsyncSession
