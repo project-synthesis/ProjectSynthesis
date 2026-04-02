@@ -5,11 +5,15 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- `cold_path.py` module with `execute_cold_path()` and `ColdPathResult` — extracted cold path from engine.py with quality gate via `is_cold_path_non_regressive()` to reject regressive HDBSCAN refits instead of committing unconditionally
 - `warm_path.py` orchestrator module with `execute_warm_path()` — sequential 7-phase warm path with per-phase Q gates, embedding index snapshot/restore on speculative rollback, per-phase deadlock breaker counters, and `WarmPathResult` aggregated dataclass
 - `warm_phases.py` module extracting 7 warm-path phase functions from engine.py monolith — reconcile, split_emerge, merge, retire, refresh, discover, audit — each independently callable with dependency-injected engine and fresh AsyncSession
 - `PhaseResult`, `ReconcileResult`, `RefreshResult`, `DiscoverResult`, `AuditResult` dataclasses for structured phase return values
 
 ### Fixed
+- Cold path now excludes archived clusters from HDBSCAN input — original used `state != "domain"` which included archived (fix #5)
+- Cold path existing-node matching now includes mature/template states — original used `state.in_(["active", "candidate"])` which missed them (fix #6)
+- Cold path resets `split_failures` metadata on matched nodes after HDBSCAN refit (fix #14)
 - Warm-path reconciliation now queries fresh non-domain/non-archived nodes instead of iterating a stale `active_nodes` list (fixes #10, #16)
 - Emerge phase excludes domain/archived nodes from orphan family query (fix #7)
 - Leaf split now increments `ops_accepted` counter on success (fix #9)
