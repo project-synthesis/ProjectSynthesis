@@ -68,6 +68,8 @@ class Optimization(Base):
     intent_label = Column(String, nullable=True)
     domain = Column(String, nullable=True)
     embedding = Column(LargeBinary, nullable=True)
+    optimized_embedding = Column(LargeBinary, nullable=True)
+    transformation_embedding = Column(LargeBinary, nullable=True)
     cluster_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=True)
     domain_raw = Column(String, nullable=True)
     heuristic_flags = Column(JSON, nullable=True)
@@ -109,6 +111,7 @@ class PromptCluster(Base):
 
     centroid_embedding = Column(LargeBinary, nullable=True)
     member_count = Column(Integer, nullable=False, default=0)
+    weighted_member_sum = Column(Float, default=0.0, nullable=False, server_default="0.0")
     scored_count = Column(Integer, nullable=False, default=0)
     usage_count = Column(Integer, nullable=False, default=0)
     avg_score = Column(Float, nullable=True)

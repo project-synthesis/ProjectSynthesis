@@ -249,6 +249,33 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass  # Column already exists
 
+            # Startup: ensure optimized_embedding + transformation_embedding columns exist
+            try:
+                async with async_session_factory() as _emb_db:
+                    await _emb_db.execute(
+                        _text_gsc("ALTER TABLE optimizations ADD COLUMN optimized_embedding BLOB")
+                    )
+                    await _emb_db.commit()
+            except Exception:
+                pass
+            try:
+                async with async_session_factory() as _emb_db2:
+                    await _emb_db2.execute(
+                        _text_gsc("ALTER TABLE optimizations ADD COLUMN transformation_embedding BLOB")
+                    )
+                    await _emb_db2.commit()
+            except Exception:
+                pass
+            # Startup: ensure weighted_member_sum column exists on prompt_cluster
+            try:
+                async with async_session_factory() as _wms_db:
+                    await _wms_db.execute(
+                        _text_gsc("ALTER TABLE prompt_cluster ADD COLUMN weighted_member_sum REAL NOT NULL DEFAULT 0.0")
+                    )
+                    await _wms_db.commit()
+            except Exception:
+                pass
+
             # Startup: backfill orphan optimizations with null cluster_id
             try:
                 from app.services.prompt_lifecycle import PromptLifecycleService
