@@ -418,3 +418,53 @@ async def test_concurrent_upserts_do_not_corrupt():
     assert index.size == 20
     # Matrix rows must equal ids length
     assert index._matrix.shape == (20, 384)
+
+
+# ---------------------------------------------------------------------------
+# 7. save_cache / load_cache
+# ---------------------------------------------------------------------------
+
+import time
+from pathlib import Path
+
+
+@pytest.mark.asyncio
+async def test_save_and_load_cache_round_trip(index: TransformationIndex, tmp_path: Path):
+    """Save/load round-trip preserves vectors."""
+    v1 = _rand_emb(seed=10)
+    v2 = _rand_emb(seed=20)
+    await index.upsert("c1", v1)
+    await index.upsert("c2", v2)
+
+    cache_path = tmp_path / "transformation_index.pkl"
+    await index.save_cache(cache_path)
+    assert cache_path.exists()
+
+    fresh = TransformationIndex(dim=384)
+    loaded = await fresh.load_cache(cache_path)
+    assert loaded is True
+    assert fresh.size == 2
+
+    restored_v1 = fresh.get_vector("c1")
+    assert restored_v1 is not None
+    assert np.dot(restored_v1, v1 / np.linalg.norm(v1)) > 0.99
+
+
+@pytest.mark.asyncio
+async def test_load_cache_rejects_stale(index: TransformationIndex, tmp_path: Path):
+    """Cache older than max_age_seconds is rejected."""
+    await index.upsert("c1", _rand_emb(seed=1))
+    cache_path = tmp_path / "transformation_index.pkl"
+    await index.save_cache(cache_path)
+
+    fresh = TransformationIndex(dim=384)
+    loaded = await fresh.load_cache(cache_path, max_age_seconds=0)
+    assert loaded is False
+    assert fresh.size == 0
+
+
+@pytest.mark.asyncio
+async def test_load_cache_missing_file(index: TransformationIndex, tmp_path: Path):
+    """Missing file returns False without error."""
+    loaded = await index.load_cache(tmp_path / "nonexistent.pkl")
+    assert loaded is False
