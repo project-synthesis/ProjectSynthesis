@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -27,6 +28,28 @@ async def db() -> AsyncGenerator[AsyncSession, None]:
         await conn.run_sync(Base.metadata.create_all)
     async with async_session() as session:
         yield session
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def session_factory() -> AsyncGenerator:
+    """Async session factory for warm-path tests.
+
+    Returns a callable that, when called, produces an async context manager
+    yielding a fresh AsyncSession — matching the interface expected by
+    ``TaxonomyEngine.run_warm_path(session_factory)``.
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    _async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    @asynccontextmanager
+    async def _factory():
+        async with _async_session() as session:
+            yield session
+
+    yield _factory
     await engine.dispose()
 
 

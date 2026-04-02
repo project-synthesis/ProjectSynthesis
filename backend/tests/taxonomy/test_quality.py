@@ -5,10 +5,13 @@ import math
 import pytest
 
 from app.services.taxonomy.quality import (
+    COLD_PATH_EPSILON,
+    NodeMetrics,
     QWeights,
     adaptive_threshold,
     compute_q_system,
     epsilon_tolerance,
+    is_cold_path_non_regressive,
     is_non_regressive,
     suggestion_threshold,
 )
@@ -147,6 +150,96 @@ class TestIsNonRegressive:
 
     def test_large_regression_fails(self):
         assert not is_non_regressive(q_before=0.8, q_after=0.7, warm_path_age=50)
+
+
+class TestIsColdPathNonRegressive:
+    """Cold-path quality gate — flat COLD_PATH_EPSILON tolerance."""
+
+    def test_constant_value(self):
+        assert COLD_PATH_EPSILON == pytest.approx(0.08)
+
+    def test_improvement_passes(self):
+        assert is_cold_path_non_regressive(0.6, 0.65)
+
+    def test_equal_passes(self):
+        assert is_cold_path_non_regressive(0.6, 0.6)
+
+    def test_within_epsilon_passes(self):
+        # 0.6 - 0.55 = 0.05, which is < 0.08 tolerance
+        assert is_cold_path_non_regressive(0.6, 0.55)
+
+    def test_exactly_at_boundary_passes(self):
+        # 0.6 - 0.08 = 0.52, exactly on the boundary
+        assert is_cold_path_non_regressive(0.6, 0.52)
+
+    def test_beyond_epsilon_fails(self):
+        # 0.6 - 0.50 = 0.10, which exceeds 0.08 tolerance
+        assert not is_cold_path_non_regressive(0.6, 0.50)
+
+    def test_large_regression_fails(self):
+        assert not is_cold_path_non_regressive(0.9, 0.0)
+
+    def test_zero_before_zero_after(self):
+        assert is_cold_path_non_regressive(0.0, 0.0)
+
+    def test_cold_epsilon_wider_than_warm(self):
+        """Cold epsilon must be wider than warm minimum (0.001)."""
+        assert COLD_PATH_EPSILON > epsilon_tolerance(warm_path_age=10000)
+
+
+class TestComputeQSystemStateMembership:
+    """Verify which node states contribute to Q computation."""
+
+    def _weights(self):
+        return QWeights.from_ramp(0.0)
+
+    def test_active_nodes_included(self):
+        nodes = [NodeMetrics(coherence=0.8, separation=0.7, state="active")]
+        assert compute_q_system(nodes, self._weights()) > 0.0
+
+    def test_mature_nodes_included(self):
+        nodes = [NodeMetrics(coherence=0.8, separation=0.7, state="mature")]
+        assert compute_q_system(nodes, self._weights()) > 0.0
+
+    def test_template_nodes_included(self):
+        nodes = [NodeMetrics(coherence=0.8, separation=0.7, state="template")]
+        assert compute_q_system(nodes, self._weights()) > 0.0
+
+    def test_candidate_nodes_included(self):
+        nodes = [NodeMetrics(coherence=0.8, separation=0.7, state="candidate")]
+        assert compute_q_system(nodes, self._weights()) > 0.0
+
+    def test_domain_nodes_excluded(self):
+        nodes = [NodeMetrics(coherence=0.99, separation=0.99, state="domain")]
+        assert compute_q_system(nodes, self._weights()) == 0.0
+
+    def test_archived_nodes_excluded(self):
+        nodes = [NodeMetrics(coherence=0.99, separation=0.99, state="archived")]
+        assert compute_q_system(nodes, self._weights()) == 0.0
+
+    def test_mixed_states_only_non_excluded_contribute(self):
+        """mature/template should contribute; domain/archived should not."""
+        # All contributing nodes have high quality
+        contributing = [
+            NodeMetrics(coherence=0.9, separation=0.9, state="active"),
+            NodeMetrics(coherence=0.9, separation=0.9, state="mature"),
+            NodeMetrics(coherence=0.9, separation=0.9, state="template"),
+        ]
+        # Excluded nodes have terrible quality — if they contributed the score
+        # would be dragged below 0.5
+        excluded = [
+            NodeMetrics(coherence=0.0, separation=0.0, state="domain"),
+            NodeMetrics(coherence=0.0, separation=0.0, state="archived"),
+        ]
+        score = compute_q_system(contributing + excluded, self._weights(), coverage=1.0)
+        assert score > 0.5
+
+    def test_only_excluded_states_returns_zero(self):
+        nodes = [
+            NodeMetrics(coherence=0.9, separation=0.9, state="domain"),
+            NodeMetrics(coherence=0.9, separation=0.9, state="archived"),
+        ]
+        assert compute_q_system(nodes, self._weights()) == 0.0
 
 
 class TestSuggestionThreshold:

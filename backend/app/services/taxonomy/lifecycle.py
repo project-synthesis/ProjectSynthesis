@@ -20,7 +20,6 @@ import logging
 import math
 import random
 from collections import Counter
-from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -37,15 +36,7 @@ from app.utils.text_cleanup import parse_domain
 logger = logging.getLogger(__name__)
 
 
-def _utcnow() -> datetime:
-    """Naive UTC timestamp — matches SQLAlchemy DateTime() round-trip on SQLite.
-
-    SQLAlchemy's ``DateTime()`` (without ``timezone=True``) strips tzinfo on
-    storage and returns naive datetimes on read.  Using naive UTC ensures
-    in-memory comparisons (e.g. in prompt_lifecycle.py curation) never hit
-    ``TypeError: can't compare offset-naive and offset-aware datetimes``.
-    """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from app.services.taxonomy._constants import _utcnow  # noqa: E402
 
 
 class GuardrailViolationError(RuntimeError):

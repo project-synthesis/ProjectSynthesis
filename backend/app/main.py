@@ -386,21 +386,22 @@ async def lifespan(app: FastAPI):
                         from app.services.prompt_lifecycle import (
                             PromptLifecycleService,
                         )
-                        async with async_session_factory() as db:
-                            result = await engine.run_warm_path(db)
-                            if result:
-                                logger.info(
-                                    "Warm path completed: q=%.4f ops=%d/%d snapshot=%s",
-                                    result.q_system or 0.0,
-                                    result.operations_accepted,
-                                    result.operations_attempted,
-                                    result.snapshot_id,
-                                )
-                            # Warm path: curation + usage decay after clustering
+                        result = await engine.run_warm_path(async_session_factory)
+                        if result:
+                            logger.info(
+                                "Warm path completed: q=%.4f baseline=%.4f ops=%d/%d snapshot=%s",
+                                result.q_system or 0.0,
+                                result.q_baseline or 0.0,
+                                result.operations_accepted,
+                                result.operations_attempted,
+                                result.snapshot_id,
+                            )
+                        # Lifecycle service gets its own session
+                        async with async_session_factory() as lifecycle_db:
                             lifecycle = PromptLifecycleService()
-                            await lifecycle.curate(db, embedding_index=engine.embedding_index)
-                            await lifecycle.decay_usage(db)
-                            await db.commit()
+                            await lifecycle.curate(lifecycle_db, embedding_index=engine.embedding_index)
+                            await lifecycle.decay_usage(lifecycle_db)
+                            await lifecycle_db.commit()
 
                         # Auto-trigger cold path when:
                         # 1. Deadlock breaker signaled _cold_path_needed, OR

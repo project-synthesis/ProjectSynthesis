@@ -279,10 +279,17 @@ class TestClusterRecluster:
         @dataclass
         class FakeColdPathResult:
             snapshot_id: str = "snap-1"
-            q_system: float = 0.85
+            q_before: float | None = 0.80
+            q_after: float | None = 0.85
+            accepted: bool = True
             nodes_created: int = 3
             nodes_updated: int = 1
             umap_fitted: bool = True
+            q_system: float | None = None  # backward compat — auto-set from q_after
+
+            def __post_init__(self) -> None:
+                if self.q_system is None and self.q_after is not None:
+                    self.q_system = self.q_after
 
         mock_engine = AsyncMock()
         mock_engine.run_cold_path.return_value = FakeColdPathResult()

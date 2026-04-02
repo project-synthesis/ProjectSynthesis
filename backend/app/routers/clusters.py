@@ -441,10 +441,15 @@ async def trigger_recluster(
         result = await engine.run_cold_path(db)
         if result is None:
             return ReclusterResponse(status="skipped", reason="lock held")
+        status = "completed" if result.accepted else "rejected"
         return ReclusterResponse(
-            status="completed",
+            status=status,
+            reason="quality gate failed — rolled back" if not result.accepted else None,
             snapshot_id=result.snapshot_id,
             q_system=result.q_system,
+            q_before=result.q_before,
+            q_after=result.q_after,
+            accepted=result.accepted,
             nodes_created=result.nodes_created,
             nodes_updated=result.nodes_updated,
             umap_fitted=result.umap_fitted,

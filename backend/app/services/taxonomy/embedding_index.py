@@ -7,11 +7,24 @@ snapshots (copy-on-write). At 2000 clusters (384-dim), search is ~3ms.
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class IndexSnapshot:
+    """Frozen copy of EmbeddingIndex state for rollback support.
+
+    Used by the warm-path speculative lifecycle to restore the index if the
+    quality gate rolls back its DB transaction.
+    """
+
+    matrix: np.ndarray  # deep copy of _matrix (N x dim, float32)
+    ids: list[str]       # copy of _ids (cluster UUIDs)
 
 
 class EmbeddingIndex:
@@ -185,6 +198,30 @@ class EmbeddingIndex:
             self._ids = ids
 
         logger.info("EmbeddingIndex rebuilt: %d centroids", len(ids))
+
+    async def snapshot(self) -> IndexSnapshot:
+        """Return a frozen copy of the current index state.
+
+        Acquires the lock to prevent concurrent mutations during the copy.
+        The returned snapshot is fully independent — subsequent mutations to
+        the index do not affect it.
+        """
+        async with self._lock:
+            return IndexSnapshot(
+                matrix=self._matrix.copy(),
+                ids=list(self._ids),
+            )
+
+    async def restore(self, snapshot: IndexSnapshot) -> None:
+        """Atomically swap the index state back to a previously captured snapshot.
+
+        Acquires the lock to prevent concurrent readers from observing a
+        partially-restored state. Safe to call from within a rolled-back
+        DB transaction handler.
+        """
+        async with self._lock:
+            self._matrix = snapshot.matrix.copy()
+            self._ids = list(snapshot.ids)
 
     async def save_cache(self, cache_path: Path) -> None:
         """Serialize index to disk for fast startup recovery."""

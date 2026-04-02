@@ -26,6 +26,11 @@ _W_V_BASE = 0.25
 # Adaptive threshold scaling factor
 _ALPHA = 0.15
 
+# Cold-path non-regression tolerance.
+# HDBSCAN refits are destructive and non-deterministic, so a wider
+# flat epsilon (8%) is used instead of the warm-path adaptive decay.
+COLD_PATH_EPSILON = 0.08
+
 
 @dataclass(frozen=True)
 class NodeMetrics:
@@ -36,7 +41,9 @@ class NodeMetrics:
 
     coherence: float
     separation: float
-    state: str  # 'candidate' | 'active' | 'archived'
+    state: str  # 'candidate' | 'active' | 'mature' | 'template' | 'archived' | 'domain'
+    # Q-contributing states: candidate, active, mature, template
+    # Excluded from Q computation: domain, archived
 
 
 @dataclass(frozen=True)
@@ -84,11 +91,14 @@ def compute_q_system(
     Reference: Spec Section 2.5
 
     Edge cases:
-    - Empty or all-archived: returns 0.0
+    - Empty or all-excluded (domain/archived only): returns 0.0
     - Single node: coherence=perfect, separation=perfect (no siblings)
     - NaN/Inf: replaced with 0.0
+
+    Included states: candidate, active, mature, template.
+    Excluded states: domain (structural containers), archived (retired).
     """
-    active = [n for n in nodes if n.state == "active"]
+    active = [n for n in nodes if n.state not in ("domain", "archived")]
     if not active:
         return 0.0
 
@@ -148,12 +158,17 @@ def adaptive_threshold(
 
 
 def epsilon_tolerance(warm_path_age: int) -> float:
-    """Compute non-regression epsilon for Q_system comparison.
+    """Compute warm-path non-regression epsilon for Q_system comparison.
 
     Reference: Spec Section 2.5
 
+    Used by the warm path (HDBSCAN-lite speculative mutations).
     Young taxonomies get larger epsilon (~0.007 at age 20).
     Mature taxonomies get tiny epsilon (~0.001 at age 100).
+
+    For the cold path (full HDBSCAN refit), use COLD_PATH_EPSILON
+    instead — it is a flat 0.08 tolerance because cold-path refits are
+    destructive and non-deterministic.
 
     Args:
         warm_path_age: Number of warm-path cycles completed.
@@ -166,13 +181,39 @@ def is_non_regressive(
     q_after: float,
     warm_path_age: int,
 ) -> bool:
-    """Check if a quality transition passes the non-regression gate.
+    """Check if a warm-path quality transition passes the non-regression gate.
 
     Reference: Spec Section 2.5
+
+    Uses an adaptive epsilon that decays with warm_path_age (see
+    epsilon_tolerance). For cold-path gating use is_cold_path_non_regressive.
+
     Q_after >= Q_before - epsilon (tolerance)
     """
     eps = epsilon_tolerance(warm_path_age)
     return q_after >= q_before - eps
+
+
+def is_cold_path_non_regressive(q_before: float, q_after: float) -> bool:
+    """Check if a cold-path quality transition passes the non-regression gate.
+
+    Reference: Spec Section 2.5
+
+    Used after a full HDBSCAN refit (cold path). The tolerance is a flat
+    COLD_PATH_EPSILON (0.08 = 8%) rather than the warm-path adaptive decay
+    because HDBSCAN refits are destructive and non-deterministic — a tighter
+    gate would reject valid refits due to stochastic centroid variance.
+
+    Q_after >= Q_before - COLD_PATH_EPSILON
+
+    Args:
+        q_before: Q_system score before the cold-path refit.
+        q_after: Q_system score after the cold-path refit.
+
+    Returns:
+        True if the transition is within the allowed regression window.
+    """
+    return q_after >= q_before - COLD_PATH_EPSILON
 
 
 def suggestion_threshold(

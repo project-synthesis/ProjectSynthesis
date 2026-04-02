@@ -116,6 +116,9 @@ class ReclusterResponse(BaseModel):
     reason: str | None = None
     snapshot_id: str | None = None
     q_system: float | None = None
+    q_before: float | None = None
+    q_after: float | None = None
+    accepted: bool = True
     nodes_created: int = 0
     nodes_updated: int = 0
     umap_fitted: bool = False
