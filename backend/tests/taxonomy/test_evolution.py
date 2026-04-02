@@ -4,18 +4,50 @@ Verifies Q_system monotonicity across warm-path cycles with realistic
 synthetic data. Uses hash-based embedding to produce deterministic clusters.
 """
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 import numpy as np
 import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
-from app.models import Optimization
+from app.models import Base, Optimization
 from app.services.taxonomy.engine import TaxonomyEngine
 from tests.taxonomy.conftest import EMBEDDING_DIM
+
+
+@pytest_asyncio.fixture
+async def shared_db_and_factory() -> AsyncGenerator[tuple, None]:
+    """Shared in-memory SQLite database — both db and session_factory use the same engine.
+
+    Required because run_warm_path(session_factory) creates its own sessions,
+    and those sessions must see data committed by the test's db session.
+    """
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        # share_cache ensures multiple connections share the same in-memory DB
+        connect_args={"check_same_thread": False},
+    )
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    @asynccontextmanager
+    async def _factory():
+        async with async_session() as session:
+            yield session
+
+    async with async_session() as db:
+        yield db, _factory
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
 @pytest.mark.slow
 async def test_q_system_non_regressive_over_100_optimizations(
-    db, mock_embedding, mock_provider,
+    shared_db_and_factory, mock_embedding, mock_provider,
 ):
     """Q_system should remain non-regressive across warm-path cycles.
 
@@ -23,6 +55,7 @@ async def test_q_system_non_regressive_over_100_optimizations(
     warm-path every 20 optimizations. Q_system at each checkpoint
     should be >= previous checkpoint (within tolerance).
     """
+    db, session_factory = shared_db_and_factory
     engine = TaxonomyEngine(
         embedding_service=mock_embedding, provider=mock_provider,
     )
@@ -61,8 +94,11 @@ async def test_q_system_non_regressive_over_100_optimizations(
 
             await engine.process_optimization(opt.id, db)
 
-        # Run warm path at each checkpoint
-        result = await engine.run_warm_path(db)
+        # Commit data so warm path sessions can see it
+        await db.commit()
+
+        # Run warm path at each checkpoint (uses session_factory for per-phase sessions)
+        result = await engine.run_warm_path(session_factory)
         if result and result.q_system is not None:
             q_checkpoints.append(result.q_system)
 
