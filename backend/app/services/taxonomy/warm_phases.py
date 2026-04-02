@@ -88,6 +88,8 @@ class PhaseResult:
     q_before: float
     q_after: float
     accepted: bool
+    ops_attempted: int = 0
+    ops_accepted: int = 0
     operations: list[dict] = field(default_factory=list)
     embedding_index_mutations: int = 0
 
@@ -800,6 +802,8 @@ async def phase_split_emerge(
         q_before=q_before,
         q_after=q_after,
         accepted=ops_accepted > 0,
+        ops_attempted=ops_attempted,
+        ops_accepted=ops_accepted,
         operations=operations_log,
         embedding_index_mutations=embedding_index_mutations,
     )
@@ -1066,6 +1070,8 @@ async def phase_merge(
         q_before=q_before,
         q_after=q_after,
         accepted=ops_accepted > 0,
+        ops_attempted=ops_attempted,
+        ops_accepted=ops_accepted,
         operations=operations_log,
         embedding_index_mutations=embedding_index_mutations,
     )
@@ -1122,6 +1128,8 @@ async def phase_retire(
         q_before=q_before,
         q_after=q_after,
         accepted=ops_accepted > 0,
+        ops_attempted=ops_attempted,
+        ops_accepted=ops_accepted,
         operations=operations_log,
         embedding_index_mutations=embedding_index_mutations,
     )
@@ -1326,12 +1334,8 @@ async def phase_audit(
     result = AuditResult()
 
     # Gather aggregated stats from all phase results
-    total_ops_attempted = sum(
-        len(pr.operations) for pr in phase_results
-    )
-    total_ops_accepted = sum(
-        len(pr.operations) for pr in phase_results if pr.accepted
-    )
+    total_ops_attempted = sum(pr.ops_attempted for pr in phase_results)
+    total_ops_accepted = sum(pr.ops_accepted for pr in phase_results)
     all_operations: list[dict] = []
     for pr in phase_results:
         all_operations.extend(pr.operations)
