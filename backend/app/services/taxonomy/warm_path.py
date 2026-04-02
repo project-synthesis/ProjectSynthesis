@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -29,11 +29,7 @@ from app.models import PromptCluster
 from app.services.taxonomy._constants import DEADLOCK_BREAKER_THRESHOLD
 from app.services.taxonomy.quality import is_non_regressive
 from app.services.taxonomy.warm_phases import (
-    AuditResult,
-    DiscoverResult,
     PhaseResult,
-    ReconcileResult,
-    RefreshResult,
     phase_audit,
     phase_discover,
     phase_merge,

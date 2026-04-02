@@ -34,15 +34,15 @@ from app.models import (
 from app.providers.base import LLMProvider
 from app.services.embedding_service import EmbeddingService
 from app.services.prompt_loader import PromptLoader
+from app.services.taxonomy._constants import _utcnow
 from app.services.taxonomy.cluster_meta import read_meta, write_meta
+from app.services.taxonomy.cold_path import ColdPathResult, execute_cold_path
 from app.services.taxonomy.embedding_index import EmbeddingIndex
 from app.services.taxonomy.family_ops import (
-    adaptive_merge_threshold,
     assign_cluster,
     build_breadcrumb,
     extract_meta_patterns,
     merge_meta_pattern,
-    merge_score_into_cluster,
 )
 from app.services.taxonomy.matching import (
     PatternMatch,
@@ -55,20 +55,10 @@ from app.services.taxonomy.matching import (
     match_prompt as _match_prompt,
 )
 from app.services.taxonomy.sparkline import compute_sparkline_data
+from app.services.taxonomy.warm_path import WarmPathResult, execute_warm_path
 from app.utils.text_cleanup import parse_domain
 
 logger = logging.getLogger(__name__)
-
-
-from app.services.taxonomy._constants import (  # noqa: E402
-    DEADLOCK_BREAKER_THRESHOLD,
-    SPLIT_COHERENCE_FLOOR,
-    SPLIT_MIN_MEMBERS,
-    _utcnow,
-)
-from app.services.taxonomy.cold_path import ColdPathResult, execute_cold_path
-from app.services.taxonomy.warm_path import WarmPathResult, execute_warm_path
-
 
 # ---------------------------------------------------------------------------
 # TaxonomyEngine
@@ -1097,7 +1087,6 @@ class TaxonomyEngine:
         Returns:
             The newly created PromptCluster domain node.
         """
-        from datetime import datetime, timezone
 
         from app.services.taxonomy.coloring import compute_max_distance_color
 
@@ -1366,7 +1355,6 @@ class TaxonomyEngine:
         self, db: AsyncSession, domain: PromptCluster,
     ) -> None:
         """Regenerate TF-IDF keywords for a domain with stale signals."""
-        from datetime import datetime, timezone
 
         keywords = await self._extract_domain_keywords(db, domain)
         domain.cluster_metadata = write_meta(

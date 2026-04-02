@@ -20,10 +20,8 @@ from app.services.taxonomy.warm_path import (
     _update_phase_rejection_counters,
     execute_warm_path,
 )
-from app.services.taxonomy.warm_phases import (
-    DEADLOCK_BREAKER_THRESHOLD,
-    PhaseResult,
-)
+from app.services.taxonomy._constants import DEADLOCK_BREAKER_THRESHOLD
+from app.services.taxonomy.warm_phases import PhaseResult
 from tests.taxonomy.conftest import EMBEDDING_DIM
 
 

@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 
 from app.models import Optimization, PromptCluster
+from app.services.taxonomy._constants import DEADLOCK_BREAKER_THRESHOLD
 from app.services.taxonomy.warm_phases import (
-    DEADLOCK_BREAKER_THRESHOLD,
     AuditResult,
     DiscoverResult,
     PhaseResult,

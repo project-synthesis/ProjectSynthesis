@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
-from sqlalchemy import func, select, update as sa_update
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -35,6 +36,11 @@ from app.models import (
     MetaPattern,
     Optimization,
     PromptCluster,
+)
+from app.services.taxonomy._constants import (
+    SPLIT_COHERENCE_FLOOR,
+    SPLIT_MIN_MEMBERS,
+    _utcnow,
 )
 from app.services.taxonomy.cluster_meta import read_meta, write_meta
 from app.services.taxonomy.clustering import (
@@ -55,14 +61,6 @@ if TYPE_CHECKING:
     from app.services.taxonomy.engine import TaxonomyEngine
 
 logger = logging.getLogger(__name__)
-
-from app.services.taxonomy._constants import (
-    DEADLOCK_BREAKER_THRESHOLD,
-    SPLIT_COHERENCE_FLOOR,
-    SPLIT_MIN_MEMBERS,
-    _utcnow,
-)
-
 
 # ---------------------------------------------------------------------------
 # Result dataclasses
