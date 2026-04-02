@@ -211,6 +211,14 @@ async def phase_reconcile(
                 node.scored_count = scored
                 result.scores_reconciled += 1
 
+        # Recompute weighted_member_sum from score data
+        for node in live_nodes:
+            score_data = score_map.get(node.id)
+            if score_data:
+                avg, scored = score_data
+                if scored and avg:
+                    node.weighted_member_sum = scored * max(0.1, avg / 10.0)
+
         # Reconcile domain node member_counts and parent_id links.
         domain_q = await db.execute(
             select(PromptCluster).where(PromptCluster.state == "domain")

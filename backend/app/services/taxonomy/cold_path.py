@@ -398,6 +398,14 @@ async def execute_cold_path(
             )).scalar() or 0
             dn.member_count = child_count
 
+    # Recompute weighted_member_sum from score data
+    for node in all_nodes:
+        score_data = score_map.get(node.id)
+        if score_data:
+            avg, scored = score_data
+            if scored and avg:
+                node.weighted_member_sum = scored * max(0.1, avg / 10.0)
+
     if mc_repairs:
         logger.info(
             "Cold path: reconciled %d member_counts from Optimization rows",

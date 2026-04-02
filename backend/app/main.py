@@ -276,6 +276,102 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+            # One-time backfill: embed optimized_prompt + transformation for existing rows
+            import numpy as np
+            from sqlalchemy import select as _bf_select
+
+            from app.models import Optimization as _bf_Opt
+
+            _backfill_marker = DATA_DIR / ".embedding_backfill_done"
+            if not _backfill_marker.exists():
+                try:
+                    async with async_session_factory() as _bf_db:
+                        from sqlalchemy import func as _bf_func
+                        count = (await _bf_db.execute(
+                            _bf_select(_bf_func.count()).where(
+                                _bf_Opt.embedding.isnot(None),
+                                _bf_Opt.optimized_embedding.is_(None),
+                                _bf_Opt.optimized_prompt.isnot(None),
+                            )
+                        )).scalar() or 0
+
+                        if count > 0:
+                            logger.info("Backfilling %d optimized embeddings...", count)
+                            rows = (await _bf_db.execute(
+                                _bf_select(_bf_Opt).where(
+                                    _bf_Opt.embedding.isnot(None),
+                                    _bf_Opt.optimized_embedding.is_(None),
+                                    _bf_Opt.optimized_prompt.isnot(None),
+                                )
+                            )).scalars().all()
+
+                            # Batch embed for efficiency (errata E1-4)
+                            texts = [opt.optimized_prompt for opt in rows]
+                            if texts:
+                                embeddings = await _shared_embedding_service.aembed_texts(texts)
+                                for opt, opt_emb in zip(rows, embeddings):
+                                    try:
+                                        raw_emb = np.frombuffer(opt.embedding, dtype=np.float32)
+                                        opt.optimized_embedding = opt_emb.astype(np.float32).tobytes()
+                                        transform = opt_emb - raw_emb
+                                        t_norm = np.linalg.norm(transform)
+                                        if t_norm > 1e-9:
+                                            transform = transform / t_norm
+                                        opt.transformation_embedding = transform.astype(np.float32).tobytes()
+                                    except Exception:
+                                        continue
+                            await _bf_db.commit()
+                            logger.info("Backfill complete: %d rows processed", count)
+
+                    _backfill_marker.touch()
+                except Exception as bf_exc:
+                    logger.warning("Embedding backfill failed (non-fatal): %s", bf_exc)
+
+            # Build transformation index from cluster mean transformation vectors
+            try:
+                async with async_session_factory() as _ti_db:
+                    from sqlalchemy import func as _ti_func
+                    # Find clusters with transformation data
+                    ti_q = await _ti_db.execute(
+                        _bf_select(
+                            _bf_Opt.cluster_id,
+                            _ti_func.count().label("ct"),
+                        ).where(
+                            _bf_Opt.cluster_id.isnot(None),
+                            _bf_Opt.transformation_embedding.isnot(None),
+                        ).group_by(_bf_Opt.cluster_id)
+                    )
+                    cluster_ids_with_transforms = [row[0] for row in ti_q.all() if row[1] >= 1]
+
+                    transform_vectors: dict[str, np.ndarray] = {}
+                    for cid in cluster_ids_with_transforms:
+                        emb_q = await _ti_db.execute(
+                            _bf_select(_bf_Opt.transformation_embedding).where(
+                                _bf_Opt.cluster_id == cid,
+                                _bf_Opt.transformation_embedding.isnot(None),
+                            )
+                        )
+                        embs = []
+                        for row in emb_q.scalars().all():
+                            try:
+                                embs.append(np.frombuffer(row, dtype=np.float32))
+                            except (ValueError, TypeError):
+                                continue
+                        if embs:
+                            mean_vec = np.mean(np.stack(embs), axis=0).astype(np.float32)
+                            norm = np.linalg.norm(mean_vec)
+                            if norm > 1e-9:
+                                transform_vectors[cid] = mean_vec / norm
+
+                    if transform_vectors:
+                        await engine._transformation_index.rebuild(transform_vectors)
+                        logger.info(
+                            "TransformationIndex loaded with %d vectors",
+                            len(transform_vectors),
+                        )
+            except Exception as ti_exc:
+                logger.warning("TransformationIndex build failed (non-fatal): %s", ti_exc)
+
             # Startup: backfill orphan optimizations with null cluster_id
             try:
                 from app.services.prompt_lifecycle import PromptLifecycleService
