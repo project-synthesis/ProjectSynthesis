@@ -6,20 +6,21 @@ import pytest
 
 from app.models import Optimization, PromptCluster
 from app.services.taxonomy.engine import TaxonomyEngine
+from app.services.taxonomy.warm_path import WarmPathResult
 from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
 
 
 @pytest.mark.asyncio
-async def test_warm_path_creates_snapshot(db, mock_embedding, mock_provider):
+async def test_warm_path_creates_snapshot(session_factory, mock_embedding, mock_provider):
     """Warm path should always create a snapshot."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
-    result = await engine.run_warm_path(db)
+    result = await engine.run_warm_path(session_factory)
     assert result is not None
     assert result.snapshot_id is not None
 
 
 @pytest.mark.asyncio
-async def test_warm_path_lock_deduplication(db, mock_embedding, mock_provider):
+async def test_warm_path_lock_deduplication(session_factory, mock_embedding, mock_provider):
     """Concurrent warm-path invocations should be deduplicated."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
@@ -27,32 +28,35 @@ async def test_warm_path_lock_deduplication(db, mock_embedding, mock_provider):
     async with engine._warm_path_lock:
         assert engine._warm_path_lock.locked()
         # Second invocation should skip
-        result = await engine.run_warm_path(db)
+        result = await engine.run_warm_path(session_factory)
         assert result is None  # skipped due to lock
 
 
 @pytest.mark.asyncio
-async def test_warm_path_q_system_non_regressive(db, mock_embedding, mock_provider):
+async def test_warm_path_q_system_non_regressive(session_factory, mock_embedding, mock_provider):
     """Q_system should not decrease across warm-path cycles (within epsilon)."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
     # Create some families and nodes to give the warm path something to work with
+    from contextlib import asynccontextmanager
     rng = np.random.RandomState(42)
-    for text in ["REST API", "SQL queries", "React components"]:
-        cluster = make_cluster_distribution(text, 5, spread=0.05, rng=rng)
-        for i, emb in enumerate(cluster):
-            f = PromptCluster(
-                label=f"{text}-{i}",
-                domain="general",
-                centroid_embedding=emb.astype(np.float32).tobytes(),
-            )
-            db.add(f)
-    await db.commit()
+
+    async with session_factory() as db:
+        for text in ["REST API", "SQL queries", "React components"]:
+            cluster = make_cluster_distribution(text, 5, spread=0.05, rng=rng)
+            for i, emb in enumerate(cluster):
+                f = PromptCluster(
+                    label=f"{text}-{i}",
+                    domain="general",
+                    centroid_embedding=emb.astype(np.float32).tobytes(),
+                )
+                db.add(f)
+        await db.commit()
 
     # Run multiple warm paths
     q_values = []
     for _ in range(3):
-        result = await engine.run_warm_path(db)
+        result = await engine.run_warm_path(session_factory)
         if result and result.q_system is not None:
             q_values.append(result.q_system)
 
@@ -66,10 +70,10 @@ async def test_warm_path_q_system_non_regressive(db, mock_embedding, mock_provid
 
 
 @pytest.mark.asyncio
-async def test_warm_path_returns_operation_counts(db, mock_embedding, mock_provider):
+async def test_warm_path_returns_operation_counts(session_factory, mock_embedding, mock_provider):
     """WarmPathResult should report operations_attempted and operations_accepted."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
-    result = await engine.run_warm_path(db)
+    result = await engine.run_warm_path(session_factory)
     assert result is not None
     assert result.operations_attempted >= 0
     assert result.operations_accepted >= 0
@@ -77,79 +81,182 @@ async def test_warm_path_returns_operation_counts(db, mock_embedding, mock_provi
 
 
 @pytest.mark.asyncio
-async def test_warm_path_deadlock_breaker_field(db, mock_embedding, mock_provider):
+async def test_warm_path_deadlock_breaker_field(session_factory, mock_embedding, mock_provider):
     """WarmPathResult should include deadlock_breaker_used field."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
-    result = await engine.run_warm_path(db)
+    result = await engine.run_warm_path(session_factory)
     assert result is not None
     assert isinstance(result.deadlock_breaker_used, bool)
 
 
 @pytest.mark.asyncio
-async def test_warm_path_lock_released_after_completion(db, mock_embedding, mock_provider):
+async def test_warm_path_lock_released_after_completion(session_factory, mock_embedding, mock_provider):
     """Warm path should release lock after completing."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
-    await engine.run_warm_path(db)
+    await engine.run_warm_path(session_factory)
     # Lock should be released after completion
     assert not engine._warm_path_lock.locked()
 
 
 @pytest.mark.asyncio
 async def test_warm_path_deadlock_breaker_triggers_at_cycle_5(
-    db, mock_embedding, mock_provider
+    mock_embedding, mock_provider
 ):
-    """Deadlock breaker should activate after 5 consecutive rejected cycles.
+    """Per-phase deadlock breaker should activate after 5 consecutive rejections.
 
-    We set the counter to 4 and run one cycle where ops are attempted but
-    ALL are rejected (ops_accepted == 0), pushing the counter to 5.
+    The ``_update_phase_rejection_counters`` helper in warm_path.py increments
+    per-phase counters whenever a phase's Q gate rejects the phase (accepted=False).
+    When any counter reaches DEADLOCK_BREAKER_THRESHOLD (5), it sets
+    engine._cold_path_needed and the WarmPathResult carries deadlock_breaker_used=True.
+
+    This test exercises the logic directly by calling the helper function with
+    mocked PhaseResult objects.
     """
+    from app.services.taxonomy.warm_path import _update_phase_rejection_counters
+    from app.services.taxonomy.warm_phases import PhaseResult
+
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
-    engine._consecutive_rejected_cycles = 4
 
-    # Create exactly ONE confirmed node with member_count=0 so retire is
-    # attempted.  After retire succeeds, Q drops from ~0.7 to 0.0 (no
-    # confirmed nodes left), which fails the non-regression check.  The
-    # rollback makes ops_accepted=0, pushing the counter from 4 to 5.
-    node = PromptCluster(
-        label="Idle node",
-        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
-        state="active",
-        member_count=0,
-        coherence=0.9,
-        color_hex="#a855f7",
+    # Simulate 4 prior consecutive rejections for the retire phase
+    engine._phase_rejection_counters["retire"] = 4
+
+    # Build a PhaseResult that represents a rejected retire phase
+    rejected_retire = PhaseResult(
+        phase="retire",
+        q_before=0.7,
+        q_after=0.3,  # regressed — gate rejected
+        accepted=False,
+        ops_attempted=1,
+        ops_accepted=0,
+        operations=[],
+        embedding_index_mutations=0,
     )
-    db.add(node)
-    await db.commit()
 
-    result = await engine.run_warm_path(db)
-    assert result is not None
-    # The counter should have hit 5, triggering the breaker
-    assert result.deadlock_breaker_used is True
-    # Counter should be reset after breaker triggers
-    assert engine._consecutive_rejected_cycles == 0
-    # _cold_path_needed flag should be set
+    speculative = [
+        ("split_emerge", PhaseResult(
+            phase="split_emerge", q_before=0.7, q_after=0.7,
+            accepted=True, ops_attempted=0, ops_accepted=0,
+            operations=[], embedding_index_mutations=0,
+        )),
+        ("merge", PhaseResult(
+            phase="merge", q_before=0.7, q_after=0.7,
+            accepted=True, ops_attempted=0, ops_accepted=0,
+            operations=[], embedding_index_mutations=0,
+        )),
+        ("retire", rejected_retire),
+    ]
+
+    deadlock_used, deadlock_phase = _update_phase_rejection_counters(engine, speculative)
+
+    # Counter was 4 → now 5 → threshold reached
+    assert deadlock_used is True
+    assert deadlock_phase == "retire"
     assert engine._cold_path_needed is True
+    # Counter should have been reset after breaker triggers… wait, the helper does NOT
+    # reset the counter — that's done in the audit phase.  Verify the counter IS at 5.
+    assert engine._phase_rejection_counters["retire"] == 5
 
 
 @pytest.mark.asyncio
-async def test_warm_path_lock_released_on_error(db, mock_embedding, mock_provider):
+async def test_warm_path_lock_released_on_error(session_factory, mock_embedding, mock_provider):
     """Warm path should release lock even if an error occurs mid-execution."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
     # Create a node with corrupt centroid to trigger error during Q computation
-    node = PromptCluster(
-        label="Corrupt",
-        centroid_embedding=b"not_valid_floats",
-        state="active",
-        member_count=5,
-        color_hex="#a855f7",
-    )
-    db.add(node)
-    await db.commit()
+    async with session_factory() as db:
+        node = PromptCluster(
+            label="Corrupt",
+            centroid_embedding=b"not_valid_floats",
+            state="active",
+            member_count=5,
+            color_hex="#a855f7",
+        )
+        db.add(node)
+        await db.commit()
 
     # Should not raise, and lock should be released
-    await engine.run_warm_path(db)
+    await engine.run_warm_path(session_factory)
     assert not engine._warm_path_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_warm_path_result_has_q_baseline_and_q_final(session_factory, mock_embedding, mock_provider):
+    """WarmPathResult should expose q_baseline and q_final fields."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+    result = await engine.run_warm_path(session_factory)
+    assert result is not None
+    # q_baseline and q_final can be None (no active nodes) or float
+    if result.q_baseline is not None:
+        assert 0.0 <= result.q_baseline <= 1.0
+    if result.q_final is not None:
+        assert 0.0 <= result.q_final <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_warm_path_q_system_backward_compat(session_factory, mock_embedding, mock_provider):
+    """WarmPathResult.q_system should be auto-set from q_final for backward compat."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+    result = await engine.run_warm_path(session_factory)
+    assert result is not None
+    # q_system must equal q_final (set via __post_init__)
+    assert result.q_system == result.q_final
+    # Confirm it can be accessed just like the old q_system field
+    if result.q_system is not None:
+        assert 0.0 <= result.q_system <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_warm_path_result_direct_construction():
+    """WarmPathResult.__post_init__ sets q_system from q_final when not provided."""
+    result = WarmPathResult(
+        snapshot_id="snap-test",
+        q_baseline=0.5,
+        q_final=0.75,
+        phase_results=[],
+        operations_attempted=3,
+        operations_accepted=2,
+        deadlock_breaker_used=False,
+        deadlock_breaker_phase=None,
+    )
+    # q_system should be auto-populated from q_final
+    assert result.q_system == 0.75
+
+
+@pytest.mark.asyncio
+async def test_warm_path_result_explicit_q_system_preserved():
+    """WarmPathResult.__post_init__ does not overwrite explicit q_system."""
+    result = WarmPathResult(
+        snapshot_id="snap-test",
+        q_baseline=0.5,
+        q_final=0.75,
+        phase_results=[],
+        operations_attempted=3,
+        operations_accepted=2,
+        deadlock_breaker_used=False,
+        deadlock_breaker_phase=None,
+        q_system=0.99,  # explicitly provided
+    )
+    # Should NOT be overwritten by q_final
+    assert result.q_system == 0.99
+
+
+@pytest.mark.asyncio
+async def test_warm_path_has_phase_results(session_factory, mock_embedding, mock_provider):
+    """WarmPathResult should expose a list of phase_results."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+    result = await engine.run_warm_path(session_factory)
+    assert result is not None
+    assert isinstance(result.phase_results, list)
+
+
+@pytest.mark.asyncio
+async def test_warm_path_deadlock_breaker_phase_field(session_factory, mock_embedding, mock_provider):
+    """WarmPathResult should have deadlock_breaker_phase field (None when no deadlock)."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+    result = await engine.run_warm_path(session_factory)
+    assert result is not None
+    # deadlock_breaker_phase is None unless a deadlock was triggered
+    assert result.deadlock_breaker_phase is None or isinstance(result.deadlock_breaker_phase, str)
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +284,7 @@ def _make_diverse_embeddings(n_topics: int, per_topic: int, rng: np.random.Rando
 
 
 @pytest.mark.asyncio
-async def test_warm_path_recomputes_stale_coherence(db, mock_embedding, mock_provider):
+async def test_warm_path_recomputes_stale_coherence(session_factory, mock_embedding, mock_provider):
     """Clusters with stale high coherence should be corrected by warm path.
 
     The hot path never updates coherence, so a cluster that grew from 2 to 10
@@ -187,47 +294,54 @@ async def test_warm_path_recomputes_stale_coherence(db, mock_embedding, mock_pro
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
     rng = np.random.RandomState(42)
 
-    # Create a cluster with falsely high coherence
-    center = rng.randn(EMBEDDING_DIM).astype(np.float32)
-    center /= np.linalg.norm(center) + 1e-9
+    async with session_factory() as db:
+        # Create a cluster with falsely high coherence
+        center = rng.randn(EMBEDDING_DIM).astype(np.float32)
+        center /= np.linalg.norm(center) + 1e-9
 
-    cluster = PromptCluster(
-        label="Stale Coherence Cluster",
-        state="active",
-        domain="general",
-        centroid_embedding=center.tobytes(),
-        member_count=10,
-        coherence=0.95,  # stale — will not match actual pairwise
-        color_hex="#a855f7",
-    )
-    db.add(cluster)
-    await db.flush()
-
-    # Add 10 diverse optimizations (5 topics × 2) — actual coherence will be low
-    diverse_embs = _make_diverse_embeddings(5, 2, rng)
-    for i, emb in enumerate(diverse_embs):
-        opt = Optimization(
-            raw_prompt=f"diverse prompt topic {i}",
-            cluster_id=cluster.id,
-            embedding=emb.astype(np.float32).tobytes(),
+        cluster = PromptCluster(
+            label="Stale Coherence Cluster",
+            state="active",
+            domain="general",
+            centroid_embedding=center.tobytes(),
+            member_count=10,
+            coherence=0.95,  # stale — will not match actual pairwise
+            color_hex="#a855f7",
         )
-        db.add(opt)
-    await db.commit()
+        db.add(cluster)
+        await db.flush()
 
-    await engine.run_warm_path(db)
+        # Add 10 diverse optimizations (5 topics × 2) — actual coherence will be low
+        diverse_embs = _make_diverse_embeddings(5, 2, rng)
+        for i, emb in enumerate(diverse_embs):
+            opt = Optimization(
+                raw_prompt=f"diverse prompt topic {i}",
+                cluster_id=cluster.id,
+                embedding=emb.astype(np.float32).tobytes(),
+            )
+            db.add(opt)
+        await db.commit()
+        cluster_id = cluster.id
 
-    # Refresh from DB
-    await db.refresh(cluster)
-    # Coherence should now reflect actual pairwise similarity, not the stale 0.95
-    assert cluster.coherence is not None
-    assert cluster.coherence < 0.6, (
-        f"Expected coherence to drop from stale 0.95 to actual pairwise (~0.4), "
-        f"got {cluster.coherence:.3f}"
-    )
+    await engine.run_warm_path(session_factory)
+
+    # Refresh from DB using a new session
+    async with session_factory() as db:
+        from sqlalchemy import select
+        refreshed = (await db.execute(
+            select(PromptCluster).where(PromptCluster.id == cluster_id)
+        )).scalar_one_or_none()
+        assert refreshed is not None
+        # Coherence should now reflect actual pairwise similarity, not the stale 0.95
+        assert refreshed.coherence is not None
+        assert refreshed.coherence < 0.6, (
+            f"Expected coherence to drop from stale 0.95 to actual pairwise (~0.4), "
+            f"got {refreshed.coherence:.3f}"
+        )
 
 
 @pytest.mark.asyncio
-async def test_warm_path_recomputes_nonzero_coherence(db, mock_embedding, mock_provider):
+async def test_warm_path_recomputes_nonzero_coherence(session_factory, mock_embedding, mock_provider):
     """Reconciliation must recompute coherence even when it's nonzero and non-null.
 
     Previously, the guard `node.coherence is None or node.coherence == 0.0`
@@ -242,42 +356,49 @@ async def test_warm_path_recomputes_nonzero_coherence(db, mock_embedding, mock_p
     center = np.mean(tight_embs, axis=0).astype(np.float32)
     center /= np.linalg.norm(center) + 1e-9
 
-    cluster = PromptCluster(
-        label="Nonzero Coherence Cluster",
-        state="active",
-        domain="general",
-        centroid_embedding=center.tobytes(),
-        member_count=5,
-        coherence=0.42,  # intentionally wrong — should be corrected upward
-        color_hex="#a855f7",
-    )
-    db.add(cluster)
-    await db.flush()
-
-    for i, emb in enumerate(tight_embs):
-        opt = Optimization(
-            raw_prompt=f"tight prompt {i}",
-            cluster_id=cluster.id,
-            embedding=emb.astype(np.float32).tobytes(),
+    async with session_factory() as db:
+        cluster = PromptCluster(
+            label="Nonzero Coherence Cluster",
+            state="active",
+            domain="general",
+            centroid_embedding=center.tobytes(),
+            member_count=5,
+            coherence=0.42,  # intentionally wrong — should be corrected upward
+            color_hex="#a855f7",
         )
-        db.add(opt)
-    await db.commit()
+        db.add(cluster)
+        await db.flush()
 
-    await engine.run_warm_path(db)
+        for i, emb in enumerate(tight_embs):
+            opt = Optimization(
+                raw_prompt=f"tight prompt {i}",
+                cluster_id=cluster.id,
+                embedding=emb.astype(np.float32).tobytes(),
+            )
+            db.add(opt)
+        await db.commit()
+        cluster_id = cluster.id
 
-    await db.refresh(cluster)
-    # Coherence should be recomputed to the tight cluster's actual pairwise value.
-    # With spread=0.03 this is ~0.73.  The key assertion: it was recomputed
-    # from the stale 0.42 to something significantly higher.
-    assert cluster.coherence is not None
-    assert cluster.coherence > 0.65, (
-        f"Expected tight cluster coherence >0.65, got {cluster.coherence:.3f} "
-        f"(old guard would have left it at 0.42)"
-    )
+    await engine.run_warm_path(session_factory)
+
+    async with session_factory() as db:
+        from sqlalchemy import select
+        refreshed = (await db.execute(
+            select(PromptCluster).where(PromptCluster.id == cluster_id)
+        )).scalar_one_or_none()
+        assert refreshed is not None
+        # Coherence should be recomputed to the tight cluster's actual pairwise value.
+        # With spread=0.03 this is ~0.73.  The key assertion: it was recomputed
+        # from the stale 0.42 to something significantly higher.
+        assert refreshed.coherence is not None
+        assert refreshed.coherence > 0.65, (
+            f"Expected tight cluster coherence >0.65, got {refreshed.coherence:.3f} "
+            f"(old guard would have left it at 0.42)"
+        )
 
 
 @pytest.mark.asyncio
-async def test_split_triggers_on_stale_coherence_cluster(db, mock_embedding, mock_provider):
+async def test_split_triggers_on_stale_coherence_cluster(session_factory, mock_embedding, mock_provider):
     """A 14-member mega-cluster with stale coherence should be split.
 
     With actual pairwise coherence well below the dynamic split floor,
@@ -287,48 +408,49 @@ async def test_split_triggers_on_stale_coherence_cluster(db, mock_embedding, moc
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
     rng = np.random.RandomState(77)
 
-    # Create a domain node for the cluster to be parented under
-    domain_node = PromptCluster(
-        label="general",
-        state="domain",
-        domain="general",
-        centroid_embedding=rng.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
-        member_count=14,
-        color_hex="#6366f1",
-    )
-    db.add(domain_node)
-    await db.flush()
-
-    # Create a mega-cluster with stale high coherence
-    center = rng.randn(EMBEDDING_DIM).astype(np.float32)
-    center /= np.linalg.norm(center) + 1e-9
-
-    mega = PromptCluster(
-        label="Mega Cluster",
-        state="active",
-        domain="general",
-        parent_id=domain_node.id,
-        centroid_embedding=center.tobytes(),
-        member_count=14,
-        coherence=0.95,  # stale — actual will be ~0.2
-        color_hex="#a855f7",
-    )
-    db.add(mega)
-    await db.flush()
-
-    # Add 14 diverse optimizations (7 topics × 2) — low actual coherence
-    diverse_embs = _make_diverse_embeddings(7, 2, rng)
-    for i, emb in enumerate(diverse_embs):
-        opt = Optimization(
-            raw_prompt=f"mega topic {i}",
+    async with session_factory() as db:
+        # Create a domain node for the cluster to be parented under
+        domain_node = PromptCluster(
+            label="general",
+            state="domain",
             domain="general",
-            cluster_id=mega.id,
-            embedding=emb.astype(np.float32).tobytes(),
+            centroid_embedding=rng.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+            member_count=14,
+            color_hex="#6366f1",
         )
-        db.add(opt)
-    await db.commit()
+        db.add(domain_node)
+        await db.flush()
 
-    result = await engine.run_warm_path(db)
+        # Create a mega-cluster with stale high coherence
+        center = rng.randn(EMBEDDING_DIM).astype(np.float32)
+        center /= np.linalg.norm(center) + 1e-9
+
+        mega = PromptCluster(
+            label="Mega Cluster",
+            state="active",
+            domain="general",
+            parent_id=domain_node.id,
+            centroid_embedding=center.tobytes(),
+            member_count=14,
+            coherence=0.95,  # stale — actual will be ~0.2
+            color_hex="#a855f7",
+        )
+        db.add(mega)
+        await db.flush()
+
+        # Add 14 diverse optimizations (7 topics × 2) — low actual coherence
+        diverse_embs = _make_diverse_embeddings(7, 2, rng)
+        for i, emb in enumerate(diverse_embs):
+            opt = Optimization(
+                raw_prompt=f"mega topic {i}",
+                domain="general",
+                cluster_id=mega.id,
+                embedding=emb.astype(np.float32).tobytes(),
+            )
+            db.add(opt)
+        await db.commit()
+
+    result = await engine.run_warm_path(session_factory)
     assert result is not None
 
     # The split should have been attempted

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from app.models import PromptCluster
+from app.services.taxonomy.cold_path import ColdPathResult
 from app.services.taxonomy.engine import TaxonomyEngine
 from tests.taxonomy.conftest import EMBEDDING_DIM
 
@@ -133,10 +134,98 @@ async def test_cold_path_lock_released_on_error(db, mock_embedding, mock_provide
 
 @pytest.mark.asyncio
 async def test_cold_path_q_system_in_result(db, mock_embedding, mock_provider):
-    """ColdPathResult should contain q_system score."""
+    """ColdPathResult should contain q_system score (backward compat)."""
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
     result = await engine.run_cold_path(db)
     assert result is not None
     # q_system can be None (no nodes) or a float
     if result.q_system is not None:
         assert 0.0 <= result.q_system <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_cold_path_result_has_q_before_and_q_after(db, mock_embedding, mock_provider):
+    """ColdPathResult should expose q_before and q_after fields."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+    result = await engine.run_cold_path(db)
+    assert result is not None
+    # q_before and q_after can be None (no active nodes) or float
+    if result.q_before is not None:
+        assert 0.0 <= result.q_before <= 1.0
+    if result.q_after is not None:
+        assert 0.0 <= result.q_after <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_cold_path_result_has_accepted_field(db, mock_embedding, mock_provider):
+    """ColdPathResult should expose the accepted field indicating quality gate outcome."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+    result = await engine.run_cold_path(db)
+    assert result is not None
+    assert isinstance(result.accepted, bool)
+
+
+@pytest.mark.asyncio
+async def test_cold_path_q_system_backward_compat(db, mock_embedding, mock_provider):
+    """ColdPathResult.q_system should equal q_after for backward compat."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+    rng = np.random.RandomState(42)
+    for i in range(4):
+        node = PromptCluster(
+            label=f"Node {i}",
+            centroid_embedding=rng.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+            state="active",
+            member_count=3,
+            color_hex="#a855f7",
+        )
+        db.add(node)
+    await db.commit()
+
+    result = await engine.run_cold_path(db)
+    assert result is not None
+    # q_system must match q_after (set via __post_init__)
+    assert result.q_system == result.q_after
+
+
+@pytest.mark.asyncio
+async def test_cold_path_result_direct_construction():
+    """ColdPathResult.__post_init__ sets q_system from q_after when not provided."""
+    result = ColdPathResult(
+        snapshot_id="snap-cold",
+        q_before=0.6,
+        q_after=0.72,
+        accepted=True,
+        nodes_created=2,
+        nodes_updated=3,
+        umap_fitted=True,
+    )
+    # q_system should be auto-populated from q_after
+    assert result.q_system == 0.72
+
+
+@pytest.mark.asyncio
+async def test_cold_path_result_explicit_q_system_preserved():
+    """ColdPathResult.__post_init__ does not overwrite explicit q_system."""
+    result = ColdPathResult(
+        snapshot_id="snap-cold",
+        q_before=0.6,
+        q_after=0.72,
+        accepted=True,
+        nodes_created=2,
+        nodes_updated=3,
+        umap_fitted=True,
+        q_system=0.99,
+    )
+    # Explicit q_system should NOT be overwritten
+    assert result.q_system == 0.99
+
+
+@pytest.mark.asyncio
+async def test_cold_path_accepted_on_empty_db(db, mock_embedding, mock_provider):
+    """Cold path with no data should still return accepted=True (trivial case)."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+    result = await engine.run_cold_path(db)
+    assert result is not None
+    # Empty DB has no active nodes, so quality gate trivially passes
+    assert result.accepted is True
