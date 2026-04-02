@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from sklearn.cluster import HDBSCAN
+from sklearn.metrics import silhouette_score
 
 from app.services.taxonomy._constants import (
     CLUSTERING_BLEND_W_OPTIMIZED,
@@ -42,6 +43,7 @@ class ClusterResult:
     noise_count: int
     persistences: list[float] = field(default_factory=list)
     centroids: list[np.ndarray] = field(default_factory=list)
+    silhouette: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +320,7 @@ def batch_cluster(
             noise_count=n,
             persistences=[],
             centroids=[],
+            silhouette=0.0,
         )
 
     # Stack into (N, D) matrix and L2-normalise.
@@ -350,12 +353,25 @@ def batch_cluster(
             mean_vec = mean_vec / norm
         centroids.append(mean_vec)
 
+    # --- Silhouette score: cluster validity metric ---
+    # Requires >= 2 clusters and >= 2 non-noise points.
+    # Rescale from [-1, 1] to [0, 1] for Q_system compatibility.
+    sil = 0.0
+    non_noise_mask = labels >= 0
+    if n_clusters >= 2 and non_noise_mask.sum() >= 2:
+        try:
+            raw_sil = silhouette_score(mat[non_noise_mask], labels[non_noise_mask])
+            sil = (raw_sil + 1.0) / 2.0
+        except Exception:
+            sil = 0.0
+
     return ClusterResult(
         labels=labels,
         n_clusters=n_clusters,
         noise_count=noise_count,
         persistences=persistences,
         centroids=centroids,
+        silhouette=sil,
     )
 
 

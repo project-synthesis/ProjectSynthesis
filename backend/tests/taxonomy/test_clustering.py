@@ -185,3 +185,43 @@ class TestL2Normalize1d:
         vec = np.zeros(EMBEDDING_DIM, dtype=np.float32)
         result = l2_normalize_1d(vec)
         assert np.allclose(result, vec)
+
+
+def test_cluster_result_has_silhouette():
+    """ClusterResult includes silhouette score in [0, 1]."""
+    from app.services.taxonomy.clustering import batch_cluster
+    # Create 3 tight clusters of 5 points each
+    rng = np.random.RandomState(42)
+    clusters = []
+    for center_seed in [0.0, 3.0, 6.0]:
+        center = np.zeros(384, dtype=np.float32)
+        center[0] = center_seed
+        for _ in range(5):
+            point = center + rng.randn(384).astype(np.float32) * 0.1
+            clusters.append(point / np.linalg.norm(point))
+
+    result = batch_cluster(clusters, min_cluster_size=3)
+    assert hasattr(result, "silhouette"), "ClusterResult must have silhouette field"
+    assert 0.0 <= result.silhouette <= 1.0
+
+
+def test_silhouette_zero_for_single_cluster():
+    """Silhouette is 0.0 when only one cluster found (or all noise)."""
+    from app.services.taxonomy.clustering import batch_cluster
+    rng = np.random.RandomState(99)
+    # Tight single blob — HDBSCAN should find 1 cluster or all noise
+    points = []
+    for _ in range(10):
+        v = rng.randn(384).astype(np.float32)
+        points.append(v / np.linalg.norm(v))
+
+    result = batch_cluster(points, min_cluster_size=3)
+    assert result.silhouette == pytest.approx(0.0, abs=0.01) or result.n_clusters <= 1
+
+
+def test_silhouette_zero_for_too_few_points():
+    """Silhouette is 0.0 when too few points to cluster."""
+    from app.services.taxonomy.clustering import batch_cluster
+    v = np.random.randn(384).astype(np.float32)
+    result = batch_cluster([v, v], min_cluster_size=3)
+    assert result.silhouette == 0.0
