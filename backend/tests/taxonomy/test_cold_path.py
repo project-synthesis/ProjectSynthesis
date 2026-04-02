@@ -346,3 +346,20 @@ async def test_execute_cold_path_resets_cold_path_needed_on_accept(db, mock_embe
     # On accepted full refit, _cold_path_needed must be reset
     if result.accepted:
         assert not engine._cold_path_needed
+
+
+def test_cold_path_saves_all_three_caches():
+    """Verify cold_path.py references save_cache for all three indices."""
+    import inspect
+    from app.services.taxonomy import cold_path
+
+    source = inspect.getsource(cold_path)
+    assert "transformation_index.pkl" in source, (
+        "Cold path must save TransformationIndex cache"
+    )
+    assert "optimized_index.pkl" in source, (
+        "Cold path must save OptimizedEmbeddingIndex cache"
+    )
+    assert "embedding_index.pkl" in source, (
+        "Cold path must save EmbeddingIndex cache (existing)"
+    )

@@ -679,6 +679,16 @@ async def execute_cold_path(
             "TransformationIndex rebuild failed (non-fatal): %s", ti_exc
         )
 
+    # Persist TransformationIndex cache to disk for fast startup recovery
+    try:
+        await engine._transformation_index.save_cache(
+            DATA_DIR / "transformation_index.pkl"
+        )
+    except Exception as ti_cache_exc:
+        logger.warning(
+            "TransformationIndex cache save failed (non-fatal): %s", ti_cache_exc
+        )
+
     # Rebuild OptimizedEmbeddingIndex from cluster mean optimized embeddings
     try:
         oi_q = await db.execute(
@@ -715,6 +725,16 @@ async def execute_cold_path(
     except Exception as oi_exc:
         logger.warning(
             "OptimizedEmbeddingIndex rebuild failed (non-fatal): %s", oi_exc
+        )
+
+    # Persist OptimizedEmbeddingIndex cache to disk for fast startup recovery
+    try:
+        await engine._optimized_index.save_cache(
+            DATA_DIR / "optimized_index.pkl"
+        )
+    except Exception as oi_cache_exc:
+        logger.warning(
+            "OptimizedEmbeddingIndex cache save failed (non-fatal): %s", oi_cache_exc
         )
 
     # Create snapshot — commits all pending node updates AND the
