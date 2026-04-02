@@ -565,7 +565,7 @@ async def execute_cold_path(
     # ------------------------------------------------------------------
     # Step 21: Compute Q_after
     # ------------------------------------------------------------------
-    q_after = engine._compute_q_from_nodes(active_after)
+    q_after = engine._compute_q_from_nodes(active_after, silhouette=cluster_result.silhouette)
 
     # ------------------------------------------------------------------
     # Step 22-24: Quality gate — reject regressive refits

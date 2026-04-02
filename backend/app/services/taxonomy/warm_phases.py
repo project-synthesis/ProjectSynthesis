@@ -1671,7 +1671,26 @@ async def phase_audit(
     )
     active_after = list(active_q.scalars().all())
     engine._update_per_node_separation(active_after)
-    q_after = engine._compute_q_from_nodes(active_after)
+    # Compute silhouette from active centroids for Q_system validity metric.
+    _warm_silhouette = 0.0
+    if len(active_after) >= 2:
+        try:
+            _centroids_for_sil = []
+            _labels_for_sil = []
+            for _i, _n in enumerate(active_after):
+                if _n.centroid_embedding:
+                    _emb = np.frombuffer(_n.centroid_embedding, dtype=np.float32)
+                    if _emb.shape[0] == 384:
+                        _centroids_for_sil.append(_emb / max(np.linalg.norm(_emb), 1e-9))
+                        _labels_for_sil.append(_i)
+            if len(set(_labels_for_sil)) >= 2:
+                from sklearn.metrics import silhouette_score as _sil_score
+                _mat = np.stack(_centroids_for_sil)
+                _raw_sil = _sil_score(_mat, _labels_for_sil)
+                _warm_silhouette = (_raw_sil + 1.0) / 2.0
+        except Exception:
+            _warm_silhouette = 0.0
+    q_after = engine._compute_q_from_nodes(active_after, silhouette=_warm_silhouette)
     result.q_final = q_after
 
     # Invalidate stats cache

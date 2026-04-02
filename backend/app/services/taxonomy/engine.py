@@ -720,7 +720,9 @@ class TaxonomyEngine:
     # Warm/cold path helpers
     # ------------------------------------------------------------------
 
-    def _compute_q_from_nodes(self, nodes: list[PromptCluster]) -> float:
+    def _compute_q_from_nodes(
+        self, nodes: list[PromptCluster], silhouette: float = 0.0
+    ) -> float:
         """Compute Q_system from a list of PromptCluster rows."""
         from app.services.taxonomy.quality import (
             NodeMetrics,
@@ -741,15 +743,13 @@ class TaxonomyEngine:
                 )
             )
 
-        # DBCV ramp disabled: DBCV is not yet computed (always 0.0 in
-        # compute_q_system).  Ramping its weight adds dead weight that
-        # degrades Q_system over time — at age 20+ the ceiling drops to
-        # 0.85 even with perfect metrics.  Restore the ramp logic from
-        # Spec Section 2.5 when DBCV computation is implemented.
-        ramp = 0.0
+        # DBCV ramp: linear activation from 5 to 25 active nodes.
+        # Below 5 nodes the taxonomy is too young for validity metrics.
+        n_active = len(metrics)
+        ramp = min(1.0, max(0.0, (n_active - 5) / 20))
         weights = QWeights.from_ramp(ramp)
 
-        return compute_q_system(metrics, weights)
+        return compute_q_system(metrics, weights, dbcv=silhouette)
 
     @staticmethod
     def _update_per_node_separation(nodes: list[PromptCluster]) -> None:

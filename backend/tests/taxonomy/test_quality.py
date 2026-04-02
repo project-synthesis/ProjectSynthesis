@@ -270,3 +270,37 @@ class TestCoherenceThreshold:
         from app.services.taxonomy.quality import coherence_threshold
         cluster = PromptCluster(label="test", state="active")
         assert coherence_threshold(cluster) == pytest.approx(0.6)
+
+
+class TestQSystemWithSilhouette:
+    """Verify DBCV slot activates when silhouette is provided."""
+
+    def test_silhouette_increases_q_when_ramped(self):
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.6, state="active"),
+            NodeMetrics(coherence=0.7, separation=0.5, state="active"),
+        ] * 5  # 10 nodes — ramp_progress = (10-5)/20 = 0.25
+
+        # Without silhouette (old behavior)
+        w_no_sil = QWeights.from_ramp(0.0)
+        q_no_sil = compute_q_system(nodes, w_no_sil, coverage=1.0, dbcv=0.0)
+
+        # With silhouette and ramp
+        w_sil = QWeights.from_ramp(0.25)
+        q_sil = compute_q_system(nodes, w_sil, coverage=1.0, dbcv=0.9)
+
+        # High silhouette should improve Q
+        assert q_sil > q_no_sil
+
+    def test_silhouette_no_effect_below_5_nodes(self):
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.6, state="active"),
+        ] * 3  # 3 nodes — ramp_progress = 0.0
+
+        w = QWeights.from_ramp(0.0)
+        q = compute_q_system(nodes, w, coverage=1.0, dbcv=0.9)
+
+        # DBCV weight is 0 when ramp is 0, so dbcv=0.9 has no effect
+        w2 = QWeights.from_ramp(0.0)
+        q2 = compute_q_system(nodes, w2, coverage=1.0, dbcv=0.0)
+        assert q == pytest.approx(q2)
