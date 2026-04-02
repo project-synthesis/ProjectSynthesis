@@ -95,6 +95,7 @@ class LLMProvider(ABC):
 
     name: str
     last_usage: TokenUsage | None = None
+    last_model: str | None = None
 
     @abstractmethod
     async def complete_parsed(

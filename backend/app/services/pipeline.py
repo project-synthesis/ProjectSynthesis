@@ -299,7 +299,13 @@ class PipelineOrchestrator:
                 max_tokens=ANALYZE_MAX_TOKENS,
             )
 
-            yield PipelineEvent(event="status", data={"stage": "analyze", "state": "complete", "model": analyzer_model})
+            # Capture actual model ID from provider response
+            if isinstance(provider.last_model, str):
+                model_ids["analyze"] = provider.last_model
+            yield PipelineEvent(
+                event="status",
+                data={"stage": "analyze", "state": "complete", "model": model_ids["analyze"]},
+            )
 
             analyze_duration = int((time.monotonic() - phase_start) * 1000)
             phase_durations["analyze_ms"] = analyze_duration
@@ -522,9 +528,12 @@ class PipelineOrchestrator:
                 strategy_used=optimization.strategy_used,
             )
 
+            # Capture actual model ID from provider response
+            if isinstance(provider.last_model, str):
+                model_ids["optimize"] = provider.last_model
             yield PipelineEvent(
                 event="status",
-                data={"stage": "optimize", "state": "complete", "model": optimizer_model},
+                data={"stage": "optimize", "state": "complete", "model": model_ids["optimize"]},
             )
 
             optimize_duration = int((time.monotonic() - phase_start) * 1000)
@@ -591,7 +600,13 @@ class PipelineOrchestrator:
                     cache_ttl="1h",
                 )
 
-                yield PipelineEvent(event="status", data={"stage": "score", "state": "complete", "model": scorer_model})
+                # Capture actual model ID from provider response
+                if isinstance(provider.last_model, str):
+                    model_ids["score"] = provider.last_model
+                yield PipelineEvent(
+                    event="status",
+                    data={"stage": "score", "state": "complete", "model": model_ids["score"]},
+                )
 
                 score_duration = int((time.monotonic() - phase_start) * 1000)
                 phase_durations["score_ms"] = score_duration
@@ -767,7 +782,8 @@ class PipelineOrchestrator:
                 score_conciseness=optimized_scores.conciseness if optimized_scores else None,
                 overall_score=optimized_scores.overall if optimized_scores else None,
                 provider=provider.name,
-                model_used=optimizer_model,
+                routing_tier="internal",
+                model_used=model_ids.get("optimize", optimizer_model),
                 scoring_mode="hybrid" if optimized_scores else "skipped",
                 duration_ms=duration_ms,
                 status="completed",
@@ -877,7 +893,8 @@ class PipelineOrchestrator:
                 score_deltas=deltas,
                 overall_score=optimized_scores.overall if optimized_scores else None,
                 provider=provider.name,
-                model_used=optimizer_model,
+                routing_tier="internal",
+                model_used=model_ids.get("optimize", optimizer_model),
                 models_by_phase=model_ids,
                 scoring_mode="hybrid" if optimized_scores else "skipped",
                 duration_ms=duration_ms,
@@ -916,6 +933,7 @@ class PipelineOrchestrator:
                     id=opt_id,
                     raw_prompt=raw_prompt,
                     status="failed",
+                    routing_tier="internal",
                     trace_id=trace_id,
                     duration_ms=duration_ms,
                     provider=provider.name,

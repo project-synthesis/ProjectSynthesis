@@ -261,6 +261,7 @@ async def handle_save_result(
                 score_conciseness=final_scores.get("conciseness"),
                 overall_score=overall,
                 provider="mcp_passthrough",
+                routing_tier="passthrough",
                 model_used=model or "external",
                 models_by_phase={"optimize": model or "external"},
                 scoring_mode=scoring_mode,

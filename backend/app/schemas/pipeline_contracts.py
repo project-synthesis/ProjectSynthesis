@@ -314,6 +314,10 @@ class PipelineResult(BaseModel):
         default=None, description="Mean of all dimension scores (0.0-10.0).",
     )
     provider: str = Field(description="LLM provider name (e.g. 'claude_cli', 'anthropic_api').")
+    routing_tier: str | None = Field(
+        default=None,
+        description="Execution tier that processed this optimization: 'internal', 'sampling', or 'passthrough'.",
+    )
     model_used: str = Field(description="Model ID used for optimization.")
     models_by_phase: dict[str, str] = Field(
         default_factory=dict,

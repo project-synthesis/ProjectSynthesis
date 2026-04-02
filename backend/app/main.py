@@ -195,6 +195,48 @@ async def lifespan(app: FastAPI):
                     "EmbeddingIndex warm-load failed (non-fatal): %s", idx_exc
                 )
 
+            # Startup: ensure routing_tier column exists (SQLite ALTER TABLE)
+            # SQLAlchemy create_all() only creates new tables, not new columns
+            # on existing tables. This is idempotent — duplicate ADD COLUMN
+            # raises OperationalError which we catch and ignore.
+            try:
+                from sqlalchemy import text as _text_rt
+                async with async_session_factory() as _alt_db:
+                    await _alt_db.execute(
+                        _text_rt("ALTER TABLE optimizations ADD COLUMN routing_tier VARCHAR")
+                    )
+                    await _alt_db.commit()
+                    logger.info("Added routing_tier column to optimizations table")
+            except Exception:
+                pass  # Column already exists — expected on subsequent startups
+
+            # Startup: backfill routing_tier on legacy records (idempotent)
+            try:
+                from sqlalchemy import update as _upd_rt
+
+                from app.models import Optimization as _Opt_rt
+
+                async with async_session_factory() as _rt_db:
+                    await _rt_db.execute(
+                        _upd_rt(_Opt_rt)
+                        .where(_Opt_rt.routing_tier.is_(None), _Opt_rt.provider == "mcp_sampling")
+                        .values(routing_tier="sampling")
+                    )
+                    await _rt_db.execute(
+                        _upd_rt(_Opt_rt)
+                        .where(_Opt_rt.routing_tier.is_(None), _Opt_rt.provider.like("%passthrough%"))
+                        .values(routing_tier="passthrough")
+                    )
+                    await _rt_db.execute(
+                        _upd_rt(_Opt_rt)
+                        .where(_Opt_rt.routing_tier.is_(None))
+                        .values(routing_tier="internal")
+                    )
+                    await _rt_db.commit()
+                    logger.info("Routing tier backfill complete")
+            except Exception as rt_exc:
+                logger.warning("Routing tier backfill failed (non-fatal): %s", rt_exc)
+
             # Startup: backfill orphan optimizations with null cluster_id
             try:
                 from app.services.prompt_lifecycle import PromptLifecycleService

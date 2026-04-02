@@ -102,6 +102,7 @@ class AnthropicAPIProvider(LLMProvider):
             cache_read_tokens=cache_read,
             cache_creation_tokens=cache_creation,
         )
+        self.last_model = response.model
 
         parts = [
             f"model={response.model}",

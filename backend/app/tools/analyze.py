@@ -180,6 +180,7 @@ async def handle_analyze(
             domain_raw=domain_raw,
             cluster_id=cluster_id,
             provider=provider.name,
+            routing_tier="internal",
             model_used=analyzer_model,
             models_by_phase={
                 "analyze": analyzer_model,

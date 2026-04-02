@@ -155,6 +155,7 @@ class ClaudeCLIProvider(LLMProvider):
             cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
             cache_creation_tokens=usage_data.get("cache_creation_input_tokens", 0),
         )
+        self.last_model = raw.get("model", model) if isinstance(raw, dict) else model
 
         # Log with duration and cost
         duration = raw.get("duration_ms", "?") if isinstance(raw, dict) else "?"

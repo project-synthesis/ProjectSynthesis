@@ -106,6 +106,7 @@ async def handle_prepare(
             status="pending",
             trace_id=trace_id,
             provider="mcp_passthrough",
+            routing_tier="passthrough",
             strategy_used=strategy_name,
             task_type=enrichment.task_type,
             domain=enrichment.domain_value,

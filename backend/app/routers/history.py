@@ -32,6 +32,9 @@ class HistoryItem(BaseModel):
     status: str = Field(description="Optimization status.")
     duration_ms: int | None = Field(default=None, description="Pipeline duration in milliseconds.")
     provider: str | None = Field(default=None, description="LLM provider used.")
+    routing_tier: str | None = Field(
+        default=None, description="Execution tier: internal, sampling, or passthrough.",
+    )
     models_by_phase: dict[str, str] | None = Field(default=None, description="Per-phase model IDs used.")
     raw_prompt: str | None = Field(default=None, description="Truncated original prompt (first 100 chars).")
     optimized_prompt: str | None = Field(default=None, description="Truncated optimized prompt (first 100 chars).")
@@ -116,6 +119,7 @@ async def get_history(
                 status=opt.status,
                 duration_ms=opt.duration_ms,
                 provider=opt.provider,
+                routing_tier=opt.routing_tier,
                 models_by_phase=opt.models_by_phase,
                 raw_prompt=opt.raw_prompt[:100] if opt.raw_prompt else None,
                 optimized_prompt=opt.optimized_prompt[:100] if opt.optimized_prompt else None,

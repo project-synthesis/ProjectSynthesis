@@ -58,6 +58,7 @@ class Optimization(Base):
     repo_full_name = Column(String, nullable=True)
     codebase_context_snapshot = Column(Text, nullable=True)
     status = Column(String, default="completed", nullable=False)  # completed / failed / interrupted
+    routing_tier = Column(String, nullable=True)  # internal / sampling / passthrough
     trace_id = Column(String, nullable=True)
     tokens_total = Column(Integer, nullable=True)
     tokens_by_phase = Column(JSON, nullable=True)

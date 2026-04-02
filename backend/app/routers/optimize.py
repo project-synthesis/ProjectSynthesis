@@ -52,6 +52,9 @@ class OptimizationDetail(BaseModel):
     score_deltas: dict[str, float] | None = Field(default=None, description="Score changes from original to optimized.")
     overall_score: float | None = Field(default=None, description="Weighted overall quality score (1.0-10.0).")
     provider: str | None = Field(default=None, description="LLM provider used (e.g. 'claude_cli', 'anthropic_api').")
+    routing_tier: str | None = Field(
+        default=None, description="Execution tier: internal, sampling, or passthrough.",
+    )
     model_used: str | None = Field(default=None, description="Model ID used for optimization.")
     models_by_phase: dict[str, str] | None = Field(
         default=None, description="Per-phase model IDs used during optimization.",
@@ -228,7 +231,7 @@ async def optimize(
         opt_id = str(uuid.uuid4())
         pending = Optimization(
             id=opt_id, raw_prompt=body.prompt, status="pending",
-            trace_id=trace_id, provider="web_passthrough",
+            trace_id=trace_id, provider="web_passthrough", routing_tier="passthrough",
             strategy_used=strategy_name,
             task_type=enrichment.task_type,
             domain=enrichment.domain_value,
@@ -345,6 +348,7 @@ def _serialize_optimization(opt: Optimization, *, cluster_id: str | None = None)
         score_deltas=opt.score_deltas,
         overall_score=opt.overall_score,
         provider=opt.provider,
+        routing_tier=opt.routing_tier,
         model_used=opt.model_used,
         models_by_phase=opt.models_by_phase,
         scoring_mode=opt.scoring_mode,
@@ -447,6 +451,7 @@ async def passthrough_prepare(
         status="pending",
         trace_id=trace_id,
         provider="web_passthrough",
+        routing_tier="passthrough",
         strategy_used=strategy_name,
         task_type=enrichment.task_type,
         domain=enrichment.domain_value,
