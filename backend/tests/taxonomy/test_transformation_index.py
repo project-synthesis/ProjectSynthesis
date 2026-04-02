@@ -11,6 +11,7 @@ Covers:
 
 import asyncio
 import inspect
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -423,9 +424,6 @@ async def test_concurrent_upserts_do_not_corrupt():
 # ---------------------------------------------------------------------------
 # 7. save_cache / load_cache
 # ---------------------------------------------------------------------------
-
-import time
-from pathlib import Path
 
 
 @pytest.mark.asyncio

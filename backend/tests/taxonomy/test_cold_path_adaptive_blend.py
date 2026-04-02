@@ -27,8 +27,7 @@ def test_low_output_coherence_reduces_optimized_weight():
 
 def test_high_output_coherence_keeps_default_weights():
     """When output coherence >= 0.5, default weights are used."""
-    output_coherence = 0.8
-    # No scaling applied
+    # output_coherence=0.8 → no scaling applied
     w_opt = CLUSTERING_BLEND_W_OPTIMIZED  # 0.20
     w_raw = CLUSTERING_BLEND_W_RAW  # 0.65
 
@@ -37,8 +36,7 @@ def test_high_output_coherence_keeps_default_weights():
 
 
 def test_missing_output_coherence_keeps_default_weights():
-    """When output_coherence is None, default weights are used."""
-    output_coherence = None
+    """When output_coherence is None, default weights are used (no scaling)."""
     w_opt = CLUSTERING_BLEND_W_OPTIMIZED
     assert w_opt == 0.20
 
@@ -73,6 +71,7 @@ def test_blend_embeddings_accepts_custom_weights():
 def test_cold_path_uses_adaptive_blend():
     """Verify cold_path.py implements adaptive blend logic."""
     import inspect
+
     from app.services.taxonomy import cold_path
 
     source = inspect.getsource(cold_path)
