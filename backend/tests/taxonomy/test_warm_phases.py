@@ -7,7 +7,7 @@ replicating the full warm-path flow end-to-end.
 from __future__ import annotations
 
 from dataclasses import fields
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -26,7 +26,6 @@ from app.services.taxonomy.warm_phases import (
     phase_split_emerge,
 )
 from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
-
 
 # ---------------------------------------------------------------------------
 # Dataclass field contracts
@@ -216,7 +215,7 @@ async def test_phase_reconcile_queries_notin_domain_archived(db, mock_embedding,
     db.add(domain_node)
     await db.commit()
 
-    result = await phase_reconcile(engine, db)
+    await phase_reconcile(engine, db)
 
     await db.refresh(domain_node)
     # Domain node should remain (not archived)

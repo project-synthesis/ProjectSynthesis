@@ -8,16 +8,12 @@ raises an exception.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
-import numpy as np
 import pytest
 
-from app.models import PromptCluster
 from app.services.taxonomy.cold_path import ColdPathResult
 from app.services.taxonomy.warm_path import WarmPathResult
-from tests.taxonomy.conftest import EMBEDDING_DIM
-
 
 # ---------------------------------------------------------------------------
 # Helpers

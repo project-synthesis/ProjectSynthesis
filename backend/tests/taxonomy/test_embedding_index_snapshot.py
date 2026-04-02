@@ -18,7 +18,6 @@ import pytest
 
 from app.services.taxonomy.embedding_index import EmbeddingIndex, IndexSnapshot
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -140,7 +139,6 @@ async def test_snapshot_matrix_independence(index: EmbeddingIndex):
 async def test_restore_empty_snapshot(index: EmbeddingIndex):
     """Restoring an empty snapshot clears the index."""
     await index.upsert("a", _rand_emb(seed=1))
-    snap = await index.snapshot()           # snapshot while empty would be before upsert
     empty_snap = IndexSnapshot(matrix=np.empty((0, 384), dtype=np.float32), ids=[])
     await index.restore(empty_snap)
 

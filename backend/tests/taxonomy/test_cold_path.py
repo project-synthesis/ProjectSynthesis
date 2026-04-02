@@ -11,15 +11,14 @@ Covers:
 from __future__ import annotations
 
 from dataclasses import fields
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from app.models import Optimization, PromptCluster
+from app.models import PromptCluster
 from app.services.taxonomy.cold_path import ColdPathResult, execute_cold_path
 from tests.taxonomy.conftest import EMBEDDING_DIM, make_cluster_distribution
-
 
 # ---------------------------------------------------------------------------
 # ColdPathResult dataclass
@@ -103,7 +102,6 @@ async def test_execute_cold_path_accepted_on_empty_db(db, mock_embedding, mock_p
 async def test_execute_cold_path_accepted_when_q_improves(db, mock_embedding, mock_provider):
     """Cold path is accepted when Q_after >= Q_before."""
     from app.services.taxonomy.engine import TaxonomyEngine
-    from app.services.taxonomy.quality import is_cold_path_non_regressive
 
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
@@ -213,6 +211,7 @@ async def test_cold_path_hdbscan_query_excludes_archived_state():
     pattern that would include archived clusters.
     """
     import inspect
+
     import app.services.taxonomy.cold_path as cold_path_module
 
     source = inspect.getsource(cold_path_module)
@@ -279,8 +278,8 @@ async def test_cold_path_matching_query_includes_mature_template():
     We check that the HDBSCAN input query and the matching query both use notin_
     rather than the narrower in_(["active", "candidate"]) pattern.
     """
-    import re
     import inspect
+
     import app.services.taxonomy.cold_path as cold_path_module
 
     source = inspect.getsource(cold_path_module)

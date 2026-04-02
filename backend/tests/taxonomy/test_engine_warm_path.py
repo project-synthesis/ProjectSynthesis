@@ -38,7 +38,6 @@ async def test_warm_path_q_system_non_regressive(session_factory, mock_embedding
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
     # Create some families and nodes to give the warm path something to work with
-    from contextlib import asynccontextmanager
     rng = np.random.RandomState(42)
 
     async with session_factory() as db:
