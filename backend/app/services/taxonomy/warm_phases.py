@@ -211,13 +211,23 @@ async def phase_reconcile(
                 node.scored_count = scored
                 result.scores_reconciled += 1
 
-        # Recompute weighted_member_sum from score data
+        # Recompute weighted_member_sum and centroid from member data.
+        # The hot-path running mean can drift; this corrects from ground truth.
         for node in live_nodes:
             score_data = score_map.get(node.id)
             if score_data:
                 avg, scored = score_data
                 if scored and avg:
                     node.weighted_member_sum = scored * max(0.1, avg / 10.0)
+
+            # Recompute centroid from actual member embeddings
+            member_embs = emb_by_cluster.get(node.id, [])
+            if len(member_embs) >= 2:
+                stacked = np.stack(member_embs, axis=0)
+                recomputed = np.mean(stacked, axis=0).astype(np.float32)
+                c_norm = np.linalg.norm(recomputed)
+                if c_norm > 1e-9:
+                    node.centroid_embedding = (recomputed / c_norm).tobytes()
 
         # Reconcile domain node member_counts and parent_id links.
         domain_q = await db.execute(
