@@ -18,6 +18,7 @@ export function mockHealthResponse(overrides: Record<string, unknown> = {}) {
     sampling_capable: null,
     mcp_disconnected: false,
     available_tiers: ['internal', 'passthrough'],
+    injection_stats: { provenance_successes: 0, provenance_failures: 0 },
     ...overrides,
   };
 }

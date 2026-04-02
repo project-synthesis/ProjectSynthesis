@@ -107,11 +107,14 @@ export function tooltip(node: HTMLElement, text: string | null | undefined) {
   }
 
   let currentText = text;
+  let destroyed = false;
 
   function onEnter() {
-    if (!currentText) return;
+    if (!currentText || destroyed) return;
     const t = currentText; // capture for closure
-    showTimer = setTimeout(() => show(node, t), SHOW_DELAY_MS);
+    showTimer = setTimeout(() => {
+      if (!destroyed) show(node, t);
+    }, SHOW_DELAY_MS);
   }
 
   function onLeave() {
@@ -132,6 +135,7 @@ export function tooltip(node: HTMLElement, text: string | null | undefined) {
       }
     },
     destroy() {
+      destroyed = true;
       hide();
       node.removeEventListener('mouseenter', onEnter);
       node.removeEventListener('mouseleave', onLeave);

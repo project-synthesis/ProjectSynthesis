@@ -20,6 +20,7 @@ export interface HealthResponse {
   available_tiers?: string[];
   domain_count?: number | null;
   domain_ceiling?: number | null;
+  injection_stats?: Record<string, number>;
 }
 
 export interface ApiKeyStatus {
