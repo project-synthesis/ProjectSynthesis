@@ -5,6 +5,19 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- `warm_phases.py` module extracting 7 warm-path phase functions from engine.py monolith — reconcile, split_emerge, merge, retire, refresh, discover, audit — each independently callable with dependency-injected engine and fresh AsyncSession
+- `PhaseResult`, `ReconcileResult`, `RefreshResult`, `DiscoverResult`, `AuditResult` dataclasses for structured phase return values
+
+### Fixed
+- Warm-path reconciliation now queries fresh non-domain/non-archived nodes instead of iterating a stale `active_nodes` list (fixes #10, #16)
+- Emerge phase excludes domain/archived nodes from orphan family query (fix #7)
+- Leaf split now increments `ops_accepted` counter on success (fix #9)
+- Noise reassignment uses pre-fetched embedding cache instead of per-point DB queries (fix #11)
+- Replaced 3 manual cosine similarity calculations with `cosine_similarity()` from clustering.py (fix #12)
+- `warm_path_age` now increments unconditionally in audit phase (fix #13)
+- Stale label/pattern refresh now extracts new patterns before deleting old ones, preventing data loss on extraction failure (fix #15)
+
+### Added
 - `routing_tier` column on Optimization model — persists which tier (internal/sampling/passthrough) processed each optimization, with startup backfill for legacy records
 - `routing_tier` field in `OptimizationDetail`, `PipelineResult`, and `HistoryItem` API responses
 - Inspector Tier row showing persisted routing tier with color coding (green=sampling, cyan=internal, yellow=passthrough)
