@@ -18,6 +18,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 from sqlalchemy import func, select
@@ -105,6 +106,9 @@ class TaxonomyEngine:
         self._warm_path_age: int = 0
         # Set by deadlock breaker — caller should schedule cold path.
         self._cold_path_needed: bool = False
+        # Last silhouette score from cold path — reused by warm path since
+        # warm path lacks the full embedding matrix needed for silhouette.
+        self._last_silhouette: float = 0.0
         # Stats cache — monotonic TTL, invalidated on warm/cold path completion.
         self._stats_cache: dict | None = None
         self._stats_cache_time: float = 0.0
@@ -125,6 +129,47 @@ class TaxonomyEngine:
     def transformation_index(self):
         """In-memory transformation vector search index."""
         return self._transformation_index
+
+    # ------------------------------------------------------------------
+    # Index cache management
+    # ------------------------------------------------------------------
+
+    async def load_index_caches(self, data_dir: Path) -> None:
+        """Load TransformationIndex and OptimizedEmbeddingIndex from disk cache.
+
+        Called at startup to avoid cold-start degradation of composite fusion
+        Signals 2 (transformation) and 3 (output). EmbeddingIndex has its own
+        warm-load logic in main.py with staleness validation.
+        """
+        # TransformationIndex
+        try:
+            ti_loaded = await self._transformation_index.load_cache(
+                data_dir / "transformation_index.pkl"
+            )
+            if ti_loaded:
+                logger.info(
+                    "TransformationIndex warm-loaded from cache: %d vectors",
+                    self._transformation_index.size,
+                )
+            else:
+                logger.info("TransformationIndex cache not available — will populate via hot path")
+        except Exception as ti_exc:
+            logger.warning("TransformationIndex warm-load failed (non-fatal): %s", ti_exc)
+
+        # OptimizedEmbeddingIndex
+        try:
+            oi_loaded = await self._optimized_index.load_cache(
+                data_dir / "optimized_index.pkl"
+            )
+            if oi_loaded:
+                logger.info(
+                    "OptimizedEmbeddingIndex warm-loaded from cache: %d vectors",
+                    self._optimized_index.size,
+                )
+            else:
+                logger.info("OptimizedEmbeddingIndex cache not available — will populate via hot path")
+        except Exception as oi_exc:
+            logger.warning("OptimizedEmbeddingIndex warm-load failed (non-fatal): %s", oi_exc)
 
     # ------------------------------------------------------------------
     # Public hot-path entry point

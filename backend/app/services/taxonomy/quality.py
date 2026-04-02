@@ -50,10 +50,12 @@ class NodeMetrics:
 class QWeights:
     """Constant-sum weights for Q_system (always sum to 1.0).
 
-    Spec Section 2.5 — DBCV weight is designed to ramp in linearly
-    over 20 observations after >=5 active nodes exist.  Currently
-    always called with ramp_progress=0.0 because DBCV computation
-    is not yet implemented (see engine.py _compute_q_from_nodes).
+    Spec Section 2.5 — DBCV weight ramps in linearly over 20
+    observations after >=5 active nodes exist. The DBCV slot is
+    fed by silhouette_score (rescaled to [0,1]) computed during
+    batch_cluster() and stored on ClusterResult.silhouette. Cold
+    path passes it directly; warm path reuses the last cold-path
+    value via engine._last_silhouette.
     """
 
     w_c: float  # coherence

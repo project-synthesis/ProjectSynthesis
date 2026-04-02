@@ -351,6 +351,7 @@ async def test_execute_cold_path_resets_cold_path_needed_on_accept(db, mock_embe
 def test_cold_path_saves_all_three_caches():
     """Verify cold_path.py references save_cache for all three indices."""
     import inspect
+
     from app.services.taxonomy import cold_path
 
     source = inspect.getsource(cold_path)

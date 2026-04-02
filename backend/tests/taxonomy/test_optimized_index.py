@@ -1,6 +1,5 @@
 """Unit tests for OptimizedEmbeddingIndex save_cache / load_cache."""
 
-import asyncio
 from pathlib import Path
 
 import numpy as np

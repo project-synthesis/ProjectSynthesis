@@ -584,6 +584,10 @@ async def execute_cold_path(
     # ------------------------------------------------------------------
     q_after = engine._compute_q_from_nodes(active_after, silhouette=cluster_result.silhouette)
 
+    # Persist silhouette for warm-path reuse (warm path lacks the full
+    # embedding matrix needed for sklearn's silhouette_score).
+    engine._last_silhouette = cluster_result.silhouette
+
     # ------------------------------------------------------------------
     # Step 22-24: Quality gate — reject regressive refits
     # ------------------------------------------------------------------
