@@ -53,7 +53,7 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - **Scoring**: hybrid LLM + heuristic with z-score normalization and divergence detection
 - **Providers**: Claude CLI or Anthropic API, auto-detected once at startup, stored on `app.state.routing`
 - **Classification**: `semantic_upgrade_general()` gate catches LLM returning "general" when strong keywords present. Heuristic analyzer for zero-LLM passthrough classification
-- **Taxonomy**: evolutionary hierarchical clustering (`services/taxonomy/`). Hot/warm/cold paths. Domain discovery. Adaptive merge threshold `0.55 + 0.04 * log2(1 + member_count)` with task_type mismatch penalty (-0.05)
+- **Taxonomy**: evolutionary hierarchical clustering (`services/taxonomy/`). Hot/warm/cold paths. Domain discovery. Adaptive merge threshold `0.55 + 0.04 * log2(1 + member_count)` with task_type mismatch penalty (-0.05). Multi-embedding: optimized prompt + transformation vectors + score-weighted centroids. Composite fusion blends 4 signals (topic, transformation, output, pattern) with per-phase adaptive weights
 - **Layer rules**: `routers/` → `services/` → `models/` only. Services must never import from routers
 - **Model IDs**: centralized in `config.py` (`MODEL_SONNET/OPUS/HAIKU`). Use `PreferencesService.resolve_model()`, never hardcode
 - **Env vars**: `ANTHROPIC_API_KEY` (optional), `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `SECRET_KEY` (auto-generated)
@@ -133,4 +133,4 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **Context enrichment**: unified `ContextEnrichmentService.enrich()` for all routing tiers. All call sites default `workspace_path` to `PROJECT_ROOT`
 - **Workspace intelligence**: auto-detects project type from manifests + deep scanning (README, entry points, architecture docs)
 - **Refinement**: each turn is a fresh pipeline invocation, not multi-turn accumulation. Rollback creates a branch fork. 3 suggestions per turn
-- **Feedback adaptation**: strategy affinity counter. Degenerate pattern detection (>90% same rating over 10+ feedbacks)
+- **Feedback adaptation**: strategy affinity counter. Degenerate pattern detection (>90% same rating over 10+ feedbacks). Phase weight adaptation: positive feedback shifts embedding fusion weights toward the stored optimization-time profile via EMA (alpha=0.05); warm-path decay (rate=0.01) drifts back to defaults

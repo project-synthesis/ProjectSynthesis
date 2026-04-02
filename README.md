@@ -115,13 +115,15 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, .clinerules, CONVENTIONS.md for context injection. Monorepo-aware: `discover_project_dirs()` scans manifest-containing subdirectories with SHA256 deduplication
 - **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution. Dimension-specific weights prevent single-model bias. Divergence flags when LLM and heuristic disagree by >2.5 points
 - **Real-time events** — SSE-based event bus with toast notifications for file changes, MCP operations, and pipeline status
-- **Evolutionary taxonomy engine** — self-organizing hierarchical clustering that groups optimizations into a navigable taxonomy. Three execution paths: hot (per-optimization embedding + nearest-node search), warm (periodic HDBSCAN re-clustering with speculative lifecycle mutations + domain discovery), cold (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Quality-gated: 5-dimension Q_system score (coherence, separation, coverage, DBCV, stability) prevents regressions. Snapshot audit trail for recovery
+- **Evolutionary taxonomy engine** — self-organizing hierarchical clustering that groups optimizations into a navigable taxonomy. Three execution paths: hot (per-optimization multi-embedding + nearest-node search), warm (periodic HDBSCAN re-clustering with speculative lifecycle mutations + domain discovery), cold (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Quality-gated: 5-dimension Q_system score (coherence, separation, coverage, DBCV, stability) prevents regressions. Snapshot audit trail for recovery
+- **Multi-signal embedding fusion** — composite queries blend 4 signals (topic, transformation, output, pattern) with per-phase adaptive weights for richer pattern matching. Score-weighted centroids give high-quality optimizations more cluster influence. TransformationIndex enables technique-space search across domains
+- **Cross-cluster pattern injection** — universal techniques (high `global_source_count`) are injected regardless of topic cluster, ranked by composite relevance formula. Benefits all routing tiers (internal, passthrough, MCP)
 - **Unified domain taxonomy** — domains are `PromptCluster` nodes with `state="domain"`, discovered organically from user behavior. No hardcoded domain constants — `DomainResolver` resolves from DB, `DomainSignalLoader` provides heuristic keyword signals from domain node metadata. Warm path proposes new domains when coherent sub-populations emerge under "general". Five stability guardrails prevent drift: color pinning, retire exemption, merge approval, separate coherence floor, split isolation. Stats cache with trend tracking
 - **3D taxonomy visualization** — Three.js interactive topology with LOD tiers (far/mid/near) based on persistence thresholds. Click-to-focus navigation, raycasting hover, billboard labels, force-directed collision resolution, Ctrl+F search, Q_system badge, and recluster controls
 - **Pattern suggestion on paste** — embeds pasted text, cosine-searches active clusters (≥0.72), suggests matching clusters with 1-click apply (50-char delta, 300ms debounce, 10s auto-dismiss). Applied patterns injected into optimizer context
 - **Bidirectional history–clusters navigation** — history items show intent labels and domain badges. Loading an optimization auto-selects its cluster in Inspector. Clicking a linked optimization in a cluster detail loads it in the editor. Live cluster link: background pattern extraction triggers automatic UI sync via SSE
 - **StatusBar breadcrumb** — shows CLI/API/SAMPLING/PASSTHROUGH tier badge + `[domain] › intent_label` for the active optimization with domain color coding. Editor tabs use intent labels as titles
-- **Feedback loop** — thumbs up/down drives strategy affinity adaptation
+- **Feedback loop** — thumbs up/down drives strategy affinity adaptation + phase weight adaptation (EMA toward successful fusion profiles)
 - **API key management** — set/update/remove via UI with Fernet encryption at rest
 - **Per-phase effort controls** — configure `low`/`medium`/`high`/`max` effort per pipeline phase (analyzer, optimizer, scorer) via Settings. Applies to internal tier; sampling tier defers to the IDE's model selection
 - **Structured repo indexing** — type-aware file outlines (Python classes/functions/imports, TypeScript exports, Svelte runes) with domain-boosted semantic retrieval and token-budget packing
@@ -149,7 +151,7 @@ The MCP server provides 11 tools with `synthesis_` prefix on port 8001. All tool
 | `synthesis_strategies` | List available optimization strategies with metadata |
 | `synthesis_history` | Paginated optimization history with sort/filter |
 | `synthesis_get_optimization` | Full optimization detail by ID or trace_id |
-| `synthesis_match` | Knowledge graph search for similar clusters and reusable patterns |
+| `synthesis_match` | Knowledge graph search for similar clusters, reusable patterns, and cross-cluster universal techniques |
 | `synthesis_feedback` | Submit quality feedback (thumbs_up/thumbs_down) to drive strategy adaptation |
 | `synthesis_refine` | Iteratively improve an optimized prompt with specific instructions |
 
@@ -165,7 +167,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~90s, 1160+ tests)
+# Backend tests (~90s, 1410+ tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check

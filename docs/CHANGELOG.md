@@ -4,62 +4,39 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.11-dev — 2026-04-02
+
 ### Added
-- Cross-cluster pattern injection: universal meta-patterns (high `global_source_count`) are now injected regardless of topic cluster match
-- `MetaPattern.global_source_count` field tracks how many distinct clusters contain semantically similar patterns (computed during warm path refresh)
-- Cross-cluster patterns ranked by composite relevance: `cosine_similarity × log2(1 + global_source_count) × cluster_avg_score_factor`
-- `PatternMatch.cross_cluster_patterns` field returns universal patterns alongside topic-matched patterns
-- New constants: `CROSS_CLUSTER_MIN_SOURCE_COUNT`, `CROSS_CLUSTER_MAX_PATTERNS`, `CROSS_CLUSTER_RELEVANCE_FLOOR`, `CROSS_CLUSTER_SIMILARITY_THRESHOLD`
-- `CROSS_CLUSTER_RELEVANCE_FLOOR` (0.35) gates low-relevance cross-cluster candidates; deduplication prevents double-injection of patterns already found via topic match
-
-### Added (Phase 2 — Composite Embedding Fusion)
-- `PhaseWeights` dataclass with per-phase default profiles (analysis, optimization, pattern_injection, scoring), floor enforcement (min 0.05), and dict serialization
-- `CompositeQuery` dataclass fusing four signals (topic, transformation, output, pattern) into a single L2-normalized embedding via weighted blend with zero-signal graceful degradation
-- `adapt_weights()` EMA convergence toward successful weight profiles
-- `decay_toward_defaults()` drift back to phase defaults when adaptation is not reinforced
-- `build_composite_query()` async builder assembling all four signals from taxonomy engine, embedding index, transformation index, and DB queries
-- Exported `CompositeQuery`, `PhaseWeights`, `adapt_weights`, `build_composite_query`, `decay_toward_defaults` from taxonomy package
-
-### Added (Phase 1 — Multi-Embedding Foundation)
-- `Optimization.optimized_embedding` and `Optimization.transformation_embedding` columns — embed optimized prompts and compute L2-normalized improvement direction vectors in the hot path
-- `PromptCluster.weighted_member_sum` column — score-weighted centroid computation where high-scoring prompts have proportionally more influence on the cluster center
-- `TransformationIndex` module — in-memory technique-space search index with `get_vector()`, snapshot/restore, mirrors EmbeddingIndex API
-- One-time backfill migration for existing optimization data (batch embedding via `aembed_texts()`)
-- TransformationIndex built at startup from per-cluster mean transformation vectors
-- Warm/cold path reconciliation extended to recompute `weighted_member_sum`
-
-### Fixed (Cross-Phase Audit, Final Pass)
-- Replaced hardcoded `>= 3` and `.limit(3)` in `fusion.py` Signal 4 with `CROSS_CLUSTER_MIN_SOURCE_COUNT` and new `FUSION_PATTERN_TOP_K` constants; added `FUSION_CLUSTER_LOOKUP_THRESHOLD` for the 0.3 search threshold
-- Surfaced `cross_cluster_patterns` in MCP `synthesis_match` tool: added field to `MatchOutput` schema and serialization in `handle_match()`
-- Fixed `context_enrichment._resolve_patterns()` to include `cross_cluster_patterns` from `match_prompt()` — passthrough tier now receives universal techniques (previously only the internal tier got them via `pattern_injection.py`)
-- Added `logger.debug` to 2 bare `except: pass` blocks in `engine.py` (phase_weights snapshot) and `warm_phases.py` (weight decay) for debuggability
-
-### Fixed (Cross-Phase Audit, Pass 3)
-- TransformationIndex now correctly cleaned up during warm-path merge (3 merge sites), retire, and split-archive operations — previously only zombie cleanup removed stale entries
-- Speculative phase rollback in `warm_path.py` now snapshots and restores TransformationIndex alongside EmbeddingIndex, preventing index divergence on rejected phases
-
-### Fixed (Cross-Phase Audit, Pass 2)
-- Fixed adaptation loop no-op: `update_phase_weights()` was adapting toward itself because both `current` and `successful` came from the same preferences file; now stores phase_weights snapshot on the `Optimization` record at taxonomy processing time and passes the stored profile as the adaptation target
-- Added `Optimization.phase_weights_json` column to persist the weight profile used for each optimization
-- Unified cross-cluster relevance formula in `match_prompt()` to include `cluster_score_factor` — previously missing the quality signal that `auto_inject_patterns()` uses
-- Exported `resolve_fused_embedding` from `taxonomy/__init__.py` for API completeness
-- Removed redundant double L2 normalization in engine.py TransformationIndex upsert
-
-### Fixed (Cross-Phase Audit, Pass 1)
-- Wired `update_phase_weights()` into feedback flow — adaptation loop was previously dead code, phase weights now shift toward successful profiles on positive feedback
-- Warm path centroid recomputation now uses score-weighted mean (matching hot-path formula) instead of unweighted `np.mean`
-- Cold path `weighted_member_sum` recomputed from true per-member scores instead of average approximation
-- Hot path `TransformationIndex` upsert now uses running mean instead of overwriting cluster mean with single-sample vector
-- Warm path zombie cleanup now removes archived clusters from `TransformationIndex` (previously left stale entries)
-- Cold path now rebuilds `TransformationIndex` after refit (previously only rebuilt `EmbeddingIndex`)
-- `match_prompt()` cross-cluster patterns now ranked by relevance formula (`cosine × log2(1 + global_source_count)`) with `CROSS_CLUSTER_RELEVANCE_FLOOR` filter (previously returned by `global_source_count` only, ignoring prompt relevance)
-- Consolidated duplicate composite query resolution code from `pattern_injection.py` and `matching.py` into shared `resolve_fused_embedding()` helper in `fusion.py`
-- Deduplicated `emb_idx.search()` calls in `build_composite_query()` — Signal 2 and Signal 3 now share a single cluster lookup
-- Removed redundant `test_fusion_integration.py` (all 3 tests were strict subsets of `taxonomy/test_fusion.py`)
+- **Unified embedding architecture** — 3-phase system (cross-cluster injection, multi-embedding foundation, composite fusion) enhancing taxonomy search with multi-signal queries
+- Cross-cluster pattern injection: universal meta-patterns flow across topic boundaries ranked by composite relevance (`cosine_similarity × log2(1 + global_source_count) × cluster_avg_score_factor`)
+- `MetaPattern.global_source_count` field tracking cross-cluster presence, computed during warm-path refresh via pairwise cosine similarity (threshold 0.82)
+- `Optimization.optimized_embedding` and `Optimization.transformation_embedding` columns for optimized prompt embeddings and L2-normalized improvement direction vectors
+- `Optimization.phase_weights_json` column persisting the weight profile used for each optimization, enabling feedback-driven adaptation
+- `PromptCluster.weighted_member_sum` column for score-weighted centroid computation
+- `TransformationIndex` module — in-memory technique-space search index with `get_vector()`, snapshot/restore, running-mean upsert, mirroring `EmbeddingIndex` API
+- `CompositeQuery` and `PhaseWeights` dataclasses for multi-signal fusion with per-phase weight profiles (analysis, optimization, pattern_injection, scoring)
+- `resolve_fused_embedding()` shared helper consolidating composite query construction, weight loading, and fusion
+- `adapt_weights()` EMA convergence toward successful weight profiles on positive feedback; `decay_toward_defaults()` drift back per warm cycle
+- `cross_cluster_patterns` field on `MatchOutput` MCP schema — `synthesis_match` now returns universal techniques alongside topic-matched patterns
+- One-time backfill migration for existing optimization embeddings with `data/.embedding_backfill_done` marker
+- Constants: `CROSS_CLUSTER_MIN_SOURCE_COUNT`, `CROSS_CLUSTER_MAX_PATTERNS`, `CROSS_CLUSTER_RELEVANCE_FLOOR`, `CROSS_CLUSTER_SIMILARITY_THRESHOLD`, `FUSION_CLUSTER_LOOKUP_THRESHOLD`, `FUSION_PATTERN_TOP_K`
 
 ### Changed
-- `auto_inject_patterns()` restructured to eliminate early returns that blocked cross-cluster injection — topic-based search now produces an empty list instead of short-circuiting
-- `assign_cluster()` centroid update uses score-weighted formula instead of equal-weight running mean
+- `auto_inject_patterns()` uses composite fusion for cluster search instead of raw prompt embedding alone
+- `match_prompt()` uses composite fusion for similarity search with relevance-scored cross-cluster patterns
+- `context_enrichment._resolve_patterns()` includes cross-cluster patterns for passthrough tier
+- `assign_cluster()` centroid update uses score-weighted running mean instead of equal-weight mean
+- Warm-path centroid reconciliation uses per-member score-weighted mean from ground truth
+- Cold-path `weighted_member_sum` recomputed from true per-member scores instead of average approximation
+- `TransformationIndex` maintained across all lifecycle operations: hot path (running mean upsert), merge (remove loser), retire (remove), split (remove archived), zombie cleanup (remove), cold path (full rebuild), speculative rollback (snapshot/restore)
+- Feedback-driven phase weight adaptation wired end-to-end: positive feedback shifts weights toward the stored optimization-time profile via EMA
+
+### Fixed
+- Adaptation loop was dead code — `update_phase_weights()` never called from feedback flow
+- Adaptation loop was no-op even when wired — both `current` and `successful` loaded from same preferences file; fixed by storing weight snapshot on Optimization record
+- Cross-cluster relevance formula in `match_prompt()` was missing `cluster_score_factor` (inconsistent with `auto_inject_patterns()`)
+- Hardcoded magic numbers in `fusion.py` Signal 4 replaced with named constants
+- Silent `except: pass` blocks in engine.py and warm_phases.py now log at debug level
 
 ### Added
 - `cold_path.py` module with `execute_cold_path()` and `ColdPathResult` — extracted cold path from engine.py with quality gate via `is_cold_path_non_regressive()` to reject regressive HDBSCAN refits instead of committing unconditionally

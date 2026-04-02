@@ -20,9 +20,9 @@ Everything backend developers need. For project overview, see root `CLAUDE.md`. 
 **Workspace**: `workspace_intelligence.py` (manifest-based stack detection + deep scanning), `roots_scanner.py` (agent guidance file discovery, SHA256 dedup), `codebase_explorer.py` (semantic retrieval + Haiku synthesis, SHA cache), `explore_cache.py` (TTL+LRU), `repo_index_service.py` (background indexing, `query_curated_context()`)
 **Embeddings**: `embedding_service.py` (singleton `all-MiniLM-L6-v2`, 384-dim), `embedding_index.py` (numpy index, O(1) upsert, batch cosine)
 **Domain**: `domain_resolver.py` (cached DB lookup, replaces `VALID_DOMAINS`), `domain_signal_loader.py` (keyword signals from domain metadata)
-**Patterns**: `pattern_injection.py` (`auto_inject_patterns()` from embedding index), `prompt_lifecycle.py` (state promotion, quality pruning, usage decay, orphan backfill)
+**Patterns**: `pattern_injection.py` (`auto_inject_patterns()` with composite fusion + cross-cluster injection), `prompt_lifecycle.py` (state promotion, quality pruning, usage decay, orphan backfill)
 **Infrastructure**: `event_bus.py` (in-process pub/sub), `event_notification.py` (cross-process HTTP POST), `trace_logger.py` (per-phase JSONL, daily rotation), `mcp_session_file.py` (read/write/staleness), `mcp_proxy.py` (REST→MCP sampling proxy)
-**Feedback**: `feedback_service.py` (CRUD + adaptation update), `adaptation_tracker.py` (strategy affinity, degenerate detection)
+**Feedback**: `feedback_service.py` (CRUD + adaptation update + phase weight adaptation), `adaptation_tracker.py` (strategy affinity, degenerate detection, phase weight EMA)
 **GitHub**: `github_service.py` (Fernet encrypt/decrypt), `github_client.py` (raw API, explicit token param)
 **Preferences**: `preferences.py` (file-based JSON, frozen snapshot per pipeline run, effort levels: `low`|`medium`|`high`|`max`)
 
@@ -60,10 +60,10 @@ Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (i
 
 ## Data models (`app/models.py`)
 
-- `Optimization` — raw/optimized prompt, scores, clustering info, domain, per-phase model IDs
+- `Optimization` — raw/optimized prompt, scores, clustering info, domain, per-phase model IDs, multi-embedding (optimized + transformation), `phase_weights_json` snapshot
 - `PromptCluster` — UUID PK, self-join `parent_id`, L2-normalized centroid (384-dim), lifecycle state (`candidate`|`active`|`mature`|`template`|`archived`|`domain`), metrics, `cluster_metadata` JSON
 - `TaxonomySnapshot` — audit trail (trigger, Q metrics, operation log, tree_state)
-- `MetaPattern` — reusable techniques (`embedding`, `pattern_text`, `cluster_id` FK)
+- `MetaPattern` — reusable techniques (`embedding`, `pattern_text`, `cluster_id` FK, `global_source_count` for cross-cluster presence)
 - `OptimizationPattern` — join: Optimization→PromptCluster with similarity + relationship type
 - `Feedback`, `StrategyAffinity`, `RefinementBranch`, `RefinementTurn`, `GitHubToken`, `LinkedRepo`, `RepoFileIndex`, `AuditLog`
 
@@ -132,7 +132,9 @@ Process singleton (`get_engine()`/`set_engine()`). Three paths: **hot** (per-opt
 
 **Domain discovery**: `_propose_domains()` from coherent "general" sub-populations (≥3 members, ≥0.3 coherence, ≥60% consistent `domain_raw`). Five guardrails: color pinning, retire exemption, merge gate, coherence floor, split→candidates. Ceiling at 30.
 
-**Modules**: `engine.py`, `clustering.py`, `lifecycle.py`, `quality.py`, `projection.py`, `coloring.py`, `labeling.py`, `snapshot.py`, `sparkline.py`, `family_ops.py`, `matching.py`, `embedding_index.py`.
+**Multi-embedding**: hot path embeds `optimized_prompt` + computes transformation vector (`L2_norm(embed(optimized) - embed(raw))`). Score-weighted centroids: `max(0.1, score / 10.0)`. `TransformationIndex` for technique-space search. Composite fusion (`fusion.py`): blends topic + transformation + output + pattern signals with per-phase adaptive weights via `resolve_fused_embedding()`. Cross-cluster injection: patterns with `global_source_count >= 3` injected across topic boundaries.
+
+**Modules**: `engine.py`, `clustering.py`, `lifecycle.py`, `quality.py`, `projection.py`, `coloring.py`, `labeling.py`, `snapshot.py`, `sparkline.py`, `family_ops.py`, `matching.py`, `embedding_index.py`, `transformation_index.py`, `fusion.py`, `warm_phases.py`, `warm_path.py`, `cold_path.py`.
 
 ## Testing
 
