@@ -331,13 +331,24 @@ async def assign_cluster(
                         )
                         # Fall through to creation
                     else:
-                        # Merge: update centroid as running mean, re-normalize
+                        # Score-weighted centroid: higher-scoring prompts
+                        # shift the centroid more than low-scoring ones.
+                        score_weight = max(0.1, (overall_score or 5.0) / 10.0)
                         old_centroid = np.frombuffer(
                             matched.centroid_embedding, dtype=np.float32
                         )
-                        new_centroid = (old_centroid * matched.member_count + embedding) / (
-                            matched.member_count + 1
+                        # Fallback for pre-migration clusters where
+                        # weighted_member_sum is 0.0 — use member_count
+                        # as the weight denominator.
+                        weighted_sum = (
+                            getattr(matched, "weighted_member_sum", None)
+                            or float(matched.member_count or 1)
                         )
+                        new_weighted_sum = weighted_sum + score_weight
+                        new_centroid = (
+                            old_centroid * weighted_sum
+                            + embedding * score_weight
+                        ) / new_weighted_sum
                         # Re-normalize to unit norm — running mean drifts
                         # from unit sphere without this (critical for cosine
                         # similarity accuracy on subsequent merges).
@@ -347,7 +358,8 @@ async def assign_cluster(
                         matched.centroid_embedding = new_centroid.astype(
                             np.float32
                         ).tobytes()
-                        matched.member_count += 1
+                        matched.member_count = (matched.member_count or 0) + 1
+                        matched.weighted_member_sum = new_weighted_sum
                         # NOTE: coherence is intentionally NOT recomputed here.
                         # The warm path reconciliation recomputes it from all
                         # member embeddings.  See engine.py _run_warm_path_inner().
@@ -402,6 +414,7 @@ async def assign_cluster(
         parent_id=domain_node.id if domain_node else None,
         centroid_embedding=embedding.astype(np.float32).tobytes(),
         member_count=1,
+        weighted_member_sum=max(0.1, (overall_score or 5.0) / 10.0),
         scored_count=1 if overall_score is not None else 0,
         usage_count=0,
         avg_score=overall_score,

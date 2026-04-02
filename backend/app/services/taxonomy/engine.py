@@ -122,7 +122,6 @@ class TaxonomyEngine:
     @property
     def transformation_index(self):
         """In-memory transformation vector search index."""
-        from app.services.taxonomy.transformation_index import TransformationIndex
         return self._transformation_index
 
     # ------------------------------------------------------------------

@@ -1,12 +1,16 @@
 """Tests for multi-embedding schema columns and hot-path embedding."""
 from __future__ import annotations
+
 from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models import Optimization, PromptCluster
 from app.services.taxonomy.engine import TaxonomyEngine
+
 
 @pytest.mark.asyncio
 async def test_optimization_has_optimized_embedding_column(db: AsyncSession):

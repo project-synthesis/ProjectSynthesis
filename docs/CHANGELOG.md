@@ -12,8 +12,17 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - New constants: `CROSS_CLUSTER_MIN_SOURCE_COUNT`, `CROSS_CLUSTER_MAX_PATTERNS`, `CROSS_CLUSTER_RELEVANCE_FLOOR`, `CROSS_CLUSTER_SIMILARITY_THRESHOLD`
 - `CROSS_CLUSTER_RELEVANCE_FLOOR` (0.35) gates low-relevance cross-cluster candidates; deduplication prevents double-injection of patterns already found via topic match
 
+### Added (Phase 1 — Multi-Embedding Foundation)
+- `Optimization.optimized_embedding` and `Optimization.transformation_embedding` columns — embed optimized prompts and compute L2-normalized improvement direction vectors in the hot path
+- `PromptCluster.weighted_member_sum` column — score-weighted centroid computation where high-scoring prompts have proportionally more influence on the cluster center
+- `TransformationIndex` module — in-memory technique-space search index with `get_vector()`, snapshot/restore, mirrors EmbeddingIndex API
+- One-time backfill migration for existing optimization data (batch embedding via `aembed_texts()`)
+- TransformationIndex built at startup from per-cluster mean transformation vectors
+- Warm/cold path reconciliation extended to recompute `weighted_member_sum`
+
 ### Changed
 - `auto_inject_patterns()` restructured to eliminate early returns that blocked cross-cluster injection — topic-based search now produces an empty list instead of short-circuiting
+- `assign_cluster()` centroid update uses score-weighted formula instead of equal-weight running mean
 
 ### Added
 - `cold_path.py` module with `execute_cold_path()` and `ColdPathResult` — extracted cold path from engine.py with quality gate via `is_cold_path_non_regressive()` to reject regressive HDBSCAN refits instead of committing unconditionally
