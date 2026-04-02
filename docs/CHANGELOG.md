@@ -4,6 +4,14 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Changed
+- Replaced per-feedback phase weight adaptation with score-correlated batch adaptation in the warm path — weights now adapt toward profiles that correlate with the highest `overall_score` values using z-score weighting (above-median optimizations only)
+- Phase weight adaptation moved from `FeedbackService.create_feedback()` (per-thumbs_up) to `phase_refresh()` (periodic warm cycle) — feedback still drives strategy affinity, warm path drives embedding fusion weights
+- Removed `AdaptationTracker.update_phase_weights()` — replaced by `compute_score_correlated_target()` pure function in `fusion.py`
+
+### Added
+- `compute_score_correlated_target()` — computes score-weighted optimal weight profile from recent optimization history with z-score contribution weighting and configurable maturity gate (`SCORE_ADAPTATION_MIN_SAMPLES=10`)
+
 ## v0.3.11-dev — 2026-04-02
 
 ### Added

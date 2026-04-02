@@ -98,24 +98,10 @@ class FeedbackService:
                     optimization_id,
                 )
 
-        # Adapt phase weights on positive feedback (Phase 2: adaptive fusion).
-        # Uses the weights snapshot stored on the Optimization record at taxonomy
-        # processing time — this is the profile that PRODUCED this result.
-        # Falls back to current preferences if no snapshot exists (pre-migration data).
-        try:
-            successful_weights = opt.phase_weights_json
-            if not successful_weights:
-                from app.services.preferences import PreferencesService
-
-                successful_weights = PreferencesService().load().get("phase_weights", {})
-            if successful_weights:
-                phase_tracker = AdaptationTracker(self._session)
-                await phase_tracker.update_phase_weights(rating, successful_weights)
-        except Exception:
-            logger.debug(
-                "Phase weight adaptation failed for optimization %s — ignoring",
-                optimization_id,
-            )
+        # Phase weight adaptation moved to warm path (score-correlated batch
+        # adaptation). Feedback drives strategy affinity only — phase weights
+        # adapt toward profiles that correlate with high overall_score values,
+        # computed periodically during warm-path refresh.
 
         # Publish real-time event for cross-source notifications
         try:

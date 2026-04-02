@@ -31,6 +31,7 @@ ADAPTATION_ALPHA = 0.05
 DECAY_RATE = 0.01
 FUSION_CLUSTER_LOOKUP_THRESHOLD = 0.3
 FUSION_PATTERN_TOP_K = 3
+SCORE_ADAPTATION_MIN_SAMPLES = 10
 
 # Default weight profiles: (w_topic, w_transform, w_output, w_pattern)
 _DEFAULT_PROFILES: dict[str, tuple[float, float, float, float]] = {
@@ -285,6 +286,119 @@ def decay_toward_defaults(
         w_pattern=current.w_pattern + rate * (defaults.w_pattern - current.w_pattern),
     )
     return new.enforce_floor()
+
+
+# ---------------------------------------------------------------------------
+# Score-correlated adaptation
+# ---------------------------------------------------------------------------
+
+
+def compute_score_correlated_target(
+    scored_profiles: list[tuple[float, dict[str, dict[str, float]]]],
+    min_samples: int = SCORE_ADAPTATION_MIN_SAMPLES,
+) -> dict[str, PhaseWeights] | None:
+    """Compute score-weighted target weight profiles from historical data.
+
+    Identifies which weight profiles correlate with the highest
+    ``overall_score`` values and produces a per-phase target that
+    the warm-path adaptation can move toward via EMA.
+
+    Args:
+        scored_profiles: List of ``(overall_score, phase_weights_json)``
+            tuples. Each ``phase_weights_json`` maps phase name to
+            weight dict (e.g. ``{"analysis": {"w_topic": 0.6, ...}}``).
+        min_samples: Minimum profiles required for meaningful signal.
+            Returns ``None`` below this threshold.
+
+    Returns:
+        Dict mapping phase name to target ``PhaseWeights``, or ``None``
+        if insufficient data.
+
+    Weighting formula:
+        - Compute median and stdev of scores
+        - ``contribution = max(0, (score - median) / stdev)``
+        - Below-median optimizations contribute 0 (no anti-reinforcement)
+        - If stdev < 0.01 (all scores identical), equal contribution
+        - Target = score-weighted mean of phase weights, floor-enforced
+    """
+    if len(scored_profiles) < min_samples:
+        return None
+
+    scores = [s for s, _ in scored_profiles]
+    sorted_scores = sorted(scores)
+    n = len(sorted_scores)
+
+    # Median
+    if n % 2 == 1:
+        median = sorted_scores[n // 2]
+    else:
+        median = (sorted_scores[n // 2 - 1] + sorted_scores[n // 2]) / 2.0
+
+    # Standard deviation
+    mean = sum(scores) / n
+    variance = sum((s - mean) ** 2 for s in scores) / n
+    stdev = variance ** 0.5
+
+    # Compute per-profile contribution weights
+    contributions: list[float] = []
+    for score, _ in scored_profiles:
+        if stdev < 0.01:
+            # All scores essentially identical — equal contribution
+            contributions.append(1.0)
+        else:
+            # Z-score above median: only above-median optimizations contribute
+            contributions.append(max(0.0, (score - median) / stdev))
+
+    total_contribution = sum(contributions)
+    if total_contribution < 1e-9:
+        # All below or at median (degenerate) — fall back to equal weighting
+        contributions = [1.0] * len(scored_profiles)
+        total_contribution = float(len(scored_profiles))
+
+    # Collect all phase names across all profiles
+    all_phases: set[str] = set()
+    for _, pw_json in scored_profiles:
+        if isinstance(pw_json, dict):
+            all_phases.update(pw_json.keys())
+
+    if not all_phases:
+        return None
+
+    # Compute score-weighted mean per phase
+    result: dict[str, PhaseWeights] = {}
+    for phase in all_phases:
+        w_topic = 0.0
+        w_transform = 0.0
+        w_output = 0.0
+        w_pattern = 0.0
+        phase_contribution = 0.0
+
+        for (_, pw_json), contribution in zip(scored_profiles, contributions):
+            if not isinstance(pw_json, dict):
+                continue
+            phase_dict = pw_json.get(phase)
+            if not isinstance(phase_dict, dict):
+                continue
+
+            pw = PhaseWeights.from_dict(phase_dict)
+            w_topic += pw.w_topic * contribution
+            w_transform += pw.w_transform * contribution
+            w_output += pw.w_output * contribution
+            w_pattern += pw.w_pattern * contribution
+            phase_contribution += contribution
+
+        if phase_contribution < 1e-9:
+            continue
+
+        target = PhaseWeights(
+            w_topic=w_topic / phase_contribution,
+            w_transform=w_transform / phase_contribution,
+            w_output=w_output / phase_contribution,
+            w_pattern=w_pattern / phase_contribution,
+        )
+        result[phase] = target.enforce_floor()
+
+    return result if result else None
 
 
 # ---------------------------------------------------------------------------

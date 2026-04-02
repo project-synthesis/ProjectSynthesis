@@ -416,3 +416,142 @@ class TestConstants:
 
     def test_decay_rate(self):
         assert DECAY_RATE == 0.01
+
+    def test_score_adaptation_min_samples(self):
+        from app.services.taxonomy.fusion import SCORE_ADAPTATION_MIN_SAMPLES
+
+        assert SCORE_ADAPTATION_MIN_SAMPLES == 10
+
+
+# ---------------------------------------------------------------------------
+# Score-correlated target computation
+# ---------------------------------------------------------------------------
+
+
+class TestScoreCorrelatedTarget:
+    """compute_score_correlated_target: score-weighted optimal profile."""
+
+    def _default_profile(self) -> dict[str, dict[str, float]]:
+        return {
+            "analysis": {"w_topic": 0.60, "w_transform": 0.15, "w_output": 0.10, "w_pattern": 0.15},
+            "optimization": {"w_topic": 0.20, "w_transform": 0.35, "w_output": 0.25, "w_pattern": 0.20},
+            "pattern_injection": {"w_topic": 0.25, "w_transform": 0.25, "w_output": 0.20, "w_pattern": 0.30},
+            "scoring": {"w_topic": 0.15, "w_transform": 0.20, "w_output": 0.45, "w_pattern": 0.20},
+        }
+
+    def test_below_min_samples_returns_none(self):
+        """Returns None when fewer than min_samples profiles."""
+        from app.services.taxonomy.fusion import compute_score_correlated_target
+
+        profiles = [(7.0, self._default_profile())] * 5
+        assert compute_score_correlated_target(profiles, min_samples=10) is None
+
+    def test_empty_list_returns_none(self):
+        from app.services.taxonomy.fusion import compute_score_correlated_target
+
+        assert compute_score_correlated_target([]) is None
+
+    def test_uniform_scores_returns_average(self):
+        """When all scores are identical, target = unweighted average."""
+        from app.services.taxonomy.fusion import compute_score_correlated_target
+
+        profiles = [(5.0, self._default_profile())] * 15
+        result = compute_score_correlated_target(profiles)
+        assert result is not None
+        # With identical profiles, target should match input
+        pw = result["analysis"]
+        assert abs(pw.w_topic - 0.60) < 0.02
+        assert abs(pw.total - 1.0) < 1e-6
+
+    def test_high_scorer_dominates(self):
+        """Optimization with highest score should dominate the target."""
+        from app.services.taxonomy.fusion import compute_score_correlated_target
+
+        default = self._default_profile()
+        alt = {
+            "analysis": {"w_topic": 0.20, "w_transform": 0.40, "w_output": 0.20, "w_pattern": 0.20},
+            "optimization": {"w_topic": 0.20, "w_transform": 0.35, "w_output": 0.25, "w_pattern": 0.20},
+            "pattern_injection": {"w_topic": 0.25, "w_transform": 0.25, "w_output": 0.20, "w_pattern": 0.30},
+            "scoring": {"w_topic": 0.15, "w_transform": 0.20, "w_output": 0.45, "w_pattern": 0.20},
+        }
+        # 9 mediocre with defaults, 1 excellent with alt profile
+        profiles = [(3.0, default)] * 9 + [(10.0, alt)]
+        result = compute_score_correlated_target(profiles)
+        assert result is not None
+        # The 10.0 scorer's w_topic=0.20 should pull analysis target below 0.60
+        assert result["analysis"].w_topic < 0.55
+        # The 10.0 scorer's w_transform=0.40 should pull analysis target above 0.15
+        assert result["analysis"].w_transform > 0.20
+
+    def test_multiple_phases_present(self):
+        """All phases in input appear in output."""
+        from app.services.taxonomy.fusion import compute_score_correlated_target
+
+        profiles = [(7.0, self._default_profile())] * 12
+        result = compute_score_correlated_target(profiles)
+        assert result is not None
+        assert "analysis" in result
+        assert "optimization" in result
+        assert "pattern_injection" in result
+        assert "scoring" in result
+
+    def test_result_sums_to_one(self):
+        """Target weights sum to 1.0 for each phase."""
+        from app.services.taxonomy.fusion import compute_score_correlated_target
+
+        profiles = [(8.0, self._default_profile())] * 10
+        result = compute_score_correlated_target(profiles)
+        assert result is not None
+        for phase, pw in result.items():
+            assert abs(pw.total - 1.0) < 1e-6, f"{phase}: total={pw.total}"
+
+    def test_respects_weight_floor(self):
+        """Target weights respect WEIGHT_FLOOR."""
+        from app.services.taxonomy.fusion import WEIGHT_FLOOR, compute_score_correlated_target
+
+        # Extreme profile with near-zero weights
+        extreme = {
+            "analysis": {"w_topic": 0.97, "w_transform": 0.01, "w_output": 0.01, "w_pattern": 0.01},
+        }
+        profiles = [(9.0, extreme)] * 15
+        result = compute_score_correlated_target(profiles)
+        assert result is not None
+        pw = result["analysis"]
+        assert pw.w_transform >= WEIGHT_FLOOR - 1e-9
+        assert pw.w_output >= WEIGHT_FLOOR - 1e-9
+        assert pw.w_pattern >= WEIGHT_FLOOR - 1e-9
+
+    def test_below_median_excluded(self):
+        """Below-median optimizations should not influence the target."""
+        from app.services.taxonomy.fusion import compute_score_correlated_target
+
+        low_profile = {
+            "analysis": {"w_topic": 0.10, "w_transform": 0.70, "w_output": 0.10, "w_pattern": 0.10},
+        }
+        high_profile = {
+            "analysis": {"w_topic": 0.60, "w_transform": 0.15, "w_output": 0.10, "w_pattern": 0.15},
+        }
+        # 5 low scorers with extreme profile, 5 high scorers with default
+        profiles = [(2.0, low_profile)] * 5 + [(9.0, high_profile)] * 5
+        result = compute_score_correlated_target(profiles)
+        assert result is not None
+        # Target should be dominated by the high-scoring default-like profile,
+        # not pulled toward the low-scoring extreme profile
+        assert result["analysis"].w_topic > 0.45
+
+    def test_missing_phase_in_some_profiles(self):
+        """Profiles with missing phases contribute only to phases they contain."""
+        from app.services.taxonomy.fusion import compute_score_correlated_target
+
+        full = self._default_profile()
+        partial = {"analysis": {"w_topic": 0.30, "w_transform": 0.30, "w_output": 0.20, "w_pattern": 0.20}}
+        # Mix of full and partial profiles at the same score
+        profiles = [(7.0, full)] * 6 + [(7.0, partial)] * 6
+        result = compute_score_correlated_target(profiles)
+        assert result is not None
+        assert "analysis" in result
+        # optimization appears (from the 6 full profiles that have it)
+        assert "optimization" in result
+        # analysis target should blend both full and partial contributions
+        # (full has w_topic=0.60, partial has w_topic=0.30)
+        assert result["analysis"].w_topic < 0.55  # pulled down by partial

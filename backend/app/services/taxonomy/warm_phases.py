@@ -1282,6 +1282,63 @@ async def phase_refresh(
     except Exception as decay_exc:
         logger.debug("Phase weight decay failed (non-fatal): %s", decay_exc)
 
+    # Score-correlated phase weight adaptation (Option 3)
+    # Queries recent scored optimizations, computes score-weighted optimal
+    # profile from above-median results, adapts current weights toward it.
+    # Runs AFTER decay so that adaptation (alpha=0.05) dominates over
+    # decay (rate=0.01) when there is strong quality signal.
+    try:
+        from app.services.taxonomy.fusion import (
+            SCORE_ADAPTATION_MIN_SAMPLES,
+            adapt_weights,
+            compute_score_correlated_target,
+        )
+
+        scored_q = await db.execute(
+            select(
+                Optimization.overall_score,
+                Optimization.phase_weights_json,
+            ).where(
+                Optimization.overall_score.isnot(None),
+                Optimization.phase_weights_json.isnot(None),
+                Optimization.status == "completed",
+            ).order_by(
+                Optimization.created_at.desc(),
+            ).limit(200)
+        )
+        scored_rows = scored_q.all()
+
+        if len(scored_rows) >= SCORE_ADAPTATION_MIN_SAMPLES:
+            scored_profiles = [
+                (float(row[0]), row[1])
+                for row in scored_rows
+            ]
+            target_profiles = compute_score_correlated_target(scored_profiles)
+
+            if target_profiles:
+                prefs_svc_sc = PreferencesService()
+                prefs_sc = prefs_svc_sc.load()
+                phase_weights_sc = prefs_sc.get("phase_weights", {})
+                adapted = False
+
+                for phase_name_sc, target_pw in target_profiles.items():
+                    current_dict_sc = phase_weights_sc.get(phase_name_sc, {})
+                    current_pw_sc = PhaseWeights.from_dict(current_dict_sc)
+                    updated_pw_sc = adapt_weights(current_pw_sc, target_pw)
+                    new_dict = updated_pw_sc.to_dict()
+                    if new_dict != phase_weights_sc.get(phase_name_sc):
+                        phase_weights_sc[phase_name_sc] = new_dict
+                        adapted = True
+
+                if adapted:
+                    prefs_svc_sc.patch({"phase_weights": phase_weights_sc})
+                    logger.info(
+                        "Score-correlated adaptation applied from %d scored optimizations",
+                        len(scored_rows),
+                    )
+    except Exception as sc_exc:
+        logger.debug("Score-correlated adaptation failed (non-fatal): %s", sc_exc)
+
     # --- Cross-cluster global_source_count computation ---
     # For each MetaPattern, count how many DISTINCT clusters contain a
     # semantically similar pattern (cosine >= 0.82). This enables

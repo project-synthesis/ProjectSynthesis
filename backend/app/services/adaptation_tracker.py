@@ -164,41 +164,6 @@ class AdaptationTracker:
             )
         return is_degenerate
 
-    async def update_phase_weights(
-        self,
-        rating: str,
-        phase_weights_used: dict[str, dict[str, float]],
-    ) -> None:
-        """Adapt phase weights based on feedback.
-
-        On positive feedback (thumbs_up), shift weights toward the
-        profile that produced the result via EMA. On negative,
-        no shift (only positive reinforcement to prevent oscillation).
-
-        Args:
-            rating: "thumbs_up" or "thumbs_down"
-            phase_weights_used: dict mapping phase name to weight dict
-                e.g. {"pattern_injection": {"w_topic": 0.25, ...}}
-        """
-        if rating != "thumbs_up":
-            return
-
-        from app.services.preferences import PreferencesService
-        from app.services.taxonomy.fusion import PhaseWeights, adapt_weights
-
-        prefs_svc = PreferencesService()
-        current_prefs = prefs_svc.load()
-        current_phase_weights = current_prefs.get("phase_weights", {})
-
-        for phase, weights_dict in phase_weights_used.items():
-            current_dict = current_phase_weights.get(phase, {})
-            current = PhaseWeights.from_dict(current_dict)
-            successful = PhaseWeights.from_dict(weights_dict)
-            updated = adapt_weights(current, successful)
-            current_phase_weights[phase] = updated.to_dict()
-
-        prefs_svc.patch({"phase_weights": current_phase_weights})
-
     async def cleanup_orphaned_affinities(self) -> int:
         """Remove StrategyAffinity rows for strategies no longer on disk.
 
