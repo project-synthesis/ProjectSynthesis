@@ -789,9 +789,14 @@ class TaxonomyEngine:
             )
 
         # DBCV ramp: linear activation from 5 to 25 active nodes.
-        # Below 5 nodes the taxonomy is too young for validity metrics.
-        n_active = len(metrics)
-        ramp = min(1.0, max(0.0, (n_active - 5) / 20))
+        # Only activate when silhouette has actually been computed (> 0).
+        # Uninitialized silhouette (0.0) creates dead weight that
+        # artificially depresses Q_system by up to 15%.
+        if silhouette > 0.0:
+            n_active = len(metrics)
+            ramp = min(1.0, max(0.0, (n_active - 5) / 20))
+        else:
+            ramp = 0.0
         weights = QWeights.from_ramp(ramp)
 
         return compute_q_system(metrics, weights, dbcv=silhouette)

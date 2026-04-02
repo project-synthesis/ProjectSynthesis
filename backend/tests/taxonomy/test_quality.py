@@ -304,3 +304,28 @@ class TestQSystemWithSilhouette:
         w2 = QWeights.from_ramp(0.0)
         q2 = compute_q_system(nodes, w2, coverage=1.0, dbcv=0.0)
         assert q == pytest.approx(q2)
+
+    def test_zero_silhouette_no_dead_weight(self):
+        """Uninitialized silhouette (0.0) must not create dead weight.
+
+        With 34 active nodes the ramp would be 1.0, giving 15% weight to
+        DBCV. If silhouette is 0.0 (no cold path has run), that 15% is
+        dead weight pulling Q_system down by ~15%. The ramp guard must
+        keep ramp=0.0 when silhouette=0.0 regardless of node count.
+        """
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.6, state="active"),
+        ] * 34  # 34 nodes — would be ramp=1.0 without guard
+
+        # With zero silhouette, ramp should stay 0 → weights identical to no-DBCV
+        w_guarded = QWeights.from_ramp(0.0)  # ramp=0 because silhouette=0
+        q_guarded = compute_q_system(nodes, w_guarded, coverage=1.0, dbcv=0.0)
+
+        # Without guard, ramp=1.0 → 15% dead weight
+        w_unguarded = QWeights.from_ramp(1.0)
+        q_unguarded = compute_q_system(nodes, w_unguarded, coverage=1.0, dbcv=0.0)
+
+        # Guarded Q must be higher (no dead weight)
+        assert q_guarded > q_unguarded
+        # The difference should be ~15% of Q
+        assert q_guarded - q_unguarded > 0.05

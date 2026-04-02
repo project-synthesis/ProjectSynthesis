@@ -165,7 +165,7 @@ export function assessTaxonomyHealth(stats: ClusterStats | null): HealthAssessme
   parts.push(`${counts.join(', ')} group${total !== 1 ? 's' : ''}`);
 
   // Quality insight
-  if (coh >= COHERENCE_GOOD && sep >= SEPARATION_GOOD) {
+  if (q >= Q_GOOD && coh >= COHERENCE_GOOD && sep >= SEPARATION_GOOD) {
     parts.push('patterns are well-grouped and clearly distinct');
   } else if (issues.length > 0) {
     parts.push(issues[0]);
