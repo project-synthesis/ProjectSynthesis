@@ -91,6 +91,8 @@ class TaxonomyEngine:
         self._provider_resolver = provider_resolver
         self._prompt_loader = PromptLoader(PROMPTS_DIR)
         self._embedding_index = EmbeddingIndex(dim=384)
+        from app.services.taxonomy.transformation_index import TransformationIndex
+        self._transformation_index = TransformationIndex(dim=384)
         # Lock gates concurrent hot-path writes to shared centroid state.
         self._lock: asyncio.Lock = asyncio.Lock()
         # Separate lock for warm/cold path deduplication (Spec Section 2.6).
@@ -116,6 +118,12 @@ class TaxonomyEngine:
     def embedding_index(self) -> EmbeddingIndex:
         """In-memory embedding search index for PromptCluster centroids."""
         return self._embedding_index
+
+    @property
+    def transformation_index(self):
+        """In-memory transformation vector search index."""
+        from app.services.taxonomy.transformation_index import TransformationIndex
+        return self._transformation_index
 
     # ------------------------------------------------------------------
     # Public hot-path entry point
@@ -173,6 +181,18 @@ class TaxonomyEngine:
             embedding = await self._embedding.aembed_single(opt.raw_prompt)
             opt.embedding = embedding.astype(np.float32).tobytes()
 
+            # 1b. Embed optimized_prompt (Phase 1: multi-embedding)
+            if opt.optimized_prompt:
+                optimized_emb = await self._embedding.aembed_single(opt.optimized_prompt)
+                opt.optimized_embedding = optimized_emb.astype(np.float32).tobytes()
+
+                # 1c. Compute transformation vector: direction of improvement
+                transform = optimized_emb - embedding  # raw_emb already computed
+                t_norm = np.linalg.norm(transform)
+                if t_norm > 1e-9:
+                    transform = transform / t_norm
+                opt.transformation_embedding = transform.astype(np.float32).tobytes()
+
             # 2. Find or create PromptCluster
             # Use the RESOLVED domain (opt.domain) for cluster assignment — this
             # maps to a known domain node label. The raw analyzer output (domain_raw)
@@ -209,6 +229,14 @@ class TaxonomyEngine:
                         cluster.label,
                     )
             opt.cluster_id = cluster.id
+
+            # Update TransformationIndex with this optimization's transformation
+            if opt.transformation_embedding and hasattr(self, '_transformation_index'):
+                try:
+                    transform_vec = np.frombuffer(opt.transformation_embedding, dtype=np.float32)
+                    await self._transformation_index.upsert(cluster.id, transform_vec)
+                except Exception:
+                    pass  # non-fatal
 
             # 3. Extract meta-patterns
             meta_texts = await extract_meta_patterns(
