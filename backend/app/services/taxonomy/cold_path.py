@@ -113,7 +113,7 @@ async def execute_cold_path(
     # Step 1: Compute Q_before from current active nodes
     # ------------------------------------------------------------------
     q_before_result = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     q_before_nodes = list(q_before_result.scalars().all())
     q_before = engine._compute_q_from_nodes(q_before_nodes)
@@ -518,7 +518,7 @@ async def execute_cold_path(
     # Step 20: Compute per-node separation
     # ------------------------------------------------------------------
     active_result = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     active_after = list(active_result.scalars().all())
 

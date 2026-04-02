@@ -60,21 +60,12 @@ from app.utils.text_cleanup import parse_domain
 logger = logging.getLogger(__name__)
 
 
-def _utcnow() -> datetime:
-    """Naive UTC timestamp — matches SQLAlchemy DateTime() round-trip on SQLite."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-# ---------------------------------------------------------------------------
-# Constants — warm path operational limits
-# (Matching thresholds imported from matching.py and re-exported for
-#  backward compatibility)
-# ---------------------------------------------------------------------------
-
-DEADLOCK_BREAKER_THRESHOLD = 5  # consecutive rejected cycles before forcing
-SPLIT_COHERENCE_FLOOR = 0.5  # below this coherence, node is a split candidate
-SPLIT_MIN_MEMBERS = 6  # minimum members before a node can be split
-
-
+from app.services.taxonomy._constants import (  # noqa: E402
+    DEADLOCK_BREAKER_THRESHOLD,
+    SPLIT_COHERENCE_FLOOR,
+    SPLIT_MIN_MEMBERS,
+    _utcnow,
+)
 from app.services.taxonomy.cold_path import ColdPathResult, execute_cold_path
 from app.services.taxonomy.warm_path import WarmPathResult, execute_warm_path
 
@@ -114,10 +105,7 @@ class TaxonomyEngine:
         self._lock: asyncio.Lock = asyncio.Lock()
         # Separate lock for warm/cold path deduplication (Spec Section 2.6).
         self._warm_path_lock: asyncio.Lock = asyncio.Lock()
-        # Deadlock breaker counter (Spec Section 2.5).
-        # Legacy counter — still used by warm_phases.phase_audit().
-        self._consecutive_rejected_cycles: int = 0
-        # Per-phase rejection counters — used by warm_path orchestrator.
+        # Per-phase rejection counters (Spec Section 2.5) — used by warm_path orchestrator.
         self._phase_rejection_counters: dict[str, int] = {}
         # Warm-path age counter for adaptive epsilon tolerance.
         self._warm_path_age: int = 0
@@ -1464,9 +1452,11 @@ class TaxonomyEngine:
         """Create a warm-path snapshot with current metrics."""
         from app.services.taxonomy.snapshot import create_snapshot
 
-        # Load active nodes for metrics
+        # Load non-domain/non-archived nodes for metrics (Fix #10)
         result = await db.execute(
-            select(PromptCluster).where(PromptCluster.state == "active")
+            select(PromptCluster).where(
+                PromptCluster.state.notin_(["domain", "archived"])
+            )
         )
         active_nodes = list(result.scalars().all())
 

@@ -26,9 +26,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import PromptCluster
+from app.services.taxonomy._constants import DEADLOCK_BREAKER_THRESHOLD
 from app.services.taxonomy.quality import is_non_regressive
 from app.services.taxonomy.warm_phases import (
-    DEADLOCK_BREAKER_THRESHOLD,
     AuditResult,
     DiscoverResult,
     PhaseResult,

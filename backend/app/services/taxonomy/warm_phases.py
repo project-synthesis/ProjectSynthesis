@@ -56,23 +56,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants — warm path operational limits
-# ---------------------------------------------------------------------------
-
-DEADLOCK_BREAKER_THRESHOLD = 5  # consecutive rejected cycles before forcing
-SPLIT_COHERENCE_FLOOR = 0.5    # below this coherence, node is a split candidate
-SPLIT_MIN_MEMBERS = 6          # minimum members before a node can be split
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _utcnow() -> datetime:
-    """Naive UTC timestamp -- matches SQLAlchemy DateTime() round-trip on SQLite."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from app.services.taxonomy._constants import (
+    DEADLOCK_BREAKER_THRESHOLD,
+    SPLIT_COHERENCE_FLOOR,
+    SPLIT_MIN_MEMBERS,
+    _utcnow,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +351,7 @@ async def phase_split_emerge(
 
     # Load active nodes
     active_q = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     active_nodes = list(active_q.scalars().all())
 
@@ -793,7 +782,7 @@ async def phase_split_emerge(
 
     # Compute Q_after for the phase result
     after_q_result = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     active_after = list(after_q_result.scalars().all())
     q_after = engine._compute_q_from_nodes(active_after)
@@ -832,7 +821,7 @@ async def phase_merge(
 
     # Load active nodes
     active_q = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     active_nodes = list(active_q.scalars().all())
 
@@ -910,7 +899,7 @@ async def phase_merge(
 
         # Reload active nodes (may have changed from global merge)
         current_q = await db.execute(
-            select(PromptCluster).where(PromptCluster.state == "active")
+            select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
         )
         current_active = list(current_q.scalars().all())
 
@@ -983,7 +972,7 @@ async def phase_merge(
                             embedding_index_mutations += 2
 
             # Signal B: high centroid similarity within domain
-            remaining = [s for s in siblings if s.state == "active"]
+            remaining = [s for s in siblings if s.state not in ("domain", "archived")]
             if len(remaining) >= 2:
                 merged_this_domain = False
                 for i in range(len(remaining)):
@@ -1004,8 +993,8 @@ async def phase_merge(
                         except (ValueError, TypeError):
                             continue
                         both_active = (
-                            remaining[i].state == "active"
-                            and remaining[j].state == "active"
+                            remaining[i].state not in ("domain", "archived")
+                            and remaining[j].state not in ("domain", "archived")
                         )
                         combined_mc = max(
                             remaining[i].member_count or 0,
@@ -1061,7 +1050,7 @@ async def phase_merge(
 
     # Compute Q_after
     after_q_result = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     active_after = list(after_q_result.scalars().all())
     q_after = engine._compute_q_from_nodes(active_after)
@@ -1095,7 +1084,7 @@ async def phase_retire(
 
     # Load active nodes
     active_q = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     active_nodes = list(active_q.scalars().all())
 
@@ -1119,7 +1108,7 @@ async def phase_retire(
 
     # Compute Q_after
     after_q_result = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     active_after = list(after_q_result.scalars().all())
     q_after = engine._compute_q_from_nodes(active_after)
@@ -1161,7 +1150,7 @@ async def phase_refresh(
 
         # Load active non-domain nodes
         nodes_q = await db.execute(
-            select(PromptCluster).where(PromptCluster.state == "active")
+            select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
         )
         active_nodes = list(nodes_q.scalars().all())
 
@@ -1324,12 +1313,14 @@ async def phase_audit(
     phase_results: list[PhaseResult],
     q_baseline: float | None,
 ) -> AuditResult:
-    """Compute per-node separation, Q_system, create snapshot, evaluate
-    deadlock breaker, publish events.
+    """Compute per-node separation, final Q_system, create snapshot, publish events.
 
     Fix #13: always increment ``engine._warm_path_age`` unconditionally.
+
+    Note: Quality gating and deadlock breaking are handled per-phase by the
+    orchestrator (warm_path.py). This function only computes the final metrics,
+    creates the audit snapshot, and publishes events.
     """
-    from app.services.taxonomy.quality import is_non_regressive
     from app.services.taxonomy.snapshot import get_latest_snapshot
 
     result = AuditResult()
@@ -1343,76 +1334,12 @@ async def phase_audit(
 
     # Compute per-node separation and Q_final
     active_q = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "active")
+        select(PromptCluster).where(PromptCluster.state.notin_(["domain", "archived"]))
     )
     active_after = list(active_q.scalars().all())
     engine._update_per_node_separation(active_after)
     q_after = engine._compute_q_from_nodes(active_after)
-
-    # Quality gate — if operations regressed Q, roll back
-    q_before = q_baseline if q_baseline is not None else 0.0
-    if total_ops_accepted > 0 and not is_non_regressive(
-        q_before, q_after, engine._warm_path_age
-    ):
-        logger.warning(
-            "Warm path quality regression: Q_before=%.4f Q_after=%.4f "
-            "-- rolling back operations",
-            q_before, q_after,
-        )
-        await db.rollback()
-        q_after = q_before
-        total_ops_accepted = 0
-        all_operations = []
-        # Re-query active nodes after rollback
-        active_q = await db.execute(
-            select(PromptCluster).where(PromptCluster.state == "active")
-        )
-        active_after = list(active_q.scalars().all())
-
     result.q_final = q_after
-
-    # Deadlock breaker (Spec Section 2.5)
-    if total_ops_attempted > 0 and total_ops_accepted == 0:
-        engine._consecutive_rejected_cycles += 1
-    else:
-        engine._consecutive_rejected_cycles = 0
-
-    if engine._consecutive_rejected_cycles >= DEADLOCK_BREAKER_THRESHOLD:
-        logger.warning(
-            "Deadlock breaker triggered after %d consecutive rejected cycles "
-            "-- forcing best single-dimension operation and scheduling cold path",
-            engine._consecutive_rejected_cycles,
-        )
-        result.deadlock_breaker_used = True
-        result.deadlock_breaker_phase = "emerge"
-        engine._consecutive_rejected_cycles = 0
-
-        # Force emerge on unassigned families (cheapest constructive op)
-        fam_result = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.parent_id.is_(None),
-                PromptCluster.state.notin_(["domain", "archived"]),
-            )
-        )
-        unassigned_families = list(fam_result.scalars().all())
-        if len(unassigned_families) >= 3:
-            emerged = await engine._try_emerge_from_families(
-                db, unassigned_families, batch_cluster, max_clusters=1,
-            )
-            total_ops_accepted += len(emerged)
-            all_operations.extend(emerged)
-            if emerged:
-                logger.info(
-                    "Deadlock breaker forced emerge: node=%s",
-                    emerged[0].get("node_id"),
-                )
-
-        # Signal cold-path rebuild needed
-        engine._cold_path_needed = True
-        logger.warning(
-            "Cold path rebuild needed -- caller should invoke "
-            "run_cold_path() with a fresh session"
-        )
 
     # Invalidate stats cache
     engine._invalidate_stats_cache()
