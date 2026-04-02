@@ -18,6 +18,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
+# Module-level counters for health check observability.
+# Increment on provenance failures so the health endpoint can surface
+# injection reliability without querying the DB.
+_injection_provenance_failures: int = 0
+_injection_provenance_successes: int = 0
+
+
+def get_injection_stats() -> dict[str, int]:
+    """Return injection provenance success/failure counts for health reporting."""
+    return {
+        "provenance_successes": _injection_provenance_successes,
+        "provenance_failures": _injection_provenance_failures,
+    }
+
 
 @dataclass
 class InjectedPattern:
@@ -161,6 +175,8 @@ async def auto_inject_patterns(
                 db.add(record)
                 pending.append(record)
             await db.flush()
+            global _injection_provenance_successes  # noqa: PLW0603
+            _injection_provenance_successes += 1
             logger.info(
                 "Injection provenance: %d records for opt=%s clusters=[%s]. trace_id=%s",
                 len(pending), optimization_id[:8],
@@ -173,6 +189,8 @@ async def auto_inject_patterns(
                     db.expunge(record)
                 except Exception:
                     pass
+            global _injection_provenance_failures  # noqa: PLW0603
+            _injection_provenance_failures += 1
             logger.warning(
                 "Injection provenance failed (non-fatal, expunged): %s trace_id=%s",
                 exc, trace_id,

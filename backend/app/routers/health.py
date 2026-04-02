@@ -72,6 +72,10 @@ class HealthResponse(BaseModel):
         default=DOMAIN_COUNT_CEILING,
         description="Maximum allowed domain nodes before new domain creation is suppressed.",
     )
+    injection_stats: dict[str, int] = Field(
+        default_factory=dict,
+        description="Pattern injection provenance success/failure counts since process start.",
+    )
 
 
 @router.get("/health")
@@ -148,6 +152,14 @@ async def health_check(
     except Exception:
         logger.debug("Health check metrics collection failed", exc_info=True)
 
+    # Injection provenance reliability
+    injection_stats: dict[str, int] = {}
+    try:
+        from app.services.pattern_injection import get_injection_stats
+        injection_stats = get_injection_stats()
+    except Exception:
+        pass
+
     return HealthResponse(
         status="healthy" if provider else "degraded",
         version=__version__,
@@ -161,4 +173,5 @@ async def health_check(
         available_tiers=available_tiers,
         domain_count=domain_count,
         domain_ceiling=DOMAIN_COUNT_CEILING,
+        injection_stats=injection_stats,
     )

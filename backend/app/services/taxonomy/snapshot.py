@@ -37,7 +37,6 @@ async def create_snapshot(
     nodes_retired: int = 0,
     nodes_merged: int = 0,
     nodes_split: int = 0,
-    tree_state: dict[str, Any] | None = None,
 ) -> TaxonomySnapshot:
     """Create and persist a TaxonomySnapshot.
 
@@ -54,10 +53,15 @@ async def create_snapshot(
         nodes_retired: Count of nodes retired in this cycle.
         nodes_merged: Count of nodes merged in this cycle.
         nodes_split: Count of nodes split in this cycle.
-        tree_state: Optional dict with full node IDs + parent edges for recovery.
 
     Returns:
         Persisted TaxonomySnapshot with id populated.
+
+    Note:
+        The ``tree_state`` column on the model exists for future tree recovery
+        but is intentionally not populated — recovery uses the live
+        PromptCluster table instead.  The parameter was removed to prevent
+        dead-data accumulation (~50KB per snapshot).
     """
     snap = TaxonomySnapshot(
         trigger=trigger,
@@ -71,7 +75,6 @@ async def create_snapshot(
         nodes_retired=nodes_retired,
         nodes_merged=nodes_merged,
         nodes_split=nodes_split,
-        tree_state=json.dumps(tree_state) if tree_state is not None else None,
     )
     db.add(snap)
     await db.commit()

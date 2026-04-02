@@ -16,6 +16,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from app.services.taxonomy.cluster_meta import ClusterMeta, read_meta, write_meta
 from app.services.taxonomy.embedding_index import EmbeddingIndex
 from app.services.taxonomy.engine import TaxonomyEngine
 from app.services.taxonomy.matching import (
@@ -26,6 +27,7 @@ from app.services.taxonomy.quality import QWeights
 from app.services.taxonomy.sparkline import SparklineData, compute_sparkline_data
 
 __all__ = [
+    "ClusterMeta",
     "EmbeddingIndex",
     "PatternMatch",
     "QWeights",
@@ -34,8 +36,10 @@ __all__ = [
     "TaxonomyMapping",
     "compute_sparkline_data",
     "get_engine",
+    "read_meta",
     "reset_engine",
     "set_engine",
+    "write_meta",
 ]
 
 # ---------------------------------------------------------------------------
