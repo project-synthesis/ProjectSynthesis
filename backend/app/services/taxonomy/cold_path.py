@@ -35,6 +35,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Optimization, PromptCluster
+from app.services.taxonomy._constants import (
+    CLUSTERING_BLEND_W_OPTIMIZED,
+    CLUSTERING_BLEND_W_TRANSFORM,
+)
 from app.services.taxonomy.cluster_meta import read_meta, write_meta
 from app.services.taxonomy.clustering import (
     batch_cluster,
@@ -180,11 +184,24 @@ async def execute_cold_path(
     for i, f in enumerate(valid_families):
         opt_vec = opt_idx.get_vector(f.id) if opt_idx else None
         trans_vec = trans_idx.get_vector(f.id) if trans_idx else None
+
+        # Adaptive blend: downweight optimized signal when output coherence
+        # is low — divergent outputs make the optimized embedding mean
+        # unreliable as a clustering signal.
+        w_opt = CLUSTERING_BLEND_W_OPTIMIZED
+        out_coh = read_meta(f.cluster_metadata).get("output_coherence")
+        if out_coh is not None and out_coh < 0.5:
+            w_opt = CLUSTERING_BLEND_W_OPTIMIZED * max(0.25, out_coh / 0.5)
+        w_raw = 1.0 - w_opt - CLUSTERING_BLEND_W_TRANSFORM
+
         blended_embeddings.append(
             blend_embeddings(
                 raw=embeddings[i],
                 optimized=opt_vec,
                 transformation=trans_vec,
+                w_raw=w_raw,
+                w_optimized=w_opt,
+                w_transform=CLUSTERING_BLEND_W_TRANSFORM,
             )
         )
 
