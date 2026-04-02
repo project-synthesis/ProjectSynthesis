@@ -10,6 +10,13 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - `warm_phases.py` module extracting 7 warm-path phase functions from engine.py monolith — reconcile, split_emerge, merge, retire, refresh, discover, audit — each independently callable with dependency-injected engine and fresh AsyncSession
 - `PhaseResult`, `ReconcileResult`, `RefreshResult`, `DiscoverResult`, `AuditResult` dataclasses for structured phase return values
 
+### Changed
+- `engine.py` refactored to delegate warm and cold path execution to new modules — removed `_run_warm_path_inner()` (~1075 lines) and `_run_cold_path_inner()` (~455 lines), reducing engine.py from 3587 to 2049 lines
+- `run_warm_path()` now accepts `session_factory` (async context manager factory) instead of a single `db` session, enabling per-phase session isolation
+- `run_cold_path()` now delegates to `execute_cold_path()` from cold_path.py
+- `WarmPathResult` and `ColdPathResult` dataclasses moved from engine.py to warm_path.py and cold_path.py respectively, with extended schemas (q_baseline/q_final/phase_results and q_before/q_after/accepted)
+- Added `_phase_rejection_counters` dict attribute to TaxonomyEngine for per-phase deadlock tracking
+
 ### Fixed
 - Cold path now excludes archived clusters from HDBSCAN input — original used `state != "domain"` which included archived (fix #5)
 - Cold path existing-node matching now includes mature/template states — original used `state.in_(["active", "candidate"])` which missed them (fix #6)
