@@ -115,6 +115,7 @@ async def _run_speculative_phase(
         PhaseResult with accepted=True if Q gate passed, False otherwise.
     """
     idx_snapshot = await engine.embedding_index.snapshot()
+    ti_snapshot = await engine._transformation_index.snapshot()
 
     async with session_factory() as db:
         # Load nodes and compute Q_before
@@ -149,6 +150,7 @@ async def _run_speculative_phase(
         else:
             await db.rollback()
             await engine.embedding_index.restore(idx_snapshot)
+            await engine._transformation_index.restore(ti_snapshot)
             phase_result.accepted = False
             logger.warning(
                 "Phase %s rejected (Q regression): Q %.4f -> %.4f",
