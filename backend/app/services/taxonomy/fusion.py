@@ -137,21 +137,21 @@ class PhaseWeights:
 
     @classmethod
     def from_dict(cls, d: dict) -> PhaseWeights:
-        """Construct from a plain dict with keys matching field names."""
+        """Construct from a plain dict. Missing keys default to 0.25."""
         return cls(
-            w_topic=float(d["w_topic"]),
-            w_transform=float(d["w_transform"]),
-            w_output=float(d["w_output"]),
-            w_pattern=float(d["w_pattern"]),
+            w_topic=float(d.get("w_topic", 0.25)),
+            w_transform=float(d.get("w_transform", 0.25)),
+            w_output=float(d.get("w_output", 0.25)),
+            w_pattern=float(d.get("w_pattern", 0.25)),
         )
 
     def to_dict(self) -> dict:
-        """Serialize to a plain dict."""
+        """Serialize to a plain dict with rounded values."""
         return {
-            "w_topic": self.w_topic,
-            "w_transform": self.w_transform,
-            "w_output": self.w_output,
-            "w_pattern": self.w_pattern,
+            "w_topic": round(self.w_topic, 4),
+            "w_transform": round(self.w_transform, 4),
+            "w_output": round(self.w_output, 4),
+            "w_pattern": round(self.w_pattern, 4),
         }
 
 
@@ -359,7 +359,10 @@ async def build_composite_query(
                         Optimization.optimized_embedding.isnot(None),
                         Optimization.status == "completed",
                     )
-                    .order_by(Optimization.created_at.desc())
+                    .order_by(
+                        Optimization.overall_score.desc().nullslast(),
+                        Optimization.created_at.desc(),
+                    )
                     .limit(1)
                 )
                 row = result.scalar_one_or_none()

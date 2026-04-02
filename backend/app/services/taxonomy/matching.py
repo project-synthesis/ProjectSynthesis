@@ -108,7 +108,11 @@ async def match_prompt(
             prompt_text, embedding_service, engine, db,
             topic_embedding=query_emb,
         )
-        weights = PhaseWeights.for_phase("pattern_injection")
+        # Load adapted weights from preferences if available, else defaults
+        from app.services.preferences import PreferencesService
+        prefs = PreferencesService().load()
+        pw_dict = prefs.get("phase_weights", {}).get("pattern_injection", {})
+        weights = PhaseWeights.from_dict(pw_dict) if pw_dict else PhaseWeights.for_phase("pattern_injection")
         search_emb = composite.fuse(weights)
     except Exception:
         pass  # fallback to topic-only
