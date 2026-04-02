@@ -12,7 +12,7 @@ engine state.  The TaxonomyEngine delegates to these functions from
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from sqlalchemy import select
@@ -66,6 +66,7 @@ class PatternMatch:
     similarity: float
     match_level: str  # "family" | "cluster" | "none"
     taxonomy_breadcrumb: list[str] | None = None
+    cross_cluster_patterns: list[MetaPattern] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +106,8 @@ async def match_prompt(
         )
     )
     families = list(result.scalars().all())
+
+    result: PatternMatch | None = None
 
     if families:
         # Build family centroids and load their parent nodes
@@ -172,142 +175,184 @@ async def match_prompt(
 
                     breadcrumb = await build_breadcrumb(db, node) if node else []
 
-                    return PatternMatch(
+                    result = PatternMatch(
                         cluster=node or family,
                         meta_patterns=meta_patterns,
                         similarity=score,
                         match_level="family",
                         taxonomy_breadcrumb=breadcrumb,
                     )
+                    break
 
     # ------------------------------------------------------------------
     # Level 2: Cluster-level fallback
     # ------------------------------------------------------------------
-    node_result = await db.execute(
-        select(PromptCluster).where(
-            PromptCluster.state.in_(["active", "candidate"])
+    if result is None:
+        node_result = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.in_(["active", "candidate"])
+            )
         )
-    )
-    all_nodes = list(node_result.scalars().all())
+        all_nodes = list(node_result.scalars().all())
 
-    if all_nodes:
-        valid_nodes: list[PromptCluster] = []
-        node_centroids: list[np.ndarray] = []
+        if all_nodes:
+            valid_nodes: list[PromptCluster] = []
+            node_centroids: list[np.ndarray] = []
 
-        for n in all_nodes:
-            try:
-                c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
-                if c.shape[0] != query_emb.shape[0]:
+            for n in all_nodes:
+                try:
+                    c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
+                    if c.shape[0] != query_emb.shape[0]:
+                        continue
+                    node_centroids.append(c)
+                    valid_nodes.append(n)
+                except (ValueError, TypeError):
                     continue
-                node_centroids.append(c)
-                valid_nodes.append(n)
-            except (ValueError, TypeError):
-                continue
 
-        skipped_nodes = len(all_nodes) - len(valid_nodes)
-        if skipped_nodes > 0:
-            logger.warning(
-                "match_prompt: skipped %d/%d taxonomy nodes (dimension mismatch or corrupt centroid)",
-                skipped_nodes, len(all_nodes),
-            )
-
-        if node_centroids:
-            matches = EmbeddingService.cosine_search(
-                query_emb, node_centroids, top_k=len(node_centroids)
-            )
-
-            for idx, score in matches:
-                node = valid_nodes[idx]
-                coherence = node.coherence if node.coherence is not None else 0.0
-                # Spec 7.4 strict CANDIDATE_THRESHOLD applies only at family
-                # level. Cluster-level uses adaptive threshold for all node
-                # states — the match is more general (parent cluster context).
-                threshold = suggestion_threshold(
-                    base=CLUSTER_MATCH_THRESHOLD, coherence=coherence
+            skipped_nodes = len(all_nodes) - len(valid_nodes)
+            if skipped_nodes > 0:
+                logger.warning(
+                    "match_prompt: skipped %d/%d taxonomy nodes (dimension mismatch or corrupt centroid)",
+                    skipped_nodes, len(all_nodes),
                 )
 
-                if score >= threshold:
-                    # Aggregate meta-patterns from top-3 child families
-                    # ranked by cosine similarity to query (Spec 7.7).
-                    # Load direct children once (covers both leaf families
-                    # and intermediate nodes in the unified PromptCluster model).
-                    children_result = await db.execute(
-                        select(PromptCluster)
-                        .where(PromptCluster.parent_id == node.id)
-                    )
-                    direct_children = list(children_result.scalars().all())
-                    candidate_families = list(direct_children)
+            if node_centroids:
+                matches = EmbeddingService.cosine_search(
+                    query_emb, node_centroids, top_k=len(node_centroids)
+                )
 
-                    # Also include grandchildren (families under child nodes)
-                    child_node_ids = [cn.id for cn in direct_children]
-                    if child_node_ids:
-                        grandchildren_result = await db.execute(
+                for idx, score in matches:
+                    node = valid_nodes[idx]
+                    coherence = node.coherence if node.coherence is not None else 0.0
+                    # Spec 7.4 strict CANDIDATE_THRESHOLD applies only at family
+                    # level. Cluster-level uses adaptive threshold for all node
+                    # states — the match is more general (parent cluster context).
+                    threshold = suggestion_threshold(
+                        base=CLUSTER_MATCH_THRESHOLD, coherence=coherence
+                    )
+
+                    if score >= threshold:
+                        # Aggregate meta-patterns from top-3 child families
+                        # ranked by cosine similarity to query (Spec 7.7).
+                        # Load direct children once (covers both leaf families
+                        # and intermediate nodes in the unified PromptCluster model).
+                        children_result = await db.execute(
                             select(PromptCluster)
-                            .where(
-                                PromptCluster.parent_id.in_(child_node_ids)
-                            )
+                            .where(PromptCluster.parent_id == node.id)
                         )
-                        candidate_families.extend(
-                            grandchildren_result.scalars().all()
-                        )
+                        direct_children = list(children_result.scalars().all())
+                        candidate_families = list(direct_children)
 
-                    # Rank all candidate families by cosine similarity
-                    # to the query embedding and take top-3
-                    scored_families: list[tuple[PromptCluster, float]] = []
-                    for fam in candidate_families:
-                        try:
-                            fc = np.frombuffer(
-                                fam.centroid_embedding, dtype=np.float32
-                            )
-                            if fc.shape[0] != query_emb.shape[0]:
-                                continue
-                            norm_fc = np.linalg.norm(fc)
-                            norm_q = np.linalg.norm(query_emb)
-                            if norm_fc > 0 and norm_q > 0:
-                                sim = float(
-                                    np.dot(query_emb, fc) / (norm_q * norm_fc)
+                        # Also include grandchildren (families under child nodes)
+                        child_node_ids = [cn.id for cn in direct_children]
+                        if child_node_ids:
+                            grandchildren_result = await db.execute(
+                                select(PromptCluster)
+                                .where(
+                                    PromptCluster.parent_id.in_(child_node_ids)
                                 )
-                                scored_families.append((fam, sim))
-                        except (ValueError, TypeError):
-                            continue
-
-                    scored_families.sort(key=lambda x: x[1], reverse=True)
-                    top_families = [f for f, _ in scored_families[:3]]
-
-                    # Gather meta-patterns from these families
-                    cluster_ids = [f.id for f in top_families]
-                    if cluster_ids:
-                        mp_result = await db.execute(
-                            select(MetaPattern).where(
-                                MetaPattern.cluster_id.in_(cluster_ids)
                             )
+                            candidate_families.extend(
+                                grandchildren_result.scalars().all()
+                            )
+
+                        # Rank all candidate families by cosine similarity
+                        # to the query embedding and take top-3
+                        scored_families: list[tuple[PromptCluster, float]] = []
+                        for fam in candidate_families:
+                            try:
+                                fc = np.frombuffer(
+                                    fam.centroid_embedding, dtype=np.float32
+                                )
+                                if fc.shape[0] != query_emb.shape[0]:
+                                    continue
+                                norm_fc = np.linalg.norm(fc)
+                                norm_q = np.linalg.norm(query_emb)
+                                if norm_fc > 0 and norm_q > 0:
+                                    sim = float(
+                                        np.dot(query_emb, fc) / (norm_q * norm_fc)
+                                    )
+                                    scored_families.append((fam, sim))
+                            except (ValueError, TypeError):
+                                continue
+
+                        scored_families.sort(key=lambda x: x[1], reverse=True)
+                        top_families = [f for f, _ in scored_families[:3]]
+
+                        # Gather meta-patterns from these families
+                        cluster_ids = [f.id for f in top_families]
+                        if cluster_ids:
+                            mp_result = await db.execute(
+                                select(MetaPattern).where(
+                                    MetaPattern.cluster_id.in_(cluster_ids)
+                                )
+                            )
+                            all_meta_patterns = list(mp_result.scalars().all())
+                        else:
+                            all_meta_patterns = []
+
+                        # Deduplicate at cosine 0.82
+                        deduped = _deduplicate_meta_patterns(all_meta_patterns)
+
+                        breadcrumb = await build_breadcrumb(db, node)
+
+                        result = PatternMatch(
+                            cluster=node,
+                            meta_patterns=deduped,
+                            similarity=score,
+                            match_level="cluster",
+                            taxonomy_breadcrumb=breadcrumb,
                         )
-                        all_meta_patterns = list(mp_result.scalars().all())
-                    else:
-                        all_meta_patterns = []
-
-                    # Deduplicate at cosine 0.82
-                    deduped = _deduplicate_meta_patterns(all_meta_patterns)
-
-                    breadcrumb = await build_breadcrumb(db, node)
-
-                    return PatternMatch(
-                        cluster=node,
-                        meta_patterns=deduped,
-                        similarity=score,
-                        match_level="cluster",
-                        taxonomy_breadcrumb=breadcrumb,
-                    )
+                        break
 
     # ------------------------------------------------------------------
-    # No match at any level
+    # No match at any level — create a "none" result
     # ------------------------------------------------------------------
-    return PatternMatch(
-        cluster=None,
-        meta_patterns=[],
-        similarity=0.0,
-        match_level="none",
-    )
+    if result is None:
+        result = PatternMatch(
+            cluster=None,
+            meta_patterns=[],
+            similarity=0.0,
+            match_level="none",
+        )
+
+    # ------------------------------------------------------------------
+    # Cross-cluster patterns: fetch high global_source_count patterns
+    # from ANY cluster, regardless of topic match.
+    # ------------------------------------------------------------------
+    cross_cluster: list[MetaPattern] = []
+    try:
+        from app.services.pipeline_constants import (
+            CROSS_CLUSTER_MAX_PATTERNS,
+            CROSS_CLUSTER_MIN_SOURCE_COUNT,
+        )
+
+        cc_q = await db.execute(
+            select(MetaPattern)
+            .where(
+                MetaPattern.global_source_count >= CROSS_CLUSTER_MIN_SOURCE_COUNT,
+                MetaPattern.embedding.isnot(None),
+            )
+            .order_by(MetaPattern.global_source_count.desc())
+            .limit(CROSS_CLUSTER_MAX_PATTERNS * 2)  # fetch extra for dedup
+        )
+        cc_candidates = list(cc_q.scalars().all())
+
+        # Deduplicate against patterns already collected for the matched cluster
+        existing_ids: set[str] = set()
+        if result and result.meta_patterns:
+            existing_ids = {p.id for p in result.meta_patterns}
+
+        for cp in cc_candidates:
+            if cp.id not in existing_ids and len(cross_cluster) < CROSS_CLUSTER_MAX_PATTERNS:
+                cross_cluster.append(cp)
+                existing_ids.add(cp.id)
+    except Exception as cc_exc:
+        logger.warning("Cross-cluster pattern lookup failed (non-fatal): %s", cc_exc)
+
+    result.cross_cluster_patterns = cross_cluster
+
+    return result
 
 
 def _deduplicate_meta_patterns(
