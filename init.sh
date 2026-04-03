@@ -22,10 +22,10 @@ MCP_PORT=8001
 FRONTEND_PORT=5199
 
 # Graceful shutdown timeout per service (seconds).
-# Backend needs 10s: uvicorn --reload supervisor → worker → async lifespan
-# shutdown (routing stop + extraction tasks 5s wait_for + warm-path timer
-# + strategy file watcher).
-declare -A STOP_TIMEOUT=([backend]=15 [mcp]=5 [frontend]=5)
+# Backend breakdown: uvicorn graceful drain (10s) + lifespan shutdown
+#   Phase 1 SSE drain (0.1s) + Phase 2 bg tasks (2s) + Phase 3 extraction
+#   drain (5s) + Phase 4-5 cleanup (1s) = ~18s total. Add margin.
+declare -A STOP_TIMEOUT=([backend]=25 [mcp]=5 [frontend]=5)
 
 # Startup readiness timeout per service (seconds).
 declare -A READY_TIMEOUT=([backend]=15 [mcp]=10 [frontend]=15)
