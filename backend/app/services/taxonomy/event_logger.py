@@ -122,13 +122,17 @@ class TaxonomyEventLogger:
             except Exception:
                 pass  # Non-fatal
         elif self._cross_process:
-            # MCP server process: forward via HTTP to backend's event bus
+            # MCP server process: forward via HTTP to backend's event bus.
             try:
-                from app.services.event_notification import notify_event_bus
                 import asyncio
-                asyncio.create_task(notify_event_bus("taxonomy_activity", event))
-            except Exception:
-                pass  # Non-fatal
+                loop = asyncio.get_running_loop()
+                from app.services.event_notification import notify_event_bus
+                loop.create_task(notify_event_bus("taxonomy_activity", event))
+                logger.debug("Cross-process event queued: %s/%s", event.get("op"), event.get("decision"))
+            except RuntimeError:
+                logger.debug("Cross-process skip: no running event loop")
+            except Exception as _cp_exc:
+                logger.debug("Cross-process notification failed: %s", _cp_exc)
 
     # ------------------------------------------------------------------
     # Read
