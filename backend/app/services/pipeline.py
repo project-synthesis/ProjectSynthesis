@@ -843,6 +843,16 @@ class PipelineOrchestrator:
                 heuristic_flags=_divergence_flags or None,
                 suggestions=suggestions,
             )
+            # Compute weighted improvement score from deltas
+            if deltas:
+                _imp = (
+                    deltas.get("clarity", 0) * 0.25
+                    + deltas.get("specificity", 0) * 0.25
+                    + deltas.get("structure", 0) * 0.20
+                    + deltas.get("faithfulness", 0) * 0.20
+                    + deltas.get("conciseness", 0) * 0.10
+                )
+                db_opt.improvement_score = round(max(0.0, min(10.0, _imp)), 2)
             db.add(db_opt)
 
             # Track applied patterns in join table (relationship: "applied")
