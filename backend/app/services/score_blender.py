@@ -27,8 +27,16 @@ HEURISTIC_WEIGHTS: dict[str, float] = {
 
 DIMENSIONS = ("clarity", "specificity", "structure", "faithfulness", "conciseness")
 
+DIMENSION_WEIGHTS: dict[str, float] = {
+    "clarity": 0.25,
+    "specificity": 0.25,
+    "structure": 0.20,
+    "faithfulness": 0.20,
+    "conciseness": 0.10,
+}
+
 # Z-score normalization parameters
-ZSCORE_MIN_SAMPLES = 10       # Need at least 10 historical scores
+ZSCORE_MIN_SAMPLES = 999999   # Disabled — re-enable after rubric recalibration baseline
 ZSCORE_MIN_STDDEV = 0.3       # Skip normalization if stddev is tiny (degenerate data)
 ZSCORE_CENTER = 5.5           # Re-center normalized scores around midpoint
 ZSCORE_SPREAD = 1.5           # Map 1 stddev to ±1.5 on the 1-10 scale
@@ -155,8 +163,11 @@ def blend_scores(
                 dim, llm_raw, heur_raw, abs(llm_raw - heur_raw),
             )
 
-    # Overall: arithmetic mean of blended scores
-    overall = round(sum(blended.values()) / len(blended), 2)
+    # Overall: weighted mean — conciseness downweighted to prevent compression
+    overall = round(
+        sum(blended[dim] * DIMENSION_WEIGHTS[dim] for dim in DIMENSIONS),
+        2,
+    )
 
     if divergence_flags:
         logger.warning(
