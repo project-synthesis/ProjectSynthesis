@@ -53,20 +53,22 @@ class HeuristicScorer:
         """Score prompt structure based on formatting indicators.
 
         Scoring:
-        - Baseline: 3.0
-        - Markdown headers (## / # lines): +2 for ≥2, +1 for exactly 1
-        - List items (- / * / numbered): +1.5 for ≥2 items, +0.5 for 1 item
+        - Baseline: 4.0
+        - Markdown headers (## / # lines): +2.5 for ≥3, +2.0 for ≥2, +1.0 for exactly 1
+        - List items (- / * / numbered): +2.0 for ≥4 items, +1.5 for ≥2 items, +0.5 for 1 item
         - XML-style tags (<tag> or </tag>): +1 for ≥2 distinct uses
         - Output format mention (output / format / return / json / schema): +1
 
         Result is capped at 10.0.
         """
-        score = 3.0
+        score = 4.0
 
         # Headers: lines that start with one or more '#' characters
         headers = re.findall(r"(?m)^#{1,6}\s+\S", prompt)
         n_headers = len(headers)
-        if n_headers >= 2:
+        if n_headers >= 3:
+            score += 2.5
+        elif n_headers >= 2:
             score += 2.0
         elif n_headers == 1:
             score += 1.0
@@ -74,7 +76,9 @@ class HeuristicScorer:
         # List items: lines starting with '-', '*', '+', or a digit followed by '.'
         list_items = re.findall(r"(?m)^\s*[-*+]\s+\S|^\s*\d+\.\s+\S", prompt)
         n_items = len(list_items)
-        if n_items >= 2:
+        if n_items >= 4:
+            score += 2.0
+        elif n_items >= 2:
             score += 1.5
         elif n_items == 1:
             score += 0.5
@@ -96,15 +100,11 @@ class HeuristicScorer:
 
     @staticmethod
     def heuristic_conciseness(prompt: str) -> float:
-        """Score prompt conciseness via type-token ratio and filler detection.
+        """Score prompt conciseness as information density.
 
-        Scoring:
-        - Base: 5.0
-        - Type-Token Ratio (unique words / total words): adjust proportionally
-          relative to 0.6 midpoint — higher TTR → higher score
-        - Filler phrases: −0.8 per detected filler (cumulative)
-
-        Result is clamped to [1.0, 10.0].
+        Instead of penalizing length, measures how much of the content
+        contributes useful information. A long, structured prompt with
+        high information density scores well.
         """
         fillers = [
             r"\bplease note that\b",
@@ -125,16 +125,21 @@ class HeuristicScorer:
         words = re.findall(r"\b[a-zA-Z']+\b", prompt.lower())
         total = len(words)
         if total == 0:
-            return 5.0
+            return 6.0
 
         unique = len(set(words))
-        ttr = unique / total  # 0..1
+        ttr = unique / total
 
-        # Adjust from base 5.0 proportionally: TTR of 0.6 → no adjustment,
-        # higher → bonus, lower → penalty (scaled by 5 to give ±range)
-        score = 5.0 + (ttr - 0.6) * 5.0
+        # Base 6.0 + TTR adjustment (0.5 midpoint for long prompts)
+        score = 6.0 + (ttr - 0.5) * 4.0
 
-        # Penalise filler phrases
+        # Structural density bonus: headers and lists compress information
+        headers = len(re.findall(r"(?m)^#{1,6}\s+\S", prompt))
+        lists = len(re.findall(r"(?m)^\s*[-*+]\s+\S|^\s*\d+\.\s+\S", prompt))
+        if headers >= 2 and lists >= 2:
+            score += 1.0
+
+        # Filler penalty
         for pattern in fillers:
             matches = re.findall(pattern, prompt, re.IGNORECASE)
             score -= 0.8 * len(matches)
@@ -168,7 +173,7 @@ class HeuristicScorer:
         hits = sum(
             1 for pattern, flags in checks if re.search(pattern, prompt, flags)
         )
-        score = 2.0 + hits * 1.3
+        score = 2.0 + hits * 1.5
         return round(max(1.0, min(10.0, score)), 2)
 
     @staticmethod
@@ -193,14 +198,14 @@ class HeuristicScorer:
         # text and would drag the score below 3.0 unfairly.
         flesch = max(0.0, min(100.0, flesch))
 
-        # Map Flesch score (0-100) to our scale (3-8)
+        # Map Flesch score (0-100) to our scale (3-9)
         # Higher Flesch = easier to read = more clear
-        score = 3.0 + (flesch / 100.0) * 5.0
+        score = 3.0 + (flesch / 100.0) * 6.0
 
         # Structural clarity bonus: well-organized prompts with headers and
         # lists are clear regardless of readability score.
         if re.search(r"(?m)^#{1,3}\s+\S", prompt):
-            score += 1.0  # Has markdown headers
+            score += 1.5  # Has markdown headers
         if re.search(r"(?m)^\s*[-*]\s+\S", prompt):
             score += 0.5  # Has bullet points
 
