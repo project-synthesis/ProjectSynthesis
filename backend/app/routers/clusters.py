@@ -562,7 +562,7 @@ async def backfill_scores(
 
 @router.get("/api/clusters/activity", response_model=ActivityResponse)
 async def get_cluster_activity(
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=200),
     path: str | None = Query(None, pattern="^(hot|warm|cold)$"),
     op: str | None = Query(None),
     errors_only: bool = Query(False),

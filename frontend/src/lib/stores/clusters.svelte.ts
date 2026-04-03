@@ -8,8 +8,9 @@
 import {
   matchPattern, getClusterDetail, getClusterTree, getClusterStats,
   getClusterTemplates, getClusterSimilarityEdges, getClusterInjectionEdges,
+  getClusterActivity,
   type ClusterMatchResponse, type ClusterDetail, type ClusterNode, type ClusterStats,
-  type SimilarityEdge, type InjectionEdge,
+  type SimilarityEdge, type InjectionEdge, type TaxonomyActivityEvent,
 } from '$lib/api/clusters';
 
 /** A node is orphaned when it has no members and no usage — its optimizations
@@ -288,6 +289,34 @@ class ClusterStore {
     this._lastLength = 0;
   }
 
+  // Activity panel state
+  activityEvents = $state<TaxonomyActivityEvent[]>([]);
+  activityOpen = $state(false);
+  activityLoading = $state(false);
+
+  pushActivityEvent(event: TaxonomyActivityEvent): void {
+    this.activityEvents = [event, ...this.activityEvents].slice(0, 200);
+  }
+
+  toggleActivity(): void {
+    this.activityOpen = !this.activityOpen;
+    if (this.activityOpen && this.activityEvents.length === 0) {
+      this.loadActivity();
+    }
+  }
+
+  async loadActivity(params?: { path?: string; op?: string }): Promise<void> {
+    this.activityLoading = true;
+    try {
+      const resp = await getClusterActivity({ limit: 200, ...params });
+      this.activityEvents = resp.events;
+    } catch (err) {
+      console.warn('Activity load failed:', err);
+    } finally {
+      this.activityLoading = false;
+    }
+  }
+
   /** @internal Test-only: restore initial state */
   _reset() {
     this.suggestion = null;
@@ -307,6 +336,9 @@ class ClusterStore {
     this.showInjectionEdges = false;
     this.highlightedDomain = null;
     this.stateFilter = 'active';
+    this.activityEvents = [];
+    this.activityOpen = false;
+    this.activityLoading = false;
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     if (this._dismissTimer) clearTimeout(this._dismissTimer);
     this._debounceTimer = null;

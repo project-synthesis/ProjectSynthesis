@@ -641,6 +641,11 @@ async def execute_cold_path(
                     "clusters_input": len(families),
                     "hdbscan_clusters": cluster_result.n_clusters,
                     "accepted": False,
+                    "blended_weights": {
+                        "raw": round(1.0 - CLUSTERING_BLEND_W_OPTIMIZED - CLUSTERING_BLEND_W_TRANSFORM, 3),
+                        "optimized": round(CLUSTERING_BLEND_W_OPTIMIZED, 3),
+                        "transform": round(CLUSTERING_BLEND_W_TRANSFORM, 3),
+                    },
                 },
             )
         except RuntimeError:
@@ -813,6 +818,7 @@ async def execute_cold_path(
                 "hdbscan_clusters": cluster_result.n_clusters,
                 "nodes_created": nodes_created,
                 "nodes_updated": nodes_updated,
+                "mega_splits": 0,
                 "blended_weights": {
                     "raw": round(1.0 - CLUSTERING_BLEND_W_OPTIMIZED - CLUSTERING_BLEND_W_TRANSFORM, 3),
                     "optimized": round(CLUSTERING_BLEND_W_OPTIMIZED, 3),

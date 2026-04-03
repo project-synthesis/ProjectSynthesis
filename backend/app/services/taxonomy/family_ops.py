@@ -353,6 +353,8 @@ async def assign_cluster(
                     if (task_type and matched.task_type and task_type != matched.task_type)
                     else 0.0
                 )
+                _member_ct = matched.member_count or 1
+                _size_pressure = round(0.02 * max(0, (_member_ct - 15) / 10) ** 2, 4) if _member_ct > 15 else 0.0
                 _candidates_log.append({
                     "id": matched.id,
                     "label": matched.label,
@@ -364,6 +366,7 @@ async def assign_cluster(
                         "coherence": _coh_pen,
                         "output_coh": _out_pen,
                         "task_type": _type_pen,
+                        "size_pressure": _size_pressure,
                     },
                 })
 

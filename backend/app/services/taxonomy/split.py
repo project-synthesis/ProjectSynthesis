@@ -103,6 +103,7 @@ async def split_cluster(
 
     # HDBSCAN
     split_result = batch_cluster(child_blended, min_cluster_size=3)
+    used_kmeans_fallback = False
 
     # K-means bisection fallback
     if (
@@ -128,6 +129,7 @@ async def split_cluster(
                     persistences=[0.5, 0.5],
                     noise_count=0,
                 )
+                used_kmeans_fallback = True
                 logger.info(
                     "HDBSCAN failed, k-means bisection succeeded: %s members",
                     sizes,
@@ -145,11 +147,27 @@ async def split_cluster(
                     "error_type": "insufficient_clusters",
                     "error_message": f"HDBSCAN produced {split_result.n_clusters} clusters from {len(child_blended)} members",
                     "recovery": "skipped",
+                    "stack_trace": "",
                 },
             )
         except RuntimeError:
             pass
         return SplitResult(success=False, children_created=0, noise_reassigned=0)
+
+    # Log algorithm result before child creation
+    try:
+        get_event_logger().log_decision(
+            path="warm", op="split", decision="algorithm_result",
+            cluster_id=node.id,
+            context={
+                "hdbscan_clusters": int(split_result.n_clusters),
+                "noise_count": int(split_result.noise_count),
+                "fallback": "kmeans" if used_kmeans_fallback else "none",
+                "total_members": len(child_blended),
+            },
+        )
+    except RuntimeError:
+        pass
 
     # Create child clusters
     from app.services.taxonomy.coloring import generate_color
@@ -332,6 +350,16 @@ async def split_cluster(
                 merge_score_into_cluster(best_c, noise_score_lookup.get(nid))
                 noise_reassigned += 1
 
+    if noise_reassigned > 0:
+        try:
+            get_event_logger().log_decision(
+                path="warm", op="split", decision="noise_reassigned",
+                cluster_id=node.id,
+                context={"noise_reassigned": noise_reassigned, "total_noise": len(noise_ids)},
+            )
+        except RuntimeError:
+            pass
+
     # Compute per-child separation (min cosine distance to any sibling)
     if len(new_children) >= 2:
         child_centroids = []
@@ -441,6 +469,7 @@ async def split_cluster(
                 "parent_label": node.label,
                 "hdbscan_clusters": len(new_children),
                 "noise_count": noise_reassigned,
+                "silhouette": getattr(split_result, 'silhouette', None),
                 "children": [
                     {
                         "id": c.id,

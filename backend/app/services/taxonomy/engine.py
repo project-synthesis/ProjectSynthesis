@@ -960,6 +960,7 @@ class TaxonomyEngine:
                             "coherence": round(node.coherence or 0, 4),
                             "domain": node.domain or "general",
                             "parent_id": node.parent_id,
+                            "family_id": node.id,
                         },
                     )
                 except RuntimeError:
@@ -1100,6 +1101,13 @@ class TaxonomyEngine:
                 created.append(top_primary)
                 existing_domains.add(top_primary)
                 try:
+                    _total_domains_q = await db.execute(
+                        select(func.count()).where(PromptCluster.state == "domain")
+                    )
+                    _total_domains_after = int(_total_domains_q.scalar() or 0)
+                except Exception:
+                    _total_domains_after = len(existing_domains)
+                try:
                     get_event_logger().log_decision(
                         path="warm", op="discover", decision="domain_created",
                         cluster_id=_domain_node.id,
@@ -1108,6 +1116,7 @@ class TaxonomyEngine:
                             "seed_cluster_id": candidate.id,
                             "consistency_pct": round(top_count / total, 4),
                             "members_reparented": _members_reparented,
+                            "total_domains_after": _total_domains_after,
                         },
                     )
                 except RuntimeError:

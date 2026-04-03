@@ -94,6 +94,7 @@ async def _run_speculative_phase(
     engine: TaxonomyEngine,
     session_factory: SessionFactory,
     split_protected_ids: set[str] | None = None,
+    phase_idx: int = 0,
 ) -> PhaseResult:
     """Execute a single speculative phase with a per-phase Q gate.
 
@@ -111,6 +112,7 @@ async def _run_speculative_phase(
         engine: TaxonomyEngine instance (not imported at module level).
         session_factory: Async context manager yielding AsyncSession.
         split_protected_ids: IDs protected from merge (output of split phase).
+        phase_idx: Phase index (0=split_emerge, 1=merge, 2=retire).
 
     Returns:
         PhaseResult with accepted=True if Q gate passed, False otherwise.
@@ -152,6 +154,7 @@ async def _run_speculative_phase(
                     path="warm", op="phase", decision="accepted",
                     context={
                         "phase_name": phase_name,
+                        "phase_idx": phase_idx,
                         "q_before": round(q_before, 4),
                         "q_after": round(q_after, 4),
                         "delta": round(q_after - q_before, 4),
@@ -159,6 +162,7 @@ async def _run_speculative_phase(
                         "ops_attempted": phase_result.ops_attempted,
                         "rejection_count": engine._phase_rejection_counters.get(phase_name, 0),
                         "operations": phase_result.operations[:10],
+                        "accepted": True,
                     },
                 )
             except RuntimeError:
@@ -178,11 +182,13 @@ async def _run_speculative_phase(
                     path="warm", op="phase", decision="rejected",
                     context={
                         "phase_name": phase_name,
+                        "phase_idx": phase_idx,
                         "q_before": round(q_before, 4),
                         "q_after": round(q_after, 4),
                         "delta": round(q_after - q_before, 4),
                         "ops_attempted": phase_result.ops_attempted,
                         "rejection_count": engine._phase_rejection_counters.get(phase_name, 0),
+                        "accepted": False,
                     },
                 )
             except RuntimeError:
@@ -300,6 +306,7 @@ async def execute_warm_path(
     split_result = await _run_speculative_phase(
         "split_emerge", phase_split_emerge, engine, session_factory,
         split_protected_ids=set(),
+        phase_idx=0,
     )
     all_phase_results.append(split_result)
 
@@ -312,6 +319,7 @@ async def execute_warm_path(
     merge_result = await _run_speculative_phase(
         "merge", phase_merge, engine, session_factory,
         split_protected_ids=split_protected_ids,
+        phase_idx=1,
     )
     all_phase_results.append(merge_result)
 
@@ -320,6 +328,7 @@ async def execute_warm_path(
     # ------------------------------------------------------------------
     retire_result = await _run_speculative_phase(
         "retire", phase_retire, engine, session_factory,
+        phase_idx=2,
     )
     all_phase_results.append(retire_result)
 

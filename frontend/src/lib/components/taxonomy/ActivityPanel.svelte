@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getClusterActivity } from '$lib/api/clusters';
   import type { TaxonomyActivityEvent } from '$lib/api/clusters';
+  import { clustersStore } from '$lib/stores/clusters.svelte';
 
   // -- State --
 
-  let events = $state<TaxonomyActivityEvent[]>([]);
   let totalInBuffer = $state(0);
   let filterPath = $state<string>('');
-  let filterOp = $state<string>('');
+  let filterOp = $state<string | null>(null);
   let errorsOnly = $state(false);
   let pinToBottom = $state(true);
   let expandedTs = $state<string | null>(null);
@@ -17,7 +16,7 @@
   // -- Derived --
 
   const filtered = $derived(
-    events.filter(e => {
+    clustersStore.activityEvents.filter(e => {
       if (filterPath && e.path !== filterPath) return false;
       if (filterOp && e.op !== filterOp) return false;
       if (errorsOnly && !(e.op === 'error' || e.decision === 'rejected' || e.decision === 'failed')) return false;
@@ -93,9 +92,8 @@
 
   async function loadInitial(): Promise<void> {
     try {
-      const resp = await getClusterActivity({ limit: 50 });
-      events = resp.events.slice().reverse(); // newest first
-      totalInBuffer = resp.total_in_buffer;
+      await clustersStore.loadActivity();
+      totalInBuffer = clustersStore.activityEvents.length;
     } catch {
       // non-fatal
     }
@@ -107,7 +105,7 @@
     // Listen for taxonomy_activity SSE events dispatched by parent
     function onActivity(e: Event): void {
       const ev = (e as CustomEvent).detail as TaxonomyActivityEvent;
-      events = [ev, ...events].slice(0, 200);
+      clustersStore.pushActivityEvent(ev);
       totalInBuffer++;
       if (pinToBottom && scrollEl) {
         requestAnimationFrame(() => {
@@ -154,6 +152,16 @@
         style="--chip-color: var(--color-neon-red)"
         onclick={() => { errorsOnly = !errorsOnly; }}
       >errors</button>
+    </div>
+    <!-- Operation type filter chips -->
+    <div class="ap-filter-row">
+      {#each ['assign','split','merge','retire','phase','refit','emerge','discover','error'] as opVal}
+        <button
+          class="ap-chip"
+          class:ap-chip-active={filterOp === opVal}
+          onclick={() => { filterOp = filterOp === opVal ? null : opVal; }}
+        >{opVal}</button>
+      {/each}
     </div>
   </div>
 
@@ -301,6 +309,14 @@
     height: 10px;
     background: var(--color-border-subtle);
     margin: 0 2px;
+  }
+
+  .ap-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    flex-wrap: wrap;
+    margin-top: 3px;
   }
 
   /* -- List -- */

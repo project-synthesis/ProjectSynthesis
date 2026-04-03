@@ -336,6 +336,7 @@ async def phase_reconcile(
             )
         )
         zombie_candidates = list(zombie_q.scalars().all())
+        zombie_ids: list[str] = []
 
         for node in zombie_candidates:
             if (node.member_count or 0) == 0:
@@ -366,20 +367,19 @@ async def phase_reconcile(
                 node.state = "archived"
                 node.archived_at = _utcnow()
                 result.zombies_archived += 1
+                zombie_ids.append(node.id)
                 await engine._embedding_index.remove(node.id)
                 await engine._transformation_index.remove(node.id)
                 await engine._optimized_index.remove(node.id)
-                try:
-                    get_event_logger().log_decision(
-                        path="warm", op="retire", decision="zombie_archived",
-                        cluster_id=node.id,
-                        context={
-                            "node_label": node.label,
-                            "member_count_before": 0,
-                        },
-                    )
-                except RuntimeError:
-                    pass
+
+        if zombie_ids:
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="reconcile", decision="zombies_archived",
+                    context={"count": len(zombie_ids), "node_ids": zombie_ids},
+                )
+            except RuntimeError:
+                pass
 
         if result.zombies_archived:
             logger.info(
@@ -593,6 +593,7 @@ async def phase_split_emerge(
                                 "floor": round(dynamic_floor, 4),
                                 "hdbscan_clusters": result.children_created,
                                 "noise_count": result.noise_reassigned,
+                                "silhouette": getattr(result, 'silhouette', None),
                                 "children": [
                                     {
                                         "id": c.id,
@@ -744,6 +745,14 @@ async def phase_merge(
         valid_nodes: list[PromptCluster] = []
         for n in active_nodes:
             if n.id in split_protected_ids:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="merge", decision="skipped",
+                        cluster_id=n.id,
+                        context={"gate": "split_protected", "node_label": n.label},
+                    )
+                except RuntimeError:
+                    pass
                 continue
             meta_m = read_meta(n.cluster_metadata)
             merge_until_m = meta_m.get("merge_protected_until", "")
@@ -751,6 +760,14 @@ async def phase_merge(
                 try:
                     from datetime import datetime as _dt_m
                     if now_merge < _dt_m.fromisoformat(merge_until_m):
+                        try:
+                            get_event_logger().log_decision(
+                                path="warm", op="merge", decision="skipped",
+                                cluster_id=n.id,
+                                context={"gate": "merge_protected", "node_label": n.label},
+                            )
+                        except RuntimeError:
+                            pass
                         continue
                 except (ValueError, TypeError):
                     pass
@@ -913,6 +930,14 @@ async def phase_merge(
         domain_groups: dict[str, list[PromptCluster]] = {}
         for node in current_active:
             if node.id in split_protected_ids:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="merge", decision="skipped",
+                        cluster_id=node.id,
+                        context={"gate": "split_protected", "node_label": node.label},
+                    )
+                except RuntimeError:
+                    pass
                 continue
             # Merge cooldown: split children are protected for 30 minutes
             meta = read_meta(node.cluster_metadata)
@@ -922,6 +947,14 @@ async def phase_merge(
                     from datetime import datetime
                     protected_until = datetime.fromisoformat(merge_until)
                     if now < protected_until:
+                        try:
+                            get_event_logger().log_decision(
+                                path="warm", op="merge", decision="skipped",
+                                cluster_id=node.id,
+                                context={"gate": "merge_protected", "node_label": node.label},
+                            )
+                        except RuntimeError:
+                            pass
                         continue  # still protected
                 except (ValueError, TypeError):
                     pass
@@ -1153,6 +1186,10 @@ async def phase_retire(
                         context={
                             "node_label": node.label,
                             "member_count_before": node.member_count or 0,
+                            "sibling_target_id": None,
+                            "sibling_label": None,
+                            "families_reparented": 0,
+                            "optimizations_reassigned": 0,
                         },
                     )
                 except RuntimeError:
@@ -1287,18 +1324,6 @@ async def phase_refresh(
                 "Refreshed label+patterns for '%s' (members=%d, prev_pmc=%d)",
                 node.label, node.member_count, last_pmc,
             )
-            try:
-                get_event_logger().log_decision(
-                    path="warm", op="phase", decision="refresh",
-                    cluster_id=node.id,
-                    context={
-                        "cluster_label": node.label,
-                        "members": node.member_count or 0,
-                        "new_patterns": len(new_pattern_texts),
-                    },
-                )
-            except RuntimeError:
-                pass
 
         if result.clusters_refreshed:
             await db.flush()
@@ -1306,6 +1331,13 @@ async def phase_refresh(
                 "Refreshed label+patterns for %d clusters",
                 result.clusters_refreshed,
             )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="refresh", decision="patterns_refreshed",
+                    context={"count": result.clusters_refreshed},
+                )
+            except RuntimeError:
+                pass
     except Exception as refresh_exc:
         logger.warning(
             "Stale label/pattern refresh failed (non-fatal): %s",
