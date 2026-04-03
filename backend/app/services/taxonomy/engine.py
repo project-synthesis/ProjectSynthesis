@@ -2136,7 +2136,6 @@ class TaxonomyEngine:
     def _node_to_dict(node: PromptCluster) -> dict:
         from app.services.taxonomy._constants import (
             CLUSTERING_BLEND_W_OPTIMIZED,
-            CLUSTERING_BLEND_W_RAW,
             CLUSTERING_BLEND_W_TRANSFORM,
         )
         from app.services.taxonomy.cluster_meta import read_meta
