@@ -1640,9 +1640,9 @@ class TaxonomyEngine:
         db: AsyncSession,
         min_persistence: float = 0.0,
     ) -> list[dict]:
-        # Show all non-archived lifecycle states in the topology view.
-        # Mature and template nodes are valid topology members — excluding
-        # them would create inconsistency with stats panel node counts.
+        # Return all lifecycle states including archived — the ClusterNavigator's
+        # "archived" tab filters on the frontend side from this full set.
+        # The topology component further filters to non-archived for rendering.
         query = select(PromptCluster).where(
             PromptCluster.state.in_(["active", "candidate", "mature", "template", "domain", "archived"])
         )

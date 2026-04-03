@@ -84,20 +84,25 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
   const nodes: SceneNode[] = [];
   const edges: SceneEdge[] = [];
 
+  // Filter out archived nodes — they belong in the ClusterNavigator's "archived"
+  // tab but NOT in the 3D topology visualization.  The tree endpoint returns all
+  // states (including archived) for the navigator; topology filters here.
+  const visibleNodes = flatNodes.filter(n => n.state !== 'archived');
+
   // Pre-compute aggregate member count per domain node (sum of children's members).
   // Domain nodes' own member_count is child-cluster count, not optimization count,
   // so a domain with 1 child cluster of 25 members would render tiny without this.
   const domainChildMembers = new Map<string, number>();
-  for (const node of flatNodes) {
+  for (const node of visibleNodes) {
     if (node.state === 'domain') {
-      const childSum = flatNodes
+      const childSum = visibleNodes
         .filter(n => n.parent_id === node.id && n.state !== 'domain')
         .reduce((sum, n) => sum + n.member_count + n.usage_count * 0.5, 0);
       domainChildMembers.set(node.id, childSum);
     }
   }
 
-  for (const node of flatNodes) {
+  for (const node of visibleNodes) {
     // Position: UMAP coords scaled to scene units, or hash-based fallback.
     // UMAP outputs ~[-1, 1]; multiply by 10 for comfortable spacing.
     const UMAP_SCALE = 10;
