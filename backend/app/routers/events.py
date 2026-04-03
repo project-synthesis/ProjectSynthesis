@@ -44,6 +44,15 @@ async def publish_event(body: InternalEventRequest, request: Request) -> OkRespo
     else:
         event_bus.publish(body.event_type, body.data)
 
+    # Mirror taxonomy_activity events into the backend's ring buffer so
+    # the /api/clusters/activity endpoint returns cross-process events.
+    if body.event_type == "taxonomy_activity":
+        try:
+            from app.services.taxonomy.event_logger import get_event_logger
+            get_event_logger()._buffer.append(body.data)
+        except (RuntimeError, Exception):
+            pass  # Non-fatal
+
     return OkResponse()
 
 
