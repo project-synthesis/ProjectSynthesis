@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 DEADLOCK_BREAKER_THRESHOLD = 5  # consecutive rejected cycles before forcing
 SPLIT_COHERENCE_FLOOR = 0.5    # below this coherence, node is a split candidate
 SPLIT_MIN_MEMBERS = 6          # minimum members before a node can be split
+MEGA_CLUSTER_MEMBER_FLOOR = 2 * SPLIT_MIN_MEMBERS  # 12 — cold path mega-cluster split threshold
 
 
 # ---------------------------------------------------------------------------

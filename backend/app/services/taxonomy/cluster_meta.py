@@ -36,6 +36,7 @@ class ClusterMeta(TypedDict, total=False):
 
     # --- Warm-path lifecycle tracking ---
     split_failures: int                  # Consecutive HDBSCAN split failures (cooldown after 3)
+    split_attempt_member_count: int   # member_count when last split was attempted (growth-based cooldown reset)
     coherence_member_count: int          # member_count at last coherence recomputation
     pattern_member_count: int            # member_count at last meta-pattern extraction
     label_refreshed_at: str              # ISO8601 timestamp of last label refresh
@@ -60,6 +61,7 @@ _DEFAULTS: dict[str, Any] = {
     "signal_member_count_at_generation": 0,
     "signal_generated_at": "",
     "split_failures": 0,
+    "split_attempt_member_count": 0,
     "coherence_member_count": 0,
     "pattern_member_count": 0,
     "label_refreshed_at": "",
@@ -72,6 +74,7 @@ _DEFAULTS: dict[str, Any] = {
 # downstream (e.g. comparing ``split_failures >= 3`` when it's a string).
 _COERCE: dict[str, type] = {
     "split_failures": int,
+    "split_attempt_member_count": int,
     "coherence_member_count": int,
     "pattern_member_count": int,
     "signal_member_count_at_generation": int,
