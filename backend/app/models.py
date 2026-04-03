@@ -74,6 +74,7 @@ class Optimization(Base):
     cluster_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=True)
     domain_raw = Column(String, nullable=True)
     heuristic_flags = Column(JSON, nullable=True)
+    improvement_score = Column(Float, nullable=True)  # Weighted delta score (0-10)
     suggestions = Column(JSON, nullable=True)
 
 
