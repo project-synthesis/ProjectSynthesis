@@ -227,7 +227,8 @@ async def execute_cold_path(
     )
     existing_nodes = {n.id: n for n in existing_result.scalars().all()}
 
-    node_embeddings: list[np.ndarray] = []
+    node_embeddings: list[np.ndarray] = []       # raw centroids (for storage/matching)
+    node_umap_embeddings: list[np.ndarray] = []  # blended (for UMAP projection)
     all_nodes: list[PromptCluster] = []
 
     # ------------------------------------------------------------------
@@ -337,6 +338,13 @@ async def execute_cold_path(
                 fam.parent_id = node.id
 
         node_embeddings.append(centroid)
+        # Collect blended centroid for UMAP — cluster_result.centroids are
+        # mean of blended embeddings (what HDBSCAN clustered on), so UMAP
+        # will reflect the same relationships that drove clustering.
+        if cid < len(cluster_result.centroids):
+            node_umap_embeddings.append(cluster_result.centroids[cid])
+        else:
+            node_umap_embeddings.append(centroid)  # fallback to raw
         all_nodes.append(node)
 
     # ------------------------------------------------------------------
@@ -352,6 +360,12 @@ async def execute_cold_path(
                     leftover_node.centroid_embedding, dtype=np.float32,
                 ).copy()
                 node_embeddings.append(emb)
+                # Blend leftover node's embedding for UMAP consistency
+                opt_vec = opt_idx.get_vector(leftover_node.id) if opt_idx else None
+                trans_vec = trans_idx.get_vector(leftover_node.id) if trans_idx else None
+                node_umap_embeddings.append(
+                    blend_embeddings(raw=emb, optimized=opt_vec, transformation=trans_vec)
+                )
                 all_nodes.append(leftover_node)
             except (ValueError, TypeError):
                 pass  # skip corrupt embeddings
@@ -505,9 +519,11 @@ async def execute_cold_path(
     # Step 17: UMAP 3D projection with Procrustes alignment
     # ------------------------------------------------------------------
     umap_fitted = False
-    if node_embeddings:
+    if node_umap_embeddings:
         projector = UMAPProjector()
-        positions = projector.fit(node_embeddings)
+        # Project blended embeddings so UMAP layout reflects the same
+        # relationships that HDBSCAN used for clustering decisions.
+        positions = projector.fit(node_umap_embeddings)
 
         # Procrustes alignment against previous positions if available
         old_positions = []

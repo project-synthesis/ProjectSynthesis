@@ -17,6 +17,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Optimization, PromptCluster
 from app.services.taxonomy._constants import SPLIT_MIN_MEMBERS, _utcnow
+from app.services.taxonomy.cluster_meta import write_meta
 from app.services.taxonomy.clustering import (
     batch_cluster,
     blend_embeddings,
@@ -36,6 +38,7 @@ from app.services.taxonomy.clustering import (
     l2_normalize_1d,
 )
 from app.services.taxonomy.family_ops import merge_score_into_cluster
+from app.services.taxonomy.projection import interpolate_position
 
 if TYPE_CHECKING:
     from app.services.taxonomy.engine import TaxonomyEngine
@@ -199,6 +202,29 @@ async def split_cluster(
         )
         db.add(child_node)
         await db.flush()
+
+        # Interpolate UMAP position from positioned siblings or parent
+        siblings = []
+        for existing in new_children:
+            if existing.umap_x is not None and existing.centroid_embedding:
+                sib_emb = np.frombuffer(
+                    existing.centroid_embedding, dtype=np.float32
+                )
+                siblings.append(
+                    (sib_emb, existing.umap_x, existing.umap_y, existing.umap_z)
+                )
+        if siblings:
+            pos = interpolate_position(centroid, siblings)
+            if pos:
+                child_node.umap_x, child_node.umap_y, child_node.umap_z = pos
+        elif node.umap_x is not None:
+            # Fallback: position near parent with jitter
+            child_node.umap_x = node.umap_x + random.uniform(-0.5, 0.5)
+            child_node.umap_y = node.umap_y + random.uniform(-0.5, 0.5)
+            child_node.umap_z = node.umap_z + random.uniform(-0.5, 0.5)
+        child_node.cluster_metadata = write_meta(
+            child_node.cluster_metadata, position_source="interpolated",
+        )
 
         # Reassign optimizations
         await db.execute(
