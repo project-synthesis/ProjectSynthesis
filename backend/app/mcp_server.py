@@ -226,6 +226,17 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 await db.execute("PRAGMA busy_timeout=5000")
             logger.info("MCP lifespan: SQLite WAL mode enabled")
 
+        # Initialize taxonomy event logger for scoring observability.
+        # Without this, pipeline score events are silently skipped because
+        # get_event_logger() raises RuntimeError in the MCP process.
+        from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
+        _tel = TaxonomyEventLogger(
+            events_dir=DATA_DIR / "taxonomy_events",
+            publish_to_bus=False,  # MCP process has no SSE subscribers
+        )
+        set_event_logger(_tel)
+        logger.info("MCP lifespan: TaxonomyEventLogger initialized")
+
         # Initialize routing with cross-process notification bridge.
         from app.services.event_bus import EventBus as _EventBus
 
