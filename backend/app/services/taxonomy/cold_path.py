@@ -38,6 +38,8 @@ from app.models import Optimization, PromptCluster
 from app.services.taxonomy._constants import (
     CLUSTERING_BLEND_W_OPTIMIZED,
     CLUSTERING_BLEND_W_TRANSFORM,
+    MEGA_CLUSTER_MEMBER_FLOOR,
+    SPLIT_COHERENCE_FLOOR,
 )
 from app.services.taxonomy.cluster_meta import read_meta, write_meta
 from app.services.taxonomy.clustering import (
@@ -771,7 +773,90 @@ async def execute_cold_path(
         nodes_created=nodes_created,
     )
 
-    # Step 25: Reset cold_path_needed flag
+    # ------------------------------------------------------------------
+    # Step 25: Mega-cluster split pass
+    # Identify clusters with high member count + low coherence and split
+    # them using member-level HDBSCAN. This is the second pass of the
+    # two-pass cold path: Pass 1 handled topology (centroid-level),
+    # Pass 2 handles mega-clusters (member-level).
+    # ------------------------------------------------------------------
+    mega_split_created = 0
+    try:
+        mega_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.notin_(["domain", "archived"]),
+                PromptCluster.member_count >= MEGA_CLUSTER_MEMBER_FLOOR,
+                PromptCluster.coherence < SPLIT_COHERENCE_FLOOR,
+            )
+        )
+        mega_clusters = list(mega_q.scalars().all())
+
+        if mega_clusters:
+            from app.services.taxonomy.split import split_cluster
+
+            logger.info(
+                "Mega-cluster split pass: %d candidates detected",
+                len(mega_clusters),
+            )
+
+            for mc in mega_clusters:
+                # Load member embeddings
+                mc_opt_q = await db.execute(
+                    select(
+                        Optimization.id,
+                        Optimization.embedding,
+                        Optimization.optimized_embedding,
+                        Optimization.transformation_embedding,
+                    ).where(
+                        Optimization.cluster_id == mc.id,
+                        Optimization.embedding.isnot(None),
+                    )
+                )
+                mc_opt_rows = [
+                    (r[0], r[1], r[2], r[3]) for r in mc_opt_q.all()
+                ]
+
+                if len(mc_opt_rows) < MEGA_CLUSTER_MEMBER_FLOOR:
+                    continue
+
+                mc_result = await split_cluster(mc, engine, db, mc_opt_rows)
+
+                # Always reset split_failures — cold path tried
+                mc.cluster_metadata = write_meta(
+                    mc.cluster_metadata,
+                    split_failures=0,
+                    split_attempt_member_count=0,
+                )
+
+                if mc_result.success:
+                    mega_split_created += mc_result.children_created
+                    logger.info(
+                        "Mega-cluster split: '%s' -> %d sub-clusters (%d noise)",
+                        mc.label,
+                        mc_result.children_created,
+                        mc_result.noise_reassigned,
+                    )
+                else:
+                    logger.info(
+                        "Mega-cluster split failed for '%s' (HDBSCAN found no sub-structure)",
+                        mc.label,
+                    )
+
+            if mega_split_created > 0:
+                await db.commit()
+                engine._invalidate_stats_cache()
+                nodes_created += mega_split_created
+                logger.info(
+                    "Mega-cluster split pass complete: %d new clusters created",
+                    mega_split_created,
+                )
+    except Exception as mega_exc:
+        logger.warning(
+            "Mega-cluster split pass failed (non-fatal): %s", mega_exc,
+            exc_info=True,
+        )
+
+    # Step 26: Reset cold_path_needed flag  (renumbered from Step 25)
     engine._cold_path_needed = False
 
     result = ColdPathResult(

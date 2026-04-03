@@ -364,3 +364,20 @@ def test_cold_path_saves_all_three_caches():
     assert "embedding_index.pkl" in source, (
         "Cold path must save EmbeddingIndex cache (existing)"
     )
+
+
+def test_cold_path_has_mega_cluster_split_pass():
+    """Verify cold_path.py implements mega-cluster split pass."""
+    import inspect
+    from app.services.taxonomy import cold_path
+
+    source = inspect.getsource(cold_path)
+    assert "MEGA_CLUSTER_MEMBER_FLOOR" in source, (
+        "Cold path must reference MEGA_CLUSTER_MEMBER_FLOOR for mega-cluster detection"
+    )
+    assert "split_cluster" in source, (
+        "Cold path must call split_cluster() for mega-cluster splits"
+    )
+    assert "SPLIT_COHERENCE_FLOOR" in source, (
+        "Cold path must use SPLIT_COHERENCE_FLOOR for coherence check"
+    )
