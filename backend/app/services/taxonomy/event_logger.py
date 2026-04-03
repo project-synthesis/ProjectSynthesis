@@ -53,11 +53,13 @@ class TaxonomyEventLogger:
         self,
         events_dir: str | Path = "data/taxonomy_events",
         publish_to_bus: bool = True,
+        cross_process: bool = False,
         buffer_size: int = 500,
     ) -> None:
         self._events_dir = Path(events_dir)
         self._events_dir.mkdir(parents=True, exist_ok=True)
         self._publish_to_bus = publish_to_bus
+        self._cross_process = cross_process
         self._buffer: deque[dict[str, Any]] = deque(maxlen=buffer_size)
 
     # ------------------------------------------------------------------
@@ -112,13 +114,21 @@ class TaxonomyEventLogger:
         except OSError as exc:
             logger.warning("Failed to write taxonomy event to JSONL: %s", exc)
 
-        # 3. Publish to event bus for SSE
+        # 3. Publish for SSE delivery
         if self._publish_to_bus:
             try:
                 from app.services.event_bus import event_bus
                 event_bus.publish("taxonomy_activity", event)
             except Exception:
-                pass  # Non-fatal — don't break taxonomy operations
+                pass  # Non-fatal
+        elif self._cross_process:
+            # MCP server process: forward via HTTP to backend's event bus
+            try:
+                from app.services.event_notification import notify_event_bus
+                import asyncio
+                asyncio.create_task(notify_event_bus("taxonomy_activity", event))
+            except Exception:
+                pass  # Non-fatal
 
     # ------------------------------------------------------------------
     # Read

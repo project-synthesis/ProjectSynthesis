@@ -229,10 +229,12 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         # Initialize taxonomy event logger for scoring observability.
         # Without this, pipeline score events are silently skipped because
         # get_event_logger() raises RuntimeError in the MCP process.
+        # cross_process=True forwards events to the backend's SSE via HTTP POST.
         from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
         _tel = TaxonomyEventLogger(
             events_dir=DATA_DIR / "taxonomy_events",
-            publish_to_bus=False,  # MCP process has no SSE subscribers
+            publish_to_bus=False,
+            cross_process=True,
         )
         set_event_logger(_tel)
         logger.info("MCP lifespan: TaxonomyEventLogger initialized")
