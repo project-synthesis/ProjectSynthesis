@@ -1335,6 +1335,17 @@ class TaxonomyEngine:
                     "Sub-domain HDBSCAN found no sub-structure in '%s'",
                     domain_node.label,
                 )
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover", decision="sub_domain_no_structure",
+                        context={
+                            "parent_domain": domain_node.label,
+                            "total_members": len(embs_blended),
+                            "hdbscan_clusters": cluster_result.n_clusters,
+                        },
+                    )
+                except RuntimeError:
+                    pass
                 continue
 
             # Evaluate each group
@@ -1479,6 +1490,20 @@ class TaxonomyEngine:
                         sub_label, domain_node.label, exc,
                         exc_info=True,
                     )
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="error", decision="sub_domain_failed",
+                            context={
+                                "source": "propose_sub_domains",
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc)[:500],
+                                "recovery": "skipped",
+                                "domain_label": sub_label,
+                                "parent_domain": domain_node.label,
+                            },
+                        )
+                    except RuntimeError:
+                        pass
                     continue
 
         return created
