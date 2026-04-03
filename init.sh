@@ -25,7 +25,7 @@ FRONTEND_PORT=5199
 # Backend needs 10s: uvicorn --reload supervisor → worker → async lifespan
 # shutdown (routing stop + extraction tasks 5s wait_for + warm-path timer
 # + strategy file watcher).
-declare -A STOP_TIMEOUT=([backend]=10 [mcp]=5 [frontend]=5)
+declare -A STOP_TIMEOUT=([backend]=35 [mcp]=5 [frontend]=5)
 
 # Startup readiness timeout per service (seconds).
 declare -A READY_TIMEOUT=([backend]=15 [mcp]=10 [frontend]=15)
@@ -180,13 +180,14 @@ _launch() {
         backend)
             cd "$BACKEND_DIR"
             # --reload-dir: restrict file watching to app/ (skips .venv, data, tests)
-            # --timeout-graceful-shutdown: cap connection drain wait.  With
-            #   event_bus.shutdown() sending sentinels to SSE subscribers,
-            #   connections close in ~0.1s.  The 3s ceiling is a safety net.
+            # --timeout-graceful-shutdown: allow long-running operations (recluster,
+            #   mega-cluster split with LLM extraction) to complete on reload.
+            #   Cold path + LLM calls can take 30-60s. Previous 3s ceiling caused
+            #   CancelledError on file-change reloads, silently aborting reclusters.
             setsid "$UVICORN" app.main:asgi_app \
                 --host 127.0.0.1 --port "$BACKEND_PORT" \
                 --reload --reload-dir app \
-                --timeout-graceful-shutdown 3 \
+                --timeout-graceful-shutdown 30 \
                 </dev/null >> "$DATA_DIR/backend.log" 2>&1 &
             ;;
         mcp)
