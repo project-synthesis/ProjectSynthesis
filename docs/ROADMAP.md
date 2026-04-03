@@ -59,6 +59,16 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 **Prerequisite:** Refactor `tier-onboarding.svelte.ts`, merge 3 guide components into 1, new `onboarding-dismissed` preference field, update `triggerTierGuide()` to emit toast instead of modal after initial onboarding, update `+page.svelte` startup gate.
 
+### PostgreSQL migration
+**Status:** Exploring
+**Context:** SQLite's single-writer limitation causes `database is locked` errors when the MCP server pipeline (optimization write) and backend warm path (taxonomy mutations) write concurrently. WAL mode + busy_timeout=30s mitigates but doesn't eliminate the issue. At scale (concurrent users, parallel optimizations), SQLite becomes a bottleneck.
+
+**Scope:** Replace `aiosqlite` with `asyncpg` + PostgreSQL. Requires: Alembic migration infrastructure, connection pooling config, Docker Compose for local dev, production deployment update, test fixture changes (async session factory).
+
+**Trigger:** When `database is locked` errors become user-facing despite busy_timeout, or when concurrent multi-user access is needed.
+
+**Files:** `database.py` (engine), `config.py` (DATABASE_URL), `main.py`/`mcp_server.py` (PRAGMA removal), `docker-compose.yml` (new), all test fixtures.
+
 ### Project workspaces
 **Status:** Exploring
 **Context:** All optimizations, clusters, taxonomy, and history share a single flat namespace. Users working on multiple projects (e.g., a backend API and a marketing site) see everything mixed together. There's no way to start fresh without manual database cleanup.
