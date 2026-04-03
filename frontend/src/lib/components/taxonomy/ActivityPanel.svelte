@@ -28,9 +28,22 @@
 
   function decisionColor(e: TaxonomyActivityEvent): string {
     if (e.op === 'error') return 'var(--color-neon-red)';
-    if (e.decision === 'accepted' || e.decision === 'merged' || e.decision === 'merge_into') return 'var(--color-neon-green)';
-    if (e.decision === 'create_new' || e.decision === 'child_created') return 'var(--color-neon-cyan)';
-    if (e.decision === 'rejected' || e.decision === 'blocked') return 'var(--color-neon-yellow)';
+    const d = e.decision;
+    // Green — successful operations
+    if (d === 'accepted' || d === 'merged' || d === 'merge_into' || d === 'complete'
+        || d === 'split_complete' || d === 'archived' || d === 'domain_created'
+        || d === 'created' || d === 'patterns_refreshed' || d === 'zombies_archived')
+      return 'var(--color-neon-green)';
+    // Cyan — new entities created
+    if (d === 'create_new' || d === 'child_created' || d === 'family_split')
+      return 'var(--color-neon-cyan)';
+    // Amber — rejections, blocks, skips
+    if (d === 'rejected' || d === 'blocked' || d === 'skipped' || d === 'split_failed'
+        || d === 'candidates_filtered')
+      return 'var(--color-neon-yellow)';
+    // Informational — algorithm results, noise
+    if (d === 'algorithm_result' || d === 'noise_reassigned' || d === 'mega_clusters_detected')
+      return 'var(--color-text-secondary)';
     return 'var(--color-text-dim)';
   }
 
@@ -80,6 +93,24 @@
       const sim = typeof c.similarity === 'number' ? `sim=${c.similarity.toFixed(3)}` : '';
       const gate = typeof c.gate === 'string' ? ` [${c.gate}]` : '';
       return sim + gate;
+    }
+    if (e.op === 'extract') {
+      return typeof c.meta_patterns_added === 'number' ? `${c.meta_patterns_added} patterns` : '';
+    }
+    if (e.op === 'retire') {
+      return typeof c.sibling_label === 'string' ? `→ ${c.sibling_label}` : '';
+    }
+    if (e.op === 'discover') {
+      return typeof c.domain_label === 'string' ? c.domain_label : '';
+    }
+    if (e.op === 'error') {
+      return typeof c.error_message === 'string' ? c.error_message.slice(0, 60) : '';
+    }
+    if (e.op === 'emerge') {
+      return typeof c.domain === 'string' ? c.domain : '';
+    }
+    if (e.op === 'reconcile') {
+      return typeof c.count === 'number' ? `${c.count} zombies` : '';
     }
     return '';
   }
@@ -162,7 +193,7 @@
     </div>
     <!-- Operation type filter chips -->
     <div class="ap-filter-row">
-      {#each ['assign','split','merge','retire','phase','refit','emerge','discover','error'] as opVal}
+      {#each ['assign','extract','split','merge','retire','phase','refit','emerge','discover','reconcile','refresh','error'] as opVal}
         <button
           class="ap-chip"
           class:ap-chip-active={filterOp === opVal}
