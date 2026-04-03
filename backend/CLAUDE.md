@@ -19,9 +19,9 @@ Everything backend developers need. For project overview, see root `CLAUDE.md`. 
 **Taxonomy**: `taxonomy/` package (see Taxonomy Engine below)
 **Workspace**: `workspace_intelligence.py` (manifest-based stack detection + deep scanning), `roots_scanner.py` (agent guidance file discovery, SHA256 dedup), `codebase_explorer.py` (semantic retrieval + Haiku synthesis, SHA cache), `explore_cache.py` (TTL+LRU), `repo_index_service.py` (background indexing, `query_curated_context()`)
 **Embeddings**: `embedding_service.py` (singleton `all-MiniLM-L6-v2`, 384-dim), `embedding_index.py` (numpy index, O(1) upsert, batch cosine)
-**Domain**: `domain_resolver.py` (cached DB lookup, replaces `VALID_DOMAINS`), `domain_signal_loader.py` (keyword signals from domain metadata)
+**Domain**: `domain_resolver.py` (cached DB lookup, replaces `VALID_DOMAINS`, runtime `add_label()` for sub-domain registration), `domain_signal_loader.py` (keyword signals from domain metadata)
 **Patterns**: `pattern_injection.py` (`auto_inject_patterns()` with composite fusion + cross-cluster injection), `prompt_lifecycle.py` (state promotion, quality pruning, usage decay, orphan backfill)
-**Infrastructure**: `event_bus.py` (in-process pub/sub), `event_notification.py` (cross-process HTTP POST), `trace_logger.py` (per-phase JSONL, daily rotation), `mcp_session_file.py` (read/write/staleness), `mcp_proxy.py` (REST→MCP sampling proxy)
+**Infrastructure**: `event_bus.py` (in-process pub/sub), `event_notification.py` (cross-process HTTP POST), `trace_logger.py` (per-phase JSONL, daily rotation), `taxonomy/event_logger.py` (decision JSONL + ring buffer + SSE, singleton via `get_event_logger()`), `mcp_session_file.py` (read/write/staleness), `mcp_proxy.py` (REST→MCP sampling proxy)
 **Feedback**: `feedback_service.py` (CRUD + adaptation update), `adaptation_tracker.py` (strategy affinity, degenerate detection)
 **GitHub**: `github_service.py` (Fernet encrypt/decrypt), `github_client.py` (raw API, explicit token param)
 **Preferences**: `preferences.py` (file-based JSON, frozen snapshot per pipeline run, effort levels: `low`|`medium`|`high`|`max`)
@@ -54,7 +54,7 @@ Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MOD
 | `health.py` | `GET /api/health` (provider, tiers, scores, errors, domain_count) |
 | `events.py` | `GET /api/events` (SSE), `POST /api/events/_publish` (cross-process) |
 | `domains.py` | `GET /api/domains`, `POST /api/domains/{id}/promote` |
-| `clusters.py` | CRUD, match, tree, stats, templates, recluster, reassign, repair. Read endpoints use `db.autoflush=False`. Legacy 301 for `/api/patterns/*`, `/api/taxonomy/*` |
+| `clusters.py` | CRUD, match, tree, stats, templates, recluster, reassign, repair, activity (ring buffer + JSONL history). Activity endpoints MUST be before `{cluster_id}` dynamic route. Read endpoints use `db.autoflush=False`. Legacy 301 for `/api/patterns/*`, `/api/taxonomy/*` |
 
 Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (in-memory via `limits`).
 
@@ -130,13 +130,19 @@ Process singleton (`get_engine()`/`set_engine()`). Three paths: **hot** (per-opt
 
 **Quality**: 5-dimension Q_system (coherence, separation, coverage, DBCV, stability) with adaptive weights. Domain floor: coherence ≥0.3.
 
-**Domain discovery**: `_propose_domains()` from coherent "general" sub-populations (≥3 members, ≥0.3 coherence, ≥60% consistent `domain_raw`). Five guardrails: color pinning, retire exemption, merge gate, coherence floor, split→candidates. Ceiling at 30.
+**Domain discovery**: `_propose_domains()` from coherent "general" sub-populations (≥3 members, ≥0.3 coherence, ≥60% consistent `domain_raw`). Five guardrails: color pinning, retire exemption, merge gate, coherence floor, split→candidates. Ceiling at 30. **Sub-domain discovery**: `_propose_sub_domains()` uses HDBSCAN within oversized domains (≥20 members, mean coherence <0.50) to discover semantic sub-groups promoted to nested domain nodes (`state="domain"`, `parent_id=parent_domain_id`). Parallel Haiku label generation. Label format: `{parent}-{qualifier}`.
 
 **Multi-embedding HDBSCAN**: warm/cold path clustering uses blended embeddings (`blend_embeddings()`: 0.65 raw + 0.20 optimized + 0.15 transformation, configurable via `_constants.py`). Hot-path assignment stays raw-only (speed + bootstrap avoidance). Score-weighted centroids: `max(0.1, score / 10.0)`. `TransformationIndex` for technique-space search. `OptimizedEmbeddingIndex` for output-space search. Composite fusion (`fusion.py`): blends topic + transformation + output + pattern signals with per-phase adaptive weights via `resolve_fused_embedding()`. Cross-cluster injection: patterns with `global_source_count >= 3` injected across topic boundaries. Output coherence (pairwise cosine of optimized_embeddings) informs split/merge lifecycle. Dual few-shot retrieval: input-similar (cosine >= 0.50) + output-similar (cosine >= 0.40), re-ranked by `max(sim) * score`.
 
 **Adaptive weight learning (3-layer bootstrap)**: Layer 1: `resolve_contextual_weights()` derives per-optimization weight profiles from task-type bias vectors (`_TASK_TYPE_WEIGHT_BIAS`, 7 types). Layer 2: `compute_score_correlated_target()` discovers which profiles correlate with high scores (z-score weighting, above-median only, min 10 samples) at global and per-cluster level. Layer 3: per-cluster learned weights stored in `cluster_metadata["learned_phase_weights"]`, blended back into Layer 1 at alpha=0.3. Decay toward learned weights at rate=0.01 (< adaptation alpha=0.05, so learning dominates).
 
-**Modules**: `engine.py`, `clustering.py`, `lifecycle.py`, `quality.py`, `projection.py`, `coloring.py`, `labeling.py`, `snapshot.py`, `sparkline.py`, `family_ops.py`, `matching.py`, `embedding_index.py`, `transformation_index.py`, `fusion.py`, `warm_phases.py`, `warm_path.py`, `cold_path.py`.
+**Observability**: `event_logger.py` — `TaxonomyEventLogger` singleton with JSONL persistence (`data/taxonomy_events/decisions-YYYY-MM-DD.jsonl`, 30-day rotation) + ring buffer (500 events) + `taxonomy_activity` SSE bridge. 17 instrumentation points, 12 op types. All `log_decision()` calls wrapped in `try/except RuntimeError: pass`. Initialized in lifespan via `set_event_logger()`.
+
+**Split protection**: `merge_protected_until` naive-UTC timestamp on split children (60-min window via `SPLIT_MERGE_PROTECTION_MINUTES`). `split_failures` persisted outside speculative transactions via `PhaseResult.split_attempted_ids` + post-rejection session in `_run_speculative_phase()`. 3-strike cooldown with 25% growth reset.
+
+**Performance**: `split_cluster()` uses 3-phase approach — sequential DB queries, parallel `asyncio.gather` on `generate_label()` calls, sequential object creation. Pattern extraction deferred to Phase 4 (Refresh) via `pattern_stale=True`. Phase 4 also parallelizes label generation across stale clusters.
+
+**Modules**: `engine.py`, `clustering.py`, `lifecycle.py`, `quality.py`, `projection.py`, `coloring.py`, `labeling.py`, `snapshot.py`, `sparkline.py`, `family_ops.py`, `matching.py`, `embedding_index.py`, `transformation_index.py`, `fusion.py`, `warm_phases.py`, `warm_path.py`, `cold_path.py`, `split.py`, `event_logger.py`, `cluster_meta.py`, `_constants.py`.
 
 ## Testing
 

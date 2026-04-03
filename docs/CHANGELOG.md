@@ -4,41 +4,54 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
-### Changed
-- **Multi-embedding HDBSCAN** — warm-path split, cold-path refit, and all merge paths (global + same-domain label + same-domain embedding) now operate on blended embeddings (0.65 raw + 0.20 optimized + 0.15 transformation) instead of raw-only — clusters reflect topic, output quality, and technique direction simultaneously. Hot-path assignment stays raw-only by design
-- `CompositeQuery.fuse()` refactored to delegate to shared `weighted_blend()` helper in `clustering.py` — eliminates algorithmic duplication with `blend_embeddings()`
-- Replaced per-feedback phase weight adaptation with score-correlated batch adaptation in the warm path — weights now adapt toward profiles that correlate with the highest `overall_score` values using z-score weighting (above-median optimizations only)
-- Phase weight adaptation moved from `FeedbackService.create_feedback()` (per-thumbs_up) to `phase_refresh()` (periodic warm cycle) — feedback still drives strategy affinity, warm path drives embedding fusion weights
-- Removed `AdaptationTracker.update_phase_weights()` — replaced by `compute_score_correlated_target()` pure function in `fusion.py`
-- **Broke the weight bootstrap fixed point** — `phase_weights_json` snapshots now use context-derived weights (task-type bias + cluster learned profiles) instead of global preferences, giving `compute_score_correlated_target()` genuine variance to learn from
-- `decay_toward_defaults()` renamed to `decay_toward_target()` with optional explicit target parameter; backward-compatible alias preserved
-- Composite fusion Signal 3 (output) upgraded from single-best DB query to `OptimizedEmbeddingIndex` lookup (cluster mean optimized embedding) — more representative and eliminates a DB round-trip
-- Few-shot retrieval upgraded to dual-retrieval: input-similar (raw embedding) + output-similar (optimized embedding), merged and re-ranked by `max(input_sim, output_sim) * overall_score`
-- Split heuristic now considers output coherence — clusters with high raw coherence but low output coherence (<0.25) trigger splits (similar inputs → divergent outputs)
-- Merge heuristic uses output coherence boost — clusters where both have output coherence >0.5 get a 0.03 threshold reduction
+## v0.3.12-dev — 2026-04-03
 
 ### Added
-- **Taxonomy engine observability** — `TaxonomyEventLogger` service dual-writes structured decision events to JSONL files (`data/taxonomy_events/`) and an in-memory ring buffer (500 events). All three paths instrumented: hot path captures assign decisions with full candidate scoring and penalty breakdown; warm path captures Q-gate accept/reject, leaf splits, merge decisions with gate reasons, zombie archival, domain discovery, and cluster refresh; cold path captures HDBSCAN refit result, mega-cluster detection, and per-child split events
-- `GET /api/clusters/activity` — ring buffer endpoint with path/op/errors-only filters; `GET /api/clusters/activity/history` — paginated JSONL endpoint for a specific date
-- `taxonomy_activity` SSE event type — streams each decision event to connected frontend clients in real time
-- **ActivityPanel.svelte** — collapsible bottom panel below the 3D topology view. Filter chips for path (hot/warm/cold) and errors-only. Color-coded decision badges (green=accept/merge, cyan=create, amber=reject, red=error). Expandable context grid. Cluster label click navigates topology via `select-cluster` custom event. Pin-to-newest auto-scroll toggle. Seeds from ring buffer on mount, updates via `taxonomy_activity` SSE
-- `compute_score_correlated_target()` — computes score-weighted optimal weight profile from recent optimization history with z-score contribution weighting and configurable maturity gate (`SCORE_ADAPTATION_MIN_SAMPLES=10`)
-- **Few-shot example retrieval** — optimizer prompt now includes 1-2 concrete before/after examples from high-scoring past optimizations similar to the current prompt (cosine >= 0.50, score >= 7.5), teaching by example rather than abstract patterns alone
-- **Score-informed strategy recommendation** — `recommend_strategy_from_history()` identifies which strategy produced the highest scores for similar prompts, overrides the "auto" fallback when analyzer confidence is below the gate and data has strong signal
-- `StrategyRecommendation` dataclass with dominance margin and confidence boost for the strategy resolution chain
-- `{{few_shot_examples}}` template variable in `optimize.md` with auto-stripped XML tags on cold start
-- `OptimizedEmbeddingIndex` — in-memory cosine search index for per-cluster mean optimized-prompt embeddings, with hot/warm/cold path lifecycle matching `TransformationIndex`
-- `resolve_contextual_weights()` — derives per-phase weight profiles from task type + cluster learned weights, creating organic diversity for the adaptation loop
-- `_TASK_TYPE_WEIGHT_BIAS` — 7 task-type directional offsets (coding, writing, analysis, creative, data, system, general) seeding meaningful weight variation
-- Per-cluster learned weight profiles stored in `cluster_metadata["learned_phase_weights"]`, computed by warm-path per-cluster adaptation
-- Output coherence (`cluster_metadata["output_coherence"]`) computed during warm-path reconciliation as mean pairwise cosine of optimized_embeddings within each cluster
-- `FEW_SHOT_OUTPUT_SIMILARITY_THRESHOLD` constant (0.40) for the output-similarity retrieval path
-- `weighted_blend()` in `clustering.py` — shared core for zero-vector detection, weight redistribution, and L2-normalization used by both HDBSCAN blending and composite fusion
-- `blend_embeddings()` in `clustering.py` — weighted average of raw + optimized + transformation embeddings with graceful degradation for missing signals
-- `CLUSTERING_BLEND_W_RAW/OPTIMIZED/TRANSFORM` configurable constants in `_constants.py` for HDBSCAN blend weights
+- **Taxonomy engine observability** — `TaxonomyEventLogger` service dual-writes structured decision events to JSONL files (`data/taxonomy_events/`) and in-memory ring buffer (500 events). 17 instrumentation points across hot/warm/cold paths with 12 operation types and 24 decision outcomes
+- `GET /api/clusters/activity` — ring buffer endpoint with path/op/errors-only filters; `GET /api/clusters/activity/history` — paginated JSONL endpoint by date. Activity endpoints routed before `{cluster_id}` to prevent shadowing
+- `taxonomy_activity` SSE event type — streams decision events to frontend in real time
+- **ActivityPanel.svelte** — collapsible bottom panel below 3D topology. Filter chips for path (hot/warm/cold), 12 operation types, errors-only toggle. Color-coded decision badges. Expandable context grid. Cluster click-through. Pin-to-newest auto-scroll. Seeds from ring buffer with JSONL history fallback after server restart
+- **Sub-domain discovery** — `_propose_sub_domains()` uses HDBSCAN to discover semantic sub-groups within oversized domains (≥20 members, mean coherence <0.50). Sub-domains are domain nodes with `parent_id` pointing to parent domain, same guardrails as top-level domains. Label format: `{parent}-{qualifier}`. Counts toward 30-domain ceiling. Parallel Haiku label generation via `asyncio.gather`
+- `DomainResolver.add_label()` — runtime domain cache registration after sub-domain creation
+- `RetireResult` dataclass replacing boolean return from `attempt_retire()` — captures sibling target, families reparented, optimizations reassigned for observability
+- `PhaseResult.split_attempted_ids` — tracks which clusters had splits attempted regardless of outcome, used for post-rejection metadata persistence
+- `SPLIT_MERGE_PROTECTION_MINUTES` constant (60 min) — configurable merge protection window for split children
+- `SUB_DOMAIN_*` constants — `MIN_MEMBERS` (20), `COHERENCE_CEILING` (0.50), `MIN_GROUP_MEMBERS` (5), `HDBSCAN_MIN_CLUSTER` (5)
+- `compute_score_correlated_target()` — score-weighted optimal weight profile from optimization history using z-score contribution weighting
+- **Few-shot example retrieval** — optimizer prompt includes 1-2 before/after examples from high-scoring similar past optimizations (cosine ≥0.50, score ≥7.5)
+- **Score-informed strategy recommendation** — `recommend_strategy_from_history()` overrides "auto" fallback with data-driven strategy selection
+- `OptimizedEmbeddingIndex` — in-memory cosine search for per-cluster mean optimized-prompt embeddings
+- `resolve_contextual_weights()` — per-phase weight profiles from task type + cluster learned weights
+- Output coherence in `cluster_metadata["output_coherence"]` — pairwise cosine of optimized_embeddings within clusters
+- `blend_embeddings()` and `weighted_blend()` in `clustering.py` — shared multi-embedding blending
+
+### Changed
+- **Multi-embedding HDBSCAN** — warm/cold paths now use blended embeddings (0.65 raw + 0.20 optimized + 0.15 transformation). Hot-path stays raw-only
+- **Parallel split label generation** — `split_cluster()` restructured into 3 phases: collect data (sequential DB), `asyncio.gather` label generation (parallel LLM), create objects (sequential). Reduces split from ~7 min to ~17s
+- **Deferred pattern extraction** — meta-pattern extraction removed from `split_cluster()`, children marked `pattern_stale=True` for warm-path Phase 4 (Refresh). Eliminates 15+ sequential Haiku calls from critical split path
+- **Parallel Phase 4 label generation** — `phase_refresh()` restructured with `asyncio.gather` for all stale cluster labels
+- Split merge protection window increased from 30 minutes to 60 minutes — prevents same-domain merge from immediately undoing cold-path splits
+- Score-correlated batch adaptation replaces per-feedback weight adaptation in warm path
+- Composite fusion Signal 3 upgraded to `OptimizedEmbeddingIndex` lookup
+- Few-shot retrieval upgraded to dual-retrieval (input + output similarity)
+- Split heuristic considers output coherence; merge heuristic uses output coherence boost
 
 ### Fixed
-- `OptimizedEmbeddingIndex` entries were never removed during lifecycle operations (merge, retire, split archive, zombie cleanup) — stale vectors accumulated for dead clusters. Added `_optimized_index.remove()` at all 6 lifecycle paths, matching the existing `_transformation_index.remove()` calls
+- **Groundhog Day split loop (variant 1)** — `split_failures` metadata lost on Q-gate transaction rollback, causing same cluster to be split and rejected indefinitely. Fixed with post-rejection metadata persistence in a separate committed session
+- **Groundhog Day split loop (variant 2)** — 30-minute merge protection expired before warm path ran, causing split children to be immediately re-merged. Fixed by increasing protection to 60 minutes
+- `/api/clusters/activity` returned 404 — route was after `{cluster_id}` dynamic route. Moved before it
+- Activity panel showed 0 events after server restart — added JSONL history fallback when ring buffer is empty
+- Merge-skip events caused event storms (per-node logging in both merge passes) — consolidated to summary events
+- Split events logged `path="cold"` even from warm-path calls — parameterized via `log_path` argument
+- `errors_only` filter inconsistency between frontend and backend — both now check `op="error"` + `decision in (rejected, failed, split_failed)`
+- Event `{#each}` key collisions in ActivityPanel — added cluster_id + index for uniqueness
+- `keyMetric()` showed wrong data for `create_new` events — gated display by decision type
+- Activity toggle routed through store (`clustersStore.toggleActivity`) instead of local state
+- SSE events flow through store directly (removed window CustomEvent indirection)
+- Inline datetime imports moved to module level in warm_phases.py
+- Cold path epsilon references constant instead of magic number
+- `context: dict = Field(default_factory=dict)` replaces mutable default in schema
+- `OptimizedEmbeddingIndex` stale entries removed during all lifecycle operations
 
 ## v0.3.11-dev — 2026-04-02
 

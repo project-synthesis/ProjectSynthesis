@@ -44,7 +44,7 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `preferences.svelte.ts` | Persistent user preferences loaded from backend |
 | `toast.svelte.ts` | Toast notification queue with `addToast()` API |
 | `routing.svelte.ts` | Derived routing state mirroring backend 5-tier priority chain. Reactive tier resolver |
-| `clusters.svelte.ts` | Cluster state: paste detection (50-char delta, 300ms debounce), suggestion lifecycle (10s auto-dismiss), tree/stats, detail, template spawning, `StateFilter` + `filteredTaxonomyTree`, SSE invalidation |
+| `clusters.svelte.ts` | Cluster state: paste detection (50-char delta, 300ms debounce), suggestion lifecycle (10s auto-dismiss), tree/stats, detail, template spawning, `StateFilter` + `filteredTaxonomyTree`, SSE invalidation. Activity panel state: `activityEvents`, `activityOpen`, `pushActivityEvent()`, `toggleActivity()`, `loadActivity()` with JSONL history fallback |
 | `domains.svelte.ts` | API-driven domain palette. `colorFor()` resolves domain→hex with keyword fallback. Invalidated on `domain_created`/`taxonomy_changed` SSE |
 | `passthrough-guide.svelte.ts` | Passthrough workflow guide modal (visibility, "don't show again") |
 | `sampling-guide.svelte.ts` | Sampling tier guide modal state |
@@ -59,7 +59,8 @@ src/lib/components/
   layout/       # ActivityBar, Navigator, ClusterNavigator, EditorGroups, Inspector, StatusBar
   editor/       # PromptEdit, ForgeArtifact, PatternSuggestion, PassthroughView
   taxonomy/     # SemanticTopology, TopologyControls, TopologyRenderer, TopologyData,
-                # TopologyInteraction, TopologyLabels, TopologyWorker (5-force simulation)
+                # TopologyInteraction, TopologyLabels, TopologyWorker (5-force simulation),
+                # ActivityPanel (collapsible bottom panel — decision event feed)
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, DiffView, Logo, MarkdownRenderer, PassthroughGuide,
@@ -110,6 +111,7 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | `refinement_turn` | Refinement timeline update |
 | `strategy_changed` | Strategy list refresh |
 | `taxonomy_changed` | Cluster/domain store invalidation, topology re-render |
+| `taxonomy_activity` | `clustersStore.pushActivityEvent()` — real-time feed to ActivityPanel |
 | `routing_state_changed` | Routing store update, tier availability toasts |
 | `domain_created` | Domain store invalidation |
 
