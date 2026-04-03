@@ -38,6 +38,7 @@ from app.models import (
     PromptCluster,
 )
 from app.services.taxonomy._constants import (
+    MEGA_CLUSTER_MEMBER_FLOOR,
     SPLIT_COHERENCE_FLOOR,
     SPLIT_MIN_MEMBERS,
     _utcnow,
@@ -800,7 +801,7 @@ async def phase_merge(
             try:
                 get_event_logger().log_decision(
                     path="warm", op="merge", decision="candidates_filtered",
-                    context={"split_protected": _global_sp_count, "merge_cooled": _global_mc_count},
+                    context={"pass": "global", "split_protected": _global_sp_count, "merge_cooled": _global_mc_count},
                 )
             except RuntimeError:
                 pass
@@ -975,7 +976,7 @@ async def phase_merge(
             try:
                 get_event_logger().log_decision(
                     path="warm", op="merge", decision="candidates_filtered",
-                    context={"split_protected": _domain_sp_count, "merge_cooled": _domain_mc_count},
+                    context={"pass": "same_domain", "split_protected": _domain_sp_count, "merge_cooled": _domain_mc_count},
                 )
             except RuntimeError:
                 pass
@@ -1104,6 +1105,37 @@ async def phase_merge(
                         )
                         if sim >= same_domain_threshold and both_active:
                             ni, nj = remaining[i], remaining[j]
+                            # Block merges that would recreate a mega-cluster.
+                            # If the combined member count would exceed the
+                            # mega-cluster floor AND either cluster's coherence
+                            # is below the split floor, the merge would reform
+                            # the exact condition that triggered a split.
+                            combined_members = (ni.member_count or 0) + (nj.member_count or 0)
+                            either_low_coh = (
+                                (ni.coherence is not None and ni.coherence < SPLIT_COHERENCE_FLOOR)
+                                or (nj.coherence is not None and nj.coherence < SPLIT_COHERENCE_FLOOR)
+                            )
+                            if combined_members >= MEGA_CLUSTER_MEMBER_FLOOR and either_low_coh:
+                                logger.debug(
+                                    "Same-domain merge blocked: would recreate mega-cluster "
+                                    "'%s' + '%s' (%d combined, low coherence)",
+                                    ni.label, nj.label, combined_members,
+                                )
+                                try:
+                                    get_event_logger().log_decision(
+                                        path="warm", op="merge", decision="blocked",
+                                        context={
+                                            "pair": [ni.id, nj.id],
+                                            "labels": [ni.label, nj.label],
+                                            "similarity": round(sim, 4),
+                                            "threshold": round(same_domain_threshold, 4),
+                                            "gate": "mega_cluster_prevention",
+                                            "combined_members": combined_members,
+                                        },
+                                    )
+                                except RuntimeError:
+                                    pass
+                                continue
                             big = (
                                 ni
                                 if (ni.member_count or 0) >= (nj.member_count or 0)
