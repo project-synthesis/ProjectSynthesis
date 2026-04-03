@@ -33,6 +33,7 @@ from app.models import (
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.services.embedding_service import EmbeddingService
 from app.services.prompt_loader import PromptLoader
+from app.services.taxonomy.event_logger import get_event_logger
 from app.services.taxonomy.projection import interpolate_position
 from app.utils.text_cleanup import parse_domain
 
@@ -276,6 +277,7 @@ async def assign_cluster(
     Returns:
         Existing (updated) or newly-created PromptCluster.
     """
+    _candidates_log: list[dict] = []  # Decision trace
 
     # Only merge into non-archived clusters.  Archived clusters are
     # effectively tombstoned and should never absorb new members.
@@ -336,6 +338,20 @@ async def assign_cluster(
                 if task_type and matched.task_type and task_type != matched.task_type:
                     effective_score *= 0.88
 
+                _candidates_log.append({
+                    "id": matched.id,
+                    "label": matched.label,
+                    "raw_score": round(score, 4),
+                    "threshold": round(threshold, 4),
+                    "effective_score": round(effective_score, 4),
+                    "member_count": matched.member_count or 0,
+                    "penalties": {
+                        "coherence": round((0.4 - (matched.coherence or 1.0)) * 0.3, 4) if matched.coherence is not None and matched.coherence < 0.4 else 0.0,
+                        "output_coh": round((0.35 - (_out_coh or 1.0)) * 0.4, 4) if _out_coh is not None and _out_coh < 0.35 else 0.0,
+                        "task_type": 0.12 if (task_type and matched.task_type and task_type != matched.task_type) else 0.0,
+                    },
+                })
+
                 if effective_score >= threshold:
                     # Cross-domain merge prevention
                     matched_primary, _ = parse_domain(matched.domain)
@@ -349,6 +365,8 @@ async def assign_cluster(
                             domain,
                             score,
                         )
+                        if _candidates_log:
+                            _candidates_log[-1]["gate"] = "cross_domain"
                         # Fall through to creation
                     else:
                         # Score-weighted centroid: higher-scoring prompts
@@ -408,8 +426,25 @@ async def assign_cluster(
                             threshold,
                             matched.member_count,
                         )
+                        try:
+                            get_event_logger().log_decision(
+                                path="hot", op="assign", decision="merge_into",
+                                cluster_id=matched.id,
+                                context={
+                                    "candidates": _candidates_log,
+                                    "winner_id": matched.id,
+                                    "winner_label": matched.label,
+                                    "new_cluster": False,
+                                    "prompt_domain": domain,
+                                    "prompt_task_type": task_type,
+                                },
+                            )
+                        except RuntimeError:
+                            pass
                         return matched
                 else:
+                    if _candidates_log:
+                        _candidates_log[-1]["gate"] = "below_threshold"
                     logger.debug(
                         "Below adaptive threshold: cluster '%s' "
                         "cosine=%.3f effective=%.3f < threshold=%.3f (members=%d)",
@@ -494,6 +529,22 @@ async def assign_cluster(
         domain,
         domain_node.label if domain_node else None,
     )
+    try:
+        get_event_logger().log_decision(
+            path="hot", op="assign", decision="create_new",
+            cluster_id=new_cluster.id,
+            context={
+                "candidates": _candidates_log,
+                "winner_id": None,
+                "new_cluster": True,
+                "new_label": label,
+                "prompt_domain": domain,
+                "prompt_task_type": task_type,
+                "parent_domain": domain_node.label if domain_node else None,
+            },
+        )
+    except (RuntimeError, NameError):
+        pass
     return new_cluster
 
 

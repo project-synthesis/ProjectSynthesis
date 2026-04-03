@@ -55,6 +55,7 @@ from app.services.taxonomy.matching import (
 from app.services.taxonomy.matching import (
     match_prompt as _match_prompt,
 )
+from app.services.taxonomy.event_logger import get_event_logger
 from app.services.taxonomy.sparkline import compute_sparkline_data
 from app.services.taxonomy.warm_path import WarmPathResult, execute_warm_path
 from app.utils.text_cleanup import parse_domain
@@ -386,6 +387,20 @@ class TaxonomyEngine:
             except Exception as evt_exc:
                 logger.warning("Failed to publish taxonomy_changed: %s", evt_exc)
 
+            try:
+                get_event_logger().log_decision(
+                    path="hot", op="assign", decision="extraction_complete",
+                    cluster_id=cluster.id,
+                    optimization_id=optimization_id,
+                    context={
+                        "cluster_label": cluster.label,
+                        "meta_patterns_added": len(meta_texts),
+                        "reassigned_from": old_cluster_id if old_cluster_id and old_cluster_id != cluster.id else None,
+                    },
+                )
+            except RuntimeError:
+                pass
+
         except Exception as exc:
             logger.error(
                 "Taxonomy process_optimization failed for %s: %s",
@@ -393,6 +408,19 @@ class TaxonomyEngine:
                 exc,
                 exc_info=True,
             )
+            try:
+                get_event_logger().log_decision(
+                    path="hot", op="error", decision="failed",
+                    optimization_id=optimization_id,
+                    context={
+                        "source": "process_optimization",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc)[:500],
+                        "recovery": "skipped",
+                    },
+                )
+            except RuntimeError:
+                pass
 
     # ------------------------------------------------------------------
     # Pattern matching — delegated to matching.py
