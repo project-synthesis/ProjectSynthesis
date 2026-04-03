@@ -39,6 +39,7 @@ class ClusterMeta(TypedDict, total=False):
     split_attempt_member_count: int   # member_count when last split was attempted (growth-based cooldown reset)
     coherence_member_count: int          # member_count at last coherence recomputation
     pattern_member_count: int            # member_count at last meta-pattern extraction
+    pattern_stale: bool                  # True when cluster composition changed since last pattern extraction
     label_refreshed_at: str              # ISO8601 timestamp of last label refresh
 
     # --- Adaptive learning ---
@@ -64,6 +65,7 @@ _DEFAULTS: dict[str, Any] = {
     "split_attempt_member_count": 0,
     "coherence_member_count": 0,
     "pattern_member_count": 0,
+    "pattern_stale": True,
     "label_refreshed_at": "",
     "learned_phase_weights": None,
     "output_coherence": None,

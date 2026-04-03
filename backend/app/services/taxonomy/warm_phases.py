@@ -1057,9 +1057,10 @@ async def phase_refresh(
     """
     result = RefreshResult()
 
-    refresh_growth_factor = 3   # trigger when member_count >= 3x last extraction
     refresh_min_members = 3     # matches domain discovery threshold
     refresh_sample_size = 8     # representative sample for re-extraction
+    refresh_cooldown_minutes = 10  # min time between re-extractions
+    refresh_min_delta = 3       # min member change to override cooldown
 
     try:
         from app.services.taxonomy.labeling import generate_label
@@ -1070,13 +1071,29 @@ async def phase_refresh(
         )
         active_nodes = list(nodes_q.scalars().all())
 
+        now = _utcnow()
         for node in active_nodes:
             if node.state == "domain" or (node.member_count or 0) < refresh_min_members:
                 continue
             meta = read_meta(node.cluster_metadata)
-            last_count = meta["pattern_member_count"]
-            if last_count > 0 and node.member_count < last_count * refresh_growth_factor:
-                continue  # not stale enough
+
+            # Event-driven: only refresh clusters marked stale by mutation events
+            if not meta.get("pattern_stale", True):
+                continue  # patterns are fresh
+
+            # Cooldown: don't re-extract if recently refreshed AND small change
+            last_refresh = meta.get("label_refreshed_at", "")
+            last_pmc = meta.get("pattern_member_count", 0)
+            if last_refresh:
+                try:
+                    from datetime import datetime
+                    refresh_time = datetime.fromisoformat(last_refresh)
+                    age_minutes = (now - refresh_time).total_seconds() / 60
+                    member_delta = abs((node.member_count or 0) - last_pmc)
+                    if age_minutes < refresh_cooldown_minutes and member_delta < refresh_min_delta:
+                        continue  # too soon, too little change
+                except (ValueError, TypeError):
+                    pass  # malformed timestamp, proceed with refresh
 
             # Gather representative sample of recent members
             sample_q = await db.execute(
@@ -1133,12 +1150,13 @@ async def phase_refresh(
             node.cluster_metadata = write_meta(
                 node.cluster_metadata,
                 pattern_member_count=node.member_count,
+                pattern_stale=False,
                 label_refreshed_at=_utcnow().isoformat(),
             )
             result.clusters_refreshed += 1
             logger.info(
-                "Refreshed label+patterns for '%s' (members: %d->%d, old_count=%d)",
-                node.label, last_count, node.member_count, last_count,
+                "Refreshed label+patterns for '%s' (members=%d, prev_pmc=%d)",
+                node.label, node.member_count, last_pmc,
             )
 
         if result.clusters_refreshed:

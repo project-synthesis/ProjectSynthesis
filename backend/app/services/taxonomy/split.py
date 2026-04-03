@@ -376,6 +376,7 @@ async def split_cluster(
             ch.cluster_metadata = write_meta(
                 ch.cluster_metadata,
                 pattern_member_count=ch.member_count,
+                pattern_stale=False,
             )
             if pattern_texts:
                 logger.info(

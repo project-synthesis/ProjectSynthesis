@@ -268,6 +268,11 @@ class TaxonomyEngine:
                     old_cluster.member_count = max(0, (old_cluster.member_count or 1) - 1)
                     if opt.overall_score is not None and (old_cluster.scored_count or 0) > 0:
                         old_cluster.scored_count = max(0, old_cluster.scored_count - 1)
+                    # Mark old cluster pattern-stale — it lost a member
+                    from app.services.taxonomy.cluster_meta import write_meta as _wm_reassign
+                    old_cluster.cluster_metadata = _wm_reassign(
+                        old_cluster.cluster_metadata, pattern_stale=True,
+                    )
                     logger.info(
                         "Decremented old cluster '%s' member_count to %d "
                         "(reassigned to '%s')",
@@ -341,9 +346,17 @@ class TaxonomyEngine:
                 opt, db, self._provider, self._prompt_loader,
             )
 
-            # 4. Merge meta-patterns
+            # 4. Merge meta-patterns and update freshness flag
             for text in meta_texts:
                 await merge_meta_pattern(db, cluster.id, text, self._embedding)
+            # If extraction produced results, patterns are fresh for this member.
+            # If empty (provider unavailable), mark stale so Phase 4 catches it.
+            from app.services.taxonomy.cluster_meta import write_meta as _wm_hot
+
+            cluster.cluster_metadata = _wm_hot(
+                cluster.cluster_metadata,
+                pattern_stale=len(meta_texts) == 0,
+            )
 
             # 5. Write join record
             join = OptimizationPattern(

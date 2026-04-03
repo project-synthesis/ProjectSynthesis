@@ -328,6 +328,13 @@ async def attempt_merge(
                 await db.delete(mp)
             logger.info("merge: moved %d meta-patterns to survivor", moved)
 
+        # Mark survivor as pattern-stale — merged population needs re-extraction
+        from app.services.taxonomy.cluster_meta import write_meta as _wm
+
+        survivor.cluster_metadata = _wm(
+            survivor.cluster_metadata, pattern_stale=True,
+        )
+
         await db.flush()
         logger.info(
             "merge: '%s' (id=%s) absorbed '%s' (id=%s) → %d members",
@@ -562,6 +569,26 @@ async def attempt_retire(
                 "retire: reassigned %d optimizations to '%s' (member_count now %d)",
                 opt_result.rowcount, target_sibling.label,
                 target_sibling.member_count,
+            )
+
+        # Clean up orphaned meta-patterns — archived clusters don't participate
+        # in pattern injection or matching, so their patterns are dead weight.
+        from app.models import MetaPattern
+
+        orphan_patterns = (await db.execute(
+            select(MetaPattern).where(MetaPattern.cluster_id == node.id)
+        )).scalars().all()
+        for mp in orphan_patterns:
+            await db.delete(mp)
+        if orphan_patterns:
+            logger.info("retire: deleted %d orphaned meta-patterns", len(orphan_patterns))
+
+        # Mark target sibling as pattern-stale (inherited members need re-extraction)
+        if opt_result.rowcount:
+            from app.services.taxonomy.cluster_meta import write_meta as _wm
+
+            target_sibling.cluster_metadata = _wm(
+                target_sibling.cluster_metadata, pattern_stale=True,
             )
 
         # Mark node as retired and clear stale metrics.
