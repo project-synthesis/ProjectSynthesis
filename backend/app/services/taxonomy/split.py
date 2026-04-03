@@ -222,8 +222,15 @@ async def split_cluster(
             child_node.umap_x = node.umap_x + random.uniform(-0.5, 0.5)
             child_node.umap_y = node.umap_y + random.uniform(-0.5, 0.5)
             child_node.umap_z = node.umap_z + random.uniform(-0.5, 0.5)
+        # Protect from merge for 30 minutes — split children have similar
+        # centroids to their parent and siblings, so the warm-path merge
+        # phase would immediately re-merge them without this cooldown.
+        from datetime import datetime, timedelta, timezone
+        merge_until = (datetime.now(timezone.utc) + timedelta(minutes=30)).replace(tzinfo=None)
         child_node.cluster_metadata = write_meta(
-            child_node.cluster_metadata, position_source="interpolated",
+            child_node.cluster_metadata,
+            position_source="interpolated",
+            merge_protected_until=merge_until.isoformat(),
         )
 
         # Reassign optimizations

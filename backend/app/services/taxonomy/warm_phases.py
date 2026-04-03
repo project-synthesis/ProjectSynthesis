@@ -698,6 +698,8 @@ async def phase_merge(
     # Use blended centroids (raw + optimized + transformation) for the
     # pairwise similarity matrix so merge candidates reflect topic,
     # output quality, and technique direction — not just topic similarity.
+    # Exclude split-protected and merge-cooled nodes from merge candidates.
+    now_merge = _utcnow()
     opt_idx = getattr(engine, "_optimized_index", None)
     trans_idx = getattr(engine, "_transformation_index", None)
     if len(active_nodes) >= 2:
@@ -705,6 +707,17 @@ async def phase_merge(
         blended_centroids = []
         valid_nodes: list[PromptCluster] = []
         for n in active_nodes:
+            if n.id in split_protected_ids:
+                continue
+            meta_m = read_meta(n.cluster_metadata)
+            merge_until_m = meta_m.get("merge_protected_until", "")
+            if merge_until_m:
+                try:
+                    from datetime import datetime as _dt_m
+                    if now_merge < _dt_m.fromisoformat(merge_until_m):
+                        continue
+                except (ValueError, TypeError):
+                    pass
             try:
                 c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
                 opt_vec = opt_idx.get_vector(n.id) if opt_idx else None
@@ -802,11 +815,23 @@ async def phase_merge(
         )
         current_active = list(current_q.scalars().all())
 
-        # Group by primary domain, excluding split-protected nodes
+        # Group by primary domain, excluding split-protected and merge-cooled nodes
+        now = _utcnow()
         domain_groups: dict[str, list[PromptCluster]] = {}
         for node in current_active:
             if node.id in split_protected_ids:
                 continue
+            # Merge cooldown: split children are protected for 30 minutes
+            meta = read_meta(node.cluster_metadata)
+            merge_until = meta.get("merge_protected_until", "")
+            if merge_until:
+                try:
+                    from datetime import datetime
+                    protected_until = datetime.fromisoformat(merge_until)
+                    if now < protected_until:
+                        continue  # still protected
+                except (ValueError, TypeError):
+                    pass
             primary, _ = parse_domain(node.domain or "general")
             domain_groups.setdefault(primary, []).append(node)
 
