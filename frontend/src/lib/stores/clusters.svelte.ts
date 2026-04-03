@@ -8,7 +8,7 @@
 import {
   matchPattern, getClusterDetail, getClusterTree, getClusterStats,
   getClusterTemplates, getClusterSimilarityEdges, getClusterInjectionEdges,
-  getClusterActivity,
+  getClusterActivity, getClusterActivityHistory,
   type ClusterMatchResponse, type ClusterDetail, type ClusterNode, type ClusterStats,
   type SimilarityEdge, type InjectionEdge, type TaxonomyActivityEvent,
 } from '$lib/api/clusters';
@@ -309,7 +309,15 @@ class ClusterStore {
     this.activityLoading = true;
     try {
       const resp = await getClusterActivity({ limit: 200, ...params });
-      this.activityEvents = resp.events;
+      if (resp.events.length > 0) {
+        this.activityEvents = resp.events;
+      } else {
+        // Ring buffer empty (e.g. after server restart) — fall back to
+        // today's JSONL history so the panel isn't blank.
+        const today = new Date().toISOString().slice(0, 10);
+        const hist = await getClusterActivityHistory({ date: today, limit: 200 });
+        this.activityEvents = hist.events.reverse(); // newest first
+      }
     } catch (err) {
       console.warn('Activity load failed:', err);
     } finally {
