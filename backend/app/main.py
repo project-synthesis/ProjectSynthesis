@@ -109,6 +109,14 @@ async def lifespan(app: FastAPI):
             app.state.taxonomy_engine = engine
             set_engine(engine)
 
+            # Initialize taxonomy event logger
+            from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
+            taxonomy_event_logger = TaxonomyEventLogger(
+                events_dir=DATA_DIR / "taxonomy_events",
+                publish_to_bus=True,
+            )
+            set_event_logger(taxonomy_event_logger)
+
             # Initialize domain services
             from app.services.domain_resolver import (
                 DomainResolver,
@@ -701,6 +709,17 @@ async def lifespan(app: FastAPI):
             logger.info("Trace rotation: deleted %d old files", deleted)
     except Exception as exc:
         logger.error("Trace rotation failed: %s", exc)
+
+    try:
+        from app.services.taxonomy.event_logger import get_event_logger
+        tel = get_event_logger()
+        tel_deleted = tel.rotate(retention_days=settings.TRACE_RETENTION_DAYS)
+        if tel_deleted:
+            logger.info("Rotated %d old taxonomy event files", tel_deleted)
+    except RuntimeError:
+        pass  # Logger not initialized (unlikely during shutdown)
+    except Exception as exc:
+        logger.error("Taxonomy event rotation failed: %s", exc)
 
     # Phase 5: Clear taxonomy singleton + dispose database engine.
     try:

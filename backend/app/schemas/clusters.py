@@ -158,3 +158,29 @@ class InjectionEdge(BaseModel):
 
 class InjectionEdgesResponse(BaseModel):
     edges: list[InjectionEdge]
+
+
+class TaxonomyActivityEvent(BaseModel):
+    """Single taxonomy decision event."""
+    ts: str
+    path: str
+    op: str
+    decision: str
+    cluster_id: str | None = None
+    optimization_id: str | None = None
+    duration_ms: int | None = None
+    context: dict = {}
+
+
+class ActivityResponse(BaseModel):
+    """Response for GET /api/clusters/activity."""
+    events: list[TaxonomyActivityEvent]
+    total_in_buffer: int
+    oldest_ts: str | None = None
+
+
+class ActivityHistoryResponse(BaseModel):
+    """Response for GET /api/clusters/activity/history."""
+    events: list[TaxonomyActivityEvent]
+    total: int
+    has_more: bool
