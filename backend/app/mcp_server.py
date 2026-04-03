@@ -597,21 +597,22 @@ class _CapabilityDetectionMiddleware:
                     pass
 
                 # Disconnect logic
-                routing = _shared._routing
+                # For Streamable HTTP, SSE GET streams are ephemeral — the
+                # client opens GET /mcp, receives pending responses, and the
+                # stream closes naturally.  An empty SSE count does NOT mean
+                # the client disconnected; it will open new GETs on its next
+                # request.  True disconnection is detected by the staleness-
+                # based _disconnect_loop (30s poll, 5-minute threshold).
+                #
+                # We only log the stream count change; no immediate routing
+                # state transitions on SSE close.
                 if cls._active_sse_streams == 0:
-                    logger.info("Last SSE stream closed — full disconnect")
-                    if routing:
-                        routing.on_mcp_disconnect()
+                    logger.debug("All SSE streams closed (ephemeral — not a disconnect)")
                 elif was_sampling and not cls._sampling_sse_sessions:
-                    # Last SAMPLING stream closed — non-sampling clients remain.
-                    # Only clear sampling_capable; keep mcp_connected=True.
-                    logger.info(
-                        "Last sampling SSE closed — sampling-only disconnect "
-                        "(non-sampling streams remain: %d)",
+                    logger.debug(
+                        "Last sampling SSE closed (non-sampling streams remain: %d)",
                         cls._active_sse_streams,
                     )
-                    if routing:
-                        routing.on_sampling_disconnect()
 
     # ── Activity tracking ─────────────────────────────────────────
 
