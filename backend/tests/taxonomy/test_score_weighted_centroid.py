@@ -210,8 +210,9 @@ async def test_pre_migration_fallback(db: AsyncSession):
     )
     assert result.id == cluster.id
     # Should have used member_count (5) as old weighted_sum fallback
-    # New weighted_sum = 5.0 + 0.8 = 5.8
-    assert result.weighted_member_sum == pytest.approx(5.0 + 0.8, abs=1e-6)
+    # Power-law weight: max(0.2, (8.0/10.0)**1.5) ≈ 0.7155
+    # New weighted_sum = 5.0 + 0.7155 ≈ 5.7155
+    assert result.weighted_member_sum == pytest.approx(5.0 + max(0.2, (8.0 / 10.0) ** 1.5), abs=1e-4)
     assert result.member_count == 6
 
 

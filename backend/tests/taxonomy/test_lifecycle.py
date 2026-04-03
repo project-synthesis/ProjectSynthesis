@@ -131,7 +131,7 @@ async def test_retire_redistributes_members(db, mock_embedding):
         warm_path_age=25,
     )
 
-    assert result is True
+    assert result.success is True
     assert target.state == "archived"
     assert target.archived_at is not None
 
@@ -185,7 +185,7 @@ async def test_retire_root_node_rejected(db, mock_embedding):
         warm_path_age=25,
     )
 
-    assert result is False
+    assert result.success is False
     assert root.state == "active"
     assert root.archived_at is None
 
