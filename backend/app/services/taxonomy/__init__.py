@@ -12,6 +12,9 @@ Public API:
     compute_sparkline_data — transform raw Q values into sparkline data
     get_engine — process-wide singleton accessor
     set_engine — register the canonical instance (called from main.py lifespan)
+    TaxonomyEventLogger — structured decision tracing (JSONL + ring buffer)
+    get_event_logger — process-wide event logger accessor
+    set_event_logger — register the canonical event logger (called from main.py lifespan)
 """
 
 from __future__ import annotations
@@ -38,6 +41,11 @@ from app.services.taxonomy.matching import (
 from app.services.taxonomy.quality import QWeights
 from app.services.taxonomy.sparkline import SparklineData, compute_sparkline_data
 from app.services.taxonomy.transformation_index import TransformationIndex
+from app.services.taxonomy.event_logger import (
+    TaxonomyEventLogger,
+    get_event_logger,
+    set_event_logger,
+)
 from app.services.taxonomy.warm_path import WarmPathResult
 
 __all__ = [
@@ -51,6 +59,7 @@ __all__ = [
     "QWeights",
     "SparklineData",
     "TaxonomyEngine",
+    "TaxonomyEventLogger",
     "TaxonomyMapping",
     "TransformationIndex",
     "WarmPathResult",
@@ -60,9 +69,11 @@ __all__ = [
     "decay_toward_defaults",
     "resolve_fused_embedding",
     "get_engine",
+    "get_event_logger",
     "read_meta",
     "reset_engine",
     "set_engine",
+    "set_event_logger",
     "write_meta",
 ]
 
