@@ -82,6 +82,7 @@
   // Badge count reflects the filtered view (what the user actually sees)
   const totalFamilies = $derived(filteredFamilies.length);
 
+
   // Group filtered families by primary domain (ignores qualifier from "primary: qualifier")
   let grouped = $derived(
     filteredFamilies.reduce<Record<string, ClusterNode[]>>((acc, f) => {

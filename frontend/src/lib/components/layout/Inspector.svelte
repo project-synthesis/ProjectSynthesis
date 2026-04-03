@@ -10,6 +10,9 @@
   import { assessTaxonomyHealth } from '$lib/utils/taxonomy-health';
   import { tooltip } from '$lib/actions/tooltip';
 
+  /** Known domains for the domain picker (legacy compat). */
+  const KNOWN_DOMAINS = ['backend', 'frontend', 'database', 'security', 'devops', 'fullstack', 'general'];
+
   /** Deduplicate array by `id` field (prevents Svelte keyed each errors). */
   function dedupe<T extends { id: string }>(items: T[]): T[] {
     const seen = new Set<string>();
@@ -958,6 +961,12 @@
     color: var(--color-text-secondary);
     line-height: 1.4;
     margin-top: 2px;
+  }
+
+  .health-trend {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    white-space: nowrap;
   }
 
   /* Pattern family detail */
