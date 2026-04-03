@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     if db_path.exists():
         async with aiosqlite.connect(str(db_path)) as db:
             await db.execute("PRAGMA journal_mode=WAL")
-            await db.execute("PRAGMA busy_timeout=5000")
+            await db.execute("PRAGMA busy_timeout=30000")  # 30s — warm path can hold lock 10-20s
         logger.info("SQLite WAL mode enabled for %s", db_path)
 
     # Initialize routing service
