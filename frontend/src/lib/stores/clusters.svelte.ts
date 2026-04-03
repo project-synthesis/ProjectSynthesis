@@ -300,7 +300,7 @@ class ClusterStore {
 
   toggleActivity(): void {
     this.activityOpen = !this.activityOpen;
-    if (this.activityOpen && this.activityEvents.length === 0) {
+    if (this.activityOpen) {
       this.loadActivity();
     }
   }
