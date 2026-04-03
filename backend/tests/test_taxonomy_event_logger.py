@@ -1,7 +1,6 @@
 """Tests for TaxonomyEventLogger — JSONL persistence + ring buffer."""
 
 import json
-import time
 from pathlib import Path
 
 import pytest

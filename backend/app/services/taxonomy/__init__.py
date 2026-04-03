@@ -44,6 +44,7 @@ from app.services.taxonomy.transformation_index import TransformationIndex
 from app.services.taxonomy.event_logger import (
     TaxonomyEventLogger,
     get_event_logger,
+    reset_event_logger,
     set_event_logger,
 )
 from app.services.taxonomy.warm_path import WarmPathResult
@@ -72,6 +73,7 @@ __all__ = [
     "get_event_logger",
     "read_meta",
     "reset_engine",
+    "reset_event_logger",
     "set_engine",
     "set_event_logger",
     "write_meta",

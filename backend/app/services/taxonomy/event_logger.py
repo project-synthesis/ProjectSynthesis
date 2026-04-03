@@ -35,6 +35,12 @@ def set_event_logger(inst: "TaxonomyEventLogger") -> None:
     _instance = inst
 
 
+def reset_event_logger() -> None:
+    """Clear the process singleton (test cleanup only)."""
+    global _instance
+    _instance = None
+
+
 # ---------------------------------------------------------------------------
 # Logger class
 # ---------------------------------------------------------------------------
