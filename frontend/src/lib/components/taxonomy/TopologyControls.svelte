@@ -1,11 +1,9 @@
 <script lang="ts">
   import { clustersStore } from '$lib/stores/clusters.svelte';
-  import { qHealthColor } from '$lib/utils/colors';
-  import { assessTaxonomyHealth } from '$lib/utils/taxonomy-health';
   import { TAXONOMY_TOOLTIPS } from '$lib/utils/metric-tooltips';
   import { tooltip } from '$lib/actions/tooltip';
   import { TOPOLOGY_TOOLTIPS } from '$lib/utils/ui-tooltips';
-  import ScoreSparkline from '$lib/components/refinement/ScoreSparkline.svelte';
+  import TopologyInfoPanel from './TopologyInfoPanel.svelte';
   import type { LODTier } from './TopologyRenderer';
 
   interface Props {
@@ -19,19 +17,6 @@
   let searchQuery = $state('');
   let searchOpen = $state(false);
   let reclustering = $state(false);
-
-  const stats = $derived(clustersStore.taxonomyStats);
-  const qSystem = $derived(stats?.q_system ?? null);
-  const qColor = $derived(qHealthColor(qSystem));
-  const health = $derived(stats ? assessTaxonomyHealth(stats) : null);
-
-  // Sub-metrics
-  const coherence = $derived(stats?.q_coherence ?? null);
-  const separation = $derived(stats?.q_separation ?? null);
-
-  // Sparkline data
-  const sparkline = $derived(stats?.q_sparkline ?? []);
-  const hasSparkline = $derived(sparkline.length >= 2);
 
   // Canonical state breakdown from the store (respects orphan filter + state filter)
   const filteredCounts = $derived(clustersStore.clusterCounts);
@@ -65,54 +50,14 @@
       searchOpen = true;
     }
   }
-
-  function formatMetric(v: number | null): string {
-    if (v == null) return '--';
-    return v.toFixed(2);
-  }
 </script>
 
 <svelte:window onkeydown={handleGlobalKey} />
 
 <div class="tc-panel">
-  <!-- Health section -->
-  <div class="tc-section tc-health">
-    {#if qSystem != null}
-      <div class="tc-health-row">
-        <div class="tc-q-group" use:tooltip={TAXONOMY_TOOLTIPS.q_system}>
-          <span class="tc-q-label">Q</span>
-          <span class="tc-q-value" style="color: {qColor}">{qSystem.toFixed(3)}</span>
-        </div>
-        {#if hasSparkline}
-          <div class="tc-sparkline">
-            <ScoreSparkline scores={sparkline} width={72} height={16} minRange={0.2} />
-          </div>
-        {/if}
-        {#if health}
-          <span class="tc-severity-dot" style="background: {health.color}"></span>
-        {/if}
-      </div>
-
-      {#if health}
-        <div class="tc-headline" style="color: {health.color}" use:tooltip={health.detail}>
-          {health.headline}
-        </div>
-      {/if}
-
-      <!-- Sub-metrics -->
-      <div class="tc-metrics">
-        <span class="tc-metric" use:tooltip={TAXONOMY_TOOLTIPS.coherence}>
-          <span class="tc-metric-label">coh</span>
-          <span class="tc-metric-value">{formatMetric(coherence)}</span>
-        </span>
-        <span class="tc-metric" use:tooltip={TAXONOMY_TOOLTIPS.separation}>
-          <span class="tc-metric-label">sep</span>
-          <span class="tc-metric-value">{formatMetric(separation)}</span>
-        </span>
-      </div>
-    {:else}
-      <div class="tc-empty">No data</div>
-    {/if}
+  <!-- Adaptive info panel -->
+  <div class="tc-section tc-info">
+    <TopologyInfoPanel />
   </div>
 
   <!-- Edge layer toggles -->
@@ -227,86 +172,10 @@
     margin-bottom: 4px;
   }
 
-  /* ── Health section ── */
+  /* ── Info panel section ── */
 
-  .tc-health {
-    padding: 6px;
-  }
-
-  .tc-health-row {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .tc-q-group {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    flex-shrink: 0;
-  }
-
-  .tc-q-label {
-    color: var(--color-text-dim);
-    font-weight: 500;
-  }
-
-  .tc-q-value {
-    font-weight: 700;
-  }
-
-  .tc-sparkline {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-  }
-
-  .tc-severity-dot {
-    width: 5px;
-    height: 5px;
-    flex-shrink: 0;
-  }
-
-  .tc-headline {
-    font-family: var(--font-sans);
-    font-size: 10px;
-    font-weight: 500;
-    margin-top: 3px;
-    cursor: default;
-  }
-
-  .tc-metrics {
-    display: flex;
-    gap: 8px;
-    margin-top: 4px;
-  }
-
-  .tc-metric {
-    display: flex;
-    gap: 3px;
-    font-family: var(--font-mono);
-    font-size: 9px;
-    cursor: default;
-  }
-
-  .tc-metric-label {
-    color: var(--color-text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .tc-metric-value {
-    color: var(--color-text-secondary);
-  }
-
-  .tc-empty {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--color-text-dim);
+  .tc-info {
+    padding: 0;
   }
 
   /* ── Layer toggles ── */
