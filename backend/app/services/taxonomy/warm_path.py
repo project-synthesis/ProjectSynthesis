@@ -150,24 +150,28 @@ async def _run_speculative_phase(
                 "Phase %s accepted: Q %.4f -> %.4f (ops=%d)",
                 phase_name, q_before, q_after, phase_result.ops_accepted,
             )
-            try:
-                get_event_logger().log_decision(
-                    path="warm", op="phase", decision="accepted",
-                    context={
-                        "phase_name": phase_name,
-                        "phase_idx": phase_idx,
-                        "q_before": round(q_before, 4),
-                        "q_after": round(q_after, 4),
-                        "delta": round(q_after - q_before, 4),
-                        "ops_accepted": phase_result.ops_accepted,
-                        "ops_attempted": phase_result.ops_attempted,
-                        "rejection_count": engine._phase_rejection_counters.get(phase_name, 0),
-                        "operations": phase_result.operations[:10],
-                        "accepted": True,
-                    },
-                )
-            except RuntimeError:
-                pass
+            # Only log accepted phases that actually did work — idle
+            # phases (0 attempted, 0 accepted) are noise in the
+            # Activity panel and JSONL when the system has converged.
+            if phase_result.ops_attempted > 0:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="phase", decision="accepted",
+                        context={
+                            "phase_name": phase_name,
+                            "phase_idx": phase_idx,
+                            "q_before": round(q_before, 4),
+                            "q_after": round(q_after, 4),
+                            "delta": round(q_after - q_before, 4),
+                            "ops_accepted": phase_result.ops_accepted,
+                            "ops_attempted": phase_result.ops_attempted,
+                            "rejection_count": engine._phase_rejection_counters.get(phase_name, 0),
+                            "operations": phase_result.operations[:10],
+                            "accepted": True,
+                        },
+                    )
+                except RuntimeError:
+                    pass
             return phase_result
         else:
             await db.rollback()
