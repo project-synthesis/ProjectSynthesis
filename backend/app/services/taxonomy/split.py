@@ -297,6 +297,55 @@ async def split_cluster(
                 merge_score_into_cluster(best_c, noise_score_lookup.get(nid))
                 noise_reassigned += 1
 
+    # Compute per-child separation (min cosine distance to any sibling)
+    if len(new_children) >= 2:
+        child_centroids = []
+        for ch in new_children:
+            try:
+                child_centroids.append(
+                    np.frombuffer(ch.centroid_embedding, dtype=np.float32)
+                )
+            except (ValueError, TypeError):
+                child_centroids.append(np.zeros(384, dtype=np.float32))
+        for i, ch in enumerate(new_children):
+            min_dist = 1.0
+            for j, other_c in enumerate(child_centroids):
+                if i == j:
+                    continue
+                sim = float(np.dot(
+                    child_centroids[i] / max(np.linalg.norm(child_centroids[i]), 1e-9),
+                    other_c / max(np.linalg.norm(other_c), 1e-9),
+                ))
+                dist = 1.0 - sim
+                if dist < min_dist:
+                    min_dist = dist
+            ch.separation = min_dist
+
+    # Compute output coherence per child from optimized_embeddings
+    for ch in new_children:
+        try:
+            oe_q = await db.execute(
+                select(Optimization.optimized_embedding).where(
+                    Optimization.cluster_id == ch.id,
+                    Optimization.optimized_embedding.isnot(None),
+                )
+            )
+            opt_embs = []
+            for (oe_bytes,) in oe_q.all():
+                try:
+                    oe = np.frombuffer(oe_bytes, dtype=np.float32)
+                    if oe.shape[0] == 384:
+                        opt_embs.append(oe / max(np.linalg.norm(oe), 1e-9))
+                except (ValueError, TypeError):
+                    continue
+            if len(opt_embs) >= 2:
+                out_coh = compute_pairwise_coherence(opt_embs)
+                ch.cluster_metadata = write_meta(
+                    ch.cluster_metadata, output_coherence=round(out_coh, 4),
+                )
+        except Exception:
+            pass  # Non-fatal
+
     await db.flush()
     logger.info(
         "Split '%s' -> %d sub-clusters (%d noise reassigned)",
