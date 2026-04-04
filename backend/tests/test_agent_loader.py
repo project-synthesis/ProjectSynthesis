@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.agent_loader import AgentLoader, SeedAgent
+from app.services.agent_loader import AgentLoader
 
 
 @pytest.fixture

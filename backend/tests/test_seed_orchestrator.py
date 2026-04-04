@@ -1,6 +1,5 @@
 """Tests for SeedOrchestrator — prompt generation and deduplication."""
 
-import numpy as np
 import pytest
 
 from app.services.seed_orchestrator import SeedOrchestrator, deduplicate_prompts
