@@ -10,6 +10,20 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ---
 
+## Immediate
+
+### Sub-domain discovery cluster-count trigger
+**Status:** Immediate
+**Context:** The sub-domain discovery system (`_propose_sub_domains()` in engine.py) only triggers when a domain's mean child cluster coherence drops below 0.50. With well-organized taxonomy (the warm path keeps clusters coherent), this threshold is never reached — the SaaS domain has 23 active clusters, 59 members, but mean coherence 0.828.
+
+**Diagnosis:** The 0.50 coherence ceiling was designed for domains that grow organically incoherent (many diverse prompts forced into a single mega-cluster). But the taxonomy engine's split/merge/reconcile cycle prevents this — new prompts either join matching clusters (maintaining coherence) or spawn focused new clusters (coherence=1.0). The domain IS diverse (pricing vs metrics vs onboarding vs customer success vs operations) but diversity is captured at the cluster level, not reflected in per-cluster coherence.
+
+**Proposed fix:** Add OR-logic trigger: sub-domain discovery fires if EITHER `(members >= 20 AND mean_coherence < 0.50)` OR `(active_clusters >= 15 AND members >= 30)`. The cluster-count path recognizes that a domain with 15+ clusters is structurally complex enough to benefit from sub-grouping regardless of individual cluster coherence.
+
+**Files:** `backend/app/services/taxonomy/_constants.py` (new `SUB_DOMAIN_MIN_CLUSTERS` constant), `backend/app/services/taxonomy/engine.py` (`_propose_sub_domains()` — add second trigger path)
+
+---
+
 ## Planned
 
 ### MCP routing fallback — per-client capability awareness
