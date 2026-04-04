@@ -1193,17 +1193,13 @@ async def phase_merge(
                         )
                         if sim >= same_domain_threshold and both_active:
                             ni, nj = remaining[i], remaining[j]
-                            # Block merges that would recreate a mega-cluster.
-                            # If the combined member count would exceed the
-                            # mega-cluster floor AND either cluster's coherence
-                            # is below the split floor, the merge would reform
-                            # the exact condition that triggered a split.
+                            # Block same-domain merges that would create an
+                            # oversized cluster. The global merge path uses
+                            # adaptive_merge_threshold with size pressure for
+                            # large clusters — the same-domain path should not
+                            # bypass that by merging on similarity alone.
                             combined_members = (ni.member_count or 0) + (nj.member_count or 0)
-                            either_low_coh = (
-                                (ni.coherence is not None and ni.coherence < SPLIT_COHERENCE_FLOOR)
-                                or (nj.coherence is not None and nj.coherence < SPLIT_COHERENCE_FLOOR)
-                            )
-                            if combined_members >= MEGA_CLUSTER_MEMBER_FLOOR and either_low_coh:
+                            if combined_members >= MEGA_CLUSTER_MEMBER_FLOOR:
                                 logger.debug(
                                     "Same-domain merge blocked: would recreate mega-cluster "
                                     "'%s' + '%s' (%d combined, low coherence)",
