@@ -180,17 +180,6 @@
     border-top: 1px solid var(--color-border-subtle);
   }
 
-  .tc-section-title {
-    display: block;
-    font-family: var(--font-display);
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    color: var(--color-text-dim);
-    text-transform: uppercase;
-    margin-bottom: 4px;
-  }
-
   /* ── Info panel section ── */
 
   .tc-info {
