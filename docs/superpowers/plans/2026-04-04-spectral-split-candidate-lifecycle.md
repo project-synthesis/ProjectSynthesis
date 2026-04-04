@@ -234,16 +234,19 @@ def spectral_split(
         silhouette_gate: Minimum rescaled silhouette to accept.
 
     Returns:
-        :class:`ClusterResult` with the best partition, or ``None`` if
-        no valid partition passes the silhouette gate.
+        Tuple of (:class:`ClusterResult` or ``None``, dict mapping k → rescaled
+        silhouette for ALL k values attempted). The dict is always populated
+        even when the result is None — needed for the ``spectral_evaluation``
+        observability event.
     """
     n = embeddings.shape[0]
     min_required = max(k_range) * SPECTRAL_MIN_GROUP_SIZE
+    all_silhouettes: dict[int, float] = {}
     if n < min_required:
         logger.debug(
             "spectral_split: N=%d < min_required=%d, skipping", n, min_required,
         )
-        return None
+        return None, all_silhouettes
 
     # Cosine similarity matrix (L2-normalized → dot product = cosine)
     sim_matrix = embeddings @ embeddings.T
@@ -271,6 +274,7 @@ def spectral_split(
         # Reject if any group is too small
         group_sizes = [int((labels == cid).sum()) for cid in range(k)]
         if any(s < SPECTRAL_MIN_GROUP_SIZE for s in group_sizes):
+            all_silhouettes[k] = -1.0  # rejected for group size
             continue
 
         # Silhouette score (cosine metric, raw range [-1, 1])
@@ -280,6 +284,7 @@ def spectral_split(
         except Exception:
             continue
 
+        all_silhouettes[k] = round(rescaled, 4)
         if rescaled > best_sil:
             best_sil = rescaled
             best_k = k
@@ -290,7 +295,7 @@ def spectral_split(
             "spectral_split: no valid partition (best_sil=%.4f, gate=%.4f)",
             best_sil, silhouette_gate,
         )
-        return None
+        return None, all_silhouettes
 
     # Compute L2-normalized centroids
     centroids: list[np.ndarray] = []
@@ -309,7 +314,7 @@ def spectral_split(
         persistences=[best_sil] * best_k,  # type: ignore[operator]
         centroids=centroids,
         silhouette=best_sil,
-    )
+    ), all_silhouettes
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -378,13 +383,11 @@ Replace lines 107-143 of `split.py` (the HDBSCAN call through the end of K-Means
     norms = np.where(norms == 0, 1.0, norms)
     emb_stack = (emb_stack / norms).astype(np.float32)
 
-    split_result = spectral_split(emb_stack)
+    split_result, all_silhouettes = spectral_split(emb_stack)
     used_algorithm = "spectral"
 
     # Log spectral evaluation result
-    spectral_silhouettes: dict[str, float] = {}
-    if split_result is not None:
-        spectral_silhouettes = {str(split_result.n_clusters): round(split_result.silhouette, 4)}
+    spectral_silhouettes: dict[str, float] = {str(k): v for k, v in all_silhouettes.items()}
     try:
         get_event_logger().log_decision(
             path=log_path, op="split", decision="spectral_evaluation",
@@ -1069,6 +1072,9 @@ async def phase_evaluate_candidates(
                         "coherence": round(coherence, 4),
                         "reason": "coherence_above_floor",
                         "coherence_floor": CANDIDATE_COHERENCE_FLOOR,
+                        "time_as_candidate_ms": int(
+                            (_utcnow() - (candidate.created_at or _utcnow())).total_seconds() * 1000
+                        ),
                     },
                 )
             except RuntimeError:
@@ -1186,6 +1192,16 @@ Insert Phase 0.5 between Phase 0 (reconcile) and Phase 1 (split_emerge). In `exe
                 candidate_result["rejected"],
                 candidate_result["splits_fully_reversed"],
             )
+            # Trigger topology re-render after promotions/rejections
+            try:
+                from app.services.event_bus import event_bus
+                event_bus.publish("taxonomy_changed", {
+                    "trigger": "candidate_evaluation",
+                    "promoted": candidate_result["promoted"],
+                    "rejected": candidate_result["rejected"],
+                })
+            except Exception:
+                pass
 ```
 
 - [ ] **Step 5: Exclude candidates from `_load_active_nodes()` for Q computation**
@@ -1264,6 +1280,7 @@ split_fully_reversed events."
 - Modify: `frontend/src/lib/components/layout/ClusterNavigator.svelte`
 - Modify: `frontend/src/lib/components/taxonomy/TopologyData.ts`
 - Modify: `frontend/src/lib/utils/colors.ts`
+- Modify: `frontend/src/lib/components/layout/Inspector.svelte` (CANDIDATE badge, hide Promote button)
 
 - [ ] **Step 1: Add `'candidate'` to `StateFilter` type**
 
@@ -1318,20 +1335,53 @@ Looking at line 45 of `colors.ts`, `candidate` already maps to `'#7a7a9e'`:
 
 No change needed. Already present.
 
-- [ ] **Step 5: Run frontend type check**
+- [ ] **Step 5: Inspector — CANDIDATE badge + hide Promote button**
+
+In `frontend/src/lib/components/layout/Inspector.svelte`, the state badge is rendered conditionally. The existing code handles `ACTIVE`, `MATURE`, `TEMPLATE`, `ARCHIVED`. Add `CANDIDATE` with dimmed styling:
+
+- Where the state badge is rendered, add a case for `candidate`:
+  ```svelte
+  {#if detail.state === 'candidate'}
+    <span class="state-badge" style="color: var(--color-text-dim); border-color: var(--color-text-dim);">CANDIDATE</span>
+  {/if}
+  ```
+- Where the "Promote to Template" button is rendered, add a guard: `{#if detail.state !== 'candidate'}` around it
+
+- [ ] **Step 6: Candidate count badge on filter tab**
+
+In `ClusterNavigator.svelte`, derive the candidate count from the store and display it on the candidate tab:
+
+```typescript
+const candidateCount = $derived(
+  clustersStore.filteredTaxonomyTree.filter(n => n.state === 'candidate').length
+);
+```
+
+In the tab rendering, add a badge when `tab === 'candidate'` and `candidateCount > 0`:
+```svelte
+{#if tab === 'candidate' && candidateCount > 0}
+  <span class="cn-tab-badge">{candidateCount}</span>
+{/if}
+```
+
+- [ ] **Step 7: Suppress billboard labels for candidates in TopologyData.ts**
+
+In the `buildSceneData()` function where node labels are set for the topology renderer, add a check: if `node.state === 'candidate'`, set `showLabel = false` (or equivalent). This reduces visual noise for transient candidates.
+
+- [ ] **Step 8: Run frontend type check**
 
 ```bash
 cd /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/frontend && npx svelte-check --threshold warning 2>&1 | tail -20
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-cd /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2 && git add frontend/src/lib/stores/clusters.svelte.ts frontend/src/lib/components/layout/ClusterNavigator.svelte && git commit -m "feat(frontend): add candidate state to filter tabs
+cd /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2 && git add frontend/src/lib/stores/clusters.svelte.ts frontend/src/lib/components/layout/ClusterNavigator.svelte frontend/src/lib/components/layout/Inspector.svelte frontend/src/lib/components/taxonomy/TopologyData.ts && git commit -m "feat(frontend): candidate state visibility — filter tab, badge, Inspector, label suppression
 
-Add 'candidate' to StateFilter type and ClusterNavigator tab bar.
-TopologyData.ts and colors.ts already handle candidate state. Removes
-outdated comment about intentional candidate exclusion."
+Add 'candidate' to StateFilter type and ClusterNavigator tab bar with
+count badge. Inspector shows CANDIDATE badge with dimmed styling, hides
+Promote button. Billboard labels suppressed for candidate nodes."
 ```
 
 ---
