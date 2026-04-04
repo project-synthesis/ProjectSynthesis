@@ -4,6 +4,38 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.14-dev — 2026-04-04
+
+### Added
+- **Batch seeding system** — explore-driven pipeline that generates diverse prompts from a project description, optimizes them through the full pipeline in parallel, and lets taxonomy discover structure organically. Four-phase architecture: agent generation → in-memory batch optimize → bulk persist → batched taxonomy integration
+- **Seed agent definition system** — 5 default agents in `prompts/seed-agents/*.md` (coding, architecture, analysis, testing, documentation) with YAML frontmatter, hot-reload via file watcher, user-extensible by dropping `.md` files
+- **`AgentLoader` service** — file parser for seed agent frontmatter (name, description, task_types, phase_context, prompts_per_run, enabled). Mirrors `StrategyLoader` pattern
+- **`SeedOrchestrator` service** — parallel agent dispatch via `asyncio.gather`, embedding-based deduplication (cosine > 0.90), scales `prompts_per_run` to hit target count
+- **`batch_pipeline.py`** — in-memory batch execution with zero DB writes during LLM-heavy portion. `PendingOptimization` dataclass, `run_single_prompt()` (direct provider calls, no `PipelineOrchestrator`), `run_batch()` (semaphore-bounded parallelism with 429 backoff), `bulk_persist()` (single-transaction INSERT with retry + idempotency), `batch_taxonomy_assign()` (cluster assignment with `pattern_stale=True` deferral), `estimate_batch_cost()` (tier-aware pricing)
+- **`synthesis_seed` MCP tool** — 12th tool in MCP server. Accepts `project_description`, `workspace_path`, `prompt_count`, `agents`, or user-provided `prompts`. Returns `SeedOutput` with batch_id, counts, domains, clusters, cost estimate
+- **`POST /api/seed`** — REST endpoint mirroring MCP tool for UI consumption. Resolves routing from `request.app.state.routing` (not MCP-only `_shared.py` singleton)
+- **`GET /api/seed/agents`** — lists enabled seed agents with metadata for frontend agent selector
+- **`SeedRequest`/`SeedOutput` schemas** — Pydantic models with `min_length=20` on project_description, `ge=5, le=100` on prompt_count. No `actual_cost_usd` field (estimation-only design)
+- **`SeedModal.svelte`** — brand-compliant modal with Generate/Provide tabs, agent checkboxes, prompt count slider (5-100), cost estimate, progress bar via SSE, result card with copyable batch_id, status badge, stats grid, domain tags, tier badge, duration
+- **Seed button in topology controls** — "Seed" button in `TopologyControls.svelte` opens `SeedModal` in `SemanticTopology.svelte`
+- **`seed.ts` API client** — TypeScript interfaces (`SeedRequest`, `SeedOutput`, `SeedAgent`) and fetch functions (`seedTaxonomy`, `listSeedAgents`)
+- **`seed_batch_progress` SSE handler** — `+page.svelte` receives SSE events, dispatches `seed-batch-progress` DOM CustomEvent for SeedModal progress bar
+- **9 seed observability events** — `seed_started`, `seed_explore_complete`, `seed_agents_complete`, `seed_prompt_scored`, `seed_prompt_failed`, `seed_persist_complete`, `seed_taxonomy_complete`, `seed_completed`, `seed_failed` — all with structured context for MLOps monitoring (throughput, cost/prompt, failure rate, domain distribution)
+- **ActivityPanel seed event rendering** — `keyMetric` handlers for all seed events showing scores, prompt counts, cluster counts, domain counts, error messages. Color mapping: `seed_failed` → red, `seed_prompt_failed` → amber, `seed_completed` → green, informational events → secondary
+
+### Changed
+- **Split test threshold updated** — `test_split_triggers_on_stale_coherence_cluster` updated from 14 → 26 members to match `SPLIT_MIN_MEMBERS=25` raised in v0.3.13-dev
+- **Provider-aware concurrency** — batch seeding uses CLI=10, API=5 parallel for internal tier (distinguishes `claude_cli` from `anthropic_api` provider)
+
+### Fixed
+- **`routing.state.tier` crash** — `handle_seed()` accessed non-existent `RoutingState.tier` attribute; fixed to use `routing.resolve(RoutingContext)` returning `RoutingDecision.tier`, matching all other tool handlers
+- **`PromptLoader._prompts_dir` AttributeError** — batch pipeline accessed private `_prompts_dir` attribute; corrected to public `prompts_dir`
+- **`cluster_id` not written back in `batch_taxonomy_assign`** — taxonomy assignment created clusters but didn't update `Optimization.cluster_id` rows; added writeback matching engine.py hot-path pattern
+- **Semaphore leak on 429 backoff** — rate-limit retry in `run_batch()` acquired extra semaphore slot without `try/finally`; fixed to ensure release on cancellation
+- **SeedModal stale state on reopen** — closing and reopening modal showed previous result/error/progress; now resets transient state on open
+- **Frontend validation mismatch** — SeedModal accepted 1-char descriptions but backend requires `min_length=20`; aligned to `>= 20`
+- **Frontend cost estimate formula** — was `promptCount × agents × $0.002` (wrong); now mirrors backend `agents × $0.003 + prompts × $0.132`
+
 ## v0.3.13-dev — 2026-04-03
 
 ### Added

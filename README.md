@@ -122,7 +122,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **3D taxonomy visualization** — Three.js interactive topology with LOD tiers (far/mid/near) based on persistence thresholds. Click-to-focus navigation, raycasting hover, billboard labels, force-directed collision resolution, Ctrl+F search, Q_system badge, and recluster controls
 - **Pattern suggestion on paste** — embeds pasted text, cosine-searches active clusters (≥0.72), suggests matching clusters with 1-click apply (50-char delta, 300ms debounce, 10s auto-dismiss). Applied patterns injected into optimizer context
 - **Bidirectional history–clusters navigation** — history items show intent labels and domain badges. Loading an optimization auto-selects its cluster in Inspector. Clicking a linked optimization in a cluster detail loads it in the editor. Live cluster link: background pattern extraction triggers automatic UI sync via SSE
-- **Taxonomy Activity panel** — collapsible bottom panel below the 3D topology showing a live feed of all taxonomy decision events (hot/warm/cold path, 12 operation types). Filter by path, operation, or errors-only. Expandable context for each event. Click the `↗` button on score events to load the optimization in the editor. Seeds from ring buffer; falls back to JSONL history after server restart. Cross-process: MCP score events reach the panel via HTTP POST + ring buffer mirroring
+- **Batch taxonomy seeding** — explore-driven pipeline generates diverse prompts from a project description, optimizes them in parallel through the full pipeline, and lets taxonomy discover clusters/domains/patterns organically. 5 default seed agents (coding, architecture, analysis, testing, documentation) with YAML frontmatter — user-extensible by dropping `.md` files. Embedding-based deduplication. Provider-aware concurrency (CLI=10, API=5, sampling=2). SeedModal in topology view with agent selector, progress bar, and result card. 9 observability events for MLOps monitoring
+- **Taxonomy Activity panel** — collapsible bottom panel below the 3D topology showing a live feed of all taxonomy decision events (hot/warm/cold/seed path, 12+ operation types). Filter by path, operation, or errors-only. Expandable context for each event. Click the `↗` button on score events to load the optimization in the editor. Seeds from ring buffer; falls back to JSONL history after server restart. Cross-process: MCP score events reach the panel via HTTP POST + ring buffer mirroring
 - **StatusBar breadcrumb** — shows CLI/API/SAMPLING/PASSTHROUGH tier badge + `[domain] › intent_label` for the active optimization with domain color coding. Editor tabs use intent labels as titles
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation + phase weight adaptation (EMA toward successful fusion profiles)
 - **API key management** — set/update/remove via UI with Fernet encryption at rest
@@ -133,7 +134,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 
 ## MCP Integration
 
-The MCP server provides 11 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
+The MCP server provides 12 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
 
 ### Core pipeline tools
 
@@ -155,6 +156,7 @@ The MCP server provides 11 tools with `synthesis_` prefix on port 8001. All tool
 | `synthesis_match` | Knowledge graph search for similar clusters, reusable patterns, and cross-cluster universal techniques |
 | `synthesis_feedback` | Submit quality feedback (thumbs_up/thumbs_down) to drive strategy adaptation |
 | `synthesis_refine` | Iteratively improve an optimized prompt with specific instructions |
+| `synthesis_seed` | Batch-seed the taxonomy — generate + optimize + persist + cluster in one call |
 
 Connect via `.mcp.json` (auto-loaded by Claude Code) or manually at `http://127.0.0.1:8001/mcp`.
 
@@ -168,7 +170,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~90s, 1410+ tests)
+# Backend tests (~120s, 1510+ tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
@@ -215,6 +217,8 @@ cd frontend && npm run build
 | `/api/clusters/backfill-scores` | POST | Recompute cluster avg_score/scored_count |
 | `/api/clusters/activity` | GET | Ring buffer of recent taxonomy decision events (filters: path, op, errors_only) |
 | `/api/clusters/activity/history` | GET | Paginated JSONL history of taxonomy decision events by date |
+| `/api/seed` | POST | Batch-seed taxonomy (generate + optimize + persist + cluster) |
+| `/api/seed/agents` | GET | List available seed agents with metadata |
 | `/api/github/auth/*` | GET/POST | GitHub OAuth flow |
 | `/api/github/repos/*` | GET/POST/DELETE | Repo management |
 
@@ -222,8 +226,9 @@ cd frontend && npm run build
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for planned improvements. Key upcoming items:
 
+- **Quality-driven split trigger** — coherence-based split targeting individual low-coherence clusters regardless of domain health
+- **Sub-domain cluster-count trigger** — trigger sub-domain discovery based on cluster count within a domain
 - **Unified scoring service** — consolidate duplicated scoring orchestration across all pipeline tiers
-- **Conciseness heuristic calibration** — domain-aware TTR adjustment for technical specification prompts
 
 ## License
 

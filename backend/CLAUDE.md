@@ -14,7 +14,8 @@ Everything backend developers need. For project overview, see root `CLAUDE.md`. 
 **Analysis**: `heuristic_analyzer.py` (zero-LLM classifier, 6-layer, adaptive keyword weights), `context_enrichment.py` (unified `enrich()` for all tiers → frozen `EnrichedContext`), `context_resolver.py` (per-source char caps, untrusted wrapping)
 **Scoring**: `heuristic_scorer.py` (5-dimension heuristics, `score_prompt()` facade, clamped [1.0, 10.0]), `score_blender.py` (hybrid LLM+heuristic, z-score normalization, divergence detection)
 **Optimization**: `optimization_service.py` (CRUD, sort/filter, `VALID_SORT_COLUMNS`), `refinement_service.py` (sessions, branching, rollback, suggestions)
-**Prompts & Strategies**: `prompt_loader.py` (template loading, startup validation), `strategy_loader.py` (file discovery, YAML frontmatter, hot-reload), `file_watcher.py` (watchfiles.awatch, publishes `strategy_changed`)
+**Prompts & Strategies**: `prompt_loader.py` (template loading, startup validation), `strategy_loader.py` (file discovery, YAML frontmatter, hot-reload), `file_watcher.py` (watchfiles.awatch, publishes `strategy_changed` + `agent_changed`)
+**Batch Seeding**: `agent_loader.py` (seed agent file parser, frontmatter, hot-reload), `seed_orchestrator.py` (parallel agent dispatch, dedup), `batch_pipeline.py` (in-memory pipeline: `run_single_prompt` → `run_batch` → `bulk_persist` → `batch_taxonomy_assign` + `estimate_batch_cost`)
 **Routing**: `routing.py` (RoutingManager singleton, `resolve_route()` pure function — see Routing Internals below)
 **Taxonomy**: `taxonomy/` package (see Taxonomy Engine below)
 **Workspace**: `workspace_intelligence.py` (manifest-based stack detection + deep scanning), `roots_scanner.py` (agent guidance file discovery, SHA256 dedup), `codebase_explorer.py` (semantic retrieval + Haiku synthesis, SHA cache), `explore_cache.py` (TTL+LRU), `repo_index_service.py` (background indexing, `query_curated_context()`)
@@ -54,6 +55,7 @@ Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MOD
 | `health.py` | `GET /api/health` (provider, tiers, scores, errors, domain_count) |
 | `events.py` | `GET /api/events` (SSE), `POST /api/events/_publish` (cross-process) |
 | `domains.py` | `GET /api/domains`, `POST /api/domains/{id}/promote` |
+| `seed.py` | `POST /api/seed` (batch seeding), `GET /api/seed/agents` (agent metadata for UI) |
 | `clusters.py` | CRUD, match, tree, stats, templates, recluster, reassign, repair, activity (ring buffer + JSONL history). Activity endpoints MUST be before `{cluster_id}` dynamic route. Read endpoints use `db.autoflush=False`. Legacy 301 for `/api/patterns/*`, `/api/taxonomy/*` |
 
 Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (in-memory via `limits`).

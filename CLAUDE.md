@@ -54,7 +54,8 @@ PIDs: `data/pids/backend.pid`, `data/pids/mcp.pid`, `data/pids/frontend.pid`
 - **Providers**: Claude CLI or Anthropic API, auto-detected once at startup, stored on `app.state.routing`
 - **Classification**: `semantic_upgrade_general()` gate catches LLM returning "general" when strong keywords present. Heuristic analyzer for zero-LLM passthrough classification
 - **Taxonomy**: evolutionary hierarchical clustering (`services/taxonomy/`). Hot/warm/cold paths. Domain discovery + sub-domain discovery (HDBSCAN within oversized domains). Adaptive merge threshold `0.55 + 0.04 * log2(1 + member_count)` with task_type mismatch penalty (-0.05). Multi-embedding HDBSCAN: blended raw + optimized + transformation vectors (0.65/0.20/0.15) for warm/cold clustering, raw-only for hot-path assignment. Score-weighted centroids. Composite fusion blends 4 signals (topic, transformation, output, pattern) with per-phase adaptive weights. Output coherence informs split/merge lifecycle. Parallel label generation via `asyncio.gather`. Pattern extraction deferred to warm-path Phase 4. Warm-path Phase 0 reconciles domain node member counts and prunes stale archived clusters (>24h, 0 members). `mega_cluster_prevention` gate prevents merge regressions
-- **Observability**: `TaxonomyEventLogger` dual-writes structured decision events to JSONL (`data/taxonomy_events/`) + in-memory ring buffer (500). 17 instrumentation points across hot/warm/cold paths. `taxonomy_activity` SSE events. Frontend `ActivityPanel` with path/op/error filters and expandable context
+- **Batch seeding**: explore-driven pipeline generates diverse prompts from project descriptions, optimizes in parallel (zero DB during LLM), bulk persists in one transaction, assigns taxonomy. 5 default agents in `prompts/seed-agents/` (hot-reloaded). `synthesis_seed` MCP tool + `POST /api/seed` REST. `SeedModal` in topology view. 9 observability events (`seed_*`). Concurrency: CLI=10, API=5, sampling=2
+- **Observability**: `TaxonomyEventLogger` dual-writes structured decision events to JSONL (`data/taxonomy_events/`) + in-memory ring buffer (500). 17+ instrumentation points across hot/warm/cold/seed paths. `taxonomy_activity` SSE events. Frontend `ActivityPanel` with path/op/error filters and expandable context
 - **Layer rules**: `routers/` → `services/` → `models/` only. Services must never import from routers
 - **Model IDs**: centralized in `config.py` (`MODEL_SONNET/OPUS/HAIKU`). Use `PreferencesService.resolve_model()`, never hardcode
 - **Env vars**: `ANTHROPIC_API_KEY` (optional), `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `SECRET_KEY` (auto-generated)
@@ -76,13 +77,15 @@ All prompts live in `prompts/`. `{{variable}}` syntax. Hot-reloaded on each call
 | `adaptation.md` | Adaptation state formatter |
 | `passthrough.md` | MCP passthrough combined template |
 | `extract_patterns.md` | Meta-pattern extraction from completed optimizations (Haiku) |
+| `seed.md` | Batch seed agent prompt generation template |
 | `strategies/*.md` | Strategy files with YAML frontmatter. Fully adaptive — add/remove files to change available strategies |
+| `seed-agents/*.md` | Seed agent definitions with YAML frontmatter (name, task_types, phase_context, prompts_per_run, enabled) |
 
 Variable reference: `prompts/manifest.json`
 
 ## MCP server
 
-11 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`). All use `structured_output=True`. Tool handlers in `backend/app/tools/*.py`; `mcp_server.py` is a thin registration layer. See `AGENTS.md` for detailed tool usage guidance.
+12 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`). All use `structured_output=True`. Tool handlers in `backend/app/tools/*.py`; `mcp_server.py` is a thin registration layer. See `AGENTS.md` for detailed tool usage guidance.
 
 **Adding a tool:**
 1. Define Pydantic output model in `schemas/mcp_models.py`
@@ -128,7 +131,7 @@ Exit codes: `0` = allow, `2` = block (fix errors first).
 - **GitHub tokens**: Fernet-encrypted at rest. `github_service.encrypt_token`/`decrypt_token` are the only entry points
 - **API key**: encrypted at rest in `data/.api_credentials`. Provider hot-reloads when key is set via `GET/PATCH/DELETE /api/provider/api-key`
 - **Secrets**: `SECRET_KEY` auto-generated on first startup, persisted to `data/.app_secrets` (0o600)
-- **Event bus**: `event_bus.py` publishes to SSE subscribers. Types: `optimization_created/analyzed/failed`, `feedback_submitted`, `refinement_turn`, `strategy_changed`, `taxonomy_changed`, `taxonomy_activity`, `routing_state_changed`, `domain_created`. MCP server notifies via HTTP POST to `/api/events/_publish`
+- **Event bus**: `event_bus.py` publishes to SSE subscribers. Types: `optimization_created/analyzed/failed`, `feedback_submitted`, `refinement_turn`, `strategy_changed`, `taxonomy_changed`, `taxonomy_activity`, `routing_state_changed`, `domain_created`, `seed_batch_progress`. MCP server notifies via HTTP POST to `/api/events/_publish`
 - **Preferences**: file-based JSON (`data/preferences.json`), loaded as frozen snapshot per pipeline run. Model selection per phase, pipeline toggles, default strategy, per-phase effort
 - **Trace logging**: per-phase JSONL to `data/traces/`, daily rotation, configurable retention
 - **Taxonomy observability**: per-decision JSONL to `data/taxonomy_events/`, 30-day rotation. `TaxonomyEventLogger` singleton initialized in lifespan in **both** backend and MCP processes. Ring buffer (500) + JSONL dual-write. MCP process events forwarded to backend ring buffer via cross-process HTTP POST. Score events include `intent_label`. `get_event_logger()` raises `RuntimeError` if uninitialized — all call sites wrapped in `try/except RuntimeError: pass`

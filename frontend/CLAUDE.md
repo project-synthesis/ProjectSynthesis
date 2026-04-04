@@ -32,6 +32,7 @@ All backend calls go through this module. Key helpers:
 - `streamSSE()` — manages `AbortController` + line-buffering for SSE streams
 
 Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryItem`, `DimensionScores`
+- `seed.ts` — `seedTaxonomy()`, `listSeedAgents()`. Types: `SeedRequest`, `SeedOutput`, `SeedAgent`
 
 ## Stores (`src/lib/stores/`)
 
@@ -60,7 +61,8 @@ src/lib/components/
   editor/       # PromptEdit, ForgeArtifact, PatternSuggestion, PassthroughView
   taxonomy/     # SemanticTopology, TopologyControls, TopologyRenderer, TopologyData,
                 # TopologyInteraction, TopologyLabels, TopologyWorker (5-force simulation),
-                # ActivityPanel (collapsible bottom panel — decision event feed)
+                # ActivityPanel (collapsible bottom panel — decision event feed),
+                # SeedModal (batch seeding modal — agent selector, progress bar, result card)
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, DiffView, Logo, MarkdownRenderer, PassthroughGuide,
@@ -114,6 +116,7 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | `taxonomy_activity` | `clustersStore.pushActivityEvent()` — real-time feed to ActivityPanel |
 | `routing_state_changed` | Routing store update, tier availability toasts |
 | `domain_created` | Domain store invalidation |
+| `seed_batch_progress` | Dispatched as `seed-batch-progress` DOM CustomEvent for SeedModal progress bar |
 
 Fixed 60s health polling for StatusBar display only — no routing decisions from frontend.
 
