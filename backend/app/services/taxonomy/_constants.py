@@ -14,8 +14,16 @@ from datetime import datetime, timezone
 
 DEADLOCK_BREAKER_THRESHOLD = 5  # consecutive rejected cycles before forcing
 SPLIT_COHERENCE_FLOOR = 0.5    # below this coherence, node is a split candidate
-SPLIT_MIN_MEMBERS = 6          # minimum members before a node can be split
-MEGA_CLUSTER_MEMBER_FLOOR = 2 * SPLIT_MIN_MEMBERS  # 12 — cold path mega-cluster split threshold
+SPLIT_MIN_MEMBERS = 25         # minimum members before a node can be split
+# Raised from 6 to 25: clusters under 25 members don't have enough data
+# to sustain independent weight learning (min 10 samples) after splitting
+# into 2-3 children. Pattern injection quality also degrades when clusters
+# are fragmented — a broad 25-member cluster with diverse meta-patterns
+# serves the optimizer better than 3 narrow 8-member clusters.
+# See session analysis: 26% split success rate, 29% children re-merged.
+MEGA_CLUSTER_MEMBER_FLOOR = 50  # cold path mega-cluster split threshold
+# Raised from 12 to 50: only truly oversized clusters warrant cold-path
+# splitting. Aligns with SPLIT_MIN_MEMBERS * 2 logic.
 
 
 # ---------------------------------------------------------------------------
