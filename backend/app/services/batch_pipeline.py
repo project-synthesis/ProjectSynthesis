@@ -324,3 +324,138 @@ async def run_single_prompt(
             error=str(exc)[:500],
             duration_ms=duration_ms,
         )
+
+
+async def run_batch(
+    prompts: list[str],
+    provider: LLMProvider,
+    prompt_loader: PromptLoader,
+    embedding_service: EmbeddingService,
+    *,
+    max_parallel: int = 10,
+    codebase_context: str | None = None,
+    workspace_guidance: str | None = None,
+    batch_id: str | None = None,
+    on_progress: Any | None = None,
+) -> list[PendingOptimization]:
+    """Run N prompts through the pipeline in parallel.
+
+    Args:
+        prompts: Raw prompt strings to optimize.
+        provider: LLM provider for all phases.
+        max_parallel: Concurrency limit (10 internal, 5 API, 2 sampling).
+        on_progress: Callback fired after each prompt completes.
+
+    Returns:
+        List of PendingOptimization results (some may have status="failed").
+    """
+    batch_id = batch_id or str(uuid.uuid4())
+    semaphore = asyncio.Semaphore(max_parallel)
+    results: list[PendingOptimization] = [None] * len(prompts)  # type: ignore
+
+    async def _run_with_semaphore(index: int, prompt: str) -> None:
+        nonlocal semaphore
+
+        # Rate limit (429) backoff: reduce semaphore by half on first 429, retry once
+        _rate_limited = False
+
+        async def _attempt() -> PendingOptimization:
+            nonlocal _rate_limited
+            result = await run_single_prompt(
+                raw_prompt=prompt,
+                provider=provider,
+                prompt_loader=prompt_loader,
+                embedding_service=embedding_service,
+                codebase_context=codebase_context,
+                workspace_guidance=workspace_guidance,
+                batch_id=batch_id,
+                prompt_index=index,
+                total_prompts=len(prompts),
+            )
+            # Check for rate limit error in result
+            if (
+                result.status == "failed"
+                and result.error
+                and ("429" in result.error or "rate_limit" in result.error.lower())
+                and not _rate_limited
+            ):
+                _rate_limited = True
+                logger.warning(
+                    "Rate limit hit on prompt %d — reducing concurrency and retrying", index
+                )
+                # Reduce effective parallelism by acquiring an extra slot
+                await semaphore.acquire()
+                await asyncio.sleep(5)
+                retry = await run_single_prompt(
+                    raw_prompt=prompt,
+                    provider=provider,
+                    prompt_loader=prompt_loader,
+                    embedding_service=embedding_service,
+                    codebase_context=codebase_context,
+                    workspace_guidance=workspace_guidance,
+                    batch_id=batch_id,
+                    prompt_index=index,
+                    total_prompts=len(prompts),
+                )
+                semaphore.release()
+                return retry
+            return result
+
+        async with semaphore:
+            result = await _attempt()
+            results[index] = result
+
+            # Log per-prompt event
+            try:
+                from app.services.taxonomy.event_logger import get_event_logger
+                decision = "seed_prompt_scored" if result.status == "completed" else "seed_prompt_failed"
+                ctx: dict[str, Any] = {
+                    "batch_id": batch_id,
+                    "prompt_index": index,
+                    "total": len(prompts),
+                    "overall_score": result.overall_score,
+                    "improvement_score": result.improvement_score,
+                    "task_type": result.task_type,
+                    "strategy_used": result.strategy_used,
+                    "duration_ms": result.duration_ms,
+                    "error": result.error,
+                }
+                if result.status == "failed":
+                    ctx["recovery"] = "skipped"
+                get_event_logger().log_decision(
+                    path="hot", op="seed", decision=decision,
+                    optimization_id=result.trace_id,
+                    context=ctx,
+                )
+            except RuntimeError:
+                pass
+
+            # Publish seed_batch_progress to event bus for SSE frontend
+            try:
+                from app.services.event_bus import event_bus
+                event_bus.publish("seed_batch_progress", {
+                    "batch_id": batch_id,
+                    "phase": "optimize",
+                    "completed": sum(1 for r in results if r is not None),
+                    "total": len(prompts),
+                    "current_prompt": (
+                        result.intent_label or result.raw_prompt[:60]
+                        if result.status == "completed"
+                        else result.raw_prompt[:60]
+                    ),
+                    "failed": sum(
+                        1 for r in results if r is not None and r.status == "failed"
+                    ),
+                })
+            except Exception:
+                pass
+
+            if on_progress:
+                on_progress(index, len(prompts), result)
+
+    await asyncio.gather(
+        *[_run_with_semaphore(i, p) for i, p in enumerate(prompts)],
+        return_exceptions=True,
+    )
+
+    return [r for r in results if r is not None]
