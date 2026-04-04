@@ -416,6 +416,7 @@ async def run_batch(
                     "improvement_score": result.improvement_score,
                     "task_type": result.task_type,
                     "strategy_used": result.strategy_used,
+                    "intent_label": result.intent_label,
                     "duration_ms": result.duration_ms,
                     "error": result.error,
                 }
@@ -494,8 +495,7 @@ async def bulk_persist(
                     )
                 )
                 existing_ids: set[str] = {row[0] for row in existing_ids_result}
-
-                inserted = 0
+                inserted = 0  # Reset for retry
                 for pending in completed:
                     if pending.id in existing_ids:
                         logger.debug(

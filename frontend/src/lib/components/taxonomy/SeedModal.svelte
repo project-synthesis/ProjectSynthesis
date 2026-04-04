@@ -95,7 +95,7 @@
 
   const isValid = $derived(
     mode === 'generate'
-      ? projectDescription.trim().length > 0 && selectedAgents.size > 0
+      ? projectDescription.trim().length >= 20 && selectedAgents.size > 0
       : promptsText.split('\n').map(s => s.trim()).filter(Boolean).length > 0
   );
 
@@ -119,9 +119,10 @@
     return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
   }
 
-  // Estimated cost: rough formula — 0.002 per prompt per tier
+  // Estimated cost: mirrors backend estimate_batch_cost() logic
+  // Agent generation: ~$0.003/agent (Haiku). Per optimization: ~$0.132 (Sonnet+Opus+Sonnet)
   const estimatedCost = $derived(
-    (promptCount * selectedAgents.size * 0.002).toFixed(3)
+    (selectedAgents.size * 0.003 + promptCount * 0.132).toFixed(2)
   );
 </script>
 
@@ -160,10 +161,13 @@
             <textarea
               id="seed-desc"
               class="seed-textarea"
-              placeholder="Describe your project to generate relevant prompts..."
+              placeholder="Describe your project to generate relevant prompts (min 20 characters)..."
               bind:value={projectDescription}
               disabled={seeding}
             ></textarea>
+            {#if projectDescription.trim().length > 0 && projectDescription.trim().length < 20}
+              <span class="seed-char-hint">{projectDescription.trim().length}/20 characters</span>
+            {/if}
           </div>
 
           <!-- Agent checkboxes -->
@@ -216,7 +220,7 @@
           <div class="seed-cost">
             <span class="seed-cost-label">EST. COST</span>
             <span class="seed-cost-val">~${estimatedCost}</span>
-            <span class="seed-cost-formula">({promptCount} prompts × {selectedAgents.size} agents × $0.002)</span>
+            <span class="seed-cost-formula">({promptCount} prompts × $0.13 + {selectedAgents.size} agents)</span>
           </div>
 
         {:else}
@@ -470,6 +474,12 @@
   .seed-textarea:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .seed-char-hint {
+    font-size: 9px;
+    color: var(--color-neon-yellow, #fbbf24);
+    text-align: right;
   }
 
   .seed-provide-count {
