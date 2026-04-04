@@ -12,9 +12,10 @@
     onSearch: (query: string) => void;
     onRecluster: () => Promise<void>;
     onToggleActivity: () => void;
+    onSeed: () => void;
   }
 
-  let { lodTier, showActivity, onSearch, onRecluster, onToggleActivity }: Props = $props();
+  let { lodTier, showActivity, onSearch, onRecluster, onToggleActivity, onSeed }: Props = $props();
 
   let searchQuery = $state('');
   let searchOpen = $state(false);
@@ -91,6 +92,15 @@
 
   <!-- Actions -->
   <div class="tc-section tc-actions">
+    <div class="tc-action-row">
+      <button
+        class="tc-recluster"
+        onclick={onSeed}
+        use:tooltip={'Seed taxonomy with generated prompts'}
+      >
+        Seed
+      </button>
+    </div>
     <div class="tc-action-row">
       <button
         class="tc-recluster"

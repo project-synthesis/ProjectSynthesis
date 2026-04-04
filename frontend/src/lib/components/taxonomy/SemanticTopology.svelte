@@ -8,6 +8,7 @@
   import { settleForces } from './TopologyWorker';
   import TopologyControls from './TopologyControls.svelte';
   import ActivityPanel from './ActivityPanel.svelte';
+  import SeedModal from './SeedModal.svelte';
   import * as THREE from 'three';
   import { triggerRecluster } from '$lib/api/clusters';
   import type { TaxonomyActivityEvent } from '$lib/api/clusters';
@@ -82,6 +83,7 @@
   let lodTier = $state<LODTier>('far');
   let focusedNodeId = $state<string | null>(null);
   let hoveredNodeId = $state<string | null>(null);
+  let seedModalOpen = $state(false);
 
   // Node meshes for raycasting
   let nodeMeshes: Map<string, THREE.Mesh> = new Map();
@@ -691,7 +693,11 @@
     onSearch={handleSearch}
     onRecluster={handleRecluster}
     onToggleActivity={() => clustersStore.toggleActivity()}
+    onSeed={() => { seedModalOpen = true; }}
   />
+  {#if seedModalOpen}
+    <SeedModal bind:open={seedModalOpen} onClose={() => { seedModalOpen = false; }} />
+  {/if}
   {#if hoveredNodeId}
     <div class="topology-tooltip" role="tooltip">
       {sceneData?.nodes.find(n => n.id === hoveredNodeId)?.label ?? ''}
