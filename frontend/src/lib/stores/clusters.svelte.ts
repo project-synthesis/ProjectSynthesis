@@ -309,14 +309,30 @@ class ClusterStore {
     this.activityLoading = true;
     try {
       const resp = await getClusterActivity({ limit: 200, ...params });
-      if (resp.events.length > 0) {
+      if (resp.events.length >= 20) {
+        // Ring buffer has enough events — use as-is
         this.activityEvents = resp.events;
       } else {
-        // Ring buffer empty (e.g. after server restart) — fall back to
-        // today's JSONL history so the panel isn't blank.
+        // Ring buffer sparse (after restart only a few warm-path events
+        // exist) — merge with today's JSONL for meaningful context.
         const today = new Date().toISOString().slice(0, 10);
         const hist = await getClusterActivityHistory({ date: today, limit: 200 });
-        this.activityEvents = hist.events.reverse(); // newest first
+        const jsonlEvents = hist.events.reverse(); // newest first
+
+        // Merge: ring buffer is authoritative for recent, dedupe by key
+        const seen = new Set(resp.events.map(
+          (e: TaxonomyActivityEvent) => `${e.ts}|${e.op}|${e.decision}`
+        ));
+        const merged: TaxonomyActivityEvent[] = [...resp.events];
+        for (const e of jsonlEvents) {
+          const key = `${e.ts}|${e.op}|${e.decision}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            merged.push(e);
+          }
+        }
+        merged.sort((a, b) => (b.ts ?? '').localeCompare(a.ts ?? ''));
+        this.activityEvents = merged.slice(0, 200);
       }
     } catch (err) {
       console.warn('Activity load failed:', err);
