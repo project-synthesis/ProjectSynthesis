@@ -63,6 +63,7 @@ src/lib/components/
                 # TopologyInteraction, TopologyLabels, TopologyWorker (5-force simulation),
                 # ActivityPanel (collapsible bottom panel — decision event feed),
                 # SeedModal (batch seeding modal — agent selector, progress bar, result card)
+                # Candidate nodes: 40% opacity, no billboard labels, filter tab with count badge
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, DiffView, Logo, MarkdownRenderer, PassthroughGuide,

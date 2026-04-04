@@ -4,6 +4,27 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.15-dev — 2026-04-04
+
+### Added
+- **Spectral clustering for taxonomy splits** — replaced HDBSCAN as primary split algorithm. Spectral finds sub-communities via similarity graph structure, solving the uniform-density problem where HDBSCAN returned 0 clusters. Tries k=2,3,4 with silhouette gating (rescaled [0,1], gate=0.15). HDBSCAN retained as secondary fallback. K-Means fallback removed (spectral subsumes it)
+- **Candidate lifecycle for split children** — split children start as `state="candidate"` instead of active. Warm-path Phase 0.5 (`phase_evaluate_candidates()`) evaluates each candidate: coherence ≥ 0.30 → promote to active, below floor → reject and reassign members to nearest active cluster via `_reassign_to_active()`. Candidates excluded from Q_system computation in speculative phases to prevent low-coherence candidates from causing Q-gate rejection of the split that created them
+- **Candidate visibility in frontend** — candidate filter tab in ClusterNavigator with count badge when candidates > 0. Candidate nodes render at 40% opacity in topology graph with label suppression. Inspector shows CANDIDATE badge. "Promote to Template" button hidden for candidates
+- **5 new observability events** — `candidate_created` (cyan), `candidate_promoted` (green), `candidate_rejected` (amber), `split_fully_reversed` (amber), `spectral_evaluation` (split trace with per-k silhouettes). All events include full context for audit: coherence, coherence_floor, time_as_candidate_ms, members_reassigned_to, parent_label
+- **Activity panel candidate support** — `candidate` op filter chip, `keyMetric` handlers for all candidate events + `spectral_evaluation`, `decisionColor` entries. Toast notifications for promotion, rejection, and split-with-candidates
+- **Cold-path cluster detail event** — `refit/cluster_detail` logs every cluster ≥5 members after recluster with label, member_count, domain, coherence. Makes recluster operations visible instead of a black box
+- **Activity panel JSONL merge on startup** — ring buffer + today's JSONL merged when buffer has <20 events, preventing the "2 events after restart" problem
+
+### Changed
+- **`assign/merge_into` events enriched** — now include `member_count` and `prompt_label` so Activity panel shows "Design Auth API → Saas Growth [39m] 0.847" instead of just "→ Saas Growth Strategy"
+- **Sub-domain evaluation noise reduced** — only logs when domain is ≥75% of member threshold (was logging for ALL domains EVERY warm cycle — 760/day reduced to ~20/day)
+- **`seed_prompt_failed` color changed from red to amber** — individual prompt failures are expected (fail-forward), not catastrophic. Only `seed_failed` (entire batch) is red
+
+### Fixed
+- **Activity panel showed only 2 events after restart** — JSONL fallback only triggered when ring buffer was completely empty (0 events). Two warm-path events prevented fallback, leaving users with zero historical context
+- **Event context key mismatches** — `candidate_promoted`/`rejected` used `label` instead of spec's `cluster_label`, missing `coherence_floor`, `members_reassigned_to`, `reason` fields. All context keys now match spec exactly
+- **`candidate_created` event field names** — `members` → `child_member_count`, `coherence` → `child_coherence` per spec
+
 ## v0.3.14-dev — 2026-04-04
 
 ### Added

@@ -115,7 +115,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, .clinerules, CONVENTIONS.md for context injection. Monorepo-aware: `discover_project_dirs()` scans manifest-containing subdirectories with SHA256 deduplication
 - **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution. Dimension-specific weights prevent single-model bias. Divergence flags when LLM and heuristic disagree by >2.5 points
 - **Real-time events** — SSE-based event bus with toast notifications for file changes, MCP operations, and pipeline status
-- **Evolutionary taxonomy engine** — self-organizing hierarchical clustering that groups optimizations into a navigable taxonomy. Three execution paths: hot (per-optimization multi-embedding + nearest-node search), warm (periodic HDBSCAN re-clustering with speculative lifecycle mutations + domain discovery + stale cluster pruning), cold (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Quality-gated: 5-dimension Q_system score (coherence, separation, coverage, DBCV, stability) prevents regressions. `mega_cluster_prevention` gate blocks merge regressions. Snapshot audit trail for recovery
+- **Evolutionary taxonomy engine** — self-organizing hierarchical clustering that groups optimizations into a navigable taxonomy. Three execution paths: hot (per-optimization multi-embedding + nearest-node search), warm (periodic re-clustering with speculative lifecycle mutations + domain discovery + stale cluster pruning), cold (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Spectral clustering as primary split algorithm (finds sub-communities in uniform-density spaces where HDBSCAN fails); HDBSCAN as fallback. Split children start as candidates — warm-path Phase 0.5 evaluates and promotes (coherence ≥ 0.30) or rejects (members reassigned to nearest active cluster). Quality-gated: 5-dimension Q_system score (coherence, separation, coverage, DBCV, stability) prevents regressions. Snapshot audit trail for recovery
 - **Multi-signal embedding fusion** — composite queries blend 4 signals (topic, transformation, output, pattern) with per-phase adaptive weights for richer pattern matching. Score-weighted centroids give high-quality optimizations more cluster influence. TransformationIndex enables technique-space search across domains
 - **Cross-cluster pattern injection** — universal techniques (high `global_source_count`) are injected regardless of topic cluster, ranked by composite relevance formula. Benefits all routing tiers (internal, passthrough, MCP)
 - **Unified domain taxonomy** — domains are `PromptCluster` nodes with `state="domain"`, discovered organically from user behavior. No hardcoded domain constants — `DomainResolver` resolves from DB, `DomainSignalLoader` provides heuristic keyword signals from domain node metadata. Warm path proposes new domains when coherent sub-populations emerge under "general". Five stability guardrails prevent drift: color pinning, retire exemption, merge approval, separate coherence floor, split isolation. Stats cache with trend tracking
@@ -170,7 +170,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~120s, 1510+ tests)
+# Backend tests (~100s, 1520+ tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
@@ -226,7 +226,7 @@ cd frontend && npm run build
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for planned improvements. Key upcoming items:
 
-- **Quality-driven split trigger** — coherence-based split targeting individual low-coherence clusters regardless of domain health
+- **Agglomerative cold-path rewrite** — replace HDBSCAN in cold path with Hierarchical Agglomerative Clustering + dendrogram cut (makes recluster actually useful)
 - **Sub-domain cluster-count trigger** — trigger sub-domain discovery based on cluster count within a domain
 - **Unified scoring service** — consolidate duplicated scoring orchestration across all pipeline tiers
 
