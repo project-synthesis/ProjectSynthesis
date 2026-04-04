@@ -459,3 +459,112 @@ async def run_batch(
     )
 
     return [r for r in results if r is not None]
+
+
+async def bulk_persist(
+    results: list[PendingOptimization],
+    session_factory: Any,
+    batch_id: str,
+) -> int:
+    """Persist all completed optimizations in a single transaction.
+
+    Returns count of rows inserted. Skips failed optimizations.
+    Idempotent: skips prompts already persisted for this batch_id.
+    Includes retry logic — one retry after 5s on transient failures.
+    """
+    t0 = time.monotonic()
+    completed = [r for r in results if r.status == "completed"]
+
+    if not completed:
+        return 0
+
+    for attempt in range(2):
+        try:
+            async with session_factory() as db:
+                from sqlalchemy import select as sa_select
+
+                from app.models import Optimization
+
+                # Idempotency check: find already-persisted IDs for this batch
+                existing_ids_result = await db.execute(
+                    sa_select(Optimization.id).where(
+                        Optimization.context_sources.op("->>")(
+                            "batch_id"
+                        ) == batch_id
+                    )
+                )
+                existing_ids: set[str] = {row[0] for row in existing_ids_result}
+
+                inserted = 0
+                for pending in completed:
+                    if pending.id in existing_ids:
+                        logger.debug(
+                            "Skipping already-persisted optimization %s (batch_id=%s)",
+                            pending.id[:8], batch_id,
+                        )
+                        continue
+
+                    db_opt = Optimization(
+                        id=pending.id,
+                        trace_id=pending.trace_id,
+                        raw_prompt=pending.raw_prompt,
+                        optimized_prompt=pending.optimized_prompt,
+                        task_type=pending.task_type,
+                        strategy_used=pending.strategy_used,
+                        changes_summary=pending.changes_summary,
+                        score_clarity=pending.score_clarity,
+                        score_specificity=pending.score_specificity,
+                        score_structure=pending.score_structure,
+                        score_faithfulness=pending.score_faithfulness,
+                        score_conciseness=pending.score_conciseness,
+                        overall_score=pending.overall_score,
+                        improvement_score=pending.improvement_score,
+                        scoring_mode=pending.scoring_mode,
+                        intent_label=pending.intent_label,
+                        domain=pending.domain,
+                        domain_raw=pending.domain_raw,
+                        embedding=pending.embedding,
+                        optimized_embedding=pending.optimized_embedding,
+                        transformation_embedding=pending.transformation_embedding,
+                        models_by_phase=pending.models_by_phase,
+                        original_scores=pending.original_scores,
+                        score_deltas=pending.score_deltas,
+                        duration_ms=pending.duration_ms,
+                        status=pending.status,
+                        provider=pending.provider,
+                        model_used=pending.model_used,
+                        routing_tier=pending.routing_tier,
+                        heuristic_flags=pending.heuristic_flags,
+                        suggestions=pending.suggestions,
+                        context_sources=pending.context_sources,
+                    )
+                    db.add(db_opt)
+                    inserted += 1
+
+                await db.commit()
+            break  # success
+        except Exception as exc:
+            if attempt == 0:
+                logger.warning("Bulk persist failed, retrying in 5s: %s", exc)
+                await asyncio.sleep(5)
+            else:
+                raise
+
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    try:
+        from app.services.taxonomy.event_logger import get_event_logger
+        get_event_logger().log_decision(
+            path="hot", op="seed", decision="seed_persist_complete",
+            context={
+                "batch_id": batch_id,
+                "rows_inserted": inserted,
+                "rows_skipped_idempotent": len(completed) - inserted,
+                "transaction_ms": duration_ms,
+            },
+        )
+    except RuntimeError:
+        pass
+
+    logger.info("Bulk persist: %d rows in %dms", inserted, duration_ms)
+    return inserted
