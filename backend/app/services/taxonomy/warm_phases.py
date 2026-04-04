@@ -24,7 +24,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -412,6 +412,64 @@ async def phase_reconcile(
             await db.flush()
     except Exception as zombie_exc:
         logger.warning("Zombie cleanup failed (non-fatal): %s", zombie_exc)
+
+    # --- Prune stale archived clusters ---
+    try:
+        # Delete archived nodes older than 24h with no optimization or pattern
+        # references. Prevents dead-weight accumulation from repeated
+        # split/merge/reform cycles.
+        prune_cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=24)
+        ).replace(tzinfo=None)
+
+        stale_archived_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state == "archived",
+                PromptCluster.member_count == 0,
+                PromptCluster.archived_at.isnot(None),
+                PromptCluster.archived_at < prune_cutoff,
+            )
+        )
+        stale_archived = list(stale_archived_q.scalars().all())
+
+        pruned = 0
+        for node in stale_archived:
+            # Check no optimizations reference this cluster.
+            opt_ref = await db.execute(
+                select(func.count()).select_from(Optimization).where(
+                    Optimization.cluster_id == node.id
+                )
+            )
+            if (opt_ref.scalar() or 0) > 0:
+                continue
+
+            # Check no meta-patterns reference this cluster.
+            pat_ref = await db.execute(
+                select(func.count()).select_from(MetaPattern).where(
+                    MetaPattern.cluster_id == node.id
+                )
+            )
+            if (pat_ref.scalar() or 0) > 0:
+                continue
+
+            await db.delete(node)
+            pruned += 1
+
+        if pruned:
+            logger.info(
+                "Pruned %d stale archived clusters (>24h old, no references)",
+                pruned,
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="reconcile", decision="stale_pruned",
+                    context={"count": pruned},
+                )
+            except RuntimeError:
+                pass
+            await db.flush()
+    except Exception as prune_exc:
+        logger.warning("Stale cluster pruning failed (non-fatal): %s", prune_exc)
 
     return result
 
