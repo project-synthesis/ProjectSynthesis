@@ -51,8 +51,15 @@ async def handle_seed(
         except Exception:
             routing = None
 
-    tier = routing.state.tier if routing else "passthrough"
-    provider = routing.state.provider if routing else None
+    if routing is not None:
+        from app.services.routing import RoutingContext
+        caller = "mcp" if ctx is not None else "rest"
+        decision = routing.resolve(RoutingContext(caller=caller))
+        tier = decision.tier
+        provider = decision.provider
+    else:
+        tier = "passthrough"
+        provider = None
 
     # Resolve agent count for cost estimation
     agent_count = len(AgentLoader(PROMPTS_DIR / "seed-agents").list_enabled())
