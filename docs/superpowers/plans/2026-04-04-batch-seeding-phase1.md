@@ -10,6 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-04-explore-driven-batch-seeding-design.md`
 
+**MLOps mindset:**
+- **Reproducibility:** Each batch gets a `batch_id` UUID generated in Phase 3's `handle_seed()` (single authoritative source). Every event and persisted optimization references it.
+- **Lineage:** `context_sources` on each optimization tracks batch origin: `{"source": "batch_seed", "batch_id": "...", "agent": "coding-implementation"}`.
+- **Monitoring:** The `seed_completed` event (Phase 3) includes enough data to compute: prompts/minute throughput, cost/prompt efficiency, failure rate, domain distribution.
+- **Idempotency:** Phase 2's `bulk_persist()` checks existing batch_id before inserting — interrupted batches can be safely retried.
+
 ---
 
 ### Task 1: Create Default Agent Definition Files
@@ -475,6 +481,8 @@ git commit -m "feat: seed prompt generation template"
 - Create: `backend/app/services/seed_orchestrator.py`
 - Create: `backend/tests/test_seed_orchestrator.py`
 
+**NOTE on batch_id ownership:** `batch_id` is generated once in Phase 3's `handle_seed()` (the single authoritative source) and passed down to the orchestrator. It is NOT generated inside `generate()`. The `GenerationResult` carries it for downstream lineage tracking.
+
 - [ ] **Step 1: Write tests**
 
 ```python
@@ -552,10 +560,11 @@ logger = logging.getLogger(__name__)
 class GenerationResult:
     """Result of the orchestrator's explore + generate phases."""
 
+    batch_id: str  # Passed in from handle_seed — single source of truth
     prompts: list[str]
     prompts_before_dedup: int
     agents_used: list[str]
-    per_agent: list[dict[str, Any]]  # [{name, count, duration_ms}]
+    per_agent: list[dict[str, Any]]  # [{name, count, duration_ms, error_type?}]
     explore_context: str | None
     workspace_profile: str | None
     duration_ms: int
@@ -618,12 +627,17 @@ class SeedOrchestrator:
     async def generate(
         self,
         project_description: str,
+        batch_id: str,
         workspace_profile: str | None = None,
         codebase_context: str | None = None,
         agent_names: list[str] | None = None,
         prompt_count: int = 30,
     ) -> GenerationResult:
-        """Run explore + generate + deduplicate. Returns prompt list."""
+        """Run explore + generate + deduplicate. Returns prompt list.
+
+        Args:
+            batch_id: UUID from handle_seed — single authoritative source for lineage.
+        """
         t0 = time.monotonic()
 
         # Resolve agents
@@ -679,6 +693,14 @@ class SeedOrchestrator:
                 )
                 duration = int((time.monotonic() - agent_t0) * 1000)
                 return agent.name, result.prompts[:scaled_count], duration
+            except asyncio.TimeoutError:
+                duration = int((time.monotonic() - agent_t0) * 1000)
+                logger.warning("Agent '%s' timed out", agent.name)
+                return agent.name, [], duration
+            except json.JSONDecodeError:
+                duration = int((time.monotonic() - agent_t0) * 1000)
+                logger.warning("Agent '%s' returned unparseable JSON", agent.name)
+                return agent.name, [], duration
             except Exception as exc:
                 duration = int((time.monotonic() - agent_t0) * 1000)
                 logger.warning(
@@ -712,12 +734,28 @@ class SeedOrchestrator:
 
         before_dedup = len(all_prompts)
 
+        # Log agents complete event
+        try:
+            from app.services.taxonomy.event_logger import get_event_logger
+            get_event_logger().log_decision(
+                path="hot", op="seed", decision="seed_agents_complete",
+                context={
+                    "batch_id": batch_id,
+                    "prompts_generated": before_dedup,
+                    "per_agent": per_agent,
+                    "duplicates_to_remove": "pending",
+                },
+            )
+        except RuntimeError:
+            pass
+
         # Deduplicate
         all_prompts = deduplicate_prompts(all_prompts)
 
         duration_ms = int((time.monotonic() - t0) * 1000)
 
         return GenerationResult(
+            batch_id=batch_id,
             prompts=all_prompts,
             prompts_before_dedup=before_dedup,
             agents_used=agents_used,
@@ -809,49 +847,11 @@ git commit -m "feat: file watcher for seed agent hot-reload"
 ### Task 6: Observability Events for Phase 1
 
 **Files:**
-- Modify: `backend/app/services/seed_orchestrator.py` (add event logging)
+- Modify: `frontend/src/lib/components/taxonomy/ActivityPanel.svelte` (add seed op filter)
 
-- [ ] **Step 1: Add event logging to SeedOrchestrator.generate()**
+**NOTE on seed_started placement:** The `seed_started` event is emitted ONLY in Phase 3's `handle_seed()`, NOT here in Phase 1. That is the single authoritative location because tier, estimated_cost, and agent_count are all resolved there. Do not add a `seed_started` emit to SeedOrchestrator.
 
-At the start of `generate()`, log `seed_started`:
-
-```python
-try:
-    from app.services.taxonomy.event_logger import get_event_logger
-    get_event_logger().log_decision(
-        path="hot", op="seed", decision="seed_started",
-        context={
-            "batch_id": batch_id,
-            "agent_count": len(agents),
-            "prompt_count_target": prompt_count,
-            "project_description": project_description[:200],
-        },
-    )
-except RuntimeError:
-    pass
-```
-
-After agent dispatch completes, log `seed_agents_complete`:
-
-```python
-try:
-    get_event_logger().log_decision(
-        path="hot", op="seed", decision="seed_agents_complete",
-        context={
-            "batch_id": batch_id,
-            "prompts_generated": before_dedup,
-            "prompts_after_dedup": len(all_prompts),
-            "per_agent": per_agent,
-            "duplicates_removed": before_dedup - len(all_prompts),
-        },
-    )
-except RuntimeError:
-    pass
-```
-
-Add `batch_id = str(uuid.uuid4())` at the top of `generate()` and include it in the `GenerationResult`.
-
-- [ ] **Step 2: Add seed op to frontend ActivityPanel filter chips**
+- [ ] **Step 1: Add seed op to frontend ActivityPanel filter chips**
 
 In `frontend/src/lib/components/taxonomy/ActivityPanel.svelte`, add `'seed'` to the op filter chip list:
 
@@ -874,14 +874,14 @@ Add color mapping — `seed_started` → cyan, `seed_completed` → green, `seed
 
 In the `decisionColor` function, add `seed_started` and `seed_agents_complete` to the informational (secondary) group.
 
-- [ ] **Step 3: Run tests + frontend check**
+- [ ] **Step 2: Run tests + frontend check**
 
 ```bash
 cd backend && source .venv/bin/activate && python -m pytest tests/test_agent_loader.py tests/test_seed_orchestrator.py -v
 cd frontend && npx svelte-check --threshold error
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add backend/app/services/seed_orchestrator.py frontend/src/lib/components/taxonomy/ActivityPanel.svelte
@@ -945,7 +945,7 @@ async def test():
     # Without provider — should raise
     orch = SeedOrchestrator(provider=None)
     try:
-        await orch.generate('A fintech app')
+        await orch.generate('A fintech app', batch_id='test-batch')
         print('ERROR: should have raised')
     except ValueError as e:
         print(f'Correctly raised: {e}')

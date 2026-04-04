@@ -14,6 +14,11 @@
 
 **IMPORTANT:** Use `frontend-design` and `brand-guidelines` skills when implementing SeedModal.svelte. Industrial cyberpunk theme: dark backgrounds, 1px neon contours, no rounded corners, no shadows, no gradients, monospace font hierarchy.
 
+**MLOps mindset:**
+- **Reproducibility:** The `batch_id` from `SeedOutput` is displayed in the result card so users can correlate frontend sessions with backend logs and taxonomy events.
+- **Monitoring:** The SSE `seed_batch_progress` event delivers live throughput data. The result card shows prompts_optimized, prompts_failed, clusters_created, and domains_touched — matching the `seed_completed` event fields.
+- **Lineage:** The result card links to the activity panel filtered on `batch_id` so users can inspect per-prompt observability events.
+
 ---
 
 ### Task 1: API Client
@@ -44,7 +49,8 @@ export interface SeedOutput {
   prompts_optimized: number;
   prompts_failed: number;
   estimated_cost_usd: number | null;
-  actual_cost_usd: number | null;
+  // NOTE: actual_cost_usd is intentionally absent — matches Python SeedOutput.
+  // The backend provides estimation only.
   domains_touched: string[];
   clusters_created: number;
   summary: string;
@@ -82,35 +88,22 @@ git commit -m "feat: seed API client types and functions"
 
 ### Task 2: Seed Agents List Endpoint
 
-**Files:**
-- Modify: `backend/app/routers/seed.py`
+This endpoint is defined in Phase 3 Task 4 alongside `POST /api/seed`. No separate backend changes needed here.
 
-- [ ] **Step 1: Add agent list endpoint**
+**Verification only:**
 
-```python
-@router.get("/api/seed/agents")
-async def list_seed_agents() -> list[dict]:
-    """List available seed agents with metadata."""
-    from app.services.agent_loader import AgentLoader
-    loader = AgentLoader(PROMPTS_DIR / "seed-agents")
-    return [
-        {
-            "name": a.name,
-            "description": a.description,
-            "task_types": a.task_types,
-            "prompts_per_run": a.prompts_per_run,
-            "enabled": a.enabled,
-        }
-        for a in loader.list_enabled()
-    ]
-```
-
-- [ ] **Step 2: Commit**
+- [ ] **Step 1: Verify GET /api/seed/agents works**
 
 ```bash
-git add backend/app/routers/seed.py
-git commit -m "feat: GET /api/seed/agents endpoint"
+# After restarting services:
+curl -s http://localhost:8000/api/seed/agents | python3 -m json.tool
 ```
+
+Expected: JSON array of 5 agent objects with name, description, task_types, prompts_per_run, enabled.
+
+- [ ] **Step 2: Commit (no-op if already done in Phase 3)**
+
+Confirm `GET /api/seed/agents` is in `backend/app/routers/seed.py`. If it is (from Phase 3 Task 4), no additional changes needed.
 
 ---
 
@@ -164,7 +157,8 @@ Use the **frontend-design** and **brand-guidelines** skills. The modal should fo
     }
   });
 
-  // SSE progress listener
+  // SSE progress listener — receives seed_batch_progress events dispatched
+  // by +page.svelte's SSE handler as custom DOM events
   $effect(() => {
     if (!seeding) return;
     const handler = (e: Event) => {
@@ -221,7 +215,8 @@ The exact template and styling should be built using the frontend-design skill t
 - "Estimated cost: $X.XX" display
 - Start/Cancel buttons
 - Progress bar during seeding
-- Result card on completion
+- Result card on completion showing: status badge, batch_id, prompts_optimized, prompts_failed, clusters_created, domains_touched, tier, duration
+- The result card batch_id should be copyable (for correlating with backend logs)
 
 - [ ] **Step 2: Commit**
 
@@ -294,14 +289,29 @@ git commit -m "feat: Seed button in topology controls + modal wiring"
 
 **Files:**
 - Modify: `frontend/src/routes/app/+page.svelte`
+- Modify: `frontend/src/lib/components/taxonomy/ActivityPanel.svelte`
 
 - [ ] **Step 1: Add seed_batch_progress SSE handler**
 
-In the SSE event handler (where `taxonomy_activity` and `taxonomy_changed` are handled), add:
+In the SSE event handler in `+page.svelte` (where `taxonomy_activity` and `taxonomy_changed` are handled), add:
 
 ```typescript
 if (type === 'seed_batch_progress') {
+  // Dispatch as a DOM custom event so SeedModal can listen
+  // without being coupled to the SSE layer
   window.dispatchEvent(new CustomEvent('seed-batch-progress', { detail: data }));
+}
+```
+
+The `seed_batch_progress` event payload (from Phase 2 `run_batch()`):
+```typescript
+{
+  batch_id: string;
+  phase: 'optimize';
+  completed: number;
+  total: number;
+  current_prompt: string;
+  failed: number;
 }
 ```
 
@@ -310,8 +320,11 @@ if (type === 'seed_batch_progress') {
 In `ActivityPanel.svelte`, add to the `decisionColor` function:
 
 - `seed_started` → cyan (informational)
+- `seed_explore_complete` → cyan (informational)
 - `seed_agents_complete` → cyan (informational)
-- `seed_prompt_scored` → secondary (informational)
+- `seed_prompt_scored` → secondary (informational — high volume, keep subtle)
+- `seed_persist_complete` → cyan (informational)
+- `seed_taxonomy_complete` → cyan (informational)
 - `seed_completed` → green (success)
 - `seed_failed` → red (error)
 
@@ -347,18 +360,33 @@ curl -s -X POST http://localhost:8000/api/seed \
   | python3 -m json.tool
 ```
 
-Expected: SeedOutput with status="completed", prompts_optimized=~10, clusters_created>0, domains_touched non-empty.
+Expected: SeedOutput with `status="completed"`, `prompts_optimized=~10`, `clusters_created>0`, `domains_touched` non-empty, `batch_id` present, no `actual_cost_usd` field.
 
-- [ ] **Step 3: Verify UI**
+- [ ] **Step 3: Verify TypeScript SeedOutput matches Python SeedOutput**
+
+```bash
+# Confirm no actual_cost_usd in TypeScript interface
+grep "actual_cost_usd" frontend/src/lib/api/seed.ts
+# Expected: zero matches (or only a comment)
+```
+
+Cross-plan coherence check for Phase 4:
+1. `SeedOutput.actual_cost_usd` absent in TypeScript — YES (not in interface)
+2. SSE handler dispatches `seed_batch_progress` to DOM — YES (Task 5 Step 1)
+3. `SeedModal` listens for `seed-batch-progress` DOM event — YES (Task 3 `$effect`)
+4. `GET /api/seed/agents` available for agent selector — YES (Phase 3 Task 4)
+
+- [ ] **Step 4: Verify UI**
 
 Open browser, navigate to Pattern Graph, click "Seed" button. Verify:
-- Modal opens with agent checkboxes
+- Modal opens with agent checkboxes (loaded from GET /api/seed/agents)
 - Enter project description, click Start
-- Progress bar updates
-- Activity panel shows seed events
+- Progress bar updates as `seed_batch_progress` SSE events arrive
+- Activity panel shows seed events with correct color coding
 - On completion, topology refreshes with new clusters
+- Result card shows batch_id (copyable), prompts_optimized, clusters_created
 
-- [ ] **Step 4: Final commit**
+- [ ] **Step 5: Final commit**
 
 ```bash
 git add -A
