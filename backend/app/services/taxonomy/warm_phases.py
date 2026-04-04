@@ -302,6 +302,22 @@ async def phase_reconcile(
                 domain_node.member_count = child_count
                 result.member_counts_fixed += 1
 
+        # Reconcile domain node member_count (child cluster count by parent_id)
+        domain_q2 = await db.execute(
+            select(PromptCluster).where(PromptCluster.state == "domain")
+        )
+        for domain_node in domain_q2.scalars():
+            child_count_q = await db.execute(
+                select(func.count()).where(
+                    PromptCluster.parent_id == domain_node.id,
+                    PromptCluster.state.notin_(["domain", "archived"]),
+                )
+            )
+            actual_count = child_count_q.scalar() or 0
+            if domain_node.member_count != actual_count:
+                domain_node.member_count = actual_count
+                result.member_counts_fixed += 1
+
             # Repair self-referencing parent_id links on children.
             self_ref_q = await db.execute(
                 select(PromptCluster).where(
