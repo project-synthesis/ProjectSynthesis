@@ -103,7 +103,11 @@ async def event_stream(request: Request) -> StreamingResponse:
 
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    # 45s timeout gives comfortable headroom over warm-path transactions
+                    # (~10-20s). The warm-path debounce (T7) reduces firing frequency,
+                    # so 45s keepalive intervals are safe and prevent EventSource
+                    # disconnects during busy warm-path windows.
+                    event = await asyncio.wait_for(queue.get(), timeout=45.0)
                     if event_bus.is_shutdown_event(event):
                         return
                     # Skip events already sent during replay (deduplication)
