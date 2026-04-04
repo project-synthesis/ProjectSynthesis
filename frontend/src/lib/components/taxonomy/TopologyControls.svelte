@@ -159,25 +159,25 @@
 
   .tc-panel {
     position: absolute;
-    top: 6px;
-    right: 6px;
+    top: 0;
+    right: 0;
     width: 184px;
     display: flex;
     flex-direction: column;
-    background: color-mix(in srgb, var(--color-bg-secondary) 88%, transparent);
-    border: 1px solid var(--color-border-subtle);
+    gap: 1px;
+    padding: 6px;
     pointer-events: auto;
     z-index: 10;
   }
 
-  /* ── Sections ── */
+  /* ── Sections — floating HUD blocks ── */
 
   .tc-section {
     padding: 5px 6px;
-  }
-
-  .tc-section + .tc-section {
-    border-top: 1px solid var(--color-border-subtle);
+    background: color-mix(in srgb, var(--color-bg-primary) 72%, transparent);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 35%, transparent);
   }
 
   /* ── Info panel section ── */
@@ -204,7 +204,7 @@
     flex: 1;
     padding: 2px 5px;
     background: transparent;
-    border: 1px solid var(--color-border-subtle);
+    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 40%, transparent);
     color: var(--color-text-dim);
     font-family: var(--font-mono);
     font-size: 9px;
@@ -257,7 +257,7 @@
     flex: 1;
     padding: 2px 4px;
     background: transparent;
-    border: 1px solid var(--color-border-subtle);
+    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 40%, transparent);
     color: var(--color-text-dim);
     font-family: var(--font-mono);
     font-size: 9px;
@@ -286,8 +286,8 @@
     color: var(--color-text-dim);
     padding: 2px 4px;
     letter-spacing: 0.08em;
-    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 50%, transparent);
-    background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 30%, transparent);
+    background: color-mix(in srgb, var(--color-bg-hover) 25%, transparent);
     flex-shrink: 0;
   }
 
@@ -304,8 +304,8 @@
   .tc-search-input {
     width: 100%;
     padding: 2px 5px;
-    background: var(--color-bg-input);
-    border: 1px solid var(--color-border-subtle);
+    background: color-mix(in srgb, var(--color-bg-input) 80%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 40%, transparent);
     color: var(--color-text-primary);
     font-family: var(--font-mono);
     font-size: 10px;
@@ -354,7 +354,7 @@
     margin-top: 2px;
     font-family: var(--font-mono);
     font-size: 7px;
-    color: color-mix(in srgb, var(--color-text-dim) 50%, transparent);
+    color: color-mix(in srgb, var(--color-text-dim) 40%, transparent);
     letter-spacing: 0.02em;
   }
 
