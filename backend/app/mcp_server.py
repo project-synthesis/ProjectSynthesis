@@ -40,6 +40,7 @@ from app.schemas.mcp_models import (
     SaveResultOutput,
     StrategiesOutput,
 )
+from app.schemas.seed import SeedOutput
 from app.services.event_notification import notify_event_bus
 from app.services.mcp_session_file import MCPSessionFile
 from app.services.routing import RoutingManager
@@ -1070,6 +1071,58 @@ async def synthesis_refine(
     Chain: Call synthesis_feedback after the final refinement to close the loop.
     """
     return await handle_refine(optimization_id, refinement_request, branch_id, workspace_path, ctx)
+
+
+@mcp.tool(structured_output=True)
+async def synthesis_seed(
+    project_description: Annotated[str, Field(
+        description="Project description for prompt generation (20+ chars).",
+    )],
+    workspace_path: Annotated[str | None, Field(
+        default=None,
+        description="Absolute path to workspace root for context extraction.",
+    )] = None,
+    repo_full_name: Annotated[str | None, Field(
+        default=None,
+        description="GitHub repo in 'owner/repo' format for explore phase.",
+    )] = None,
+    prompt_count: Annotated[int, Field(
+        default=30,
+        description="Target total prompts (5-100).",
+    )] = 30,
+    agents: Annotated[list[str] | None, Field(
+        default=None,
+        description="Specific agent names. None = all enabled.",
+    )] = None,
+    prompts: Annotated[list[str] | None, Field(
+        default=None,
+        description="User-provided prompts (bypasses generation).",
+    )] = None,
+    ctx: Context | None = None,
+) -> SeedOutput:
+    """Seed the taxonomy by generating and optimizing diverse prompts.
+
+    Two modes:
+    1. Generated (default): Provide project_description. Agents generate
+       diverse prompts which are optimized through the full pipeline.
+    2. Provided: Supply prompts list directly for batch optimization.
+
+    The taxonomy discovers clusters, domains, and patterns organically
+    from the optimized results. No structure is forced — the pipeline
+    and taxonomy engine handle everything.
+    """
+    from app.tools.seed import handle_seed
+    # MCP context: routing resolved via get_routing() inside handle_seed fallback
+    return await handle_seed(
+        project_description=project_description,
+        workspace_path=workspace_path,
+        repo_full_name=repo_full_name,
+        prompt_count=prompt_count,
+        agents=agents,
+        prompts=prompts,
+        ctx=ctx,
+        routing=None,  # MCP path: handle_seed falls back to get_routing()
+    )
 
 
 # ---------------------------------------------------------------------------
