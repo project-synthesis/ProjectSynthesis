@@ -971,6 +971,7 @@ async def run_sampling_pipeline(
                     context={
                         "scoring_mode": "hybrid",
                         "overall": optimized_scores.overall,
+                        "intent_label": analysis.intent_label,
                         "blended": blended_optimized.as_dict(),
                         "raw_llm": blended_optimized.raw_llm,
                         "raw_heuristic": blended_optimized.raw_heuristic,

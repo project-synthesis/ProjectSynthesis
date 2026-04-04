@@ -97,8 +97,9 @@
     }
     if (e.op === 'score') {
       const overall = typeof c.overall === 'number' ? c.overall.toFixed(1) : '?';
+      const label = typeof c.intent_label === 'string' ? c.intent_label : '';
       const divs = Array.isArray(c.divergence) && c.divergence.length > 0 ? ` [${c.divergence.join(',')}]` : '';
-      return `${overall}${divs}`;
+      return `${overall} ${label}${divs}`;
     }
     if (e.op === 'extract') {
       return typeof c.meta_patterns_added === 'number' ? `${c.meta_patterns_added} patterns` : '';
