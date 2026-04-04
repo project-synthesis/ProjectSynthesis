@@ -568,3 +568,102 @@ async def bulk_persist(
 
     logger.info("Bulk persist: %d rows in %dms", inserted, duration_ms)
     return inserted
+
+
+async def batch_taxonomy_assign(
+    results: list[PendingOptimization],
+    session_factory: Any,
+    batch_id: str,
+) -> dict[str, Any]:
+    """Assign clusters for all persisted optimizations in one transaction.
+
+    Pattern extraction is deferred (pattern_stale=True) — the warm path
+    handles it after the batch completes.
+
+    Returns summary dict with clusters_assigned, clusters_created, domains_touched.
+    """
+    t0 = time.monotonic()
+    completed = [r for r in results if r.status == "completed" and r.embedding]
+    clusters_created = 0
+    domains_touched: set[str] = set()
+
+    if not completed:
+        return {"clusters_assigned": 0, "clusters_created": 0, "domains_touched": []}
+
+    from app.services.taxonomy import get_engine
+    from app.services.taxonomy.family_ops import assign_cluster
+
+    engine = get_engine()
+
+    async with session_factory() as db:
+        for pending in completed:
+            try:
+                embedding = np.frombuffer(pending.embedding, dtype=np.float32)
+                cluster = await assign_cluster(
+                    db=db,
+                    embedding=embedding,
+                    label=pending.intent_label or "general",
+                    domain=pending.domain or "general",
+                    task_type=pending.task_type or "general",
+                    overall_score=pending.overall_score,
+                    embedding_index=engine._embedding_index,
+                )
+
+                # Track what was created
+                if cluster.member_count == 1:
+                    clusters_created += 1
+                domains_touched.add(pending.domain or "general")
+
+                # Defer pattern extraction to warm path
+                from app.services.taxonomy.cluster_meta import write_meta
+                cluster.cluster_metadata = write_meta(
+                    cluster.cluster_metadata, pattern_stale=True,
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    "Taxonomy assign failed for %s: %s",
+                    pending.id[:8], exc,
+                )
+
+        await db.commit()
+
+    duration_ms = int((time.monotonic() - t0) * 1000)
+    domains_list = sorted(domains_touched)
+
+    try:
+        from app.services.taxonomy.event_logger import get_event_logger
+        get_event_logger().log_decision(
+            path="hot", op="seed", decision="seed_taxonomy_complete",
+            context={
+                "batch_id": batch_id,
+                "clusters_assigned": len(completed),
+                "clusters_created": clusters_created,
+                "domains_touched": domains_list,
+                "transaction_ms": duration_ms,
+            },
+        )
+    except RuntimeError:
+        pass
+
+    # Trigger warm path (single event — debounce handles the rest)
+    try:
+        from app.services.event_bus import event_bus
+        event_bus.publish("taxonomy_changed", {
+            "trigger": "batch_seed",
+            "batch_id": batch_id,
+            "clusters_created": clusters_created,
+        })
+    except Exception:
+        pass
+
+    logger.info(
+        "Taxonomy assign: %d clusters (%d new), domains=%s (%dms)",
+        len(completed), clusters_created, domains_list, duration_ms,
+    )
+
+    return {
+        "clusters_assigned": len(completed),
+        "clusters_created": clusters_created,
+        "domains_touched": domains_list,
+    }
