@@ -38,6 +38,7 @@ from app.models import (
     PromptCluster,
 )
 from app.services.taxonomy._constants import (
+    CANDIDATE_COHERENCE_FLOOR,
     MEGA_CLUSTER_MEMBER_FLOOR,
     SPLIT_COHERENCE_FLOOR,
     SPLIT_MIN_MEMBERS,
@@ -119,6 +120,281 @@ class AuditResult:
     q_final: float | None = None
     deadlock_breaker_used: bool = False
     deadlock_breaker_phase: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Phase 0.5 helpers — Candidate lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def _reassign_to_active(
+    db: AsyncSession,
+    opt_ids: list[str],
+    opt_embeddings: list[np.ndarray],
+) -> None:
+    """Reassign optimizations to the nearest active/mature/template cluster.
+
+    Only targets non-candidate, non-archived, non-domain clusters so that
+    rejected candidate members always land in a stable parent cluster.
+
+    Args:
+        db: Active database session.
+        opt_ids: Optimization primary-key IDs to reassign.
+        opt_embeddings: Corresponding unit-norm embeddings (same order).
+    """
+    if not opt_ids:
+        return
+
+    # Load candidate target clusters (active/mature/template only)
+    targets_q = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state.in_(["active", "mature", "template"])
+        )
+    )
+    target_clusters: list[PromptCluster] = list(targets_q.scalars().all())
+    if not target_clusters:
+        # No stable target exists — leave assignments unchanged
+        return
+
+    # Pre-decode target centroids
+    target_centroids: list[np.ndarray] = []
+    valid_targets: list[PromptCluster] = []
+    for tc in target_clusters:
+        if tc.centroid_embedding:
+            try:
+                centroid = np.frombuffer(tc.centroid_embedding, dtype=np.float32).copy()
+                target_centroids.append(centroid)
+                valid_targets.append(tc)
+            except (ValueError, TypeError):
+                pass
+
+    if not valid_targets:
+        return
+
+    for opt_id, emb in zip(opt_ids, opt_embeddings):
+        # Find nearest target by cosine similarity
+        best_target: PromptCluster | None = None
+        best_sim: float = -1.0
+        for tc, centroid in zip(valid_targets, target_centroids):
+            sim = cosine_similarity(emb, centroid)
+            if sim > best_sim:
+                best_sim = sim
+                best_target = tc
+
+        if best_target is None:
+            continue
+
+        opt = await db.get(Optimization, opt_id)
+        if opt is None:
+            continue
+
+        # Update the optimization's cluster assignment
+        opt.cluster_id = best_target.id
+        best_target.member_count = (best_target.member_count or 0) + 1
+
+
+async def phase_evaluate_candidates(
+    db: AsyncSession,
+) -> dict:
+    """Phase 0.5 — evaluate candidate clusters for promotion or rejection.
+
+    For each cluster with ``state="candidate"``:
+    - Zero members → archive immediately (candidate_rejected: zero_members)
+    - Pairwise coherence >= CANDIDATE_COHERENCE_FLOOR → promote to "active"
+    - Pairwise coherence < CANDIDATE_COHERENCE_FLOOR → reassign members to
+      nearest active cluster, then archive (candidate_rejected: low_coherence)
+
+    After evaluating all candidates, detect ``split_fully_reversed`` events:
+    all candidates sharing the same ``parent_id`` were rejected.
+
+    This phase is NOT Q-gated — it always commits.
+
+    Returns:
+        Dict with keys: promoted (int), rejected (int), splits_fully_reversed (int).
+    """
+    promoted = 0
+    rejected = 0
+    splits_fully_reversed = 0
+
+    # Load all candidate clusters
+    cands_q = await db.execute(
+        select(PromptCluster).where(PromptCluster.state == "candidate")
+    )
+    candidates: list[PromptCluster] = list(cands_q.scalars().all())
+
+    if not candidates:
+        return {"promoted": 0, "rejected": 0, "splits_fully_reversed": 0}
+
+    # Pre-fetch member embeddings grouped by cluster_id in a single query
+    cand_ids = [c.id for c in candidates]
+    emb_q = await db.execute(
+        select(Optimization.id, Optimization.cluster_id, Optimization.embedding)
+        .where(
+            Optimization.cluster_id.in_(cand_ids),
+            Optimization.embedding.isnot(None),
+        )
+    )
+    emb_by_cluster: dict[str, list[tuple[str, np.ndarray]]] = {}
+    for opt_id, cid, emb_bytes in emb_q.all():
+        if emb_bytes:
+            try:
+                emb = np.frombuffer(emb_bytes, dtype=np.float32).copy()
+                emb_by_cluster.setdefault(cid, []).append((opt_id, emb))
+            except (ValueError, TypeError):
+                pass
+
+    # Track outcomes per parent_id for split_fully_reversed detection
+    # Maps parent_id → {promoted: int, rejected: int}
+    parent_outcomes: dict[str, dict[str, int]] = {}
+
+    now = _utcnow()
+
+    for candidate in candidates:
+        members = emb_by_cluster.get(candidate.id, [])
+        member_count = len(members)
+
+        # Track outcome per parent
+        if candidate.parent_id:
+            if candidate.parent_id not in parent_outcomes:
+                parent_outcomes[candidate.parent_id] = {"promoted": 0, "rejected": 0}
+
+        # Compute time_as_candidate_ms for event logging.
+        # Guard against naive/aware mismatch: models._utcnow() may return
+        # timezone-aware datetimes while SQLAlchemy strips tzinfo on SQLite
+        # round-trips. Use try/except for safety.
+        time_as_candidate_ms: int | None = None
+        if candidate.created_at:
+            try:
+                created = candidate.created_at
+                # Normalise: strip tzinfo if present so subtraction works with
+                # our naive `now`.
+                if getattr(created, "tzinfo", None) is not None:
+                    created = created.replace(tzinfo=None)
+                delta = now - created
+                time_as_candidate_ms = int(delta.total_seconds() * 1000)
+            except (TypeError, AttributeError):
+                pass
+
+        # Case 1: zero members — archive immediately
+        if member_count == 0:
+            candidate.state = "archived"
+            candidate.archived_at = now
+            rejected += 1
+            if candidate.parent_id:
+                parent_outcomes[candidate.parent_id]["rejected"] += 1
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="candidate", decision="candidate_rejected",
+                    context={
+                        "cluster_id": candidate.id,
+                        "label": candidate.label,
+                        "reason": "zero_members",
+                        "parent_id": candidate.parent_id,
+                        "time_as_candidate_ms": time_as_candidate_ms,
+                    },
+                )
+            except RuntimeError:
+                pass
+            continue
+
+        # Compute pairwise coherence from member embeddings
+        embeddings = [emb for _, emb in members]
+        if len(embeddings) >= 2:
+            coherence = compute_pairwise_coherence(embeddings)
+        else:
+            # Single member — coherence is 1.0 by definition, but we
+            # treat singletons as promotable (they'll grow or be retired).
+            coherence = 1.0
+
+        # Case 2: coherence meets floor — promote to active
+        if coherence >= CANDIDATE_COHERENCE_FLOOR:
+            candidate.state = "active"
+            candidate.coherence = coherence
+            promoted += 1
+            if candidate.parent_id:
+                parent_outcomes[candidate.parent_id]["promoted"] += 1
+            logger.info(
+                "Candidate '%s' promoted to active (coherence=%.3f)",
+                candidate.label, coherence,
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="candidate", decision="candidate_promoted",
+                    context={
+                        "cluster_id": candidate.id,
+                        "label": candidate.label,
+                        "coherence": round(coherence, 4),
+                        "member_count": member_count,
+                        "parent_id": candidate.parent_id,
+                        "time_as_candidate_ms": time_as_candidate_ms,
+                    },
+                )
+            except RuntimeError:
+                pass
+
+        else:
+            # Case 3: coherence below floor — reassign members and archive
+            opt_ids = [oid for oid, _ in members]
+            opt_embs = [emb for _, emb in members]
+            await _reassign_to_active(db, opt_ids, opt_embs)
+
+            candidate.state = "archived"
+            candidate.archived_at = now
+            candidate.member_count = 0
+            rejected += 1
+            if candidate.parent_id:
+                parent_outcomes[candidate.parent_id]["rejected"] += 1
+            logger.info(
+                "Candidate '%s' rejected (coherence=%.3f < %.2f), reassigning %d members",
+                candidate.label, coherence, CANDIDATE_COHERENCE_FLOOR, member_count,
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="candidate", decision="candidate_rejected",
+                    context={
+                        "cluster_id": candidate.id,
+                        "label": candidate.label,
+                        "reason": "low_coherence",
+                        "coherence": round(coherence, 4),
+                        "member_count": member_count,
+                        "parent_id": candidate.parent_id,
+                        "time_as_candidate_ms": time_as_candidate_ms,
+                    },
+                )
+            except RuntimeError:
+                pass
+
+    # Detect split_fully_reversed: all siblings from same parent were rejected
+    for parent_id, outcomes in parent_outcomes.items():
+        total = outcomes["promoted"] + outcomes["rejected"]
+        if total > 0 and outcomes["promoted"] == 0:
+            splits_fully_reversed += 1
+            logger.info(
+                "Split fully reversed: all %d candidates from parent '%s' rejected",
+                total, parent_id,
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="candidate", decision="split_fully_reversed",
+                    context={
+                        "parent_id": parent_id,
+                        "rejected_count": outcomes["rejected"],
+                    },
+                )
+            except RuntimeError:
+                pass
+
+    # Flush all pending ORM mutations to the DB so callers can rely on
+    # consistent state after this function returns (without requiring a full
+    # commit, matching the pattern used by phase_reconcile and phase_refresh).
+    if promoted > 0 or rejected > 0:
+        await db.flush()
+
+    return {
+        "promoted": promoted,
+        "rejected": rejected,
+        "splits_fully_reversed": splits_fully_reversed,
+    }
 
 
 # ---------------------------------------------------------------------------

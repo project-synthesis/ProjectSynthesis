@@ -34,6 +34,7 @@ from app.services.taxonomy.warm_phases import (
     PhaseResult,
     phase_audit,
     phase_discover,
+    phase_evaluate_candidates,
     phase_merge,
     phase_reconcile,
     phase_refresh,
@@ -79,11 +80,24 @@ class WarmPathResult:
 # ---------------------------------------------------------------------------
 
 
-async def _load_active_nodes(db: AsyncSession) -> list[PromptCluster]:
-    """Load all non-domain, non-archived nodes from the database."""
+async def _load_active_nodes(
+    db: AsyncSession,
+    exclude_candidates: bool = False,
+) -> list[PromptCluster]:
+    """Load all non-domain, non-archived nodes from the database.
+
+    Args:
+        db: Active database session.
+        exclude_candidates: When True, also exclude ``state="candidate"``
+            from the result set. Used in Q computation to prevent low-coherence
+            candidates from dragging Q_after below Q_before.
+    """
+    excluded = ["domain", "archived"]
+    if exclude_candidates:
+        excluded.append("candidate")
     result = await db.execute(
         select(PromptCluster).where(
-            PromptCluster.state.notin_(["domain", "archived"])
+            PromptCluster.state.notin_(excluded)
         )
     )
     return list(result.scalars().all())
@@ -122,8 +136,9 @@ async def _run_speculative_phase(
     ti_snapshot = await engine._transformation_index.snapshot()
 
     async with session_factory() as db:
-        # Load nodes and compute Q_before
-        nodes_before = await _load_active_nodes(db)
+        # Load nodes and compute Q_before — exclude candidates to prevent
+        # low-coherence candidate clusters from dragging Q down.
+        nodes_before = await _load_active_nodes(db, exclude_candidates=True)
         q_before = engine._compute_q_from_nodes(nodes_before)
 
         # Call the phase function with appropriate arguments
@@ -134,8 +149,8 @@ async def _run_speculative_phase(
             # phase_split_emerge and phase_merge take split_protected_ids
             phase_result = await phase_fn(engine, db, split_protected_ids or set())
 
-        # Re-query nodes and compute Q_after
-        nodes_after = await _load_active_nodes(db)
+        # Re-query nodes and compute Q_after — same exclusion as Q_before.
+        nodes_after = await _load_active_nodes(db, exclude_candidates=True)
         q_after = engine._compute_q_from_nodes(nodes_after)
 
         # Update phase result Q values
@@ -337,6 +352,30 @@ async def execute_warm_path(
         # Compute Q_baseline from the reconciled state
         nodes = await _load_active_nodes(db)
         q_baseline = engine._compute_q_from_nodes(nodes)
+
+    # ------------------------------------------------------------------
+    # Phase 0.5: Evaluate candidates — NOT Q-gated, always commits
+    # ------------------------------------------------------------------
+    async with session_factory() as db:
+        candidate_result = await phase_evaluate_candidates(db)
+        await db.commit()
+        if candidate_result["promoted"] > 0 or candidate_result["rejected"] > 0:
+            logger.info(
+                "Phase 0.5 (candidate_eval): promoted=%d rejected=%d splits_fully_reversed=%d",
+                candidate_result["promoted"],
+                candidate_result["rejected"],
+                candidate_result["splits_fully_reversed"],
+            )
+            # Publish taxonomy_changed so the frontend re-renders the topology
+            try:
+                from app.services.event_bus import event_bus
+                event_bus.publish("taxonomy_changed", {
+                    "trigger": "candidate_evaluation",
+                    "promoted": candidate_result["promoted"],
+                    "rejected": candidate_result["rejected"],
+                })
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Phase 1: Split/Emerge — speculative
