@@ -567,6 +567,8 @@ async def lifespan(app: FastAPI):
         ``_warm_path_pending`` is set (e.g. after a new optimization is
         clustered), whichever comes first.
         """
+        debounce_seconds = 30  # Wait 30s after last event before running
+
         try:
             await asyncio.sleep(60)  # Initial delay — let system stabilize
             while True:
@@ -576,8 +578,19 @@ async def lifespan(app: FastAPI):
                         timeout=settings.WARM_PATH_INTERVAL_SECONDS,
                     )
                     _warm_path_pending.clear()  # Reset for next cycle
+                    # Debounce: wait 30s, restart if more events arrive
+                    while True:
+                        try:
+                            await asyncio.wait_for(
+                                _warm_path_pending.wait(),
+                                timeout=debounce_seconds,
+                            )
+                            _warm_path_pending.clear()  # Another event — restart debounce
+                            logger.debug("Warm path debounce reset — more events arriving")
+                        except asyncio.TimeoutError:
+                            break  # 30s of silence — proceed to run warm path
                 except asyncio.TimeoutError:
-                    pass  # Normal timeout — run warm path on schedule
+                    pass  # Normal interval timeout — run warm path on schedule
                 try:
                     engine = getattr(app.state, "taxonomy_engine", None)
                     if engine:
