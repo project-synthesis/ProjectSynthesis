@@ -120,6 +120,11 @@
       if (type === 'taxonomy_activity') {
         clustersStore.pushActivityEvent(data as unknown as import('$lib/api/clusters').TaxonomyActivityEvent);
       }
+      if (type === 'seed_batch_progress') {
+        // Dispatch as a DOM custom event so SeedModal can listen
+        // without being coupled to the SSE layer
+        window.dispatchEvent(new CustomEvent('seed-batch-progress', { detail: data }));
+      }
       if (type === 'domain_created') {
         domainStore.invalidate();
       }

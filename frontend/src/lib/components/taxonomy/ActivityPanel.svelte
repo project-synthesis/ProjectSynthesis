@@ -30,7 +30,7 @@
     if (e.op === 'error') return 'var(--color-neon-red)';
     const d = e.decision;
     // Red — seed failures
-    if (d === 'seed_failed') return 'var(--color-neon-red)';
+    if (d === 'seed_failed' || d === 'seed_prompt_failed') return 'var(--color-neon-red)';
     // Green — successful operations
     if (d === 'accepted' || d === 'merged' || d === 'merge_into' || d === 'complete'
         || d === 'split_complete' || d === 'archived' || d === 'domain_created'
@@ -48,7 +48,8 @@
     if (d === 'algorithm_result' || d === 'noise_reassigned' || d === 'mega_clusters_detected'
         || d === 'no_sub_structure' || d === 'scored'
         || d === 'seed_started' || d === 'seed_explore_complete' || d === 'seed_agents_complete'
-        || d === 'seed_persist_complete' || d === 'seed_taxonomy_complete')
+        || d === 'seed_persist_complete' || d === 'seed_taxonomy_complete'
+        || d === 'seed_prompt_scored')
       return 'var(--color-text-secondary)';
     return 'var(--color-text-dim)';
   }
