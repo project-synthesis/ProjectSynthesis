@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any
 
-from app.config import DATA_DIR, PROMPTS_DIR, settings
+from app.config import PROMPTS_DIR
 from app.schemas.seed import SeedOutput
 from app.services.agent_loader import AgentLoader
 from app.services.batch_pipeline import (
@@ -231,7 +231,7 @@ async def handle_seed(
     from app.database import async_session_factory
 
     try:
-        rows_inserted = await bulk_persist(results, async_session_factory, batch_id)
+        await bulk_persist(results, async_session_factory, batch_id)
     except Exception as exc:
         logger.error("Seed persist failed: %s", exc, exc_info=True)
         completed = sum(1 for r in results if r.status == "completed")
