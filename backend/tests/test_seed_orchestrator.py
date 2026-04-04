@@ -35,9 +35,8 @@ class TestDeduplication:
 
 class TestSeedOrchestrator:
     def test_no_provider_raises(self) -> None:
+        import asyncio
+
         orch = SeedOrchestrator(provider=None)
         with pytest.raises(ValueError, match="No LLM provider"):
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(
-                orch.generate("test project", batch_id="test-batch")
-            )
+            asyncio.run(orch.generate("test project", batch_id="test-batch"))

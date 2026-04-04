@@ -170,7 +170,10 @@ class SeedOrchestrator:
 
         before_dedup = len(all_prompts)
 
-        # Log agents complete event
+        # Deduplicate BEFORE logging so event has actual counts
+        all_prompts = deduplicate_prompts(all_prompts)
+
+        # Log agents complete event with real dedup counts
         try:
             from app.services.taxonomy.event_logger import get_event_logger
             get_event_logger().log_decision(
@@ -178,14 +181,13 @@ class SeedOrchestrator:
                 context={
                     "batch_id": batch_id,
                     "prompts_generated": before_dedup,
+                    "prompts_after_dedup": len(all_prompts),
                     "per_agent": per_agent,
-                    "duplicates_to_remove": "pending",
+                    "duplicates_removed": before_dedup - len(all_prompts),
                 },
             )
         except RuntimeError:
             pass
-
-        all_prompts = deduplicate_prompts(all_prompts)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
         return GenerationResult(
