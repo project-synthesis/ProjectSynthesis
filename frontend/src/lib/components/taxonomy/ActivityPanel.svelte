@@ -42,6 +42,13 @@
     // Cyan — new entities created
     if (d === 'create_new' || d === 'child_created' || d === 'family_split')
       return 'var(--color-neon-cyan)';
+    // Cyan — candidate created
+    if (d === 'candidate_created') return 'var(--color-neon-cyan)';
+    // Green — candidate promoted
+    if (d === 'candidate_promoted') return 'var(--color-neon-green)';
+    // Amber — candidate rejected, split fully reversed
+    if (d === 'candidate_rejected' || d === 'split_fully_reversed')
+      return 'var(--color-neon-yellow)';
     // Amber — rejections, blocks, skips
     if (d === 'rejected' || d === 'blocked' || d === 'skipped'
         || d === 'candidates_filtered')
@@ -103,7 +110,46 @@
       return `Q ${(c.q_before as number)?.toFixed(3) ?? '?'}→${(c.q_after as number)?.toFixed(3) ?? '?'}`;
     }
     if (e.op === 'split') {
+      if (e.decision === 'spectral_evaluation') {
+        const k = typeof c.best_k === 'number' ? `k=${c.best_k}` : '';
+        const sil = typeof c.best_silhouette === 'number' ? `sil=${c.best_silhouette.toFixed(3)}` : '';
+        const accepted = c.accepted ? 'accepted' : c.fallback_to_hdbscan ? '→ hdbscan' : 'rejected';
+        return `${k} ${sil} ${accepted}`.trim();
+      }
+      if (typeof c.algorithm === 'string') {
+        const algo = `[${c.algorithm}]`;
+        const clusters = typeof c.clusters_found === 'number'
+          ? `${c.clusters_found} sub-clusters`
+          : typeof c.hdbscan_clusters === 'number'
+            ? `${c.hdbscan_clusters} sub-clusters`
+            : '';
+        return `${clusters} ${algo}`.trim();
+      }
       return typeof c.hdbscan_clusters === 'number' ? `${c.hdbscan_clusters} sub-clusters` : '';
+    }
+    if (e.op === 'candidate') {
+      if (e.decision === 'candidate_created') {
+        const label = typeof c.child_label === 'string' ? c.child_label : '';
+        const algo = typeof c.split_algorithm === 'string' ? `[${c.split_algorithm}]` : '';
+        return `${label} ${algo}`.trim();
+      }
+      if (e.decision === 'candidate_promoted') {
+        const label = typeof c.cluster_label === 'string' ? c.cluster_label : '';
+        const coh = typeof c.coherence === 'number' ? `coh=${c.coherence.toFixed(3)}` : '';
+        return `${label} ${coh}`.trim();
+      }
+      if (e.decision === 'candidate_rejected') {
+        const label = typeof c.cluster_label === 'string' ? c.cluster_label : '';
+        const coh = typeof c.coherence === 'number' ? `coh=${c.coherence.toFixed(3)}` : '';
+        const count = typeof c.member_count === 'number' ? `${c.member_count}m` : '';
+        return `${label} ${coh} ${count}`.trim();
+      }
+      if (e.decision === 'split_fully_reversed') {
+        const label = typeof c.parent_label === 'string' ? c.parent_label : '';
+        const n = typeof c.candidates_rejected === 'number' ? `${c.candidates_rejected} rejected` : '';
+        return `${label} ${n}`.trim();
+      }
+      return '';
     }
     if (e.op === 'merge') {
       const sim = typeof c.similarity === 'number' ? `sim=${c.similarity.toFixed(3)}` : '';
@@ -248,7 +294,7 @@
     </div>
     <!-- Operation type filter chips -->
     <div class="ap-filter-row">
-      {#each ['assign','extract','score','seed','split','merge','retire','phase','refit','emerge','discover','reconcile','refresh','error'] as opVal}
+      {#each ['assign','extract','score','seed','split','candidate','merge','retire','phase','refit','emerge','discover','reconcile','refresh','error'] as opVal}
         <button
           class="ap-chip"
           class:ap-chip-active={filterOp === opVal}

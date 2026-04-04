@@ -119,6 +119,26 @@
       }
       if (type === 'taxonomy_activity') {
         clustersStore.pushActivityEvent(data as unknown as import('$lib/api/clusters').TaxonomyActivityEvent);
+        // Candidate lifecycle toasts
+        const actData = data as { op?: string; decision?: string; context?: Record<string, unknown> };
+        if (actData.op === 'candidate') {
+          const ctx = actData.context ?? {};
+          if (actData.decision === 'candidate_promoted') {
+            addToast('created', `Promoted: ${ctx.cluster_label ?? 'cluster'} → active`);
+          }
+          if (actData.decision === 'candidate_rejected') {
+            const coh = typeof ctx.coherence === 'number' ? ` (coh ${ctx.coherence.toFixed(2)})` : '';
+            const count = typeof ctx.member_count === 'number' ? ` — ${ctx.member_count} members reassigned` : '';
+            addToast('deleted', `Rejected: ${ctx.cluster_label ?? 'cluster'}${coh}${count}`);
+          }
+        }
+        if (actData.op === 'split' && actData.decision === 'split_complete') {
+          const ctx = actData.context ?? {};
+          if (ctx.children_state === 'candidate') {
+            const childCount = typeof ctx.children_created === 'number' ? ctx.children_created : '?';
+            addToast('created', `Split: ${childCount} candidates from ${ctx.parent_label ?? 'cluster'}`);
+          }
+        }
       }
       if (type === 'seed_batch_progress') {
         // Dispatch as a DOM custom event so SeedModal can listen
