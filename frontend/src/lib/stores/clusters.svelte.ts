@@ -257,8 +257,12 @@ class ClusterStore {
       }
     } catch (err) {
       if (gen !== this._clusterGeneration) return;
-      this.clusterDetailError = (err instanceof Error && err.message) ? err.message : 'Failed to load cluster';
+      // Cluster no longer exists (404) or load failed — clear the selection
+      // entirely so the Inspector doesn't show a stale "Cluster not found"
+      // error and the topology doesn't keep trying to focus on a ghost node.
+      this.selectedClusterId = null;
       this.clusterDetail = null;
+      this.clusterDetailError = null;
     } finally {
       // Always clear loading. If a newer call is in flight, it will have
       // already set clusterDetailLoading=true synchronously before its
