@@ -51,20 +51,9 @@
     metricsTimer = setTimeout(() => { metricsVisible = false; }, 2000);
   }
 
-  // --- Edge hover detection (right 50px zone, throttled) ---
-  let lastMoveTime = 0;
-  function handleMouseMove(e: MouseEvent) {
-    const now = performance.now();
-    if (now - lastMoveTime < 100) return; // throttle to 10Hz
-    lastMoveTime = now;
-    const target = e.currentTarget as HTMLElement;
-    if (!target) return;
-    const rect = target.getBoundingClientRect();
-    const distFromRight = rect.right - e.clientX;
-    if (distFromRight < 50 && !controlsVisible) {
-      showControls();
-    }
-  }
+  // Edge hover detection moved to a dedicated edge-zone div with pointer-events: auto.
+  // The parent .hud has pointer-events: none (necessary to not block graph interaction)
+  // so onmousemove on .hud never fires. The edge-zone div is the fix.
 
   // --- Cleanup timers on destroy ---
   onDestroy(() => {
@@ -138,9 +127,14 @@
 <!-- Diegetic UI — minimal overlay, auto-hide controls -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="hud" onmousemove={handleMouseMove} onclick={handleGraphClick}>
+<div class="hud" onclick={handleGraphClick}>
+  <!-- Invisible right-edge hover zone — triggers controls panel -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="hud-edge-zone" onmouseenter={showControls}></div>
+
   <!-- AMBIENT: Minimal telemetry — hidden when controls are visible -->
   <div class="hud-ambient" class:hud-ambient--hidden={controlsVisible}>
+    <button class="hud-help" onclick={() => { import('$lib/stores/pattern-graph-guide.svelte').then(m => m.patternGraphGuide.show(false)); }} use:tooltip={'Pattern Graph guide'}>?</button>
     <span>{filteredCounts.active} clusters</span>
     <span class="hud-dot">·</span>
     <span class="hud-lod">{lodTier.toUpperCase()}</span>
@@ -207,6 +201,17 @@
     z-index: 10;
   }
 
+  /* ── Edge detection zone — reveals controls on hover ── */
+
+  .hud-edge-zone {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 50px;
+    height: 100%;
+    pointer-events: auto;
+  }
+
   /* ── AMBIENT: Always visible, minimal ── */
 
   .hud-ambient {
@@ -225,6 +230,29 @@
 
   .hud-ambient--hidden {
     opacity: 0;
+  }
+
+  .hud-help {
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 30%, transparent);
+    color: color-mix(in srgb, var(--color-text-dim) 50%, transparent);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    pointer-events: auto;
+    padding: 0;
+    transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .hud-help:hover {
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+    color: var(--color-text-secondary);
   }
 
   .hud-dot {

@@ -9,6 +9,8 @@
   import TopologyControls from './TopologyControls.svelte';
   import ActivityPanel from './ActivityPanel.svelte';
   import SeedModal from './SeedModal.svelte';
+  import PatternGraphGuide from '$lib/components/shared/PatternGraphGuide.svelte';
+  import { patternGraphGuide } from '$lib/stores/pattern-graph-guide.svelte';
   import * as THREE from 'three';
   import { triggerRecluster } from '$lib/api/clusters';
   import type { TaxonomyActivityEvent } from '$lib/api/clusters';
@@ -667,6 +669,9 @@
     // Taxonomy data loaded by +layout.svelte on app mount — no need to re-fetch here.
     // The $effect watching filteredTaxonomyTree (line 432) rebuilds the scene reactively.
 
+    // Show Pattern Graph guide on first visit
+    patternGraphGuide.show(true);
+
     // Resize observer
     const ro = new ResizeObserver(entries => {
       const { width, height } = entries[0].contentRect;
@@ -702,6 +707,7 @@
   {#if seedModalOpen}
     <SeedModal bind:open={seedModalOpen} onClose={() => { seedModalOpen = false; }} />
   {/if}
+  <PatternGraphGuide />
   {#if hoveredNodeId}
     <div class="topology-tooltip" role="tooltip">
       {sceneData?.nodes.find(n => n.id === hoveredNodeId)?.label ?? ''}
