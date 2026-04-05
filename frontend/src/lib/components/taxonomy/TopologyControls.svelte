@@ -3,8 +3,6 @@
   import { TAXONOMY_TOOLTIPS } from '$lib/utils/metric-tooltips';
   import { tooltip } from '$lib/actions/tooltip';
   import { TOPOLOGY_TOOLTIPS } from '$lib/utils/ui-tooltips';
-  import { generatePanelInsight } from '$lib/utils/taxonomy-health';
-  import type { PanelMode } from '$lib/utils/taxonomy-health';
   import TopologyInfoPanel from './TopologyInfoPanel.svelte';
   import type { LODTier } from './TopologyRenderer';
 
@@ -23,55 +21,60 @@
   let searchOpen = $state(false);
   let reclustering = $state(false);
 
-  // Canonical state breakdown from the store (respects orphan filter + state filter)
   const filteredCounts = $derived(clustersStore.clusterCounts);
 
-  // Insight text — generated here so it can be positioned independently (top-left)
-  const detail = $derived(clustersStore.clusterDetail);
-  const selectedId = $derived(clustersStore.selectedClusterId);
-  const mode: PanelMode = $derived.by(() => {
-    if (!selectedId || !detail) return 'system';
-    if (detail.state === 'domain') return 'domain';
-    return 'cluster';
-  });
-  const insight = $derived(generatePanelInsight({
-    mode,
-    stats: clustersStore.taxonomyStats,
-    detail: detail ? {
-      coherence: detail.coherence,
-      separation: detail.separation,
-      output_coherence: detail.output_coherence ?? null,
-      blend_w_optimized: detail.blend_w_optimized ?? null,
-      member_count: detail.member_count,
-      split_failures: detail.split_failures ?? 0,
-      label: detail.label,
-      state: detail.state,
-    } : null,
-    domainChildCount: (detail?.children ?? []).length,
-    domainBelowFloor: (detail?.children ?? []).filter(c => c.coherence != null && c.coherence < 0.5).length,
-  }));
+  // --- Auto-hide controls ---
+  let controlsVisible = $state(false);
+  let controlsTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function handleSearch(): void {
-    if (searchQuery.trim()) {
-      onSearch(searchQuery.trim());
+  function showControls() {
+    controlsVisible = true;
+    if (controlsTimer) clearTimeout(controlsTimer);
+  }
+
+  function startControlsHide() {
+    if (controlsTimer) clearTimeout(controlsTimer);
+    controlsTimer = setTimeout(() => { controlsVisible = false; }, 2000);
+  }
+
+  // --- Auto-hide metrics ---
+  let metricsVisible = $state(false);
+  let metricsTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function showMetrics() {
+    metricsVisible = true;
+    if (metricsTimer) clearTimeout(metricsTimer);
+  }
+
+  function startMetricsHide() {
+    if (metricsTimer) clearTimeout(metricsTimer);
+    metricsTimer = setTimeout(() => { metricsVisible = false; }, 2000);
+  }
+
+  // --- Edge hover detection (right 50px zone) ---
+  function handleMouseMove(e: MouseEvent) {
+    const target = e.currentTarget as HTMLElement;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    const distFromRight = rect.right - e.clientX;
+    if (distFromRight < 50 && !controlsVisible) {
+      showControls();
     }
+  }
+
+  // --- Keyboard shortcuts ---
+  function handleSearch(): void {
+    if (searchQuery.trim()) onSearch(searchQuery.trim());
   }
 
   function handleKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Enter') handleSearch();
-    if (e.key === 'Escape') {
-      searchOpen = false;
-      searchQuery = '';
-    }
+    if (e.key === 'Escape') { searchOpen = false; searchQuery = ''; }
   }
 
   async function handleRecluster(): Promise<void> {
     reclustering = true;
-    try {
-      await onRecluster();
-    } finally {
-      reclustering = false;
-    }
+    try { await onRecluster(); } finally { reclustering = false; }
   }
 
   function handleGlobalKey(e: KeyboardEvent): void {
@@ -79,27 +82,33 @@
       e.preventDefault();
       searchOpen = true;
     }
+    if (e.key === 'q' && !searchOpen && !(e.target instanceof HTMLInputElement)) {
+      metricsVisible = !metricsVisible;
+      if (metricsVisible) showMetrics();
+    }
   }
 </script>
 
 <svelte:window onkeydown={handleGlobalKey} />
 
-<!-- HUD — 4-corner distributed overlay -->
-<div class="hud">
-  <!-- TOP-RIGHT: Metrics readout -->
-  <div class="hud-tr">
-    <TopologyInfoPanel hideInsight />
+<!-- Diegetic UI — minimal overlay, auto-hide controls -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="hud" onmousemove={handleMouseMove}>
+  <!-- AMBIENT: Minimal telemetry — always visible, bottom-right -->
+  <div class="hud-ambient">
+    <span>{filteredCounts.active} clusters</span>
+    <span class="hud-dot">·</span>
+    <span class="hud-lod">{lodTier.toUpperCase()}</span>
   </div>
 
-  <!-- TOP-LEFT: Insight callout -->
-  {#if insight}
-    <div class="hud-tl">
-      <p class="hud-insight">{insight}</p>
-    </div>
-  {/if}
-
-  <!-- BOTTOM-RIGHT: Controls -->
-  <div class="hud-br">
+  <!-- CONTROLS: Auto-hide — appears on right-edge hover -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="hud-controls"
+    class:hud-controls--visible={controlsVisible}
+    onmouseenter={showControls}
+    onmouseleave={startControlsHide}
+  >
     <div class="hud-row">
       <button class="hud-btn" class:hud-btn--on={clustersStore.showSimilarityEdges} style="--hud-accent: var(--color-neon-cyan)" onclick={() => { clustersStore.showSimilarityEdges = !clustersStore.showSimilarityEdges; }} use:tooltip={TOPOLOGY_TOOLTIPS.toggle_similarity}>Sim</button>
       <button class="hud-btn" class:hud-btn--on={clustersStore.showInjectionEdges} style="--hud-accent: var(--color-neon-orange)" onclick={() => { clustersStore.showInjectionEdges = !clustersStore.showInjectionEdges; }} use:tooltip={TOPOLOGY_TOOLTIPS.toggle_injection}>Inj</button>
@@ -113,22 +122,18 @@
     </div>
   </div>
 
-  <!-- BOTTOM-LEFT: Status telemetry -->
-  <div class="hud-bl">
-    <span class="hud-count" use:tooltip={TAXONOMY_TOOLTIPS.active}>{filteredCounts.active} active</span>
-    {#if filteredCounts.candidate > 0}
-      <span class="hud-sep"></span>
-      <span class="hud-count hud-count--candidate" use:tooltip={TAXONOMY_TOOLTIPS.candidate}>{filteredCounts.candidate} forming</span>
-    {/if}
-    {#if filteredCounts.template > 0}
-      <span class="hud-sep"></span>
-      <span class="hud-count" use:tooltip={TAXONOMY_TOOLTIPS.template}>{filteredCounts.template} tmpl</span>
-    {/if}
-    <span class="hud-sep"></span>
-    <span class="hud-lod" use:tooltip={'Level of detail'}>{lodTier.toUpperCase()}</span>
+  <!-- METRICS: On-demand — press Q or hover bottom-left -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="hud-metrics"
+    class:hud-metrics--visible={metricsVisible}
+    onmouseenter={showMetrics}
+    onmouseleave={startMetricsHide}
+  >
+    <TopologyInfoPanel />
   </div>
 
-  <!-- CENTER-TOP: Search (Ctrl+F) -->
+  <!-- SEARCH: Center-top (Ctrl+F) -->
   {#if searchOpen}
     <div class="hud-search">
       <input
@@ -143,7 +148,12 @@
 </div>
 
 <style>
-  /* ══ HUD — 4-corner distributed overlay ══ */
+  /* ══ Diegetic UI — Dead Space inspired ══
+   *
+   * Almost nothing visible by default. The graph IS the interface.
+   * Controls reveal on edge-hover. Metrics on Q key.
+   * Only ambient telemetry persists (cluster count + LOD).
+   */
 
   .hud {
     position: absolute;
@@ -152,52 +162,57 @@
     z-index: 10;
   }
 
-  /* ── TOP-RIGHT: Metrics readout ── */
+  /* ── AMBIENT: Always visible, minimal ── */
 
-  .hud-tr {
+  .hud-ambient {
     position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 178px;
-    pointer-events: auto;
-    background: color-mix(in srgb, var(--color-bg-primary) 75%, transparent);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-  }
-
-  /* ── TOP-LEFT: Insight callout ── */
-
-  .hud-tl {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    max-width: 220px;
+    bottom: 8px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     pointer-events: none;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: color-mix(in srgb, var(--color-text-dim) 40%, transparent);
+    transition: opacity 500ms ease;
   }
 
-  .hud-insight {
-    font-family: var(--font-sans);
-    font-size: 10px;
-    color: color-mix(in srgb, var(--color-text-dim) 70%, transparent);
-    line-height: 1.5;
-    margin: 0;
+  .hud-dot {
+    opacity: 0.3;
   }
 
-  /* ── BOTTOM-RIGHT: Controls ── */
+  .hud-lod {
+    font-weight: 700;
+    font-size: 8px;
+    letter-spacing: 0.08em;
+  }
 
-  .hud-br {
+  /* ── CONTROLS: Auto-hide right edge ── */
+
+  .hud-controls {
     position: absolute;
     bottom: 8px;
     right: 8px;
-    width: 178px;
+    width: 160px;
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 4px 6px;
+    padding: 6px;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateX(8px);
+    transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    background: color-mix(in srgb, var(--color-bg-primary) 80%, transparent);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  .hud-controls--visible {
+    opacity: 1;
     pointer-events: auto;
-    background: color-mix(in srgb, var(--color-bg-primary) 75%, transparent);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    transform: translateX(0);
   }
 
   .hud-row {
@@ -210,10 +225,10 @@
     flex: 1;
     align-items: center;
     justify-content: center;
-    height: 22px;
-    padding: 0 6px;
+    height: 24px;
+    padding: 0 8px;
     background: transparent;
-    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 25%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 30%, transparent);
     color: var(--color-text-dim);
     font-family: var(--font-mono);
     font-size: 9px;
@@ -239,38 +254,30 @@
     cursor: not-allowed;
   }
 
-  /* ── BOTTOM-LEFT: Status telemetry ── */
+  /* ── METRICS: On-demand, bottom-left ── */
 
-  .hud-bl {
+  .hud-metrics {
     position: absolute;
     bottom: 8px;
     left: 8px;
-    display: flex;
-    align-items: center;
-    gap: 5px;
+    width: 190px;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    background: color-mix(in srgb, var(--color-bg-primary) 80%, transparent);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  .hud-metrics--visible {
+    opacity: 1;
     pointer-events: auto;
-    font-family: var(--font-mono);
-    font-size: 9px;
-    color: color-mix(in srgb, var(--color-text-dim) 70%, transparent);
+    transform: translateY(0);
   }
 
-  .hud-count { cursor: default; }
-  .hud-count--candidate { color: #7a7a9e; }
-
-  .hud-sep {
-    width: 1px;
-    height: 8px;
-    background: color-mix(in srgb, var(--color-text-dim) 20%, transparent);
-    flex-shrink: 0;
-  }
-
-  .hud-lod {
-    font-size: 8px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-  }
-
-  /* ── CENTER-TOP: Search ── */
+  /* ── SEARCH: Center-top ── */
 
   .hud-search {
     position: absolute;
