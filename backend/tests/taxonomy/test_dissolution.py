@@ -7,13 +7,8 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization, PromptCluster
-from app.services.taxonomy._constants import (
-    DISSOLVE_COHERENCE_CEILING,
-    DISSOLVE_MAX_MEMBERS,
-)
 from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
 
 EMBEDDING_DIM = 384
@@ -135,7 +130,7 @@ class TestDissolution:
 
             from app.services.taxonomy.warm_phases import phase_retire
 
-            result = await phase_retire(engine, db)
+            await phase_retire(engine, db)
             await db.flush()
 
             await db.refresh(good_cluster)
@@ -186,7 +181,7 @@ class TestDissolution:
 
             from app.services.taxonomy.warm_phases import phase_retire
 
-            result = await phase_retire(engine, db)
+            await phase_retire(engine, db)
             await db.flush()
 
             await db.refresh(new_bad)
@@ -216,7 +211,7 @@ class TestDissolution:
 
             from app.services.taxonomy.warm_phases import phase_retire
 
-            result = await phase_retire(engine, db)
+            await phase_retire(engine, db)
             await db.flush()
 
             await db.refresh(large_bad)

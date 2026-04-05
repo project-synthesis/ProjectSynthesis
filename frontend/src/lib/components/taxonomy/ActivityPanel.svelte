@@ -645,6 +645,8 @@
     padding: 0 1px;
     opacity: 1;
     max-width: 140px;
+    min-width: 0;
+    flex-shrink: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
