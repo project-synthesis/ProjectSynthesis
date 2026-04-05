@@ -478,13 +478,15 @@
     display: flex;
     align-items: center;
     gap: 3px;
-    padding: 1px 6px;
+    padding: 1px 5px;
     background: transparent;
     border: 1px solid color-mix(in srgb, var(--color-border-subtle) 40%, transparent);
     color: var(--color-text-dim);
     font-family: var(--font-mono);
     font-size: 9px;
     font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     cursor: pointer;
     transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
                 color 150ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -493,8 +495,8 @@
 
   .ap-chip-row > .ap-chip::before {
     content: '';
-    width: 4px;
-    height: 4px;
+    width: 6px;
+    height: 6px;
     flex-shrink: 0;
     background: var(--chip-color, var(--color-text-dim));
     opacity: 0.4;
@@ -523,24 +525,26 @@
     margin: 0 3px;
   }
 
-  /* Op filter chips — smaller, dimmer, subordinate */
+  /* Op filter chips — compact, uppercase, dimmed until active */
   .ap-filter-row {
     display: flex;
     align-items: center;
     gap: 2px;
     flex-wrap: wrap;
-    margin-top: 1px;
+    margin-top: 2px;
   }
 
   .ap-filter-row > .ap-chip {
-    padding: 0px 4px;
+    padding: 1px 4px;
     background: transparent;
-    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 25%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-border-subtle) 20%, transparent);
     color: var(--color-text-dim);
     font-family: var(--font-mono);
     font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
     cursor: pointer;
-    opacity: 0.55;
+    opacity: 0.45;
     transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
                 color 150ms cubic-bezier(0.16, 1, 0.3, 1),
                 opacity 150ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -548,7 +552,7 @@
   }
 
   .ap-filter-row > .ap-chip:hover {
-    opacity: 1;
+    opacity: 0.9;
     border-color: color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
     color: var(--color-text-secondary);
   }
