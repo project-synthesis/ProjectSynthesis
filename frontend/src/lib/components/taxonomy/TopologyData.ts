@@ -24,9 +24,19 @@ export interface SceneNode {
   avgScore: number | null; // [1, 10] → color saturation
 }
 
-/** Opacity by lifecycle state — candidates are translucent. */
-function stateOpacity(state: string): number {
-  return state === 'candidate' ? 0.4 : 1.0;
+/** Opacity by lifecycle state and active filter.
+ *  - null filter ("all" tab): candidates at 40%, everything else 100%
+ *  - specific filter: matching nodes 100%, domains 50%, rest 25% (ghosted)
+ */
+function stateOpacity(state: string, stateFilter: string | null = null): number {
+  if (stateFilter === null) {
+    // "all" tab — candidates translucent, everything else full
+    return state === 'candidate' ? 0.4 : 1.0;
+  }
+  // Filtered tab — matching nodes glow, rest ghosted
+  if (state === stateFilter) return 1.0;
+  if (state === 'domain') return 0.5;
+  return 0.25;
 }
 
 /** Size multiplier by lifecycle state.
@@ -80,7 +90,7 @@ const LOD_THRESHOLDS: Record<LODTier, number> = {
  * Convert flat taxonomy node list into scene-ready nodes and edges.
  * Backend `get_tree` returns a flat list — we build edges from `parent_id`.
  */
-export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: SimilarityEdge[], injectionEdges?: InjectionEdge[]): SceneData {
+export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: SimilarityEdge[], injectionEdges?: InjectionEdge[], stateFilter?: string | null): SceneData {
   const nodes: SceneNode[] = [];
   const edges: SceneEdge[] = [];
 
@@ -133,10 +143,10 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
       position: [x, y, z],
       color: stateNodeColor(node.state, node.domain ?? node.color_hex),
       size: finalSize,
-      opacity: stateOpacity(node.state),
+      opacity: stateOpacity(node.state, stateFilter ?? null),
       persistence: node.persistence ?? 0.5,
       state: node.state,
-      label: node.state === 'candidate' ? '' : (node.label ?? ''),
+      label: stateOpacity(node.state, stateFilter ?? null) < 0.5 ? '' : (node.label ?? ''),
       visible: true,
       parentId: node.parent_id ?? undefined,
       coherence: node.coherence ?? 0.5,
