@@ -197,6 +197,15 @@ export function assignLodVisibility(nodes: SceneNode[], tier: LODTier): void {
   }
 }
 
+/** Build a lookup map of node ID → SceneNode for beam targeting. */
+export function buildNodeMap(nodes: SceneNode[]): Map<string, SceneNode> {
+  const map = new Map<string, SceneNode>();
+  for (const node of nodes) {
+    map.set(node.id, node);
+  }
+  return map;
+}
+
 /** Deterministic float from string hash (0..1). */
 function hashFloat(str: string, seed: number): number {
   let h = seed * 2654435761;
