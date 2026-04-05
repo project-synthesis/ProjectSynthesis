@@ -29,6 +29,11 @@ _ALPHA = 0.15
 # Cold-path non-regression tolerance.
 # HDBSCAN refits are destructive and non-deterministic, so a wider
 # flat epsilon (8%) is used instead of the warm-path adaptive decay.
+# NOTE: This intentionally allows small quality regressions (up to 8%).
+# Operations with negative q_delta within the epsilon are ACCEPTED BY DESIGN
+# because stochastic algorithms need headroom — tightening this gate
+# would reject valid topology improvements that happen to lower Q_system
+# by a few percent in the short term.
 COLD_PATH_EPSILON = 0.08
 
 

@@ -64,8 +64,8 @@ class TestGetRecent:
         assert len(logger.get_recent(op="split")) == 1
 
     def test_limit(self, logger: TaxonomyEventLogger) -> None:
-        for _ in range(10):
-            logger.log_decision(path="hot", op="assign", decision="create_new", context={})
+        for i in range(10):
+            logger.log_decision(path="hot", op="assign", decision="create_new", context={"i": i})
         assert len(logger.get_recent(limit=3)) == 3
 
 

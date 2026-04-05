@@ -230,10 +230,12 @@ async def _run_speculative_phase(
                     cluster = await meta_db.get(PromptCluster, cid)
                     if cluster:
                         meta = read_meta(cluster.cluster_metadata)
+                        content_hash = phase_result.split_content_hashes.get(cid, "")
                         cluster.cluster_metadata = write_meta(
                             cluster.cluster_metadata,
                             split_failures=meta["split_failures"] + 1,
                             split_attempt_member_count=cluster.member_count or 0,
+                            split_content_hash=content_hash,
                         )
                 await meta_db.commit()
                 logger.info(

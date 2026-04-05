@@ -49,6 +49,11 @@ CLUSTERING_BLEND_W_TRANSFORM = 0.15
 # re-merges when timing was unlucky.
 SPLIT_MERGE_PROTECTION_MINUTES = 60  # 1 hour
 
+# Maximum times the same member set (by content hash) can fail split before
+# permanent cooldown.  Prevents Groundhog Day loops where the same ~25-39
+# member pool is repeatedly split and rolled back/merged.
+SPLIT_CONTENT_HASH_MAX_RETRIES = 2
+
 SUB_DOMAIN_MIN_MEMBERS = 20         # domain must have ≥20 total members
 SUB_DOMAIN_COHERENCE_CEILING = 0.50 # mean child coherence must be below this
 SUB_DOMAIN_MIN_GROUP_MEMBERS = 5    # each HDBSCAN group needs ≥5 members

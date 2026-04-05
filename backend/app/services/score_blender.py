@@ -36,7 +36,7 @@ DIMENSION_WEIGHTS: dict[str, float] = {
 }
 
 # Z-score normalization parameters
-ZSCORE_MIN_SAMPLES = 999999   # Disabled — re-enable after rubric recalibration baseline
+ZSCORE_MIN_SAMPLES = 30       # Minimum sample count for z-score stability (CLT threshold)
 ZSCORE_MIN_STDDEV = 0.3       # Skip normalization if stddev is tiny (degenerate data)
 ZSCORE_CENTER = 5.5           # Re-center normalized scores around midpoint
 ZSCORE_SPREAD = 1.5           # Map 1 stddev to ±1.5 on the 1-10 scale

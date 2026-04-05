@@ -41,6 +41,7 @@ class ClusterMeta(TypedDict, total=False):
     pattern_member_count: int            # member_count at last meta-pattern extraction
     pattern_stale: bool                  # True when cluster composition changed since last pattern extraction
     merge_protected_until: str           # ISO8601 timestamp — skip merge until this time (split child protection)
+    split_content_hash: str              # SHA-256 prefix of sorted member opt_ids at last split attempt
     label_refreshed_at: str              # ISO8601 timestamp of last label refresh
 
     # --- Adaptive learning ---
@@ -68,6 +69,7 @@ _DEFAULTS: dict[str, Any] = {
     "pattern_member_count": 0,
     "pattern_stale": True,
     "merge_protected_until": "",
+    "split_content_hash": "",
     "label_refreshed_at": "",
     "learned_phase_weights": None,
     "output_coherence": None,

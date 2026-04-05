@@ -21,6 +21,8 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import math
 from dataclasses import dataclass, field
@@ -41,6 +43,7 @@ from app.services.taxonomy._constants import (
     CANDIDATE_COHERENCE_FLOOR,
     MEGA_CLUSTER_MEMBER_FLOOR,
     SPLIT_COHERENCE_FLOOR,
+    SPLIT_CONTENT_HASH_MAX_RETRIES,
     SPLIT_MIN_MEMBERS,
     _utcnow,
 )
@@ -86,6 +89,10 @@ class PhaseResult:
     # Used by warm_path to persist split_failures metadata outside the
     # speculative transaction on Q-gate rejection (prevents Groundhog Day loop).
     split_attempted_ids: list[str] = field(default_factory=list)
+    # Maps cluster_id → content hash of sorted member opt_ids.
+    # Persisted outside the speculative transaction so the content-hash
+    # loop detector can compare future split attempts against prior ones.
+    split_content_hashes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -153,16 +160,18 @@ async def _reassign_to_active(
     if not opt_ids:
         return []
 
-    # Load candidate target clusters (active/mature/template only)
-    targets_q = await db.execute(
-        select(PromptCluster).where(
-            PromptCluster.state.in_(["active", "mature", "template"])
-        )
+    # Load candidate target clusters (active/mature/template only).
+    # SQL-level exclusion prevents the dissolving cluster from appearing
+    # in results regardless of SQLAlchemy identity-map state.
+    _target_query = select(PromptCluster).where(
+        PromptCluster.state.in_(["active", "mature", "template"])
     )
-    target_clusters: list[PromptCluster] = [
-        tc for tc in targets_q.scalars().all()
-        if not exclude_cluster_ids or tc.id not in exclude_cluster_ids
-    ]
+    if exclude_cluster_ids:
+        _target_query = _target_query.where(
+            PromptCluster.id.notin_(list(exclude_cluster_ids))
+        )
+    targets_q = await db.execute(_target_query)
+    target_clusters: list[PromptCluster] = list(targets_q.scalars().all())
     if not target_clusters:
         logger.warning("_reassign_to_active: no stable targets available")
         return []
@@ -214,6 +223,19 @@ async def _reassign_to_active(
             reassignment_counts[key]["count"] += 1
         except Exception as exc:
             logger.warning("_reassign_to_active: failed for opt %s: %s", opt_id, exc)
+
+    # Belt-and-suspenders: verify no assignment landed on an excluded cluster.
+    # Catches edge cases where the SQL-level filter did not take effect.
+    if exclude_cluster_ids:
+        for key in list(reassignment_counts):
+            if reassignment_counts[key]["cluster_id"] in exclude_cluster_ids:
+                logger.error(
+                    "_reassign_to_active: BUG — member assigned to excluded "
+                    "cluster %s (label=%s). Removing from results.",
+                    reassignment_counts[key]["cluster_id"],
+                    reassignment_counts[key].get("cluster_label"),
+                )
+                del reassignment_counts[key]
 
     return list(reassignment_counts.values())
 
@@ -846,6 +868,7 @@ async def phase_split_emerge(
     ops_attempted = 0
     ops_accepted = 0
     operations_log: list[dict] = []
+    split_content_hashes: dict[str, str] = {}
     embedding_index_mutations = 0
     split_attempted_ids: list[str] = []
 
@@ -947,7 +970,9 @@ async def phase_split_emerge(
             if split_attempt_mc > 0 and member_count >= split_attempt_mc * 1.25:
                 split_failures = 0
                 node.cluster_metadata = write_meta(
-                    node.cluster_metadata, split_failures=0,
+                    node.cluster_metadata,
+                    split_failures=0,
+                    split_content_hash="",
                 )
                 logger.info(
                     "Split cooldown reset: '%s' grew from %d to %d members",
@@ -956,8 +981,45 @@ async def phase_split_emerge(
             else:
                 continue
 
+        # Content-hash loop detection: compute hash of current member set.
+        # If identical to the hash stored at last split attempt AND failures
+        # exceed SPLIT_CONTENT_HASH_MAX_RETRIES, skip — splitting the same
+        # population will produce the same (rejected/re-merged) result.
+        _current_opt_ids = sorted([r[0] for r in _cached_opt_rows])
+        _current_content_hash = hashlib.sha256(
+            json.dumps(_current_opt_ids).encode()
+        ).hexdigest()[:16]
+        stored_content_hash = node_meta.get("split_content_hash", "")
+        if (
+            stored_content_hash
+            and stored_content_hash == _current_content_hash
+            and split_failures >= SPLIT_CONTENT_HASH_MAX_RETRIES
+        ):
+            logger.info(
+                "Split skipped (content-hash loop): '%s' — same %d members "
+                "failed %d times (hash=%s)",
+                node.label, len(_current_opt_ids),
+                split_failures, _current_content_hash,
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="split", decision="content_hash_loop",
+                    cluster_id=node.id,
+                    context={
+                        "cluster_label": node.label,
+                        "member_count": len(_current_opt_ids),
+                        "content_hash": _current_content_hash,
+                        "split_failures": split_failures,
+                        "max_retries": SPLIT_CONTENT_HASH_MAX_RETRIES,
+                    },
+                )
+            except RuntimeError:
+                pass
+            continue
+
         ops_attempted += 1
         split_attempted_ids.append(node.id)
+        split_content_hashes[node.id] = _current_content_hash
         logger.info(
             "Split candidate: '%s' (members=%d, coherence=%.3f, threshold=%.3f)",
             node.label, member_count, coherence, dynamic_floor,
@@ -986,17 +1048,19 @@ async def phase_split_emerge(
                         node.cluster_metadata,
                         split_failures=split_failures + 1,
                         split_attempt_member_count=member_count,
+                        split_content_hash=_current_content_hash,
                     )
                     logger.info(
                         "Leaf split failed for '%s' (attempt %d/3)",
                         node.label, split_failures + 1,
                     )
                 else:
-                    # Reset failure counter on success
+                    # Reset failure counter and content hash on success
                     node.cluster_metadata = write_meta(
                         node.cluster_metadata,
                         split_failures=0,
                         split_attempt_member_count=0,
+                        split_content_hash="",
                     )
                     embedding_index_mutations += len(result.children) + 1
 
@@ -1147,6 +1211,7 @@ async def phase_split_emerge(
         operations=operations_log,
         embedding_index_mutations=embedding_index_mutations,
         split_attempted_ids=split_attempted_ids,
+        split_content_hashes=split_content_hashes,
     )
 
 
@@ -1220,7 +1285,7 @@ async def phase_merge(
             except (ValueError, TypeError):
                 continue
 
-        if _global_sp_count or _global_mc_count:
+        if (_global_sp_count or _global_mc_count) and len(blended_centroids) >= 2:
             try:
                 get_event_logger().log_decision(
                     path="warm", op="merge", decision="candidates_filtered",

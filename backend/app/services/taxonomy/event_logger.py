@@ -7,6 +7,7 @@ Dual-writes to:
 Optionally publishes to the EventBus for SSE streaming.
 """
 
+import hashlib
 import json
 import logging
 from collections import deque
@@ -61,6 +62,10 @@ class TaxonomyEventLogger:
         self._publish_to_bus = publish_to_bus
         self._cross_process = cross_process
         self._buffer: deque[dict[str, Any]] = deque(maxlen=buffer_size)
+        # Consecutive dedup: suppress identical back-to-back events with the
+        # same (path, op, decision) signature.  Reduces log noise from
+        # repeated sub_domain_evaluation and candidates_filtered no-ops.
+        self._last_event_hash: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Write
@@ -88,6 +93,17 @@ class TaxonomyEventLogger:
             duration_ms: Wall-clock time in ms (nullable).
             context: Operation-specific decision context dict.
         """
+        # Consecutive dedup: suppress identical back-to-back events.
+        _dedup_key = f"{path}:{op}:{decision}"
+        _dedup_payload = json.dumps(
+            {"cluster_id": cluster_id, "context": context or {}},
+            sort_keys=True, default=str,
+        )
+        _dedup_hash = hashlib.md5(_dedup_payload.encode()).hexdigest()
+        if self._last_event_hash.get(_dedup_key) == _dedup_hash:
+            return  # Suppress consecutive duplicate
+        self._last_event_hash[_dedup_key] = _dedup_hash
+
         event: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat(),
             "path": path,

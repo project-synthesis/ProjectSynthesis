@@ -228,6 +228,24 @@ async def execute_cold_path(
         _time.monotonic() - _cold_t2, cluster_result.n_clusters, cluster_result.noise_count,
     )
 
+    if cluster_result.n_clusters == 0:
+        logger.info(
+            "Cold path: HDBSCAN found 0 clusters (%d points, all noise) — "
+            "skipping cluster creation, proceeding to reconciliation",
+            len(blended_embeddings),
+        )
+        try:
+            get_event_logger().log_decision(
+                path="cold", op="refit", decision="zero_clusters",
+                context={
+                    "total_points": len(blended_embeddings),
+                    "noise_count": cluster_result.noise_count,
+                    "min_cluster_size": 3,
+                },
+            )
+        except RuntimeError:
+            pass
+
     # ------------------------------------------------------------------
     _cold_t3 = _time.monotonic()
     # Step 6: Load existing nodes for matching
@@ -923,14 +941,16 @@ async def execute_cold_path(
 
                 mc_result = await split_cluster(mc, engine, db, mc_opt_rows, log_path="cold")
 
-                # Always reset split_failures — cold path tried
-                mc.cluster_metadata = write_meta(
-                    mc.cluster_metadata,
-                    split_failures=0,
-                    split_attempt_member_count=0,
-                )
-
                 if mc_result.success:
+                    # Reset split_failures and content hash on success.
+                    # On failure, do NOT reset — let the warm path's
+                    # content-hash cooldown persist to prevent Groundhog Day.
+                    mc.cluster_metadata = write_meta(
+                        mc.cluster_metadata,
+                        split_failures=0,
+                        split_attempt_member_count=0,
+                        split_content_hash="",
+                    )
                     mega_split_created += mc_result.children_created
                     # Commit EACH successful split immediately so structural
                     # changes persist even if a subsequent LLM call or server

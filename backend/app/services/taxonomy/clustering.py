@@ -208,6 +208,8 @@ def _extract_persistences(hdb: HDBSCAN, n_clusters: int) -> list[float]:
     Returns:
         List of ``n_clusters`` float values.
     """
+    if n_clusters == 0:
+        return []
     try:
         tree = hdb.condensed_tree_
         # condensed_tree_ is a numpy structured array with fields:
@@ -433,6 +435,7 @@ def batch_cluster(
         min_cluster_size=min_cluster_size,
         metric="euclidean",
         cluster_selection_method="eom",
+        copy=True,  # Explicit to silence sklearn >=1.10 FutureWarning
     )
     hdb.fit(mat)
 
