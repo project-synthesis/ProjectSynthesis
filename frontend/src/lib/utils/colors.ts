@@ -46,7 +46,7 @@ export function stateColor(state: string): string {
     active: '#4d8eff',
     mature: '#a855f7',
     template: '#00e5ff',
-    archived: '#2a2a3e',
+    archived: '#3a3a52',
     domain: '#c0a060',  // warm platinum — structural foundation (distinct from neon-yellow/passthrough #fbbf24)
   };
   return map[state] ?? '#7a7a9e';

@@ -388,7 +388,7 @@
 </div>
 
 <style>
-  /* ---- State filter tabs — chromatic dot + abbreviated labels ---- */
+  /* ---- State filter tabs — chromatic instrument indicators ---- */
   .state-tabs {
     display: flex;
     align-items: center;
@@ -405,7 +405,8 @@
     justify-content: center;
     gap: 3px;
     height: 20px;
-    padding: 0 4px;
+    line-height: 20px;
+    padding: 0 3px;
     border: 1px solid transparent;
     background: transparent;
     color: var(--color-text-dim);
@@ -413,7 +414,7 @@
     font-weight: 600;
     font-family: var(--font-sans);
     cursor: pointer;
-    text-transform: lowercase;
+    text-transform: uppercase;
     border-radius: 0;
     transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
                 border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -421,15 +422,20 @@
   }
 
   .state-dot {
-    width: 4px;
-    height: 4px;
+    width: 6px;
+    height: 6px;
     flex-shrink: 0;
     background: var(--tab-state-color, var(--color-text-dim));
     transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* "All" is a meta-filter, not a state — no chromatic dot */
+  .state-tab:first-child .state-dot { display: none; }
+  .state-tab:first-child { gap: 0; }
+
   .state-tab-label {
     line-height: 1;
+    letter-spacing: 0.04em;
   }
 
   .state-tab:hover {
@@ -437,14 +443,20 @@
     background: var(--color-bg-hover);
   }
 
+  /* Active tab glows in its OWN state color — true chromatic encoding */
   .state-tab--active {
-    color: var(--tier-accent, var(--color-neon-cyan));
-    border-color: var(--tier-accent, var(--color-neon-cyan));
-    background: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 8%, transparent);
+    color: var(--tab-state-color, var(--color-text-dim));
+    border-color: var(--tab-state-color, var(--color-text-dim));
+    background: color-mix(in srgb, var(--tab-state-color, var(--color-text-dim)) 8%, transparent);
   }
 
   .state-tab--active .state-dot {
-    background: var(--tab-state-color, var(--tier-accent, var(--color-neon-cyan)));
+    background: var(--tab-state-color, var(--color-text-dim));
+  }
+
+  .state-tab:focus-visible {
+    outline: 1px solid var(--color-neon-cyan);
+    outline-offset: -1px;
   }
 
   .cn-tab-badge {
@@ -455,10 +467,10 @@
     height: 12px;
     padding: 0 2px;
     margin-left: 2px;
-    background: color-mix(in srgb, #7a7a9e 20%, transparent);
-    border: 1px solid #7a7a9e;
-    color: #7a7a9e;
-    font-size: 8px;
+    background: color-mix(in srgb, var(--tab-state-color, #7a7a9e) 20%, transparent);
+    border: 1px solid var(--tab-state-color, #7a7a9e);
+    color: var(--tab-state-color, #7a7a9e);
+    font-size: 9px;
     font-family: var(--font-mono);
     font-weight: 700;
     line-height: 1;
