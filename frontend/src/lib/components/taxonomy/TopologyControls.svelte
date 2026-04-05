@@ -130,7 +130,7 @@
 <div class="hud" onclick={handleGraphClick}>
   <!-- Invisible right-edge hover zone — triggers controls panel -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="hud-edge-zone" onmouseenter={showControls}></div>
+  <div class="hud-edge-zone" onmouseenter={showControls} onmouseleave={startControlsHide}></div>
 
   <!-- AMBIENT: Minimal telemetry — hidden when controls are visible -->
   <div class="hud-ambient" class:hud-ambient--hidden={controlsVisible}>
