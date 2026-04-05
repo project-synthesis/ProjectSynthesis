@@ -238,10 +238,14 @@ class ClusterStore {
       // Auto-switch state filter if the selected cluster would be hidden
       // by the current filter (e.g., clicking a candidate while on "active" tab).
       // null = "all" which shows everything, so no switch needed.
+      // Don't switch if the cluster is an orphan (0 members, 0 usage) — it won't
+      // appear in the navigator even after switching tabs.
+      const isOrphan = (detail.member_count ?? 0) === 0 && (detail.usage_count ?? 0) === 0;
       if (
         this.stateFilter !== null
         && detail.state !== 'domain'
         && detail.state !== this.stateFilter
+        && !isOrphan
       ) {
         this.stateFilter = (detail.state as StateFilter) ?? null;
       }

@@ -433,8 +433,12 @@
 
   // Watch for taxonomy tree changes — untrack the write to sceneData
   // to prevent effect_update_depth_exceeded (reads tree, writes sceneData).
+  // Topology graph uses the FULL taxonomy tree (not filtered by navigator tab).
+  // buildSceneData() already excludes archived nodes (line 90 of TopologyData.ts).
+  // The navigator sidebar tab filter only affects the ClusterNavigator list,
+  // NOT the 3D visualization.
   $effect(() => {
-    const tree = clustersStore.filteredTaxonomyTree;
+    const tree = clustersStore.taxonomyTree;
     if (tree.length > 0 && renderer) {
       untrack(() => {
         flatNodeMap = new Map(tree.map(n => [n.id, n]));
