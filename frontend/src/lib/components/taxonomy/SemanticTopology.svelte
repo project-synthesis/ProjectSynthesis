@@ -102,7 +102,7 @@
   let _hasPlayedEntrance = false;
   let _beamNodeGroups: Map<string, THREE.Group> = new Map();
   let _sceneNodeMap: Map<string, import('./TopologyData').SceneNode> = new Map();
-  let _prevMemberCounts: Map<string, number> = new Map();
+  let _prevNodeSizes: Map<string, number> = new Map();
   let _seedBatchActive = false;
   let _removeDomainRotation: (() => void) | null = null;
 
@@ -406,8 +406,7 @@
     // Build beam targeting map (node groups for beam target objects)
     // _sceneNodeMap was already built above (before edges) — no need to rebuild
     _beamNodeGroups.clear();
-    for (const [nodeId] of nodeMeshes) {
-      const mesh = nodeMeshes.get(nodeId);
+    for (const [nodeId, mesh] of nodeMeshes) {
       if (mesh?.parent) {
         _beamNodeGroups.set(nodeId, mesh.parent as THREE.Group);
       }
@@ -625,12 +624,12 @@
         }
 
         // Fire beams at clusters that grew (post-optimization or post-seed)
-        if (_prevMemberCounts.size > 0 && beamPool && renderer) {
+        if (_prevNodeSizes.size > 0 && beamPool && renderer) {
           const isSeedBatch = _seedBatchActive;
           let firedCount = 0;
           for (const node of sceneData.nodes) {
             if (node.state === 'domain') continue;
-            const prevSize = _prevMemberCounts.get(node.id);
+            const prevSize = _prevNodeSizes.get(node.id);
             if (prevSize !== undefined && node.size > prevSize) {
               const group = _beamNodeGroups.get(node.id);
               if (group) {
@@ -647,7 +646,7 @@
               }
             }
           }
-          _prevMemberCounts.clear();
+          _prevNodeSizes.clear();
           if (isSeedBatch) _seedBatchActive = false;
         }
       });
@@ -677,9 +676,9 @@
       // Only snapshot on actual optimization completions — ignore feedback/failure
       const detail = (e as CustomEvent).detail;
       if (detail?.status !== 'completed') return;
-      _prevMemberCounts.clear();
+      _prevNodeSizes.clear();
       for (const [id, node] of _sceneNodeMap) {
-        _prevMemberCounts.set(id, node.size);
+        _prevNodeSizes.set(id, node.size);
       }
     }
     window.addEventListener('optimization-event', onOptimization);

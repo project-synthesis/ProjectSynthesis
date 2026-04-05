@@ -35,6 +35,7 @@ vi.mock('./TopologyLabels', () => {
     clear = () => {};
     getOrCreate = () => ({ position: { set: () => {} } });
     setVisible = () => {};
+    setVisibleFor = () => {};
     dispose = () => {};
   }
   return { TopologyLabels };

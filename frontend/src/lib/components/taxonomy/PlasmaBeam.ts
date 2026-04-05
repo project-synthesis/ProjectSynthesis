@@ -135,11 +135,6 @@ export class PlasmaBeam {
     this._stateTime = 0;
   }
 
-  pulseAbsorb(): void {
-    if (this._state !== 'sustain' || !this._config) return;
-    this._material.uniforms.uThickness.value = 1.4;
-  }
-
   update(
     delta: number,
     origin: THREE.Vector3,
@@ -166,10 +161,6 @@ export class PlasmaBeam {
       }
       case 'sustain': {
         this._material.uniforms.uOpacity.value = 1.0;
-        const thick = this._material.uniforms.uThickness.value;
-        if (thick > 1.01) {
-          this._material.uniforms.uThickness.value = 1.0 + (thick - 1.0) * 0.85;
-        }
         const needsRebuild = this._frameCounter % 3 === 0 && this._needsCurveRebuild(camera);
         if (needsRebuild) {
           this._updateCurve(origin, camera, false);
