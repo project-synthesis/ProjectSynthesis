@@ -231,7 +231,7 @@
 
   function handleClusterClick(id: string | null): void {
     if (!id) return;
-    window.dispatchEvent(new CustomEvent('select-cluster', { detail: { id } }));
+    clustersStore.selectCluster(id);
   }
 
   // -- Score event → load optimization in main editor --
