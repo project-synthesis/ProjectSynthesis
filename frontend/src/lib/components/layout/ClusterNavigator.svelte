@@ -61,11 +61,9 @@
   // Expanded family — uses store's clusterDetail state
   let expandedId = $state<string | null>(null);
 
-  // Sync: when Inspector dismisses (selectCluster(null)), collapse here too
+  // Sync expandedId with store selection (topology clicks, dismiss, etc.)
   $effect(() => {
-    if (clustersStore.selectedClusterId === null) {
-      expandedId = null;
-    }
+    expandedId = clustersStore.selectedClusterId;
   });
 
   // Proven Templates section — pinned regardless of state filter.
