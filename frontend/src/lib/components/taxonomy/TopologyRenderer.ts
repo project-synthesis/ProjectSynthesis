@@ -28,7 +28,7 @@ export class TopologyRenderer {
   private _focusAnimId: number | null = null;
   private _disposed = false;
   private _onLodChange: ((tier: LODTier) => void) | null = null;
-  private _onAnimate: (() => void) | null = null;
+  private _animateCallbacks: (() => void)[] = [];
   private _currentLod: LODTier = 'far';
 
   constructor(canvas: HTMLCanvasElement, opts?: RendererOptions) {
@@ -69,9 +69,13 @@ export class TopologyRenderer {
     this._onLodChange = cb;
   }
 
-  /** Register a per-frame callback (called before render). */
-  set onAnimate(cb: (() => void) | null) {
-    this._onAnimate = cb;
+  /** Register a per-frame callback (called before render). Returns unsubscribe function. */
+  addAnimationCallback(cb: () => void): () => void {
+    this._animateCallbacks.push(cb);
+    return () => {
+      const idx = this._animateCallbacks.indexOf(cb);
+      if (idx >= 0) this._animateCallbacks.splice(idx, 1);
+    };
   }
 
   /** Start the render loop. */
@@ -81,7 +85,7 @@ export class TopologyRenderer {
       if (this._disposed) return;
       this._animationId = requestAnimationFrame(loop);
       this.controls.update();
-      this._onAnimate?.();
+      for (const cb of this._animateCallbacks) cb();
       this.renderer.render(this.scene, this.camera);
     };
     loop();
@@ -133,6 +137,12 @@ export class TopologyRenderer {
     animate();
   }
 
+  /** Unproject an NDC coordinate to world space. */
+  unprojectNDC(ndc: THREE.Vector3, out?: THREE.Vector3): THREE.Vector3 {
+    const result = out ?? new THREE.Vector3();
+    return result.copy(ndc).unproject(this.camera);
+  }
+
   /** Clean up all Three.js resources. */
   dispose(): void {
     this._disposed = true;
@@ -144,7 +154,7 @@ export class TopologyRenderer {
     }
     this.controls.dispose();
     this.renderer.dispose();
-    this._onAnimate = null;
+    this._animateCallbacks.length = 0;
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments || obj instanceof THREE.Points) {
         obj.geometry.dispose();
