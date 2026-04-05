@@ -393,21 +393,22 @@
     display: flex;
     align-items: center;
     height: 24px;
-    padding: 0 4px;
+    padding: 0;
     border-bottom: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
-    gap: 1px;
+    gap: 0;
   }
 
   .state-tab {
     display: flex;
-    flex: 1;
+    flex: 1 1 0%;
+    min-width: 0;
     align-items: center;
     justify-content: center;
     gap: 3px;
     height: 20px;
     line-height: 20px;
-    padding: 0 2px;
+    padding: 0;
     border: 1px solid transparent;
     background: transparent;
     color: var(--color-text-dim);
