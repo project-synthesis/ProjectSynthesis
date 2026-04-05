@@ -307,8 +307,19 @@ class ForgeStore {
     // Bidirectional family link — auto-select in patterns store so Inspector shows family detail.
     // Always call selectCluster (even with null) to clear stale Inspector state
     // from a previous optimization that had a different cluster.
+    // Guard: only select if the cluster exists in the current tree (avoids 404
+    // on startup when restoring a session whose cluster was deleted by recluster).
     this.clusterId = opt.cluster_id ?? null;
-    clustersStore.selectCluster(this.clusterId);
+    if (this.clusterId) {
+      const exists = clustersStore.taxonomyTree.some(n => n.id === this.clusterId);
+      if (exists) {
+        clustersStore.selectCluster(this.clusterId);
+      } else {
+        clustersStore.selectCluster(null);
+      }
+    } else {
+      clustersStore.selectCluster(null);
+    }
 
     // Cache the result in the editor store so each result tab has its own data
     if (opt.id) {
