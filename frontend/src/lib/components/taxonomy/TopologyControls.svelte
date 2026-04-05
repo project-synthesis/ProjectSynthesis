@@ -136,16 +136,16 @@
     width: 178px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
     pointer-events: auto;
-  }
-
-  /* ── HUD blocks — borderless floating panels ── */
-
-  .hud-block {
     background: color-mix(in srgb, var(--color-bg-primary) 75%, transparent);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
+  }
+
+  /* ── HUD blocks — seamless sections within the cluster ── */
+
+  .hud-block + .hud-block {
+    border-top: 1px solid color-mix(in srgb, var(--color-border-subtle) 40%, transparent);
   }
 
   .hud-metrics {
