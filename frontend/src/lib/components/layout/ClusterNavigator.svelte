@@ -19,12 +19,12 @@
 
   // Tab definitions: abbreviated labels with full aria-labels for accessibility
   const STATE_TABS: { filter: StateFilter; label: string; ariaLabel: string }[] = [
-    { filter: null,        label: 'all',  ariaLabel: 'All' },
-    { filter: 'active',    label: 'act',  ariaLabel: 'active' },
-    { filter: 'candidate', label: 'cand', ariaLabel: 'candidate' },
-    { filter: 'mature',    label: 'mat',  ariaLabel: 'mature' },
-    { filter: 'template',  label: 'tmpl', ariaLabel: 'template' },
-    { filter: 'archived',  label: 'arch', ariaLabel: 'archived' },
+    { filter: null,        label: 'all', ariaLabel: 'All' },
+    { filter: 'active',    label: 'act', ariaLabel: 'active' },
+    { filter: 'candidate', label: 'can', ariaLabel: 'candidate' },
+    { filter: 'mature',    label: 'mat', ariaLabel: 'mature' },
+    { filter: 'template',  label: 'tpl', ariaLabel: 'template' },
+    { filter: 'archived',  label: 'arc', ariaLabel: 'archived' },
   ];
 
   // Count for the candidate tab badge — derived from raw tree to reflect true total
@@ -396,7 +396,7 @@
     padding: 0 4px;
     border-bottom: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
-    gap: 0;
+    gap: 1px;
   }
 
   .state-tab {
@@ -404,10 +404,10 @@
     flex: 1;
     align-items: center;
     justify-content: center;
-    gap: 2px;
+    gap: 3px;
     height: 20px;
     line-height: 20px;
-    padding: 0 1px;
+    padding: 0 2px;
     border: 1px solid transparent;
     background: transparent;
     color: var(--color-text-dim);
@@ -430,9 +430,7 @@
     transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* "All" is a meta-filter, not a state — no chromatic dot */
-  .state-tab:first-child .state-dot { display: none; }
-  .state-tab:first-child { gap: 0; }
+  /* All tabs have dots for visual consistency */
 
   .state-tab-label {
     line-height: 1;
