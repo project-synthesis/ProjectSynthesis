@@ -66,36 +66,18 @@
       <TopologyInfoPanel />
     </div>
 
-    <!-- Controls — uniform button grid -->
+    <!-- Controls — uniform button grid, no dots (active state shows via border+tint) -->
     <div class="hud-block hud-controls">
       <div class="hud-row">
-        <button
-          class="hud-btn"
-          class:hud-btn--on={clustersStore.showSimilarityEdges}
-          style="--hud-accent: var(--color-neon-cyan)"
-          onclick={() => { clustersStore.showSimilarityEdges = !clustersStore.showSimilarityEdges; }}
-          use:tooltip={TOPOLOGY_TOOLTIPS.toggle_similarity}
-        ><span class="hud-dot"></span>Sim</button>
-        <button
-          class="hud-btn"
-          class:hud-btn--on={clustersStore.showInjectionEdges}
-          style="--hud-accent: var(--color-neon-orange)"
-          onclick={() => { clustersStore.showInjectionEdges = !clustersStore.showInjectionEdges; }}
-          use:tooltip={TOPOLOGY_TOOLTIPS.toggle_injection}
-        ><span class="hud-dot"></span>Inj</button>
+        <button class="hud-btn" class:hud-btn--on={clustersStore.showSimilarityEdges} style="--hud-accent: var(--color-neon-cyan)" onclick={() => { clustersStore.showSimilarityEdges = !clustersStore.showSimilarityEdges; }} use:tooltip={TOPOLOGY_TOOLTIPS.toggle_similarity}>Sim</button>
+        <button class="hud-btn" class:hud-btn--on={clustersStore.showInjectionEdges} style="--hud-accent: var(--color-neon-orange)" onclick={() => { clustersStore.showInjectionEdges = !clustersStore.showInjectionEdges; }} use:tooltip={TOPOLOGY_TOOLTIPS.toggle_injection}>Inj</button>
       </div>
       <div class="hud-row">
         <button class="hud-btn" onclick={onSeed} use:tooltip={'Seed taxonomy with generated prompts'}>Seed</button>
         <button class="hud-btn" onclick={handleRecluster} disabled={reclustering} use:tooltip={TOPOLOGY_TOOLTIPS.recluster}>{reclustering ? '...' : 'Recluster'}</button>
       </div>
       <div class="hud-row">
-        <button
-          class="hud-btn"
-          class:hud-btn--on={showActivity}
-          style="--hud-accent: var(--color-neon-purple)"
-          onclick={onToggleActivity}
-          use:tooltip={'Toggle taxonomy decision feed'}
-        ><span class="hud-dot"></span>Activity</button>
+        <button class="hud-btn" class:hud-btn--on={showActivity} style="--hud-accent: var(--color-neon-purple)" onclick={onToggleActivity} use:tooltip={'Toggle taxonomy decision feed'}>Activity</button>
       </div>
     </div>
 
@@ -220,18 +202,7 @@
     cursor: not-allowed;
   }
 
-  .hud-dot {
-    width: 5px;
-    height: 5px;
-    flex-shrink: 0;
-    background: var(--hud-accent, var(--color-neon-cyan));
-    opacity: 0.25;
-    transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  .hud-btn--on .hud-dot {
-    opacity: 1;
-  }
+  /* Toggle state shown via border + background tint — no dots needed */
 
   /* ── Status telemetry ── */
 
