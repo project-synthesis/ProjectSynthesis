@@ -7,12 +7,15 @@ vi.mock('./TopologyRenderer', () => {
       children: [] as unknown[],
       add: () => {},
       remove: () => {},
+      traverse: () => {},
     };
+    camera = { position: { distanceTo: () => 80 }, quaternion: { angleTo: () => 0 }, up: { clone: () => ({ negate: () => ({ multiplyScalar: () => ({}) }) }) } };
     start = () => {};
     dispose = () => {};
     resize = () => {};
     onLodChange = () => {};
     focusOn = () => {};
+    addAnimationCallback = () => () => {};
   }
   return { TopologyRenderer };
 });
@@ -46,6 +49,39 @@ vi.mock('./TopologyWorker', () => ({
 vi.mock('./TopologyData', () => ({
   buildSceneData: () => ({ nodes: [], edges: [] }),
   assignLodVisibility: () => {},
+  buildNodeMap: () => new Map(),
+}));
+
+vi.mock('./BeamPool', () => {
+  class BeamPool {
+    group = { name: 'beam-pool', children: [] as unknown[], add() {}, remove() {} };
+    acquire() { return null; }
+    update() {}
+    terminateAll() {}
+    dispose() {}
+  }
+  return { BeamPool };
+});
+
+vi.mock('./ClusterPhysics', () => {
+  class ClusterPhysics {
+    onBeamImpact() {}
+    setBaseScale() {}
+    update() {}
+    clear() {}
+    isActive() { return false; }
+  }
+  return { ClusterPhysics };
+});
+
+vi.mock('./BeamShader', () => ({
+  createRippleUniforms: () => ({
+    uColor: { value: { r: 1, g: 1, b: 1, copy: () => {} } },
+    uOpacity: { value: 1 },
+    uRipple: { value: 0 },
+  }),
+  RIPPLE_VERTEX_SHADER: '',
+  RIPPLE_FRAGMENT_SHADER: '',
 }));
 
 vi.mock('./TopologyControls.svelte', () => ({
@@ -67,19 +103,88 @@ vi.mock('three', () => {
   class Vector3 {
     x = 0; y = 0; z = 0;
     constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+    copy() { return this; }
+    clone() { return new Vector3(this.x, this.y, this.z); }
+    set(x: number, y: number, z: number) { this.x = x; this.y = y; this.z = z; return this; }
+    subVectors() { return this; }
+    addVectors() { return this; }
+    multiplyScalar() { return this; }
+    normalize() { return this; }
+    crossVectors() { return this; }
+    negate() { return this; }
+    add() { return this; }
+    distanceTo() { return 10; }
+    unproject() { return this; }
+    getWorldPosition(target: Vector3) { return target; }
+  }
+  class Color {
+    r = 0; g = 0; b = 0;
+    constructor() {}
+    copy() { return this; }
+    setHex() { return this; }
+    multiplyScalar() { return this; }
+  }
+  class Quaternion {
+    copy() { return this; }
+    angleTo() { return 0; }
+  }
+  class Group {
+    children: unknown[] = [];
+    name = '';
+    add() {}
+    remove() {}
   }
   class IcosahedronGeometry {}
-  class MeshBasicMaterial {}
+  class DodecahedronGeometry {}
+  class EdgesGeometry {}
+  class MeshBasicMaterial { color = new Color(); opacity = 1; transparent = false; }
+  class ShaderMaterial {
+    uniforms: Record<string, { value: unknown }> = {};
+    isShaderMaterial = true;
+  }
   class Mesh {
-    position = { set: () => {} };
+    position = new Vector3();
     scale = { setScalar: () => {} };
     userData: Record<string, unknown> = {};
+    material: unknown = null;
+    parent: unknown = null;
+    visible = true;
+    frustumCulled = true;
   }
-  class BufferGeometry { setAttribute = () => {}; }
+  const _emptyArray = new Float32Array(0);
+  class BufferAttribute {
+    array = _emptyArray;
+    needsUpdate = false;
+    constructor(arr?: ArrayLike<number>) { if (arr) this.array = arr as Float32Array; }
+  }
+  class BufferGeometry {
+    setAttribute() {}
+    setIndex() {}
+    getAttribute() { return new BufferAttribute(); }
+    getIndex() { return new BufferAttribute(new Uint16Array(0)); }
+    computeBoundingSphere() {}
+    dispose() {}
+  }
   class Float32BufferAttribute {}
   class LineBasicMaterial {}
+  class LineDashedMaterial {}
+  class PointsMaterial {}
   class LineSegments {}
-  return { Vector3, IcosahedronGeometry, MeshBasicMaterial, Mesh, BufferGeometry, Float32BufferAttribute, LineBasicMaterial, LineSegments };
+  class Points {}
+  class Sprite {}
+  class QuadraticBezierCurve3 {
+    v0 = new Vector3(); v1 = new Vector3(); v2 = new Vector3();
+    getPoint(_t: number, target?: Vector3) { return target ?? new Vector3(); }
+  }
+  const AdditiveBlending = 1;
+  const DoubleSide = 2;
+  return {
+    Vector3, Color, Quaternion, Group, IcosahedronGeometry, DodecahedronGeometry,
+    EdgesGeometry, MeshBasicMaterial, ShaderMaterial, Mesh, BufferAttribute,
+    BufferGeometry, Float32BufferAttribute, LineBasicMaterial, LineDashedMaterial,
+    PointsMaterial, LineSegments, Points, Sprite, QuadraticBezierCurve3,
+    AdditiveBlending, DoubleSide,
+  };
 });
 
 import { render } from '@testing-library/svelte';
