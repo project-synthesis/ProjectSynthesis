@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { TOPOLOGY_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import TopologyInfoPanel from './TopologyInfoPanel.svelte';
   import type { LODTier } from './TopologyRenderer';
+  import { routing } from '$lib/stores/routing.svelte';
 
   interface Props {
     lodTier: LODTier;
@@ -51,6 +52,25 @@
     metricsTimer = setTimeout(() => { metricsVisible = false; }, 2000);
   }
 
+  // --- Hint card (shows once on first visit) ---
+  const HINT_KEY = 'synthesis:pattern_graph_hints_dismissed';
+  let hintVisible = $state(false);
+
+  onMount(() => {
+    if (localStorage.getItem(HINT_KEY) !== '1') {
+      hintVisible = true;
+    }
+  });
+
+  function dismissHint() {
+    hintVisible = false;
+    localStorage.setItem(HINT_KEY, '1');
+  }
+
+  function showHint() {
+    hintVisible = true;
+  }
+
   // Edge hover detection moved to a dedicated edge-zone div with pointer-events: auto.
   // The parent .hud has pointer-events: none (necessary to not block graph interaction)
   // so onmousemove on .hud never fires. The edge-zone div is the fix.
@@ -63,6 +83,7 @@
 
   // --- Dismiss all overlays ---
   function dismissAll() {
+    if (hintVisible) { dismissHint(); }
     if (searchOpen) { searchOpen = false; searchQuery = ''; }
     if (controlsVisible) { controlsVisible = false; }
     if (metricsVisible) { metricsVisible = false; }
@@ -106,8 +127,9 @@
       return;
     }
 
-    // Escape: dismiss any visible overlay
+    // Escape: dismiss any visible overlay (priority order)
     if (e.key === 'Escape') {
+      if (hintVisible) { dismissHint(); return; }
       if (searchOpen) { searchOpen = false; searchQuery = ''; return; }
       if (metricsVisible) { metricsVisible = false; return; }
       if (controlsVisible) { controlsVisible = false; return; }
@@ -134,11 +156,39 @@
 
   <!-- AMBIENT: Minimal telemetry — hidden when controls are visible -->
   <div class="hud-ambient" class:hud-ambient--hidden={controlsVisible}>
-    <button class="hud-help" onclick={() => { import('$lib/stores/pattern-graph-guide.svelte').then(m => m.patternGraphGuide.show(false)); }} use:tooltip={'Pattern Graph guide'}>?</button>
+    <button class="hud-help" onclick={showHint} use:tooltip={'Shortcuts'}>?</button>
     <span>{filteredCounts.active} clusters</span>
     <span class="hud-dot">·</span>
     <span class="hud-lod">{lodTier.toUpperCase()}</span>
   </div>
+
+  <!-- HINT CARD: Compact shortcut cheat-sheet -->
+  {#if hintVisible}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="hud-hint-overlay" onclick={dismissHint}>
+      <div class="hud-hint" style="--hint-accent: {routing.tierColor};" onclick={(e) => e.stopPropagation()}>
+        <div class="hud-hint-header">
+          <span class="hud-hint-title">PATTERN GRAPH</span>
+          <button class="hud-hint-close" onclick={dismissHint}>×</button>
+        </div>
+        <div class="hud-hint-shortcuts">
+          <div class="hud-hint-row"><span class="hud-hint-key">Drag</span><span class="hud-hint-desc">Orbit</span></div>
+          <div class="hud-hint-row"><span class="hud-hint-key">Scroll</span><span class="hud-hint-desc">Zoom</span></div>
+          <div class="hud-hint-row"><span class="hud-hint-key">Click node</span><span class="hud-hint-desc">Inspect cluster</span></div>
+          <div class="hud-hint-row"><span class="hud-hint-key">Right edge</span><span class="hud-hint-desc">Reveal controls</span></div>
+          <div class="hud-hint-row"><span class="hud-hint-key">Q</span><span class="hud-hint-desc">Toggle metrics</span></div>
+          <div class="hud-hint-row"><span class="hud-hint-key">Ctrl+F</span><span class="hud-hint-desc">Search nodes</span></div>
+          <div class="hud-hint-row"><span class="hud-hint-key">Esc</span><span class="hud-hint-desc">Dismiss overlays</span></div>
+        </div>
+        <div class="hud-hint-visual">
+          <span>Node size = members</span>
+          <span>Color = domain</span>
+          <span>Wireframe = coherence</span>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- CONTROLS: Auto-hide — appears on right-edge hover -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -354,7 +404,105 @@
     transform: translateY(0);
   }
 
-  /* ── SEARCH: Center-top ── */
+  /* ── HINT CARD ── */
+
+  .hud-hint-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    background: rgba(0, 0, 0, 0.4);
+    animation: hint-fade-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 20;
+  }
+
+  @keyframes hint-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .hud-hint {
+    width: 220px;
+    background: color-mix(in srgb, var(--color-bg-secondary) 95%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid color-mix(in srgb, var(--hint-accent, var(--color-neon-cyan)) 25%, transparent);
+    font-family: var(--font-mono);
+    animation: hint-slide-in 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes hint-slide-in {
+    from { opacity: 0; transform: scale(0.95) translateY(8px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .hud-hint-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px 6px;
+    border-bottom: 1px solid color-mix(in srgb, var(--hint-accent, var(--color-neon-cyan)) 15%, transparent);
+  }
+
+  .hud-hint-title {
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--hint-accent, var(--color-neon-cyan));
+  }
+
+  .hud-hint-close {
+    background: transparent;
+    border: none;
+    color: var(--color-text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+  }
+
+  .hud-hint-close:hover { color: var(--color-text-primary); }
+
+  .hud-hint-shortcuts {
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .hud-hint-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+  }
+
+  .hud-hint-key {
+    min-width: 65px;
+    color: var(--hint-accent, var(--color-neon-cyan));
+    font-weight: 600;
+    font-size: 9px;
+  }
+
+  .hud-hint-desc {
+    color: var(--color-text-secondary);
+    font-size: 9px;
+  }
+
+  .hud-hint-visual {
+    padding: 6px 10px 8px;
+    border-top: 1px solid color-mix(in srgb, var(--color-border-subtle) 30%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 8px;
+    color: var(--color-text-dim);
+  }
+
+  /* ── SEARCH ── */
 
   .hud-search {
     position: absolute;
