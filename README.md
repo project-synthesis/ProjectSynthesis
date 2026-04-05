@@ -119,7 +119,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Multi-signal embedding fusion** — composite queries blend 4 signals (topic, transformation, output, pattern) with per-phase adaptive weights for richer pattern matching. Score-weighted centroids give high-quality optimizations more cluster influence. TransformationIndex enables technique-space search across domains
 - **Cross-cluster pattern injection** — universal techniques (high `global_source_count`) are injected regardless of topic cluster, ranked by composite relevance formula. Benefits all routing tiers (internal, passthrough, MCP)
 - **Unified domain taxonomy** — domains are `PromptCluster` nodes with `state="domain"`, discovered organically from user behavior. No hardcoded domain constants — `DomainResolver` resolves from DB, `DomainSignalLoader` provides heuristic keyword signals from domain node metadata. Warm path proposes new domains when coherent sub-populations emerge under "general". Five stability guardrails prevent drift: color pinning, retire exemption, merge approval, separate coherence floor, split isolation. Stats cache with trend tracking
-- **3D taxonomy visualization** — Three.js interactive topology with LOD tiers (far/mid/near) based on persistence thresholds. Click-to-focus navigation, raycasting hover, billboard labels, force-directed collision resolution, Ctrl+F search, Q_system badge, and recluster controls
+- **3D taxonomy visualization** — Three.js interactive topology with LOD tiers (far/mid/near) based on persistence thresholds. Diegetic UI (Dead Space-inspired): ambient telemetry only, controls auto-hide on right-edge hover, metrics via Q key, inline hint card on first visit. State filter tabs dim non-matching nodes (25% opacity) while matching glow at 100%. Click-to-focus navigation, raycasting hover, billboard labels, force-directed collision resolution, Ctrl+F search
 - **Pattern suggestion on paste** — embeds pasted text, cosine-searches active clusters (≥0.72), suggests matching clusters with 1-click apply (50-char delta, 300ms debounce, 10s auto-dismiss). Applied patterns injected into optimizer context
 - **Bidirectional history–clusters navigation** — history items show intent labels and domain badges. Loading an optimization auto-selects its cluster in Inspector. Clicking a linked optimization in a cluster detail loads it in the editor. Live cluster link: background pattern extraction triggers automatic UI sync via SSE
 - **Batch taxonomy seeding** — explore-driven pipeline generates diverse prompts from a project description, optimizes them in parallel through the full pipeline, and lets taxonomy discover clusters/domains/patterns organically. 5 default seed agents (coding, architecture, analysis, testing, documentation) with YAML frontmatter — user-extensible by dropping `.md` files. Embedding-based deduplication. Provider-aware concurrency (CLI=10, API=5, sampling=2). SeedModal in topology view with agent selector, progress bar, and result card. 9 observability events for MLOps monitoring
@@ -170,7 +170,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~100s, 1520+ tests)
+# Backend tests (~100s, 1530+ tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check

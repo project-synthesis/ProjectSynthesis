@@ -59,11 +59,13 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 src/lib/components/
   layout/       # ActivityBar, Navigator, ClusterNavigator, EditorGroups, Inspector, StatusBar
   editor/       # PromptEdit, ForgeArtifact, PatternSuggestion, PassthroughView
-  taxonomy/     # SemanticTopology, TopologyControls, TopologyRenderer, TopologyData,
+  taxonomy/     # SemanticTopology, TopologyControls (diegetic UI — auto-hide controls,
+                # right-edge hover zone, Q key metrics, inline hint card),
+                # TopologyRenderer, TopologyData (state filter graph dimming),
                 # TopologyInteraction, TopologyLabels, TopologyWorker (5-force simulation),
-                # ActivityPanel (collapsible bottom panel — decision event feed),
+                # ActivityPanel (mission control terminal — severity-driven rows, path
+                # accent rails, auto-hide cluster links, expandable context cards),
                 # SeedModal (batch seeding modal — agent selector, progress bar, result card)
-                # Candidate nodes: 40% opacity, no billboard labels, filter tab with count badge
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, DiffView, Logo, MarkdownRenderer, PassthroughGuide,

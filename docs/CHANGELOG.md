@@ -4,6 +4,38 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.16-dev — 2026-04-05
+
+### Added
+- **Diegetic UI for Pattern Graph** — Dead Space-inspired immersive interface replacing all persistent overlays. Default view shows only ambient telemetry (`46 clusters · MID` at 40% opacity). Controls auto-hide on right-edge hover (50px zone, 2s fade delay). Metrics panel toggled via Q key. Search via Ctrl+F. All overlays dismissable via click/Escape
+- **Inline hint card** — compact shortcut cheat-sheet (7 shortcuts + 3 visual encoding hints) replaces the TierGuide modal wizard. Shows once on first visit, `?` button re-opens. Tier-aware accent color. Dismissable via click/Escape/backdrop
+- **Cluster dissolution** — small incoherent clusters (coherence < 0.30, ≤5 members, ≥2h old) dissolved and members reassigned to nearest active cluster. Runs in Phase 3 (retire), Q-gated. `retire/dissolved` event with full context
+- **State filter graph dimming** — switching navigator tabs dims non-matching nodes to 25% opacity in the 3D graph. Matching nodes at 100%, domains at 50%. Labels suppressed for dimmed nodes
+- **Auto-switch navigator tab** — clicking a cluster (from Activity panel, graph, or search) auto-switches the sidebar tab to match the cluster's state. Skips auto-switch for orphan clusters
+- **Activity panel cluster navigation** — clicking cluster IDs in the Activity feed selects the cluster, pans the 3D camera, loads the Inspector, and auto-switches the navigator tab
+
+### Changed
+- **State filter tabs redesigned** — clean bottom-border accent in state's own color (chromatic encoding), monospace font, 3-char labels (ALL/ACT/CAN/MAT/TPL/ARC), `flex:1` equal width
+- **Activity panel redesigned** — mission control terminal aesthetic. Path chips with 6px colored dots (uppercase), op chips dimmed at 55% opacity. Severity-driven event rows: 2px left accent rail by path color, error rows with red tint, info rows dimmed to 50%. Cluster links hidden by default (visible on hover). Expanded context slides in with animation
+- **Phase 4 pattern extraction parallelized** — pre-computes taxonomy context sequentially, runs all LLM calls in parallel via `asyncio.gather`. ~25x speedup (800s → ~30s)
+- **Sub-domain evaluation noise eliminated** — only logs when `would_trigger=True` (961→0 events/day)
+- **InfoPanel grid borders softened** — transparent background, 40% opacity separators instead of solid grid lines
+- **Archived state color brightened** — `#2a2a3e` → `#3a3a52` for better contrast on dark backgrounds
+
+### Fixed
+- **Right-edge hover detection** — `.hud` had `pointer-events:none` blocking all mouse events. Fixed with dedicated edge-zone div with `pointer-events:auto`
+- **Cluster ID click in Activity panel** — was dispatching unhandled CustomEvent. Now calls `clustersStore.selectCluster()` directly
+- **Session restore 404** — startup loaded optimization with deleted `cluster_id`. Guard checks tree before calling `selectCluster`
+- **Cluster load failure retry loop** — 404 on deleted cluster left `selectedClusterId` set, causing infinite retry. Now clears selection on failure
+- **Topology showed filtered nodes** — graph used `filteredTaxonomyTree` (changed with tabs). Fixed to use full `taxonomyTree`; `buildSceneData` filters archived
+- **setStateFilter always cleared selection** — now preserves selection if cluster would remain visible in new filter
+- **Navigator page size** — bumped 50→500 to eliminate hidden clusters below fold
+- **errorsOnly filter** — now catches `seed_failed` and `candidate_rejected` events
+- **Decision badge text overflow** — long names like `sub_domain_evaluation` truncated with `flex-shrink:1` + `max-width`
+- **DB session safety in Phase 4** — parallel pattern extraction shared DB session across coroutines. Pre-computes taxonomy context sequentially, parallel phase is LLM-only
+- **Candidate reassignment cascade** — rejected members could be assigned to sibling candidates. Now excludes all candidate IDs from reassignment targets
+- **3 svelte-check warnings resolved** — SeedModal tabindex, label→span, unused CSS
+
 ## v0.3.15-dev — 2026-04-04
 
 ### Added
@@ -12,13 +44,13 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - **Candidate visibility in frontend** — candidate filter tab in ClusterNavigator with count badge when candidates > 0. Candidate nodes render at 40% opacity in topology graph with label suppression. Inspector shows CANDIDATE badge. "Promote to Template" button hidden for candidates
 - **5 new observability events** — `candidate_created` (cyan), `candidate_promoted` (green), `candidate_rejected` (amber), `split_fully_reversed` (amber), `spectral_evaluation` (split trace with per-k silhouettes). All events include full context for audit: coherence, coherence_floor, time_as_candidate_ms, members_reassigned_to, parent_label
 - **Activity panel candidate support** — `candidate` op filter chip, `keyMetric` handlers for all candidate events + `spectral_evaluation`, `decisionColor` entries. Toast notifications for promotion, rejection, and split-with-candidates
-- **Cold-path cluster detail event** — `refit/cluster_detail` logs every cluster ≥5 members after recluster with label, member_count, domain, coherence. Makes recluster operations visible instead of a black box
+- **Cold-path cluster detail event** — `refit/cluster_detail` logs every cluster ≥5 members after recluster with label, member_count, domain, coherence
 - **Activity panel JSONL merge on startup** — ring buffer + today's JSONL merged when buffer has <20 events, preventing the "2 events after restart" problem
+- **`assign/merge_into` events enriched** — now include `member_count` and `prompt_label` for Activity panel display
+- **`seed_prompt_failed` color changed from red to amber** — individual prompt failures are expected (fail-forward), not catastrophic
 
 ### Changed
-- **`assign/merge_into` events enriched** — now include `member_count` and `prompt_label` so Activity panel shows "Design Auth API → Saas Growth [39m] 0.847" instead of just "→ Saas Growth Strategy"
-- **Sub-domain evaluation noise reduced** — only logs when domain is ≥75% of member threshold (was logging for ALL domains EVERY warm cycle — 760/day reduced to ~20/day)
-- **`seed_prompt_failed` color changed from red to amber** — individual prompt failures are expected (fail-forward), not catastrophic. Only `seed_failed` (entire batch) is red
+- **Sub-domain evaluation noise reduced** — only logs when domain is ≥75% of member threshold (760/day → ~20/day)
 
 ### Fixed
 - **Activity panel showed only 2 events after restart** — JSONL fallback only triggered when ring buffer was completely empty (0 events). Two warm-path events prevented fallback, leaving users with zero historical context
@@ -89,22 +121,21 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ### Added
 - **Taxonomy engine observability** — `TaxonomyEventLogger` service dual-writes structured decision events to JSONL files (`data/taxonomy_events/`) and in-memory ring buffer (500 events). 17 instrumentation points across hot/warm/cold paths with 12 operation types and 24 decision outcomes
-- `GET /api/clusters/activity` — ring buffer endpoint with path/op/errors-only filters; `GET /api/clusters/activity/history` — paginated JSONL endpoint by date. Activity endpoints routed before `{cluster_id}` to prevent shadowing
-- `taxonomy_activity` SSE event type — streams decision events to frontend in real time
+- **Cluster activity endpoints** — `GET /api/clusters/activity` (ring buffer with path/op/errors-only filters) and `GET /api/clusters/activity/history` (paginated JSONL by date). Routed before `{cluster_id}` to prevent shadowing
+- **`taxonomy_activity` SSE event type** — streams decision events to frontend in real time
 - **ActivityPanel.svelte** — collapsible bottom panel below 3D topology. Filter chips for path (hot/warm/cold), 12 operation types, errors-only toggle. Color-coded decision badges. Expandable context grid. Cluster click-through. Pin-to-newest auto-scroll. Seeds from ring buffer with JSONL history fallback after server restart
 - **Sub-domain discovery** — `_propose_sub_domains()` uses HDBSCAN to discover semantic sub-groups within oversized domains (≥20 members, mean coherence <0.50). Sub-domains are domain nodes with `parent_id` pointing to parent domain, same guardrails as top-level domains. Label format: `{parent}-{qualifier}`. Counts toward 30-domain ceiling. Parallel Haiku label generation via `asyncio.gather`
-- `DomainResolver.add_label()` — runtime domain cache registration after sub-domain creation
-- `RetireResult` dataclass replacing boolean return from `attempt_retire()` — captures sibling target, families reparented, optimizations reassigned for observability
-- `PhaseResult.split_attempted_ids` — tracks which clusters had splits attempted regardless of outcome, used for post-rejection metadata persistence
-- `SPLIT_MERGE_PROTECTION_MINUTES` constant (60 min) — configurable merge protection window for split children
-- `SUB_DOMAIN_*` constants — `MIN_MEMBERS` (20), `COHERENCE_CEILING` (0.50), `MIN_GROUP_MEMBERS` (5), `HDBSCAN_MIN_CLUSTER` (5)
-- `compute_score_correlated_target()` — score-weighted optimal weight profile from optimization history using z-score contribution weighting
+- **`DomainResolver.add_label()`** — runtime domain cache registration after sub-domain creation
+- **`RetireResult` dataclass** — replaces boolean return from `attempt_retire()`, captures sibling target, families reparented, optimizations reassigned
+- **`PhaseResult.split_attempted_ids`** — tracks clusters with attempted splits regardless of outcome, for post-rejection metadata persistence
+- **Split/sub-domain constants** — `SPLIT_MERGE_PROTECTION_MINUTES` (60 min), `SUB_DOMAIN_MIN_MEMBERS` (20), `SUB_DOMAIN_COHERENCE_CEILING` (0.50), `SUB_DOMAIN_MIN_GROUP_MEMBERS` (5)
+- **`compute_score_correlated_target()`** — score-weighted optimal weight profile from optimization history using z-score contribution weighting
 - **Few-shot example retrieval** — optimizer prompt includes 1-2 before/after examples from high-scoring similar past optimizations (cosine ≥0.50, score ≥7.5)
 - **Score-informed strategy recommendation** — `recommend_strategy_from_history()` overrides "auto" fallback with data-driven strategy selection
-- `OptimizedEmbeddingIndex` — in-memory cosine search for per-cluster mean optimized-prompt embeddings
-- `resolve_contextual_weights()` — per-phase weight profiles from task type + cluster learned weights
-- Output coherence in `cluster_metadata["output_coherence"]` — pairwise cosine of optimized_embeddings within clusters
-- `blend_embeddings()` and `weighted_blend()` in `clustering.py` — shared multi-embedding blending
+- **`OptimizedEmbeddingIndex`** — in-memory cosine search for per-cluster mean optimized-prompt embeddings
+- **`resolve_contextual_weights()`** — per-phase weight profiles from task type + cluster learned weights
+- **Output coherence** — pairwise cosine of optimized_embeddings within clusters, stored in `cluster_metadata["output_coherence"]`
+- **`blend_embeddings()` and `weighted_blend()`** — shared multi-embedding blending in `clustering.py`
 
 ### Changed
 - **Multi-embedding HDBSCAN** — warm/cold paths now use blended embeddings (0.65 raw + 0.20 optimized + 0.15 transformation). Hot-path stays raw-only
@@ -112,24 +143,23 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - **Deferred pattern extraction** — meta-pattern extraction removed from `split_cluster()`, children marked `pattern_stale=True` for warm-path Phase 4 (Refresh). Eliminates 15+ sequential Haiku calls from critical split path
 - **Parallel Phase 4 label generation** — `phase_refresh()` restructured with `asyncio.gather` for all stale cluster labels
 - Split merge protection window increased from 30 minutes to 60 minutes — prevents same-domain merge from immediately undoing cold-path splits
-- Score-correlated batch adaptation replaces per-feedback weight adaptation in warm path
-- Composite fusion Signal 3 upgraded to `OptimizedEmbeddingIndex` lookup
-- Few-shot retrieval upgraded to dual-retrieval (input + output similarity)
-- Split heuristic considers output coherence; merge heuristic uses output coherence boost
+- **Score-correlated batch adaptation** — replaces per-feedback weight adaptation in warm path
+- **Composite fusion Signal 3** — upgraded to `OptimizedEmbeddingIndex` lookup
+- **Few-shot retrieval** — upgraded to dual-retrieval (input + output similarity)
+- **Split/merge heuristics** — split considers output coherence; merge uses output coherence boost
 
 ### Fixed
 - **Groundhog Day split loop (variant 1)** — `split_failures` metadata lost on Q-gate transaction rollback, causing same cluster to be split and rejected indefinitely. Fixed with post-rejection metadata persistence in a separate committed session
 - **Groundhog Day split loop (variant 2)** — 30-minute merge protection expired before warm path ran, causing split children to be immediately re-merged. Fixed by increasing protection to 60 minutes
-- `/api/clusters/activity` returned 404 — route was after `{cluster_id}` dynamic route. Moved before it
-- Activity panel showed 0 events after server restart — added JSONL history fallback when ring buffer is empty
-- Merge-skip events caused event storms (per-node logging in both merge passes) — consolidated to summary events
-- Split events logged `path="cold"` even from warm-path calls — parameterized via `log_path` argument
-- `errors_only` filter inconsistency between frontend and backend — both now check `op="error"` + `decision in (rejected, failed, split_failed)`
-- Event `{#each}` key collisions in ActivityPanel — added cluster_id + index for uniqueness
-- `keyMetric()` showed wrong data for `create_new` events — gated display by decision type
-- Activity toggle routed through store (`clustersStore.toggleActivity`) instead of local state
-- SSE events flow through store directly (removed window CustomEvent indirection)
-- Inline datetime imports moved to module level in warm_phases.py
+- **`/api/clusters/activity` returned 404** — route was after `{cluster_id}` dynamic route; moved before it
+- **Activity panel showed 0 events after restart** — added JSONL history fallback when ring buffer is empty
+- **Merge-skip event storms** — per-node logging in both merge passes consolidated to summary events
+- **Split events logged wrong path** — parameterized via `log_path` argument
+- **`errors_only` filter inconsistency** — frontend and backend now both check `op="error"` + `decision in (rejected, failed, split_failed)`
+- **Event `{#each}` key collisions** — added cluster_id + index for uniqueness in ActivityPanel
+- **`keyMetric()` wrong data for `create_new`** — gated display by decision type
+- **Activity toggle routed through store** — uses `clustersStore.toggleActivity()` instead of local state
+- **SSE events flow through store directly** — removed window CustomEvent indirection
 - Cold path epsilon references constant instead of magic number
 - `context: dict = Field(default_factory=dict)` replaces mutable default in schema
 - `OptimizedEmbeddingIndex` stale entries removed during all lifecycle operations
