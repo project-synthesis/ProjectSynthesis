@@ -9,7 +9,7 @@
   import { tooltip } from '$lib/actions/tooltip';
   import { CLUSTER_NAV_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE = 500;
 
   // Pagination state — families are derived from the store's tree (no redundant API calls)
   let pageLimit = $state(PAGE_SIZE);
