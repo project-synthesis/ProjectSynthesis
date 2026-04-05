@@ -104,6 +104,7 @@
   let _sceneNodeMap: Map<string, import('./TopologyData').SceneNode> = new Map();
   let _prevMemberCounts: Map<string, number> = new Map();
   let _seedBatchActive = false;
+  let _removeDomainRotation: (() => void) | null = null;
 
   // External highlight tracking (for family selection sync)
   let _highlightedId: string | null = null;
@@ -283,7 +284,9 @@
     }
 
     // Domain rotation: ~1 revolution per 50s at 60fps
-    renderer.addAnimationCallback(() => {
+    // Unsubscribe previous callback to prevent accumulation across rebuilds
+    _removeDomainRotation?.();
+    _removeDomainRotation = renderer.addAnimationCallback(() => {
       for (const g of domainGroups) {
         g.rotation.y += 0.002;
       }
@@ -827,6 +830,7 @@
       clusterPhysics?.clear();
       clusterPhysics = null;
       removeBeamUpdate();
+      _removeDomainRotation?.();
       ro.disconnect();
       interaction?.dispose();
       labels?.dispose();
