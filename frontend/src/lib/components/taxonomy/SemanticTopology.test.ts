@@ -153,9 +153,9 @@ vi.mock('three', () => {
   }
   const _emptyArray = new Float32Array(0);
   class BufferAttribute {
-    array = _emptyArray;
+    array: ArrayLike<number> = _emptyArray;
     needsUpdate = false;
-    constructor(arr?: ArrayLike<number>) { if (arr) this.array = arr as Float32Array; }
+    constructor(arr?: ArrayLike<number>) { if (arr) this.array = arr; }
   }
   class BufferGeometry {
     setAttribute() {}

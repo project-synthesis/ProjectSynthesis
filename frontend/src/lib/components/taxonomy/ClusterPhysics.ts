@@ -3,7 +3,6 @@
 export interface ClusterPhysicsState {
   baseScale: number;
   targetScale: number;
-  scaleVelocity: number;
   rippleIntensity: number;
 }
 
@@ -31,7 +30,6 @@ export class ClusterPhysics {
       state = {
         baseScale: currentScale,
         targetScale: currentScale,
-        scaleVelocity: 0,
         rippleIntensity: 0,
       };
       this._states.set(nodeId, state);

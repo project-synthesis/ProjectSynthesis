@@ -137,12 +137,6 @@ export class TopologyRenderer {
     animate();
   }
 
-  /** Unproject an NDC coordinate to world space. */
-  unprojectNDC(ndc: THREE.Vector3, out?: THREE.Vector3): THREE.Vector3 {
-    const result = out ?? new THREE.Vector3();
-    return result.copy(ndc).unproject(this.camera);
-  }
-
   /** Clean up all Three.js resources. */
   dispose(): void {
     this._disposed = true;
