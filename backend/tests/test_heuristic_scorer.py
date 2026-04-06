@@ -133,3 +133,60 @@ def test_clarity_genuine_ambiguity_penalized() -> None:
     prompt = "Maybe do something about the stuff. Perhaps try things somehow."
     score = HeuristicScorer.heuristic_clarity(prompt)
     assert score < 4.0, f"Ambiguous prompt scored {score}, expected < 4.0"
+
+
+# ---------------------------------------------------------------------------
+# heuristic_specificity (v2 — 10 categories, graduated density)
+# ---------------------------------------------------------------------------
+
+
+def test_specificity_dense_notation_not_penalized() -> None:
+    """Dense shorthand should score comparably to verbose phrasing."""
+    dense = (
+        "validate_email(addr: str) -> bool. RFC 5322 regex. "
+        "False on invalid. ValueError if None. TypeError if not str. "
+        "Include docstring with 3 examples."
+    )
+    verbose = (
+        "You should write a function that must return a bool. "
+        "It should raise a ValueError when input is None. "
+        "Please raise a TypeError when the input is not a string type. "
+        "Format the output as a Python function. "
+        "For example: validate_email('test@example.com') returns True. "
+        "It must handle at least 3 edge cases."
+    )
+    dense_score = HeuristicScorer.heuristic_specificity(dense)
+    verbose_score = HeuristicScorer.heuristic_specificity(verbose)
+    assert abs(dense_score - verbose_score) < 2.0, (
+        f"Dense={dense_score} vs Verbose={verbose_score}, gap > 2.0"
+    )
+
+
+def test_specificity_creative_prompt_scores_above_5() -> None:
+    """Creative prompts with constraints should score > 5.0."""
+    prompt = (
+        "Write a short story about a lighthouse keeper. "
+        "Exactly 500 words, first person present tense, "
+        "with a twist ending. Set it during a storm. "
+        "The tone should be literary horror — dread, not gore."
+    )
+    score = HeuristicScorer.heuristic_specificity(prompt)
+    assert score > 5.0, f"Creative prompt scored {score}, expected > 5.0"
+
+
+def test_specificity_error_types_detected() -> None:
+    """Error/exception type names should count as specificity signals."""
+    prompt = "Raise ValueError on invalid input. Raise TypeError on non-string."
+    score = HeuristicScorer.heuristic_specificity(prompt)
+    assert score > 5.0, f"Error types scored {score}, expected > 5.0"
+
+
+def test_specificity_multiple_constraints_score_higher() -> None:
+    """More constraints in same category -> higher score (graduated)."""
+    single = "You must validate the input."
+    multiple = "You must validate the input. You must log errors. You must retry on failure. You must return JSON."
+    single_score = HeuristicScorer.heuristic_specificity(single)
+    multiple_score = HeuristicScorer.heuristic_specificity(multiple)
+    assert multiple_score > single_score, (
+        f"Multiple={multiple_score} should exceed Single={single_score}"
+    )

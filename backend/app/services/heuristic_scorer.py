@@ -127,31 +127,43 @@ class HeuristicScorer:
     def heuristic_specificity(prompt: str) -> float:
         """Score how specific and constrained the prompt is.
 
-        Constraint indicators (each unique hit adds 1.5 to base 2.0):
-        - Modal obligations: must / shall / should
-        - Outcome verbs: return / raise / output / yield
-        - Type hints (e.g. ``str``, ``int``, ``list``, ``dict``, ``bool``, ``float``)
-        - Format keywords: format / schema / json / yaml / xml / csv / markdown
-        - Example keywords: for example / e.g. / such as / example:
-        - Numeric constraints: any standalone integer or decimal (e.g. "3 items")
-
-        Each *category* is counted once (binary hit). Result is capped at 10.0.
+        10 categories with graduated density scoring.  Each first hit in
+        a category adds +1.0; additional hits add +0.3 (category cap +2.0).
+        Broadened beyond coding patterns to cover creative, analytical,
+        and writing prompts.
         """
-        checks: list[tuple[str, int]] = [
-            # (pattern, re_flags)
-            (r"\b(?:must|shall|should)\b", re.IGNORECASE),
-            (r"\b(?:return|raise|output|yield)\b", re.IGNORECASE),
-            (r"\b(?:str|int|float|bool|list|dict|tuple|set)\b", 0),
-            (r"\b(?:format|schema|json|yaml|xml|csv|markdown)\b", re.IGNORECASE),
-            (r"\bfor example\b|\be\.g\.\b|\bsuch as\b|\bexample:", re.IGNORECASE),
-            (r"\b\d+(?:\.\d+)?\b", 0),
+        categories: list[tuple[str, int, float]] = [
+            # (pattern, re_flags, category_cap)
+            # 1. Modal obligations
+            (r"\b(?:must|shall|should|require[ds]?|ensure[ds]?)\b", re.IGNORECASE, 2.0),
+            # 2. Outcome verbs
+            (r"\b(?:return|raise|output|yield|produce|generate|include|handle)\b", re.IGNORECASE, 2.0),
+            # 3. Type annotations + function signatures
+            (r"\b(?:str|int|float|bool|list|dict|tuple|set)\b|->", 0, 2.0),
+            # 4. Format keywords
+            (r"\b(?:format|schema|json|yaml|xml|csv|markdown|html)\b", re.IGNORECASE, 2.0),
+            # 5. Example markers
+            (r"\bfor example\b|\be\.g\.\b|\bsuch as\b|\bexamples?\b", re.IGNORECASE, 2.0),
+            # 6. Numeric constraints (capped at 1.0 — avoids incidental numbers)
+            (r"\b\d+(?:\.\d+)?\b", 0, 1.0),
+            # 7. Error/exception types
+            (r"\b\w+(?:Error|Exception)\b", 0, 2.0),
+            # 8. Exclusion/negation constraints
+            (r"\b(?:never|exclude|except|without|avoid)\b|(?:do|must|should)\s+not\b", re.IGNORECASE, 2.0),
+            # 9. Temporal/quantity constraints
+            (r"\b(?:exactly|at\s+least|at\s+most|no\s+more\s+than|within|maximum|minimum)\b", re.IGNORECASE, 2.0),
+            # 10. Audience/tone/style
+            (r"\b(?:first\s+person|third\s+person|formal|informal|tone|audience|voice|tense)\b", re.IGNORECASE, 2.0),
         ]
 
-        hits = sum(
-            1 for pattern, flags in checks if re.search(pattern, prompt, flags)
-        )
-        score = 2.0 + hits * 1.5
-        return round(max(1.0, min(10.0, score)), 2)
+        total = 2.5
+        for pattern, flags, cap in categories:
+            hits = len(re.findall(pattern, prompt, flags))
+            if hits > 0:
+                category_score = min(1.0 + 0.3 * (hits - 1), cap)
+                total += category_score
+
+        return round(max(1.0, min(10.0, total)), 2)
 
     @staticmethod
     def heuristic_clarity(prompt: str) -> float:
