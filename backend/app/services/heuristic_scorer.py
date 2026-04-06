@@ -207,7 +207,7 @@ class HeuristicScorer:
             (r"(?:->|:\s*(?:str|int|float|bool|list|dict))\b", 0),        # typed parameters
             (r"```|^    \S", re.MULTILINE),                                # code blocks / indented code
             (r"<role>|\byou are\b|^##?\s+role\b", re.IGNORECASE | re.MULTILINE),  # role framing
-            (r"\b(?:raise|error|edge\s*case|handle)\b", re.IGNORECASE),   # error/edge handling
+            (r"\b(?:raise|error|edge\s*case)\b|\bhandle\s+(?:error|exception|failure|edge)", re.IGNORECASE),   # error/edge handling
             (r"\b(?:scope|boundar|limitation|constraint)\b", re.IGNORECASE),  # scoping language
         ]
         precision_hits = sum(
@@ -216,17 +216,36 @@ class HeuristicScorer:
         score += min(precision_hits * 0.5, 3.0)
 
         # --- Ambiguity penalty (max -3.0) ---
+        # Only penalize genuinely vague language, not identifiers or
+        # compound terms (e.g. "Maybe-null", "etc_config", "perhaps_valid").
         ambiguity_words = [
             "maybe", "perhaps", "somehow", "something",
             "stuff", "things", "etc", "possibly",
         ]
         ambiguity_hits = 0
+        prompt_lower = prompt.lower()
         for word in ambiguity_words:
-            pattern = rf"\b{word}\b(?![_a-zA-Z0-9])"
-            matches = re.findall(pattern, prompt, re.IGNORECASE)
-            for m in matches:
-                start = prompt.lower().find(m.lower())
-                if start > 0 and prompt[start - 1] == "_":
+            # Match standalone words not touching identifiers on either side
+            pattern = rf"(?<![_a-zA-Z0-9])\b{word}\b(?![_a-zA-Z0-9-])"
+            for m in re.finditer(pattern, prompt_lower):
+                ctx_before = prompt_lower[max(0, m.start() - 15):m.start()].rstrip()
+                ctx_after = prompt_lower[m.end():m.end() + 20].lstrip()
+                # Skip "etc" used as a field/identifier name
+                if word == "etc" and (
+                    ctx_before.endswith(("the", "an", "a", "its", "my"))
+                    or ctx_after.startswith(("field", "config", "value"))
+                ):
+                    continue
+                # Skip "something" immediately clarified ("something useful —
+                # specifically", "something like X")
+                if word == "something" and re.match(
+                    r"\w+\s*[—\-–:]\s*specifically\b|\blike\b", ctx_after
+                ):
+                    continue
+                # Skip "things" in enumeration context ("the following things:")
+                if word == "things" and (
+                    ctx_before.endswith("following") or ctx_after.startswith(":")
+                ):
                     continue
                 ambiguity_hits += 1
         score -= min(ambiguity_hits * 0.5, 3.0)

@@ -241,3 +241,82 @@ def test_structure_xml_sections_score_like_headers() -> None:
     assert abs(xml_score - md_score) < 2.0, (
         f"XML={xml_score} vs MD={md_score}, gap should be < 2.0"
     )
+
+
+# ---------------------------------------------------------------------------
+# Full 8-prompt validation matrix
+# ---------------------------------------------------------------------------
+
+
+class TestScoringValidationMatrix:
+    """Validates all heuristic dimensions against diverse prompt types."""
+
+    P1_VAGUE = "write some code to handle user data"
+
+    P2_STRUCTURED = (
+        "## Role\nYou are a senior Python engineer.\n\n"
+        "## Task\nWrite a function validate_email(addr: str) -> bool that:\n"
+        "1. Validates against RFC 5322 via re module\n"
+        "2. Returns False on invalid format\n"
+        "3. Raises ValueError if addr is None\n"
+        "4. Raises TypeError if addr is not str\n\n"
+        "## Output\nPython function with type hints, docstring, and 3 usage examples."
+    )
+
+    P3_DENSE = (
+        "validate_email(addr: str) -> bool. RFC 5322 regex. False on invalid. "
+        "ValueError if None. TypeError if not str. Include docstring with 3 examples."
+    )
+
+    P5_XML = (
+        "<role>Senior code reviewer</role>\n"
+        "<task>Review the following code diff for security vulnerabilities, "
+        "performance issues, and API contract violations.</task>\n"
+        "<output-format>\n"
+        "For each finding:\n"
+        "- Severity: critical / warning / info\n"
+        "- Location: file:line\n"
+        "- Issue: one-sentence description\n"
+        "- Fix: concrete code suggestion\n"
+        "</output-format>\n"
+        "<code_diff>{{code_diff}}</code_diff>"
+    )
+
+    P6_CREATIVE = (
+        "Write a short story about a lighthouse keeper who discovers that "
+        "the light attracts something other than ships. The story should be "
+        "exactly 500 words, written in first person present tense, with a "
+        "twist ending. Set it during a storm. The tone should be literary "
+        "horror — dread, not gore."
+    )
+
+    P8_FP_AMBIGUITY = (
+        "You must handle the following things: (1) parse the input set of items, "
+        "(2) return something useful — specifically a dict mapping each item to its "
+        "frequency. Handle the etc field in the metadata. Maybe-null values should "
+        "be coerced to 0. Use the perhaps_valid flag from config to gate the output."
+    )
+
+    def test_p1_vague_clarity_low(self) -> None:
+        assert HeuristicScorer.heuristic_clarity(self.P1_VAGUE) < 5.5
+
+    def test_p1_vague_conciseness_capped(self) -> None:
+        assert HeuristicScorer.heuristic_conciseness(self.P1_VAGUE) < 6.0
+
+    def test_p5_xml_clarity_above_6(self) -> None:
+        assert HeuristicScorer.heuristic_clarity(self.P5_XML) > 6.0
+
+    def test_p5_xml_structure_above_8_5(self) -> None:
+        assert HeuristicScorer.heuristic_structure(self.P5_XML) > 8.5
+
+    def test_p6_creative_specificity_above_6(self) -> None:
+        assert HeuristicScorer.heuristic_specificity(self.P6_CREATIVE) > 6.0
+
+    def test_p8_fp_ambiguity_clarity_above_5(self) -> None:
+        # Should not be destroyed by false-positive ambiguity penalties
+        assert HeuristicScorer.heuristic_clarity(self.P8_FP_AMBIGUITY) > 5.0
+
+    def test_p3_dense_vs_p2_specificity_within_range(self) -> None:
+        dense = HeuristicScorer.heuristic_specificity(self.P3_DENSE)
+        structured = HeuristicScorer.heuristic_specificity(self.P2_STRUCTURED)
+        assert abs(dense - structured) < 2.5
