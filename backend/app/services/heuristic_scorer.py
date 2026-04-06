@@ -23,18 +23,13 @@ class HeuristicScorer:
     def heuristic_structure(prompt: str) -> float:
         """Score prompt structure based on formatting indicators.
 
-        Scoring:
-        - Baseline: 4.0
-        - Markdown headers (## / # lines): +2.5 for ≥3, +2.0 for ≥2, +1.0 for exactly 1
-        - List items (- / * / numbered): +2.0 for ≥4 items, +1.5 for ≥2 items, +0.5 for 1 item
-        - XML-style tags (<tag> or </tag>): +1 for ≥2 distinct uses
-        - Output format mention (output / format / return / json / schema): +1
-
-        Result is capped at 10.0.
+        Markdown headers and XML section pairs are treated as equivalent
+        structural signals.  Both bonuses are additive — prompts using
+        both patterns for different purposes get credit for each.
         """
         score = 4.0
 
-        # Headers: lines that start with one or more '#' characters
+        # --- Markdown headers ---
         headers = re.findall(r"(?m)^#{1,6}\s+\S", prompt)
         n_headers = len(headers)
         if n_headers >= 3:
@@ -44,7 +39,21 @@ class HeuristicScorer:
         elif n_headers == 1:
             score += 1.0
 
-        # List items: lines starting with '-', '*', '+', or a digit followed by '.'
+        # --- XML section pairs (paired open/close tags) ---
+        xml_opens = set(re.findall(r"<([A-Za-z][A-Za-z0-9_-]*)(?:\s[^>]*)?>", prompt))
+        xml_closes = set(re.findall(r"</([A-Za-z][A-Za-z0-9_-]*)>", prompt))
+        xml_sections = len(xml_opens & xml_closes)
+        if xml_sections >= 3:
+            score += 2.5
+        elif xml_sections >= 2:
+            score += 2.0
+        elif xml_sections == 1:
+            score += 1.0
+        elif len(re.findall(r"</?[A-Za-z][A-Za-z0-9_-]*\s*/?>", prompt)) >= 2:
+            # Unpaired XML tags (e.g., self-closing or data delimiters)
+            score += 1.0
+
+        # --- List items ---
         list_items = re.findall(r"(?m)^\s*[-*+]\s+\S|^\s*\d+\.\s+\S", prompt)
         n_items = len(list_items)
         if n_items >= 4:
@@ -54,12 +63,7 @@ class HeuristicScorer:
         elif n_items == 1:
             score += 0.5
 
-        # XML-style tags
-        xml_tags = re.findall(r"</?[A-Za-z][A-Za-z0-9_-]*\s*/?>", prompt)
-        if len(xml_tags) >= 2:
-            score += 1.0
-
-        # Output format mention
+        # --- Output format mention ---
         if re.search(
             r"\b(?:output|format|return|json|schema|yaml|xml|markdown)\b",
             prompt,

@@ -209,3 +209,35 @@ def test_conciseness_short_but_dense_still_reasonable() -> None:
     prompt = "sum_list(numbers: list[float]) -> float. Sum of elements. Empty returns 0.0."
     score = HeuristicScorer.heuristic_conciseness(prompt)
     assert score >= 5.0, f"Dense short prompt scored {score}, expected >= 5.0"
+
+
+# ---------------------------------------------------------------------------
+# heuristic_structure (v2 — XML parity)
+# ---------------------------------------------------------------------------
+
+
+def test_structure_xml_sections_score_like_headers() -> None:
+    """XML section pairs should score comparably to markdown headers."""
+    xml_prompt = (
+        "<role>Senior code reviewer</role>\n"
+        "<task>Review code for security issues.</task>\n"
+        "<output-format>\n"
+        "- Severity: critical / warning / info\n"
+        "- Fix: concrete suggestion\n"
+        "</output-format>\n"
+        "<code_diff>{{diff}}</code_diff>"
+    )
+    md_prompt = (
+        "## Role\nSenior code reviewer\n\n"
+        "## Task\nReview code for security issues.\n\n"
+        "## Output format\n"
+        "- Severity: critical / warning / info\n"
+        "- Fix: concrete suggestion\n\n"
+        "{{diff}}"
+    )
+    xml_score = HeuristicScorer.heuristic_structure(xml_prompt)
+    md_score = HeuristicScorer.heuristic_structure(md_prompt)
+    assert xml_score >= 8.5, f"XML prompt scored {xml_score}, expected >= 8.5"
+    assert abs(xml_score - md_score) < 2.0, (
+        f"XML={xml_score} vs MD={md_score}, gap should be < 2.0"
+    )
