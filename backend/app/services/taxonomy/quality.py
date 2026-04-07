@@ -28,13 +28,12 @@ _ALPHA = 0.15
 
 # Cold-path non-regression tolerance.
 # HDBSCAN refits are destructive and non-deterministic, so a wider
-# flat epsilon (8%) is used instead of the warm-path adaptive decay.
-# NOTE: This intentionally allows small quality regressions (up to 8%).
+# flat epsilon (5%) is used instead of the warm-path adaptive decay.
+# Tightened from 8% to 5% after observing cold-path refits accepted
+# with 5-6% Q drops that degraded taxonomy quality meaningfully.
 # Operations with negative q_delta within the epsilon are ACCEPTED BY DESIGN
-# because stochastic algorithms need headroom — tightening this gate
-# would reject valid topology improvements that happen to lower Q_system
-# by a few percent in the short term.
-COLD_PATH_EPSILON = 0.08
+# because stochastic algorithms need headroom.
+COLD_PATH_EPSILON = 0.05
 
 
 @dataclass(frozen=True)
@@ -174,13 +173,16 @@ def epsilon_tolerance(warm_path_age: int) -> float:
     Mature taxonomies get tiny epsilon (~0.001 at age 100).
 
     For the cold path (full HDBSCAN refit), use COLD_PATH_EPSILON
-    instead — it is a flat 0.08 tolerance because cold-path refits are
+    instead — it is a flat 0.05 tolerance because cold-path refits are
     destructive and non-deterministic.
 
     Args:
         warm_path_age: Number of warm-path cycles completed.
     """
-    return max(0.001, 0.01 * math.exp(-warm_path_age / 50))
+    # Tightened from 0.01 to 0.006 base: at age 10, epsilon was 0.0082
+    # which accepted merges with delta=-0.004. New base yields 0.0049
+    # at age 10 — rejects merges that degrade Q by more than ~0.5%.
+    return max(0.001, 0.006 * math.exp(-warm_path_age / 50))
 
 
 def is_non_regressive(
@@ -207,9 +209,8 @@ def is_cold_path_non_regressive(q_before: float, q_after: float) -> bool:
     Reference: Spec Section 2.5
 
     Used after a full HDBSCAN refit (cold path). The tolerance is a flat
-    COLD_PATH_EPSILON (0.08 = 8%) rather than the warm-path adaptive decay
-    because HDBSCAN refits are destructive and non-deterministic — a tighter
-    gate would reject valid refits due to stochastic centroid variance.
+    COLD_PATH_EPSILON (0.05 = 5%) rather than the warm-path adaptive decay
+    because HDBSCAN refits are destructive and non-deterministic.
 
     Q_after >= Q_before - COLD_PATH_EPSILON
 

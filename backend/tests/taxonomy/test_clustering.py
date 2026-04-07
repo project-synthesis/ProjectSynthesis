@@ -206,7 +206,11 @@ def test_cluster_result_has_silhouette():
 
 
 def test_silhouette_zero_for_single_cluster():
-    """Silhouette is 0.0 when only one cluster found (or all noise)."""
+    """Silhouette is 0.0 when only one cluster found (or all noise).
+
+    With min_samples lowered (min_cluster_size - 1), HDBSCAN may find 2
+    clusters from random data. Use min_cluster_size=5 to force single cluster.
+    """
     from app.services.taxonomy.clustering import batch_cluster
     rng = np.random.RandomState(99)
     # Tight single blob — HDBSCAN should find 1 cluster or all noise
@@ -215,7 +219,7 @@ def test_silhouette_zero_for_single_cluster():
         v = rng.randn(384).astype(np.float32)
         points.append(v / np.linalg.norm(v))
 
-    result = batch_cluster(points, min_cluster_size=3)
+    result = batch_cluster(points, min_cluster_size=5)
     assert result.silhouette == pytest.approx(0.0, abs=0.01) or result.n_clusters <= 1
 
 

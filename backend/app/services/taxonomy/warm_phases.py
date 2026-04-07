@@ -41,6 +41,11 @@ from app.models import (
 )
 from app.services.taxonomy._constants import (
     CANDIDATE_COHERENCE_FLOOR,
+    DISSOLVE_COHERENCE_CEILING,
+    DISSOLVE_MAX_MEMBERS,
+    DISSOLVE_MIN_AGE_HOURS,
+    FORCED_SPLIT_COHERENCE_FLOOR,
+    FORCED_SPLIT_MIN_MEMBERS,
     MEGA_CLUSTER_MEMBER_FLOOR,
     SPLIT_COHERENCE_FLOOR,
     SPLIT_CONTENT_HASH_MAX_RETRIES,
@@ -60,6 +65,7 @@ from app.services.taxonomy.family_ops import (
     adaptive_merge_threshold,
     build_breadcrumb,
     merge_meta_pattern,
+    score_to_centroid_weight,
 )
 from app.utils.text_cleanup import parse_domain
 
@@ -103,6 +109,7 @@ class ReconcileResult:
     coherence_updated: int = 0
     scores_reconciled: int = 0
     zombies_archived: int = 0
+    leaked_patterns_cleaned: int = 0
 
 
 @dataclass
@@ -531,7 +538,7 @@ async def phase_reconcile(
                         np.frombuffer(emb_bytes, dtype=np.float32).copy()
                     )
                     score_by_cluster.setdefault(cid, []).append(
-                        max(0.1, (opt_score or 5.0) / 10.0)
+                        score_to_centroid_weight(opt_score)
                     )
                 except (ValueError, TypeError):
                     pass
@@ -611,8 +618,8 @@ async def phase_reconcile(
 
         # Recompute weighted_member_sum and centroid from member data.
         # The hot-path running mean can drift; this corrects from ground truth.
-        # Uses score-weighted mean: each member's influence is proportional
-        # to max(0.1, score / 10.0), matching the hot-path formula.
+        # Uses score_to_centroid_weight() — the same power-law formula as the
+        # hot-path assignment — so reconciliation preserves centroid semantics.
         for node in live_nodes:
             member_embs = emb_by_cluster.get(node.id, [])
             member_scores = score_by_cluster.get(node.id, [])
@@ -717,6 +724,17 @@ async def phase_reconcile(
                 result.scores_reconciled,
             )
             await db.flush()
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="reconcile", decision="repaired",
+                    context={
+                        "member_counts_fixed": result.member_counts_fixed,
+                        "coherence_updated": result.coherence_updated,
+                        "scores_reconciled": result.scores_reconciled,
+                    },
+                )
+            except RuntimeError:
+                pass
     except Exception as recon_exc:
         logger.warning("Reconciliation failed (non-fatal): %s", recon_exc)
 
@@ -842,6 +860,173 @@ async def phase_reconcile(
     except Exception as prune_exc:
         logger.warning("Stale cluster pruning failed (non-fatal): %s", prune_exc)
 
+    # --- Leaked meta-pattern cleanup ---
+    # Delete MetaPatterns belonging to archived clusters.  These accumulate
+    # when split_cluster() archives a parent without cleaning up its patterns
+    # (fixed in split.py, but historical leaks need a backfill pass).
+    try:
+        archived_ids_sq = select(PromptCluster.id).where(
+            PromptCluster.state == "archived"
+        )
+        leaked_q = await db.execute(
+            select(MetaPattern).where(
+                MetaPattern.cluster_id.in_(archived_ids_sq)
+            )
+        )
+        leaked_patterns = list(leaked_q.scalars().all())
+        if leaked_patterns:
+            for mp in leaked_patterns:
+                await db.delete(mp)
+            await db.flush()
+            result.leaked_patterns_cleaned = len(leaked_patterns)
+            logger.info(
+                "Cleaned %d leaked meta-patterns from archived clusters",
+                len(leaked_patterns),
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="reconcile",
+                    decision="leaked_patterns_cleaned",
+                    context={"count": len(leaked_patterns)},
+                )
+            except RuntimeError:
+                pass
+    except Exception as leak_exc:
+        logger.warning("Leaked pattern cleanup failed (non-fatal): %s", leak_exc)
+
+    # --- Semi-orphan optimization repair ---
+    # Reassign optimizations pointing to archived/missing clusters to the
+    # nearest active cluster.  backfill_orphans() handles this at startup,
+    # but semi-orphans accumulate between restarts from split/merge/retire.
+    try:
+        from sqlalchemy import or_
+
+        active_ids_sq = select(PromptCluster.id).where(
+            PromptCluster.state.in_(["active", "candidate", "mature", "template"])
+        )
+        semi_orphan_q = await db.execute(
+            select(Optimization).where(
+                Optimization.status == "completed",
+                Optimization.embedding.isnot(None),
+                or_(
+                    Optimization.cluster_id.is_(None),
+                    ~Optimization.cluster_id.in_(active_ids_sq),
+                ),
+            ).limit(50)  # cap per cycle to avoid blocking warm path
+        )
+        semi_orphans = list(semi_orphan_q.scalars().all())
+        if semi_orphans:
+            repaired = 0
+            for orphan in semi_orphans:
+                try:
+                    emb = np.frombuffer(orphan.embedding, dtype=np.float32)
+                    matches = engine._embedding_index.search(emb, k=1, threshold=0.25)
+                    if matches:
+                        new_cid, _sim = matches[0]
+                        orphan.cluster_id = new_cid
+                        repaired += 1
+                except (ValueError, TypeError):
+                    continue
+            if repaired:
+                await db.flush()
+                logger.info(
+                    "Repaired %d semi-orphan optimizations (of %d found)",
+                    repaired, len(semi_orphans),
+                )
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="reconcile",
+                        decision="semi_orphans_repaired",
+                        context={
+                            "repaired": repaired,
+                            "found": len(semi_orphans),
+                        },
+                    )
+                except RuntimeError:
+                    pass
+    except Exception as orphan_exc:
+        logger.warning("Semi-orphan repair failed (non-fatal): %s", orphan_exc)
+
+    # --- Stale OptimizationPattern repair ---
+    # Migrate join records pointing to archived/missing clusters to the
+    # optimization's current cluster_id. Previously this just DELETED stale
+    # records, causing prompts to vanish from cluster detail views.
+    try:
+        from app.models import OptimizationPattern
+        from sqlalchemy import delete as sa_delete
+
+        active_ids_sq2 = select(PromptCluster.id).where(
+            PromptCluster.state.in_(["active", "candidate", "mature", "template", "domain"])
+        )
+        # Find stale OP records (pointing to dead clusters)
+        stale_ops = (await db.execute(
+            select(OptimizationPattern).where(
+                OptimizationPattern.relationship == "source",
+                ~OptimizationPattern.cluster_id.in_(active_ids_sq2),
+            )
+        )).scalars().all()
+
+        if stale_ops:
+            migrated = 0
+            deleted = 0
+            for op in stale_ops:
+                # Look up the optimization's CURRENT cluster_id
+                opt_row = (await db.execute(
+                    select(Optimization.cluster_id).where(
+                        Optimization.id == op.optimization_id,
+                    )
+                )).scalar_one_or_none()
+                if opt_row and opt_row in {c.id for c in (await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.id == opt_row,
+                        PromptCluster.state.notin_(["archived"]),
+                    )
+                )).scalars().all()}:
+                    # Migrate to current cluster
+                    op.cluster_id = opt_row
+                    migrated += 1
+                else:
+                    # Optimization has no valid cluster — delete the orphan
+                    await db.delete(op)
+                    deleted += 1
+            await db.flush()
+            logger.info(
+                "OptimizationPattern repair: %d migrated, %d deleted",
+                migrated, deleted,
+            )
+
+        # Also backfill: create source records for optimizations that have
+        # cluster_id but no OP record (can happen if hot-path crashed or
+        # batch_taxonomy_assign partially failed).
+        opts_without_op = (await db.execute(
+            select(Optimization.id, Optimization.cluster_id).where(
+                Optimization.status == "completed",
+                Optimization.cluster_id.isnot(None),
+                ~Optimization.id.in_(
+                    select(OptimizationPattern.optimization_id).where(
+                        OptimizationPattern.relationship == "source",
+                    )
+                ),
+            )
+        )).all()
+        if opts_without_op:
+            for opt_id, cluster_id in opts_without_op:
+                db.add(OptimizationPattern(
+                    optimization_id=opt_id,
+                    cluster_id=cluster_id,
+                    relationship="source",
+                ))
+            await db.flush()
+            logger.info(
+                "OptimizationPattern backfill: created %d missing source records",
+                len(opts_without_op),
+            )
+    except Exception as stale_op_exc:
+        logger.warning(
+            "OptimizationPattern repair failed (non-fatal): %s",
+            stale_op_exc,
+        )
+
     return result
 
 
@@ -883,9 +1068,13 @@ async def phase_split_emerge(
     # --- Priority 1: Split ---
     # Pre-fetch all optimization embeddings for split candidates in a
     # single batch query.
+    # Include both normal split candidates (≥ SPLIT_MIN_MEMBERS) and forced
+    # split candidates (≥ FORCED_SPLIT_MIN_MEMBERS with very low coherence).
+    # Without this, forced split candidates have no cached embeddings and
+    # coherence recomputation always yields 1.0 (dead code).
     _split_candidate_ids = [
         n.id for n in active_nodes
-        if (n.member_count or 0) >= SPLIT_MIN_MEMBERS
+        if (n.member_count or 0) >= FORCED_SPLIT_MIN_MEMBERS
     ]
     # Cache: (opt_id, raw_bytes, optimized_bytes | None, transformation_bytes | None)
     _split_emb_cache: dict[str, list[tuple[str, bytes, bytes | None, bytes | None]]] = {}
@@ -910,7 +1099,14 @@ async def phase_split_emerge(
 
     for node in active_nodes:
         member_count = node.member_count or 0
-        if member_count < SPLIT_MIN_MEMBERS:
+        # Normal split: ≥ SPLIT_MIN_MEMBERS
+        # Forced split: ≥ FORCED_SPLIT_MIN_MEMBERS with very low coherence
+        is_forced_split_candidate = (
+            FORCED_SPLIT_MIN_MEMBERS <= member_count < SPLIT_MIN_MEMBERS
+            and node.coherence is not None
+            and node.coherence < FORCED_SPLIT_COHERENCE_FLOOR
+        )
+        if member_count < SPLIT_MIN_MEMBERS and not is_forced_split_candidate:
             continue
 
         # Recompute coherence from actual member embeddings.
@@ -1035,9 +1231,16 @@ async def phase_split_emerge(
         node_families = list(fam_q.scalars().all())
 
         # --- Leaf split path ---
-        if len(node_families) < SPLIT_MIN_MEMBERS and member_count >= SPLIT_MIN_MEMBERS:
+        # Triggers for: (a) normal splits (≥ SPLIT_MIN_MEMBERS), or
+        # (b) forced splits for large incoherent clusters (≥ FORCED_SPLIT_MIN_MEMBERS, coherence < 0.25)
+        _qualifies_for_leaf_split = (
+            member_count >= SPLIT_MIN_MEMBERS
+            or is_forced_split_candidate
+        )
+        if len(node_families) < SPLIT_MIN_MEMBERS and _qualifies_for_leaf_split:
             opt_rows = _cached_opt_rows
-            if len(opt_rows) >= SPLIT_MIN_MEMBERS:
+            _min_rows = FORCED_SPLIT_MIN_MEMBERS if is_forced_split_candidate else SPLIT_MIN_MEMBERS
+            if len(opt_rows) >= _min_rows:
                 from app.services.taxonomy.split import split_cluster
 
                 result = await split_cluster(node, engine, db, opt_rows)
@@ -1174,8 +1377,9 @@ async def phase_split_emerge(
                                         path="warm", op="split", decision="family_split",
                                         cluster_id=child.id,
                                         context={
-                                            "parent_id": node.id,
-                                            "parent_label": node.label,
+                                            "split_source_id": node.id,
+                                            "split_source_label": node.label,
+                                            "assigned_parent_id": child.parent_id,
                                             "children_created": len(children),
                                         },
                                     )
@@ -1739,12 +1943,6 @@ async def phase_retire(
     # incoherent to be useful. Dissolve them: reassign members to nearest
     # active cluster, then archive. Uses the same _reassign_to_active()
     # helper built for candidate rejection.
-    from app.services.taxonomy._constants import (
-        DISSOLVE_COHERENCE_CEILING,
-        DISSOLVE_MAX_MEMBERS,
-        DISSOLVE_MIN_AGE_HOURS,
-    )
-
     now = _utcnow()
     for node in active_nodes:
         mc = node.member_count or 0
@@ -1794,10 +1992,16 @@ async def phase_retire(
             db, opt_ids, opt_embs, exclude_cluster_ids={node.id},
         )
 
-        # Archive the dissolved cluster
+        # Archive the dissolved cluster — zero ALL counters to prevent
+        # phantom data. Must match the fields cleared by attempt_merge()
+        # and attempt_retire() in lifecycle.py.
         node.state = "archived"
         node.archived_at = now
         node.member_count = 0
+        node.weighted_member_sum = 0.0
+        node.scored_count = 0
+        node.avg_score = None
+        node.usage_count = 0
         ops_accepted += 1
         operations_log.append({
             "type": "dissolve",
@@ -1857,7 +2061,10 @@ async def phase_refresh(
     """
     result = RefreshResult()
 
-    refresh_min_members = 3     # matches domain discovery threshold
+    refresh_min_members = 1     # extract patterns from ANY non-empty cluster
+    # Lowered from 3: with diverse seed batches, 74% of clusters end up as
+    # singletons. Even a single optimization demonstrates a concrete
+    # transformation technique worth capturing as a meta-pattern.
     refresh_sample_size = 8     # representative sample for re-extraction
     refresh_cooldown_minutes = 10  # min time between re-extractions
     refresh_min_delta = 3       # min member change to override cooldown
@@ -1875,8 +2082,10 @@ async def phase_refresh(
         now = _utcnow()
         stale_clusters: list[tuple[PromptCluster, list[str], list]] = []  # (node, member_texts, sample_opts)
         for node in active_nodes:
-            if node.state == "domain" or (node.member_count or 0) < refresh_min_members:
+            if node.state == "domain":
                 continue
+            if (node.member_count or 0) < refresh_min_members:
+                continue  # Empty cluster — nothing to extract
             meta = read_meta(node.cluster_metadata)
 
             # Event-driven: only refresh clusters marked stale by mutation events
@@ -1904,8 +2113,8 @@ async def phase_refresh(
                 .limit(refresh_sample_size)
             )
             sample_opts = list(sample_q.scalars().all())
-            if len(sample_opts) < 3:
-                continue
+            if not sample_opts:
+                continue  # Empty cluster (member_count out of sync)
 
             member_texts = [
                 o.intent_label or (o.raw_prompt or "")[:200]
@@ -1981,8 +2190,11 @@ async def phase_refresh(
                         )
                         patterns = [str(p) for p in response.patterns if isinstance(p, str)][:5]
                         texts.extend(patterns)
-                    except Exception:
-                        pass  # non-fatal per-optimization
+                    except Exception as _pe:
+                        logger.debug(
+                            "Pattern extraction failed for opt %s: %s",
+                            opt.id, _pe,
+                        )
                 return texts
 
             # Fire all pattern extractions in parallel (LLM only, no DB)
@@ -1997,44 +2209,76 @@ async def phase_refresh(
             )
 
             # --- Phase D: Apply labels + patterns (sequential DB writes) ---
+            # Each cluster is wrapped in its own try/except so that a single
+            # failure (e.g. SQLite write contention from the hot path) does
+            # not abort the entire refresh pass — remaining clusters still
+            # get processed.
             for i, (node, member_texts, sample_opts) in enumerate(stale_clusters):
-                new_label = labels[i]
-                if isinstance(new_label, BaseException):
-                    new_label = None
-                if new_label and new_label != "Unnamed Cluster":
-                    node.label = new_label
-
-                # Apply extracted patterns
-                new_pattern_texts = all_patterns[i]
-                if isinstance(new_pattern_texts, BaseException):
-                    new_pattern_texts = []
-
-                if new_pattern_texts:
-                    old_patterns = await db.execute(
-                        select(MetaPattern).where(
-                            MetaPattern.cluster_id == node.id
+                try:
+                    new_label = labels[i]
+                    if isinstance(new_label, BaseException):
+                        logger.warning(
+                            "Label generation failed for cluster %s: %s",
+                            node.id, new_label,
                         )
+                        new_label = None
+                    if new_label and new_label != "Unnamed Cluster":
+                        node.label = new_label
+
+                    # Apply extracted patterns
+                    new_pattern_texts = all_patterns[i]
+                    if isinstance(new_pattern_texts, BaseException):
+                        logger.warning(
+                            "Pattern extraction failed for cluster %s: %s",
+                            node.id, new_pattern_texts,
+                        )
+                        new_pattern_texts = []
+
+                    if new_pattern_texts:
+                        old_patterns = await db.execute(
+                            select(MetaPattern).where(
+                                MetaPattern.cluster_id == node.id
+                            )
+                        )
+                        for old_mp in old_patterns.scalars():
+                            await db.delete(old_mp)
+
+                        for text in new_pattern_texts:
+                            await merge_meta_pattern(
+                                db, node.id, text, engine._embedding,
+                            )
+
+                    # Track extraction state
+                    node.cluster_metadata = write_meta(
+                        node.cluster_metadata,
+                        pattern_member_count=node.member_count,
+                        pattern_stale=False,
+                        label_refreshed_at=_utcnow().isoformat(),
                     )
-                    for old_mp in old_patterns.scalars():
-                        await db.delete(old_mp)
-
-                    for text in new_pattern_texts:
-                        await merge_meta_pattern(
-                            db, node.id, text, engine._embedding,
+                    result.clusters_refreshed += 1
+                    logger.info(
+                        "Refreshed label+patterns for '%s' (members=%d)",
+                        node.label, node.member_count,
+                    )
+                except Exception as per_cluster_exc:
+                    logger.warning(
+                        "Refresh failed for cluster '%s' (id=%s): %s — "
+                        "skipping, will retry next warm cycle",
+                        node.label, node.id, per_cluster_exc,
+                    )
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="refresh",
+                            decision="per_cluster_refresh_failed",
+                            cluster_id=node.id,
+                            context={
+                                "cluster_label": node.label,
+                                "error_type": type(per_cluster_exc).__name__,
+                                "error_message": str(per_cluster_exc)[:300],
+                            },
                         )
-
-                # Track extraction state
-                node.cluster_metadata = write_meta(
-                    node.cluster_metadata,
-                    pattern_member_count=node.member_count,
-                    pattern_stale=False,
-                    label_refreshed_at=_utcnow().isoformat(),
-                )
-                result.clusters_refreshed += 1
-                logger.info(
-                    "Refreshed label+patterns for '%s' (members=%d)",
-                    node.label, node.member_count,
-                )
+                    except RuntimeError:
+                        pass
 
         if result.clusters_refreshed:
             await db.flush()
@@ -2074,7 +2318,7 @@ async def phase_refresh(
         if decayed:
             prefs_svc.patch({"phase_weights": phase_weights})
     except Exception as decay_exc:
-        logger.debug("Phase weight decay failed (non-fatal): %s", decay_exc)
+        logger.warning("Phase weight decay failed (non-fatal): %s", decay_exc)
 
     # Score-correlated phase weight adaptation
     # Queries recent scored optimizations, computes score-weighted optimal
@@ -2185,7 +2429,7 @@ async def phase_refresh(
                 clusters_adapted,
             )
     except Exception as sc_exc:
-        logger.debug("Score-correlated adaptation failed (non-fatal): %s", sc_exc)
+        logger.warning("Score-correlated adaptation failed (non-fatal): %s", sc_exc)
 
     # --- Cross-cluster global_source_count computation ---
     # For each MetaPattern, count how many DISTINCT clusters contain a
@@ -2194,8 +2438,11 @@ async def phase_refresh(
     # are universal techniques that benefit all prompts.
     try:
         all_patterns_q = await db.execute(
-            select(MetaPattern).where(
+            select(MetaPattern)
+            .join(PromptCluster, MetaPattern.cluster_id == PromptCluster.id)
+            .where(
                 MetaPattern.embedding.isnot(None),
+                PromptCluster.state != "archived",
             )
         )
         all_patterns = list(all_patterns_q.scalars().all())
@@ -2276,6 +2523,16 @@ async def phase_discover(
             "Warm path discovered %d new domains: %s",
             len(new_domains), new_domains,
         )
+        try:
+            get_event_logger().log_decision(
+                path="warm", op="discover", decision="domains_created",
+                context={
+                    "count": len(new_domains),
+                    "domains": new_domains[:10],
+                },
+            )
+        except RuntimeError:
+            pass
 
     # --- Sub-domain discovery (intra-domain HDBSCAN) ---
     try:
@@ -2286,6 +2543,16 @@ async def phase_discover(
                 "Warm path discovered %d sub-domains: %s",
                 len(new_sub_domains), new_sub_domains,
             )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="discover", decision="sub_domains_created",
+                    context={
+                        "count": len(new_sub_domains),
+                        "sub_domains": new_sub_domains[:10],
+                    },
+                )
+            except RuntimeError:
+                pass
     except Exception as sub_exc:
         logger.warning(
             "Sub-domain discovery failed (non-fatal): %s", sub_exc
@@ -2392,6 +2659,23 @@ async def phase_audit(
     else:
         latest = await get_latest_snapshot(db)
         result.snapshot_id = latest.id if latest else "no-snapshot"
+
+    # Log structured audit summary for observability
+    try:
+        get_event_logger().log_decision(
+            path="warm", op="audit", decision="q_computed",
+            context={
+                "q_system": round(q_after, 4) if q_after else None,
+                "q_baseline": round(q_baseline, 4) if q_baseline else None,
+                "ops_attempted": total_ops_attempted,
+                "ops_accepted": total_ops_accepted,
+                "active_clusters": len(active_after),
+                "warm_path_age": engine._warm_path_age,
+                "snapshot_id": result.snapshot_id,
+            },
+        )
+    except RuntimeError:
+        pass
 
     # Publish taxonomy_changed when a snapshot was created
     snapshot_created = result.snapshot_id != "no-snapshot" and (

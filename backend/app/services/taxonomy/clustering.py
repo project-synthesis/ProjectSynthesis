@@ -211,6 +211,10 @@ def _extract_persistences(hdb: HDBSCAN, n_clusters: int) -> list[float]:
     if n_clusters == 0:
         return []
     try:
+        # Guard: condensed_tree_ is not available with all HDBSCAN parameter
+        # combinations (e.g., small datasets, certain metric/selection combos).
+        if not hasattr(hdb, "condensed_tree_"):
+            return [0.0] * n_clusters
         tree = hdb.condensed_tree_
         # condensed_tree_ is a numpy structured array with fields:
         # parent, child, lambda_val, child_size
@@ -433,6 +437,7 @@ def batch_cluster(
 
     hdb = HDBSCAN(
         min_cluster_size=min_cluster_size,
+        min_samples=max(1, min_cluster_size - 1),  # Lowered: reduces noise rate on small datasets
         metric="euclidean",
         cluster_selection_method="eom",
         copy=True,  # Explicit to silence sklearn >=1.10 FutureWarning

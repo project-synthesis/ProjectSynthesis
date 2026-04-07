@@ -21,7 +21,7 @@ class HeuristicScorer:
 
     _RE_HEADERS = r"(?m)^#{1,6}\s+\S"
     _RE_LIST_ITEMS = r"(?m)^\s*[-*+]\s+\S|^\s*\d+\.\s+\S"
-    _RE_XML_OPEN = r"<([A-Za-z][A-Za-z0-9_-]*)(?:\s[^>]*)?>",
+    _RE_XML_OPEN = r"<([A-Za-z][A-Za-z0-9_-]*)(?:\s[^>]*)?>"
     _RE_XML_CLOSE = r"</([A-Za-z][A-Za-z0-9_-]*)>"
     _RE_XML_ANY = r"</?[A-Za-z][A-Za-z0-9_-]*\s*/?>"
     _RE_FORMAT_MENTION = r"\b(?:output|format|return|json|schema|yaml|xml|markdown)\b"
@@ -32,7 +32,7 @@ class HeuristicScorer:
         n_headers = len(re.findall(HeuristicScorer._RE_HEADERS, prompt))
         n_list_items = len(re.findall(HeuristicScorer._RE_LIST_ITEMS, prompt))
         # XML section pairs: count tags with matching open/close
-        xml_opens = set(re.findall(r"<([A-Za-z][A-Za-z0-9_-]*)(?:\s[^>]*)?>", prompt))
+        xml_opens = set(re.findall(HeuristicScorer._RE_XML_OPEN, prompt))
         xml_closes = set(re.findall(HeuristicScorer._RE_XML_CLOSE, prompt))
         n_xml_sections = len(xml_opens & xml_closes)
         n_xml_tags = len(re.findall(HeuristicScorer._RE_XML_ANY, prompt))
@@ -189,12 +189,22 @@ class HeuristicScorer:
             (r"\b(?:first\s+person|third\s+person|formal|informal|tone|audience|voice|tense)\b", re.IGNORECASE, 2.0),
         ]
 
-        total = 2.5
+        total = 3.0  # Raised from 2.5 — most optimized prompts are at least somewhat specific
+        categories_hit = 0
         for pattern, flags, cap in categories:
             hits = len(re.findall(pattern, prompt, flags))
             if hits > 0:
+                categories_hit += 1
                 category_score = min(1.0 + 0.3 * (hits - 1), cap)
                 total += category_score
+
+        # Density bonus: reward concentrated specificity in shorter prompts.
+        # A 50-word prompt hitting 4 categories is MORE specific per-word than
+        # a 500-word prompt hitting the same 4. Cap bonus at 1.5.
+        word_count = max(1, len(prompt.split()))
+        if categories_hit >= 2:
+            density = categories_hit / (word_count / 40)
+            total += min(1.5, density * 0.5)
 
         return round(max(1.0, min(10.0, total)), 2)
 
@@ -288,13 +298,18 @@ class HeuristicScorer:
                 np.dot(orig_vec, opt_vec)
                 / (np.linalg.norm(orig_vec) * np.linalg.norm(opt_vec) + 1e-9)
             )
-            # Map similarity (0-1) to score (1-10). Sweet spot: 0.6-0.85
+            # Map similarity (0-1) to score (1-10).
+            # Prompt optimization typically produces similarity 0.4-0.7 (same intent,
+            # restructured text). This should map to HIGH faithfulness (7-9), not
+            # mediocre (4-6). Bands calibrated against LLM scorer agreement.
             if similarity >= 0.85:
-                return 9.0
-            elif similarity >= 0.6:
-                return 6.0 + (similarity - 0.6) / 0.25 * 3.0
+                return round(min(10.0, 9.0 + (similarity - 0.85) * 6.67), 2)
+            elif similarity >= 0.50:
+                return round(7.0 + (similarity - 0.50) / 0.35 * 2.0, 2)
+            elif similarity >= 0.30:
+                return round(4.0 + (similarity - 0.30) / 0.20 * 3.0, 2)
             else:
-                return max(1.0, similarity * 10.0)
+                return round(max(1.0, similarity * 13.3), 2)
         except (ImportError, EmbeddingError, ValueError, MemoryError):
             logger.debug("Embedding unavailable for faithfulness heuristic — returning neutral score")
             return 5.0

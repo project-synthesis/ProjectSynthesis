@@ -81,6 +81,15 @@ DISSOLVE_COHERENCE_CEILING = 0.30       # dissolve if coherence below this
 DISSOLVE_MAX_MEMBERS = 5                # only dissolve clusters with <= N members
 DISSOLVE_MIN_AGE_HOURS = 2              # cluster must be at least N hours old
 
+# Forced split for large incoherent clusters that exceed dissolution member cap
+# but have very low coherence. These clusters are too big to dissolve and too
+# small for the normal split path (SPLIT_MIN_MEMBERS=25) — the forced split
+# catches the gap (6-24 members with coherence < 0.25).
+FORCED_SPLIT_COHERENCE_FLOOR = 0.25     # force split if coherence below this
+FORCED_SPLIT_MIN_MEMBERS = 6            # minimum members for forced spectral split
+# Set to 6 (not 8) to close the gap with DISSOLVE_MAX_MEMBERS=5.
+# Spectral clustering works at 6 members (SPECTRAL_MIN_GROUP_SIZE=3, min k=2).
+
 
 def _utcnow() -> datetime:
     """Naive UTC timestamp — matches SQLAlchemy DateTime() round-trip on SQLite.

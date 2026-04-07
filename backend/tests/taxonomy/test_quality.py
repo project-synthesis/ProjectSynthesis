@@ -123,7 +123,7 @@ class TestEpsilonTolerance:
 
     def test_young_taxonomy_larger_epsilon(self):
         eps = epsilon_tolerance(warm_path_age=0)
-        assert eps == pytest.approx(0.01)
+        assert eps == pytest.approx(0.006)
 
     def test_mature_taxonomy_smaller_epsilon(self):
         eps_young = epsilon_tolerance(warm_path_age=10)
@@ -156,7 +156,7 @@ class TestIsColdPathNonRegressive:
     """Cold-path quality gate — flat COLD_PATH_EPSILON tolerance."""
 
     def test_constant_value(self):
-        assert COLD_PATH_EPSILON == pytest.approx(0.08)
+        assert COLD_PATH_EPSILON == pytest.approx(0.05)
 
     def test_improvement_passes(self):
         assert is_cold_path_non_regressive(0.6, 0.65)
@@ -169,8 +169,8 @@ class TestIsColdPathNonRegressive:
         assert is_cold_path_non_regressive(0.6, 0.55)
 
     def test_exactly_at_boundary_passes(self):
-        # 0.6 - 0.08 = 0.52, exactly on the boundary
-        assert is_cold_path_non_regressive(0.6, 0.52)
+        # 0.6 - 0.05 = 0.55, exactly on the boundary
+        assert is_cold_path_non_regressive(0.6, 0.55)
 
     def test_beyond_epsilon_fails(self):
         # 0.6 - 0.50 = 0.10, which exceeds 0.08 tolerance
