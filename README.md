@@ -70,10 +70,10 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 | Frontend | SvelteKit 2 (Svelte 5 runes), Tailwind CSS 4 |
 | Database | SQLite (WAL mode) |
 | Visualization | Three.js (3D taxonomy topology with LOD, raycasting, force layout) |
-| Clustering | HDBSCAN + adaptive cosine threshold + UMAP 3D + OKLab coloring |
+| Clustering | Spectral clustering (primary split) + HDBSCAN (fallback/cold-path) + adaptive cosine threshold + UMAP 3D + OKLab coloring |
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2, 384-dim, CPU) |
 | LLM | Configurable per phase — Opus, Sonnet, Haiku (via Settings) |
-| Scoring | Hybrid: LLM scores blended with model-independent heuristics + z-score normalization |
+| Scoring | Hybrid: LLM + heuristic blending per dimension, z-score normalization (≥30 samples), divergence detection. Weights: faithfulness 0.25, clarity/specificity/conciseness 0.20, structure 0.15 |
 | MCP | Streamable HTTP on port 8001 — process-level singleton routing with dual disconnect detection |
 | Versioning | `version.json` → `scripts/sync-version.sh` propagates to backend + frontend |
 
@@ -83,7 +83,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 |---------|------|---------|
 | Backend | 8000 | FastAPI API + pipeline orchestration |
 | Frontend | 5199 | SvelteKit dev server |
-| MCP Server | 8001 | 11-tool MCP server for IDE integration |
+| MCP Server | 8001 | 12-tool MCP server for IDE integration |
 
 ```bash
 ./init.sh start     # start all (with preflight checks + health probes)
@@ -98,7 +98,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **One-shot optimization** with 5-dimension hybrid scoring (clarity, specificity, structure, faithfulness, conciseness)
 - **Conversational refinement** — iterative improvement with version history, branching, and rollback
 - **3 suggestions per turn** — score-driven, analysis-driven, and strategic
-- **Adaptive strategies** — file-driven from `prompts/strategies/*.md` with YAML frontmatter. Add/remove/edit `.md` files and they auto-appear in the UI via real-time file watching
+- **Adaptive strategies** — file-driven from `prompts/strategies/*.md` with YAML frontmatter. Add/remove/edit `.md` files and they auto-appear in the UI via real-time file watching. `auto` strategy resolves to task-type-appropriate named strategy at runtime (coding→meta-prompting, writing→role-playing, data→structured-output)
 - **Inline strategy editor** — click to edit strategy templates directly from the sidebar with live disk save
 - **Persistent settings** — model selection per phase, pipeline toggle (explore/scoring/adaptation), default strategy. Survives restarts via `data/preferences.json`
 - **Session persistence** — page refresh restores your last optimization from the database
@@ -122,7 +122,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **3D taxonomy visualization** — Three.js interactive topology with LOD tiers (far/mid/near) based on persistence thresholds. Diegetic UI (Dead Space-inspired): ambient telemetry only, controls auto-hide on right-edge hover, metrics via Q key, inline hint card on first visit. State filter tabs dim non-matching nodes (25% opacity) while matching glow at 100%. Click-to-focus navigation, raycasting hover, billboard labels, force-directed collision resolution, Ctrl+F search
 - **Pattern suggestion on paste** — embeds pasted text, cosine-searches active clusters (≥0.72), suggests matching clusters with 1-click apply (50-char delta, 300ms debounce, 10s auto-dismiss). Applied patterns injected into optimizer context
 - **Bidirectional history–clusters navigation** — history items show intent labels and domain badges. Loading an optimization auto-selects its cluster in Inspector. Clicking a linked optimization in a cluster detail loads it in the editor. Live cluster link: background pattern extraction triggers automatic UI sync via SSE
-- **Batch taxonomy seeding** — explore-driven pipeline generates diverse prompts from a project description, optimizes them in parallel through the full pipeline, and lets taxonomy discover clusters/domains/patterns organically. 5 default seed agents (coding, architecture, analysis, testing, documentation) with YAML frontmatter — user-extensible by dropping `.md` files. Embedding-based deduplication. Provider-aware concurrency (CLI=10, API=5, sampling=2). SeedModal in topology view with agent selector, progress bar, and result card. 9 observability events for MLOps monitoring
+- **Batch taxonomy seeding** — explore-driven pipeline generates diverse prompts from a project description, optimizes them in parallel with full enrichment (pattern injection, few-shot retrieval, adaptation state, domain resolution, z-score normalization), generates 3 suggestions per seed, filters low-quality results (score < 5.0), and lets taxonomy discover clusters/domains/patterns organically. 5 default seed agents (coding, architecture, analysis, testing, documentation) with YAML frontmatter — user-extensible by dropping `.md` files. Embedding-based deduplication. Provider-aware concurrency (CLI=10, API=5, sampling=2). SeedModal in topology view with agent selector, progress bar, and result card. 9 observability events for MLOps monitoring
 - **Taxonomy Activity panel** — collapsible bottom panel below the 3D topology showing a live feed of all taxonomy decision events (hot/warm/cold/seed path, 12+ operation types). Filter by path, operation, or errors-only. Expandable context for each event. Click the `↗` button on score events to load the optimization in the editor. Seeds from ring buffer; falls back to JSONL history after server restart. Cross-process: MCP score events reach the panel via HTTP POST + ring buffer mirroring
 - **StatusBar breadcrumb** — shows CLI/API/SAMPLING/PASSTHROUGH tier badge + `[domain] › intent_label` for the active optimization with domain color coding. Editor tabs use intent labels as titles
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation + phase weight adaptation (EMA toward successful fusion profiles)

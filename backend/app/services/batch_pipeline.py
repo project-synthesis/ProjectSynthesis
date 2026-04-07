@@ -362,6 +362,7 @@ async def run_single_prompt(
         if optimized_scores and analysis.weaknesses is not None:
             try:
                 import json as _json
+
                 from app.schemas.pipeline_contracts import SuggestionsOutput
                 suggest_msg = prompt_loader.render("suggest.md", {
                     "optimized_prompt": optimization.optimized_prompt,

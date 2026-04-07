@@ -121,6 +121,7 @@ async def refine(
     _adaptation_state: str | None = None
     try:
         from pathlib import Path
+
         from app.config import PROJECT_ROOT
         from app.services.workspace_intelligence import WorkspaceIntelligence
         wi = WorkspaceIntelligence()

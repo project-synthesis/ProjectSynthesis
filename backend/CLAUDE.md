@@ -10,12 +10,12 @@ Everything backend developers need. For project overview, see root `CLAUDE.md`. 
 
 ## Key services (`app/services/`)
 
-**Pipeline**: `pipeline.py` (3-phase orchestrator), `sampling_pipeline.py` (MCP sampling — full parity), `passthrough.py` (shared passthrough assembly), `pipeline_constants.py` (shared constants: `CONFIDENCE_GATE=0.7`, `FALLBACK_STRATEGY="auto"`, `semantic_upgrade_general()` post-LLM classification gate)
+**Pipeline**: `pipeline.py` (3-phase orchestrator), `sampling_pipeline.py` (MCP sampling — full parity), `passthrough.py` (shared passthrough assembly), `pipeline_constants.py` (shared constants: `CONFIDENCE_GATE=0.7`, `FALLBACK_STRATEGY="auto"` — resolves to task-type-appropriate named strategy at runtime, `semantic_upgrade_general()` post-LLM classification gate)
 **Analysis**: `heuristic_analyzer.py` (zero-LLM classifier, 6-layer, adaptive keyword weights), `context_enrichment.py` (unified `enrich()` for all tiers → frozen `EnrichedContext`), `context_resolver.py` (per-source char caps, untrusted wrapping)
 **Scoring**: `heuristic_scorer.py` (5-dimension heuristics, `score_prompt()` facade, clamped [1.0, 10.0]), `score_blender.py` (hybrid LLM+heuristic, z-score normalization, divergence detection)
 **Optimization**: `optimization_service.py` (CRUD, sort/filter, `VALID_SORT_COLUMNS`), `refinement_service.py` (sessions, branching, rollback, suggestions)
 **Prompts & Strategies**: `prompt_loader.py` (template loading, startup validation), `strategy_loader.py` (file discovery, YAML frontmatter, hot-reload), `file_watcher.py` (watchfiles.awatch, publishes `strategy_changed` + `agent_changed`)
-**Batch Seeding**: `agent_loader.py` (seed agent file parser, frontmatter, hot-reload), `seed_orchestrator.py` (parallel agent dispatch, dedup), `batch_pipeline.py` (in-memory pipeline: `run_single_prompt` → `run_batch` → `bulk_persist` → `batch_taxonomy_assign` + `estimate_batch_cost`)
+**Batch Seeding**: `agent_loader.py` (seed agent file parser, frontmatter, hot-reload), `seed_orchestrator.py` (parallel agent dispatch, dedup), `batch_pipeline.py` (enriched pipeline: `run_single_prompt` with pattern injection + few-shot + adaptation + domain resolution → `run_batch` → `bulk_persist` with quality gate ≥5.0 → `batch_taxonomy_assign` + `estimate_batch_cost`)
 **Routing**: `routing.py` (RoutingManager singleton, `resolve_route()` pure function — see Routing Internals below)
 **Taxonomy**: `taxonomy/` package (see Taxonomy Engine below)
 **Workspace**: `workspace_intelligence.py` (manifest-based stack detection + deep scanning), `roots_scanner.py` (agent guidance file discovery, SHA256 dedup), `codebase_explorer.py` (semantic retrieval + Haiku synthesis, SHA cache), `explore_cache.py` (TTL+LRU), `repo_index_service.py` (background indexing, `query_curated_context()`)
@@ -75,7 +75,7 @@ Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (i
 - **Streaming**: optimize/refine use `messages.stream()` to prevent HTTP timeouts (up to 128K tokens)
 - **Explore**: runs when GitHub repo linked AND `enable_explore=True`. Semantic retrieval + single-shot Haiku synthesis
 - **Scoring**: skippable via `enable_scoring` preference (lean mode = 2 LLM calls). A/B randomized presentation + hybrid scoring
-- **Hybrid scoring**: LLM + heuristic blended per dimension (structure 50%, specificity 40%, clarity 40%, conciseness/faithfulness 20%). Overall weighted mean (faithfulness 0.25, structure 0.15, rest 0.20). `DIMENSION_WEIGHTS` canonical in `pipeline_contracts.py`. Z-score normalization when ≥30 samples. Divergence flags at >2.5pt gap. Passthrough clamped [1.0, 10.0], excluded from z-score distribution
+- **Hybrid scoring**: LLM + heuristic blended per dimension (structure 50%, specificity 40%, clarity 40%, conciseness/faithfulness 20%). Overall weighted mean: clarity 0.20, specificity 0.20, structure 0.15, faithfulness 0.25, conciseness 0.20. `DIMENSION_WEIGHTS` canonical in `pipeline_contracts.py`. Z-score normalization when ≥30 samples. Divergence flags at >2.5pt gap. Passthrough clamped [1.0, 10.0], excluded from z-score distribution
 - **Passthrough**: `prepare_optimization` assembles prompt → external LLM processes → `save_result` persists with heuristic-only scoring
 
 ## Routing internals
@@ -144,7 +144,7 @@ Process singleton (`get_engine()`/`set_engine()`). Three paths: **hot** (per-opt
 
 **Spectral split**: `spectral_split()` in `clustering.py` replaces HDBSCAN as primary split algorithm. Tries k=2,3,4 with silhouette gating (rescaled [0,1], gate=0.15, min group size=3). HDBSCAN retained as fallback. Split children created as `state="candidate"`. Warm-path Phase 0.5 (`phase_evaluate_candidates()`) promotes candidates with coherence ≥ `CANDIDATE_COHERENCE_FLOOR` (0.30) or rejects them (reassigns members to nearest active cluster via `_reassign_to_active()`). Candidates excluded from Q_system computation in speculative phases. `_load_active_nodes(exclude_candidates=True)` for Q-gate calls.
 
-**Dissolution**: `phase_retire()` dissolves small incoherent clusters (coherence < `DISSOLVE_COHERENCE_CEILING` 0.30, ≤ `DISSOLVE_MAX_MEMBERS` 5, ≥ `DISSOLVE_MIN_AGE_HOURS` 2h old). Members reassigned via `_reassign_to_active(exclude_cluster_ids={self})`. Q-gated. `retire/dissolved` event.
+**Dissolution**: `phase_retire()` dissolves small incoherent clusters (coherence < `DISSOLVE_COHERENCE_CEILING` 0.30, ≤ `DISSOLVE_MAX_MEMBERS` 5, ≥ `DISSOLVE_MIN_AGE_HOURS` 2h old). Members reassigned via `_reassign_to_active(exclude_cluster_ids={self})`. Q-gated. `retire/dissolved` event. **Forced split** catches the 6-24 member gap: clusters with coherence < `FORCED_SPLIT_COHERENCE_FLOOR` 0.25 and ≥ `FORCED_SPLIT_MIN_MEMBERS` 6 are split via spectral clustering even below `SPLIT_MIN_MEMBERS`.
 
 **Performance**: `split_cluster()` uses 3-phase approach — sequential DB queries, parallel `asyncio.gather` on `generate_label()` calls, sequential object creation. Pattern extraction deferred to Phase 4 (Refresh) via `pattern_stale=True`. Phase 4 parallelizes both label generation AND pattern extraction across stale clusters (taxonomy context pre-computed sequentially, LLM calls in parallel — avoids concurrent DB session access).
 

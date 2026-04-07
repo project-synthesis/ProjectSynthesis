@@ -455,7 +455,7 @@ def resolve_effective_strategy(
     # Resolve it to a task-type-appropriate named strategy so the
     # optimizer always gets concrete technique guidance.
     if effective == "auto" and task_type:
-        _AUTO_TASK_MAP: dict[str, str] = {
+        _auto_task_map: dict[str, str] = {
             "coding": "meta-prompting",
             "analysis": "meta-prompting",
             "writing": "role-playing",
@@ -464,7 +464,7 @@ def resolve_effective_strategy(
             "system": "meta-prompting",
             "general": "meta-prompting",
         }
-        resolved = _AUTO_TASK_MAP.get(task_type, "meta-prompting")
+        resolved = _auto_task_map.get(task_type, "meta-prompting")
         if resolved in available and resolved not in blocked_strategies:
             logger.info(
                 "Auto→%s resolution (task_type=%s). trace_id=%s",
