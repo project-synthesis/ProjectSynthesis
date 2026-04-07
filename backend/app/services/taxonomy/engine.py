@@ -896,6 +896,7 @@ class TaxonomyEngine:
                     coherence=n.coherence if n.coherence is not None else 0.0,
                     separation=n.separation if n.separation is not None else 1.0,
                     state=n.state or "active",
+                    member_count=n.member_count or 0,
                 )
             )
 
@@ -911,6 +912,42 @@ class TaxonomyEngine:
         weights = QWeights.from_ramp(ramp)
 
         return compute_q_system(metrics, weights, dbcv=silhouette)
+
+    def _compute_q_health_from_nodes(
+        self, nodes: list, silhouette: float = 0.0,
+    ) -> "QHealthResult":
+        """Compute member-weighted Q_health from PromptCluster rows."""
+        from app.services.taxonomy.quality import (
+            NodeMetrics, QWeights, QHealthResult, compute_q_health,
+        )
+
+        if not nodes:
+            return QHealthResult(
+                q_health=0.0, coherence_weighted=0.0, separation_weighted=0.0,
+                coverage=1.0, dbcv=0.0,
+                weights={"w_c": 0.4, "w_s": 0.35, "w_v": 0.25, "w_d": 0.0},
+                total_members=0, cluster_count=0,
+            )
+
+        metrics = []
+        for n in nodes:
+            metrics.append(
+                NodeMetrics(
+                    coherence=n.coherence if n.coherence is not None else 0.0,
+                    separation=n.separation if n.separation is not None else 1.0,
+                    state=n.state or "active",
+                    member_count=n.member_count or 0,
+                )
+            )
+
+        if silhouette > 0.0:
+            n_active = len(metrics)
+            ramp = min(1.0, max(0.0, (n_active - 5) / 20))
+        else:
+            ramp = 0.0
+        weights = QWeights.from_ramp(ramp)
+
+        return compute_q_health(metrics, weights, dbcv=silhouette)
 
     @staticmethod
     def _update_per_node_separation(nodes: list[PromptCluster]) -> None:
@@ -2072,6 +2109,16 @@ class TaxonomyEngine:
 
         mean_coherence, separation = self._snapshot_metrics(active_nodes)
 
+        # Compute member-weighted q_health for snapshot persistence
+        q_health_val = None
+        try:
+            _health = self._compute_q_health_from_nodes(
+                active_nodes, silhouette=self._last_silhouette,
+            )
+            q_health_val = _health.q_health
+        except Exception:
+            pass
+
         nodes_created = sum(1 for op in operations if op.get("type") == "emerge")
         nodes_merged = sum(1 for op in operations if op.get("type") == "merge")
         nodes_retired = sum(1 for op in operations if op.get("type") == "retire")
@@ -2084,6 +2131,7 @@ class TaxonomyEngine:
             q_coherence=mean_coherence,
             q_separation=separation,
             q_coverage=1.0,
+            q_health=q_health_val,
             operations=operations,
             nodes_created=nodes_created,
             nodes_retired=nodes_retired,
@@ -2310,6 +2358,26 @@ class TaxonomyEngine:
             "last_cold_path": last_cold_path,
             "warm_path_age": self._warm_path_age,
         }
+
+        # Compute q_health live from current cluster state
+        try:
+            _health_nodes_q = await db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.state.notin_(["domain", "archived"])
+                )
+            )
+            _health_nodes = list(_health_nodes_q.scalars().all())
+            _health_result = self._compute_q_health_from_nodes(
+                _health_nodes, silhouette=self._last_silhouette,
+            )
+            result["q_health"] = _health_result.q_health
+            result["q_health_coherence_w"] = _health_result.coherence_weighted
+            result["q_health_separation_w"] = _health_result.separation_weighted
+            result["q_health_weights"] = _health_result.weights
+            result["q_health_total_members"] = _health_result.total_members
+            result["q_health_cluster_count"] = _health_result.cluster_count
+        except Exception as qh_exc:
+            logger.debug("q_health computation failed (non-fatal): %s", qh_exc)
 
         self._stats_cache = result
         self._stats_cache_time = time.monotonic()

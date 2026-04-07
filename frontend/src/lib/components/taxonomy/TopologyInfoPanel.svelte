@@ -25,15 +25,15 @@
   });
 
   // System mode data
-  const qSystem = $derived(stats?.q_system ?? null);
+  const qSystem = $derived(stats?.q_health ?? stats?.q_system ?? null);
   const qColor = $derived(qHealthColor(qSystem));
   const health = $derived(stats ? assessTaxonomyHealth(stats) : null);
   const sparkline = $derived(stats?.q_sparkline ?? []);
   const hasSparkline = $derived(sparkline.length >= 2);
   const silhouette = $derived(stats?.q_dbcv ?? null);
   const coverage = $derived(stats?.q_coverage ?? null);
-  const coherence = $derived(stats?.q_coherence ?? null);
-  const separation = $derived(stats?.q_separation ?? null);
+  const coherence = $derived(stats?.q_health_coherence_w ?? stats?.q_coherence ?? null);
+  const separation = $derived(stats?.q_health_separation_w ?? stats?.q_separation ?? null);
 
   // Cluster mode data
   const clusterCoh = $derived(detail?.coherence ?? null);

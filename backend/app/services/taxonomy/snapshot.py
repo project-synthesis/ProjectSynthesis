@@ -32,6 +32,7 @@ async def create_snapshot(
     q_separation: float,
     q_coverage: float,
     q_dbcv: float = 0.0,
+    q_health: float | None = None,
     operations: list[dict[str, Any]] | None = None,
     nodes_created: int = 0,
     nodes_retired: int = 0,
@@ -48,6 +49,7 @@ async def create_snapshot(
         q_separation: Mean inter-cluster separation.
         q_coverage: Fraction of optimizations covered by active nodes.
         q_dbcv: DBCV validity score (0.0 when < 5 active nodes).
+        q_health: Member-weighted composite health score (None when unavailable).
         operations: List of tree-mutation operation dicts (serialized as JSON).
         nodes_created: Count of nodes created in this cycle.
         nodes_retired: Count of nodes retired in this cycle.
@@ -70,6 +72,7 @@ async def create_snapshot(
         q_separation=q_separation,
         q_coverage=q_coverage,
         q_dbcv=q_dbcv,
+        q_health=q_health,
         operations=json.dumps(operations if operations is not None else []),
         nodes_created=nodes_created,
         nodes_retired=nodes_retired,

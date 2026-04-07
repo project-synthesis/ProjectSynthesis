@@ -20,11 +20,11 @@ export interface HealthAssessment {
 
 // -- Thresholds --
 
-const Q_GOOD = 0.7;
-const Q_WARNING = 0.45;
+const Q_GOOD = 0.60;
+const Q_WARNING = 0.40;
 
-const COHERENCE_GOOD = 0.7;
-const COHERENCE_LOW = 0.5;
+const COHERENCE_GOOD = 0.60;
+const COHERENCE_LOW = 0.40;
 
 const SEPARATION_GOOD = 0.5;
 const SEPARATION_LOW = 0.3;
@@ -37,11 +37,11 @@ const TREND_DECLINING = -0.1;
  * Returns null if insufficient data.
  */
 export function assessTaxonomyHealth(stats: ClusterStats | null): HealthAssessment | null {
-  if (!stats || stats.q_system == null) return null;
+  if (!stats || (stats.q_health == null && stats.q_system == null)) return null;
 
-  const q = stats.q_system;
-  const coh = stats.q_coherence ?? 0;
-  const sep = stats.q_separation ?? 0;
+  const q = stats.q_health ?? stats.q_system!;
+  const coh = stats.q_health_coherence_w ?? stats.q_coherence ?? 0;
+  const sep = stats.q_health_separation_w ?? stats.q_separation ?? 0;
   const trend = stats.q_trend;
   const active = stats.nodes?.active ?? 0;
   const candidate = stats.nodes?.candidate ?? 0;

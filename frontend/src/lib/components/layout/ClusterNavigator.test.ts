@@ -89,6 +89,8 @@ function clusterDetail(overrides: Record<string, unknown> = {}) {
 /** Default stats response for /api/clusters/stats. */
 const defaultStats = {
   q_system: null, q_coherence: null, q_separation: null, q_coverage: null, q_dbcv: null,
+  q_health: null, q_health_coherence_w: null, q_health_separation_w: null,
+  q_health_weights: null, q_health_total_members: null, q_health_cluster_count: null,
   total_clusters: 0, nodes: null, last_warm_path: null, last_cold_path: null,
   warm_path_age: null, q_history: null, q_sparkline: null,
   q_trend: 0, q_current: null, q_min: null, q_max: null, q_point_count: 0,

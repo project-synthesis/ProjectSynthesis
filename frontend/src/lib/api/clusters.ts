@@ -85,6 +85,12 @@ export interface ClusterStats {
   q_separation: number | null;
   q_coverage: number | null;
   q_dbcv: number | null;
+  q_health: number | null;
+  q_health_coherence_w: number | null;
+  q_health_separation_w: number | null;
+  q_health_weights: { w_c: number; w_s: number; w_v: number; w_d: number } | null;
+  q_health_total_members: number | null;
+  q_health_cluster_count: number | null;
   total_clusters: number;
   nodes: {
     active: number;

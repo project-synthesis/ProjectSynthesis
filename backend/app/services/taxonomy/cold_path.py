@@ -165,6 +165,7 @@ async def execute_cold_path(
             q_coherence=0.0,
             q_separation=0.0,
             q_coverage=0.0,
+            q_health=None,
             nodes_created=0,
         )
         return ColdPathResult(
@@ -702,6 +703,7 @@ async def execute_cold_path(
             q_coherence=0.0,
             q_separation=0.0,
             q_coverage=0.0,
+            q_health=None,
             nodes_created=0,
         )
         try:
@@ -870,6 +872,17 @@ async def execute_cold_path(
     # Create snapshot — commits all pending node updates AND the
     # snapshot in a single transaction
     engine._invalidate_stats_cache()
+
+    # Compute member-weighted q_health for snapshot persistence
+    _cold_q_health = None
+    try:
+        _cold_health = engine._compute_q_health_from_nodes(
+            active_after, silhouette=cluster_result.silhouette,
+        )
+        _cold_q_health = _cold_health.q_health
+    except Exception:
+        pass
+
     snap = await create_snapshot(
         db,
         trigger="cold_path",
@@ -877,6 +890,7 @@ async def execute_cold_path(
         q_coherence=mean_coherence,
         q_separation=separation,
         q_coverage=1.0,
+        q_health=_cold_q_health,
         nodes_created=nodes_created,
     )
 

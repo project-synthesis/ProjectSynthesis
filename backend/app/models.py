@@ -202,6 +202,7 @@ class TaxonomySnapshot(Base):
     q_separation = Column(Float, nullable=False)
     q_coverage = Column(Float, nullable=False)
     q_dbcv = Column(Float, default=0.0, nullable=False)
+    q_health = Column(Float, nullable=True)  # member-weighted composite health
 
     # What changed
     operations = Column(Text, default="[]", nullable=False)  # JSON list

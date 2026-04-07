@@ -8,7 +8,9 @@ from app.services.taxonomy.quality import (
     COLD_PATH_EPSILON,
     NodeMetrics,
     QWeights,
+    QHealthResult,
     adaptive_threshold,
+    compute_q_health,
     compute_q_system,
     epsilon_tolerance,
     is_cold_path_non_regressive,
@@ -329,3 +331,104 @@ class TestQSystemWithSilhouette:
         assert q_guarded > q_unguarded
         # The difference should be ~15% of Q
         assert q_guarded - q_unguarded > 0.05
+
+
+class TestComputeQHealth:
+    """Tests for the member-weighted q_health metric."""
+
+    def _weights(self) -> QWeights:
+        return QWeights.from_ramp(0.0)  # No DBCV, standard weights
+
+    def test_singletons_dont_dominate(self):
+        """40 singletons at coh=1.0 + 10 clusters with 6 members at coh=0.42.
+        q_health should be significantly lower than q_system."""
+        nodes = []
+        for _ in range(40):
+            nodes.append(NodeMetrics(coherence=1.0, separation=1.0, state="active", member_count=1))
+        for _ in range(10):
+            nodes.append(NodeMetrics(coherence=0.42, separation=0.6, state="active", member_count=6))
+
+        w = self._weights()
+        q_sys = compute_q_system(nodes, w)
+        q_health = compute_q_health(nodes, w)
+
+        assert q_health.q_health < q_sys, f"q_health ({q_health.q_health}) should be < q_system ({q_sys})"
+        # The 60 members in low-coherence clusters (10*6=60) vs 40 singletons
+        # should drag weighted coherence well below arithmetic mean
+        assert q_health.coherence_weighted < 0.80
+
+    def test_member_weighted_coherence_correct(self):
+        """Manual verification of weighted mean calculation."""
+        nodes = [
+            NodeMetrics(coherence=0.5, separation=0.8, state="active", member_count=10),
+            NodeMetrics(coherence=1.0, separation=1.0, state="active", member_count=2),
+        ]
+        w = self._weights()
+        result = compute_q_health(nodes, w)
+
+        # Expected weighted coherence: (0.5*10 + 1.0*2) / 12 = 7.0/12 = 0.5833
+        expected_coh = (0.5 * 10 + 1.0 * 2) / 12
+        assert abs(result.coherence_weighted - round(expected_coh, 4)) < 0.001
+
+    def test_all_singletons_equals_arithmetic(self):
+        """When all clusters have member_count=1, q_health should equal q_system."""
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.7, state="active", member_count=1),
+            NodeMetrics(coherence=0.6, separation=0.9, state="active", member_count=1),
+            NodeMetrics(coherence=0.4, separation=0.5, state="active", member_count=1),
+        ]
+        w = self._weights()
+        q_sys = compute_q_system(nodes, w)
+        q_health = compute_q_health(nodes, w)
+
+        assert abs(q_health.q_health - q_sys) < 0.001
+
+    def test_returns_full_breakdown(self):
+        """QHealthResult contains all expected fields."""
+        nodes = [
+            NodeMetrics(coherence=0.7, separation=0.8, state="active", member_count=5),
+        ]
+        result = compute_q_health(nodes, self._weights())
+
+        assert isinstance(result, QHealthResult)
+        assert isinstance(result.q_health, float)
+        assert isinstance(result.coherence_weighted, float)
+        assert isinstance(result.separation_weighted, float)
+        assert isinstance(result.coverage, float)
+        assert isinstance(result.dbcv, float)
+        assert isinstance(result.weights, dict)
+        assert "w_c" in result.weights
+        assert "w_s" in result.weights
+        assert isinstance(result.total_members, int)
+        assert isinstance(result.cluster_count, int)
+
+    def test_zero_members_fallback(self):
+        """When all member_counts are 0, falls back to equal weighting."""
+        nodes = [
+            NodeMetrics(coherence=0.5, separation=0.7, state="active", member_count=0),
+            NodeMetrics(coherence=0.9, separation=0.3, state="active", member_count=0),
+        ]
+        result = compute_q_health(nodes, self._weights())
+
+        # Should not crash, should produce a valid result
+        assert 0.0 <= result.q_health <= 1.0
+        assert result.total_members == 0 or result.total_members == 2
+
+    def test_empty_returns_zero(self):
+        """Empty node list returns zero Q."""
+        result = compute_q_health([], self._weights())
+        assert result.q_health == 0.0
+        assert result.total_members == 0
+        assert result.cluster_count == 0
+
+    def test_excludes_domain_and_archived(self):
+        """Domain and archived nodes should be excluded from computation."""
+        nodes = [
+            NodeMetrics(coherence=0.5, separation=0.7, state="active", member_count=10),
+            NodeMetrics(coherence=0.0, separation=0.0, state="domain", member_count=100),
+            NodeMetrics(coherence=0.0, separation=0.0, state="archived", member_count=50),
+        ]
+        result = compute_q_health(nodes, self._weights())
+
+        assert result.cluster_count == 1  # Only the active node
+        assert result.total_members == 10  # Only the active node's members

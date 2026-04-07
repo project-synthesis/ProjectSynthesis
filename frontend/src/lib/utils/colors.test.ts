@@ -107,19 +107,22 @@ describe('qHealthColor', () => {
     expect(qHealthColor(null)).toBe('var(--color-text-dim)');
   });
 
-  it('returns green for >= 0.8', () => {
+  it('returns green for >= 0.70', () => {
     expect(qHealthColor(0.9)).toBe('var(--color-neon-green)');
+    expect(qHealthColor(0.70)).toBe('var(--color-neon-green)');
   });
 
-  it('returns cyan for >= 0.6', () => {
-    expect(qHealthColor(0.7)).toBe('var(--color-neon-cyan)');
+  it('returns cyan for >= 0.50', () => {
+    expect(qHealthColor(0.6)).toBe('var(--color-neon-cyan)');
+    expect(qHealthColor(0.50)).toBe('var(--color-neon-cyan)');
   });
 
-  it('returns yellow for >= 0.4', () => {
-    expect(qHealthColor(0.5)).toBe('var(--color-neon-yellow)');
+  it('returns yellow for >= 0.35', () => {
+    expect(qHealthColor(0.45)).toBe('var(--color-neon-yellow)');
+    expect(qHealthColor(0.35)).toBe('var(--color-neon-yellow)');
   });
 
-  it('returns red for < 0.4', () => {
+  it('returns red for < 0.35', () => {
     expect(qHealthColor(0.2)).toBe('var(--color-neon-red)');
   });
 });

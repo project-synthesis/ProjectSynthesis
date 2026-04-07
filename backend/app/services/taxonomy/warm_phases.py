@@ -2950,6 +2950,16 @@ async def phase_audit(
         latest = await get_latest_snapshot(db)
         result.snapshot_id = latest.id if latest else "no-snapshot"
 
+    # Compute member-weighted q_health
+    _q_health_val = None
+    try:
+        _q_health_result = engine._compute_q_health_from_nodes(
+            active_after, silhouette=engine._last_silhouette,
+        )
+        _q_health_val = _q_health_result.q_health
+    except Exception:
+        pass
+
     # Log structured audit summary for observability
     try:
         get_event_logger().log_decision(
@@ -2957,6 +2967,7 @@ async def phase_audit(
             context={
                 "q_system": round(q_after, 4) if q_after else None,
                 "q_baseline": round(q_baseline, 4) if q_baseline else None,
+                "q_health": round(_q_health_val, 4) if _q_health_val is not None else None,
                 "ops_attempted": total_ops_attempted,
                 "ops_accepted": total_ops_accepted,
                 "active_clusters": len(active_after),

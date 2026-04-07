@@ -12,6 +12,35 @@
   import { STATUS_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import Logo from '$lib/components/shared/Logo.svelte';
   import ScoreSparkline from '$lib/components/refinement/ScoreSparkline.svelte';
+  import type { ClusterStats } from '$lib/api/clusters';
+
+  function qHealthTooltip(stats: ClusterStats | null): string {
+    if (!stats) return 'No data';
+    const q = stats.q_health ?? stats.q_system;
+    if (q == null) return 'No data';
+
+    const coh = stats.q_health_coherence_w ?? stats.q_coherence ?? 0;
+    const sep = stats.q_health_separation_w ?? stats.q_separation ?? 0;
+    const cov = stats.q_coverage ?? 1;
+    const dbcv = stats.q_dbcv ?? 0;
+    const w = stats.q_health_weights ?? { w_c: 0.40, w_s: 0.35, w_v: 0.25, w_d: 0.00 };
+    const members = stats.q_health_total_members ?? '?';
+    const clusters = stats.q_health_cluster_count ?? stats.nodes?.active ?? '?';
+
+    return [
+      'Q = Coh\u00D7w_c + Sep\u00D7w_s + Cov\u00D7w_v + DBCV\u00D7w_d',
+      '',
+      `Coherence (weighted):  ${coh.toFixed(3)}  \u00D7${w.w_c.toFixed(2)}`,
+      `Separation (weighted): ${sep.toFixed(3)}  \u00D7${w.w_s.toFixed(2)}`,
+      `Coverage:              ${cov.toFixed(3)}  \u00D7${w.w_v.toFixed(2)}`,
+      `DBCV:                  ${dbcv.toFixed(3)}  \u00D7${w.w_d.toFixed(2)}`,
+      `${'─'.repeat(35)}`,
+      `Q_health:              ${q.toFixed(3)}`,
+      '',
+      `${clusters} clusters \u00B7 ${members} members`,
+      'Member-weighted: larger clusters count more',
+    ].join('\n');
+  }
 
   // Tab-aware result: use per-tab cached data when available, fall back to global forge state
   const activeResult = $derived(editorStore.activeResult ?? forgeStore.result);
@@ -108,15 +137,15 @@
     {#if clusterCount !== null && clusterCount > 0}
       <span class="status-patterns" use:tooltip={`${clusterCount} active clusters`}>{clusterCount} clusters</span>
     {/if}
-    {#if clustersStore.taxonomyStats?.q_system != null}
+    {#if clustersStore.taxonomyStats?.q_health != null || clustersStore.taxonomyStats?.q_system != null}
       {@const stats = clustersStore.taxonomyStats}
-      {@const qSystem = stats.q_system!}
+      {@const qVal = (stats.q_health ?? stats.q_system)!}
       {#if stats.q_sparkline && stats.q_sparkline.length >= 2}
         <ScoreSparkline scores={stats.q_sparkline} width={60} height={14} minRange={0.2} />
       {/if}
       {@const health = assessTaxonomyHealth(stats)}
-      <span class="statusbar-item" use:tooltip={health?.detail ?? 'Taxonomy health'}>
-        Q: <span style="color: {qHealthColor(qSystem)}">{qSystem.toFixed(2)}</span>
+      <span class="statusbar-item" use:tooltip={qHealthTooltip(stats)}>
+        Q: <span style="color: {qHealthColor(qVal)}">{qVal.toFixed(2)}</span>
       </span>
       {#if health}
         <span

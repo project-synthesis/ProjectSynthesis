@@ -167,13 +167,19 @@ describe('StatusBar', () => {
     expect(screen.getByText(/passthrough\.\.\./i)).toBeInTheDocument();
   });
 
-  it('shows Q_system badge when taxonomyStats has q_system value', async () => {
+  it('shows Q_health badge when taxonomyStats has q_health value', async () => {
     clustersStore.taxonomyStats = {
       q_system: 0.82,
       q_coherence: 0.7,
       q_separation: 0.6,
       q_coverage: 0.5,
       q_dbcv: 0.4,
+      q_health: 0.75,
+      q_health_coherence_w: 0.68,
+      q_health_separation_w: 0.55,
+      q_health_weights: { w_c: 0.40, w_s: 0.35, w_v: 0.25, w_d: 0.00 },
+      q_health_total_members: 42,
+      q_health_cluster_count: 5,
       total_clusters: 5,
       nodes: { active: 5, candidate: 1, mature: 0, template: 0, archived: 0, max_depth: 2, leaf_count: 4 },
       last_warm_path: null,
@@ -190,7 +196,7 @@ describe('StatusBar', () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     render(StatusBar);
     await vi.waitFor(() => {
-      expect(screen.getByText('0.82')).toBeInTheDocument();
+      expect(screen.getByText('0.75')).toBeInTheDocument();
       // Q: label is always present when stats exist
       expect(screen.getByText(/^Q:$/)).toBeInTheDocument();
     });
@@ -211,6 +217,12 @@ describe('StatusBar', () => {
       q_separation: 0.6,
       q_coverage: 0.5,
       q_dbcv: 0.4,
+      q_health: 0.72,
+      q_health_coherence_w: null,
+      q_health_separation_w: null,
+      q_health_weights: null,
+      q_health_total_members: null,
+      q_health_cluster_count: null,
       total_clusters: 5,
       nodes: { active: 5, candidate: 1, mature: 0, template: 0, archived: 0, max_depth: 2, leaf_count: 4 },
       last_warm_path: null,
@@ -238,6 +250,12 @@ describe('StatusBar', () => {
       q_separation: 0.6,
       q_coverage: 0.5,
       q_dbcv: 0.4,
+      q_health: 0.78,
+      q_health_coherence_w: null,
+      q_health_separation_w: null,
+      q_health_weights: null,
+      q_health_total_members: null,
+      q_health_cluster_count: null,
       total_clusters: 5,
       nodes: { active: 5, candidate: 1, mature: 0, template: 0, archived: 0, max_depth: 2, leaf_count: 4 },
       last_warm_path: null,
@@ -267,6 +285,12 @@ describe('StatusBar', () => {
       q_separation: 0.6,
       q_coverage: 0.5,
       q_dbcv: 0.4,
+      q_health: 0.72,
+      q_health_coherence_w: null,
+      q_health_separation_w: null,
+      q_health_weights: null,
+      q_health_total_members: null,
+      q_health_cluster_count: null,
       total_clusters: 5,
       nodes: { active: 5, candidate: 1, mature: 0, template: 0, archived: 0, max_depth: 2, leaf_count: 4 },
       last_warm_path: null,
@@ -283,8 +307,8 @@ describe('StatusBar', () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     render(StatusBar);
     await vi.waitFor(() => {
-      // Q value renders (may appear in sparkline SVG title too, so use getAllByText)
-      expect(screen.getAllByText('0.80').length).toBeGreaterThanOrEqual(1);
+      // Q value renders (q_health=0.72 displayed as 0.72)
+      expect(screen.getAllByText('0.72').length).toBeGreaterThanOrEqual(1);
     });
     // With only 2 data points, no trend-based headline like "getting better"
     expect(screen.queryByText(/getting better|looking great/i)).not.toBeInTheDocument();

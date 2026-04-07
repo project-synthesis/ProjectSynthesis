@@ -104,6 +104,12 @@ class ClusterStats(BaseModel):
     q_separation: float | None = None
     q_coverage: float | None = None
     q_dbcv: float | None = None
+    q_health: float | None = None
+    q_health_coherence_w: float | None = None
+    q_health_separation_w: float | None = None
+    q_health_weights: dict | None = None
+    q_health_total_members: int | None = None
+    q_health_cluster_count: int | None = None
     total_clusters: int = 0
     nodes: ClusterNodeCounts = ClusterNodeCounts()
     last_warm_path: str | None = None

@@ -324,16 +324,16 @@
         <div class="health-panel">
           <div class="health-title">TAXONOMY HEALTH</div>
           <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.q_system}>
-            <span class="metric-label">Q_system</span>
-            <span class="metric-value" style="color: {qHealthColor(stats.q_system)}">{stats.q_system?.toFixed(3) ?? '—'}</span>
+            <span class="metric-label">Q_health</span>
+            <span class="metric-value" style="color: {qHealthColor(stats.q_health ?? stats.q_system)}">{(stats.q_health ?? stats.q_system)?.toFixed(3) ?? '—'}</span>
           </div>
           <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.coherence}>
             <span class="metric-label">Coherence</span>
-            <span class="metric-value">{stats.q_coherence?.toFixed(3) ?? '—'}</span>
+            <span class="metric-value">{(stats.q_health_coherence_w ?? stats.q_coherence)?.toFixed(3) ?? '—'}</span>
           </div>
           <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.separation}>
             <span class="metric-label">Separation</span>
-            <span class="metric-value">{stats.q_separation?.toFixed(3) ?? '—'}</span>
+            <span class="metric-value">{(stats.q_health_separation_w ?? stats.q_separation)?.toFixed(3) ?? '—'}</span>
           </div>
           {#if stats.q_sparkline && stats.q_sparkline.length >= 2}
             <div class="health-sparkline">

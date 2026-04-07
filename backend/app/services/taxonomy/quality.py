@@ -49,6 +49,7 @@ class NodeMetrics:
     state: str  # 'candidate' | 'active' | 'mature' | 'template' | 'archived' | 'domain'
     # Q-contributing states: candidate, active, mature, template
     # Excluded from Q computation: domain, archived
+    member_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,111 @@ def compute_q_system(
         raw /= total_weight
 
     return max(0.0, min(1.0, raw))
+
+
+@dataclass(frozen=True)
+class QHealthResult:
+    """Member-weighted taxonomy health metric breakdown.
+
+    Unlike Q_system (arithmetic mean across clusters), q_health weights
+    each cluster's coherence and separation by its member_count, so a
+    30-member cluster matters 30x more than a singleton.
+    """
+
+    q_health: float
+    coherence_weighted: float
+    separation_weighted: float
+    coverage: float
+    dbcv: float
+    weights: dict[str, float]
+    total_members: int
+    cluster_count: int
+
+
+def compute_q_health(
+    nodes: list[NodeMetrics],
+    weights: QWeights,
+    coverage: float = 1.0,
+    dbcv: float = 0.0,
+) -> QHealthResult:
+    """Compute member-weighted system health score.
+
+    Each cluster's coherence and separation are weighted by its member_count.
+    A 30-member cluster contributes 30x more than a singleton. This produces
+    a metric that reflects what users actually experience — the quality of
+    the clusters where their prompts live.
+
+    Falls back to equal weighting (identical to compute_q_system) when all
+    clusters have member_count <= 1 or total_members == 0.
+    """
+    active = [n for n in nodes if n.state not in ("domain", "archived")]
+    if not active:
+        return QHealthResult(
+            q_health=0.0, coherence_weighted=0.0, separation_weighted=0.0,
+            coverage=coverage, dbcv=dbcv,
+            weights={"w_c": weights.w_c, "w_s": weights.w_s, "w_v": weights.w_v, "w_d": weights.w_d},
+            total_members=0, cluster_count=0,
+        )
+
+    total_members = sum(max(n.member_count, 0) for n in active)
+
+    # Fallback: if all clusters have 0 members, use equal weighting
+    if total_members == 0:
+        total_members = len(active)
+        effective_weights = [1 for _ in active]
+    else:
+        effective_weights = [max(n.member_count, 0) for n in active]
+
+    # Member-weighted means (only finite values)
+    coh_sum = 0.0
+    sep_sum = 0.0
+    weight_sum = 0
+    for n, w in zip(active, effective_weights):
+        if math.isfinite(n.coherence):
+            coh_sum += n.coherence * w
+        if math.isfinite(n.separation):
+            sep_sum += n.separation * w
+        weight_sum += w
+
+    if weight_sum == 0:
+        weight_sum = 1  # prevent division by zero
+
+    mean_c = max(0.0, min(1.0, coh_sum / weight_sum))
+    mean_s = max(0.0, min(1.0, sep_sum / weight_sum))
+    cov = max(0.0, min(1.0, coverage))
+    dbcv_clamped = max(0.0, min(1.0, dbcv))
+
+    raw = (
+        weights.w_c * mean_c
+        + weights.w_s * mean_s
+        + weights.w_v * cov
+        + weights.w_d * dbcv_clamped
+    )
+
+    # Defensive weight normalization (same as compute_q_system)
+    total_weight = weights.w_c + weights.w_s + weights.w_v + weights.w_d
+    if total_weight < 1e-9:
+        raw = 0.0
+    elif abs(total_weight - 1.0) > 1e-6:
+        raw /= total_weight
+
+    q = max(0.0, min(1.0, raw))
+
+    return QHealthResult(
+        q_health=round(q, 4),
+        coherence_weighted=round(mean_c, 4),
+        separation_weighted=round(mean_s, 4),
+        coverage=round(cov, 4),
+        dbcv=round(dbcv_clamped, 4),
+        weights={
+            "w_c": round(weights.w_c, 4),
+            "w_s": round(weights.w_s, 4),
+            "w_v": round(weights.w_v, 4),
+            "w_d": round(weights.w_d, 4),
+        },
+        total_members=total_members,
+        cluster_count=len(active),
+    )
 
 
 def adaptive_threshold(

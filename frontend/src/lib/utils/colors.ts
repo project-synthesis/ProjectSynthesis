@@ -30,12 +30,12 @@ export function taxonomyColor(color: string | null | undefined): string {
   return domainStore.colorFor(color);
 }
 
-/** Q_system health color for StatusBar badge. */
-export function qHealthColor(qSystem: number | null): string {
-  if (qSystem == null) return 'var(--color-text-dim)';
-  if (qSystem >= 0.8) return 'var(--color-neon-green)';
-  if (qSystem >= 0.6) return 'var(--color-neon-cyan)';
-  if (qSystem >= 0.4) return 'var(--color-neon-yellow)';
+/** Q_health color for StatusBar badge (member-weighted scale). */
+export function qHealthColor(q: number | null): string {
+  if (q == null) return 'var(--color-text-dim)';
+  if (q >= 0.70) return 'var(--color-neon-green)';
+  if (q >= 0.50) return 'var(--color-neon-cyan)';
+  if (q >= 0.35) return 'var(--color-neon-yellow)';
   return 'var(--color-neon-red)';
 }
 
