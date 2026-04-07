@@ -29,7 +29,12 @@ Analyze the prompt above and determine:
    A prompt can mention APIs, services, and data flow while being primarily about the database — classify by the **primary concern**, not by every keyword present.
 4. **Weaknesses** — List specific, actionable problems. Be concrete: "no output format specified" not "could be improved."
 5. **Strengths** — What does this prompt already do well? Even weak prompts have strengths.
-6. **Strategy** — Select the single best strategy from the available list above. If unsure, select "auto."
+6. **Strategy** — Select the single best strategy from the available list above. Always commit to a specific strategy — "auto" should be a last resort, not a default. Match the strategy to the task type:
+   - **coding/system** → meta-prompting (task framing, constraints) or structured-output (when output format matters)
+   - **analysis/debugging** → meta-prompting (self-check, negative constraints) — NOT chain-of-thought (don't prescribe reasoning steps for expert executors)
+   - **writing** → role-playing (persona, tone, audience)
+   - **data** → structured-output (schemas, formats)
+   - **creative** → role-playing or few-shot (examples of desired style)
 7. **Rationale** — Explain in 1-2 sentences why this strategy fits.
 8. **Confidence** — How confident are you? 0.0 = pure guess, 1.0 = certain. Below 0.7 triggers automatic fallback to "auto" strategy.
 

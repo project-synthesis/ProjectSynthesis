@@ -175,6 +175,7 @@ async def run_single_prompt(
             strategy_override=None,
             trace_id=trace_id,
             data_recommendation=None,
+            task_type=analysis.task_type,
         )
         strategy_instructions = strategy_loader.load(effective_strategy)
         analysis_summary = (

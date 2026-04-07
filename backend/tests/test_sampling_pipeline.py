@@ -461,8 +461,9 @@ async def test_confidence_gate_overrides_strategy():
             None,  # codebase_guidance
         )
 
-    # Confidence 0.5 < CONFIDENCE_GATE 0.7 → strategy should be overridden to "auto"
-    assert result["strategy_used"] == "auto"
+    # Confidence 0.5 < CONFIDENCE_GATE 0.7 → strategy overridden from analyzer pick.
+    # "auto" resolves to a task-type-appropriate strategy (writing → role-playing).
+    assert result["strategy_used"] != "chain-of-thought"  # analyzer's pick was overridden
 
 
 async def test_semantic_check_reduces_confidence():
@@ -530,8 +531,9 @@ async def test_semantic_check_reduces_confidence():
             None,  # codebase_guidance
         )
 
-    # Semantic check drops 0.8 → 0.6, below CONFIDENCE_GATE 0.7 → auto
-    assert result["strategy_used"] == "auto"
+    # Semantic check drops 0.8 → 0.6, below CONFIDENCE_GATE 0.7 → overrides
+    # analyzer's "chain-of-thought" pick. Auto resolves to task-type default.
+    assert result["strategy_used"] != "chain-of-thought"
 
 
 async def test_strategy_override_bypasses_confidence_gate():

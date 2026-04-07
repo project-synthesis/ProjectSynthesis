@@ -764,6 +764,7 @@ async def run_sampling_pipeline(
         strategy_override=strategy_override,
         trace_id=trace_id,
         data_recommendation=data_recommendation,
+        task_type=analysis.task_type,
     )
 
     # ------------------------------------------------------------------

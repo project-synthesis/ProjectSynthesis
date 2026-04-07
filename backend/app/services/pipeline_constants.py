@@ -381,6 +381,7 @@ def resolve_effective_strategy(
     trace_id: str,
     *,
     data_recommendation: StrategyRecommendation | None = None,
+    task_type: str | None = None,
 ) -> str:
     """Post-analysis strategy resolution chain.
 
@@ -391,6 +392,8 @@ def resolve_effective_strategy(
          confidence is below the gate and data has strong signal.
       4. **Confidence gate** — override when analyzer confidence is low.
       5. **Explicit override** — user's explicit choice always wins.
+      6. **Auto resolution** — resolve "auto" to a task-type-appropriate
+         named strategy so the optimizer always gets concrete techniques.
 
     Both internal and sampling pipelines call this to ensure identical
     decision logic.
@@ -447,6 +450,27 @@ def resolve_effective_strategy(
     # 5. Explicit override always wins (final)
     if strategy_override:
         effective = strategy_override
+
+    # 6. Auto resolution: "auto" should never reach the optimizer.
+    # Resolve it to a task-type-appropriate named strategy so the
+    # optimizer always gets concrete technique guidance.
+    if effective == "auto" and task_type:
+        _AUTO_TASK_MAP: dict[str, str] = {
+            "coding": "meta-prompting",
+            "analysis": "meta-prompting",
+            "writing": "role-playing",
+            "creative": "role-playing",
+            "data": "structured-output",
+            "system": "meta-prompting",
+            "general": "meta-prompting",
+        }
+        resolved = _AUTO_TASK_MAP.get(task_type, "meta-prompting")
+        if resolved in available and resolved not in blocked_strategies:
+            logger.info(
+                "Auto→%s resolution (task_type=%s). trace_id=%s",
+                resolved, task_type, trace_id,
+            )
+            effective = resolved
 
     return effective
 
