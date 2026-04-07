@@ -46,7 +46,10 @@ from app.services.taxonomy._constants import (
     DISSOLVE_MIN_AGE_HOURS,
     FORCED_SPLIT_COHERENCE_FLOOR,
     FORCED_SPLIT_MIN_MEMBERS,
+    LABEL_COHERENCE_SPLIT_SIGNAL,
     MEGA_CLUSTER_MEMBER_FLOOR,
+    MERGE_BACK_GRACE_MINUTES,
+    SPLIT_COHERENCE_EXEMPT,
     SPLIT_COHERENCE_FLOOR,
     SPLIT_CONTENT_HASH_MAX_RETRIES,
     SPLIT_MIN_MEMBERS,
@@ -73,6 +76,142 @@ if TYPE_CHECKING:
     from app.services.taxonomy.engine import TaxonomyEngine
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Domain-level split block recording
+# ---------------------------------------------------------------------------
+
+
+async def _record_domain_split_block(
+    db: AsyncSession,
+    cluster_domain: str,
+    content_hash: str,
+    label: str,
+    source: str,
+) -> None:
+    """Record a content hash in the parent domain node's split_blocked_hashes ring buffer.
+
+    This persists split failure identity at the domain level, surviving across
+    cluster ID changes (the cross-ID identity anchor for Groundhog Day prevention).
+    """
+    from app.services.taxonomy._constants import (
+        DOMAIN_SPLIT_HASH_MAX_ENTRIES,
+        DOMAIN_SPLIT_HASH_TTL_HOURS,
+    )
+
+    if not cluster_domain:
+        return
+
+    dn_q = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            PromptCluster.label == cluster_domain,
+        )
+    )
+    domain_node = dn_q.scalar_one_or_none()
+    if not domain_node:
+        return
+
+    meta = read_meta(domain_node.cluster_metadata)
+    blocked: list[dict[str, str]] = list(meta.get("split_blocked_hashes", []))
+
+    # Deduplicate: don't add the same hash twice
+    if any(e.get("hash") == content_hash for e in blocked):
+        return
+
+    # Add new entry
+    blocked.append({
+        "hash": content_hash,
+        "ts": _utcnow().isoformat(),
+        "label": label,
+    })
+
+    # Prune expired + enforce max entries
+    ttl_cutoff = (
+        _utcnow() - timedelta(hours=DOMAIN_SPLIT_HASH_TTL_HOURS)
+    ).isoformat()
+    blocked = [e for e in blocked if e.get("ts", "") >= ttl_cutoff]
+    if len(blocked) > DOMAIN_SPLIT_HASH_MAX_ENTRIES:
+        blocked = blocked[-DOMAIN_SPLIT_HASH_MAX_ENTRIES:]
+
+    domain_node.cluster_metadata = write_meta(
+        domain_node.cluster_metadata,
+        split_blocked_hashes=blocked,
+    )
+
+    try:
+        get_event_logger().log_decision(
+            path="warm", op="split", decision="domain_hash_recorded",
+            context={
+                "hash": content_hash,
+                "domain": cluster_domain,
+                "label": label,
+                "source": source,
+                "buffer_size": len(blocked),
+            },
+        )
+    except RuntimeError:
+        pass
+
+    logger.info(
+        "Recorded domain split block: domain='%s' hash=%s label='%s' source=%s",
+        cluster_domain, content_hash, label, source,
+    )
+
+
+async def _detect_merge_back(
+    db: AsyncSession,
+    loser_merge_until: str,
+    merged: "PromptCluster",
+    loser_id: str,
+) -> None:
+    """If loser had recent merge protection, record the winner's content hash at domain level.
+
+    Evidence of a futile split: child created by split, protection expired, child merged back.
+    Called AFTER attempt_merge() succeeds with loser metadata read BEFORE the merge.
+    """
+    if not loser_merge_until:
+        return
+
+    try:
+        _prot_until = datetime.fromisoformat(loser_merge_until)
+        _now_mb = _utcnow()
+        _grace = timedelta(minutes=MERGE_BACK_GRACE_MINUTES)
+        if _now_mb > _prot_until + _grace:
+            return  # protection expired too long ago — not a merge-back
+
+        # Compute winner's content hash for domain block
+        _winner_opts_q = await db.execute(
+            select(Optimization.id)
+            .where(Optimization.cluster_id == merged.id)
+            .order_by(Optimization.id)
+        )
+        _winner_opt_ids = sorted([r[0] for r in _winner_opts_q.all()])
+        _winner_hash = hashlib.sha256(
+            json.dumps(_winner_opt_ids).encode()
+        ).hexdigest()[:16]
+        await _record_domain_split_block(
+            db, merged.domain or "general",
+            _winner_hash, merged.label or "?",
+            source="merge_back_detected",
+        )
+        try:
+            get_event_logger().log_decision(
+                path="warm", op="merge", decision="merge_back_detected",
+                cluster_id=merged.id,
+                context={
+                    "loser_id": loser_id,
+                    "winner_id": merged.id,
+                    "domain": merged.domain,
+                    "hash_recorded": _winner_hash,
+                },
+            )
+        except RuntimeError:
+            pass
+    except Exception as _mb_exc:
+        logger.debug("Merge-back detection failed (non-fatal): %s", _mb_exc)
+
 
 # ---------------------------------------------------------------------------
 # Result dataclasses
@@ -593,6 +732,34 @@ async def phase_reconcile(
                 node.cluster_metadata = write_meta(
                     node.cluster_metadata, output_coherence=1.0,
                 )
+
+        # Intent label coherence: supplementary split signal (Tier 5b)
+        try:
+            from app.services.taxonomy.quality import compute_intent_label_coherence
+
+            label_q = await db.execute(
+                select(
+                    Optimization.cluster_id,
+                    Optimization.intent_label,
+                ).where(
+                    Optimization.cluster_id.isnot(None),
+                    Optimization.intent_label.isnot(None),
+                )
+            )
+            labels_by_cluster: dict[str, list[str]] = {}
+            for cid, il in label_q.all():
+                labels_by_cluster.setdefault(cid, []).append(il)
+
+            for node in live_nodes:
+                labels = labels_by_cluster.get(node.id, [])
+                if len(labels) >= 2:
+                    ilc = compute_intent_label_coherence(labels)
+                    node.cluster_metadata = write_meta(
+                        node.cluster_metadata,
+                        intent_label_coherence=round(ilc, 4),
+                    )
+        except Exception as ilc_exc:
+            logger.debug("Intent label coherence computation failed (non-fatal): %s", ilc_exc)
 
         # Reconcile avg_score and scored_count from actual member data.
         score_q = await db.execute(
@@ -1134,6 +1301,24 @@ async def phase_split_emerge(
             )
             coherence = node.coherence if node.coherence is not None else 1.0
 
+        # Stability floor: clusters above this coherence are exempt from splitting.
+        # Prevents the dead zone (0.38-0.50) where clusters oscillate between
+        # split and merge indefinitely (Groundhog Day loop).
+        if coherence >= SPLIT_COHERENCE_EXEMPT and not is_forced_split_candidate:
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="split", decision="stability_floor_skip",
+                    cluster_id=node.id,
+                    context={
+                        "coherence": round(coherence, 4),
+                        "floor": SPLIT_COHERENCE_EXEMPT,
+                        "label": node.label,
+                    },
+                )
+            except RuntimeError:
+                pass
+            continue
+
         # Scale: +0.05 per doubling above 6 members
         dynamic_floor = SPLIT_COHERENCE_FLOOR + max(
             0, math.log2(max(member_count, 6) / 6)
@@ -1152,6 +1337,28 @@ async def phase_split_emerge(
                 "Output coherence split signal for '%s': raw=%.3f, output=%.3f — lowered threshold to %.3f",
                 node.label, coherence, output_coh, dynamic_floor,
             )
+
+        # Intent label coherence split signal (Tier 5b): if labels are
+        # highly incoherent, lower the split threshold further. This is
+        # never the sole reason for a split — only supplements embedding/output
+        # coherence signals.
+        if coherence >= dynamic_floor:
+            label_coh = read_meta(node.cluster_metadata).get("intent_label_coherence")
+            if label_coh is not None and label_coh < LABEL_COHERENCE_SPLIT_SIGNAL:
+                # Labels are highly incoherent — lower the threshold by up to 0.08
+                label_adjustment = min((LABEL_COHERENCE_SPLIT_SIGNAL - label_coh) * 0.5, 0.08)
+                adjusted = dynamic_floor - label_adjustment
+                if coherence < adjusted:
+                    logger.info(
+                        "Label coherence split signal for '%s': coh=%.3f, label_coh=%.3f — "
+                        "lowered threshold from %.3f to %.3f",
+                        node.label, coherence, label_coh, dynamic_floor, adjusted,
+                    )
+                    dynamic_floor = adjusted
+                else:
+                    continue  # coherence still above adjusted threshold
+            else:
+                continue  # no label coherence signal or labels are coherent
 
         if coherence >= dynamic_floor:
             continue
@@ -1213,6 +1420,63 @@ async def phase_split_emerge(
                 pass
             continue
 
+        # Domain-level hash check: if this member set was recently blocked at the
+        # domain level (from a prior Groundhog Day cycle under a different cluster ID),
+        # skip the split. The domain node survives across cluster ID changes.
+        try:
+            from app.services.taxonomy._constants import DOMAIN_SPLIT_HASH_TTL_HOURS
+            _domain_node = None
+            if node.domain:
+                _dn_q = await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.state == "domain",
+                        PromptCluster.label == node.domain,
+                    )
+                )
+                _domain_node = _dn_q.scalar_one_or_none()
+            if _domain_node:
+                _dn_meta = read_meta(_domain_node.cluster_metadata)
+                _blocked = _dn_meta.get("split_blocked_hashes", [])
+                _ttl_cutoff = (
+                    _utcnow() - timedelta(hours=DOMAIN_SPLIT_HASH_TTL_HOURS)
+                ).isoformat()
+                # Prune expired entries (write back only if changed)
+                _active = [e for e in _blocked if e.get("ts", "") >= _ttl_cutoff]
+                if len(_active) != len(_blocked):
+                    _domain_node.cluster_metadata = write_meta(
+                        _domain_node.cluster_metadata,
+                        split_blocked_hashes=_active,
+                    )
+                    logger.debug(
+                        "Pruned %d expired split hashes from domain '%s'",
+                        len(_blocked) - len(_active), _domain_node.label,
+                    )
+                # Check if current hash is blocked
+                if any(e.get("hash") == _current_content_hash for e in _active):
+                    _blocked_entry = next(
+                        e for e in _active if e.get("hash") == _current_content_hash
+                    )
+                    logger.info(
+                        "Split skipped (domain-level hash block): '%s' — hash=%s blocked since %s",
+                        node.label, _current_content_hash, _blocked_entry.get("ts", "?"),
+                    )
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="split", decision="domain_hash_blocked",
+                            cluster_id=node.id,
+                            context={
+                                "hash": _current_content_hash,
+                                "domain": _domain_node.label,
+                                "label": node.label,
+                                "blocked_since": _blocked_entry.get("ts", ""),
+                            },
+                        )
+                    except RuntimeError:
+                        pass
+                    continue
+        except Exception as _dh_exc:
+            logger.debug("Domain hash check failed (non-fatal): %s", _dh_exc)
+
         ops_attempted += 1
         split_attempted_ids.append(node.id)
         split_content_hashes[node.id] = _current_content_hash
@@ -1253,6 +1517,16 @@ async def phase_split_emerge(
                         split_attempt_member_count=member_count,
                         split_content_hash=_current_content_hash,
                     )
+                    # Record at domain level if failures reach 3
+                    if split_failures + 1 >= 3:
+                        try:
+                            await _record_domain_split_block(
+                                db, node.domain or "general",
+                                _current_content_hash, node.label or "?",
+                                source="split_failures_reached_3",
+                            )
+                        except Exception:
+                            pass
                     logger.info(
                         "Leaf split failed for '%s' (attempt %d/3)",
                         node.label, split_failures + 1,
@@ -1581,6 +1855,10 @@ async def phase_merge(
                 ops_attempted += 1
                 from app.services.taxonomy.lifecycle import attempt_merge
 
+                # Pre-read merge protection for both candidates (before attempt_merge)
+                _meta_a = read_meta(merge_node_a.cluster_metadata)
+                _meta_b = read_meta(merge_node_b.cluster_metadata)
+
                 merged = await attempt_merge(
                     db=db,
                     node_a=merge_node_a,
@@ -1614,6 +1892,11 @@ async def phase_merge(
                         )
                     except RuntimeError:
                         pass
+                    # Merge-back detection
+                    _loser_merge_until = (
+                        _meta_b if merged.id == merge_node_a.id else _meta_a
+                    ).get("merge_protected_until", "")
+                    await _detect_merge_back(db, _loser_merge_until, merged, loser.id)
                     # Update embedding index: upsert winner, remove loser
                     winner_centroid = np.frombuffer(
                         merged.centroid_embedding, dtype=np.float32
@@ -1728,6 +2011,8 @@ async def phase_merge(
                         adaptive_merge_threshold(combined_mc),
                     )
                     if sim >= label_merge_sanity:
+                        # Pre-read loser metadata before merge
+                        _loser_merge_until_lbl = read_meta(loser.cluster_metadata).get("merge_protected_until", "")
                         merged = await attempt_merge(
                             db,
                             survivor,
@@ -1742,6 +2027,7 @@ async def phase_merge(
                                 "duplicate (sim=%.2f, domain=%s)",
                                 label, sim, domain,
                             )
+                            await _detect_merge_back(db, _loser_merge_until_lbl, merged, loser.id)
                             winner_centroid = np.frombuffer(
                                 merged.centroid_embedding, dtype=np.float32
                             )
@@ -1834,6 +2120,8 @@ async def phase_merge(
                                 else nj
                             )
                             small = nj if big is ni else ni
+                            # Pre-read loser metadata before merge
+                            _loser_merge_until_emb = read_meta(small.cluster_metadata).get("merge_protected_until", "")
                             merged = await attempt_merge(
                                 db,
                                 big,
@@ -1848,6 +2136,7 @@ async def phase_merge(
                                     "(sim=%.2f, domain=%s)",
                                     big.label, small.label, sim, domain,
                                 )
+                                await _detect_merge_back(db, _loser_merge_until_emb, merged, small.id)
                                 winner_centroid = np.frombuffer(
                                     merged.centroid_embedding,
                                     dtype=np.float32,
@@ -2132,6 +2421,7 @@ async def phase_refresh(
                     provider=engine._provider,
                     member_texts=sc[1],
                     model=settings.MODEL_HAIKU,
+                    current_label=sc[0].label,  # continuity anchor
                 )
                 for sc in stale_clusters
             ]
