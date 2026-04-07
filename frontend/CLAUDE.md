@@ -120,6 +120,8 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | `routing_state_changed` | Routing store update, tier availability toasts |
 | `domain_created` | Domain store invalidation |
 | `seed_batch_progress` | Dispatched as `seed-batch-progress` DOM CustomEvent for SeedModal progress bar |
+| `preferences_changed` | Preferences store reload |
+| `agent_changed` | Seed agent list refresh (hot-reload on file change) |
 
 Fixed 60s health polling for StatusBar display only — no routing decisions from frontend.
 
