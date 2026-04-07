@@ -82,6 +82,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.debug("Strategy affinity cleanup skipped: %s", exc)
 
+    # Startup garbage collection — clean dead records from the DB
+    try:
+        from app.database import async_session_factory
+        from app.services.gc import run_startup_gc
+        async with async_session_factory() as db:
+            await run_startup_gc(db)
+    except Exception as exc:
+        logger.debug("Startup GC skipped: %s", exc)
+
     # Start strategy file watcher
     watcher_task = asyncio.create_task(
         watch_strategy_files(PROMPTS_DIR / "strategies")
