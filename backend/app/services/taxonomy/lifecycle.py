@@ -307,10 +307,22 @@ async def attempt_merge(
             .where(Optimization.cluster_id == loser.id)
             .values(cluster_id=survivor.id)
         )
+
+        # Atomically migrate OptimizationPattern join records to survivor.
+        # Without this, OP records become stale (pointing to archived loser),
+        # causing prompts to vanish from cluster detail views.
+        from app.models import OptimizationPattern
+
+        op_result = await db.execute(
+            update(OptimizationPattern)
+            .where(OptimizationPattern.cluster_id == loser.id)
+            .values(cluster_id=survivor.id)
+        )
+
         if opt_result.rowcount:
             logger.info(
-                "merge: reassigned %d optimizations from '%s' to '%s'",
-                opt_result.rowcount, loser.label, survivor.label,
+                "merge: reassigned %d optimizations + %d OP records from '%s' to '%s'",
+                opt_result.rowcount, op_result.rowcount, loser.label, survivor.label,
             )
 
         # Move loser's MetaPatterns to survivor (deduplicate via embedding similarity).
@@ -570,6 +582,13 @@ async def attempt_retire(
         opt_result = await db.execute(
             sa_update(Optimization)
             .where(Optimization.cluster_id == node.id)
+            .values(cluster_id=target_sibling.id)
+        )
+        # Atomically migrate OP records (same fix as attempt_merge)
+        from app.models import OptimizationPattern
+        await db.execute(
+            sa_update(OptimizationPattern)
+            .where(OptimizationPattern.cluster_id == node.id)
             .values(cluster_id=target_sibling.id)
         )
         if opt_result.rowcount:

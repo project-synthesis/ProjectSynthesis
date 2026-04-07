@@ -292,6 +292,19 @@ class TaxonomyEngine:
                     )
             opt.cluster_id = cluster.id
 
+            # Update stale OP records to match new cluster assignment.
+            # Prevents OP↔Optimization.cluster_id mismatch after reassignment.
+            if old_cluster_id and old_cluster_id != cluster.id:
+                from sqlalchemy import update as sa_update
+                await db.execute(
+                    sa_update(OptimizationPattern)
+                    .where(
+                        OptimizationPattern.optimization_id == opt.id,
+                        OptimizationPattern.relationship == "source",
+                    )
+                    .values(cluster_id=cluster.id)
+                )
+
             # Snapshot contextual phase weights — derived from task type + cluster
             # learning, NOT global preferences.  Different task types produce
             # different profiles, breaking the bootstrap fixed point so that
