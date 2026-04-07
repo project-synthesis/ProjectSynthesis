@@ -26,19 +26,20 @@ export interface SceneNode {
 
 /** Opacity by lifecycle state and active filter.
  *  - null filter ("all" tab): candidates at 40%, everything else 100%
- *  - "archived" filter: treat as "all" — archived nodes are excluded from the
- *    3D graph (no UMAP positions), so dimming everything to highlight nothing
- *    is pointless. Show the full graph instead.
- *  - specific filter: matching nodes 100%, domains 50%, rest 25% (ghosted)
+ *  - filter with matches: matching nodes 100%, domains 50%, rest 25% (ghosted)
+ *  - filter with NO matches: same as "all" — dimming everything to highlight
+ *    nothing is pointless UX. The navigator list already says "0 clusters".
+ *
+ * The `hasMatches` param indicates whether any visible (non-archived) node
+ * in the current scene matches the filter. Computed once in buildSceneData
+ * and passed through to avoid per-node recomputation.
  */
-function stateOpacity(state: string, stateFilter: string | null = null): number {
-  if (stateFilter === null || stateFilter === 'archived') {
-    // "all" or "archived" tab — candidates translucent, everything else full.
-    // Archived nodes are filtered out of the graph in buildSceneData(), so
-    // there's nothing to highlight — show the normal view instead of ghosting.
+function stateOpacity(state: string, stateFilter: string | null, hasMatches: boolean): number {
+  if (stateFilter === null || !hasMatches) {
+    // "all" tab or empty filter — candidates translucent, everything else full.
     return state === 'candidate' ? 0.4 : 1.0;
   }
-  // Filtered tab — matching nodes glow, rest ghosted
+  // Filtered tab with matches — matching nodes glow, rest ghosted
   if (state === stateFilter) return 1.0;
   if (state === 'domain') return 0.5;
   return 0.25;
@@ -104,6 +105,13 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
   // states (including archived) for the navigator; topology filters here.
   const visibleNodes = flatNodes.filter(n => n.state !== 'archived');
 
+  // Check if any visible node matches the current state filter.
+  // When no matches exist (empty tab), stateOpacity falls back to "all" mode
+  // so the graph stays readable instead of ghosting everything.
+  const effectiveFilter = stateFilter ?? null;
+  const hasFilterMatches = effectiveFilter === null
+    || visibleNodes.some(n => n.state === effectiveFilter);
+
   // Pre-compute aggregate member count per domain node (sum of children's members).
   // Domain nodes' own member_count is child-cluster count, not optimization count,
   // so a domain with 1 child cluster of 25 members would render tiny without this.
@@ -142,7 +150,7 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
     // Final size: apply state multiplier then clamp to prevent domain
     // nodes from overwhelming the scene (volume scales as r³).
     const finalSize = Math.min(MAX_NODE_SIZE, size * stateSizeMultiplier(node.state));
-    const nodeOpacity = stateOpacity(node.state, stateFilter ?? null);
+    const nodeOpacity = stateOpacity(node.state, effectiveFilter, hasFilterMatches);
 
     nodes.push({
       id: node.id,
