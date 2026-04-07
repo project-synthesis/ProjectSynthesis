@@ -90,6 +90,36 @@ FORCED_SPLIT_MIN_MEMBERS = 6            # minimum members for forced spectral sp
 # Set to 6 (not 8) to close the gap with DISSOLVE_MAX_MEMBERS=5.
 # Spectral clustering works at 6 members (SPECTRAL_MIN_GROUP_SIZE=3, min k=2).
 
+# ---------------------------------------------------------------------------
+# Intent label coherence — supplementary split signal
+# ---------------------------------------------------------------------------
+# When a cluster's pairwise intent-label Jaccard overlap is below this
+# threshold, it strengthens the case for splitting (alongside embedding
+# coherence). Never used as a sole split trigger — only a secondary signal.
+LABEL_COHERENCE_SPLIT_SIGNAL = 0.15
+
+# ---------------------------------------------------------------------------
+# Groundhog Day loop prevention
+# ---------------------------------------------------------------------------
+# Embedding coherence above which clusters are exempt from splitting.
+# Addresses the dead zone (0.38-0.50) where clusters are too incoherent
+# to be stable but too coherent to split into viable children.
+SPLIT_COHERENCE_EXEMPT = 0.38
+
+# Max pairwise centroid cosine between split children before the split
+# is aborted. Children above this threshold will merge back within 1-2
+# warm cycles, making the split futile.
+SPLIT_SIBLING_SIMILARITY_CEILING = 0.75
+
+# Domain-level ring buffer of content hashes from failed/futile splits.
+# Survives across cluster ID changes (the identity anchor).
+DOMAIN_SPLIT_HASH_MAX_ENTRIES = 20
+DOMAIN_SPLIT_HASH_TTL_HOURS = 6
+
+# Grace period after merge_protected_until expires. If a cluster merges
+# back within this window of its protection expiry, it's a futile split.
+MERGE_BACK_GRACE_MINUTES = 30
+
 
 def _utcnow() -> datetime:
     """Naive UTC timestamp — matches SQLAlchemy DateTime() round-trip on SQLite.

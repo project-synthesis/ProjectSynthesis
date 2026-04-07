@@ -192,7 +192,7 @@ export const matchPattern = (prompt_text: string) =>
     body: JSON.stringify({ prompt_text }),
   });
 
-export const updateCluster = (clusterId: string, updates: { intent_label?: string; domain?: string; state?: string }) =>
+export const updateCluster = (clusterId: string, updates: { intent_label?: string; state?: string }) =>
   apiFetch<{ id: string; intent_label: string; domain: string; state: string }>(`/clusters/${encodeURIComponent(clusterId)}`, {
     method: 'PATCH',
     body: JSON.stringify(updates),

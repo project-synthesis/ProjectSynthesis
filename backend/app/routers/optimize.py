@@ -26,7 +26,7 @@ from app.services.pipeline_constants import (
 from app.services.preferences import PreferencesService
 from app.services.taxonomy import get_engine as get_taxonomy_engine
 from app.utils.sse import format_sse
-from app.utils.text_cleanup import split_prompt_and_changes, title_case_label
+from app.utils.text_cleanup import split_prompt_and_changes, title_case_label, validate_intent_label
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +241,70 @@ async def get_optimization(
             status_code=404,
             detail="Optimization not found.",
         )
+
+    cluster_id = await _get_cluster_id(db, opt.id)
+    return _serialize_optimization(opt, cluster_id=cluster_id)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/optimize/{optimization_id} — update optimization metadata
+# ---------------------------------------------------------------------------
+
+
+class OptimizationUpdateRequest(BaseModel):
+    """Partial update for an optimization record (currently intent_label only)."""
+
+    intent_label: str | None = Field(None, min_length=1, max_length=100)
+
+
+@router.patch(
+    "/optimize/{optimization_id}",
+    response_model=OptimizationDetail,
+)
+async def update_optimization(
+    optimization_id: str,
+    body: OptimizationUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> OptimizationDetail:
+    """Update an optimization's metadata (e.g., rename its intent_label).
+
+    Uses the optimization ``id`` (UUID), not ``trace_id``.
+    """
+    result = await db.execute(
+        select(Optimization).where(Optimization.id == optimization_id)
+    )
+    opt = result.scalar_one_or_none()
+    if opt is None:
+        raise HTTPException(status_code=404, detail="Optimization not found.")
+
+    changed = False
+    if body.intent_label is not None:
+        old_label = opt.intent_label
+        opt.intent_label = validate_intent_label(
+            title_case_label(body.intent_label.strip()),
+            opt.raw_prompt,
+        )[:MAX_INTENT_LABEL_LENGTH]
+        if opt.intent_label != old_label:
+            changed = True
+            logger.info(
+                "Optimization renamed: id=%s '%s' -> '%s'",
+                optimization_id, old_label, opt.intent_label,
+            )
+
+    if changed:
+        await db.commit()
+        # Publish event so SSE subscribers (Navigator, ActivityPanel) update
+        try:
+            from app.services.event_bus import EventBus
+
+            await EventBus.publish("optimization_updated", {
+                "id": opt.id,
+                "trace_id": opt.trace_id,
+                "intent_label": opt.intent_label,
+            })
+        except Exception:
+            pass  # non-critical
 
     cluster_id = await _get_cluster_id(db, opt.id)
     return _serialize_optimization(opt, cluster_id=cluster_id)
@@ -545,7 +609,10 @@ async def passthrough_save(
     opt.domain = validated_domain
     # cluster_id is set asynchronously via optimization_created event → taxonomy hot path
     opt.domain_raw = (body.domain or opt.domain_raw or "general")[:MAX_DOMAIN_RAW_LENGTH]
-    opt.intent_label = title_case_label((body.intent_label or opt.intent_label or "general")[:MAX_INTENT_LABEL_LENGTH])
+    opt.intent_label = validate_intent_label(
+        title_case_label((body.intent_label or opt.intent_label or "general")[:MAX_INTENT_LABEL_LENGTH]),
+        opt.raw_prompt,
+    )
     if optimized_scores:
         opt.score_clarity = optimized_scores["clarity"]
         opt.score_specificity = optimized_scores["specificity"]

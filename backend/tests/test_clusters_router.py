@@ -140,8 +140,14 @@ class TestClusterUpdate:
         assert cluster.label == "new_label"
 
     @pytest.mark.asyncio
-    async def test_update_cluster_domain(self, app_client, db_session):
-        """PATCH /api/clusters/{id} updates domain."""
+    async def test_update_cluster_domain_not_accepted(self, app_client, db_session):
+        """PATCH /api/clusters/{id} does not accept domain changes.
+
+        Domain reassignment is disallowed — it causes cluster fragmentation
+        via cross-domain merge prevention, wrong warm-path merges, and
+        corrupt tree topology. Domain is set automatically by the taxonomy
+        engine from optimization classification.
+        """
         cluster = PromptCluster(
             id="c2", label="test", state="active", domain="backend",
             task_type="coding", centroid_embedding=b'\x00' * 384,
@@ -149,23 +155,9 @@ class TestClusterUpdate:
         db_session.add(cluster)
         await db_session.commit()
 
+        # domain-only payload rejected (no valid field provided)
         resp = await app_client.patch("/api/clusters/c2", json={"domain": "frontend"})
-        assert resp.status_code == 200
-        assert resp.json()["domain"] == "frontend"
-
-    @pytest.mark.asyncio
-    async def test_update_cluster_domain_invalid_422(self, app_client, db_session):
-        """PATCH /api/clusters/{id} returns 422 for an unknown domain."""
-        cluster = PromptCluster(
-            id="c2b", label="test", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
-        )
-        db_session.add(cluster)
-        await db_session.commit()
-
-        resp = await app_client.patch("/api/clusters/c2b", json={"domain": "notadomain"})
         assert resp.status_code == 422
-        assert "notadomain" in resp.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_update_cluster_state(self, app_client, db_session):

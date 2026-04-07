@@ -68,6 +68,37 @@ class FewShotExample:
     overall_score: float
     similarity: float
     task_type: str
+    intent_label: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Intent label token bonus for few-shot ranking
+# ---------------------------------------------------------------------------
+
+from app.utils.text_cleanup import LABEL_STOP_WORDS
+
+
+def _intent_label_bonus(prompt_text: str, candidate_label: str) -> float:
+    """Jaccard token overlap bonus for intent-label similarity.
+
+    Returns a small additive bonus (0.0-0.10) when the raw prompt
+    shares keywords with the candidate's intent_label. Acts as a
+    tiebreaker in few-shot ranking, not a dominant signal.
+    """
+    if not candidate_label:
+        return 0.0
+    prompt_tokens = {
+        w for w in prompt_text.lower().split()[:20]
+        if w not in LABEL_STOP_WORDS and len(w) > 1
+    }
+    label_tokens = {
+        w for w in candidate_label.lower().split()
+        if w not in LABEL_STOP_WORDS and len(w) > 1
+    }
+    if not prompt_tokens or not label_tokens:
+        return 0.0
+    jaccard = len(prompt_tokens & label_tokens) / len(prompt_tokens | label_tokens)
+    return min(jaccard * 0.15, 0.10)  # cap at 0.10
 
 
 def format_injected_patterns(
@@ -405,6 +436,7 @@ async def retrieve_few_shot_examples(
                 Optimization.strategy_used,
                 Optimization.overall_score,
                 Optimization.task_type,
+                Optimization.intent_label,
                 Optimization.embedding,
                 Optimization.optimized_embedding,
             ).where(
@@ -461,6 +493,7 @@ async def retrieve_few_shot_examples(
                     overall_score=float(row.overall_score),
                     similarity=round(best_sim, 2),
                     task_type=row.task_type or "general",
+                    intent_label=row.intent_label or "",
                 )
 
                 # Dedup: keep whichever has higher combined score
@@ -472,10 +505,13 @@ async def retrieve_few_shot_examples(
             except (ValueError, TypeError):
                 continue
 
-        # Rank by max(input_sim, output_sim) * overall_score
+        # Rank by max(input_sim, output_sim) * overall_score + label overlap bonus
         ranked = sorted(
             seen.values(),
-            key=lambda t: max(t[0], t[1]) * t[2].overall_score,
+            key=lambda t: (
+                max(t[0], t[1]) * t[2].overall_score
+                + _intent_label_bonus(raw_prompt, t[2].intent_label)
+            ),
             reverse=True,
         )
         examples = [ex for _, _, ex in ranked[:max_examples]]

@@ -5,6 +5,7 @@ from app.utils.text_cleanup import (
     sanitize_optimization_result,
     split_prompt_and_changes,
     strip_meta_header,
+    validate_intent_label,
 )
 
 # ---------------------------------------------------------------------------
@@ -257,3 +258,84 @@ class TestParseDomain:
         primary, qualifier = parse_domain("DEVOPS")
         assert primary == "devops"
         assert qualifier is None
+
+
+# ---------------------------------------------------------------------------
+# validate_intent_label
+# ---------------------------------------------------------------------------
+
+
+class TestValidateIntentLabel:
+    """Tests for the intent label quality gate."""
+
+    def test_passes_good_label(self) -> None:
+        assert validate_intent_label("Design Auth API Service") == "Design Auth API Service"
+
+    def test_passes_multi_word_descriptive(self) -> None:
+        assert validate_intent_label("Refactor Database Migration") == "Refactor Database Migration"
+
+    def test_rejects_general_with_raw_prompt(self) -> None:
+        result = validate_intent_label("General", "Create a REST API for user authentication")
+        assert result != "General"
+        assert len(result.split()) >= 2
+
+    def test_rejects_general_case_insensitive(self) -> None:
+        result = validate_intent_label("general", "Build a dashboard component")
+        assert result.lower() != "general"
+
+    def test_rejects_generic_task_suffix(self) -> None:
+        result = validate_intent_label("Coding Task", "Implement OAuth2 login flow")
+        assert result != "Coding Task"
+        assert "Implement" in result or "OAuth2" in result or "Login" in result
+
+    def test_rejects_generic_optimization_suffix(self) -> None:
+        result = validate_intent_label("Writing Optimization", "Draft technical blog post about caching")
+        assert result != "Writing Optimization"
+
+    def test_rejects_conversational_start_i(self) -> None:
+        result = validate_intent_label(
+            "I Need Help With My",
+            "I need help with my React component rendering",
+        )
+        assert not result.lower().startswith("i ")
+
+    def test_rejects_conversational_start_please(self) -> None:
+        result = validate_intent_label(
+            "Please Help Me Fix",
+            "Please help me fix the authentication bug",
+        )
+        assert not result.lower().startswith("please ")
+
+    def test_rejects_conversational_start_can(self) -> None:
+        result = validate_intent_label(
+            "Can You Write A",
+            "Can you write a Python script for data cleaning",
+        )
+        assert not result.lower().startswith("can ")
+
+    def test_rejects_single_word(self) -> None:
+        result = validate_intent_label("Coding", "Build a responsive landing page")
+        assert result != "Coding"
+        assert len(result.split()) >= 2
+
+    def test_fallback_without_raw_prompt_returns_original(self) -> None:
+        # No raw_prompt means no improvement possible — return as-is
+        assert validate_intent_label("General", None) == "General"
+        assert validate_intent_label("Coding Task") == "Coding Task"
+
+    def test_empty_label_defaults(self) -> None:
+        result = validate_intent_label("", "Create microservice for payments")
+        # Should try to extract from raw_prompt rather than return empty
+        assert result  # non-empty
+
+    def test_four_word_task_suffix_passes(self) -> None:
+        # 4+ words with " task" suffix should pass (specific enough)
+        assert validate_intent_label("REST API Backend Task") == "REST API Backend Task"
+
+    def test_four_word_optimization_suffix_passes(self) -> None:
+        assert validate_intent_label("Database Query Speed Optimization") == "Database Query Speed Optimization"
+
+    def test_preserves_acronyms_in_fallback(self) -> None:
+        result = validate_intent_label("General", "Build REST API with JWT authentication")
+        # The fallback should go through title_case_label which preserves acronyms
+        assert "REST" in result or "JWT" in result or "API" in result

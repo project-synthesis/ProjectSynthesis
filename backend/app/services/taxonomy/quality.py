@@ -249,3 +249,52 @@ def coherence_threshold(node) -> float:
     sub-topics — lower coherence is expected and correct.
     """
     return DOMAIN_COHERENCE_FLOOR if node.state == "domain" else CLUSTER_COHERENCE_FLOOR
+
+
+# ---------------------------------------------------------------------------
+# Intent label coherence — supplementary split signal (Tier 5b)
+# ---------------------------------------------------------------------------
+
+from app.utils.text_cleanup import LABEL_STOP_WORDS
+
+
+def compute_intent_label_coherence(intent_labels: list[str]) -> float:
+    """Mean pairwise Jaccard token overlap across member intent labels.
+
+    Returns a value in [0.0, 1.0]. Low values (< 0.15) suggest the cluster
+    mixes unrelated intents — useful as a supplementary split signal alongside
+    embedding coherence.
+
+    Args:
+        intent_labels: List of intent_label strings from cluster members.
+
+    Returns:
+        Mean pairwise Jaccard similarity. Returns 1.0 for 0-1 labels.
+    """
+    # Tokenize each label
+    token_sets: list[set[str]] = []
+    for label in intent_labels:
+        if not label:
+            continue
+        tokens = {
+            w for w in label.lower().split()
+            if w not in LABEL_STOP_WORDS and len(w) > 1
+        }
+        if tokens:
+            token_sets.append(tokens)
+
+    if len(token_sets) <= 1:
+        return 1.0  # trivially coherent
+
+    # Compute mean pairwise Jaccard
+    total = 0.0
+    n_pairs = 0
+    for i in range(len(token_sets)):
+        for j in range(i + 1, len(token_sets)):
+            intersection = len(token_sets[i] & token_sets[j])
+            union = len(token_sets[i] | token_sets[j])
+            if union > 0:
+                total += intersection / union
+            n_pairs += 1
+
+    return total / n_pairs if n_pairs > 0 else 1.0

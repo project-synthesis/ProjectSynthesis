@@ -276,6 +276,13 @@ export function optimizeSSE(
 export const getOptimization = (traceId: string) =>
   apiFetch<OptimizationResult>(`/optimize/${traceId}`);
 
+/** Update an optimization's metadata (e.g., rename its intent_label). Uses optimization ID (UUID). */
+export const updateOptimization = (id: string, updates: { intent_label?: string }) =>
+  apiFetch<OptimizationResult>(`/optimize/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+
 // ---- Passthrough (no-provider mode) ----
 
 export const savePassthrough = (traceId: string, optimizedPrompt: string, changesSummary?: string) =>

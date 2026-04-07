@@ -32,6 +32,7 @@ from app.services.taxonomy.event_logger import get_event_logger
 from app.services.taxonomy.quality import is_non_regressive
 from app.services.taxonomy.warm_phases import (
     PhaseResult,
+    _record_domain_split_block,
     phase_audit,
     phase_discover,
     phase_evaluate_candidates,
@@ -242,6 +243,21 @@ async def _run_speculative_phase(
                     "Persisted split_failures for %d clusters after Q-gate rejection",
                     len(phase_result.split_attempted_ids),
                 )
+                # Also record at domain level for cross-ID Groundhog Day protection
+                try:
+                    for cid in phase_result.split_attempted_ids:
+                        cluster = await meta_db.get(PromptCluster, cid)
+                        if cluster:
+                            content_hash = phase_result.split_content_hashes.get(cid, "")
+                            if content_hash:
+                                await _record_domain_split_block(
+                                    meta_db, cluster.domain or "general",
+                                    content_hash, cluster.label or "?",
+                                    source="q_gate_rejection",
+                                )
+                    await meta_db.commit()
+                except Exception as dh_exc:
+                    logger.debug("Domain hash recording on Q-gate rejection failed (non-fatal): %s", dh_exc)
         except Exception as meta_exc:
             logger.warning(
                 "Failed to persist split failure metadata (non-fatal): %s",

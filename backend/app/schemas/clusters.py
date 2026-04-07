@@ -137,7 +137,11 @@ class ReclusterResponse(BaseModel):
 
 class ClusterUpdateRequest(BaseModel):
     intent_label: str | None = None
-    domain: str | None = None
+    # domain is intentionally omitted — domain reassignment is not allowed.
+    # Incorrect domain assignment causes cluster fragmentation (cross-domain
+    # merge prevention), wrong warm-path merges, and corrupt tree topology.
+    # Domain is set automatically by the taxonomy engine from optimization
+    # classification and can only be changed via domain discovery/cold path.
     state: Literal["candidate", "active", "mature", "template", "archived", "domain"] | None = None
 
 

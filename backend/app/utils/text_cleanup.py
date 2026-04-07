@@ -16,7 +16,11 @@ __all__ = [
     "split_prompt_and_changes",
     "sanitize_optimization_result",
     "title_case_label",
+    "validate_intent_label",
+    "is_low_quality_label",
+    "extract_meaningful_words",
     "parse_domain",
+    "LABEL_STOP_WORDS",
 ]
 
 # Words that should stay uppercase (acronyms, initialisms)
@@ -44,6 +48,143 @@ def title_case_label(text: str) -> str:
         else:
             words.append(w.capitalize())
     return " ".join(words)
+
+
+# ---------------------------------------------------------------------------
+# Intent label quality gate
+# ---------------------------------------------------------------------------
+
+# Canonical stop-word set for intent label operations — shared across
+# heuristic_analyzer, pattern_injection, taxonomy quality, and this module.
+# Import as: from app.utils.text_cleanup import LABEL_STOP_WORDS
+LABEL_STOP_WORDS = frozenset({
+    # Articles & prepositions
+    "a", "an", "the", "for", "to", "of", "in", "on", "with", "and",
+    "or", "that", "this", "from", "by", "about", "some",
+    # Pronouns
+    "my", "your", "our", "it", "its", "i", "me", "we", "us", "you",
+    "he", "she", "they", "them",
+    # Auxiliaries & modals
+    "is", "are", "was", "were", "be", "been", "being",
+    "please", "can", "could", "would", "help", "need", "want", "like",
+    # Filler adverbs
+    "just", "also", "very", "really", "so", "but", "if", "how",
+    # Generic label tokens (unhelpful in labels/similarity)
+    "task", "optimization", "general",
+})
+
+_CONVERSATIONAL_STARTS = (
+    "i ", "please ", "can ", "could ", "would ", "help ",
+    "hi ", "hello ", "hey ",
+)
+
+
+def validate_intent_label(label: str, raw_prompt: str | None = None) -> str:
+    """Validate and potentially improve a generated intent label.
+
+    Catches low-quality labels produced by heuristic fallbacks or weak
+    LLM outputs and attempts to derive a better label from the raw prompt.
+
+    Rejection criteria:
+    - Exact match to "General"/"general"
+    - Ends with " optimization" or " task" AND has <=3 words (too generic)
+    - Starts with conversational filler ("I ", "Please ", "Can ", etc.)
+    - Fewer than 2 words
+
+    On rejection, extracts first 6 meaningful words from raw_prompt as
+    fallback. Returns original label if no improvement possible.
+
+    Pure function — no I/O, no async.
+    """
+    stripped = label.strip()
+    if not stripped:
+        stripped = "general"
+
+    if not is_low_quality_label(stripped):
+        return stripped
+
+    # Attempt to derive a better label from raw_prompt
+    if raw_prompt:
+        fallback = _extract_label_from_prompt(raw_prompt)
+        if fallback and not is_low_quality_label(fallback):
+            return fallback
+
+    # No improvement possible — return original (don't make things worse)
+    return stripped
+
+
+def is_low_quality_label(label: str) -> bool:
+    """Check if a label matches any low-quality pattern.
+
+    Public API — used by taxonomy engine Tier 2 label upgrade.
+    """
+    lower = label.lower().strip()
+
+    # Exact "general"
+    if lower == "general":
+        return True
+
+    words = lower.split()
+
+    # Fewer than 2 words
+    if len(words) < 2:
+        return True
+
+    # Generic tail patterns with low word count
+    if len(words) <= 3 and (
+        lower.endswith(" optimization") or lower.endswith(" task")
+    ):
+        return True
+
+    # Conversational starts
+    if any(lower.startswith(prefix) for prefix in _CONVERSATIONAL_STARTS):
+        return True
+
+    return False
+
+
+def extract_meaningful_words(
+    text: str,
+    max_words: int = 6,
+    scan_window: int = 30,
+    *,
+    exclude: frozenset[str] | None = None,
+) -> str | None:
+    """Extract up to ``max_words`` meaningful words from text, skipping stop words.
+
+    Shared utility used by both ``validate_intent_label`` (fallback extraction)
+    and ``HeuristicAnalyzer._extract_meaningful_words`` / ``_extract_noun_phrase``.
+
+    Args:
+        text: Raw text to extract from.
+        max_words: Maximum meaningful words to collect.
+        scan_window: How many words to scan (trades breadth vs speed).
+        exclude: Additional words to exclude beyond ``LABEL_STOP_WORDS``.
+
+    Returns:
+        Space-joined meaningful words, or ``None`` if none found.
+    """
+    stop = LABEL_STOP_WORDS | exclude if exclude else LABEL_STOP_WORDS
+    words = text.split()
+    meaningful: list[str] = []
+    for w in words[:scan_window]:
+        cleaned = re.sub(r"[^a-zA-Z0-9]", "", w)
+        if not cleaned or cleaned.lower() in stop:
+            continue
+        meaningful.append(cleaned)
+        if len(meaningful) >= max_words:
+            break
+
+    return " ".join(meaningful) if meaningful else None
+
+
+def _extract_label_from_prompt(raw_prompt: str) -> str | None:
+    """Extract meaningful words from prompt and title-case them for labeling."""
+    try:
+        raw = extract_meaningful_words(raw_prompt)
+        return title_case_label(raw) if raw else None
+    except Exception:
+        return None  # fail-safe for malformed input
 
 
 def strip_meta_header(text: str) -> str:

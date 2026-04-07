@@ -54,7 +54,7 @@ from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.services.trace_logger import TraceLogger
-from app.utils.text_cleanup import title_case_label
+from app.utils.text_cleanup import title_case_label, validate_intent_label
 
 logger = logging.getLogger(__name__)
 
@@ -841,7 +841,10 @@ class PipelineOrchestrator:
                 raw_prompt=raw_prompt,
                 optimized_prompt=optimization.optimized_prompt,
                 task_type=analysis.task_type if analysis.task_type in VALID_TASK_TYPES else "general",
-                intent_label=title_case_label(analysis.intent_label or "general")[:MAX_INTENT_LABEL_LENGTH],
+                intent_label=validate_intent_label(
+                    title_case_label(analysis.intent_label or "general"),
+                    raw_prompt,
+                )[:MAX_INTENT_LABEL_LENGTH],
                 domain=effective_domain,
                 domain_raw=domain_raw,
                 cluster_id=cluster_id,

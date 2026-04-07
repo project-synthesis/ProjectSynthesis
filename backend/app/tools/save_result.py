@@ -28,7 +28,7 @@ from app.services.preferences import PreferencesService
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.tools._shared import DATA_DIR, get_domain_resolver
-from app.utils.text_cleanup import parse_domain, split_prompt_and_changes, title_case_label
+from app.utils.text_cleanup import parse_domain, split_prompt_and_changes, title_case_label, validate_intent_label
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +217,7 @@ async def handle_save_result(
             # cluster_id is set asynchronously via optimization_created event → taxonomy hot path
             opt.domain_raw = (domain or opt.domain_raw or "general")[:MAX_DOMAIN_RAW_LENGTH]
             _raw_il = (intent_label or opt.intent_label or "general")[:MAX_INTENT_LABEL_LENGTH]
-            opt.intent_label = title_case_label(_raw_il)
+            opt.intent_label = validate_intent_label(title_case_label(_raw_il), opt.raw_prompt)
             opt.score_clarity = final_scores.get("clarity")
             opt.score_specificity = final_scores.get("specificity")
             opt.score_structure = final_scores.get("structure")
@@ -253,7 +253,10 @@ async def handle_save_result(
                 changes_summary=changes_summary or "",
                 domain=_new_domain,
                 domain_raw=(domain or "general")[:MAX_DOMAIN_RAW_LENGTH],
-                intent_label=title_case_label((intent_label or "general")[:MAX_INTENT_LABEL_LENGTH]),
+                intent_label=validate_intent_label(
+                    title_case_label((intent_label or "general")[:MAX_INTENT_LABEL_LENGTH]),
+                    optimized_prompt,  # raw_prompt is empty for new passthrough saves
+                ),
                 score_clarity=final_scores.get("clarity"),
                 score_specificity=final_scores.get("specificity"),
                 score_structure=final_scores.get("structure"),

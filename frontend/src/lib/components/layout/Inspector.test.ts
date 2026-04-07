@@ -409,84 +409,9 @@ describe('Inspector', () => {
     });
   });
 
-  // ── Domain picker ──────────────────────────────────────────────────────────
-
-  it('clicking domain badge opens domain picker with 7 domain options', async () => {
-    const user = userEvent.setup();
-    clustersStore.selectedClusterId = 'fam-1';
-    clustersStore.clusterDetail = makeFamilyDetail() as any;
-    clustersStore.clusterDetailLoading = false;
-    mockFetch([]);
-
-    render(Inspector);
-
-    await waitFor(() => {
-      expect(screen.getByText('API patterns')).toBeInTheDocument();
-    });
-
-    // Click the domain badge button
-    await user.click(screen.getByRole('button', { name: 'Change domain' }));
-
-    // Domain picker should appear with all 7 domain options
-    const picker = screen.getByRole('listbox', { name: 'Select domain' });
-    expect(picker).toBeInTheDocument();
-
-    const options = screen.getAllByRole('option');
-    expect(options).toHaveLength(7);
-  });
-
-  it('selecting a domain in picker calls PATCH API with new domain', async () => {
-    const user = userEvent.setup();
-
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/clusters/fam-1')) {
-        if (init?.method === 'PATCH') {
-          return new Response(JSON.stringify({ id: 'fam-1', intent_label: 'API patterns', domain: 'frontend' }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        return new Response(JSON.stringify(makeFamilyDetail({ domain: 'frontend' })), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return new Response('Not Found', { status: 404 });
-    }));
-
-    clustersStore.selectedClusterId = 'fam-1';
-    clustersStore.clusterDetail = makeFamilyDetail() as any;
-    clustersStore.clusterDetailLoading = false;
-
-    render(Inspector);
-
-    await waitFor(() => {
-      expect(screen.getByText('API patterns')).toBeInTheDocument();
-    });
-
-    // Open domain picker
-    await user.click(screen.getByRole('button', { name: 'Change domain' }));
-
-    // Click 'frontend' option
-    const options = screen.getAllByRole('option');
-    const frontendOption = options.find(o => o.textContent === 'frontend');
-    expect(frontendOption).toBeDefined();
-    await user.click(frontendOption!);
-
-    await waitFor(() => {
-      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-      const patchCall = calls.find((c: unknown[]) => {
-        const [, init] = c as [RequestInfo | URL, RequestInit?];
-        return init?.method === 'PATCH';
-      });
-      expect(patchCall).toBeDefined();
-      // Verify the PATCH body contains the domain
-      const [, patchInit] = patchCall as [RequestInfo | URL, RequestInit];
-      const body = JSON.parse(patchInit.body as string);
-      expect(body.domain).toBe('frontend');
-    });
-  });
+  // Domain picker removed — domain reassignment is not allowed (causes
+  // cluster fragmentation, wrong merges, and corrupt tree topology).
+  // Domain is set automatically by the taxonomy engine.
 
   // ── 6. Dismiss button ────────────────────────────────────────────────────────
 

@@ -446,8 +446,8 @@ async def update_cluster(
     db: AsyncSession = Depends(get_db),
 ) -> UpdateClusterResponse:
     """Update a cluster's label, domain, and/or state."""
-    if body.intent_label is None and body.domain is None and body.state is None:
-        raise HTTPException(422, "At least one of 'intent_label', 'domain', or 'state' must be provided")
+    if body.intent_label is None and body.state is None:
+        raise HTTPException(422, "At least one of 'intent_label' or 'state' must be provided")
 
     result = await db.execute(
         select(PromptCluster).where(PromptCluster.id == cluster_id)
@@ -460,17 +460,6 @@ async def update_cluster(
         old_label = cluster.label
         cluster.label = body.intent_label
         logger.info("Cluster renamed: id=%s '%s' -> '%s'", cluster_id, old_label, body.intent_label)
-
-    if body.domain is not None:
-        resolver = request.app.state.domain_resolver
-        if body.domain not in resolver.domain_labels:
-            raise HTTPException(
-                422,
-                f"Unknown domain: '{body.domain}'. Use GET /api/domains for valid options.",
-            )
-        old_domain = cluster.domain
-        cluster.domain = body.domain
-        logger.info("Cluster domain changed: id=%s '%s' -> '%s'", cluster_id, old_domain, body.domain)
 
     if body.state is not None:
         old_state = cluster.state

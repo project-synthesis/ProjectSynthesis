@@ -2,16 +2,12 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
-  import { domainStore } from '$lib/stores/domains.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { taxonomyColor, scoreColor, qHealthColor, stateColor, DIMENSION_COLORS } from '$lib/utils/colors';
   import { TAXONOMY_TOOLTIPS, CLUSTER_TOOLTIPS, STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
   import { INSPECTOR_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import { assessTaxonomyHealth } from '$lib/utils/taxonomy-health';
   import { tooltip } from '$lib/actions/tooltip';
-
-  /** Known domains for the domain picker (legacy compat). */
-  const KNOWN_DOMAINS = ['backend', 'frontend', 'database', 'security', 'devops', 'fullstack', 'general'];
 
   /** Deduplicate array by `id` field (prevents Svelte keyed each errors). */
   function dedupe<T extends { id: string }>(items: T[]): T[] {
@@ -29,7 +25,7 @@
   import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
   import ScoreSparkline from '$lib/components/refinement/ScoreSparkline.svelte';
   import { PHASE_LABELS, DIMENSION_LABELS } from '$lib/utils/dimensions';
-  import { formatScore, truncateText, isPassthroughResult, trendInfo, parsePrimaryDomain, formatRelativeTime } from '$lib/utils/formatting';
+  import { formatScore, truncateText, isPassthroughResult, trendInfo, formatRelativeTime } from '$lib/utils/formatting';
 
   // Tab-aware result: use per-tab cached data when available, fall back to global forge state
   const activeResult = $derived(editorStore.activeResult ?? forgeStore.result);
@@ -99,30 +95,7 @@
     renameSaving = false;
   }
 
-  // Domain picker state
-  let domainPickerOpen = $state(false);
-  let domainSaving = $state(false);
-
   let showDimensions = $state(false);
-
-  function toggleDomainPicker(): void {
-    domainPickerOpen = !domainPickerOpen;
-  }
-
-  async function selectDomain(newDomain: string): Promise<void> {
-    const id = clustersStore.selectedClusterId;
-    if (!id || domainSaving) return;
-    domainSaving = true;
-    try {
-      await updateCluster(id, { domain: newDomain });
-      clustersStore.selectCluster(id);
-      clustersStore.invalidateClusters();
-      domainPickerOpen = false;
-    } catch {
-      // keep picker open on error
-    }
-    domainSaving = false;
-  }
 
   let promoteSaving = $state(false);
 
@@ -221,32 +194,14 @@
                 aria-label="Click to rename"
               >{family.label}</button>
             {/if}
-            <button
+            <span
               class="domain-badge"
               style="background: {taxonomyColor(family.domain)};"
-              onclick={toggleDomainPicker}
-              use:tooltip={INSPECTOR_TOOLTIPS.change_domain}
-              aria-label="Change domain"
-            >{family.domain}</button>
+            >{family.domain}</span>
             <span
               class="state-badge"
               style="color: {stateColor(family.state)}; border-color: {stateColor(family.state)};"
             >{family.state}</span>
-            {#if domainPickerOpen}
-              <div class="domain-picker" role="listbox" aria-label="Select domain">
-                {#each domainStore.labels as d (d)}
-                  <button
-                    class="domain-option"
-                    class:domain-option--active={d === parsePrimaryDomain(family.domain)}
-                    style="background: {taxonomyColor(d)};"
-                    onclick={() => selectDomain(d)}
-                    disabled={domainSaving}
-                    role="option"
-                    aria-selected={d === family.domain}
-                  >{d}</button>
-                {/each}
-              </div>
-            {/if}
             <button
               class="dismiss-btn"
               onclick={dismissFamily}
@@ -1082,45 +1037,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     flex-shrink: 0;
-    border: none;
-    cursor: pointer;
-    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  .domain-badge:hover {
-    opacity: 0.8;
-  }
-
-  .domain-picker {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-    width: 100%;
-  }
-
-  .domain-option {
-    font-size: 8px;
-    font-family: var(--font-mono);
-    color: var(--color-bg-primary);
-    padding: 1px 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    border: 1px solid transparent;
-    cursor: pointer;
-    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  .domain-option:hover {
-    opacity: 0.8;
-  }
-
-  .domain-option--active {
-    border-color: var(--color-text-primary);
-  }
-
-  .domain-option:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
   }
 
   .dismiss-btn {

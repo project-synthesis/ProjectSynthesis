@@ -237,6 +237,40 @@ async def split_cluster(
     if len(cluster_data) < 2:
         return SplitResult(success=False, children_created=0, noise_reassigned=0)
 
+    # --- Sibling similarity gate (Groundhog Day prevention) ---
+    # If any pair of children has centroid cosine > ceiling, the split is
+    # futile — they're too similar and will merge back within 1-2 cycles.
+    from app.services.taxonomy._constants import SPLIT_SIBLING_SIMILARITY_CEILING
+
+    for i in range(len(cluster_data)):
+        for j in range(i + 1, len(cluster_data)):
+            ci = cluster_data[i]["centroid"]
+            cj = cluster_data[j]["centroid"]
+            sib_sim = float(np.dot(ci, cj) / (
+                np.linalg.norm(ci) * np.linalg.norm(cj) + 1e-9
+            ))
+            if sib_sim > SPLIT_SIBLING_SIMILARITY_CEILING:
+                logger.info(
+                    "Split aborted (sibling similarity %.3f > %.2f): '%s'",
+                    sib_sim, SPLIT_SIBLING_SIMILARITY_CEILING, node.label,
+                )
+                try:
+                    get_event_logger().log_decision(
+                        path=log_path, op="split", decision="sibling_too_similar",
+                        cluster_id=node.id,
+                        context={
+                            "max_sibling_sim": round(sib_sim, 4),
+                            "ceiling": SPLIT_SIBLING_SIMILARITY_CEILING,
+                            "label": node.label,
+                            "k": len(cluster_data),
+                        },
+                    )
+                except RuntimeError:
+                    pass
+                return SplitResult(
+                    success=False, children_created=0, noise_reassigned=0,
+                )
+
     # --- Phase 2: Parallel label generation (LLM calls, no DB session) ---
     t0_labels = time.monotonic()
     label_tasks = [

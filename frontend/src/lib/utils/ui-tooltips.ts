@@ -45,7 +45,6 @@ export const INSPECTOR_TOOLTIPS = {
   save: 'Save',
   cancel: 'Cancel',
   rename: 'Click to rename',
-  change_domain: 'Click to change domain',
   close_detail: 'Close family detail',
   promote: 'Promote this cluster to template state',
   promote_blocked: 'Needs 3+ members or 1+ pattern usage to promote',

@@ -114,7 +114,7 @@ async def run_single_prompt(
         from app.services.preferences import PreferencesService
         from app.services.score_blender import blend_scores
         from app.services.strategy_loader import StrategyLoader
-        from app.utils.text_cleanup import sanitize_optimization_result, title_case_label
+        from app.utils.text_cleanup import sanitize_optimization_result, title_case_label, validate_intent_label
 
         prefs = PreferencesService(DATA_DIR)
         prefs_snapshot = prefs.load()
@@ -422,7 +422,10 @@ async def run_single_prompt(
             overall_score=optimized_scores.overall if optimized_scores else None,
             improvement_score=improvement_score,
             scoring_mode=scoring_mode,
-            intent_label=title_case_label(analysis.intent_label or "general"),
+            intent_label=validate_intent_label(
+                title_case_label(analysis.intent_label or "general"),
+                raw_prompt,
+            ),
             domain=effective_domain,
             domain_raw=(analysis.domain or "general"),
             embedding=raw_embedding,

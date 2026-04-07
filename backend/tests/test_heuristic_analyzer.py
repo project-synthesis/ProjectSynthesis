@@ -215,6 +215,131 @@ class TestIntentLabel:
         assert len(result.intent_label.split()) <= 8  # Not too long
 
 
+class TestExtractFirstVerb:
+    """Tests for expanded verb dictionary and first-verb extraction."""
+
+    def test_finds_original_verbs(self):
+        analyzer = HeuristicAnalyzer()
+        assert analyzer._extract_first_verb("Create a REST API") == "create"
+        assert analyzer._extract_first_verb("implement user login") == "implement"
+        assert analyzer._extract_first_verb("refactor the auth module") == "refactor"
+
+    def test_finds_expanded_verbs(self):
+        analyzer = HeuristicAnalyzer()
+        assert analyzer._extract_first_verb("Transform data into JSON format") == "transform"
+        assert analyzer._extract_first_verb("Parse the XML response") == "parse"
+        assert analyzer._extract_first_verb("validate user input fields") == "validate"
+        assert analyzer._extract_first_verb("scaffold a new microservice") == "scaffold"
+        assert analyzer._extract_first_verb("Extract patterns from logs") == "extract"
+        assert analyzer._extract_first_verb("Summarize the document") == "summarize"
+        assert analyzer._extract_first_verb("Encode the payload in base64") == "encode"
+        assert analyzer._extract_first_verb("Decode the JWT token") == "decode"
+
+    def test_returns_none_for_no_verb(self):
+        analyzer = HeuristicAnalyzer()
+        assert analyzer._extract_first_verb("The weather is nice today") is None
+        assert analyzer._extract_first_verb("") is None
+
+    def test_handles_punctuation(self):
+        analyzer = HeuristicAnalyzer()
+        assert analyzer._extract_first_verb("Please, create a dashboard") == "create"
+        assert analyzer._extract_first_verb("[Task] Build the API") == "build"
+
+
+class TestExtractNounPhrase:
+    """Tests for noun phrase extraction from prompts."""
+
+    def test_extracts_after_verb(self):
+        analyzer = HeuristicAnalyzer()
+        result = analyzer._extract_noun_phrase(
+            "Create a REST API for user authentication", "create"
+        )
+        assert result is not None
+        # Should skip "a" and grab meaningful words
+        words = result.split()
+        assert len(words) >= 2
+        assert "rest" in words or "api" in words
+
+    def test_skips_stop_words(self):
+        analyzer = HeuristicAnalyzer()
+        result = analyzer._extract_noun_phrase(
+            "Build a simple dashboard for the marketing team", "build"
+        )
+        assert result is not None
+        assert "a" not in result.split()
+        assert "the" not in result.split()
+        assert "for" not in result.split()
+
+    def test_caps_at_three_words(self):
+        analyzer = HeuristicAnalyzer()
+        result = analyzer._extract_noun_phrase(
+            "Create REST API authentication middleware logging service", "create"
+        )
+        assert result is not None
+        assert len(result.split()) <= 3
+
+    def test_returns_none_when_no_meaningful_words(self):
+        analyzer = HeuristicAnalyzer()
+        result = analyzer._extract_noun_phrase("Create a the an", "create")
+        assert result is None
+
+    def test_returns_none_when_verb_not_found(self):
+        analyzer = HeuristicAnalyzer()
+        result = analyzer._extract_noun_phrase("The weather is nice", "create")
+        assert result is None
+
+
+class TestGenerateIntentLabel:
+    """Tests for the full _generate_intent_label method."""
+
+    def test_verb_plus_noun_phrase(self):
+        analyzer = HeuristicAnalyzer()
+        label = analyzer._generate_intent_label(
+            "Create a REST API for user authentication",
+            "coding", "backend",
+        )
+        # Should use verb + noun phrase, not the template
+        assert "Create" in label
+        assert label != "Create Backend Coding Task"
+
+    def test_verb_without_noun_phrase_uses_template(self):
+        analyzer = HeuristicAnalyzer()
+        label = analyzer._generate_intent_label(
+            "Create the the the a an",  # No meaningful nouns after verb
+            "coding", "backend",
+        )
+        # Falls back to template: verb + domain + task_type
+        assert "Create" in label
+
+    def test_no_verb_extracts_meaningful_words(self):
+        analyzer = HeuristicAnalyzer()
+        label = analyzer._generate_intent_label(
+            "The database migration schema needs updating for PostgreSQL",
+            "coding", "database",
+        )
+        # No verb found, so should extract meaningful words
+        assert len(label.split()) >= 2
+
+    def test_label_capped_at_six_words(self):
+        analyzer = HeuristicAnalyzer()
+        label = analyzer._generate_intent_label(
+            "Implement a complex multi-service distributed authentication "
+            "middleware caching validation system",
+            "coding", "backend",
+        )
+        assert len(label.split()) <= 6
+
+    def test_label_is_title_cased(self):
+        analyzer = HeuristicAnalyzer()
+        label = analyzer._generate_intent_label(
+            "build rest api service",
+            "coding", "backend",
+        )
+        # Each word should be capitalized (or uppercased for acronyms)
+        for word in label.split():
+            assert word[0].isupper()
+
+
 class TestAnalysisDataclass:
     @pytest.mark.asyncio
     async def test_returns_frozen_dataclass(self, db):

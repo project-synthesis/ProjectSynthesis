@@ -51,6 +51,12 @@ class ClusterMeta(TypedDict, total=False):
     # --- Positional metadata ---
     position_source: str                 # "interpolated" when UMAP position was interpolated
 
+    # --- Groundhog Day prevention (domain-level) ---
+    split_blocked_hashes: list[dict[str, str]]  # [{hash, ts, label}] ring buffer on domain nodes
+
+    # --- Intent label coherence (Tier 5b) ---
+    intent_label_coherence: float | None         # mean pairwise Jaccard of member intent labels
+
 
 # -------------------------------------------------------------------------
 # Safe read / write helpers
@@ -74,6 +80,8 @@ _DEFAULTS: dict[str, Any] = {
     "learned_phase_weights": None,
     "output_coherence": None,
     "position_source": "",
+    "split_blocked_hashes": [],
+    "intent_label_coherence": None,
 }
 
 # Type coercion map — ensures malformed JSON values don't cause TypeErrors

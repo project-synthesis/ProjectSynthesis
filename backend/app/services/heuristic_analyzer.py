@@ -18,6 +18,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Intent label helpers (module-level for reuse and testability)
+# ---------------------------------------------------------------------------
+
+_COMMON_VERBS = frozenset({
+    # Original 25
+    "implement", "create", "build", "write", "design", "refactor",
+    "fix", "add", "remove", "update", "migrate", "deploy", "test",
+    "analyze", "review", "evaluate", "compare", "draft", "generate",
+    "configure", "optimize", "debug", "integrate", "setup", "improve",
+    # Extended — common in technical and creative prompts
+    "transform", "convert", "parse", "validate", "document", "scaffold",
+    "extract", "summarize", "clean", "format", "check", "verify",
+    "sort", "merge", "split", "translate", "explain", "simplify",
+    "define", "list", "calculate", "monitor", "render", "serialize",
+    "fetch", "handle", "process", "wrap", "encode", "decode",
+})
+
+from app.utils.text_cleanup import LABEL_STOP_WORDS, extract_meaningful_words
+
 
 def _get_signal_loader():
     """Resolve the signal loader from the service-level singleton.
@@ -488,33 +508,85 @@ class HeuristicAnalyzer:
     def _generate_intent_label(
         self, raw_prompt: str, task_type: str, domain: str,
     ) -> str:
-        """Generate a short 3-6 word intent label."""
-        first_verb = self._extract_first_verb(raw_prompt)
-        if first_verb is None:
-            # Spec fallback: "{task_type} optimization"
-            label = f"{task_type} optimization"
-        elif domain != "general":
-            label = f"{first_verb} {domain} {task_type} task"
-        else:
-            label = f"{first_verb} {task_type} task"
-        # Cap at 6 words, title-case for display consistency
+        """Generate a short 3-6 word intent label.
+
+        Priority chain:
+        1. Verb + noun phrase from prompt (most specific)
+        2. Verb + domain + task_type template (generic but categorized)
+        3. task_type fallback (last resort)
+        """
         from app.utils.text_cleanup import title_case_label
 
+        first_verb = self._extract_first_verb(raw_prompt)
+        if first_verb is not None:
+            # Try to extract a meaningful noun phrase after the verb
+            noun_phrase = self._extract_noun_phrase(raw_prompt, first_verb)
+            if noun_phrase:
+                label = f"{first_verb} {noun_phrase}"
+            elif domain != "general":
+                label = f"{first_verb} {domain} {task_type} task"
+            else:
+                label = f"{first_verb} {task_type} task"
+        else:
+            # No verb found — try extracting meaningful words from the prompt
+            meaningful = self._extract_meaningful_words(raw_prompt, max_words=4)
+            if meaningful:
+                label = f"{task_type} {meaningful}"
+            else:
+                label = f"{task_type} optimization"
+
+        # Cap at 6 words, title-case for display consistency
         words = label.split()[:6]
         return title_case_label(" ".join(words))
 
     @staticmethod
     def _extract_first_verb(text: str) -> str | None:
         """Extract the first likely verb from the prompt, or None if not found."""
-        common_verbs = {
-            "implement", "create", "build", "write", "design", "refactor",
-            "fix", "add", "remove", "update", "migrate", "deploy", "test",
-            "analyze", "review", "evaluate", "compare", "draft", "generate",
-            "configure", "optimize", "debug", "integrate", "setup", "improve",
-        }
         words = text.lower().split()
         for word in words[:10]:  # Check first 10 words
             cleaned = re.sub(r"[^a-z]", "", word)
-            if cleaned in common_verbs:
+            if cleaned in _COMMON_VERBS:
                 return cleaned
         return None
+
+    @staticmethod
+    def _extract_noun_phrase(text: str, verb: str) -> str | None:
+        """Extract up to 3 meaningful words after the verb from the prompt.
+
+        Skips articles, prepositions, and other stop words to capture the
+        semantic core of what follows the verb.
+
+        Returns None if fewer than 1 meaningful word found after the verb.
+        """
+        words = text.lower().split()
+        # Find verb position in first 10 words
+        verb_idx = -1
+        for i, w in enumerate(words[:10]):
+            cleaned = re.sub(r"[^a-z]", "", w)
+            if cleaned == verb:
+                verb_idx = i
+                break
+        if verb_idx < 0:
+            return None
+
+        meaningful: list[str] = []
+        for w in words[verb_idx + 1 : verb_idx + 12]:  # scan up to 11 words ahead
+            cleaned = re.sub(r"[^a-z0-9]", "", w.lower())
+            if not cleaned or cleaned in LABEL_STOP_WORDS:
+                continue
+            meaningful.append(cleaned)
+            if len(meaningful) >= 3:
+                break
+
+        return " ".join(meaningful) if meaningful else None
+
+    @staticmethod
+    def _extract_meaningful_words(text: str, max_words: int = 4) -> str | None:
+        """Extract the first N meaningful words from text, skipping stop words.
+
+        Delegates to the canonical ``extract_meaningful_words()`` from
+        ``text_cleanup`` with verb exclusion for label disambiguation.
+        """
+        return extract_meaningful_words(
+            text, max_words=max_words, scan_window=20, exclude=_COMMON_VERBS,
+        )

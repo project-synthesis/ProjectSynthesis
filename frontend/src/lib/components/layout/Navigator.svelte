@@ -14,7 +14,7 @@
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
   import { samplingGuide } from '$lib/stores/sampling-guide.svelte';
   import { routing } from '$lib/stores/routing.svelte';
-  import { getSettings, getProviders, getHistory, getOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
+  import { getSettings, getProviders, getHistory, getOptimization, updateOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
   import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo } from '$lib/api/client';
 
   // Tab-aware active result for showing per-optimization models in Settings
@@ -39,6 +39,44 @@
   let editSaving = $state(false);
   let editDirty = $state(false);
   let suppressedNames = $state<Set<string>>(new Set());
+
+  // ---- History rename state ----
+  let renamingOptId = $state<string | null>(null);
+  let renameOptValue = $state('');
+  let renameOptSaving = $state(false);
+
+  function startOptRename(e: MouseEvent, item: HistoryItem): void {
+    e.stopPropagation();
+    renamingOptId = item.id;
+    renameOptValue = item.intent_label || '';
+  }
+
+  function cancelOptRename(): void {
+    renamingOptId = null;
+    renameOptValue = '';
+  }
+
+  async function submitOptRename(): Promise<void> {
+    const id = renamingOptId;
+    const trimmed = renameOptValue.trim();
+    if (!id || !trimmed || renameOptSaving) return;
+    renameOptSaving = true;
+    try {
+      await updateOptimization(id, { intent_label: trimmed });
+      // Update local state
+      historyItems = historyItems.map(h =>
+        h.id === id ? { ...h, intent_label: trimmed } : h
+      );
+      // Update editor tab titles if this optimization is open
+      editorStore.updateTabTitle(id, trimmed);
+      renamingOptId = null;
+      renameOptValue = '';
+    } catch {
+      // Keep rename input open on error so user can retry
+      addToast('deleted', 'Rename failed');
+    }
+    renameOptSaving = false;
+  }
 
   // Load strategies from backend on mount
   let strategiesLoaded = false;
@@ -364,31 +402,73 @@
           <p class="empty-note">No optimizations yet.</p>
         {:else}
           {#each completedItems as item (item.id)}
-            <button class="row-item history-row" style="--accent: {taxonomyColor(item.domain)};" onclick={() => loadHistoryItem(item)}>
-              <span class="row-prompt-line">
-                {#if item.task_type && item.task_type !== 'general' && TASK_TYPE_ABBREV[item.task_type]}
-                  <span class="row-type">{TASK_TYPE_ABBREV[item.task_type]}</span>
-                {/if}
-                <span class="row-prompt">{item.intent_label || (item.raw_prompt ? item.raw_prompt.slice(0, 60) + (item.raw_prompt.length > 60 ? '..' : '') : 'Untitled')}</span>
-                <span class="row-time">{formatRelativeTime(item.created_at)}</span>
-              </span>
-              <div class="history-meta">
-                <span class="row-badge font-mono">{item.strategy_used || 'auto'}</span>
-                <span
-                  class="row-score font-mono"
-                  style="color: {scoreColor(item.overall_score)};"
-                >
-                  {item.overall_score != null ? formatScore(item.overall_score) : '—'}
+            {#if renamingOptId === item.id}
+              <div class="row-item history-row" style="--accent: {taxonomyColor(item.domain)};">
+                <span class="row-prompt-line">
+                  {#if item.task_type && item.task_type !== 'general' && TASK_TYPE_ABBREV[item.task_type]}
+                    <span class="row-type">{TASK_TYPE_ABBREV[item.task_type]}</span>
+                  {/if}
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <form class="rename-form-inline" onsubmit={(e) => { e.preventDefault(); submitOptRename(); }}>
+                    <input
+                      class="rename-input-inline"
+                      type="text"
+                      bind:value={renameOptValue}
+                      onkeydown={(e) => { if (e.key === 'Escape') cancelOptRename(); }}
+                      autofocus
+                      aria-label="Rename optimization"
+                    />
+                    <button
+                      class="rename-btn-inline save"
+                      type="submit"
+                      disabled={renameOptSaving || !renameOptValue.trim()}
+                      use:tooltip={'Save'}
+                      aria-label="Save"
+                    >&#x2713;</button>
+                    <button
+                      class="rename-btn-inline cancel"
+                      type="button"
+                      onclick={() => cancelOptRename()}
+                      use:tooltip={'Cancel'}
+                      aria-label="Cancel"
+                    >×</button>
+                  </form>
+                  <span class="row-time">{formatRelativeTime(item.created_at)}</span>
                 </span>
-                {#if item.feedback_rating}
-                  <span
-                    class="row-feedback font-mono"
-                    style="color: {item.feedback_rating === 'thumbs_up' ? 'var(--color-neon-cyan)' : 'var(--color-neon-red)'};"
-                    use:tooltip={item.feedback_rating === 'thumbs_up' ? STRATEGY_TOOLTIPS.feedback_positive : STRATEGY_TOOLTIPS.feedback_negative}
-                  >{item.feedback_rating === 'thumbs_up' ? '\u2191' : '\u2193'}</span>
-                {/if}
               </div>
-            </button>
+            {:else}
+              <button class="row-item history-row" style="--accent: {taxonomyColor(item.domain)};" onclick={() => loadHistoryItem(item)}>
+                <span class="row-prompt-line">
+                  {#if item.task_type && item.task_type !== 'general' && TASK_TYPE_ABBREV[item.task_type]}
+                    <span class="row-type">{TASK_TYPE_ABBREV[item.task_type]}</span>
+                  {/if}
+                  <span
+                    class="row-prompt"
+                    role="textbox"
+                    tabindex="-1"
+                    ondblclick={(e) => startOptRename(e, item)}
+                    use:tooltip={'Double-click to rename'}
+                  >{item.intent_label || (item.raw_prompt ? item.raw_prompt.slice(0, 60) + (item.raw_prompt.length > 60 ? '..' : '') : 'Untitled')}</span>
+                  <span class="row-time">{formatRelativeTime(item.created_at)}</span>
+                </span>
+                <div class="history-meta">
+                  <span class="row-badge font-mono">{item.strategy_used || 'auto'}</span>
+                  <span
+                    class="row-score font-mono"
+                    style="color: {scoreColor(item.overall_score)};"
+                  >
+                    {item.overall_score != null ? formatScore(item.overall_score) : '—'}
+                  </span>
+                  {#if item.feedback_rating}
+                    <span
+                      class="row-feedback font-mono"
+                      style="color: {item.feedback_rating === 'thumbs_up' ? 'var(--color-neon-cyan)' : 'var(--color-neon-red)'};"
+                      use:tooltip={item.feedback_rating === 'thumbs_up' ? STRATEGY_TOOLTIPS.feedback_positive : STRATEGY_TOOLTIPS.feedback_negative}
+                    >{item.feedback_rating === 'thumbs_up' ? '\u2191' : '\u2193'}</span>
+                  {/if}
+                </div>
+              </button>
+            {/if}
           {/each}
           {#if completedItems.length === 0}
             <p class="empty-note">No completed optimizations yet.</p>
@@ -1228,6 +1308,62 @@
     text-align: left;
     flex: 1;
     min-width: 0;
+  }
+
+  .rename-form-inline {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .rename-input-inline {
+    flex: 1;
+    min-width: 0;
+    height: 18px;
+    font-size: 10px;
+    font-family: inherit;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--accent, var(--color-border));
+    color: var(--color-text-primary);
+    padding: 0 4px;
+    outline: none;
+  }
+
+  .rename-btn-inline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 18px;
+    font-size: 10px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    transition: color 200ms;
+  }
+
+  .rename-btn-inline.save {
+    color: var(--color-neon-green);
+  }
+
+  .rename-btn-inline.save:hover {
+    color: var(--accent, var(--color-neon-cyan));
+  }
+
+  .rename-btn-inline.save:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .rename-btn-inline.cancel {
+    color: var(--color-text-dim);
+  }
+
+  .rename-btn-inline.cancel:hover {
+    color: var(--color-text-primary);
   }
 
   .history-meta {

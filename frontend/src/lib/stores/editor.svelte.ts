@@ -152,6 +152,26 @@ class EditorStore {
     this.activeTabId = PROMPT_TAB_ID;
   }
 
+  /** Update tab titles for all tabs referencing the given optimization. */
+  updateTabTitle(optimizationId: string, newTitle: string) {
+    const updated = this.tabs.map((t) => {
+      if (t.optimizationId !== optimizationId) return t;
+      const prefix = t.type === 'diff' ? '~ ' : '';
+      return { ...t, title: `${prefix}${newTitle}` };
+    });
+    if (updated.some((t, i) => t !== this.tabs[i])) {
+      this.tabs = updated;
+    }
+    // Also update the result cache so future tabs derive the correct title
+    const cached = this._resultCache[optimizationId];
+    if (cached) {
+      this._resultCache = {
+        ...this._resultCache,
+        [optimizationId]: { ...cached, intent_label: newTitle },
+      };
+    }
+  }
+
   /** @internal Test-only: restore initial state */
   _reset() {
     this.tabs = [{ id: PROMPT_TAB_ID, title: 'Prompt', type: 'prompt', pinned: true }];
