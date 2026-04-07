@@ -192,28 +192,29 @@ def compute_q_health(
     total_members = sum(max(n.member_count, 0) for n in active)
 
     # Fallback: if all clusters have 0 members, use equal weighting
+    # but report actual total_members=0 in the result (not the fallback).
     if total_members == 0:
-        total_members = len(active)
         effective_weights = [1 for _ in active]
     else:
         effective_weights = [max(n.member_count, 0) for n in active]
 
-    # Member-weighted means (only finite values)
+    # Member-weighted means — per-dimension weight sums so that nodes with
+    # non-finite coherence/separation don't dilute the other dimension.
+    # Mirrors compute_q_system's behavior of skipping non-finite values.
     coh_sum = 0.0
     sep_sum = 0.0
-    weight_sum = 0
+    coh_weight_sum = 0
+    sep_weight_sum = 0
     for n, w in zip(active, effective_weights):
         if math.isfinite(n.coherence):
             coh_sum += n.coherence * w
+            coh_weight_sum += w
         if math.isfinite(n.separation):
             sep_sum += n.separation * w
-        weight_sum += w
+            sep_weight_sum += w
 
-    if weight_sum == 0:
-        weight_sum = 1  # prevent division by zero
-
-    mean_c = max(0.0, min(1.0, coh_sum / weight_sum))
-    mean_s = max(0.0, min(1.0, sep_sum / weight_sum))
+    mean_c = max(0.0, min(1.0, coh_sum / max(coh_weight_sum, 1)))
+    mean_s = max(0.0, min(1.0, sep_sum / max(sep_weight_sum, 1)))
     cov = max(0.0, min(1.0, coverage))
     dbcv_clamped = max(0.0, min(1.0, dbcv))
 

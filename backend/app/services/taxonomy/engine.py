@@ -2362,7 +2362,14 @@ class TaxonomyEngine:
             "warm_path_age": self._warm_path_age,
         }
 
-        # Compute q_health live from current cluster state
+        # Compute q_health live from current cluster state.
+        # Pre-set None defaults so dict shape is always consistent.
+        result["q_health"] = None
+        result["q_health_coherence_w"] = None
+        result["q_health_separation_w"] = None
+        result["q_health_weights"] = None
+        result["q_health_total_members"] = None
+        result["q_health_cluster_count"] = None
         try:
             _health_nodes_q = await db.execute(
                 select(PromptCluster).where(

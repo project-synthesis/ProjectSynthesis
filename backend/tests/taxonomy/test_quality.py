@@ -410,9 +410,11 @@ class TestComputeQHealth:
         ]
         result = compute_q_health(nodes, self._weights())
 
-        # Should not crash, should produce a valid result
+        # Should not crash, should produce a valid result with equal weighting
         assert 0.0 <= result.q_health <= 1.0
-        assert result.total_members == 0 or result.total_members == 2
+        # total_members reports the actual count (0), not the fallback
+        assert result.total_members == 0
+        assert result.cluster_count == 2
 
     def test_empty_returns_zero(self):
         """Empty node list returns zero Q."""
@@ -432,3 +434,29 @@ class TestComputeQHealth:
 
         assert result.cluster_count == 1  # Only the active node
         assert result.total_members == 10  # Only the active node's members
+
+    def test_negative_member_count_clamped(self):
+        """Negative member_count is treated as 0 (clamped via max(n, 0))."""
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.6, state="active", member_count=-5),
+            NodeMetrics(coherence=0.4, separation=0.9, state="active", member_count=10),
+        ]
+        result = compute_q_health(nodes, self._weights())
+
+        # Negative member clamped to 0, so only the 10-member cluster contributes
+        assert result.total_members == 10
+        assert abs(result.coherence_weighted - 0.4) < 0.01
+
+    def test_nan_coherence_excluded_from_weighted_mean(self):
+        """Nodes with NaN coherence don't dilute the weighted mean."""
+        nodes = [
+            NodeMetrics(coherence=float("nan"), separation=0.8, state="active", member_count=10),
+            NodeMetrics(coherence=0.6, separation=0.5, state="active", member_count=10),
+        ]
+        result = compute_q_health(nodes, self._weights())
+
+        # The NaN node should be excluded from coherence weighting
+        # so coherence_weighted should reflect only the 0.6 node
+        assert abs(result.coherence_weighted - 0.6) < 0.01
+        # Separation includes both (both finite)
+        assert abs(result.separation_weighted - 0.65) < 0.01
