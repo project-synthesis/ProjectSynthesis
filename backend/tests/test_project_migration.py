@@ -1,7 +1,6 @@
 """Tests for ADR-005 Legacy project node migration."""
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,11 +76,17 @@ async def test_optimization_project_id_backfilled(db_session: AsyncSession):
     db_session.add(project)
     await db_session.flush()
 
-    domain = PromptCluster(label="backend", state="domain", domain="backend", task_type="general", member_count=0, parent_id=project.id)
+    domain = PromptCluster(
+        label="backend", state="domain", domain="backend",
+        task_type="general", member_count=0, parent_id=project.id,
+    )
     db_session.add(domain)
     await db_session.flush()
 
-    cluster = PromptCluster(label="API patterns", state="active", domain="backend", task_type="coding", member_count=1, parent_id=domain.id)
+    cluster = PromptCluster(
+        label="API patterns", state="active", domain="backend",
+        task_type="coding", member_count=1, parent_id=domain.id,
+    )
     db_session.add(cluster)
     await db_session.flush()
 

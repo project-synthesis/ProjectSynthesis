@@ -29,10 +29,9 @@ logger = logging.getLogger(__name__)
 _warm_path_pending = asyncio.Event()
 
 
-async def _backfill_project_ids(db: "AsyncSession") -> None:
+async def _backfill_project_ids(db) -> None:
     """Backfill Optimization.project_id from cluster ancestry (2 hops: cluster->domain->project)."""
     from sqlalchemy import select as _sel
-    from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F811
 
     from app.models import Optimization, PromptCluster
 
@@ -85,14 +84,14 @@ async def _backfill_project_ids(db: "AsyncSession") -> None:
         logger.info("ADR-005 migration: backfilled project_id on %d optimizations", total_filled)
 
 
-async def _run_adr005_migration(db: "AsyncSession") -> None:
+async def _run_adr005_migration(db) -> None:
     """ADR-005: Create Legacy project node, re-parent domains, backfill project_id.
 
     Idempotent — safe to run on every startup. Skips if project node already exists.
     """
     from sqlalchemy import select as _sel
 
-    from app.models import Optimization, PromptCluster
+    from app.models import PromptCluster
 
     # Step 1: Check if migration already ran
     existing = await db.execute(
@@ -454,7 +453,10 @@ async def lifespan(app: FastAPI):
                 async with async_session_factory() as _pidx_db:
                     from sqlalchemy import text as _text_pidx
                     await _pidx_db.execute(
-                        _text_pidx("CREATE INDEX IF NOT EXISTS ix_optimizations_project_id ON optimizations (project_id)")
+                        _text_pidx(
+                            "CREATE INDEX IF NOT EXISTS ix_optimizations_project_id"
+                            " ON optimizations (project_id)"
+                        )
                     )
                     await _pidx_db.commit()
             except Exception:
