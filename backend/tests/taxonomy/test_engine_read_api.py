@@ -123,11 +123,12 @@ async def test_get_stats_sparkline_with_snapshots(db, mock_embedding, mock_provi
 
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
-    # Create 5 snapshots with ascending q_system values
+    # Create 5 snapshots with ascending q_health values
     for i in range(5):
         snap = TaxonomySnapshot(
             trigger="warm_path",
             q_system=0.5 + i * 0.1,  # 0.5, 0.6, 0.7, 0.8, 0.9
+            q_health=0.5 + i * 0.1,  # sparkline uses q_health exclusively
             q_coherence=0.6 + i * 0.05,
             q_separation=0.5 + i * 0.05,
             q_coverage=0.8,

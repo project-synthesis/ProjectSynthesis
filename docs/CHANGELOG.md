@@ -16,6 +16,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ### Added
 - **Split failure events** — `split/insufficient_members` and `split/too_few_children` decision events now logged when split fails due to corrupt embeddings dropping members below threshold or fewer than 2 viable children after label generation
+- **Sparkline oscillation fix** — sparkline was alternating between `q_health` (0.66) and `q_system` (0.78) every time a rejected cold path snapshot appeared. Cold path rejection snapshots now carry forward the last known `q_health` instead of `None`, and sparkline filters `q_health`-only values instead of falling back to `q_system` (different metric, different scale)
 - **Cross-domain outlier reconciliation** — Phase 0 reconciliation now ejects members whose domain differs from their cluster's domain when cosine similarity to centroid is below 0.40 and a better same-domain cluster exists. Caps at 5 ejections per cluster per cycle
 
 ### Changed

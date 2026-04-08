@@ -2318,11 +2318,15 @@ class TaxonomyEngine:
         q_coverage = latest.q_coverage if latest else None
         q_dbcv = latest.q_dbcv if latest else None
 
-        # Sparkline history — prefer q_health (member-weighted) with q_system fallback
-        # for older snapshots that predate the q_health column.
+        # Sparkline history — use q_health (member-weighted) exclusively.
+        # Older snapshots that predate q_health and rejected cold path
+        # snapshots (q_health=None) are skipped rather than falling back
+        # to q_system, which is on a different scale (0.78 vs 0.66) and
+        # creates misleading oscillations in the sparkline.
         q_values = [
-            s.q_health if s.q_health is not None else s.q_system
+            s.q_health
             for s in snapshots
+            if s.q_health is not None
         ]
         sparkline = compute_sparkline_data(q_values)
 

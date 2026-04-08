@@ -55,7 +55,7 @@ from app.services.taxonomy.family_ops import adaptive_merge_threshold, score_to_
 from app.services.taxonomy.labeling import generate_label
 from app.services.taxonomy.projection import UMAPProjector, procrustes_align
 from app.services.taxonomy.quality import COLD_PATH_EPSILON, is_cold_path_non_regressive
-from app.services.taxonomy.snapshot import create_snapshot
+from app.services.taxonomy.snapshot import create_snapshot, get_latest_snapshot
 
 if TYPE_CHECKING:
     from app.services.taxonomy.engine import TaxonomyEngine
@@ -705,7 +705,16 @@ async def execute_cold_path(
         await db.rollback()
 
         # Create a snapshot recording the rejection (after rollback, so
-        # this is a fresh transaction)
+        # this is a fresh transaction).  Carry forward the last known
+        # q_health from the most recent snapshot so the sparkline doesn't
+        # oscillate between q_health and q_system scales.
+        _prev_q_health = None
+        try:
+            prev_snap = await get_latest_snapshot(db)
+            if prev_snap and prev_snap.q_health is not None:
+                _prev_q_health = prev_snap.q_health
+        except Exception:
+            pass
         snap = await create_snapshot(
             db,
             trigger="cold_path",
@@ -713,7 +722,7 @@ async def execute_cold_path(
             q_coherence=0.0,
             q_separation=0.0,
             q_coverage=0.0,
-            q_health=None,
+            q_health=_prev_q_health,
             nodes_created=0,
         )
         try:
