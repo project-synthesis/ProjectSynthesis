@@ -277,11 +277,17 @@ _retry_service() {
     local delay=2
 
     for attempt in $(seq 1 "$max_retries"); do
+        # Stop the failed process FIRST (releases port)
+        stop_service "$svc" 2>/dev/null
+
+        # Wait for port to be fully released before retrying
+        local port; port="$(_svc_port "$svc")"
+        if ! _wait_port_free "$port" 10; then
+            _warn "[RETRY $attempt/$max_retries] $svc port $port still in use after 10s"
+        fi
+
         _warn "[RETRY $attempt/$max_retries] $svc — retrying in ${delay}s"
         sleep "$delay"
-
-        # Stop the failed process before re-launch
-        stop_service "$svc" 2>/dev/null
 
         _launch "$svc"
         local rc=$?
@@ -444,8 +450,10 @@ stop_services() {
 do_restart() {
     stop_services
 
-    # Verify ports are released (handles force-kill edge case where
-    # the kernel hasn't fully cleaned up the socket yet).
+    # Verify ports are released.  Backend lifespan shutdown can take
+    # up to 25s (taxonomy drain + warm path cancel + extraction tasks),
+    # so allow 15s for port release — enough for graceful shutdown to
+    # complete, short enough to surface stuck processes quickly.
     local need_wait=false
     for p in $BACKEND_PORT $MCP_PORT $FRONTEND_PORT; do
         _probe_port "$p" && { need_wait=true; break; }
@@ -453,7 +461,7 @@ do_restart() {
     if $need_wait; then
         echo -e "  ${_DIM}Waiting for ports to release...${_RST}"
         for p in $BACKEND_PORT $MCP_PORT $FRONTEND_PORT; do
-            _wait_port_free "$p" 5 || { _fail "Port $p still in use"; exit 1; }
+            _wait_port_free "$p" 15 || { _fail "Port $p still in use after 15s"; exit 1; }
         done
     fi
 
