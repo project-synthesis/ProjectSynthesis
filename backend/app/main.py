@@ -29,6 +29,109 @@ logger = logging.getLogger(__name__)
 _warm_path_pending = asyncio.Event()
 
 
+async def _backfill_project_ids(db: "AsyncSession") -> None:
+    """Backfill Optimization.project_id from cluster ancestry (2 hops: cluster->domain->project)."""
+    from sqlalchemy import select as _sel
+    from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F811
+
+    from app.models import Optimization, PromptCluster
+
+    total_filled = 0
+    while True:
+        missing_q = await db.execute(
+            _sel(Optimization).where(
+                Optimization.project_id.is_(None),
+                Optimization.cluster_id.isnot(None),
+            ).limit(500)
+        )
+        missing = missing_q.scalars().all()
+        if not missing:
+            break
+
+        # Build cluster_id -> project_id lookup (2-hop: cluster -> domain -> project)
+        cluster_ids = {opt.cluster_id for opt in missing if opt.cluster_id}
+        if not cluster_ids:
+            break
+
+        clusters = (await db.execute(
+            _sel(PromptCluster).where(PromptCluster.id.in_(cluster_ids))
+        )).scalars().all()
+
+        cluster_to_domain = {c.id: c.parent_id for c in clusters}
+
+        domain_ids = {pid for pid in cluster_to_domain.values() if pid}
+        domains = (await db.execute(
+            _sel(PromptCluster).where(PromptCluster.id.in_(domain_ids))
+        )).scalars().all() if domain_ids else []
+
+        domain_to_project = {d.id: d.parent_id for d in domains}
+
+        # Backfill this batch
+        filled = 0
+        for opt in missing:
+            domain_id = cluster_to_domain.get(opt.cluster_id)
+            project_id = domain_to_project.get(domain_id) if domain_id else None
+            if project_id:
+                opt.project_id = project_id
+                filled += 1
+
+        if filled == 0:
+            break  # No more backfillable rows — prevent infinite loop
+
+        total_filled += filled
+        await db.flush()
+
+    if total_filled:
+        logger.info("ADR-005 migration: backfilled project_id on %d optimizations", total_filled)
+
+
+async def _run_adr005_migration(db: "AsyncSession") -> None:
+    """ADR-005: Create Legacy project node, re-parent domains, backfill project_id.
+
+    Idempotent — safe to run on every startup. Skips if project node already exists.
+    """
+    from sqlalchemy import select as _sel
+
+    from app.models import Optimization, PromptCluster
+
+    # Step 1: Check if migration already ran
+    existing = await db.execute(
+        _sel(PromptCluster).where(PromptCluster.state == "project").limit(1)
+    )
+    if existing.scalar_one_or_none() is not None:
+        # Already migrated — just backfill any new optimizations missing project_id
+        await _backfill_project_ids(db)
+        return
+
+    # Step 2: Create Legacy project node
+    legacy = PromptCluster(
+        label="Legacy",
+        state="project",
+        domain="general",
+        task_type="general",
+        member_count=0,
+    )
+    db.add(legacy)
+    await db.flush()
+    logger.info("ADR-005 migration: created Legacy project node %s", legacy.id)
+
+    # Step 3: Re-parent all domain nodes under Legacy
+    domain_q = await db.execute(
+        _sel(PromptCluster).where(
+            PromptCluster.state == "domain",
+            PromptCluster.parent_id.is_(None),
+        )
+    )
+    domains = domain_q.scalars().all()
+    for d in domains:
+        d.parent_id = legacy.id
+    if domains:
+        logger.info("ADR-005 migration: re-parented %d domain nodes under Legacy", len(domains))
+
+    # Step 4: Backfill project_id on Optimizations
+    await _backfill_project_ids(db)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
@@ -333,6 +436,60 @@ async def lifespan(app: FastAPI):
                     await _idx_db.commit()
             except Exception:
                 pass
+
+            # ADR-005: ensure project_id column on optimizations
+            try:
+                async with async_session_factory() as _pid_db:
+                    from sqlalchemy import text as _text_pid
+                    await _pid_db.execute(
+                        _text_pid("ALTER TABLE optimizations ADD COLUMN project_id VARCHAR(36)")
+                    )
+                    await _pid_db.commit()
+                    logger.info("Added project_id column to optimizations")
+            except Exception:
+                pass  # Column already exists
+
+            # ADR-005: ensure project_id index on optimizations
+            try:
+                async with async_session_factory() as _pidx_db:
+                    from sqlalchemy import text as _text_pidx
+                    await _pidx_db.execute(
+                        _text_pidx("CREATE INDEX IF NOT EXISTS ix_optimizations_project_id ON optimizations (project_id)")
+                    )
+                    await _pidx_db.commit()
+            except Exception:
+                pass
+
+            # ADR-005: ensure global_patterns table exists
+            try:
+                async with async_session_factory() as _gp_db:
+                    from sqlalchemy import text as _text_gp
+                    await _gp_db.execute(_text_gp("""
+                        CREATE TABLE IF NOT EXISTS global_patterns (
+                            id VARCHAR(36) PRIMARY KEY,
+                            pattern_text TEXT NOT NULL,
+                            embedding BLOB,
+                            source_cluster_ids TEXT NOT NULL DEFAULT '[]',
+                            source_project_ids TEXT NOT NULL DEFAULT '[]',
+                            cross_project_count INTEGER NOT NULL DEFAULT 0,
+                            global_source_count INTEGER NOT NULL DEFAULT 0,
+                            avg_cluster_score REAL,
+                            promoted_at DATETIME NOT NULL,
+                            last_validated_at DATETIME NOT NULL,
+                            state VARCHAR(20) NOT NULL DEFAULT 'active'
+                        )
+                    """))
+                    await _gp_db.commit()
+            except Exception:
+                pass
+
+            # ADR-005: Legacy project node + domain re-parenting + project_id backfill
+            try:
+                async with async_session_factory() as _adr005_db:
+                    await _run_adr005_migration(_adr005_db)
+                    await _adr005_db.commit()
+            except Exception as adr005_exc:
+                logger.warning("ADR-005 migration failed (non-fatal): %s", adr005_exc)
 
             # One-time backfill: embed optimized_prompt + transformation for existing rows
             import numpy as np
