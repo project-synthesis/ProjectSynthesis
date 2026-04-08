@@ -421,8 +421,8 @@
     border-bottom-color: var(--tab-state-color, var(--color-neon-cyan));
   }
 
+  /* Inset focus for flush tabs (global 2px outset overlaps adjacent tabs) */
   .state-tab:focus-visible {
-    outline: 1px solid var(--color-neon-cyan);
     outline-offset: -1px;
   }
 
@@ -494,11 +494,12 @@
     padding: 0 6px;
     background: transparent;
     border: 1px solid transparent;
-    border-left: 2px solid var(--state-color, transparent);
+    border-left: 1px solid var(--state-color, transparent);
     cursor: pointer;
     width: 100%;
     text-align: left;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
                 background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
@@ -509,7 +510,7 @@
   }
 
   .search-result:active {
-    transform: none;
+    background: var(--color-bg-hover);
   }
 
 
@@ -546,6 +547,10 @@
 
   .mindmap-btn:hover {
     color: var(--tier-accent, var(--color-neon-cyan));
+  }
+
+  .mindmap-btn:active {
+    transform: scale(0.92);
   }
 
   /* ---- Proven Templates ---- */
@@ -645,6 +650,10 @@
     background: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 8%, transparent);
   }
 
+  .use-template-btn:active {
+    border-color: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 20%, transparent);
+  }
+
   /* ---- Column headers ---- */
   .column-headers {
     display: flex;
@@ -721,6 +730,10 @@
     background: var(--color-bg-hover);
   }
 
+  .domain-header:active {
+    background: var(--color-bg-hover);
+  }
+
   .domain-header--highlighted {
     box-shadow: inset 0 0 0 1px var(--color-border-accent);
     background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
@@ -759,12 +772,14 @@
     padding: 0 6px 0 16px;
     background: transparent;
     border: 1px solid transparent;
-    border-left: 2px solid var(--state-color, transparent);
+    border-left: 1px solid var(--state-color, transparent);
     cursor: pointer;
     width: 100%;
     text-align: left;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .family-row:hover {
@@ -774,11 +789,12 @@
   }
 
   .family-row:active {
-    transform: none;
+    background: var(--color-bg-hover);
   }
 
   .family-row--expanded {
-    border-color: var(--tier-accent, var(--color-neon-cyan));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 40%, transparent);
+    border-color: transparent;
     border-left-color: var(--state-color, var(--tier-accent, var(--color-neon-cyan)));
     background: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 4%, transparent);
   }

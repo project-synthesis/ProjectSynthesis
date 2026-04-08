@@ -28,7 +28,10 @@ FRONTEND_PORT=5199
 declare -A STOP_TIMEOUT=([backend]=25 [mcp]=5 [frontend]=5)
 
 # Startup readiness timeout per service (seconds).
-declare -A READY_TIMEOUT=([backend]=15 [mcp]=10 [frontend]=15)
+# Backend needs 30-40s: uvicorn --reload fork + lifespan init (SQLite WAL,
+# routing, taxonomy engine, index warm-load, domain services, migrations,
+# backfills, strategy/agent watchers, warm-path timer start).
+declare -A READY_TIMEOUT=([backend]=45 [mcp]=10 [frontend]=15)
 
 # ---------------------------------------------------------------------------
 # Output helpers (ANSI colors when stdout is a terminal)
