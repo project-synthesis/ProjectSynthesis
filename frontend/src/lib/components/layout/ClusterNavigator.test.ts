@@ -480,12 +480,14 @@ describe('ClusterNavigator', () => {
     });
   });
 
-  it('shows expanded meta-patterns after family detail loads', async () => {
+  it('shows linked optimizations after family detail loads', async () => {
     const user = userEvent.setup();
 
     stubFetch({
       '/api/clusters/fam-1': clusterDetail({
-        meta_patterns: [mockMetaPattern({ id: 'mp-1', pattern_text: 'Validate inputs', source_count: 4 })],
+        optimizations: [
+          { id: 'opt-1', trace_id: 't-1', raw_prompt: 'Test prompt', intent_label: 'Validate inputs', overall_score: 7.5, strategy_used: 'auto', created_at: new Date().toISOString() },
+        ],
       }),
       '/api/clusters/tree': treeResponseWrapped([
         mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
@@ -503,7 +505,6 @@ describe('ClusterNavigator', () => {
     await waitFor(() => {
       expect(screen.getByText('Validate inputs')).toBeInTheDocument();
     });
-    expect(screen.getByText('4x')).toBeInTheDocument();
   });
 
   // ── 6. Empty state ────────────────────────────────────────────────────────
@@ -592,13 +593,13 @@ describe('ClusterNavigator', () => {
     });
   });
 
-  // ── 11. Expanded detail — no meta-patterns fallback ───────────────────────
+  // ── 11. Expanded detail — no linked optimizations fallback ────────────────
 
-  it('shows "No meta-patterns extracted yet" when family has empty meta_patterns', async () => {
+  it('shows "No linked optimizations yet" when family has empty optimizations', async () => {
     const user = userEvent.setup();
 
     stubFetch({
-      '/api/clusters/fam-1': clusterDetail({ meta_patterns: [] }),
+      '/api/clusters/fam-1': clusterDetail({ optimizations: [] }),
       '/api/clusters/tree': treeResponseWrapped([
         mockPatternFamily({ id: 'fam-1', domain: 'backend', intent_label: 'API patterns' }),
       ]),
@@ -613,7 +614,7 @@ describe('ClusterNavigator', () => {
     await user.click(screen.getByText('API patterns'));
 
     await waitFor(() => {
-      expect(screen.getByText('No meta-patterns extracted yet.')).toBeInTheDocument();
+      expect(screen.getByText('No linked optimizations yet.')).toBeInTheDocument();
     });
   });
 

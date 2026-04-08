@@ -18,14 +18,13 @@
       return true;
     });
   }
-  import { getOptimization } from '$lib/api/client';
   import { updateCluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
   import MarkdownRenderer from '$lib/components/shared/MarkdownRenderer.svelte';
   import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
   import ScoreSparkline from '$lib/components/shared/ScoreSparkline.svelte';
   import { PHASE_LABELS, DIMENSION_LABELS } from '$lib/utils/dimensions';
-  import { formatScore, truncateText, isPassthroughResult, trendInfo, formatRelativeTime } from '$lib/utils/formatting';
+  import { formatScore, isPassthroughResult, trendInfo, formatRelativeTime } from '$lib/utils/formatting';
 
   // Tab-aware result: use per-tab cached data when available, fall back to global forge state
   const activeResult = $derived(editorStore.activeResult ?? forgeStore.result);
@@ -46,17 +45,6 @@
   const showClusterDetail = $derived(
     clustersStore.selectedClusterId !== null && !forgeActive
   );
-
-  async function openOptimization(traceId: string, optimizationId: string): Promise<void> {
-    try {
-      const opt = await getOptimization(traceId);
-      forgeStore.loadFromRecord(opt); // caches result via editorStore.cacheResult internally
-      editorStore.openResult(opt.id); // open tab — data already cached by loadFromRecord
-    } catch {
-      // Fallback: open tab without data — ForgeArtifact will handle gracefully
-      editorStore.openResult(optimizationId);
-    }
-  }
 
   function dismissFamily(): void {
     clustersStore.selectCluster(null);
@@ -290,30 +278,7 @@
             </div>
           {/if}
 
-          <!-- Linked optimizations -->
-          {#if family.optimizations.length > 0}
-            {@const allOpts = dedupe(family.optimizations)}
-            <div class="family-section">
-              <div class="section-heading" style="margin-bottom: 4px;">Linked optimizations{#if allOpts.length < family.member_count} ({allOpts.length} of {family.member_count}){/if}</div>
-              <div class="opt-list">
-                {#each allOpts as opt (opt.id)}
-                  <button
-                    class="opt-item"
-                    onclick={() => openOptimization(opt.trace_id, opt.id)}
-                    use:tooltip={opt.raw_prompt}
-                  >
-                    <span class="opt-prompt">{opt.intent_label || truncateText(opt.raw_prompt)}</span>
-                    {#if opt.created_at}
-                      <span class="opt-date font-mono">{formatRelativeTime(opt.created_at)}</span>
-                    {/if}
-                    <span class="opt-score" class:opt-score--null={opt.overall_score === null}>
-                      {formatScore(opt.overall_score)}
-                    </span>
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/if}
+          <!-- Linked optimizations moved to ClusterNavigator as sub-items -->
         {/if}
       </div>
 
@@ -1105,67 +1070,6 @@
     padding: 0 4px;
     flex-shrink: 0;
     line-height: 1.6;
-  }
-
-  /* Linked optimizations list */
-  .opt-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .opt-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    padding: 3px 6px;
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-border-subtle);
-    cursor: pointer;
-    text-align: left;
-    width: 100%;
-    font: inherit;
-    color: inherit;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 200ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  .opt-item:hover {
-    border-color: var(--color-border-accent);
-    background: var(--color-bg-hover);
-  }
-
-  .opt-item:active {
-    transform: none;
-  }
-
-  .opt-prompt {
-    font-size: 10px;
-    font-family: var(--font-sans);
-    color: var(--color-text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .opt-date {
-    font-size: 8px;
-    color: var(--color-text-dim);
-    flex-shrink: 0;
-  }
-
-  .opt-score {
-    font-size: 10px;
-    font-family: var(--font-mono);
-    color: var(--tier-accent, var(--color-neon-cyan));
-    flex-shrink: 0;
-  }
-
-  .opt-score--null {
-    color: var(--color-text-dim);
   }
 
   /* Taxonomy health panel */

@@ -5,7 +5,8 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
   import { scoreColor, taxonomyColor, stateColor } from '$lib/utils/colors';
-  import { formatScore, parsePrimaryDomain } from '$lib/utils/formatting';
+  import { formatScore, formatRelativeTime, parsePrimaryDomain } from '$lib/utils/formatting';
+  import { getOptimization } from '$lib/api/client';
   import { tooltip } from '$lib/actions/tooltip';
   import { CLUSTER_NAV_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
@@ -161,6 +162,18 @@
 
   function setStateFilter(f: StateFilter) {
     clustersStore.setStateFilter(f);
+  }
+
+  const OPT_DISPLAY_LIMIT = 8;
+
+  async function openLinkedOpt(traceId: string, optId: string) {
+    try {
+      const opt = await getOptimization(traceId);
+      forgeStore.loadFromRecord(opt);
+      editorStore.openResult(optId);
+    } catch {
+      addToast('deleted', 'Failed to load optimization');
+    }
   }
 
   async function useTemplate(clusterId: string) {
@@ -342,17 +355,32 @@
                       <span>{clustersStore.clusterDetail.preferred_strategy}</span>
                     {/if}
                   </div>
-                  {#if clustersStore.clusterDetail.meta_patterns.length > 0}
-                    <div class="meta-list">
-                      {#each clustersStore.clusterDetail.meta_patterns as mp (mp.id)}
-                        <div class="meta-row">
-                          <span class="meta-text">{mp.pattern_text}</span>
-                          <span class="meta-count font-mono">{mp.source_count}x</span>
-                        </div>
+                  {#if clustersStore.clusterDetail.optimizations.length > 0}
+                    {@const allOpts = clustersStore.clusterDetail.optimizations}
+                    {@const visibleOpts = allOpts.slice(0, OPT_DISPLAY_LIMIT)}
+                    <div class="linked-opts">
+                      {#each visibleOpts as opt (opt.id)}
+                        <button
+                          class="linked-opt-row"
+                          onclick={() => openLinkedOpt(opt.trace_id, opt.id)}
+                          use:tooltip={opt.raw_prompt}
+                        >
+                          <span class="linked-opt-label">{opt.intent_label || (opt.raw_prompt ? opt.raw_prompt.slice(0, 40) + '..' : 'Untitled')}</span>
+                          {#if opt.created_at}
+                            <span class="linked-opt-time font-mono">{formatRelativeTime(opt.created_at)}</span>
+                          {/if}
+                          <span
+                            class="linked-opt-score font-mono"
+                            style="color: {scoreColor(opt.overall_score)};"
+                          >{formatScore(opt.overall_score)}</span>
+                        </button>
                       {/each}
+                      {#if allOpts.length > OPT_DISPLAY_LIMIT}
+                        <p class="detail-note">{allOpts.length - OPT_DISPLAY_LIMIT} more in Inspector</p>
+                      {/if}
                     </div>
                   {:else}
-                    <p class="detail-note">No meta-patterns extracted yet.</p>
+                    <p class="detail-note">No linked optimizations yet.</p>
                   {/if}
                 {:else if clustersStore.clusterDetailError}
                   <p class="detail-note">Failed to load detail.</p>
@@ -842,32 +870,62 @@
     margin: 0;
   }
 
-  .meta-list {
+  /* ---- Linked optimizations in expanded detail ---- */
+  .linked-opts {
     display: flex;
     flex-direction: column;
     gap: 1px;
   }
 
-  .meta-row {
+  .linked-opt-row {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 4px;
-    padding: 2px 0;
+    height: 20px;
+    padding: 0 2px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .meta-text {
+  .linked-opt-row:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+  }
+
+  .linked-opt-row:active {
+    background: var(--color-bg-hover);
+  }
+
+  .linked-opt-label {
     font-size: 9px;
-    font-family: var(--font-mono);
     color: var(--color-text-secondary);
-    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     flex: 1;
     min-width: 0;
   }
 
-  .meta-count {
+  .linked-opt-row:hover .linked-opt-label {
+    color: var(--tier-accent, var(--color-neon-cyan));
+  }
+
+  .linked-opt-time {
     font-size: 8px;
     color: var(--color-text-dim);
     flex-shrink: 0;
+  }
+
+  .linked-opt-score {
+    font-size: 9px;
+    flex-shrink: 0;
+    width: 22px;
+    text-align: right;
   }
 
   .member-count {

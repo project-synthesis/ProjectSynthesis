@@ -218,68 +218,8 @@ describe('Inspector', () => {
     expect(screen.queryByText('Meta-patterns')).not.toBeInTheDocument();
   });
 
-  // ── 4. Linked optimizations ──────────────────────────────────────────────────
-
-  it('renders linked optimization entries', async () => {
-    clustersStore.selectedClusterId = 'fam-1';
-    clustersStore.clusterDetail = makeFamilyDetail() as any;
-    clustersStore.clusterDetailLoading = false;
-    mockFetch([]);
-
-    render(Inspector);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Linked optimizations/)).toBeInTheDocument();
-    });
-    // The optimization uses intent_label when present
-    expect(screen.getByText('Write API')).toBeInTheDocument();
-    // Score displayed
-    expect(screen.getByText('8.0')).toBeInTheDocument();
-  });
-
-  it('clicking a linked optimization calls openResult on editorStore', async () => {
-    const user = userEvent.setup();
-    const openResultSpy = vi.spyOn(editorStore, 'openResult');
-
-    // Mock getOptimization fetch
-    mockFetch([
-      {
-        match: '/api/optimize/',
-        response: mockOptimizationResult({ id: 'opt-1', trace_id: 'trace-1' }),
-      },
-    ]);
-
-    clustersStore.selectedClusterId = 'fam-1';
-    clustersStore.clusterDetail = makeFamilyDetail() as any;
-    clustersStore.clusterDetailLoading = false;
-
-    render(Inspector);
-
-    await waitFor(() => {
-      expect(screen.getByText('Write API')).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByText('Write API'));
-
-    await waitFor(() => {
-      // openResult called with ID only — data already cached by loadFromRecord
-      expect(openResultSpy).toHaveBeenCalledWith('opt-1');
-    });
-  });
-
-  it('does not render linked optimizations section when list is empty', async () => {
-    clustersStore.selectedClusterId = 'fam-1';
-    clustersStore.clusterDetail = makeFamilyDetail({ optimizations: [] }) as any;
-    clustersStore.clusterDetailLoading = false;
-    mockFetch([]);
-
-    render(Inspector);
-
-    await waitFor(() => {
-      expect(screen.getByText('API patterns')).toBeInTheDocument();
-    });
-    expect(screen.queryByText('Linked optimizations')).not.toBeInTheDocument();
-  });
+  // ── 4. Linked optimizations moved to ClusterNavigator ────────────────────────
+  // (Tests for linked optimizations are in ClusterNavigator.test.ts)
 
   // ── 5. Inline rename ─────────────────────────────────────────────────────────
 
@@ -297,7 +237,7 @@ describe('Inspector', () => {
     });
 
     // The intent label is a button with title "Click to rename"
-    await user.click(screen.getByRole('button', { name: 'Click to rename' }));
+    await user.click(screen.getByRole('button', { name: /Click to rename/ }));
 
     // Rename input should now be visible with the current label as value
     const input = screen.getByRole('textbox', { name: 'Family name' }) as HTMLInputElement;
@@ -318,7 +258,7 @@ describe('Inspector', () => {
       expect(screen.getByText('API patterns')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole('button', { name: 'Click to rename' }));
+    await user.click(screen.getByRole('button', { name: /Click to rename/ }));
     const input = screen.getByRole('textbox', { name: 'Family name' });
     // Fire keydown directly on the input to trigger the Svelte onkeydown handler
     fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
@@ -327,7 +267,7 @@ describe('Inspector', () => {
       // Rename form gone, original intent label visible again
       expect(screen.queryByRole('textbox', { name: 'Family name' })).not.toBeInTheDocument();
     });
-    expect(screen.getByRole('button', { name: 'Click to rename' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Click to rename/ })).toBeInTheDocument();
   });
 
   it('clicking cancel button in rename form reverts to display mode', async () => {
@@ -343,12 +283,12 @@ describe('Inspector', () => {
       expect(screen.getByText('API patterns')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole('button', { name: 'Click to rename' }));
+    await user.click(screen.getByRole('button', { name: /Click to rename/ }));
     // Cancel button has title="Cancel"
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByRole('textbox', { name: 'Family name' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Click to rename' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Click to rename/ })).toBeInTheDocument();
   });
 
   it('submitting rename form calls renameFamily API and refreshes family', async () => {
@@ -390,7 +330,7 @@ describe('Inspector', () => {
       expect(screen.getByText('API patterns')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole('button', { name: 'Click to rename' }));
+    await user.click(screen.getByRole('button', { name: /Click to rename/ }));
     const input = screen.getByRole('textbox', { name: 'Family name' });
     await user.clear(input);
     await user.type(input, 'Renamed Family');
