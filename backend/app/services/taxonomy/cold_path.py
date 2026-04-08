@@ -1079,3 +1079,132 @@ async def execute_cold_path(
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# UMAP-only projection (no HDBSCAN refit)
+# ---------------------------------------------------------------------------
+
+
+async def execute_umap_projection(
+    engine: "TaxonomyEngine",
+    db: AsyncSession,
+) -> int:
+    """Project UMAP-less clusters without re-clustering.
+
+    Fits UMAP on all already-positioned clusters, then uses incremental
+    transform to assign 3D coordinates to clusters that lack them.
+    No HDBSCAN, no Q-gate, no node creation/deletion — purely additive.
+
+    Also assigns OKLab colors to newly positioned nodes and updates
+    domain node UMAP positions from their children.
+
+    Returns:
+        Number of clusters that received UMAP coordinates.
+    """
+    import time as _time
+
+    _t0 = _time.monotonic()
+
+    # Load all active non-domain clusters
+    all_q = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state.notin_(["domain", "archived"])
+        )
+    )
+    all_clusters = list(all_q.scalars().all())
+
+    # Partition into positioned and unpositioned
+    positioned: list[PromptCluster] = []
+    positioned_embs: list[np.ndarray] = []
+    unpositioned: list[PromptCluster] = []
+    unpositioned_embs: list[np.ndarray] = []
+
+    opt_idx = getattr(engine, "_optimized_index", None)
+    trans_idx = getattr(engine, "_transformation_index", None)
+
+    for c in all_clusters:
+        if not c.centroid_embedding:
+            continue
+        try:
+            raw = np.frombuffer(c.centroid_embedding, dtype=np.float32)
+            opt_vec = opt_idx.get_vector(c.id) if opt_idx else None
+            trans_vec = trans_idx.get_vector(c.id) if trans_idx else None
+            blended = blend_embeddings(raw=raw, optimized=opt_vec, transformation=trans_vec)
+        except (ValueError, TypeError):
+            continue
+
+        if c.umap_x is not None and c.umap_y is not None and c.umap_z is not None:
+            positioned.append(c)
+            positioned_embs.append(blended)
+        else:
+            unpositioned.append(c)
+            unpositioned_embs.append(blended)
+
+    if not unpositioned:
+        return 0  # nothing to do
+
+    projector = UMAPProjector()
+
+    if len(positioned_embs) >= projector._MIN_POINTS_FOR_UMAP:
+        # Fit on existing positioned clusters, transform new ones
+        projector.fit(positioned_embs)
+        new_positions = projector.transform(unpositioned_embs)
+    elif positioned_embs:
+        # Too few positioned for UMAP — fit on ALL (positioned + new) together
+        all_embs = positioned_embs + unpositioned_embs
+        all_positions = projector.fit(all_embs)
+        # Extract the new positions (last N entries)
+        new_positions = all_positions[len(positioned_embs):]
+        # Update positioned nodes too (UMAP refit changes all positions)
+        for i, node in enumerate(positioned):
+            if i < len(positioned_embs):
+                node.umap_x = float(all_positions[i, 0])
+                node.umap_y = float(all_positions[i, 1])
+                node.umap_z = float(all_positions[i, 2])
+    else:
+        # No positioned nodes at all — fit on new ones only
+        new_positions = projector.fit(unpositioned_embs)
+
+    # Assign UMAP coordinates + OKLab colors to newly positioned nodes
+    projected = 0
+    for i, node in enumerate(unpositioned):
+        if i < len(new_positions):
+            node.umap_x = float(new_positions[i, 0])
+            node.umap_y = float(new_positions[i, 1])
+            node.umap_z = float(new_positions[i, 2])
+            node.color_hex = generate_color(node.umap_x, node.umap_y, node.umap_z)
+            projected += 1
+
+    # Update domain node positions from children
+    try:
+        domain_q = await db.execute(
+            select(PromptCluster).where(PromptCluster.state == "domain")
+        )
+        for dnode in domain_q.scalars().all():
+            await engine._set_domain_umap_from_children(db, dnode)
+    except Exception as dom_exc:
+        logger.warning("UMAP projection: domain positioning failed (non-fatal): %s", dom_exc)
+
+    await db.commit()
+
+    duration_ms = int((_time.monotonic() - _t0) * 1000)
+    logger.info(
+        "UMAP projection: positioned %d/%d clusters in %dms (no refit)",
+        projected, len(unpositioned), duration_ms,
+    )
+
+    try:
+        get_event_logger().log_decision(
+            path="cold", op="umap", decision="projection_only",
+            duration_ms=duration_ms,
+            context={
+                "projected": projected,
+                "already_positioned": len(positioned),
+                "total_active": len(all_clusters),
+            },
+        )
+    except RuntimeError:
+        pass
+
+    return projected

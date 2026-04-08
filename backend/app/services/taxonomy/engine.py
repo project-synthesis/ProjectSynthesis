@@ -872,6 +872,27 @@ class TaxonomyEngine:
                     umap_fitted=False,
                 )
 
+    async def run_umap_projection(self, db: AsyncSession) -> int:
+        """UMAP-only projection for clusters that lack 3D coordinates.
+
+        Unlike ``run_cold_path()``, this does NOT re-cluster via HDBSCAN.
+        It fits UMAP on already-positioned clusters and incrementally
+        transforms the unpositioned ones. No Q-gate, no rollback risk.
+
+        Returns:
+            Number of clusters projected, or 0 if skipped (lock held).
+        """
+        if self._warm_path_lock.locked():
+            return 0
+
+        async with self._warm_path_lock:
+            try:
+                from app.services.taxonomy.cold_path import execute_umap_projection
+                return await execute_umap_projection(self, db)
+            except Exception as exc:
+                logger.error("UMAP projection failed: %s", exc, exc_info=True)
+                return 0
+
     # ------------------------------------------------------------------
     # Warm/cold path helpers
     # ------------------------------------------------------------------

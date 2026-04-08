@@ -614,9 +614,6 @@ async def lifespan(app: FastAPI):
         app.state.context_service = None
 
     # Start warm-path periodic timer (Spec Section 6.4 — adaptive interval)
-    _cold_path_cooldown_seconds = 3600  # 1 hour cooldown after rejected cold path
-    _cold_path_retry_after: float = 0.0  # monotonic timestamp; 0 = no cooldown
-
     async def _warm_path_timer():
         """Periodically trigger warm-path re-clustering.
 
@@ -624,7 +621,6 @@ async def lifespan(app: FastAPI):
         ``_warm_path_pending`` is set (e.g. after a new optimization is
         clustered), whichever comes first.
         """
-        nonlocal _cold_path_retry_after
         debounce_seconds = 30  # Wait 30s after last event before running
 
         try:
@@ -693,56 +689,42 @@ async def lifespan(app: FastAPI):
                             await lifecycle.decay_usage(lifecycle_db)
                             await lifecycle_db.commit()
 
-                        # Auto-trigger cold path when:
-                        # 1. Deadlock breaker signaled _cold_path_needed, OR
-                        # 2. Active nodes lack UMAP coordinates (hot-path
-                        #    creates clusters with NULL umap_x/y/z).
-                        # Cooldown: after a rejected cold path (Q regression),
-                        # don't retry for _cold_path_cooldown_seconds to avoid
-                        # a Groundhog Day loop where UMAP-less nodes trigger
-                        # repeated cold paths that always regress and rollback.
+                        # Auto-trigger UMAP projection or cold path:
+                        # 1. Deadlock breaker → full cold path (HDBSCAN refit)
+                        # 2. UMAP-less nodes → UMAP-only projection (no refit)
                         try:
-                            need_cold = getattr(engine, "_cold_path_needed", False)
+                            need_full_refit = getattr(engine, "_cold_path_needed", False)
 
-                            if not need_cold:
-                                # Skip UMAP check if cooldown is active
-                                _now_mono = time.monotonic()
-                                if _now_mono < _cold_path_retry_after:
-                                    pass  # cooldown active — skip UMAP-driven trigger
-                                else:
-                                    from sqlalchemy import func, select
-
-                                    from app.models import PromptCluster
-
-                                    async with async_session_factory() as umap_db:
-                                        no_umap = (await umap_db.execute(
-                                            select(func.count()).where(
-                                                PromptCluster.state == "active",
-                                                PromptCluster.umap_x.is_(None),
-                                            )
-                                        )).scalar() or 0
-                                        need_cold = no_umap >= 5
-                                        if need_cold:
-                                            logger.info(
-                                                "Auto cold-path: %d active nodes lack UMAP coordinates",
-                                                no_umap,
-                                            )
-
-                            if need_cold:
-                                if getattr(engine, "_cold_path_needed", False):
-                                    logger.info("Auto cold-path: deadlock breaker requested rebuild")
+                            if need_full_refit:
+                                logger.info("Auto cold-path: deadlock breaker requested rebuild")
                                 async with async_session_factory() as cold_db:
                                     cold_result = await engine.run_cold_path(cold_db)
                                     if cold_result and not cold_result.accepted:
-                                        _cold_path_retry_after = time.monotonic() + _cold_path_cooldown_seconds
-                                        logger.info(
-                                            "Cold path rejected (Q regression) — cooldown for %ds",
-                                            _cold_path_cooldown_seconds,
+                                        logger.info("Cold path rejected (Q regression)")
+                            else:
+                                # UMAP-only: project clusters that lack 3D coordinates.
+                                # No HDBSCAN, no Q-gate, no rollback risk.
+                                from sqlalchemy import func, select
+
+                                from app.models import PromptCluster
+
+                                async with async_session_factory() as umap_db:
+                                    no_umap = (await umap_db.execute(
+                                        select(func.count()).where(
+                                            PromptCluster.state == "active",
+                                            PromptCluster.umap_x.is_(None),
                                         )
-                                    else:
-                                        _cold_path_retry_after = 0.0  # accepted — reset cooldown
+                                    )).scalar() or 0
+
+                                if no_umap >= 3:
+                                    logger.info(
+                                        "UMAP projection: %d active nodes lack coordinates",
+                                        no_umap,
+                                    )
+                                    async with async_session_factory() as proj_db:
+                                        await engine.run_umap_projection(proj_db)
                         except Exception as cold_exc:
-                            logger.warning("Auto cold-path check failed: %s", cold_exc)
+                            logger.warning("Auto cold/UMAP check failed: %s", cold_exc)
                 except Exception as exc:
                     logger.error("Warm path timer failed: %s", exc, exc_info=True)
         except asyncio.CancelledError:
