@@ -74,6 +74,7 @@ class ClusterDetail(BaseModel):
     blend_w_transform: float | None = None
     split_failures: int = 0
     promoted_at: datetime | None = None
+    member_counts_by_project: dict[str, int] = Field(default_factory=dict)  # ADR-005 Phase 2A
     meta_patterns: list[MetaPatternItem]
     optimizations: list[LinkedOptimization]
     children: list[ClusterNode] | None = None
