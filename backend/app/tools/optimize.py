@@ -217,6 +217,7 @@ async def handle_optimize(
         # Notify backend event bus (MCP runs in a separate process)
         await notify_event_bus("optimization_created", {
             "id": result.get("id", ""),
+            "trace_id": result.get("trace_id", ""),
             "task_type": result.get("task_type", ""),
             "intent_label": result.get("intent_label", "general"),
             "domain": result.get("domain", "general"),

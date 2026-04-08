@@ -81,6 +81,7 @@ async def test_synthesis_optimize_with_provider():
         assert mock_notify.call_count == 1
         mock_notify.assert_any_call("optimization_created", {
             "id": "opt_123",
+            "trace_id": "",
             "task_type": "",
             "intent_label": "general",
             "domain": "general",
