@@ -7,7 +7,7 @@ snapshots (copy-on-write). At 2000 clusters (384-dim), search is ~3ms.
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +25,7 @@ class IndexSnapshot:
 
     matrix: np.ndarray  # deep copy of _matrix (N x dim, float32)
     ids: list[str]       # copy of _ids (cluster UUIDs)
+    project_ids: list[str | None] = field(default_factory=list)  # ADR-005
 
 
 class EmbeddingIndex:
@@ -36,6 +37,7 @@ class EmbeddingIndex:
         # Immutable snapshots — replaced atomically on mutation
         self._matrix: np.ndarray = np.empty((0, dim), dtype=np.float32)
         self._ids: list[str] = []
+        self._project_ids: list[str | None] = []  # ADR-005: parallel array
 
     @property
     def size(self) -> int:
@@ -90,9 +92,13 @@ class EmbeddingIndex:
         ]
 
     def search(
-        self, embedding: np.ndarray, k: int = 5, threshold: float = 0.72
+        self, embedding: np.ndarray, k: int = 5, threshold: float = 0.72,
+        project_filter: str | None = None,
     ) -> list[tuple[str, float]]:
         """Top-k cosine search. Lock-free — reads current snapshot.
+
+        Args:
+            project_filter: If set, only include vectors tagged with this project_id.
 
         Returns list of (cluster_id, cosine_similarity) sorted descending.
         """
@@ -110,6 +116,16 @@ class EmbeddingIndex:
 
         # Cosine similarity via matmul (matrix rows are L2-normalized)
         scores = matrix @ query  # (n,)
+
+        # ADR-005: project filter mask
+        if project_filter is not None:
+            project_ids = self._project_ids
+            if project_ids:
+                project_mask = np.array(
+                    [pid == project_filter for pid in project_ids],
+                    dtype=bool,
+                )
+                scores = np.where(project_mask, scores, -1.0)
 
         # Filter by threshold
         mask = scores >= threshold
@@ -135,7 +151,10 @@ class EmbeddingIndex:
 
         return [(ids[i], float(scores[i])) for i in top_indices]
 
-    async def upsert(self, cluster_id: str, embedding: np.ndarray) -> None:
+    async def upsert(
+        self, cluster_id: str, embedding: np.ndarray,
+        project_id: str | None = None,
+    ) -> None:
         """Insert or update a single centroid. Creates new snapshot."""
         emb = embedding.astype(np.float32).ravel()
         norm = np.linalg.norm(emb)
@@ -145,12 +164,15 @@ class EmbeddingIndex:
 
         async with self._lock:
             ids = list(self._ids)
+            project_ids = list(self._project_ids)
             if cluster_id in ids:
                 idx = ids.index(cluster_id)
                 matrix = self._matrix.copy()
                 matrix[idx] = emb
+                project_ids[idx] = project_id
             else:
                 ids.append(cluster_id)
+                project_ids.append(project_id)
                 if self._matrix.shape[0] == 0:
                     matrix = emb.reshape(1, -1)
                 else:
@@ -159,6 +181,7 @@ class EmbeddingIndex:
             # Atomic swap
             self._matrix = matrix
             self._ids = ids
+            self._project_ids = project_ids
 
     async def remove(self, cluster_id: str) -> None:
         """Remove a centroid from the index. Creates new snapshot."""
@@ -166,19 +189,26 @@ class EmbeddingIndex:
             if cluster_id not in self._ids:
                 return
             ids = list(self._ids)
+            project_ids = list(self._project_ids)
             idx = ids.index(cluster_id)
             ids.pop(idx)
+            project_ids.pop(idx)
             matrix = np.delete(self._matrix, idx, axis=0)
 
             self._matrix = matrix
             self._ids = ids
+            self._project_ids = project_ids
 
-    async def rebuild(self, centroids: dict[str, np.ndarray]) -> None:
+    async def rebuild(
+        self, centroids: dict[str, np.ndarray],
+        project_ids: dict[str, str | None] | None = None,
+    ) -> None:
         """Full rebuild from scratch (cold path). Acquires lock."""
         if not centroids:
             async with self._lock:
                 self._matrix = np.empty((0, self._dim), dtype=np.float32)
                 self._ids = []
+                self._project_ids = []
             return
 
         ids = list(centroids.keys())
@@ -192,10 +222,12 @@ class EmbeddingIndex:
                 rows.append(np.zeros(self._dim, dtype=np.float32))
 
         matrix = np.vstack(rows)
+        p_ids = [project_ids.get(cid) if project_ids else None for cid in ids]
 
         async with self._lock:
             self._matrix = matrix
             self._ids = ids
+            self._project_ids = p_ids
 
         logger.info("EmbeddingIndex rebuilt: %d centroids", len(ids))
 
@@ -210,6 +242,7 @@ class EmbeddingIndex:
             return IndexSnapshot(
                 matrix=self._matrix.copy(),
                 ids=list(self._ids),
+                project_ids=list(self._project_ids),
             )
 
     async def restore(self, snapshot: IndexSnapshot) -> None:
@@ -222,13 +255,18 @@ class EmbeddingIndex:
         async with self._lock:
             self._matrix = snapshot.matrix.copy()
             self._ids = list(snapshot.ids)
+            self._project_ids = list(snapshot.project_ids) if snapshot.project_ids else [None] * len(snapshot.ids)
 
     async def save_cache(self, cache_path: Path) -> None:
         """Serialize index to disk for fast startup recovery."""
         import pickle
 
         async with self._lock:
-            data = {"matrix": self._matrix, "ids": list(self._ids)}
+            data = {
+                "matrix": self._matrix,
+                "ids": list(self._ids),
+                "project_ids": list(self._project_ids),
+            }
         try:
             with open(cache_path, "wb") as f:
                 pickle.dump(data, f)
@@ -252,6 +290,7 @@ class EmbeddingIndex:
             async with self._lock:
                 self._matrix = data["matrix"]
                 self._ids = data["ids"]
+                self._project_ids = data.get("project_ids", [None] * len(self._ids))
             logger.info("EmbeddingIndex loaded from cache: %d entries (%.0fs old)", len(self._ids), age)
             return True
         except Exception as exc:
