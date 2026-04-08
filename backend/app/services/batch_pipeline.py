@@ -183,6 +183,7 @@ async def run_single_prompt(
         strategy_instructions = strategy_loader.load(effective_strategy)
         analysis_summary = (
             f"Task type: {analysis.task_type}\n"
+            f"Domain: {effective_domain}\n"
             f"Weaknesses: {', '.join(analysis.weaknesses)}\n"
             f"Strengths: {', '.join(analysis.strengths)}\n"
             f"Strategy: {effective_strategy}\n"
