@@ -522,7 +522,7 @@ async def passthrough_save(
     cleaned_prompt, extracted_changes = split_prompt_and_changes(body.optimized_prompt)
     effective_changes = body.changes_summary or extracted_changes
 
-    if scoring_enabled or body.scores:
+    if scoring_enabled:
         from app.services.scoring_service import score_passthrough
 
         score_result = await score_passthrough(
