@@ -159,7 +159,7 @@ async def get_injection_edges(
     ``cluster_id`` (the target).  Returns weighted directed edges where weight
     is the number of injection events along that source→target pair.
 
-    Only includes edges where both source and target clusters are non-archived.
+    Only includes edges where both source and target clusters are non-structural.
     """
     try:
         db.autoflush = False
