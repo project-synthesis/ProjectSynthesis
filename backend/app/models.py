@@ -72,6 +72,7 @@ class Optimization(Base):
     transformation_embedding = Column(LargeBinary, nullable=True)
     phase_weights_json = Column(JSON, nullable=True)
     cluster_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=True)
+    project_id = Column(String(36), nullable=True, index=True)  # ADR-005: denormalized project FK
     domain_raw = Column(String, nullable=True)
     heuristic_flags = Column(JSON, nullable=True)
     improvement_score = Column(Float, nullable=True)  # Weighted delta score (0-10)
@@ -220,6 +221,29 @@ class TaxonomySnapshot(Base):
     __table_args__ = (
         Index("ix_taxonomy_snapshot_created_at", created_at.desc()),
     )
+
+
+class GlobalPattern(Base):
+    """Durable cross-project pattern (ADR-005).
+
+    Promoted from MetaPattern when a technique proves universal across
+    2+ projects. Survives source cluster archival. Injected into all
+    projects with a 1.3x relevance boost.
+    """
+
+    __tablename__ = "global_patterns"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    pattern_text = Column(Text, nullable=False)
+    embedding = Column(LargeBinary, nullable=True)  # 384-dim float32
+    source_cluster_ids = Column(JSON, nullable=False, default=list)
+    source_project_ids = Column(JSON, nullable=False, default=list)
+    cross_project_count = Column(Integer, nullable=False, default=0)
+    global_source_count = Column(Integer, nullable=False, default=0)
+    avg_cluster_score = Column(Float, nullable=True)
+    promoted_at = Column(DateTime, nullable=False, default=_utcnow)
+    last_validated_at = Column(DateTime, nullable=False, default=_utcnow)
+    state = Column(String(20), nullable=False, default="active")  # active|demoted|retired
 
 
 # --- Ported tables (GitHub/Embedding) ---
