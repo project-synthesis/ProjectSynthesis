@@ -99,19 +99,17 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 **Files:** `database.py` (engine), `config.py` (DATABASE_URL), `main.py`/`mcp_server.py` (PRAGMA removal), `docker-compose.yml` (new), all test fixtures.
 
-### Project workspaces
+### Project workspaces — explicit project_id override
 **Status:** Exploring
-**Context:** All optimizations, clusters, taxonomy, and history share a single flat namespace. Users working on multiple projects (e.g., a backend API and a marketing site) see everything mixed together. There's no way to start fresh without manual database cleanup.
+**Context:** ADR-005 Phase 2A implements session-based project resolution: optimizations inherit their project from the session's linked GitHub repo. This covers the primary use case (one repo per session) but doesn't support:
+- MCP callers without GitHub auth (always routes to Legacy project)
+- Users who want to target a specific project from the REST API
+- Automation/batch workflows that need explicit project scoping
 
-A project workspace model would provide isolated contexts:
-- Each project owns its own optimizations, clusters, taxonomy tree, strategy affinities, and session state
-- Switching projects loads a clean UI scoped to that project's data
-- Default project ("Personal") for users who don't need multi-project isolation
-- Project selector in the ActivityBar or top-level navigation
+**Proposed enhancement:** Add optional `project_id` parameter to `POST /api/optimize` and `synthesis_optimize` MCP tool. When provided, overrides session-based resolution. When absent, falls back to session lookup (current ADR-005 behavior). Requires project CRUD endpoints (`POST /api/projects`, `GET /api/projects`) so callers can discover valid project IDs.
 
-**Data model impact:** `project_id` FK on Optimization, PromptCluster, StrategyAffinity, TaxonomySnapshot. All list/filter queries scoped by active project. Taxonomy engine runs per-project (separate embedding indexes, warm/cold paths). Session persistence stores active project ID alongside trace_id.
-
-**Prerequisite:** Project CRUD endpoints, frontend project switcher, scoped query layer, per-project taxonomy engine instances.
+**Prerequisite:** ADR-005 Phase 2A (session-based project resolution) must ship first.
+**Spec:** `docs/adr/ADR-005-taxonomy-scaling-architecture.md` (Section 1: Data Model)
 
 ### LLM domain classification accuracy
 **Status:** Exploring
