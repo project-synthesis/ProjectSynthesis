@@ -29,7 +29,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import MetaPattern, Optimization, PromptCluster
+from app.models import MetaPattern, Optimization, OptimizationPattern, PromptCluster
 from app.services.taxonomy._constants import SPLIT_MIN_MEMBERS, _utcnow
 from app.services.taxonomy.cluster_meta import write_meta
 from app.services.taxonomy.clustering import (
@@ -419,7 +419,7 @@ async def split_cluster(
 
     # Clean up parent's meta-patterns — archived clusters don't participate
     # in pattern injection or matching, so their patterns are dead weight.
-    # Pattern: matches lifecycle.py:603-609 (retire cleanup).
+    # Pattern: matches lifecycle.py:618-628 (retire cleanup).
     try:
         orphan_mp_q = await db.execute(
             select(MetaPattern).where(MetaPattern.cluster_id == node.id)
@@ -434,6 +434,24 @@ async def split_cluster(
             )
     except Exception as mp_exc:
         logger.warning("Split meta-pattern cleanup failed (non-fatal): %s", mp_exc)
+
+    # Migrate OptimizationPattern join records to children so downstream
+    # consumers (history, detail view, lifecycle) find valid references.
+    # Pattern: matches lifecycle.py:589-593 (retire cleanup).
+    try:
+        for child in new_children:
+            await db.execute(
+                sa_update(OptimizationPattern)
+                .where(
+                    OptimizationPattern.cluster_id == node.id,
+                    OptimizationPattern.optimization_id.in_(
+                        select(Optimization.id).where(Optimization.cluster_id == child.id)
+                    ),
+                )
+                .values(cluster_id=child.id)
+            )
+    except Exception as op_exc:
+        logger.warning("Split OP record migration failed (non-fatal): %s", op_exc)
 
     # Upsert children into embedding index
     for child in new_children:

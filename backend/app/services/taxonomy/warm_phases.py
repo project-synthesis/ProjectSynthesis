@@ -1299,8 +1299,9 @@ async def phase_reconcile(
 
     # --- Leaked meta-pattern cleanup ---
     # Delete MetaPatterns belonging to archived clusters.  These accumulate
-    # when split_cluster() archives a parent without cleaning up its patterns
-    # (fixed in split.py, but historical leaks need a backfill pass).
+    # when dissolution archives a cluster without inline cleanup (now fixed),
+    # or from historical leaks.  Capped per cycle for SQLite single-writer.
+    _leaked_pattern_cap = 200  # max deletions per warm cycle
     try:
         archived_ids_sq = select(PromptCluster.id).where(
             PromptCluster.state == "archived"
@@ -1308,7 +1309,7 @@ async def phase_reconcile(
         leaked_q = await db.execute(
             select(MetaPattern).where(
                 MetaPattern.cluster_id.in_(archived_ids_sq)
-            )
+            ).limit(_leaked_pattern_cap)
         )
         leaked_patterns = list(leaked_q.scalars().all())
         if leaked_patterns:
@@ -2607,6 +2608,23 @@ async def phase_retire(
         await engine._transformation_index.remove(node.id)
         await engine._optimized_index.remove(node.id)
         embedding_index_mutations += 1
+
+        # Clean up dissolved cluster's MetaPatterns inline — don't defer
+        # to Phase 0 backfill. Pattern: matches split.py and lifecycle.py.
+        try:
+            _dissolved_mp_q = await db.execute(
+                select(MetaPattern).where(MetaPattern.cluster_id == node.id)
+            )
+            _dissolved_mps = list(_dissolved_mp_q.scalars().all())
+            for _dmp in _dissolved_mps:
+                await db.delete(_dmp)
+            if _dissolved_mps:
+                logger.info(
+                    "Dissolution: deleted %d meta-patterns from '%s'",
+                    len(_dissolved_mps), node.label,
+                )
+        except Exception as _dmp_exc:
+            logger.warning("Dissolution meta-pattern cleanup failed (non-fatal): %s", _dmp_exc)
 
         try:
             get_event_logger().log_decision(
