@@ -1,7 +1,6 @@
 """Tests for Phase 2A per-project Q metrics."""
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import PromptCluster

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import numpy as np
-import pytest
 from unittest.mock import MagicMock
 
+import numpy as np
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import PromptCluster
@@ -200,6 +200,7 @@ class TestAssignClusterProjectScoped:
     async def test_signature_accepts_project_id(self):
         """assign_cluster accepts project_id keyword argument."""
         import inspect
+
         from app.services.taxonomy.family_ops import assign_cluster
 
         sig = inspect.signature(assign_cluster)

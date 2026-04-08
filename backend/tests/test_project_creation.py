@@ -1,7 +1,6 @@
 """Tests for ADR-005 Phase 2A project creation."""
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import LinkedRepo, PromptCluster
