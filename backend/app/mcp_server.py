@@ -241,6 +241,12 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         set_event_logger(_tel)
         logger.info("MCP lifespan: TaxonomyEventLogger initialized")
 
+        # Initialize structured error logger for MCP process
+        from app.services.error_logger import ErrorLogger as _ErrLogger
+        from app.services.error_logger import set_error_logger as _set_err
+
+        _set_err(_ErrLogger(DATA_DIR / "errors"))
+
         # Initialize routing with cross-process notification bridge.
         from app.services.event_bus import EventBus as _EventBus
 

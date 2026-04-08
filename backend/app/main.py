@@ -31,7 +31,15 @@ _warm_path_pending = asyncio.Event()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
+    _lifespan_start = time.monotonic()
+    app.state.startup_wall = time.time()
     settings.SECRET_KEY = settings.resolve_secret_key()
+
+    # Initialize structured error logger (before anything else that might fail)
+    from app.services.error_logger import ErrorLogger, set_error_logger
+
+    _error_logger = ErrorLogger(DATA_DIR / "errors")
+    set_error_logger(_error_logger)
 
     db_path = DATA_DIR / "synthesis.db"
     if db_path.exists():
@@ -743,6 +751,10 @@ async def lifespan(app: FastAPI):
     warm_path_task = asyncio.create_task(_warm_path_timer())
     app.state.warm_path_task = warm_path_task
 
+    # Record cold start time (process spawn to fully ready)
+    app.state.startup_monotonic = _lifespan_start
+    app.state.cold_start_ms = round((time.monotonic() - _lifespan_start) * 1000, 1)
+
     yield
 
     # ── Shutdown (5-phase concurrent approach) ─────────────────────────
@@ -822,6 +834,14 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error("Taxonomy event rotation failed: %s", exc)
 
+    # Phase 4c: Rotate error logs (same retention as traces/taxonomy events).
+    try:
+        err_deleted = _error_logger.rotate(retention_days=settings.TRACE_RETENTION_DAYS)
+        if err_deleted:
+            logger.info("Error log rotation: deleted %d old files", err_deleted)
+    except Exception as exc:
+        logger.error("Error log rotation failed: %s", exc)
+
     # Phase 5: Clear taxonomy singleton + dispose database engine.
     try:
         from app.services.taxonomy import reset_engine
@@ -854,6 +874,34 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Cache-Control"],
 )
+
+# Global exception handler — captures unhandled 500s to structured error JSONL
+@app.exception_handler(Exception)
+async def _global_exception_handler(request, exc):
+    import traceback as _tb
+
+    from fastapi.responses import JSONResponse
+
+    try:
+        from app.services.error_logger import get_error_logger
+
+        get_error_logger().log_error(
+            service="backend",
+            level="error",
+            module=type(exc).__module__ or "unknown",
+            error_type=type(exc).__name__,
+            message=str(exc),
+            traceback=_tb.format_exc(),
+            request_context={
+                "method": request.method,
+                "url": str(request.url),
+                "client": request.client.host if request.client else None,
+            },
+        )
+    except Exception:
+        pass  # Error logger itself failed — don't recurse
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 
 # Routers (imported lazily — may not exist yet during phased development)
 try:
@@ -943,6 +991,12 @@ except ImportError:
 try:
     from app.routers.seed import router as seed_router
     app.include_router(seed_router)
+except ImportError:
+    pass
+
+try:
+    from app.routers.monitoring import router as monitoring_router
+    app.include_router(monitoring_router)
 except ImportError:
     pass
 

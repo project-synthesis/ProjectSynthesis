@@ -1012,6 +1012,28 @@ class PipelineOrchestrator:
             logger.exception("Pipeline failed: %s", exc)
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
+            # Structured error log
+            try:
+                import traceback as _tb
+
+                from app.services.error_logger import get_error_logger
+
+                get_error_logger().log_error(
+                    service="pipeline",
+                    level="error",
+                    module="app.services.pipeline",
+                    error_type=type(exc).__name__,
+                    message=str(exc),
+                    traceback=_tb.format_exc(),
+                    request_context={
+                        "trace_id": trace_id,
+                        "strategy": effective_strategy if "effective_strategy" in dir() else None,
+                        "provider": provider.name if provider else None,
+                    },
+                )
+            except Exception:
+                pass  # Error logger not available
+
             # Persist failed optimization
             try:
                 await db.rollback()

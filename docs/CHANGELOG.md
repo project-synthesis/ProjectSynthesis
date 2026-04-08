@@ -17,6 +17,11 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ### Added
 - **Split failure events** — `split/insufficient_members` and `split/too_few_children` decision events now logged when split fails due to corrupt embeddings dropping members below threshold or fewer than 2 viable children after label generation
 - **Sparkline oscillation fix** — sparkline was alternating between `q_health` (0.66) and `q_system` (0.78) every time a rejected cold path snapshot appeared. Cold path rejection snapshots now carry forward the last known `q_health` instead of `None`, and sparkline filters `q_health`-only values instead of falling back to `q_system` (different metric, different scale)
+- **Cross-service health probes** — `GET /api/health` now probes all three services (backend, frontend, MCP) and cross-service links (frontend→backend, MCP→backend) with 5s per-probe timeout. Returns `services` and `cross_service` dicts with status/latency/error. Status logic: `healthy`/`degraded`/`unhealthy` with 503 on unhealthy
+- **Monitoring data export** — new `GET /api/monitoring` endpoint with backend/frontend/MCP uptimes, cold start latency (ms), and per-phase LLM latency percentiles (p50/p95) computed from trace JSONL data with 60s cache
+- **Structured error logging** — new `ErrorLogger` writing to `data/errors/errors-YYYY-MM-DD.jsonl` with 30-day rotation. Global FastAPI exception handler captures unhandled 500s with request context. Wired into pipeline failure handler and MCP server
+- **Sampling regression test suite** — 20 pytest cases in `test_sampling_regressions.py` covering all 7 known bugs: GENERAL classification upgrade, scorer heuristic fallback, meta-header cleanup, changes rationale split, clarity heuristic false positives, self-referencing cluster detection, GitHub auth guard
+- **init.sh graceful retry** — services that fail readiness get up to 3 retries with exponential backoff (2s/4s/8s). Failed service name + last log line printed on final failure. Successfully started services remain running
 - **Cross-domain outlier reconciliation** — Phase 0 reconciliation now ejects members whose domain differs from their cluster's domain when cosine similarity to centroid is below 0.40 and a better same-domain cluster exists. Caps at 5 ejections per cluster per cycle
 
 ### Changed
