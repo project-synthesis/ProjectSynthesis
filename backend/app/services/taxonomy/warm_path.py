@@ -111,6 +111,7 @@ async def _run_speculative_phase(
     session_factory: SessionFactory,
     split_protected_ids: set[str] | None = None,
     phase_idx: int = 0,
+    dirty_ids: set[str] | None = None,  # ADR-005: None = process all
 ) -> PhaseResult:
     """Execute a single speculative phase with a per-phase Q gate.
 
@@ -148,7 +149,9 @@ async def _run_speculative_phase(
             phase_result = await phase_fn(engine, db)
         else:
             # phase_split_emerge and phase_merge take split_protected_ids
-            phase_result = await phase_fn(engine, db, split_protected_ids or set())
+            phase_result = await phase_fn(
+                engine, db, split_protected_ids or set(), dirty_ids=dirty_ids,
+            )
 
         # Re-query nodes and compute Q_after — same exclusion as Q_before.
         nodes_after = await _load_active_nodes(db, exclude_candidates=True)
@@ -378,6 +381,7 @@ async def execute_warm_path(
 
     # ------------------------------------------------------------------
     # Phase 0: Reconcile — fresh session, always commits
+    # ADR-005: Full scan — reconciliation needs complete cluster state
     # ------------------------------------------------------------------
     async with session_factory() as db:
         reconcile_result = await phase_reconcile(engine, db)
@@ -398,6 +402,7 @@ async def execute_warm_path(
 
     # ------------------------------------------------------------------
     # Phase 0.5: Evaluate candidates — NOT Q-gated, always commits
+    # ADR-005: Full scan — candidate evaluation needs complete cluster state
     # ------------------------------------------------------------------
     async with session_factory() as db:
         candidate_result = await phase_evaluate_candidates(db)
@@ -430,6 +435,7 @@ async def execute_warm_path(
         "split_emerge", phase_split_emerge, engine, session_factory,
         split_protected_ids=set(),
         phase_idx=0,
+        dirty_ids=dirty_ids,  # ADR-005: only split dirty clusters
     )
     all_phase_results.append(split_result)
 
@@ -443,11 +449,13 @@ async def execute_warm_path(
         "merge", phase_merge, engine, session_factory,
         split_protected_ids=split_protected_ids,
         phase_idx=1,
+        dirty_ids=dirty_ids,  # ADR-005: only merge when ≥1 partner is dirty
     )
     all_phase_results.append(merge_result)
 
     # ------------------------------------------------------------------
     # Phase 3: Retire — speculative
+    # ADR-005: Full scan — retirement needs complete cluster state
     # ------------------------------------------------------------------
     retire_result = await _run_speculative_phase(
         "retire", phase_retire, engine, session_factory,
@@ -469,6 +477,7 @@ async def execute_warm_path(
 
     # ------------------------------------------------------------------
     # Phase 4: Refresh — fresh session, always commits
+    # ADR-005: Full scan — label/pattern refresh needs complete cluster state
     # ------------------------------------------------------------------
     async with session_factory() as db:
         refresh_result = await phase_refresh(engine, db)
@@ -480,6 +489,7 @@ async def execute_warm_path(
 
     # ------------------------------------------------------------------
     # Phase 5: Discover — fresh session, always commits
+    # ADR-005: Full scan — domain discovery needs complete cluster state
     # ------------------------------------------------------------------
     async with session_factory() as db:
         discover_result = await phase_discover(engine, db)
@@ -492,6 +502,7 @@ async def execute_warm_path(
 
     # ------------------------------------------------------------------
     # Phase 6: Audit — fresh session, creates snapshot
+    # ADR-005: Full scan — audit/snapshot needs complete cluster state
     # ------------------------------------------------------------------
     async with session_factory() as db:
         audit_result = await phase_audit(

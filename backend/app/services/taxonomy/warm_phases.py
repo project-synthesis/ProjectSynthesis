@@ -1498,6 +1498,7 @@ async def phase_split_emerge(
     engine: TaxonomyEngine,
     db: AsyncSession,
     split_protected_ids: set[str],
+    dirty_ids: set[str] | None = None,  # ADR-005: None = process all
 ) -> PhaseResult:
     """Leaf splits (HDBSCAN + k-means fallback), family-based splits, and
     emerge from orphan families.
@@ -1557,6 +1558,10 @@ async def phase_split_emerge(
                 )
 
     for node in active_nodes:
+        # ADR-005: Skip clean clusters in dirty-only mode
+        if dirty_ids is not None and node.id not in dirty_ids:
+            continue
+
         member_count = node.member_count or 0
         # Normal split: ≥ SPLIT_MIN_MEMBERS
         # Forced split: ≥ FORCED_SPLIT_MIN_MEMBERS with very low coherence
@@ -1999,6 +2004,7 @@ async def phase_merge(
     engine: TaxonomyEngine,
     db: AsyncSession,
     split_protected_ids: set[str],
+    dirty_ids: set[str] | None = None,  # ADR-005: None = process all
 ) -> PhaseResult:
     """Global best-pair merge and same-domain label/embedding merge.
 
@@ -2097,7 +2103,16 @@ async def phase_merge(
             # Gate 1: Coherence floor — merging two fragmented clusters
             # creates a worse fragmented cluster.
             merge_blocked = False
-            if (
+
+            # ADR-005: Skip global merge when neither candidate is dirty
+            if dirty_ids is not None and merge_node_a.id not in dirty_ids and merge_node_b.id not in dirty_ids:
+                merge_blocked = True
+                logger.debug(
+                    "Global merge skipped: neither '%s' nor '%s' is dirty",
+                    merge_node_a.label, merge_node_b.label,
+                )
+
+            if not merge_blocked and (
                 (merge_node_a.coherence is not None and merge_node_a.coherence < 0.35)
                 or (merge_node_b.coherence is not None and merge_node_b.coherence < 0.35)
             ):
@@ -2265,6 +2280,12 @@ async def phase_merge(
         for domain, siblings in domain_groups.items():
             if len(siblings) < 2:
                 continue
+
+            # ADR-005: Skip domain groups with no dirty nodes
+            if dirty_ids is not None:
+                has_dirty = any(n.id in dirty_ids for n in siblings)
+                if not has_dirty:
+                    continue
 
             # Signal A: identical labels (one merge per domain per cycle)
             label_merged = False

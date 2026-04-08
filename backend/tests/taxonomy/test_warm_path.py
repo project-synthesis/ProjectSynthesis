@@ -120,11 +120,11 @@ async def test_execute_warm_path_phases_called_in_order(db, mock_embedding, mock
         from app.services.taxonomy.warm_phases import ReconcileResult
         return ReconcileResult()
 
-    async def fake_split_emerge(eng, session, split_protected_ids):
+    async def fake_split_emerge(eng, session, split_protected_ids, dirty_ids=None):
         call_order.append("split_emerge")
         return _make_phase_result("split_emerge")
 
-    async def fake_merge(eng, session, split_protected_ids):
+    async def fake_merge(eng, session, split_protected_ids, dirty_ids=None):
         call_order.append("merge")
         return _make_phase_result("merge")
 
@@ -187,7 +187,7 @@ async def test_run_speculative_phase_accepted_commits(db, mock_embedding, mock_p
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
     # Phase function that does nothing (Q_before == Q_after → non-regressive)
-    async def no_op_phase(eng, session, split_protected_ids):
+    async def no_op_phase(eng, session, split_protected_ids, dirty_ids=None):
         return PhaseResult(
             phase="test",
             q_before=0.5,
@@ -229,7 +229,7 @@ async def test_run_speculative_phase_rejected_rolls_back(db, mock_embedding, moc
     await db.commit()
 
     # Phase function that deletes the node and archives it (lowers Q)
-    async def destructive_phase(eng, session, split_protected_ids):
+    async def destructive_phase(eng, session, split_protected_ids, dirty_ids=None):
         # Archive the node to force Q_after < Q_before
         result = await session.execute(
             __import__("sqlalchemy", fromlist=["select"]).select(PromptCluster).where(
@@ -281,7 +281,7 @@ async def test_run_speculative_phase_restores_embedding_index_on_rollback(
     size_before = engine._embedding_index.size
 
     # Phase that removes the vector from index then causes Q regression
-    async def index_mutating_phase(eng, session, split_protected_ids):
+    async def index_mutating_phase(eng, session, split_protected_ids, dirty_ids=None):
         await eng._embedding_index.remove(test_id)
         return PhaseResult(
             phase="index_mutating",
