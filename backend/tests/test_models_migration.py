@@ -1,7 +1,5 @@
 """Tests for ADR-005 model additions."""
 
-import pytest
-
 from app.models import GlobalPattern, Optimization
 
 
