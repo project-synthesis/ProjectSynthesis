@@ -19,6 +19,8 @@
 
   // Tab-aware active result for showing per-optimization models in Settings
   const activeResult = $derived(editorStore.activeResult ?? forgeStore.result);
+  // Active trace for history row highlighting
+  const activeTraceId = $derived(activeResult?.trace_id ?? forgeStore.traceId ?? null);
   // When viewing a completed optimization, show its persisted models instead of live phaseModels
   const settingsModels = $derived(activeResult?.models_by_phase ?? null);
   const settingsModelHeading = $derived(settingsModels ? 'Models' : 'IDE Model');
@@ -437,7 +439,12 @@
                 </span>
               </div>
             {:else}
-              <button class="row-item history-row" style="--accent: {taxonomyColor(item.domain)};" onclick={() => loadHistoryItem(item)}>
+              <button
+                class="row-item history-row"
+                class:history-row--active={activeTraceId === item.trace_id}
+                style="--accent: {taxonomyColor(item.domain)};"
+                onclick={() => loadHistoryItem(item)}
+              >
                 <span class="row-prompt-line">
                   {#if item.task_type && item.task_type !== 'general' && TASK_TYPE_ABBREV[item.task_type]}
                     <span class="row-type">{TASK_TYPE_ABBREV[item.task_type]}</span>
@@ -1268,12 +1275,34 @@
     flex-direction: column;
     align-items: stretch;
     gap: 1px;
-    border-left: 2px solid var(--accent, transparent);
+    border: 1px solid transparent;
+    border-left: 1px solid var(--accent, transparent);
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .history-row:hover {
+    border-color: var(--color-border-accent);
     border-left-color: var(--accent, transparent);
   }
+
+  .history-row:active {
+    background: var(--color-bg-hover);
+  }
+
+  .history-row--active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, var(--color-neon-cyan)) 40%, transparent);
+    border-color: transparent;
+    border-left-color: var(--accent, var(--color-neon-cyan));
+    background: color-mix(in srgb, var(--accent, var(--color-neon-cyan)) 4%, transparent);
+  }
+
+  .history-row--active .row-prompt {
+    color: var(--accent, var(--color-neon-cyan));
+  }
+
 
   .row-prompt-line {
     display: flex;
@@ -1388,7 +1417,7 @@
     flex-direction: column;
     gap: 4px;
     padding: 4px 6px 4px 10px;
-    border-left: 2px solid var(--color-border-subtle);
+    border-left: 1px solid var(--color-border-subtle);
   }
 
   .skeleton-bar {
@@ -1565,7 +1594,7 @@
     color: var(--color-neon-orange);
     padding: 3px 6px;
     margin: 2px 0;
-    border-left: 2px solid var(--color-neon-orange);
+    border-left: 1px solid var(--color-neon-orange);
     background: rgba(255, 140, 0, 0.06);
     line-height: 1.4;
   }
@@ -1576,7 +1605,7 @@
     color: var(--tier-accent, var(--color-neon-cyan));
     padding: 3px 6px;
     margin: 2px 0;
-    border-left: 2px solid rgba(var(--tier-accent-rgb, 0, 229, 255), 0.4);
+    border-left: 1px solid rgba(var(--tier-accent-rgb, 0, 229, 255), 0.4);
     background: rgba(var(--tier-accent-rgb, 0, 229, 255), 0.04);
     line-height: 1.4;
   }
