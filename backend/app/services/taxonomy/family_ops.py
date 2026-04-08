@@ -629,6 +629,7 @@ async def assign_cluster(
                     c_matched = cross_valid[c_idx]
 
                     # Apply same multi-signal penalties as Tier 1
+                    from app.services.taxonomy.cluster_meta import read_meta as _rm_assign
                     c_effective = c_score
                     if c_matched.coherence is not None and c_matched.coherence < 0.4:
                         c_effective -= (0.4 - c_matched.coherence) * 0.3
