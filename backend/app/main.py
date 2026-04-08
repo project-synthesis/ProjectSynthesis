@@ -511,19 +511,23 @@ async def lifespan(app: FastAPI):
             # ADR-005 Phase 2A: backfill project_node_id on existing LinkedRepo rows
             try:
                 async with async_session_factory() as _pnid_bf_db:
-                    from app.models import LinkedRepo as _LR
-                    from app.models import PromptCluster as _PC_pnid
                     from sqlalchemy import select as _sel_pnid
+
+                    from app.models import LinkedRepo, PromptCluster
 
                     # Find Legacy project node
                     legacy = (await _pnid_bf_db.execute(
-                        _sel_pnid(_PC_pnid).where(_PC_pnid.state == "project").limit(1)
+                        _sel_pnid(PromptCluster).where(
+                            PromptCluster.state == "project",
+                        ).limit(1)
                     )).scalar_one_or_none()
 
                     if legacy:
                         # Backfill any LinkedRepo rows missing project_node_id
                         unlinked = (await _pnid_bf_db.execute(
-                            _sel_pnid(_LR).where(_LR.project_node_id.is_(None))
+                            _sel_pnid(LinkedRepo).where(
+                                LinkedRepo.project_node_id.is_(None),
+                            )
                         )).scalars().all()
                         for lr in unlinked:
                             lr.project_node_id = legacy.id
