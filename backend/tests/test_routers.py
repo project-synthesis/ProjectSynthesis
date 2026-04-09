@@ -12,7 +12,7 @@ from app.schemas.pipeline_contracts import (
 
 class TestHealthRouter:
     async def test_health_check(self, app_client):
-        resp = await app_client.get("/api/health")
+        resp = await app_client.get("/api/health?probes=false")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] in ("healthy", "degraded")
@@ -21,7 +21,7 @@ class TestHealthRouter:
 
     async def test_health_no_provider(self, app_client):
         app_client._transport.app.state.routing.set_provider(None)
-        resp = await app_client.get("/api/health")
+        resp = await app_client.get("/api/health?probes=false")
         data = resp.json()
         assert data["status"] == "degraded"
         assert data["provider"] is None
@@ -581,7 +581,7 @@ class TestHealthMetrics:
             db_session.add(opt)
         await db_session.commit()
 
-        resp = await app_client.get("/api/health")
+        resp = await app_client.get("/api/health?probes=false")
         assert resp.status_code == 200
         data = resp.json()
         assert "score_health" in data

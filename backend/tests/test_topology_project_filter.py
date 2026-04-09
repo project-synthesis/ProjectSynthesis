@@ -7,7 +7,7 @@ import pytest
 async def test_health_endpoint_has_project_count(app_client):
     """Health endpoint includes project_count field."""
     client = app_client
-    response = await client.get("/api/health")
+    response = await client.get("/api/health?probes=false")
     assert response.status_code == 200
     data = response.json()
     assert "project_count" in data

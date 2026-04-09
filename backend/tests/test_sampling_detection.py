@@ -150,7 +150,7 @@ class TestHealthSamplingCapable:
 
     async def test_null_when_no_mcp_session(self, app_client):
         """Default routing state → sampling_capable is null."""
-        resp = await app_client.get("/api/health")
+        resp = await app_client.get("/api/health?probes=false")
         assert resp.status_code == 200
         assert resp.json()["sampling_capable"] is None
 
