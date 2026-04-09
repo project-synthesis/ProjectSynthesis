@@ -13,8 +13,12 @@ class RefinementStore {
   error = $state<string | null>(null);
 
   private controller: AbortController | null = null;
-  /** Set when the stream receives a refinement_complete event (backend committed) */
+  /** True once the backend sends a refinement_complete event (data is committed). */
   private serverConfirmed = false;
+  /** Incremented on every refine()/cancel()/reset() to invalidate stale recovery loops. */
+  private generation = 0;
+
+  // ── Derived getters ──────────────────────────────────────────────
 
   get scoreProgression(): number[] {
     return this.turns
@@ -41,6 +45,8 @@ class RefinementStore {
     return this.turns.length > 0 ? this.turns[this.turns.length - 1] : null;
   }
 
+  // ── Public API ───────────────────────────────────────────────────
+
   selectVersion(turn: RefinementTurn | null) {
     this.selectedVersion = turn;
   }
@@ -58,25 +64,25 @@ class RefinementStore {
         const last = this.turns[this.turns.length - 1];
         this.suggestions = last.suggestions || [];
       } else {
-        // No refinement turns yet — seed with initial suggestions from the pipeline
         this.suggestions = forgeStore.initialSuggestions;
       }
     } catch {
-      // No versions yet — seed with initial suggestions from the pipeline
       this.suggestions = forgeStore.initialSuggestions;
     }
   }
 
   refine(request: string) {
     if (!this.optimizationId) return;
-    // Abort any in-flight stream
-    this.controller?.abort();
-    this.controller = null;
+
+    // Invalidate any in-flight stream AND any running recovery loop.
+    this.abortCurrent();
+
     this.suggestions = [];
     this.status = 'refining';
     this.error = null;
     this.serverConfirmed = false;
 
+    const gen = this.generation;
     const branchId = this.activeBranchId;
 
     this.controller = refineSSE(
@@ -84,11 +90,13 @@ class RefinementStore {
       request,
       branchId,
       // onEvent
-      (event: SSEEvent) => this.handleEvent(event),
+      (event: SSEEvent) => {
+        if (this.generation !== gen) return; // stale stream
+        this.handleEvent(event);
+      },
       // onError — stream broke unexpectedly
       (err: Error) => {
-        // If the server already confirmed completion, the data is safe —
-        // just reload from DB instead of showing an error.
+        if (this.generation !== gen) return;
         if (this.serverConfirmed) {
           this.reloadTurns(branchId);
           return;
@@ -96,102 +104,21 @@ class RefinementStore {
         this.error = `Refinement interrupted: ${err.message}`;
         this.status = 'error';
         console.warn('Refinement stream interrupted — attempting recovery');
-        // Attempt to recover: the backend may have committed the turn
-        // before the stream died.  Poll the DB to find out.
-        this.attemptRecovery(branchId);
+        this.attemptRecovery(branchId, gen);
       },
-      // onComplete — stream closed (may be graceful OR abrupt)
+      // onComplete — stream closed (graceful or abrupt)
       () => {
-        if (this.status === 'error') return; // already handled by onError
+        if (this.generation !== gen) return;
+        if (this.status === 'error') return;
         if (this.serverConfirmed) {
-          // Server confirmed — reload the committed turn from DB
           this.status = 'complete';
           this.reloadTurns(branchId);
         } else {
-          // Stream closed without server confirmation — something went wrong.
-          // The backend may still be running (SSE disconnect doesn't stop it).
-          // Poll to check if the turn was committed.
-          this.attemptRecovery(branchId);
+          // Stream ended without confirmation — backend may still be running.
+          this.attemptRecovery(branchId, gen);
         }
       },
     );
-  }
-
-  private handleEvent(event: SSEEvent) {
-    const type = event.event as string || event.type as string;
-    if (type === 'refinement_complete' || type === 'optimization_complete') {
-      // The backend has committed the turn to the database.
-      this.serverConfirmed = true;
-      this.status = 'complete';
-      this.reloadTurns(this.activeBranchId);
-    } else if (type === 'suggestions') {
-      this.suggestions = (event.suggestions || event.items || []) as Array<Record<string, string>>;
-    } else if (type === 'error') {
-      this.error = (event.error || event.message) as string;
-      this.status = 'error';
-    }
-  }
-
-  /**
-   * Reload turns from the database after a successful refinement.
-   * Safe to call multiple times — last write wins.
-   */
-  private reloadTurns(preserveBranchId: string | null) {
-    if (!this.optimizationId) return;
-    getRefinementVersions(this.optimizationId)
-      .then((data) => {
-        this.turns = data.versions;
-        if (preserveBranchId) this.activeBranchId = preserveBranchId;
-        // Update suggestions from the latest turn
-        if (this.turns.length > 0) {
-          const last = this.turns[this.turns.length - 1];
-          if (last.suggestions?.length) this.suggestions = last.suggestions;
-        }
-      })
-      .catch((err) => {
-        // DB fetch failed — don't overwrite existing state, just log
-        console.warn('Failed to reload refinement turns:', err);
-      });
-  }
-
-  /**
-   * Poll the backend to check if the refinement turn was committed
-   * despite the SSE stream dying.  The backend pipeline runs to
-   * completion independently of the client connection.
-   */
-  private async attemptRecovery(branchId: string | null) {
-    if (!this.optimizationId) return;
-
-    const prevCount = this.turns.length;
-
-    // Wait briefly for the backend to finish committing
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await new Promise(r => setTimeout(r, 2000));
-      try {
-        const data = await getRefinementVersions(this.optimizationId!);
-        if (data.versions.length > prevCount) {
-          // Backend committed a new turn — recovery successful
-          this.turns = data.versions;
-          if (branchId) this.activeBranchId = branchId;
-          const last = data.versions[data.versions.length - 1];
-          if (last.suggestions?.length) this.suggestions = last.suggestions;
-          this.status = 'complete';
-          this.error = null;
-          console.info('Refinement recovered from interrupted stream');
-          return;
-        }
-      } catch {
-        // Backend may still be restarting (hot-reload) — keep trying
-      }
-    }
-
-    // After 20 seconds, give up — the turn was likely not committed
-    if (this.status === 'error') {
-      // Already showing error from onError — don't override
-      return;
-    }
-    this.status = 'error';
-    this.error = 'Refinement may not have completed. Try again.';
   }
 
   async rollback(toVersion: number) {
@@ -209,20 +136,12 @@ class RefinementStore {
   }
 
   cancel() {
-    this.controller?.abort();
-    this.controller = null;
-    this.serverConfirmed = false;
+    this.abortCurrent();
     if (this.status === 'refining') this.status = 'idle';
   }
 
-  /** @internal Test-only: invoke handleEvent for SSE event simulation */
-  _handleEvent(event: SSEEvent) {
-    this.handleEvent(event);
-  }
-
-  /** @internal Test-only: restore initial state */
-  _reset() {
-    this.cancel();
+  reset() {
+    this.abortCurrent();
     this.optimizationId = null;
     this.turns = [];
     this.branches = [];
@@ -233,17 +152,105 @@ class RefinementStore {
     this.error = null;
   }
 
-  reset() {
+  // ── Private helpers ──────────────────────────────────────────────
+
+  /**
+   * Abort the SSE controller AND invalidate any running recovery loop
+   * by bumping the generation counter.
+   */
+  private abortCurrent() {
     this.controller?.abort();
     this.controller = null;
     this.serverConfirmed = false;
-    this.optimizationId = null;
-    this.turns = [];
-    this.branches = [];
-    this.activeBranchId = null;
-    this.suggestions = [];
-    this.status = 'idle';
-    this.error = null;
+    this.generation++;
+  }
+
+  private handleEvent(event: SSEEvent) {
+    const type = event.event as string || event.type as string;
+    if (type === 'refinement_complete' || type === 'optimization_complete') {
+      this.serverConfirmed = true;
+      this.status = 'complete';
+      this.reloadTurns(this.activeBranchId);
+    } else if (type === 'suggestions') {
+      this.suggestions = (event.suggestions || event.items || []) as Array<Record<string, string>>;
+    } else if (type === 'error') {
+      this.error = (event.error || event.message) as string;
+      this.status = 'error';
+    }
+  }
+
+  /**
+   * Reload turns from the database after a successful refinement.
+   */
+  private reloadTurns(preserveBranchId: string | null) {
+    if (!this.optimizationId) return;
+    getRefinementVersions(this.optimizationId)
+      .then((data) => {
+        this.turns = data.versions;
+        if (preserveBranchId) this.activeBranchId = preserveBranchId;
+        if (this.turns.length > 0) {
+          const last = this.turns[this.turns.length - 1];
+          if (last.suggestions?.length) this.suggestions = last.suggestions;
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to reload refinement turns:', err);
+      });
+  }
+
+  /**
+   * Poll the backend to check if the turn was committed despite the
+   * SSE stream dying.  Stops immediately if the generation changes
+   * (new refine/cancel/reset was called).
+   */
+  private async attemptRecovery(branchId: string | null, gen: number) {
+    if (!this.optimizationId) return;
+
+    const prevCount = this.turns.length;
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Bail if a new operation started while we were sleeping
+      if (this.generation !== gen) return;
+
+      try {
+        const data = await getRefinementVersions(this.optimizationId!);
+        if (this.generation !== gen) return;
+
+        if (data.versions.length > prevCount) {
+          this.turns = data.versions;
+          if (branchId) this.activeBranchId = branchId;
+          const last = data.versions[data.versions.length - 1];
+          if (last.suggestions?.length) this.suggestions = last.suggestions;
+          this.status = 'complete';
+          this.error = null;
+          console.info('Refinement recovered from interrupted stream');
+          return;
+        }
+      } catch {
+        // Backend may still be restarting — keep trying
+      }
+    }
+
+    // 20s elapsed, no new turn found
+    if (this.generation !== gen) return;
+    if (this.status !== 'error') {
+      this.status = 'error';
+      this.error = 'Refinement may not have completed. Try again.';
+    }
+  }
+
+  // ── Test helpers ─────────────────────────────────────────────────
+
+  /** @internal Test-only: invoke handleEvent for SSE event simulation */
+  _handleEvent(event: SSEEvent) {
+    this.handleEvent(event);
+  }
+
+  /** @internal Test-only: restore initial state */
+  _reset() {
+    this.reset();
   }
 }
 

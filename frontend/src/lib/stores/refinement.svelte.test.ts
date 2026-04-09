@@ -118,7 +118,7 @@ describe('RefinementStore', () => {
       expect(ctrl.abort).toHaveBeenCalled();
     });
 
-    it('SSE error callback sets error and error status', () => {
+    it('SSE error callback sets error and status when server has not confirmed', () => {
       refinementStore.optimizationId = 'opt-1';
       let errorCallback: (err: Error) => void = () => {};
       vi.mocked(apiClient.refineSSE).mockImplementation(
@@ -131,11 +131,11 @@ describe('RefinementStore', () => {
       refinementStore.refine('Make it better');
       errorCallback(new Error('Stream failed'));
 
-      expect(refinementStore.error).toBe('Stream failed');
+      expect(refinementStore.error).toBe('Refinement interrupted: Stream failed');
       expect(refinementStore.status).toBe('error');
     });
 
-    it('SSE close callback sets status to complete and reloads versions', async () => {
+    it('SSE close callback sets status to complete when server confirmed', async () => {
       refinementStore.optimizationId = 'opt-1';
       const turn = mockRefinementTurn();
       vi.mocked(apiClient.getRefinementVersions).mockResolvedValue({
@@ -143,17 +143,19 @@ describe('RefinementStore', () => {
         versions: [turn],
       } as any);
 
+      let onEvent: (event: any) => void = () => {};
       let closeCallback: () => void = () => {};
       vi.mocked(apiClient.refineSSE).mockImplementation(
-        (_id: string, _req: string, _branch: any, _onEvent: any, _onError: any, onClose: any) => {
+        (_id: string, _req: string, _branch: any, onEvt: any, _onError: any, onClose: any) => {
+          onEvent = onEvt;
           closeCallback = onClose;
           return mockCtrl();
         }
       );
 
       refinementStore.refine('Make it better');
-      refinementStore.status = 'refining'; // ensure status is refining
-
+      // Simulate server confirming the turn was committed
+      onEvent({ event: 'refinement_complete', type: 'refinement_complete' });
       closeCallback();
 
       expect(refinementStore.status).toBe('complete');
