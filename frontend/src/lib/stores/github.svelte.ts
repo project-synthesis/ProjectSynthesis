@@ -41,6 +41,8 @@ class GitHubStore {
       this.verificationUri = data.verification_uri;
       this.pollInterval = data.interval || 5;
       this.deviceExpiry = Date.now() + (data.expires_in || 900) * 1000;
+      // Auto-copy code to clipboard so user can paste on GitHub page
+      try { await navigator.clipboard.writeText(data.user_code); } catch { /* ignore */ }
       // Open GitHub device page in new tab
       window.open(data.verification_uri, '_blank');
       // Start polling for authorization
