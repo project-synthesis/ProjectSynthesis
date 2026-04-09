@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from typing import Any
 
 from app.config import settings
 from app.schemas.pipeline_contracts import ResolvedContext
@@ -120,7 +121,7 @@ class ContextResolver:
                     orig_len, settings.MAX_ADAPTATION_CHARS,
                 )
 
-        context_sources: dict[str, bool] = {
+        context_sources: dict[str, Any] = {
             "codebase_guidance": codebase_guidance is not None,
             "codebase_context": codebase_context is not None,
             "adaptation": adaptation_state is not None,

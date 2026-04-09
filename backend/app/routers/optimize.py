@@ -67,6 +67,7 @@ class OptimizationDetail(BaseModel):
     created_at: str | None = Field(default=None, description="ISO 8601 creation timestamp.")
     intent_label: str | None = Field(default=None, description="Short intent classification label (3-6 words).")
     domain: str | None = Field(default=None, description="Domain category (backend, frontend, database, etc.).")
+    repo_full_name: str | None = Field(default=None, description="GitHub repo (owner/repo) linked during optimization.")
     cluster_id: str | None = Field(default=None, description="Pattern family ID this optimization belongs to.")
     heuristic_flags: list[str] = Field(
         default_factory=list,

@@ -163,7 +163,7 @@ class PipelineOrchestrator:
         codebase_guidance: str | None = None,
         codebase_context: str | None = None,
         adaptation_state: str | None = None,
-        context_sources: dict[str, bool] | None = None,
+        context_sources: dict[str, Any] | None = None,
         repo_full_name: str | None = None,
         github_token: str | None = None,
         applied_pattern_ids: list[str] | None = None,

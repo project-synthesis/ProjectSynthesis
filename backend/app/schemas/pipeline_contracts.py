@@ -283,9 +283,9 @@ class ResolvedContext(BaseModel):
         default=None,
         description="Formatted adaptation state from feedback tracker.",
     )
-    context_sources: dict[str, bool] = Field(
+    context_sources: dict[str, Any] = Field(
         default_factory=dict,
-        description="Map of context source names to enabled/available flags.",
+        description="Context source flags and optional enrichment_meta block.",
     )
     trace_id: str = Field(
         description="Trace ID for this pipeline run.",
@@ -344,8 +344,8 @@ class PipelineResult(BaseModel):
     )
     duration_ms: int = Field(description="Total pipeline execution time (milliseconds).")
     status: str = Field(description="Pipeline status: 'completed', 'failed', or 'interrupted'.")
-    context_sources: dict[str, bool] = Field(
-        description="Map of context sources and whether they were enabled.",
+    context_sources: dict[str, Any] = Field(
+        description="Context source flags and optional enrichment_meta block.",
     )
     tokens_total: int = Field(default=0, description="Total tokens used across all phases.")
     tokens_by_phase: dict[str, int] = Field(

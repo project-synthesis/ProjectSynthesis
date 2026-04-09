@@ -486,7 +486,7 @@ async def run_sampling_pipeline(
     phase_durations: dict[str, int] = {}
     trace_id = str(uuid.uuid4())
 
-    context_sources: dict[str, bool] = {
+    context_sources: dict[str, Any] = {
         "explore": False,
         "patterns": False,
         "adaptation": False,
@@ -1213,7 +1213,7 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
     strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
 
     phase_durations: dict[str, int] = {}
-    context_sources: dict[str, bool] = {
+    context_sources: dict[str, Any] = {
         "explore": False,
         "patterns": False,
         "adaptation": False,
