@@ -264,7 +264,9 @@ Phase 6 (Audit) continues to compute global Q for the `TaxonomySnapshot`. Per-pr
 
 ## 4. Topology UI Project Filter
 
-### Backend: tree endpoint
+> **Note:** The frontend items in this section (project dropdown, multi-project badge) are **deferred** to the hierarchical topology navigation roadmap item (`docs/ROADMAP.md`). That roadmap entry supersedes the flat-topology approach described here with a proper 4-level drill-down (Project → Domain → Cluster → Prompt). Building a flat-topology stopgap would be throwaway code. The backend APIs below are implemented and ready for either approach.
+
+### Backend: tree endpoint — IMPLEMENTED
 
 `GET /api/clusters/tree` gains optional `project_id` query parameter.
 
@@ -276,29 +278,23 @@ When set:
 When unset:
 - Return the full tree (current behavior, backward compatible).
 
-### Backend: cluster detail
+### Backend: cluster detail — IMPLEMENTED
 
 `GET /api/clusters/{id}` response gains:
 - `project_ids: list[str]` — distinct project IDs among the cluster's optimizations.
-- `member_counts_by_project: dict[str, int]` — `SELECT project_id, COUNT(*) FROM optimizations WHERE cluster_id = :id GROUP BY project_id`. The `project_id` column is already indexed on Optimization.
+- `member_counts_by_project: dict[str, int]` — per-project member breakdown.
 
-### Backend: project list
+### Backend: project list — IMPLEMENTED
 
-`GET /api/clusters/tree` response already includes project nodes (state="project"). The frontend extracts them for the dropdown. No new endpoint needed.
+`GET /api/projects` returns all project nodes with id, label, and member_count.
 
-### Frontend: project dropdown
+### Frontend: project dropdown — DEFERRED
 
-- New `ProjectFilter` component in the topology view toolbar.
-- Extracts project nodes from tree response.
-- Selecting a project re-fetches the tree with `?project_id=...`.
-- "All projects" option shows the full tree (no filter).
+Superseded by hierarchical topology Level 0 (Project Space). In the hierarchical approach, projects are spatially navigated — no dropdown needed. See `docs/ROADMAP.md` "Hierarchical topology navigation" entry.
 
-### Frontend: multi-project badge
+### Frontend: multi-project badge — DEFERRED
 
-When a cluster has members from multiple projects:
-- Node tooltip shows "8 of 10 members" (project-scoped count / total).
-- Small badge icon indicating cross-project cluster.
-- Color: primary project's domain color, secondary project indicated by a dot.
+Superseded by hierarchical topology Level 2 (Cluster View). When viewing a domain's clusters, multi-project clusters will be visually distinguished at that level with the "N of M members" tooltip and cross-project indicators. The data (`member_counts_by_project`, `project_ids`) is already served by the backend.
 
 ## 5. New Constants
 
