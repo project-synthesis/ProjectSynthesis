@@ -115,7 +115,19 @@ Living document tracking planned improvements. Items are prioritized but not sch
 - Pattern suggestion on paste searches across the current project's clusters (Level 2 scope)
 - SeedModal targets the current project (Level 0 scope)
 
-**Prerequisites:** ADR-005 Phase 2A (project nodes and tree endpoint with project filter). The integration store (above) for project creation beyond GitHub.
+**Single-project behavior:** When only one project exists (Legacy or a single repo), skip Level 0 and open directly at Level 1 (domains). Level 0 only renders when 2+ projects exist. The breadcrumb still shows the project name for context.
+
+**Legacy project:** Always visible at Level 0 as a permanent node. Contains all pre-repo and non-repo optimizations. Never merged or renamed. Users who never link a repo see only Legacy and skip straight to Level 1.
+
+**Existing backend support:**
+- `GET /api/projects` already returns project nodes (built in Phase 2A)
+- `GET /api/clusters/tree?project_id=...` already filters by project (Phase 2A)
+- `GET /api/clusters/{id}` already returns `member_counts_by_project` and `project_ids` (Phase 2A)
+- New endpoints needed: per-domain cluster lists and per-cluster optimization lists with embedding positions for Level 3
+
+**ADR-006 label adaptation:** Topology level labels should respect the active vertical. For non-developers: Level 0 "Workspaces", Level 1 "Categories", Level 2 "Pattern groups", Level 3 "Prompts". For developers: Level 0 "Projects", Level 1 "Domains", Level 2 "Clusters", Level 3 "Optimizations". Driven by a preference setting per ADR-006 non-developer onboarding pathway.
+
+**Prerequisites:** ADR-005 Phase 2A (project nodes and tree endpoint with project filter). The integration store (above) for project creation beyond GitHub. ADR-006 (universal engine — vertical-aware labels).
 
 **Files:** Major frontend refactor. New `TopologyLevel0`, `TopologyLevel1`, `TopologyLevel2`, `TopologyLevel3` components. Refactored `TopologyNavigation` with breadcrumb + back. New `topology-state.svelte.ts` store for current level + drill path. New backend endpoints for per-domain cluster lists and per-cluster optimization lists with spatial data. Updated `TopologyWorker` with per-level force configs.
 
