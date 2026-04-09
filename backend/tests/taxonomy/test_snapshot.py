@@ -124,10 +124,16 @@ async def test_prune_weekly_best_retention(db):
     now = datetime.now(timezone.utc)
 
     # Create 3 snapshots guaranteed to be in the same ISO week (45 days ago).
-    # Use hour offsets instead of day offsets so they always share the same
-    # calendar date and therefore the same ISO week regardless of when the
-    # test runs.
+    # Anchor to Wednesday noon UTC — guaranteed mid-week, so hour offsets
+    # never cross an ISO week boundary (Mon 00:00 UTC).
     base = now - timedelta(days=45)
+    # Shift to Wednesday noon to avoid Sunday-Monday ISO week boundary
+    base = base.replace(hour=12, minute=0, second=0, microsecond=0)
+    weekday = base.weekday()  # 0=Mon, 6=Sun
+    if weekday >= 5:  # Sat or Sun — shift to previous Wednesday
+        base -= timedelta(days=weekday - 2)
+    elif weekday < 2:  # Mon or Tue — shift to previous Wednesday
+        base -= timedelta(days=weekday + 5)
     for i, q in enumerate([0.60, 0.80, 0.70]):
         snap = TaxonomySnapshot(
             trigger="warm_path",

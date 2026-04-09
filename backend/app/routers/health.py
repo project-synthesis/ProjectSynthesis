@@ -84,6 +84,7 @@ class HealthResponse(BaseModel):
     )
     domain_count: int = Field(default=0, description="Number of active domain nodes.")
     domain_ceiling: int = Field(default=DOMAIN_COUNT_CEILING, description="Max domain nodes.")
+    project_count: int = Field(default=0, description="Number of project hierarchy nodes.")
     injection_stats: dict[str, int] = Field(
         default_factory=dict, description="Pattern injection provenance counts.",
     )
@@ -258,9 +259,13 @@ async def health_check(
 
     # Domain proliferation metrics
     domain_count = 0
+    project_count = 0
     try:
         domain_count = await db.scalar(
             select(func.count()).where(PromptCluster.state == "domain")
+        ) or 0
+        project_count = await db.scalar(
+            select(func.count()).where(PromptCluster.state == "project")
         ) or 0
     except Exception:
         logger.debug("Health check domain_count query failed", exc_info=True)
@@ -336,6 +341,7 @@ async def health_check(
         available_tiers=available_tiers,
         domain_count=domain_count,
         domain_ceiling=DOMAIN_COUNT_CEILING,
+        project_count=project_count,
         injection_stats=injection_stats,
         services=services_result,
         cross_service=cross_service_result,

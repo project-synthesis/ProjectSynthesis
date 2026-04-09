@@ -33,7 +33,10 @@ from app.models import (
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.services.embedding_service import EmbeddingService
 from app.services.prompt_loader import PromptLoader
-from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
+from app.services.taxonomy._constants import (
+    CROSS_PROJECT_THRESHOLD_BOOST,
+    EXCLUDED_STRUCTURAL_STATES,
+)
 from app.services.taxonomy.event_logger import get_event_logger
 from app.services.taxonomy.projection import interpolate_position
 from app.utils.text_cleanup import parse_domain
@@ -278,6 +281,76 @@ async def _recompute_cluster_task_type(
             cluster.task_type = mode_type
 
 
+async def _get_project_domain_ids(
+    db: AsyncSession, project_id: str,
+) -> set[str]:
+    """Get domain node IDs for a project."""
+    result = await db.execute(
+        select(PromptCluster.id).where(
+            PromptCluster.parent_id == project_id,
+            PromptCluster.state == "domain",
+        )
+    )
+    return {row[0] for row in result.all()}
+
+
+async def _resolve_or_create_domain(
+    db: AsyncSession,
+    project_id: str | None,
+    domain_label: str,
+) -> PromptCluster | None:
+    """Find or create a domain node under the project for new cluster parenting.
+
+    Search order:
+    1. Domain matching *domain_label* under the project
+    2. "general" domain under the project
+    3. Auto-bootstrap: create a new "general" domain under the project
+    """
+    if not project_id:
+        return None
+
+    # Look for existing domain under this project matching the label
+    result = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.parent_id == project_id,
+            PromptCluster.state == "domain",
+            PromptCluster.label == domain_label,
+        ).limit(1)
+    )
+    domain_node = result.scalar_one_or_none()
+    if domain_node:
+        return domain_node
+
+    # Look for "general" domain under this project
+    result = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.parent_id == project_id,
+            PromptCluster.state == "domain",
+            PromptCluster.label == "general",
+        ).limit(1)
+    )
+    general = result.scalar_one_or_none()
+    if general:
+        return general
+
+    # Auto-bootstrap: create general domain for this project
+    new_domain = PromptCluster(
+        label="general",
+        state="domain",
+        domain="general",
+        task_type="general",
+        member_count=0,
+        parent_id=project_id,
+    )
+    db.add(new_domain)
+    await db.flush()
+    logger.info(
+        "Phase 2A: auto-created 'general' domain under project %s",
+        project_id[:8],
+    )
+    return new_domain
+
+
 async def assign_cluster(
     db: AsyncSession,
     embedding: np.ndarray,
@@ -286,12 +359,18 @@ async def assign_cluster(
     task_type: str,
     overall_score: float | None,
     embedding_index: EmbeddingIndex | None = None,
+    project_id: str | None = None,
 ) -> PromptCluster:
     """Find nearest PromptCluster or create a new one.
 
     Nearest centroid search with adaptive threshold guard and
     cross-domain merge prevention.  Updates centroid as running mean
     ``(old * n + new) / (n+1)`` on merge.
+
+    ADR-005 Phase 2A: when *project_id* is set, search is two-tiered:
+      Tier 1 — only clusters under the project's domain subtree.
+      Tier 2 — cross-project fallback with boosted threshold.
+    New clusters are parented under the project's domain node.
 
     Args:
         db: Async SQLAlchemy session.
@@ -300,20 +379,35 @@ async def assign_cluster(
         domain: Free-text domain string from the analyzer (via domain_raw).
         task_type: Analyzer task type.
         overall_score: Pipeline overall score (may be None).
+        embedding_index: Optional embedding index for centroid upsert.
+        project_id: Optional project node ID for scoped search.
 
     Returns:
         Existing (updated) or newly-created PromptCluster.
     """
     _candidates_log: list[dict] = []  # Decision trace
 
-    # Only merge into non-archived clusters.  Archived clusters are
-    # effectively tombstoned and should never absorb new members.
-    result = await db.execute(
-        select(PromptCluster).where(
-            PromptCluster.state.in_(["candidate", "active", "mature", "template"])
+    # ADR-005 Phase 2A: project-scoped candidate loading (Tier 1)
+    _candidate_states = ["candidate", "active", "mature", "template"]
+    if project_id:
+        project_domain_ids = await _get_project_domain_ids(db, project_id)
+        if project_domain_ids:
+            _cluster_q = await db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.state.in_(_candidate_states),
+                    PromptCluster.parent_id.in_(project_domain_ids),
+                )
+            )
+            clusters = list(_cluster_q.scalars().all())
+        else:
+            clusters = []
+    else:
+        _cluster_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.in_(_candidate_states)
+            )
         )
-    )
-    clusters = result.scalars().all()
+        clusters = list(_cluster_q.scalars().all())
 
     if clusters:
         valid_clusters: list[PromptCluster] = []
@@ -501,15 +595,128 @@ async def assign_cluster(
                         matched.member_count or 0,
                     )
 
-    # No match — create new cluster
-    # Find the parent domain node to link under
-    domain_node_q = await db.execute(
-        select(PromptCluster).where(
-            PromptCluster.state == "domain",
-            PromptCluster.label == domain,
+    # ADR-005 Phase 2A: Tier 2 — cross-project fallback with boosted threshold
+    if project_id:
+        _all_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.in_(_candidate_states)
+            )
         )
-    )
-    domain_node = domain_node_q.scalar_one_or_none()
+        all_clusters = list(_all_q.scalars().all())
+
+        # Filter out already-evaluated in-project clusters
+        in_project_ids = {c.id for c in clusters}
+        cross_project_candidates = [c for c in all_clusters if c.id not in in_project_ids]
+
+        if cross_project_candidates:
+            cross_valid: list[PromptCluster] = []
+            cross_centroids: list[np.ndarray] = []
+            for c_row in cross_project_candidates:
+                try:
+                    c = np.frombuffer(c_row.centroid_embedding, dtype=np.float32)
+                    if c.shape[0] == embedding.shape[0]:
+                        cross_centroids.append(c)
+                        cross_valid.append(c_row)
+                except (ValueError, TypeError):
+                    continue
+
+            if cross_centroids:
+                cross_matches = EmbeddingService.cosine_search(
+                    embedding, cross_centroids, top_k=1
+                )
+                if cross_matches and cross_matches[0][1] > 0:
+                    c_idx, c_score = cross_matches[0]
+                    c_matched = cross_valid[c_idx]
+
+                    # Apply same multi-signal penalties as Tier 1
+                    from app.services.taxonomy.cluster_meta import read_meta as _rm_assign
+                    c_effective = c_score
+                    if c_matched.coherence is not None and c_matched.coherence < 0.4:
+                        c_effective -= (0.4 - c_matched.coherence) * 0.3
+                    _c_meta = _rm_assign(c_matched.cluster_metadata)
+                    _c_out_coh = _c_meta.get("output_coherence")
+                    if _c_out_coh is not None and _c_out_coh < 0.35:
+                        c_effective -= (0.35 - _c_out_coh) * 0.4
+                    if task_type and c_matched.task_type and task_type != c_matched.task_type:
+                        c_effective *= 0.88
+
+                    c_threshold = (
+                        adaptive_merge_threshold(c_matched.member_count or 1)
+                        + CROSS_PROJECT_THRESHOLD_BOOST
+                    )
+
+                    if c_effective >= c_threshold:
+                        # Cross-domain check still applies
+                        matched_primary, _ = parse_domain(c_matched.domain)
+                        incoming_primary, _ = parse_domain(domain)
+                        if matched_primary == incoming_primary:
+                            # Cross-project merge accepted — update centroid
+                            score_weight = score_to_centroid_weight(overall_score)
+                            old_centroid = np.frombuffer(
+                                c_matched.centroid_embedding, dtype=np.float32
+                            )
+                            weighted_sum = (
+                                getattr(c_matched, "weighted_member_sum", None)
+                                or float(c_matched.member_count or 1)
+                            )
+                            new_weighted_sum = weighted_sum + score_weight
+                            new_centroid = (
+                                old_centroid * weighted_sum
+                                + embedding * score_weight
+                            ) / new_weighted_sum
+                            c_norm = np.linalg.norm(new_centroid)
+                            if c_norm > 0:
+                                new_centroid = new_centroid / c_norm
+                            c_matched.centroid_embedding = (
+                                new_centroid.astype(np.float32).tobytes()
+                            )
+                            c_matched.member_count = (c_matched.member_count or 0) + 1
+                            c_matched.weighted_member_sum = new_weighted_sum
+                            merge_score_into_cluster(c_matched, overall_score)
+
+                            if embedding_index is not None:
+                                await embedding_index.upsert(
+                                    c_matched.id, new_centroid
+                                )
+                            await _recompute_cluster_task_type(db, c_matched)
+
+                            logger.info(
+                                "Cross-project merge: '%s' (cosine=%.3f, "
+                                "boosted_threshold=%.3f)",
+                                c_matched.label,
+                                c_score,
+                                c_threshold,
+                            )
+                            try:
+                                get_event_logger().log_decision(
+                                    path="hot",
+                                    op="assign",
+                                    decision="cross_project_merge",
+                                    cluster_id=c_matched.id,
+                                    context={
+                                        "winner_label": c_matched.label,
+                                        "cosine": round(c_score, 4),
+                                        "boosted_threshold": round(c_threshold, 4),
+                                        "member_count": c_matched.member_count,
+                                        "cross_project": True,
+                                    },
+                                )
+                            except RuntimeError:
+                                pass
+                            return c_matched
+
+    # No match — create new cluster
+    # ADR-005 Phase 2A: parent new cluster to project's domain
+    if project_id:
+        domain_node = await _resolve_or_create_domain(db, project_id, domain)
+    else:
+        domain_node_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.label == domain,
+            )
+        )
+        domain_node = domain_node_q.scalar_one_or_none()
 
     new_cluster = PromptCluster(
         label=label,

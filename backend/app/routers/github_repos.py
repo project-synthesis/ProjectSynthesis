@@ -111,7 +111,24 @@ async def link_repo(
         language=language,
     )
     db.add(linked)
+
+    # ADR-005 Phase 2A: ensure project node exists for this repo
+    from app.services.project_service import ensure_project_for_repo
+    project_node_id = await ensure_project_for_repo(db, full_name)
+    linked.project_node_id = project_node_id
+
     await db.commit()
+
+    # Emit project/taxonomy event
+    try:
+        from app.services.event_bus import event_bus
+        event_bus.publish("taxonomy_changed", {
+            "trigger": "project_created",
+            "project_id": project_node_id,
+            "repo": full_name,
+        })
+    except Exception:
+        pass
 
     logger.info("Repo linked: %s branch=%s language=%s", full_name, active_branch, language)
 

@@ -176,6 +176,9 @@ class TaxonomyEngine:
         self._dirty_set: set[str] = set()
         # ADR-005: Adaptive scheduler — rolling window of warm cycle timings.
         self._scheduler = AdaptiveScheduler()
+        # ADR-005 Phase 2A: project resolution caches
+        self._cluster_project_cache: dict[str, str] = {}  # cluster_id -> project_id
+        self._legacy_project_id: str | None = None  # cached Legacy project node ID
 
     def mark_dirty(self, cluster_id: str) -> None:
         """Mark a cluster as needing warm-path processing."""
@@ -264,6 +267,7 @@ class TaxonomyEngine:
         self,
         optimization_id: str,
         db: AsyncSession,
+        repo_full_name: str | None = None,  # ADR-005 Phase 2A
     ) -> None:
         """Full extraction pipeline for a single completed optimization.
 
@@ -279,6 +283,8 @@ class TaxonomyEngine:
         Args:
             optimization_id: PK of the Optimization row to process.
             db: Async SQLAlchemy session.
+            repo_full_name: Optional repo (e.g. "owner/repo") to resolve project.
+                Falls back to ``opt.repo_full_name`` when *None*.
         """
         try:
             result = await db.execute(
@@ -293,6 +299,26 @@ class TaxonomyEngine:
                     opt.status if opt else "not_found",
                 )
                 return
+
+            # ADR-005 Phase 2A: resolve project_id from repo
+            from app.services.project_service import resolve_project_id
+            if self._legacy_project_id is None:
+                _legacy_q = await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.state == "project"
+                    ).limit(1)
+                )
+                _legacy = _legacy_q.scalar_one_or_none()
+                if _legacy:
+                    self._legacy_project_id = _legacy.id
+
+            project_id = await resolve_project_id(
+                db,
+                repo_full_name or opt.repo_full_name,
+                self._legacy_project_id,
+            )
+            if project_id:
+                opt.project_id = project_id
 
             # Idempotency: skip if a 'source' OptimizationPattern already exists.
             # Use .first() to tolerate duplicate source records from
@@ -342,6 +368,7 @@ class TaxonomyEngine:
                     task_type=opt.task_type or "general",
                     overall_score=opt.overall_score,
                     embedding_index=self._embedding_index,
+                    project_id=project_id,
                 )
 
             # Write back the definitive cluster assignment.
@@ -376,6 +403,18 @@ class TaxonomyEngine:
                     )
             opt.cluster_id = cluster.id
             self.mark_dirty(cluster.id)  # ADR-005: new cluster gained a member
+
+            # ADR-005 Phase 2A: update cluster->project cache + tag embedding index
+            if project_id:
+                self._cluster_project_cache[cluster.id] = project_id
+                # Re-upsert centroid with project_id so the embedding index
+                # knows which project this cluster belongs to.  assign_cluster
+                # already wrote the centroid without project_id; this adds the tag.
+                if cluster.centroid_embedding:
+                    _centroid = np.frombuffer(cluster.centroid_embedding, dtype=np.float32)
+                    await self._embedding_index.upsert(
+                        cluster.id, _centroid, project_id=project_id,
+                    )
 
             # ----- Intent label hardening (Tier 2) -----
             from app.services.pipeline_constants import MAX_INTENT_LABEL_LENGTH
@@ -718,6 +757,7 @@ class TaxonomyEngine:
                     task_type=opt.task_type or "general",
                     overall_score=opt.overall_score,
                     embedding_index=self._embedding_index,
+                    project_id=getattr(opt, "project_id", None),
                 )
 
             opt.cluster_id = cluster.id

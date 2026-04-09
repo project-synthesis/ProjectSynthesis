@@ -277,6 +277,7 @@ class LinkedRepo(Base):
     branch = Column(String, nullable=True)  # active working branch (distinct from default)
     language = Column(String, nullable=True)
     linked_at = Column(DateTime, default=_utcnow, nullable=False)  # matches v2 column name
+    project_node_id = Column(String(36), ForeignKey("prompt_cluster.id"), nullable=True)
 
 
 class RepoFileIndex(Base):

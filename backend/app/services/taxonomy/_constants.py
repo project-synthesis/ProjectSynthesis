@@ -54,6 +54,15 @@ EXCLUDED_STRUCTURAL_STATES: frozenset[str] = frozenset({
 
 
 # ---------------------------------------------------------------------------
+# Cross-project assignment (ADR-005 Section 2)
+# ---------------------------------------------------------------------------
+# Boost applied to the adaptive merge threshold when searching across projects.
+# A prompt in Project B must be this much MORE similar to join a cluster in
+# Project A than it would need to be within its own project.
+CROSS_PROJECT_THRESHOLD_BOOST: float = 0.15
+
+
+# ---------------------------------------------------------------------------
 # Sub-domain discovery
 # ---------------------------------------------------------------------------
 # When a domain's total member count exceeds this AND its mean child coherence

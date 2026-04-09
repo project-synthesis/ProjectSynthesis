@@ -65,6 +65,40 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# ADR-005 Phase 2A: project resolution for embedding index rebuild
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_cluster_project_ids(
+    db: AsyncSession,
+) -> dict[str, str | None]:
+    """Build cluster_id -> dominant project_id mapping from Optimization rows.
+
+    For clusters with members from multiple projects, returns the project_id
+    with the highest member count (dominant project).
+    """
+    rows = (await db.execute(
+        select(
+            Optimization.cluster_id,
+            Optimization.project_id,
+            sa_func.count().label("ct"),
+        ).where(
+            Optimization.cluster_id.isnot(None),
+            Optimization.project_id.isnot(None),
+        ).group_by(
+            Optimization.cluster_id,
+            Optimization.project_id,
+        ).order_by(sa_func.count().desc())
+    )).all()
+
+    result: dict[str, str | None] = {}
+    for cluster_id, project_id, _ct in rows:
+        if cluster_id not in result:  # first row per cluster = highest count
+            result[cluster_id] = project_id
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Result dataclass
 # ---------------------------------------------------------------------------
 
@@ -774,11 +808,15 @@ async def execute_cold_path(
             )
             continue
     try:
-        await engine._embedding_index.rebuild(index_centroids)
+        # ADR-005 Phase 2A: populate project_ids on embedding index
+        cluster_project_ids = await _resolve_cluster_project_ids(db)
+        await engine._embedding_index.rebuild(index_centroids, project_ids=cluster_project_ids)
         logger.info(
             "Taxonomy embedding index loaded with %d vectors",
             engine._embedding_index.size,
         )
+        # Also repopulate engine's cluster->project cache
+        engine._cluster_project_cache = dict(cluster_project_ids)
     except Exception as rebuild_exc:
         logger.warning(
             "EmbeddingIndex rebuild failed (non-fatal): %s", rebuild_exc

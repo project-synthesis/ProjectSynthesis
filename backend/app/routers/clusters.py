@@ -85,6 +85,7 @@ class UpdateClusterResponse(BaseModel):
 async def get_cluster_tree(
     request: Request,
     min_persistence: float = Query(0.0, ge=0.0, le=1.0),
+    project_id: str | None = Query(None),  # ADR-005 Phase 2A
     db: AsyncSession = Depends(get_db),
 ) -> ClusterTreeResponse:
     """Flat node list for 3D topology visualization."""
@@ -92,6 +93,21 @@ async def get_cluster_tree(
         db.autoflush = False
         engine = _get_engine(request)
         nodes = await engine.get_tree(db, min_persistence=min_persistence)
+
+        # ADR-005 Phase 2A: filter tree to a single project sub-tree
+        if project_id:
+            # Collect IDs of the project node + its children + grandchildren
+            project_ids = {project_id}
+            # First pass: direct children of the project node
+            for n in nodes:
+                if n.get("parent_id") in project_ids:
+                    project_ids.add(n["id"])
+            # Second pass: grandchildren (cluster -> domain -> project)
+            for n in nodes:
+                if n.get("parent_id") in project_ids:
+                    project_ids.add(n["id"])
+            nodes = [n for n in nodes if n["id"] in project_ids]
+
         return ClusterTreeResponse(nodes=[ClusterNode(**n) for n in nodes])
     except OperationalError as exc:
         logger.warning("GET /api/clusters/tree DB contention: %s", exc)
@@ -406,10 +422,21 @@ async def get_cluster_detail(
         )
         optimizations = opt_result.scalars().all()
 
+        # ADR-005 Phase 2A: per-project member breakdown
+        project_counts_q = await db.execute(
+            select(Optimization.project_id, func.count())
+            .where(Optimization.cluster_id == cluster_id)
+            .group_by(Optimization.project_id)
+        )
+        member_counts_by_project = {
+            (pid or "legacy"): count for pid, count in project_counts_q.all()
+        }
+
         node_data = {k: v for k, v in node.items() if k not in ("children", "breadcrumb")}
 
         return ClusterDetail(
             **node_data,
+            member_counts_by_project=member_counts_by_project,
             meta_patterns=[
                 MetaPatternItem(id=mp.id, pattern_text=mp.pattern_text, source_count=mp.source_count)
                 for mp in meta_patterns

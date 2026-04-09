@@ -84,6 +84,7 @@ class WarmPathResult:
 async def _load_active_nodes(
     db: AsyncSession,
     exclude_candidates: bool = False,
+    project_id: str | None = None,  # ADR-005 Phase 2A
 ) -> list[PromptCluster]:
     """Load all non-domain, non-archived nodes from the database.
 
@@ -92,15 +93,39 @@ async def _load_active_nodes(
         exclude_candidates: When True, also exclude ``state="candidate"``
             from the result set. Used in Q computation to prevent low-coherence
             candidates from dragging Q_after below Q_before.
+        project_id: When provided, restrict results to clusters under this
+            project's domain subtree. Used for per-project Q scoping so that
+            a bad merge in Project A cannot block Project B's warm cycle.
     """
     excluded = list(EXCLUDED_STRUCTURAL_STATES)
     if exclude_candidates:
         excluded.append("candidate")
-    result = await db.execute(
-        select(PromptCluster).where(
-            PromptCluster.state.notin_(excluded)
+
+    if project_id:
+        # Load only clusters under this project's domain subtree
+        domain_ids_q = await db.execute(
+            select(PromptCluster.id).where(
+                PromptCluster.parent_id == project_id,
+                PromptCluster.state == "domain",
+            )
         )
-    )
+        domain_ids = {row[0] for row in domain_ids_q.all()}
+
+        if not domain_ids:
+            return []
+
+        result = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.notin_(excluded),
+                PromptCluster.parent_id.in_(domain_ids),
+            )
+        )
+    else:
+        result = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.notin_(excluded)
+            )
+        )
     return list(result.scalars().all())
 
 
@@ -138,9 +163,22 @@ async def _run_speculative_phase(
     ti_snapshot = await engine._transformation_index.snapshot()
 
     async with session_factory() as db:
+        # ADR-005 Phase 2A: scope Q to project when all dirty clusters are from one project
+        _project_scope = None
+        if dirty_ids:
+            _dirty_projects = set()
+            for cid in dirty_ids:
+                pid = engine._cluster_project_cache.get(cid)
+                if pid:
+                    _dirty_projects.add(pid)
+            if len(_dirty_projects) == 1:
+                _project_scope = _dirty_projects.pop()
+
         # Load nodes and compute Q_before — exclude candidates to prevent
         # low-coherence candidate clusters from dragging Q down.
-        nodes_before = await _load_active_nodes(db, exclude_candidates=True)
+        nodes_before = await _load_active_nodes(
+            db, exclude_candidates=True, project_id=_project_scope,
+        )
         q_before = engine._compute_q_from_nodes(nodes_before)
 
         # Call the phase function with appropriate arguments
@@ -154,7 +192,9 @@ async def _run_speculative_phase(
             )
 
         # Re-query nodes and compute Q_after — same exclusion as Q_before.
-        nodes_after = await _load_active_nodes(db, exclude_candidates=True)
+        nodes_after = await _load_active_nodes(
+            db, exclude_candidates=True, project_id=_project_scope,
+        )
         q_after = engine._compute_q_from_nodes(nodes_after)
 
         # Update phase result Q values

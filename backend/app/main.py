@@ -496,6 +496,47 @@ async def lifespan(app: FastAPI):
             except Exception as adr005_exc:
                 logger.warning("ADR-005 migration failed (non-fatal): %s", adr005_exc)
 
+            # ADR-005 Phase 2A: ensure project_node_id column on linked_repos
+            try:
+                async with async_session_factory() as _pnid_db:
+                    from sqlalchemy import text as _text_pnid
+                    await _pnid_db.execute(
+                        _text_pnid("ALTER TABLE linked_repos ADD COLUMN project_node_id VARCHAR(36)")
+                    )
+                    await _pnid_db.commit()
+                    logger.info("Added project_node_id column to linked_repos")
+            except Exception:
+                pass  # Column already exists
+
+            # ADR-005 Phase 2A: backfill project_node_id on existing LinkedRepo rows
+            try:
+                async with async_session_factory() as _pnid_bf_db:
+                    from sqlalchemy import select as _sel_pnid
+
+                    from app.models import LinkedRepo, PromptCluster
+
+                    # Find Legacy project node
+                    legacy = (await _pnid_bf_db.execute(
+                        _sel_pnid(PromptCluster).where(
+                            PromptCluster.state == "project",
+                        ).limit(1)
+                    )).scalar_one_or_none()
+
+                    if legacy:
+                        # Backfill any LinkedRepo rows missing project_node_id
+                        unlinked = (await _pnid_bf_db.execute(
+                            _sel_pnid(LinkedRepo).where(
+                                LinkedRepo.project_node_id.is_(None),
+                            )
+                        )).scalars().all()
+                        for lr in unlinked:
+                            lr.project_node_id = legacy.id
+                        if unlinked:
+                            await _pnid_bf_db.commit()
+                            logger.info("Backfilled project_node_id on %d LinkedRepo rows", len(unlinked))
+            except Exception as pnid_exc:
+                logger.warning("LinkedRepo project_node_id backfill failed (non-fatal): %s", pnid_exc)
+
             # One-time backfill: embed optimized_prompt + transformation for existing rows
             import numpy as np
             from sqlalchemy import select as _bf_select
