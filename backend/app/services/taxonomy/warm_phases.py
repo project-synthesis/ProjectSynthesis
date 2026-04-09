@@ -2224,7 +2224,11 @@ async def phase_merge(
                     await engine._transformation_index.remove(loser.id)
                     await engine._optimized_index.remove(loser.id)
                     embedding_index_mutations += 2
-                    engine.mark_dirty(merged.id)  # ADR-005: survivor needs re-evaluation
+                    # ADR-005: survivor needs re-evaluation
+                    engine.mark_dirty(
+                        merged.id,
+                        project_id=engine._cluster_project_cache.get(merged.id),
+                    )
 
     # --- Same-domain duplicate merge ---
     same_domain_merge_base = 0.65
@@ -2361,7 +2365,11 @@ async def phase_merge(
                             await engine._transformation_index.remove(loser.id)
                             await engine._optimized_index.remove(loser.id)
                             embedding_index_mutations += 2
-                            engine.mark_dirty(merged.id)  # ADR-005: survivor needs re-evaluation
+                            # ADR-005: survivor needs re-evaluation
+                            engine.mark_dirty(
+                                merged.id,
+                                project_id=engine._cluster_project_cache.get(merged.id),
+                            )
                             label_merged = True
                             break  # one merge per domain per cycle
 
@@ -2472,7 +2480,11 @@ async def phase_merge(
                                 await engine._transformation_index.remove(small.id)
                                 await engine._optimized_index.remove(small.id)
                                 embedding_index_mutations += 2
-                                engine.mark_dirty(merged.id)  # ADR-005: survivor needs re-evaluation
+                                # ADR-005: survivor needs re-evaluation
+                                engine.mark_dirty(
+                                    merged.id,
+                                    project_id=engine._cluster_project_cache.get(merged.id),
+                                )
                                 merged_this_domain = True
                                 break  # one merge per domain per cycle
 
@@ -2612,7 +2624,10 @@ async def phase_retire(
 
         # ADR-005: mark dissolution targets dirty for next cycle re-evaluation
         for _ra_info in reassignment_info:
-            engine.mark_dirty(_ra_info["cluster_id"])
+            engine.mark_dirty(
+                _ra_info["cluster_id"],
+                project_id=engine._cluster_project_cache.get(_ra_info["cluster_id"]),
+            )
 
         # Archive the dissolved cluster — zero ALL counters to prevent
         # phantom data. Must match the fields cleared by attempt_merge()

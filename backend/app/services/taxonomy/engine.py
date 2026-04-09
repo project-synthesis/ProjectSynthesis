@@ -527,7 +527,7 @@ class TaxonomyEngine:
                     old_cluster.cluster_metadata = write_meta(
                         old_cluster.cluster_metadata, pattern_stale=True,
                     )
-                    self.mark_dirty(old_cluster.id)  # ADR-005: old cluster lost a member
+                    self.mark_dirty(old_cluster.id, project_id=project_id)  # ADR-005: old cluster lost a member
                     logger.info(
                         "Decremented old cluster '%s' member_count to %d "
                         "(reassigned to '%s')",
@@ -535,7 +535,7 @@ class TaxonomyEngine:
                         cluster.label,
                     )
             opt.cluster_id = cluster.id
-            self.mark_dirty(cluster.id)  # ADR-005: new cluster gained a member
+            self.mark_dirty(cluster.id, project_id=project_id)  # ADR-005: new cluster gained a member
 
             # ADR-005 Phase 2A: update cluster->project cache + tag embedding index
             if project_id:
