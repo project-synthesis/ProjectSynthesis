@@ -638,34 +638,33 @@
           {/if}
         {:else}
           {#if githubStore.userCode}
-            <!-- Device flow: show code + waiting state -->
+            <!-- Device flow: gated handoff -->
             <div class="device-flow">
-              <p class="device-heading">Enter this code on GitHub:</p>
+              <p class="device-heading">Your authorization code:</p>
               <div class="device-code">
                 <span class="device-code-text">{githubStore.userCode}</span>
-                <button
-                  class="device-copy-btn"
-                  onclick={() => { navigator.clipboard.writeText(githubStore.userCode ?? ''); }}
-                  title="Copy code"
-                >
-                  Copy
-                </button>
               </div>
-              <a
-                class="device-link"
-                href={githubStore.verificationUri ?? 'https://github.com/login/device'}
-                target="_blank"
-                rel="noopener"
-              >
-                github.com/login/device
-              </a>
-              <p class="device-status">
-                {#if githubStore.polling}
-                  Waiting for authorization...
-                {:else if githubStore.error}
-                  {githubStore.error}
-                {/if}
+              <p class="device-instructions">
+                Copy this code and enter it on GitHub to authorize access to your repositories.
               </p>
+              <button
+                class="action-btn action-btn--primary"
+                onclick={() => {
+                  navigator.clipboard.writeText(githubStore.userCode ?? '');
+                  window.open(
+                    githubStore.verificationUri ?? 'https://github.com/login/device',
+                    '_blank',
+                  );
+                }}
+              >
+                Copy code &amp; open GitHub
+              </button>
+              {#if githubStore.polling}
+                <p class="device-status">Waiting for authorization...</p>
+              {/if}
+              {#if githubStore.error}
+                <p class="error-note">{githubStore.error}</p>
+              {/if}
               <button class="action-btn" onclick={() => githubStore.cancelLogin()}>
                 Cancel
               </button>
@@ -1891,35 +1890,23 @@
   .device-code {
     display: flex;
     align-items: center;
-    gap: 8px;
+    justify-content: center;
   }
   .device-code-text {
     font-family: var(--font-mono);
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
-    letter-spacing: 3px;
+    letter-spacing: 4px;
     color: var(--tier-accent, var(--color-neon-cyan));
-  }
-  .device-copy-btn {
-    background: transparent;
+    padding: 6px 12px;
     border: 1px solid var(--color-border);
-    color: var(--color-text-dim);
+  }
+  .device-instructions {
     font-size: 10px;
-    padding: 2px 6px;
-    cursor: pointer;
-  }
-  .device-copy-btn:hover {
-    color: var(--color-text);
-    border-color: var(--tier-accent, var(--color-neon-cyan));
-  }
-  .device-link {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--tier-accent, var(--color-neon-cyan));
-    text-decoration: none;
-  }
-  .device-link:hover {
-    text-decoration: underline;
+    color: var(--color-text-dim);
+    text-align: center;
+    margin: 0;
+    line-height: 1.4;
   }
   .device-status {
     font-size: 10px;

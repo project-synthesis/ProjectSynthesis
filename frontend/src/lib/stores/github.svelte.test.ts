@@ -52,9 +52,7 @@ describe('GitHubStore', () => {
 
   describe('login', () => {
     it('redirects to OAuth URL', async () => {
-      // Device flow: login() calls /github/auth/device and opens a new tab
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-
+      // Device flow: login() calls /github/auth/device and sets state for UI
       mockFetch([
         { match: '/github/auth/device', response: {
           device_code: 'dc-123',
@@ -66,9 +64,9 @@ describe('GitHubStore', () => {
       ]);
       await githubStore.login();
       expect(githubStore.userCode).toBe('ABCD-1234');
-      expect(openSpy).toHaveBeenCalledWith('https://github.com/login/device', '_blank');
+      expect(githubStore.verificationUri).toBe('https://github.com/login/device');
+      expect(githubStore.polling).toBe(true);
       githubStore.cancelLogin(); // stop polling
-      openSpy.mockRestore();
     });
 
     it('sets error when login API call fails', async () => {
