@@ -307,6 +307,7 @@ class RepoIndexMeta(Base):
     error_message = Column(Text, nullable=True)
     indexed_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+    explore_synthesis = Column(Text, nullable=True)  # cached Haiku architectural synthesis
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 

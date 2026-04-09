@@ -149,6 +149,8 @@ async def link_repo(
         _idx_token = token  # already decrypted
         _idx_repo = full_name
         _idx_branch = active_branch
+        _idx_provider = getattr(getattr(request.app.state, "routing", None), "state", None)
+        _idx_provider = _idx_provider.provider if _idx_provider else None
 
         async def _bg_index():
             async with async_session_factory() as bg_db:
@@ -158,6 +160,46 @@ async def link_repo(
                     embedding_service=EmbeddingService(),
                 )
                 await svc.build_index(_idx_repo, _idx_branch, _idx_token)
+
+            # Step 2: Run explore synthesis and store in RepoIndexMeta
+            try:
+                from app.services.codebase_explorer import CodebaseExplorer
+                from app.services.prompt_loader import PromptLoader
+
+                if _idx_provider:
+                    explorer = CodebaseExplorer(
+                        prompt_loader=PromptLoader(),
+                        github_client=GitHubClient(),
+                        embedding_service=EmbeddingService(),
+                        provider=_idx_provider,
+                    )
+                    synthesis = await explorer.explore(
+                        raw_prompt="Describe the project architecture, key patterns, and conventions",
+                        repo_full_name=_idx_repo,
+                        branch=_idx_branch,
+                        token=_idx_token,
+                    )
+                    if synthesis:
+                        async with async_session_factory() as bg_db2:
+                            from app.models import RepoIndexMeta
+                            meta_q = await bg_db2.execute(
+                                select(RepoIndexMeta).where(
+                                    RepoIndexMeta.repo_full_name == _idx_repo,
+                                    RepoIndexMeta.branch == _idx_branch,
+                                )
+                            )
+                            meta = meta_q.scalar_one_or_none()
+                            if meta:
+                                meta.explore_synthesis = synthesis
+                                await bg_db2.commit()
+                                logger.info(
+                                    "Explore synthesis stored for %s@%s (%d chars)",
+                                    _idx_repo, _idx_branch, len(synthesis),
+                                )
+                else:
+                    logger.debug("No LLM provider available — skipping explore synthesis")
+            except Exception as synth_exc:
+                logger.warning("Background explore synthesis failed (non-fatal): %s", synth_exc)
 
         asyncio.create_task(_bg_index())
         logger.info("Background indexing triggered for %s@%s", full_name, active_branch)

@@ -128,15 +128,31 @@ class ContextEnrichmentService:
                 task_type = "general"
 
         # 3. Codebase context — available for ALL tiers when repo is linked.
-        #    Previously gated to passthrough only, but the curated index provides
-        #    deep structural context that benefits all optimization paths.
+        #    Two layers: (a) cached Haiku synthesis (architectural overview, computed
+        #    once on link/reindex), (b) per-prompt curated retrieval (file-specific
+        #    outlines ranked by semantic similarity to the prompt).
         codebase_context: str | None = None
         if repo_full_name:
             branch = repo_branch or "main"
-            codebase_context = await self._query_index_context(
+
+            # 3a. Cached explore synthesis (architectural context)
+            explore_synthesis = await self._get_explore_synthesis(
+                repo_full_name, branch, db,
+            )
+
+            # 3b. Per-prompt curated index retrieval
+            curated = await self._query_index_context(
                 repo_full_name, branch, raw_prompt,
                 task_type, analysis.domain if analysis else None, db,
             )
+
+            # Combine: synthesis first (overview), then curated (prompt-specific)
+            if explore_synthesis and curated:
+                codebase_context = f"{explore_synthesis}\n\n---\n\n{curated}"
+            elif explore_synthesis:
+                codebase_context = explore_synthesis
+            elif curated:
+                codebase_context = curated
 
         # 4. Adaptation state — ALL tiers, task_type-aware
         #    Skipped when preferences explicitly disable adaptation.
@@ -205,6 +221,29 @@ class ContextEnrichmentService:
             logger.debug("Workspace guidance resolution failed", exc_info=True)
             return None
 
+    async def _get_explore_synthesis(
+        self,
+        repo_full_name: str,
+        branch: str,
+        db: AsyncSession,
+    ) -> str | None:
+        """Load cached Haiku architectural synthesis from RepoIndexMeta."""
+        try:
+            from sqlalchemy import select
+
+            from app.models import RepoIndexMeta
+            meta_q = await db.execute(
+                select(RepoIndexMeta.explore_synthesis).where(
+                    RepoIndexMeta.repo_full_name == repo_full_name,
+                    RepoIndexMeta.branch == branch,
+                    RepoIndexMeta.explore_synthesis.isnot(None),
+                )
+            )
+            return meta_q.scalar_one_or_none()
+        except Exception:
+            logger.debug("Explore synthesis lookup failed", exc_info=True)
+            return None
+
     async def _query_index_context(
         self,
         repo_full_name: str,
@@ -214,12 +253,7 @@ class ContextEnrichmentService:
         domain: str | None,
         db: AsyncSession,
     ) -> str | None:
-        """Query pre-built index for curated codebase context.
-
-        Note: ``RepoIndexService`` is instantiated per-call because it holds a
-        reference to the per-request ``AsyncSession``.  The service itself is
-        lightweight (no model loading) so the allocation cost is negligible.
-        """
+        """Query pre-built index for curated codebase context."""
         try:
             from app.services.repo_index_service import RepoIndexService
             svc = RepoIndexService(db, self._github_client, self._embedding_service)

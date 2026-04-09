@@ -1,8 +1,10 @@
 """Background repo file indexing with SHA-based staleness detection."""
 
 import asyncio
+import hashlib
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
@@ -17,6 +19,10 @@ from app.services.embedding_service import EmbeddingService
 from app.services.github_client import GitHubClient
 
 logger = logging.getLogger(__name__)
+
+# Module-level TTL cache for curated context results
+_curated_cache: dict[str, tuple[float, object]] = {}  # key -> (timestamp, result)
+_CURATED_CACHE_TTL = 300  # 5 minutes
 
 # File extensions that are worth indexing (text/code files)
 _INDEXABLE_EXTENSIONS = {
@@ -440,6 +446,13 @@ class RepoIndexService:
         max_chars: int | None = None,
     ) -> CuratedCodebaseContext | None:
         """Curated retrieval: semantic search + domain boost + diversity + budget packing."""
+        # TTL cache check
+        cache_key = hashlib.sha256(
+            f"{repo_full_name}:{branch}:{query[:200]}:{task_type}:{domain}".encode()
+        ).hexdigest()[:16]
+        cached = _curated_cache.get(cache_key)
+        if cached and (time.time() - cached[0]) < _CURATED_CACHE_TTL:
+            return cached[1]  # type: ignore[return-value]
         effective_max = max_chars or settings.INDEX_CURATED_MAX_CHARS
         min_sim = settings.INDEX_CURATED_MIN_SIMILARITY
         max_per_dir = settings.INDEX_CURATED_MAX_PER_DIR
@@ -519,13 +532,20 @@ class RepoIndexService:
         else:
             freshness = "unknown"
 
-        return CuratedCodebaseContext(
+        result = CuratedCodebaseContext(
             context_text="\n\n".join(parts),
             files_included=files_included,
             total_files_indexed=len(rows),
             index_freshness=freshness,
             top_relevance_score=top_score,
         )
+        # Cache result
+        _curated_cache[cache_key] = (time.time(), result)
+        # Evict stale entries (simple size cap)
+        if len(_curated_cache) > 100:
+            oldest = min(_curated_cache, key=lambda k: _curated_cache[k][0])
+            del _curated_cache[oldest]
+        return result
 
     async def get_index_status(
         self, repo_full_name: str, branch: str

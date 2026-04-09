@@ -548,6 +548,17 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass  # Column already exists
 
+            # Ensure explore_synthesis column on repo_index_meta
+            try:
+                async with async_session_factory() as _es_db:
+                    from sqlalchemy import text as _text_es
+                    await _es_db.execute(
+                        _text_es("ALTER TABLE repo_index_meta ADD COLUMN explore_synthesis TEXT")
+                    )
+                    await _es_db.commit()
+            except Exception:
+                pass  # Column already exists
+
             # One-time backfill: embed optimized_prompt + transformation for existing rows
             import numpy as np
             from sqlalchemy import select as _bf_select

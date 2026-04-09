@@ -101,7 +101,7 @@ class Settings(BaseSettings):
         default=500, description="Maximum characters per file outline in RepoIndexService.",
     )
     INDEX_CURATED_MAX_CHARS: int = Field(
-        default=8000, description="Maximum characters for curated codebase context in passthrough.",
+        default=30000, description="Maximum characters for curated codebase context.",
     )
     INDEX_CURATED_MIN_SIMILARITY: float = Field(
         default=0.3, description="Minimum cosine similarity threshold for curated retrieval.",
