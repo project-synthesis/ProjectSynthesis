@@ -46,7 +46,6 @@ from sqlalchemy import select
 from app.config import DATA_DIR, PROMPTS_DIR
 from app.database import async_session_factory
 from app.models import Optimization
-from app.providers.base import LLMProvider, TokenUsage
 from app.schemas.pipeline_contracts import (
     DIMENSION_WEIGHTS,
     AnalysisResult,
@@ -330,44 +329,6 @@ def _extract_tool_use(result: CreateMessageResult, model_cls: type[T]) -> T | No
                     pass
     return None
 
-
-# ---------------------------------------------------------------------------
-# SamplingLLMAdapter — wraps MCP sampling as an LLMProvider for CodebaseExplorer
-# ---------------------------------------------------------------------------
-
-
-class SamplingLLMAdapter(LLMProvider):
-    """Minimal ``LLMProvider`` wrapper that delegates to MCP sampling.
-
-    Only ``complete_parsed()`` is implemented — sufficient for
-    ``CodebaseExplorer`` which needs a single synthesis call.  The IDE
-    selects which model to use.
-
-    Note: The ``model`` parameter in ``complete_parsed()`` is intentionally
-    ignored — the IDE has full control over model selection.
-    """
-
-    name = "mcp_sampling"
-
-    def __init__(self, ctx: Context) -> None:
-        self._ctx = ctx
-        self.last_usage: TokenUsage | None = None
-
-    async def complete_parsed(
-        self,
-        model: str,
-        system_prompt: str,
-        user_message: str,
-        output_format: type[T],
-        max_tokens: int = 16384,
-        effort: str | None = None,
-    ) -> T:
-        """Delegate to structured sampling — IDE selects the model."""
-        parsed, _model_id = await _sampling_request_structured(
-            self._ctx, system_prompt, user_message, output_format,
-            max_tokens=max_tokens,
-        )
-        return parsed
 
 
 def _build_analysis_from_text(
@@ -1487,57 +1448,8 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def _run_explore_phase(
-    ctx: Context,
-    loader: PromptLoader,
-    prompt: str,
-    repo_full_name: str,
-) -> str | None:
-    """Run explore phase using sampling as the LLM backend.
-
-    Resolves GitHub token from DB, creates a SamplingLLMAdapter, and
-    delegates to CodebaseExplorer.  Non-fatal: returns None on any error.
-    """
-    from app.models import GitHubToken, LinkedRepo
-    from app.services.codebase_explorer import CodebaseExplorer
-    from app.services.embedding_service import EmbeddingService
-    from app.services.github_client import GitHubClient
-    from app.services.github_service import GitHubService
-
-    async with async_session_factory() as db:
-        # Find linked repo to get session_id
-        result = await db.execute(
-            select(LinkedRepo).where(LinkedRepo.full_name == repo_full_name).limit(1)
-        )
-        linked = result.scalar_one_or_none()
-        if not linked:
-            logger.info("Explore skipped: repo %s not linked", repo_full_name)
-            return None
-
-        # Get encrypted token
-        token_result = await db.execute(
-            select(GitHubToken).where(GitHubToken.session_id == linked.session_id).limit(1)
-        )
-        token_row = token_result.scalar_one_or_none()
-        if not token_row:
-            logger.info("Explore skipped: no GitHub token for session %s", linked.session_id)
-            return None
-
-        token = GitHubService.decrypt_token(token_row.token_encrypted)
-
-    adapter = SamplingLLMAdapter(ctx)
-    explorer = CodebaseExplorer(
-        prompt_loader=loader,
-        github_client=GitHubClient(),
-        embedding_service=EmbeddingService(),
-        provider=adapter,
-    )
-    return await explorer.explore(
-        raw_prompt=prompt,
-        repo_full_name=repo_full_name,
-        branch="main",
-        token=token,
-    )
+# _run_explore_phase removed — explore synthesis now handled by enrichment service
+# (background on link/reindex, pre-computed context passed to run_sampling_pipeline).
 
 
 async def _resolve_applied_pattern_text(

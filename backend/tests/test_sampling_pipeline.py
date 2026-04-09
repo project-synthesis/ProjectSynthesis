@@ -15,7 +15,6 @@ from pydantic import BaseModel
 from app.schemas.pipeline_contracts import AnalysisResult, DimensionScores, ScoreResult
 from app.services.pipeline_constants import CODING_KEYWORDS, CONFIDENCE_GATE
 from app.services.sampling_pipeline import (
-    SamplingLLMAdapter,
     _parse_text_response,
     _pydantic_to_mcp_tool,
     _sampling_request_plain,
@@ -201,30 +200,6 @@ async def test_sampling_request_plain():
     assert text == "Hello world"
     assert model_id == "claude-haiku-4-5"
 
-
-# ---------------------------------------------------------------------------
-# SamplingLLMAdapter
-# ---------------------------------------------------------------------------
-
-
-async def test_sampling_llm_adapter():
-    """SamplingLLMAdapter.complete_parsed delegates to structured sampling."""
-    tool_input = {"name": "adapter_test", "value": 42}
-    mock_result = _make_tool_use_result(tool_input)
-    ctx = _make_ctx(create_message_return=mock_result)
-
-    adapter = SamplingLLMAdapter(ctx)
-    assert adapter.name == "mcp_sampling"
-
-    result = await adapter.complete_parsed(
-        model="claude-haiku-4-5",
-        system_prompt="system",
-        user_message="user",
-        output_format=_SimpleModel,
-    )
-
-    assert result.name == "adapter_test"
-    assert result.value == 42
 
 
 # ---------------------------------------------------------------------------
