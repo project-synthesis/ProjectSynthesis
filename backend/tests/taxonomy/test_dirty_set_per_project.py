@@ -1,7 +1,8 @@
 """Tests for per-project dirty-set tracking (Phase 3A)."""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from app.services.taxonomy.engine import TaxonomyEngine
 

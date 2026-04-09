@@ -1,6 +1,5 @@
 """Tests for AdaptiveScheduler boundary computation (Phase 3A)."""
 
-import pytest
 from app.services.taxonomy.engine import AdaptiveScheduler
 
 

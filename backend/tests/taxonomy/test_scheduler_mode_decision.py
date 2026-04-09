@@ -1,6 +1,5 @@
 """Tests for AdaptiveScheduler mode decision (Phase 3A)."""
 
-import pytest
 from app.services.taxonomy.engine import AdaptiveScheduler, SchedulerDecision
 
 

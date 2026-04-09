@@ -1,6 +1,5 @@
 """Tests for AdaptiveScheduler round-robin priority selection (Phase 3A)."""
 
-import pytest
 from app.services.taxonomy.engine import AdaptiveScheduler
 
 
