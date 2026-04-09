@@ -365,6 +365,16 @@ async def split_cluster(
             .where(Optimization.id.in_(cd["group_opt_ids"]))
             .values(cluster_id=child_node.id)
         )
+        # Synchronize domain — members may carry stale domains from prior
+        # merge/retire operations.  Align to the child's inherited domain.
+        await db.execute(
+            sa_update(Optimization)
+            .where(
+                Optimization.id.in_(cd["group_opt_ids"]),
+                Optimization.domain != parent_domain,
+            )
+            .values(domain=parent_domain)
+        )
         new_children.append(child_node)
         logger.info(
             "  Split child '%s' (%d members, coherence=%.3f)",
@@ -492,7 +502,7 @@ async def split_cluster(
                 await db.execute(
                     sa_update(Optimization)
                     .where(Optimization.id == nid)
-                    .values(cluster_id=best_c.id)
+                    .values(cluster_id=best_c.id, domain=parent_domain)
                 )
                 best_c.member_count = (best_c.member_count or 0) + 1
                 merge_score_into_cluster(best_c, noise_score_lookup.get(nid))

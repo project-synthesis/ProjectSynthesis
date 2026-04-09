@@ -308,6 +308,23 @@ async def attempt_merge(
             .values(cluster_id=survivor.id)
         )
 
+        # Synchronize domain for cross-domain merges.  Loser and survivor
+        # are usually same-domain siblings, but edge cases (e.g., manual
+        # reassignment, domain reclassification) can leave stale domains.
+        loser_primary, _ = parse_domain(loser.domain)
+        survivor_primary, _ = parse_domain(survivor.domain)
+        domain_migrated = 0
+        if loser_primary != survivor_primary and survivor.domain:
+            _dm = await db.execute(
+                update(Optimization)
+                .where(
+                    Optimization.cluster_id == survivor.id,
+                    Optimization.domain == loser.domain,
+                )
+                .values(domain=survivor.domain)
+            )
+            domain_migrated = _dm.rowcount
+
         # Atomically migrate OptimizationPattern join records to survivor.
         # Without this, OP records become stale (pointing to archived loser),
         # causing prompts to vanish from cluster detail views.
@@ -321,8 +338,9 @@ async def attempt_merge(
 
         if opt_result.rowcount:
             logger.info(
-                "merge: reassigned %d optimizations + %d OP records from '%s' to '%s'",
+                "merge: reassigned %d optimizations + %d OP records from '%s' to '%s'%s",
                 opt_result.rowcount, op_result.rowcount, loser.label, survivor.label,
+                f" (domain migrated: {domain_migrated})" if domain_migrated else "",
             )
 
         # Move loser's MetaPatterns to survivor (deduplicate via embedding similarity).
@@ -584,6 +602,22 @@ async def attempt_retire(
             .where(Optimization.cluster_id == node.id)
             .values(cluster_id=target_sibling.id)
         )
+
+        # Synchronize domain for cross-domain retirements (same pattern as merge).
+        node_primary, _ = parse_domain(node.domain)
+        target_primary, _ = parse_domain(target_sibling.domain)
+        domain_migrated = 0
+        if node_primary != target_primary and target_sibling.domain:
+            _dm = await db.execute(
+                sa_update(Optimization)
+                .where(
+                    Optimization.cluster_id == target_sibling.id,
+                    Optimization.domain == node.domain,
+                )
+                .values(domain=target_sibling.domain)
+            )
+            domain_migrated = _dm.rowcount
+
         # Atomically migrate OP records (same fix as attempt_merge)
         from app.models import OptimizationPattern
         await db.execute(
@@ -610,9 +644,10 @@ async def attempt_retire(
             target_sibling.scored_count = merged_scored
             target_sibling.avg_score = merged_avg
             logger.info(
-                "retire: reassigned %d optimizations to '%s' (member_count now %d)",
+                "retire: reassigned %d optimizations to '%s' (member_count now %d)%s",
                 opt_result.rowcount, target_sibling.label,
                 target_sibling.member_count,
+                f" (domain migrated: {domain_migrated})" if domain_migrated else "",
             )
 
         # Clean up orphaned meta-patterns — archived clusters don't participate
