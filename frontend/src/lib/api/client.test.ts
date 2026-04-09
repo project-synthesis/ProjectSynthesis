@@ -18,7 +18,6 @@ import {
   updateStrategy,
   getOptimization,
   savePassthrough,
-  githubLogin,
   githubMe,
   githubLogout,
   githubRepos,
@@ -385,15 +384,7 @@ describe('savePassthrough', () => {
 
 // ── GitHub ───────────────────────────────────────────────────────
 
-describe('githubLogin', () => {
-  it('calls GET /github/auth/login', async () => {
-    const mock = mockFetch([{ match: '/github/auth/login', response: { url: 'https://github.com/login/oauth/authorize?...' } }]);
-    const result = await githubLogin();
-    expect(result.url).toContain('github.com');
-    const [url] = mock.mock.calls[0];
-    expect(url).toContain('/github/auth/login');
-  });
-});
+// githubLogin test removed — function deprecated in favor of device flow.
 
 describe('githubMe', () => {
   it('calls GET /github/auth/me', async () => {

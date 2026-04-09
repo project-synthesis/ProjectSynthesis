@@ -329,7 +329,8 @@ export const getSettings = () => apiFetch<SettingsResponse>('/settings');
 
 // ---- GitHub ----
 
-export const githubLogin = () => apiFetch<{ url: string }>('/github/auth/login');
+// githubLogin (authorization code redirect) removed — device flow is primary.
+// Backend endpoint /auth/login still exists as fallback for deployed instances.
 export const githubMe = () => apiFetch<GitHubUser>('/github/auth/me');
 export const githubLogout = () => apiFetch<void>('/github/auth/logout', { method: 'POST' });
 export const githubRepos = (page = 1) => apiFetch<{ repos: GitHubRepository[]; count: number }>(`/github/repos?page=${page}`);

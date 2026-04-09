@@ -93,6 +93,7 @@ class GitHubStore {
     if (this.polling) {
       this.polling = false;
       this.userCode = null;
+      this.verificationUri = null;
       this.deviceCode = null;
       this.error = 'Authorization timed out. Please try again.';
     }

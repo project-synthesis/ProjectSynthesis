@@ -336,6 +336,20 @@ async def poll_device_code(
     )
     logger.info("GitHub device flow completed: user=%s", user.get("login"))
 
+    # Audit log (same pattern as authorization code callback)
+    try:
+        from app.services.audit_logger import log_event
+
+        await log_event(
+            db=db,
+            action="github_login",
+            actor_ip=request.client.host if request.client else None,
+            detail={"github_login": user.get("login"), "flow": "device"},
+            outcome="success",
+        )
+    except Exception:
+        logger.debug("Audit log write failed", exc_info=True)
+
     return DevicePollResponse(
         status="success",
         user=GitHubUserResponse(
