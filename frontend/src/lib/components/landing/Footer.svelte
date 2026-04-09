@@ -7,7 +7,7 @@
       title: 'Product',
       links: [
         { label: 'Pipeline', href: '#pipeline' },
-        { label: 'Live Example', href: '#example' },
+        { label: 'Example', href: '#example' },
         { label: 'Capabilities', href: '#capabilities' },
         { label: 'Integrations', href: '#integrations' },
         { label: 'Changelog', href: `${base}/changelog` },
@@ -96,9 +96,8 @@
     transition: color var(--duration-hover) var(--ease-spring);
   }
 
-  .footer__link:hover {
-    color: var(--color-text-primary);
-  }
+  .footer__link:hover { color: var(--color-text-primary); }
+  .footer__link:focus-visible { outline: 1px solid rgba(0, 229, 255, 0.3); outline-offset: 2px; }
 
   .footer__bottom {
     display: flex;
@@ -134,7 +133,6 @@
     transition: color var(--duration-hover) var(--ease-spring);
   }
 
-  .footer__github:hover {
-    color: var(--color-text-primary);
-  }
+  .footer__github:hover { color: var(--color-text-primary); }
+  .footer__github:focus-visible { outline: 1px solid rgba(0, 229, 255, 0.3); outline-offset: 2px; }
 </style>

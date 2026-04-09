@@ -65,10 +65,12 @@ function parseChangelog(raw: string): TimelineSection['versions'] {
     // ### Category header: "### Added", "### Changed", "### Fixed", "### Removed"
     const catMatch = line.match(/^### (\w+)/);
     if (catMatch && currentVersion) {
+      const rawLabel = catMatch[1].toUpperCase();
+      if (!(rawLabel in CATEGORY_COLORS)) continue; // skip unknown categories
       if (currentCategory) {
         currentVersion.categories.push(currentCategory);
       }
-      const label = catMatch[1].toUpperCase() as CategoryLabel;
+      const label = rawLabel as CategoryLabel;
       currentCategory = {
         label,
         color: CATEGORY_COLORS[label] || 'var(--color-text-secondary)',

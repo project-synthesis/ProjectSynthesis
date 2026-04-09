@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Logo from '$lib/components/shared/Logo.svelte';
   import Navbar from '$lib/components/landing/Navbar.svelte';
   import Footer from '$lib/components/landing/Footer.svelte';
   import { base } from '$app/paths';
@@ -301,7 +300,7 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- SECTION 3: KNOWLEDGE GRAPH                                    -->
+  <!-- SECTION 4: KNOWLEDGE GRAPH                                    -->
   <!-- ============================================================ -->
   <section id="knowledge-graph" class="section" aria-labelledby="kg-heading">
     <h2 id="kg-heading" class="section-heading example-heading">Evolutionary Knowledge Graph</h2>
@@ -412,7 +411,7 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- SECTION 4: CAPABILITIES (6-CARD GRID)                         -->
+  <!-- SECTION 5: CAPABILITIES (6-CARD GRID)                         -->
   <!-- ============================================================ -->
   <section id="capabilities" class="section" aria-labelledby="capabilities-heading">
     <h2 id="capabilities-heading" class="section-heading integrations-heading">Beyond the Pipeline.</h2>
@@ -474,7 +473,7 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- SECTION 5: THREE TIERS                                       -->
+  <!-- SECTION 6: THREE TIERS                                       -->
   <!-- ============================================================ -->
   <section id="integrations" class="section" aria-labelledby="integrations-heading">
     <h2 id="integrations-heading" class="section-heading integrations-heading">Three Tiers. Every Editor.</h2>
@@ -535,7 +534,7 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- SECTION 6: GET STARTED + TRUST                               -->
+  <!-- SECTION 7: GET STARTED + TRUST                               -->
   <!-- ============================================================ -->
   <section id="trust" class="trust-section" aria-labelledby="cta-heading">
     <p class="trust-mission">
@@ -563,7 +562,7 @@
 
     <div class="trust-cta" data-animate>
       <h2 id="cta-heading" class="trust-cta__headline">
-        <span class="">STOP GUESSING. START COMPOUNDING.</span>
+        STOP GUESSING. START COMPOUNDING.
       </h2>
       <p class="trust-cta__sub">
         Every prompt scored. Every pattern extracted. Every optimization compounds the next.
@@ -649,6 +648,12 @@
 
   .btn-ghost:hover {
     background: rgba(0, 229, 255, 0.08);
+  }
+
+  .btn-primary:focus-visible,
+  .btn-ghost:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
   }
 
   /* ================================================================
@@ -1243,7 +1248,7 @@
   }
 
   /* ================================================================
-     SECTION 4: WORKS EVERYWHERE
+     SECTION 5-6: CAPABILITIES + TIERS
      ================================================================ */
   .integrations-heading {
     text-align: center;
@@ -1363,7 +1368,7 @@
   }
 
   /* ================================================================
-     SECTION 5: GET STARTED + TRUST
+     SECTION 7: GET STARTED + TRUST
      ================================================================ */
   .trust-section {
     margin-top: 140px;
