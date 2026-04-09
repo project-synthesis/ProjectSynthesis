@@ -556,6 +556,12 @@
                 <span class="data-value">{githubStore.linkedRepo.language}</span>
               </div>
             {/if}
+            {#if githubStore.linkedRepo.project_label}
+              <div class="data-row">
+                <span class="data-label">Project</span>
+                <span class="data-value font-mono">{githubStore.linkedRepo.project_label}</span>
+              </div>
+            {/if}
           </div>
           <button
             class="action-btn"

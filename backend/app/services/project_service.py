@@ -30,9 +30,11 @@ async def ensure_project_for_repo(
 
     Logic (when target_project_id is None):
     1. If LinkedRepo already has project_node_id set, return it.
-    2. If only Legacy project exists (label="Legacy"), rename it to repo name.
-    3. If a project node matching this repo label exists, reattach (re-link).
-    4. Otherwise, create a new project node.
+    2. If a project node matching this repo label exists, reattach (re-link).
+    3. Otherwise, create a new project node.
+
+    Legacy is never renamed — it stays as the permanent home for
+    pre-repo and non-repo work.
 
     Returns the project node ID (PromptCluster.id with state="project").
     """

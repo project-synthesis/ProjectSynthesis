@@ -41,6 +41,7 @@ class HistoryItem(BaseModel):
     intent_label: str | None = Field(default=None, description="Short intent classification label.")
     domain: str | None = Field(default=None, description="Domain category.")
     cluster_id: str | None = Field(default=None, description="Pattern family ID.")
+    project_id: str | None = Field(default=None, description="Project node ID.")  # ADR-005
     feedback_rating: str | None = Field(default=None, description="Latest feedback rating.")
 
 
@@ -126,6 +127,7 @@ async def get_history(
                 intent_label=opt.intent_label,
                 domain=opt.domain,
                 cluster_id=family_map.get(opt.id),
+                project_id=opt.project_id,
                 feedback_rating=feedback_map.get(opt.id),
             )
             for opt in items

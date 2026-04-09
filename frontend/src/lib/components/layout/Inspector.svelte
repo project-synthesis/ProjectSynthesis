@@ -208,6 +208,12 @@
               <span class="meta-label">Members</span>
               <span class="meta-value">{family.member_count}</span>
             </div>
+            {#if family.project_ids && family.project_ids.length > 1}
+              <div class="meta-row">
+                <span class="meta-label">Projects</span>
+                <span class="meta-value meta-value--cyan">{family.project_ids.length}</span>
+              </div>
+            {/if}
             <div class="meta-row" use:tooltip={CLUSTER_TOOLTIPS.avg_score}>
               <span class="meta-label">Avg Score</span>
               <span class="meta-value meta-value--cyan">{formatScore(family.avg_score)}</span>

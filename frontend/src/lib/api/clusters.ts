@@ -73,6 +73,8 @@ export interface ClusterDetail {
   split_failures: number;
   preferred_strategy: string | null;
   promoted_at: string | null;
+  project_ids: string[];  // ADR-005
+  member_counts_by_project: Record<string, number>;  // ADR-005
   meta_patterns: MetaPatternItem[];
   optimizations: LinkedOptimization[];
   children: ClusterNode[] | null;

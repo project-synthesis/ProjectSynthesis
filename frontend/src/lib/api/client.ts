@@ -21,6 +21,8 @@ export interface HealthResponse {
   domain_count?: number | null;
   domain_ceiling?: number | null;
   injection_stats?: Record<string, number>;
+  project_count?: number;  // ADR-005
+  global_patterns?: { active: number; demoted: number; retired: number; total: number };  // ADR-005 Phase 2B
 }
 
 export interface ApiKeyStatus {
@@ -87,6 +89,7 @@ export interface HistoryItem {
   intent_label: string | null;
   domain: string | null;
   cluster_id: string | null;
+  project_id: string | null;  // ADR-005
   feedback_rating: string | null;
 }
 
@@ -141,6 +144,8 @@ export interface LinkedRepo {
   default_branch: string;
   branch: string | null;
   language: string | null;
+  project_node_id?: string | null;  // ADR-005
+  project_label?: string | null;    // ADR-005
 }
 
 export interface FeedbackResponse {
