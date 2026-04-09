@@ -19,9 +19,10 @@ Everything backend developers need. For project overview, see root `CLAUDE.md`. 
 **Routing**: `routing.py` (RoutingManager singleton, `resolve_route()` pure function — see Routing Internals below)
 **Taxonomy**: `taxonomy/` package (see Taxonomy Engine below)
 **Workspace**: `workspace_intelligence.py` (manifest-based stack detection + deep scanning), `roots_scanner.py` (agent guidance file discovery, SHA256 dedup), `codebase_explorer.py` (semantic retrieval + Haiku synthesis, SHA cache), `explore_cache.py` (TTL+LRU), `repo_index_service.py` (background indexing, `query_curated_context()`)
-**Embeddings**: `embedding_service.py` (singleton `all-MiniLM-L6-v2`, 384-dim), `embedding_index.py` (numpy index, O(1) upsert, batch cosine)
+**Embeddings**: `embedding_service.py` (singleton `all-MiniLM-L6-v2`, 384-dim), `embedding_index.py` (dual-backend: `_NumpyBackend` default, `_HnswBackend` at ≥1000 clusters via `HNSW_CLUSTER_THRESHOLD`; stable `_id_to_label` mapping + tombstones; `project_filter` param on `search()`)
 **Domain**: `domain_resolver.py` (cached DB lookup, replaces `VALID_DOMAINS`, runtime `add_label()` for sub-domain registration), `domain_signal_loader.py` (keyword signals from domain metadata)
-**Patterns**: `pattern_injection.py` (`auto_inject_patterns()` with composite fusion + cross-cluster injection), `prompt_lifecycle.py` (state promotion, quality pruning, usage decay, orphan backfill)
+**Patterns**: `pattern_injection.py` (`auto_inject_patterns()` with composite fusion + cross-cluster injection + GlobalPattern injection at 1.3x boost), `prompt_lifecycle.py` (state promotion, quality pruning, usage decay, orphan backfill)
+**Projects** (ADR-005): `project_service.py` (`ensure_project_for_repo()` — Legacy rename/new project/re-link, `resolve_project_id()` — repo→LinkedRepo→project chain). `global_patterns.py` (promotion/validation/retention lifecycle, Phase 4.5 in warm path)
 **Infrastructure**: `event_bus.py` (in-process pub/sub), `event_notification.py` (cross-process HTTP POST), `trace_logger.py` (per-phase JSONL, daily rotation), `taxonomy/event_logger.py` (decision JSONL + ring buffer + SSE, singleton via `get_event_logger()`), `mcp_session_file.py` (read/write/staleness)
 **Feedback**: `feedback_service.py` (CRUD + adaptation update), `adaptation_tracker.py` (strategy affinity, degenerate detection)
 **GitHub**: `github_service.py` (Fernet encrypt/decrypt), `github_client.py` (raw API, explicit token param)
@@ -62,12 +63,14 @@ Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (i
 
 ## Data models (`app/models.py`)
 
-- `Optimization` — raw/optimized prompt, scores, clustering info, domain, per-phase model IDs, multi-embedding (optimized + transformation), `phase_weights_json` snapshot
-- `PromptCluster` — UUID PK, self-join `parent_id`, L2-normalized centroid (384-dim), lifecycle state (`candidate`|`active`|`mature`|`template`|`archived`|`domain`), metrics, `cluster_metadata` JSON
+- `Optimization` — raw/optimized prompt, scores, clustering info, domain, per-phase model IDs, multi-embedding (optimized + transformation), `phase_weights_json` snapshot, `project_id` (ADR-005 denormalized FK), `repo_full_name`
+- `PromptCluster` — UUID PK, self-join `parent_id`, L2-normalized centroid (384-dim), lifecycle state (`candidate`|`active`|`mature`|`template`|`archived`|`domain`|`project`), metrics, `cluster_metadata` JSON
 - `TaxonomySnapshot` — audit trail (trigger, Q metrics, operation log, tree_state)
 - `MetaPattern` — reusable techniques (`embedding`, `pattern_text`, `cluster_id` FK, `global_source_count` for cross-cluster presence)
-- `OptimizationPattern` — join: Optimization→PromptCluster with similarity + relationship type
-- `Feedback`, `StrategyAffinity`, `RefinementBranch`, `RefinementTurn`, `GitHubToken`, `LinkedRepo`, `RepoFileIndex`, `AuditLog`
+- `GlobalPattern` — durable cross-project patterns (ADR-005). 11 columns: `pattern_text`, `embedding`, `source_cluster_ids`/`source_project_ids` (JSON), `cross_project_count`, `avg_cluster_score`, `state` (active/demoted/retired). 500 cap with LRU eviction
+- `OptimizationPattern` — join: Optimization→PromptCluster with similarity + relationship type (`source`/`injected`/`global_injected`). `global_pattern_id` nullable FK
+- `LinkedRepo` — GitHub repo link with `project_node_id` FK to PromptCluster (ADR-005)
+- `Feedback`, `StrategyAffinity`, `RefinementBranch`, `RefinementTurn`, `GitHubToken`, `RepoFileIndex`, `AuditLog`
 
 ## Pipeline architecture
 
@@ -122,7 +125,7 @@ Two SDK bug fixes in `mcp_server.py`:
 
 ## Taxonomy engine (`services/taxonomy/`)
 
-Process singleton (`get_engine()`/`set_engine()`). Three paths: **hot** (per-optimization embed + adaptive cosine nearest-node), **warm** (periodic HDBSCAN + speculative lifecycle mutations gated by Q_system non-regression + domain discovery + reconciliation + zombie cleanup + stale archived cluster pruning), **cold** (full refit + UMAP 3D + OKLab coloring + Haiku labeling + domain-link restoration + member_count reconciliation). Warm-path Phase 0 reconciles member_count for both regular clusters and domain nodes; prunes archived clusters >24h old with 0 members and no optimization references. 30s debounce after `taxonomy_changed` SSE events reduces SQLite write contention during active warm cycles.
+Process singleton (`get_engine()`/`set_engine()`). **Hierarchy**: project → domain → cluster → optimizations (ADR-005). Three paths: **hot** (per-optimization embed + two-tier project-scoped cosine assignment: in-project first, cross-project fallback +0.15 boost), **warm** (periodic speculative lifecycle gated by per-project Q non-regression + domain discovery + reconciliation + zombie cleanup + Phase 4.5 GlobalPattern promotion/validation), **cold** (full refit + UMAP 3D + OKLab coloring + Haiku labeling + domain-link restoration + member_count reconciliation + project_ids rebuild). **Dirty-set tracking**: `dict[str, str|None]` (cluster→project). **Adaptive scheduler**: `AdaptiveScheduler` with linear regression boundary; all-dirty vs round-robin mode (starvation guard at 3 cycles). Warm-path Phase 0 reconciles member_count for both regular clusters and domain nodes; prunes archived clusters >24h old with 0 members. 30s debounce after `taxonomy_changed` SSE events.
 
 **Merge threshold**: adaptive `0.55 + 0.04 * log2(1 + member_count)` — grows with cluster size to prevent centroid-drift mega-clusters. Task_type mismatch penalty (-0.05) for cross-type merges. Used by hot, warm, and cold paths.
 
@@ -150,7 +153,7 @@ Process singleton (`get_engine()`/`set_engine()`). Three paths: **hot** (per-opt
 
 **Performance**: `split_cluster()` uses 3-phase approach — sequential DB queries, parallel `asyncio.gather` on `generate_label()` calls, sequential object creation. Pattern extraction deferred to Phase 4 (Refresh) via `pattern_stale=True`. Phase 4 parallelizes both label generation AND pattern extraction across stale clusters (taxonomy context pre-computed sequentially, LLM calls in parallel — avoids concurrent DB session access).
 
-**Modules**: `engine.py`, `clustering.py`, `lifecycle.py`, `quality.py`, `projection.py`, `coloring.py`, `labeling.py`, `snapshot.py`, `sparkline.py`, `family_ops.py`, `matching.py`, `embedding_index.py`, `transformation_index.py`, `fusion.py`, `warm_phases.py`, `warm_path.py`, `cold_path.py`, `split.py`, `event_logger.py`, `cluster_meta.py`, `_constants.py`.
+**Modules**: `engine.py`, `clustering.py`, `lifecycle.py`, `quality.py`, `projection.py`, `coloring.py`, `labeling.py`, `snapshot.py`, `sparkline.py`, `family_ops.py`, `matching.py`, `embedding_index.py` (dual-backend: `_NumpyBackend` + `_HnswBackend`), `transformation_index.py`, `optimized_index.py`, `fusion.py`, `warm_phases.py`, `warm_path.py`, `cold_path.py`, `split.py`, `event_logger.py`, `cluster_meta.py`, `global_patterns.py` (ADR-005 Phase 2B), `_constants.py`.
 
 ## Testing
 

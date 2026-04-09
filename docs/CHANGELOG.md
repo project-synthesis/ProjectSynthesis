@@ -4,42 +4,44 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
-### Added
-- **ADR-005 Phase 3B: dual-backend EmbeddingIndex with stable label mapping** — extracted `_NumpyBackend` class from EmbeddingIndex, added `_HnswBackend` wrapping hnswlib with `allow_replace_deleted`. Stable `_id_to_label` dict + tombstones replaces error-prone pop-and-shift removal. Auto-selects HNSW at >= 1000 clusters on rebuild. `HNSW_CLUSTER_THRESHOLD` constant added. Public API unchanged; all 1794 tests pass
-- **ADR-005 Phase 2B: GlobalPattern injection** — active GlobalPatterns injected alongside MetaPatterns in `auto_inject_patterns` with 1.3x relevance boost. `InjectedPattern` gains `source`/`source_id` fields. `format_injected_patterns` separates global patterns into a dedicated "Proven Cross-Project Techniques" section
-- **ADR-005 Phase 2A: cold path project_ids rebuild + topology endpoints** — cold path now resolves dominant project_id per cluster and passes to embedding index rebuild. Tree endpoint accepts `project_id` query param for sub-tree filtering. Cluster detail returns `member_counts_by_project` breakdown. Health endpoint reports `project_count`
-- **ADR-005 Phase 1: taxonomy scaling architecture** — foundational infrastructure for multi-project support
-  - Centralized `EXCLUDED_STRUCTURAL_STATES` constant replacing 37+ inline state exclusion patterns across 8 taxonomy files
-  - `GlobalPattern` model for durable cross-project patterns that survive cluster archival
-  - `project_id` column on `Optimization` for per-project filtering (denormalized FK)
-  - Legacy project node migration: existing domain nodes re-parented under a "Legacy" project hierarchy on startup
-  - Dirty-set tracking on taxonomy engine: warm path split/merge phases only process clusters that changed since last cycle
-  - Adaptive scheduler measurement infrastructure: rolling window of warm cycle timings with self-tuning p75 target duration
-  - `project_filter` parameter on `EmbeddingIndex.search()` for per-project vector filtering with backward-compatible cache format
-
-### Fixed
-- **Observability audit: 50+ silent failure paths instrumented** — systematic audit of all taxonomy hot/warm/cold paths, pipeline phases, pattern injection, batch seeding, and trace logging. Added `logger.warning()` to every silent `np.frombuffer` embedding deserialization catch across 12 files. Promoted `q_health` computation failures, breadcrumb build failures, merge-back detection failures, and pattern extraction failures from silent/debug to warning level. Added event bus publish failure logging where previously swallowed
-- **Pipeline embedding failure now logged** — `pipeline.py` embedding service failure was `except Exception: pass` (no log), losing visibility into why downstream pattern injection and few-shot retrieval degrade. Now warns with trace_id
-- **Pattern injection silent drops now visible** — `np.frombuffer` failures in cross-cluster injection and few-shot retrieval silently skipped patterns/examples. Now logs warning per dropped item with trace_id
-- **Sampling pipeline structured fallback now monitored** — when IDE client doesn't support tool calling and pipeline falls back to text+schema, now emits `optimization_status` event with `phase=structured_fallback` for frequency monitoring
-- **Trace and event JSONL readers now warn on malformed lines** — `trace_logger.py` and `event_logger.py` silently skipped unparseable JSONL lines. Now logs warning per malformed line with filename
-- **Event logger singleton warnings rate-limited** — `get_event_logger()` now emits up to 5 warnings when called before initialization, making outages detectable through Python logs instead of completely silent
-- **Dissolution cascade cross-domain contamination** — `_reassign_to_active()` now prefers same-domain target clusters, preventing dissolved members from spraying cross-domain and creating junk-drawer clusters. Updates `opt.domain` on cross-domain reassignment for data consistency
-- **Lifecycle dead zone for mid-size clusters** — lowered `SPLIT_MIN_MEMBERS` 25->12 and raised `FORCED_SPLIT_COHERENCE_FLOOR` 0.25->0.35, closing the gap where clusters with 6-24 members and coherence 0.25-0.50 had no lifecycle operation available
+## v0.3.18-dev — 2026-04-08
 
 ### Added
-- **Split failure events** — `split/insufficient_members` and `split/too_few_children` decision events now logged when split fails due to corrupt embeddings dropping members below threshold or fewer than 2 viable children after label generation
-- **Sparkline oscillation fix** — sparkline was alternating between `q_health` (0.66) and `q_system` (0.78) every time a rejected cold path snapshot appeared. Cold path rejection snapshots now carry forward the last known `q_health` instead of `None`, and sparkline filters `q_health`-only values instead of falling back to `q_system` (different metric, different scale)
-- **Cross-service health probes** — `GET /api/health` now probes all three services (backend, frontend, MCP) and cross-service links (frontend→backend, MCP→backend) with 5s per-probe timeout. Returns `services` and `cross_service` dicts with status/latency/error. Status logic: `healthy`/`degraded`/`unhealthy` with 503 on unhealthy
-- **Monitoring data export** — new `GET /api/monitoring` endpoint with backend/frontend/MCP uptimes, cold start latency (ms), and per-phase LLM latency percentiles (p50/p95) computed from trace JSONL data with 60s cache
-- **Structured error logging** — new `ErrorLogger` writing to `data/errors/errors-YYYY-MM-DD.jsonl` with 30-day rotation. Global FastAPI exception handler captures unhandled 500s with request context. Wired into pipeline failure handler and MCP server
-- **Sampling regression test suite** — 20 pytest cases in `test_sampling_regressions.py` covering all 7 known bugs: GENERAL classification upgrade, scorer heuristic fallback, meta-header cleanup, changes rationale split, clarity heuristic false positives, self-referencing cluster detection, GitHub auth guard
-- **init.sh graceful retry** — services that fail readiness get up to 3 retries with exponential backoff (2s/4s/8s). Failed service name + last log line printed on final failure. Successfully started services remain running
-- **Cross-domain outlier reconciliation** — Phase 0 reconciliation now ejects members whose domain differs from their cluster's domain when cosine similarity to centroid is below 0.40 and a better same-domain cluster exists. Caps at 5 ejections per cluster per cycle
+- **ADR-005: Taxonomy scaling architecture (Phases 1-3B)** — complete multi-project isolation and performance scaling. 1796 tests, 60 spec requirements verified. Key capabilities:
+  - **Multi-project isolation**: project nodes created on GitHub repo link, two-tier cluster assignment (in-project first, cross-project fallback +0.15 boost), per-project Q metrics in warm path speculative phases
+  - **Global pattern tier**: durable cross-project patterns promoted from MetaPattern siblings (2+ projects, 5+ clusters, avg_score >= 6.0), injected with 1.3x relevance boost, validated with demotion/re-promotion hysteresis (5.0/6.0), 500 retention cap with LRU eviction
+  - **Round-robin warm scheduling**: linear regression boundary computation, all-dirty vs round-robin mode decision, starvation guard (3-cycle limit), per-project dirty tracking
+  - **HNSW embedding index**: dual-backend (`_NumpyBackend` + `_HnswBackend`), stable label mapping with tombstones, auto-selects HNSW at >= 1000 clusters on rebuild
+- **`EXCLUDED_STRUCTURAL_STATES` constant** — centralized frozenset replacing 37+ inline `["domain","archived"]` patterns across 13 files. Adding a new structural state is a one-line change
+- **`GlobalPattern` model** — 11-column table for cross-project patterns that survive cluster archival. Promoted from MetaPattern, injected alongside cluster patterns
+- **`project_id` on Optimization** — denormalized FK for fast per-project filtering, backfilled from cluster ancestry
+- **Legacy project node migration** — idempotent startup migration creates Legacy project, re-parents domain nodes, backfills project_id
+- **`project_service.py`** — `ensure_project_for_repo()` (Legacy rename, new project, re-link) + `resolve_project_id()` for session-based project resolution
+- **`global_patterns.py`** — promotion pipeline (sibling discovery, dedup), validation lifecycle (demotion/re-promotion/retirement), retention cap enforcement. Phase 4.5 in warm path
+- **Topology project filter** — `GET /api/clusters/tree?project_id=...` for project-scoped subtrees, `member_counts_by_project` on cluster detail, `project_count` on health endpoint
+- **`global_patterns` health stats** — `GET /api/health` returns active/demoted/retired/total counts
+- **Cross-service health probes** — `GET /api/health` probes all three services with 5s timeout
+- **Monitoring data export** — `GET /api/monitoring` with uptimes and LLM latency percentiles
+- **Structured error logging** — `ErrorLogger` with 30-day JSONL rotation
+- **Split failure events** — `split/insufficient_members` and `split/too_few_children` decision events
+- **Sparkline oscillation fix** — cold path rejection snapshots carry forward `q_health`
+- **Sampling regression test suite** — 20 pytest cases covering 7 known bugs
+- **init.sh graceful retry** — 3 retries with exponential backoff on service startup
+- **Cross-domain outlier reconciliation** — Phase 0 ejects cross-domain members
 
 ### Changed
-- **Logging level consistency normalized** — merge-back detection failure promoted from debug to warning (loses split loop prevention data). Pattern extraction inner-loop failures promoted from debug to warning (loses taxonomy refresh data). Batch pipeline domain resolver failure changed from silent to warning
-- **Analyzer "saas" domain classification tightened** — "saas" moved from generic fallback example to explicit decision rule with clear criteria (subscription management, tenant isolation, onboarding flows, usage metering). Added clarifying instruction: classify by what the prompt asks to build, not business context
+- **Logging level consistency normalized** — merge-back, pattern extraction, batch pipeline failures promoted to warning
+- **Analyzer "saas" domain classification tightened** — explicit decision criteria
+
+### Fixed
+- **50+ silent failure paths instrumented** — systematic observability audit across all taxonomy paths
+- **Pipeline embedding failure now logged** — was silent `except Exception: pass`
+- **Pattern injection silent drops visible** — `np.frombuffer` failures now warned
+- **Sampling pipeline structured fallback monitored** — `optimization_status` event emitted
+- **JSONL readers warn on malformed lines** — `trace_logger.py` and `event_logger.py`
+- **Event logger singleton warnings rate-limited** — max 5 warnings before init
+- **Dissolution cascade cross-domain contamination** — `_reassign_to_active()` domain-aware
+- **Lifecycle dead zone for mid-size clusters** — `SPLIT_MIN_MEMBERS` 25->12, `FORCED_SPLIT_COHERENCE_FLOOR` 0.25->0.35
 
 ## v0.3.17-dev — 2026-04-07
 

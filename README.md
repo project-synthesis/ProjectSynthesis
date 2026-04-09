@@ -70,8 +70,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 | Frontend | SvelteKit 2 (Svelte 5 runes), Tailwind CSS 4 |
 | Database | SQLite (WAL mode) |
 | Visualization | Three.js (3D taxonomy topology with LOD, raycasting, force layout) |
-| Clustering | Spectral clustering (primary split) + HDBSCAN (fallback/cold-path) + adaptive cosine threshold + UMAP 3D + OKLab coloring |
-| Embeddings | sentence-transformers (all-MiniLM-L6-v2, 384-dim, CPU) |
+| Clustering | Spectral clustering (primary split) + HDBSCAN (fallback/cold-path) + adaptive cosine threshold + UMAP 3D + OKLab coloring. Multi-project hierarchy (project → domain → cluster) |
+| Embeddings | sentence-transformers (all-MiniLM-L6-v2, 384-dim, CPU). Dual-backend index: numpy (default) + hnswlib HNSW (auto at ≥1000 clusters) |
 | LLM | Configurable per phase — Opus, Sonnet, Haiku (via Settings) |
 | Scoring | Hybrid: LLM + heuristic blending per dimension, z-score normalization (≥30 samples), divergence detection. Weights: faithfulness 0.25, clarity/specificity/conciseness 0.20, structure 0.15 |
 | MCP | Streamable HTTP on port 8001 — process-level singleton routing with dual disconnect detection |
@@ -115,9 +115,9 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Workspace scanning** — automatically discovers CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, .clinerules, CONVENTIONS.md for context injection. Monorepo-aware: `discover_project_dirs()` scans manifest-containing subdirectories with SHA256 deduplication
 - **Hybrid scoring** — LLM scores blended with heuristic analysis (structure, readability, constraint density) + z-score normalization against historical distribution. Dimension-specific weights prevent single-model bias. Divergence flags when LLM and heuristic disagree by >2.5 points
 - **Real-time events** — SSE-based event bus with toast notifications for file changes, MCP operations, and pipeline status
-- **Evolutionary taxonomy engine** — self-organizing hierarchical clustering that groups optimizations into a navigable taxonomy. Three execution paths: hot (per-optimization multi-embedding + nearest-node search), warm (periodic re-clustering with speculative lifecycle mutations + domain discovery + stale cluster pruning), cold (full refit + UMAP 3D projection + OKLab coloring + Haiku labeling). Spectral clustering as primary split algorithm (finds sub-communities in uniform-density spaces where HDBSCAN fails); HDBSCAN as fallback. Split children start as candidates — warm-path Phase 0.5 evaluates and promotes (coherence ≥ 0.30) or rejects (members reassigned to nearest active cluster). Quality-gated: 5-dimension Q_system score (coherence, separation, coverage, DBCV, stability) prevents regressions. Snapshot audit trail for recovery
+- **Evolutionary taxonomy engine** — self-organizing hierarchical clustering with **multi-project isolation** (ADR-005). Hierarchy: project → domain → cluster → optimizations. Project nodes created on GitHub repo link. Three execution paths: hot (two-tier project-scoped assignment: in-project first, cross-project fallback +0.15 boost), warm (periodic speculative lifecycle with per-project Q metrics + domain discovery + Phase 4.5 GlobalPattern promotion), cold (full refit + UMAP 3D + OKLab coloring + Haiku labeling). **Adaptive scheduling**: linear regression boundary with all-dirty vs round-robin mode + starvation guard. **Dirty-set tracking**: only changed clusters processed in split/merge phases. Spectral clustering primary split (HDBSCAN fallback). Quality-gated: 5-dimension Q_system prevents regressions. Snapshot audit trail
 - **Multi-signal embedding fusion** — composite queries blend 4 signals (topic, transformation, output, pattern) with per-phase adaptive weights for richer pattern matching. Score-weighted centroids give high-quality optimizations more cluster influence. TransformationIndex enables technique-space search across domains
-- **Cross-cluster pattern injection** — universal techniques (high `global_source_count`) are injected regardless of topic cluster, ranked by composite relevance formula. Benefits all routing tiers (internal, passthrough, MCP)
+- **Cross-cluster pattern injection** — universal techniques (high `global_source_count`) injected regardless of topic cluster, ranked by composite relevance. **Global pattern tier** (ADR-005): durable cross-project patterns promoted from MetaPattern siblings spanning 2+ projects, injected with 1.3x relevance boost, validated with demotion/re-promotion hysteresis (5.0/6.0 threshold gap), 500 retention cap. Benefits all routing tiers
 - **Unified domain taxonomy** — domains are `PromptCluster` nodes with `state="domain"`, discovered organically from user behavior. No hardcoded domain constants — `DomainResolver` resolves from DB, `DomainSignalLoader` provides heuristic keyword signals from domain node metadata. Warm path proposes new domains when coherent sub-populations emerge under "general". Five stability guardrails prevent drift: color pinning, retire exemption, merge approval, separate coherence floor, split isolation. Stats cache with trend tracking
 - **3D taxonomy visualization** — Three.js interactive topology with LOD tiers (far/mid/near) based on persistence thresholds. Diegetic UI (Dead Space-inspired): ambient telemetry only, controls auto-hide on right-edge hover, metrics via Q key, inline hint card on first visit. State filter tabs dim non-matching nodes (25% opacity) while matching glow at 100%. Click-to-focus navigation, raycasting hover, billboard labels, force-directed collision resolution, Ctrl+F search
 - **Pattern suggestion on paste** — embeds pasted text, cosine-searches active clusters (≥0.72), suggests matching clusters with 1-click apply (50-char delta, 300ms debounce, 10s auto-dismiss). Applied patterns injected into optimizer context
@@ -170,7 +170,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~100s, 1530+ tests)
+# Backend tests (~110s, 1796 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
@@ -208,7 +208,7 @@ cd frontend && npm run build
 | `/api/clusters/{id}` | GET | Cluster detail (children, breadcrumb, optimizations) |
 | `/api/clusters/{id}` | PATCH | Rename/state override |
 | `/api/clusters/match` | POST | Match prompt against clusters |
-| `/api/clusters/tree` | GET | Flat node list for 3D viz |
+| `/api/clusters/tree` | GET | Flat node list for 3D viz (`?project_id=` for project subtree) |
 | `/api/clusters/stats` | GET | Q metrics + sparkline |
 | `/api/clusters/templates` | GET | Proven templates |
 | `/api/clusters/recluster` | POST | Cold-path HDBSCAN + UMAP refit |

@@ -115,7 +115,7 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | `feedback_submitted` | Inspector feedback state sync |
 | `refinement_turn` | Refinement timeline update |
 | `strategy_changed` | Strategy list refresh |
-| `taxonomy_changed` | Cluster/domain store invalidation, topology re-render |
+| `taxonomy_changed` | Cluster/domain store invalidation, topology re-render. Also fires with `trigger: "project_created"` on repo link |
 | `taxonomy_activity` | `clustersStore.pushActivityEvent()` — real-time feed to ActivityPanel |
 | `routing_state_changed` | Routing store update, tier availability toasts |
 | `domain_created` | Domain store invalidation |
