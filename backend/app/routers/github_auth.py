@@ -5,6 +5,7 @@ import secrets
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,7 +78,7 @@ async def github_callback(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
-) -> GitHubUserResponse:
+):
     """Exchange code for token, encrypt, store in DB."""
     import hmac
 
@@ -137,10 +138,6 @@ async def github_callback(
         db.add(row)
     await db.commit()
 
-    response.set_cookie(
-        "session_id", session_id, httponly=True, max_age=86400 * 14,
-        samesite="lax", secure=_is_secure(), path="/api",
-    )
     logger.info("GitHub OAuth callback completed: user=%s", user.get("login"))
 
     # Audit log
@@ -157,7 +154,17 @@ async def github_callback(
     except Exception:
         logger.debug("Audit log write failed", exc_info=True)
 
-    return GitHubUserResponse(login=user.get("login"), avatar_url=user.get("avatar_url"))
+    # Redirect to frontend app after successful OAuth
+    frontend_url = settings.FRONTEND_URL.rstrip("/")
+    redirect = RedirectResponse(
+        url=f"{frontend_url}/app?github_auth=success",
+        status_code=302,
+    )
+    redirect.set_cookie(
+        "session_id", session_id, httponly=True, max_age=86400 * 14,
+        samesite="lax", secure=_is_secure(), path="/api",
+    )
+    return redirect
 
 
 @router.get("/auth/me")

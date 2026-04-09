@@ -14,8 +14,8 @@
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
   import { samplingGuide } from '$lib/stores/sampling-guide.svelte';
   import { routing } from '$lib/stores/routing.svelte';
-  import { getSettings, getProviders, getHistory, getOptimization, updateOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
-  import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo } from '$lib/api/client';
+  import { getSettings, getProviders, getHistory, getOptimization, updateOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy, listProjects } from '$lib/api/client';
+  import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo, ProjectInfo } from '$lib/api/client';
 
   // Tab-aware active result for showing per-optimization models in Settings
   const activeResult = $derived(editorStore.activeResult ?? forgeStore.result);
@@ -152,6 +152,49 @@
   let apiKeyDeleting = $state(false);
   let confirmingDelete = $state(false);
   let confirmDeleteTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // ---- GitHub repo picker state ----
+  let repoPickerOpen = $state(false);
+  let repoSearch = $state('');
+  let projects = $state<ProjectInfo[]>([]);
+  let selectedProjectId = $state<string | null>(null);
+  let linkingRepo = $state<string | null>(null);
+
+  let filteredRepos = $derived(
+    githubStore.repos.filter(r =>
+      !repoSearch || r.full_name.toLowerCase().includes(repoSearch.toLowerCase())
+    ).slice(0, 20)
+  );
+
+  async function openRepoPicker() {
+    repoPickerOpen = true;
+    repoSearch = '';
+    selectedProjectId = null;
+    linkingRepo = null;
+    githubStore.loadRepos();
+    try {
+      projects = await listProjects();
+    } catch {
+      projects = [];
+    }
+  }
+
+  async function confirmLinkRepo(fullName: string) {
+    // If there are existing non-Legacy projects, show project selection
+    const nonLegacy = projects.filter(p => p.label !== 'Legacy');
+    if (nonLegacy.length > 0 && !linkingRepo) {
+      linkingRepo = fullName;
+      return;
+    }
+    // Link with selected project (or null for auto-create)
+    await githubStore.linkRepo(fullName, selectedProjectId ?? undefined);
+    repoPickerOpen = false;
+    linkingRepo = null;
+    selectedProjectId = null;
+    if (githubStore.linkedRepo) {
+      addToast('created', `Linked ${githubStore.linkedRepo.full_name}`);
+    }
+  }
 
   // ---- Settings accordion state ----
   let showProvider = $state(false);
@@ -527,7 +570,72 @@
               <span class="data-value font-mono">{githubStore.user.login}</span>
             </div>
           </div>
-          <p class="empty-note">No repo linked. Use Repo Picker in the editor to link one.</p>
+
+          {#if !repoPickerOpen}
+            <button
+              class="action-btn action-btn--primary"
+              onclick={openRepoPicker}
+            >
+              Link a repository
+            </button>
+          {:else}
+            <!-- Repo search -->
+            <input
+              class="search-input"
+              type="text"
+              placeholder="Search repos..."
+              bind:value={repoSearch}
+            />
+
+            {#if linkingRepo}
+              <!-- Project selection step -->
+              <div class="repo-picker-project">
+                <p class="picker-heading">Link <span class="font-mono">{linkingRepo}</span> to:</p>
+                <label class="radio-row">
+                  <input type="radio" name="project" value="" bind:group={selectedProjectId} checked />
+                  <span>New project</span>
+                </label>
+                {#each projects.filter(p => p.label !== 'Legacy') as proj}
+                  <label class="radio-row">
+                    <input type="radio" name="project" value={proj.id} bind:group={selectedProjectId} />
+                    <span class="font-mono">{proj.label}</span>
+                    <span class="repo-meta">({proj.member_count} clusters)</span>
+                  </label>
+                {/each}
+                <div class="picker-actions">
+                  <button class="action-btn action-btn--primary" onclick={() => confirmLinkRepo(linkingRepo!)}>
+                    Link
+                  </button>
+                  <button class="action-btn" onclick={() => { linkingRepo = null; selectedProjectId = null; }}>
+                    Back
+                  </button>
+                </div>
+              </div>
+            {:else if githubStore.loading}
+              <p class="empty-note">Loading repositories...</p>
+            {:else if filteredRepos.length === 0}
+              <p class="empty-note">{repoSearch ? 'No matching repos' : 'No repos found'}</p>
+            {:else}
+              <!-- Repo list -->
+              <div class="repo-list">
+                {#each filteredRepos as repo}
+                  <button
+                    class="repo-item"
+                    onclick={() => confirmLinkRepo(repo.full_name)}
+                  >
+                    <span class="repo-name font-mono">{repo.full_name}</span>
+                    {#if repo.language}
+                      <span class="repo-meta">{repo.language}</span>
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+
+            <button class="action-btn" onclick={() => { repoPickerOpen = false; linkingRepo = null; }}>
+              Cancel
+            </button>
+          {/if}
         {:else}
           <p class="empty-note">Sign in to GitHub to link a repository for context-aware optimization.</p>
           <button
@@ -1651,5 +1759,81 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-text-dim);
+  }
+
+  /* Repo picker */
+  .search-input {
+    width: 100%;
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    margin-bottom: 6px;
+    outline: none;
+  }
+  .search-input:focus {
+    border-color: var(--tier-accent, var(--color-neon-cyan));
+  }
+  .repo-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    max-height: 240px;
+    overflow-y: auto;
+    margin-bottom: 6px;
+  }
+  .repo-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 6px;
+    background: transparent;
+    border: none;
+    color: var(--color-text);
+    cursor: pointer;
+    text-align: left;
+    font-size: 11px;
+  }
+  .repo-item:hover {
+    background: var(--color-surface-hover);
+  }
+  .repo-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .repo-meta {
+    font-size: 10px;
+    color: var(--color-text-dim);
+    margin-left: 6px;
+    flex-shrink: 0;
+  }
+  .repo-picker-project {
+    margin-bottom: 6px;
+  }
+  .picker-heading {
+    font-size: 11px;
+    color: var(--color-text);
+    margin-bottom: 4px;
+  }
+  .radio-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 11px;
+    color: var(--color-text);
+    cursor: pointer;
+  }
+  .radio-row input[type="radio"] {
+    accent-color: var(--tier-accent, var(--color-neon-cyan));
+  }
+  .picker-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
   }
 </style>

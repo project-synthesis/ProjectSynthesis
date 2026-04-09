@@ -12,6 +12,8 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { routing } from '$lib/stores/routing.svelte';
+  import { githubStore } from '$lib/stores/github.svelte';
+  import { addToast } from '$lib/stores/toast.svelte';
 
   let { children } = $props();
 
@@ -22,6 +24,21 @@
     preferencesStore.init();
     forgeStore.restoreSession();
     clustersStore.loadTree();
+
+    // Check GitHub auth state on mount
+    githubStore.checkAuth();
+
+    // Handle OAuth callback redirect (?github_auth=success)
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('github_auth') === 'success') {
+      // Clean URL without reloading
+      const url = new URL(window.location.href);
+      url.searchParams.delete('github_auth');
+      window.history.replaceState({}, '', url.toString());
+      // Switch to GitHub panel and show toast
+      activeActivity = 'github';
+      addToast('created', 'GitHub connected');
+    }
   });
 
   $effect(() => {
