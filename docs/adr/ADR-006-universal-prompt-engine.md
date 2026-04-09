@@ -110,17 +110,119 @@ The following are CORRECT as developer-first implementations. They should NOT be
 - Developer features should be positioned as the first vertical, with language acknowledging the engine is universal
 - The architecture overview should explain the engine/scaffolding distinction
 
-### Migration Path
+### The Engine Is Already Universal — No Code Changes Needed
 
-No immediate code changes required. The architecture already supports universality. This ADR documents the decision so future development respects it:
+The engine layer requires zero modifications to support non-developer use cases. Every component that processes, clusters, scores, and improves prompts is domain-agnostic today:
 
-**Phase 1 (immediate — positioning):** Update README to frame developers as the primary audience, not the only audience. Remove language that implies the tool only works for code.
+- **Taxonomy clustering** groups by semantic similarity, not by domain label
+- **Pattern extraction** finds reusable techniques in any prompt type
+- **GlobalPattern promotion** shares proven techniques across projects regardless of subject matter
+- **Scoring** evaluates clarity, specificity, structure, faithfulness, and conciseness — dimensions that apply to any prompt
+- **Refinement** iterates on any prompt with version tracking and rollback
+- **Adaptive scheduling** optimizes warm-path performance independent of what the prompts are about
 
-**Phase 2 (on demand — content):** When a non-developer audience is identified, add seed agents for that vertical. This is a content addition in `prompts/seed-agents/`, not a code change. The hot-reload system handles it automatically.
+When a non-developer vertical is needed, the extension points are all content additions — no code changes, no migrations, no architectural modifications.
 
-**Phase 3 (on demand — integrations):** When a non-developer integration is needed (e.g., Google Drive, Notion), implement it as a new `ContextProvider` behind the existing `ContextEnrichmentService` abstraction. The explore phase becomes provider-pluggable.
+### How to Add a New Vertical (Content-Only Playbook)
 
-**Phase 4 (on demand — classification):** When a non-developer vertical has enough traffic, the organic domain discovery will create domains automatically. If bootstrapping is needed, add domain keyword seeds via the existing migration pattern (same as the developer domain seeds).
+#### 1. Seed Agents — drop `.md` files, instant availability
+
+Create new files in `prompts/seed-agents/` with YAML frontmatter. The hot-reload system picks them up on the next request — no restart, no deployment, no code change.
+
+**Example: marketing vertical**
+```
+prompts/seed-agents/
+  marketing-copywriting.md      # sales copy, landing pages, email campaigns
+  marketing-brand-voice.md      # brand guidelines, tone consistency, messaging frameworks
+  marketing-audience-research.md # personas, pain points, competitive positioning
+```
+
+Each file defines: `name`, `task_types` (from the 7 universal types), `phase_context` (what the agent focuses on), `prompts_per_run`, and `enabled`. The existing batch seeding infrastructure (`POST /api/seed`, `synthesis_seed` MCP tool) works immediately with new agents.
+
+**Example: legal vertical**
+```
+prompts/seed-agents/
+  legal-contract-drafting.md    # clause writing, term definitions, liability scoping
+  legal-compliance-review.md    # regulation analysis, policy evaluation, risk assessment
+  legal-brief-writing.md        # case summaries, argument structure, citation formatting
+```
+
+#### 2. Domain Keyword Seeds — bootstrap classification for new subject areas
+
+Add domain keyword seeds via the existing `DomainSignalLoader` pattern. Currently, keywords are stored in `cluster_metadata` on domain `PromptCluster` nodes. Bootstrapping a new vertical's domains uses the same Alembic migration pattern as the original developer domains.
+
+**Example migration for marketing domains:**
+```python
+# New domains with keyword signals
+marketing_domains = [
+    {"label": "copywriting", "keywords": ["copy", "headline", "CTA", "landing page", "conversion", "persuasion", "benefit-driven"]},
+    {"label": "brand-voice", "keywords": ["tone", "brand", "voice", "persona", "messaging", "guidelines", "style guide"]},
+    {"label": "audience-research", "keywords": ["persona", "demographic", "pain point", "customer journey", "segmentation", "ICP"]},
+    {"label": "campaign", "keywords": ["campaign", "funnel", "A/B test", "email sequence", "drip", "nurture", "retention"]},
+]
+```
+
+Once seeded, the organic domain discovery system takes over — new domains emerge from user behavior without further manual intervention. The seeds just accelerate the cold-start.
+
+#### 3. Heuristic Weakness Signals — domain-specific quality detection
+
+The `HeuristicAnalyzer`'s weakness detection is signal-driven. Adding new signals for a vertical means extending the signal dictionaries. No structural changes — just new entries.
+
+**Example: marketing-specific weakness signals**
+```python
+# In heuristic_analyzer.py or loaded from domain metadata
+_MARKETING_WEAKNESS_SIGNALS = {
+    "missing_target_audience": ["who is this for", "target audience", "persona", "demographic"],
+    "no_call_to_action": ["CTA", "call to action", "next step", "click", "sign up", "buy"],
+    "unclear_value_proposition": ["benefit", "value prop", "why should", "what's in it for"],
+    "missing_brand_voice": ["tone", "voice", "brand", "personality", "style"],
+    "no_competitive_context": ["competitor", "alternative", "differentiate", "unique"],
+}
+```
+
+The future-state architecture loads these from domain node metadata (the same `cluster_metadata` JSON that already stores keyword signals), making weakness detection fully data-driven without code changes.
+
+#### 4. Context Providers — pluggable external integrations
+
+The `ContextEnrichmentService` abstraction already supports multiple context sources. Currently, only GitHub is implemented. Adding a new provider is a single-service implementation behind the existing interface.
+
+**Potential providers by vertical:**
+
+| Vertical | Context provider | What it brings |
+|----------|-----------------|----------------|
+| Marketing | Google Drive | Brand guidelines, campaign briefs, past copy |
+| Legal | Document management (Clio, NetDocuments) | Precedent library, clause databases, jurisdiction rules |
+| Education | LMS (Canvas, Moodle) | Curriculum standards, learning objectives, rubrics |
+| Product | Notion / Confluence | PRDs, user stories, feature specs |
+| Any | Local filesystem | Any workspace directory (already partially supported) |
+
+Each provider implements the same interface: given a project context, return relevant documents ranked by semantic similarity. The explore phase works identically regardless of source — it synthesizes context from whatever documents the provider returns.
+
+#### 5. Analyzer Prompt Expansion — broaden domain decision rules
+
+The current `prompts/analyze.md` lists explicit decision rules for 7 technical domains. Adding new verticals means expanding these rules with examples for non-technical domains. Since prompts are hot-reloaded from disk, this is a text edit — no code change, no deployment.
+
+**Example expansion in analyze.md:**
+```
+Domain decision rules (examples — discover the domain from the prompt's subject area):
+...existing developer rules...
+- Copy, headlines, CTAs, landing pages, email sequences, conversion → `copywriting`
+- Brand voice, tone, messaging, style guidelines → `brand-voice`
+- Contracts, clauses, liability, compliance, jurisdiction → `legal`
+- Lesson plans, curriculum, learning objectives, assessment → `education`
+- Product requirements, user stories, feature specs, roadmap → `product`
+- Otherwise → use a descriptive domain name or `general`
+```
+
+### Vertical Rollout Strategy
+
+**Developers (now):** Fully built. GitHub integration, 5 seed agents, 8 domain seeds, code-specific heuristics. This is the current product.
+
+**Next vertical (on demand):** When a non-developer audience is identified with sufficient demand, execute the 5-step content playbook above. Estimated effort: 1-2 days of content creation (seed agents, domain keywords, analyzer examples) — zero engineering time on the engine.
+
+**Organic expansion:** Even without explicit vertical support, non-developer users benefit from the universal engine. Their prompts cluster, patterns emerge, and quality improves over time. The explicit vertical support (seed agents, keywords, weakness signals) just accelerates the cold-start.
+
+**Cross-vertical pattern sharing:** This is the ADR-005 GlobalPattern system's key value proposition. A technique like "always specify the target audience and desired outcome" might be discovered in marketing prompts, promoted to a GlobalPattern, and then injected into a developer's user-facing documentation prompt. The engine facilitates cross-domain knowledge transfer that no single-vertical tool can provide.
 
 ## Consequences
 
