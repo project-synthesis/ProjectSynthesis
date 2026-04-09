@@ -662,6 +662,8 @@ _probe_mcp_sampling() {
     command -v curl &>/dev/null || { _VS_HEALTH="curl not available"; return 1; }
 
     # MCP Streamable HTTP requires Accept with both JSON and SSE.
+    # Note: capabilities is empty — we're probing liveness, not registering
+    # as a sampling client (which would cause a false sampling_capable flap).
     local response http_code
     response=$(curl -s --max-time 5 \
         -w "\n%{http_code}" \
@@ -675,7 +677,7 @@ _probe_mcp_sampling() {
             "method": "initialize",
             "params": {
                 "protocolVersion": "2025-03-26",
-                "capabilities": { "sampling": {} },
+                "capabilities": {},
                 "clientInfo": { "name": "init-health-check", "version": "1.0.0" }
             }
         }' 2>&1)

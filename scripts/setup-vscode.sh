@@ -424,7 +424,7 @@ validate_server_reachable() {
         "http://127.0.0.1:8001/mcp" -X POST \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
-        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{"sampling":{}},"clientInfo":{"name":"setup-check","version":"1.0.0"}}}' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"setup-check","version":"1.0.0"}}}' \
         2>/dev/null)
     if [[ "${http_code:0:1}" == "2" ]]; then
         _ok "MCP server reachable at :8001 (sampling endpoint healthy)"
