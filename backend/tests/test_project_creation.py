@@ -20,8 +20,8 @@ async def test_cross_project_threshold_boost_constant():
 
 
 @pytest.mark.asyncio
-async def test_ensure_project_first_repo_renames_legacy(db_session: AsyncSession):
-    """First linked repo renames Legacy project node."""
+async def test_ensure_project_first_repo_creates_new_project(db_session: AsyncSession):
+    """First linked repo creates a new project — Legacy is never renamed."""
     from app.services.project_service import ensure_project_for_repo
 
     legacy = PromptCluster(
@@ -33,9 +33,14 @@ async def test_ensure_project_first_repo_renames_legacy(db_session: AsyncSession
 
     project_id = await ensure_project_for_repo(db_session, "user/backend-api")
 
-    assert project_id == legacy.id
+    # New project created, Legacy untouched
+    assert project_id != legacy.id
     await db_session.refresh(legacy)
-    assert legacy.label == "user/backend-api"
+    assert legacy.label == "Legacy"  # not renamed
+
+    new_project = await db_session.get(PromptCluster, project_id)
+    assert new_project.label == "user/backend-api"
+    assert new_project.state == "project"
 
 
 @pytest.mark.asyncio
@@ -184,13 +189,13 @@ async def test_ensure_project_invalid_target_falls_through(db_session: AsyncSess
     db_session.add(legacy)
     await db_session.flush()
 
-    # Pass a non-existent project ID — should fall through and rename Legacy
+    # Pass a non-existent project ID — should fall through and create new project
     result = await ensure_project_for_repo(
         db_session, "user/first-repo", target_project_id="nonexistent-id",
     )
-    assert result == legacy.id  # Legacy renamed
+    assert result != legacy.id  # new project, Legacy untouched
     await db_session.refresh(legacy)
-    assert legacy.label == "user/first-repo"
+    assert legacy.label == "Legacy"
 
 
 @pytest.mark.asyncio
@@ -198,14 +203,7 @@ async def test_two_repos_share_one_project(db_session: AsyncSession):
     """Two repos can be linked to the same project via target_project_id."""
     from app.services.project_service import ensure_project_for_repo
 
-    legacy = PromptCluster(
-        label="Legacy", state="project", domain="general",
-        task_type="general", member_count=0,
-    )
-    db_session.add(legacy)
-    await db_session.flush()
-
-    # First repo renames Legacy
+    # First repo creates a new project
     pid1 = await ensure_project_for_repo(db_session, "user/repo-a")
     await db_session.flush()
 

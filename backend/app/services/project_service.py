@@ -79,30 +79,10 @@ async def ensure_project_for_repo(
             await db.flush()
         return existing.id
 
-    # Check if Legacy project exists and hasn't been renamed
-    all_projects = (await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "project")
-    )).scalars().all()
-
-    legacy = None
-    for p in all_projects:
-        if p.label == "Legacy":
-            legacy = p
-            break
-
-    if legacy and len(all_projects) == 1:
-        # First repo: rename Legacy
-        legacy.label = repo_full_name
-        if lr:
-            lr.project_node_id = legacy.id
-        await db.flush()
-        logger.info(
-            "Phase 2A: renamed Legacy project to '%s' (%s)",
-            repo_full_name, legacy.id[:8],
-        )
-        return legacy.id
-
-    # Subsequent repos: create new project node
+    # Always create a new project — never rename Legacy.
+    # Legacy is the permanent home for pre-repo and non-repo work.
+    # A user may have hundreds of unrelated prompts before linking
+    # their first repo; renaming Legacy would miscategorize all of them.
     new_project = PromptCluster(
         label=repo_full_name,
         state="project",
