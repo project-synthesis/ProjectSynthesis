@@ -41,7 +41,8 @@ class TestProjectIdTracking:
         await index.upsert("c2", _random_emb(), project_id="proj-B")
         await index.remove("c1")
         assert index.size == 1
-        assert index._project_ids == ["proj-B"]
+        # Tombstoned entry is None, active entry preserved
+        assert index._project_ids[1] == "proj-B"
 
     @pytest.mark.asyncio
     async def test_rebuild_with_project_ids(self, index):

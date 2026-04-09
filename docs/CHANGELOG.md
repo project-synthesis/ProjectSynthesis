@@ -5,6 +5,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ## Unreleased
 
 ### Added
+- **ADR-005 Phase 3B: dual-backend EmbeddingIndex with stable label mapping** — extracted `_NumpyBackend` class from EmbeddingIndex, added `_HnswBackend` wrapping hnswlib with `allow_replace_deleted`. Stable `_id_to_label` dict + tombstones replaces error-prone pop-and-shift removal. Auto-selects HNSW at >= 1000 clusters on rebuild. `HNSW_CLUSTER_THRESHOLD` constant added. Public API unchanged; all 1794 tests pass
 - **ADR-005 Phase 2B: GlobalPattern injection** — active GlobalPatterns injected alongside MetaPatterns in `auto_inject_patterns` with 1.3x relevance boost. `InjectedPattern` gains `source`/`source_id` fields. `format_injected_patterns` separates global patterns into a dedicated "Proven Cross-Project Techniques" section
 - **ADR-005 Phase 2A: cold path project_ids rebuild + topology endpoints** — cold path now resolves dominant project_id per cluster and passes to embedding index rebuild. Tree endpoint accepts `project_id` query param for sub-tree filtering. Cluster detail returns `member_counts_by_project` breakdown. Health endpoint reports `project_count`
 - **ADR-005 Phase 1: taxonomy scaling architecture** — foundational infrastructure for multi-project support
