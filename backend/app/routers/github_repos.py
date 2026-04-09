@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import LinkedRepo
+from app.models import LinkedRepo, PromptCluster
 from app.routers.github_auth import _get_session_token
 from app.services.github_client import GitHubClient
 
@@ -46,7 +46,9 @@ class LinkedRepoResponse(BaseModel):
     default_branch: str = Field(description="Repository default branch name.")
     branch: str = Field(description="Active branch for this link.")
     language: str | None = Field(default=None, description="Primary programming language.")
-    linked_at: str | None = Field(default=None, description="ISO 8601 timestamp when the repo was linked.")
+    linked_at: str | None = Field(default=None)
+    project_node_id: str | None = Field(default=None)  # ADR-005
+    project_label: str | None = Field(default=None)  # ADR-005
 
 
 class OkResponse(BaseModel):
@@ -160,12 +162,21 @@ async def get_linked(
             404,
             "No linked repository for this session. Link a repo first via POST /api/github/repos/link.",
         )
+    # Resolve project label for display
+    _project_label = None
+    if linked.project_node_id:
+        _proj = await db.get(PromptCluster, linked.project_node_id)
+        if _proj:
+            _project_label = _proj.label
+
     return LinkedRepoResponse(
         full_name=linked.full_name,
         default_branch=linked.default_branch,
         branch=linked.branch,
         language=linked.language,
         linked_at=linked.linked_at.isoformat() if linked.linked_at else None,
+        project_node_id=linked.project_node_id,
+        project_label=_project_label,
     )
 
 
