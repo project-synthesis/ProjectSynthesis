@@ -373,16 +373,24 @@ start_services() {
 }
 
 # ---------------------------------------------------------------------------
-# VS Code bridge — detection, install, health verification, and status
+# Provider detection + VS Code bridge
 # ---------------------------------------------------------------------------
+# Routing tiers (priority order):
+#   1. internal  — Claude CLI (OAuth/MAX) or Anthropic API key (primary)
+#   2. sampling  — VS Code bridge (optional enhancement, uses Copilot's LLM)
+#   3. passthrough — assembles prompt for external processing (fallback)
+#
+# The internal pipeline is the main functionality.  VS Code sampling is
+# an optional zero-config enhancement.  Passthrough always works.
+#
 # Lifecycle within start_services:
 #   1. _ensure_vscode_bridge  (pre-start) — detect VS Code, install/update bridge
 #   2. services launch + readiness
-#   3. _verify_bridge_health  (post-start) — ping MCP sampling endpoint, report
+#   3. _verify_bridge_health  (post-start) — provider status + MCP health
 #
 # show_status uses _show_vscode_status for the full dashboard view.
-# All VS Code operations are non-fatal — service start/stop never fails
-# due to bridge issues.
+# All operations are non-fatal — service start/stop never fails due to
+# provider or bridge issues.
 # ---------------------------------------------------------------------------
 
 # ── Detection ────────────────────────────────────────────────────
@@ -457,6 +465,11 @@ _vscode_label() {
 
 # ── State gathering ──────────────────────────────────────────────
 
+# Provider state
+_PROVIDER_NAME=""      # "claude_cli", "anthropic_api", or "" (none)
+_PROVIDER_LABEL=""     # Human-readable label
+
+# VS Code / bridge state
 _VS_GATHERED=false
 _VS_BINS=()            # Validated VS Code binaries
 _VS_PRIMARY=""         # First working binary
@@ -468,6 +481,27 @@ _VS_VSIX_PATH=""       # Path to .vsix file
 _VS_MCP_JSON=false     # .vscode/mcp.json exists and valid
 _VS_SAMPLING_OK=false  # sampling pre-approved in settings.json
 _VS_HEALTH=""          # Health check result: "" pending, "ok", or error message
+
+_detect_provider() {
+    # Mirrors backend/app/providers/detector.py detection order:
+    # 1. claude CLI on PATH → OAuth/MAX subscription (zero marginal cost)
+    # 2. ANTHROPIC_API_KEY env var → API key
+    # 3. Stored credentials in data/.api_credentials → API key (persisted)
+    # 4. None → passthrough or sampling only
+    if command -v claude &>/dev/null; then
+        _PROVIDER_NAME="claude_cli"
+        _PROVIDER_LABEL="Claude CLI (OAuth/MAX)"
+    elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        _PROVIDER_NAME="anthropic_api"
+        _PROVIDER_LABEL="Anthropic API key (env)"
+    elif [[ -f "$DATA_DIR/.api_credentials" ]]; then
+        _PROVIDER_NAME="anthropic_api"
+        _PROVIDER_LABEL="Anthropic API key (stored)"
+    else
+        _PROVIDER_NAME=""
+        _PROVIDER_LABEL=""
+    fi
+}
 
 _reset_vscode_state() {
     _VS_GATHERED=false
@@ -482,6 +516,9 @@ _reset_vscode_state() {
 _gather_vscode_state() {
     $_VS_GATHERED && return 0
     _VS_GATHERED=true
+
+    # Provider detection (always, regardless of VS Code)
+    _detect_provider
 
     # Find .vsix
     _VS_VSIX_PATH=$(ls -t "$SCRIPT_DIR/VSGithub/mcp-copilot-extension"/mcp-copilot-bridge-*.vsix 2>/dev/null | head -1)
@@ -516,27 +553,37 @@ _gather_vscode_state() {
 # ── Pre-start: install bridge ────────────────────────────────────
 
 _ensure_vscode_bridge() {
-    # Detect VS Code and install/update the bridge extension BEFORE services
-    # start.  Full visibility when action is taken, silent when up-to-date.
+    # Detect provider + VS Code, install/update bridge BEFORE services start.
+    # Full visibility when action is taken, silent when up-to-date.
     # Non-fatal — service startup continues regardless.
 
     _gather_vscode_state
 
-    # No .vsix to install
-    [[ -z "$_VS_VSIX_PATH" ]] && return 0
-
-    # No VS Code detected — inform the user
-    if (( ${#_VS_BINS[@]} == 0 )); then
-        echo ""
-        _warn "VS Code not detected — sampling pipeline unavailable"
-        _info "Copilot's LLM runs full optimization (analyze → optimize"
-        _info "→ score → suggest) in your IDE — no API key needed."
-        _info "After installing VS Code: ./init.sh setup-vscode"
-        echo ""
+    # No .vsix to install — skip VS Code setup entirely
+    if [[ -z "$_VS_VSIX_PATH" ]]; then
+        # Still show provider info if detected
+        [[ -n "$_PROVIDER_NAME" ]] && _ok "Provider: ${_PROVIDER_LABEL}"
         return 0
     fi
 
-    # Install/update across all detected installations
+    # No VS Code detected — not an error if we have a provider
+    if (( ${#_VS_BINS[@]} == 0 )); then
+        if [[ -n "$_PROVIDER_NAME" ]]; then
+            # Provider available — VS Code is optional
+            :  # silent, provider status shown in _verify_bridge_health
+        else
+            echo ""
+            _warn "No provider detected and VS Code not found"
+            _info "For the internal pipeline: install Claude CLI (npm i -g @anthropic-ai/claude-code)"
+            _info "  or set ANTHROPIC_API_KEY in your environment"
+            _info "For the sampling pipeline: install VS Code + ./init.sh setup-vscode"
+            _info "Without either, the app runs in passthrough mode (prompt assembly only)"
+            echo ""
+        fi
+        return 0
+    fi
+
+    # VS Code detected — install/update bridge across all binaries
     local any_action=false
     local any_failure=false
     local any_verified=false
@@ -545,10 +592,8 @@ _ensure_vscode_bridge() {
         installed=$(_run_vscode "$code_cmd" --list-extensions --show-versions \
                     | grep -i "mcp-copilot-bridge" | sed 's/.*@//' || true)
 
-        # Already at target version — skip silently
         [[ "$installed" == "$_VS_VSIX_VER" ]] && { any_verified=true; continue; }
 
-        # First action — print header
         if ! $any_action; then
             _log "VS Code bridge setup..."
             _ok "Detected ${_VS_PRIMARY_LABEL} v${_VS_PRIMARY_VER}"
@@ -568,7 +613,6 @@ _ensure_vscode_bridge() {
         local rc=$?
 
         if [[ $rc -eq 0 ]]; then
-            # Verify the install actually took effect
             local verify
             verify=$(_run_vscode "$code_cmd" --list-extensions --show-versions \
                      | grep -i "mcp-copilot-bridge" | sed 's/.*@//' || true)
@@ -578,7 +622,7 @@ _ensure_vscode_bridge() {
             else
                 _ok "Install reported success for ${label}"
                 _warn "Could not verify — VS Code may need restart"
-                any_verified=true  # trust the exit code
+                any_verified=true
             fi
         elif [[ $rc -eq 124 ]]; then
             any_failure=true
@@ -595,15 +639,13 @@ _ensure_vscode_bridge() {
 
     if $any_action; then
         if $any_failure && ! $any_verified; then
-            _warn "Bridge installation failed — sampling will fall back to passthrough"
+            _warn "Bridge installation failed"
             _info "Retry with: ./init.sh setup-vscode"
         elif $any_failure; then
             _warn "Some installations failed — retry with: ./init.sh setup-vscode"
         else
-            _ok "Bridge ready — sampling pipeline will activate on service start"
+            _ok "Bridge ready"
         fi
-
-        # Re-gather state so health check sees the fresh install
         _reset_vscode_state
         _gather_vscode_state
         echo ""
@@ -676,130 +718,163 @@ _probe_mcp_sampling() {
     fi
 }
 
+_resolve_active_tier() {
+    # Determines which routing tier will be active based on detected state.
+    # Returns the tier name via echo: "internal", "sampling", or "passthrough".
+    if [[ -n "$_PROVIDER_NAME" ]]; then
+        echo "internal"
+    elif [[ -n "$_VS_BRIDGE_VER" ]] && [[ "$_VS_HEALTH" == "ok" ]]; then
+        echo "sampling"
+    else
+        echo "passthrough"
+    fi
+}
+
 _verify_bridge_health() {
-    # Post-start verification: confirms bridge + MCP + sampling are wired up.
-    # Runs after services are ready.  Non-fatal.
+    # Post-start: probe MCP, detect active tier, show summary.
+    # Provider is the primary story.  VS Code is optional enhancement.
 
     _gather_vscode_state
-
-    # No VS Code — already messaged in _ensure_vscode_bridge
-    (( ${#_VS_BINS[@]} == 0 )) && return 0
-
-    # No bridge installed — already messaged
-    [[ -z "$_VS_BRIDGE_VER" ]] && return 0
-
-    # Probe the MCP sampling endpoint
     _probe_mcp_sampling
 
     echo ""
-    if [[ "$_VS_HEALTH" == "ok" ]]; then
-        if $_VS_SAMPLING_OK && $_VS_MCP_JSON; then
-            _ok "VS Code bridge v${_VS_BRIDGE_VER} — sampling pipeline ready"
-        elif $_VS_SAMPLING_OK; then
-            _ok "VS Code bridge v${_VS_BRIDGE_VER} — sampling ready"
-            _warn "Missing .vscode/mcp.json — run: git checkout .vscode/mcp.json"
-        elif $_VS_MCP_JSON; then
-            _ok "VS Code bridge v${_VS_BRIDGE_VER} — MCP server healthy"
-            _warn "Sampling not pre-approved in .vscode/settings.json"
-            _info "Users will see a consent dialog on first sampling request"
-        else
-            _ok "VS Code bridge v${_VS_BRIDGE_VER} — MCP server healthy"
-        fi
-    else
-        # Health check failed — diagnose WHY
-        _warn "VS Code bridge v${_VS_BRIDGE_VER} installed but health check failed"
 
-        if ! _probe_port "$MCP_PORT"; then
-            _fail "MCP server not listening on :${MCP_PORT}"
-            _info "The mcp service may have crashed — check: data/mcp.log"
-        elif [[ "$_VS_HEALTH" == *"timed out"* ]]; then
-            _fail "$_VS_HEALTH"
-            _info "The MCP server is listening but not responding to JSON-RPC"
-            _info "Check for startup errors: tail -20 data/mcp.log"
-        elif [[ "$_VS_HEALTH" == *"error"* ]]; then
-            _fail "$_VS_HEALTH"
-            _info "The server rejected the initialize request"
-            _info "Check: tail -20 data/mcp.log"
-        elif [[ "$_VS_HEALTH" == *"curl not available"* ]]; then
-            _warn "Cannot verify — curl not installed"
-            _info "Install curl to enable health checks"
-        else
-            _fail "$_VS_HEALTH"
-            _info "Unexpected response from MCP server"
-            _info "Check: tail -20 data/mcp.log"
-        fi
-
-        _info "Sampling may fall back to passthrough until resolved"
+    # ── Provider status ──
+    if [[ -n "$_PROVIDER_NAME" ]]; then
+        _ok "Provider: ${_PROVIDER_LABEL}"
     fi
+
+    # ── VS Code bridge status (only if relevant) ──
+    if [[ -n "$_VS_BRIDGE_VER" ]]; then
+        if [[ "$_VS_HEALTH" == "ok" ]]; then
+            _ok "VS Code bridge v${_VS_BRIDGE_VER} — MCP endpoint healthy"
+        else
+            _warn "VS Code bridge v${_VS_BRIDGE_VER} — health check failed"
+            # Targeted diagnostics
+            if ! _probe_port "$MCP_PORT"; then
+                _fail "  MCP server not listening on :${MCP_PORT} — check data/mcp.log"
+            elif [[ "$_VS_HEALTH" == *"timed out"* ]]; then
+                _fail "  ${_VS_HEALTH} — check: tail -20 data/mcp.log"
+            elif [[ "$_VS_HEALTH" == *"error"* ]]; then
+                _fail "  ${_VS_HEALTH} — check: tail -20 data/mcp.log"
+            elif [[ "$_VS_HEALTH" == *"curl"* ]]; then
+                _info "  Cannot verify (curl not installed)"
+            else
+                _fail "  ${_VS_HEALTH} — check: tail -20 data/mcp.log"
+            fi
+        fi
+    fi
+
+    # ── Active tier preview ──
+    local tier
+    tier=$(_resolve_active_tier)
+    case "$tier" in
+        internal)
+            _ok "Active tier: ${_BLD}internal${_RST} — full pipeline via ${_PROVIDER_LABEL}"
+            if [[ -n "$_VS_BRIDGE_VER" ]] && [[ "$_VS_HEALTH" == "ok" ]]; then
+                _info "Sampling also available via VS Code Copilot"
+            fi
+            ;;
+        sampling)
+            _ok "Active tier: ${_BLD}sampling${_RST} — pipeline via VS Code Copilot's LLM"
+            _info "For zero-cost internal pipeline: install Claude CLI"
+            _info "  npm install -g @anthropic-ai/claude-code"
+            ;;
+        passthrough)
+            if [[ -z "$_PROVIDER_NAME" ]] && (( ${#_VS_BINS[@]} == 0 )); then
+                _warn "Active tier: ${_BLD}passthrough${_RST} — prompt assembly only"
+                _info "No provider or VS Code detected. To unlock full pipeline:"
+                _info "  Claude CLI:  npm install -g @anthropic-ai/claude-code"
+                _info "  API key:     export ANTHROPIC_API_KEY=sk-..."
+                _info "  VS Code:     install VS Code + ./init.sh setup-vscode"
+            elif [[ -z "$_PROVIDER_NAME" ]]; then
+                _warn "Active tier: ${_BLD}passthrough${_RST} — bridge health check failed"
+                _info "Fix the MCP server to enable sampling, or install a provider"
+            else
+                _ok "Active tier: ${_BLD}internal${_RST} — full pipeline via ${_PROVIDER_LABEL}"
+            fi
+            ;;
+    esac
 }
 
 # ── Status display (for ./init.sh status) ────────────────────────
 
 _show_vscode_status() {
-    # Full dashboard view of VS Code integration state.
+    # Full dashboard: provider + VS Code + active tier.
     _gather_vscode_state
+    _probe_mcp_sampling
 
+    # ── Provider ──
     echo ""
-    _log "VS Code integration:"
-
-    # No VS Code detected
-    if (( ${#_VS_BINS[@]} == 0 )); then
-        echo -e "  ${_DIM}○ vscode    not detected${_RST}"
-        echo -e "  ${_DIM}○ bridge    –${_RST}"
-        echo -e "  ${_DIM}○ sampling  unavailable${_RST}"
-        echo ""
-        _info "Install VS Code to unlock the sampling pipeline."
-        _info "Copilot's LLM runs full optimization (analyze → optimize"
-        _info "→ score → suggest) in your IDE — no API key needed."
-        return 1
+    _log "Pipeline status:"
+    if [[ -n "$_PROVIDER_NAME" ]]; then
+        echo -e "  ${_GRN}●${_RST} provider  ${_DIM}${_PROVIDER_LABEL}${_RST}"
+    else
+        echo -e "  ${_DIM}○ provider  not detected (CLI or API key)${_RST}"
     fi
 
-    # VS Code
-    echo -e "  ${_GRN}●${_RST} vscode    ${_DIM}${_VS_PRIMARY_LABEL} v${_VS_PRIMARY_VER}${_RST}"
-    if (( ${#_VS_BINS[@]} > 1 )); then
-        _info "          + $(( ${#_VS_BINS[@]} - 1 )) other installation(s)"
+    # ── VS Code ──
+    if (( ${#_VS_BINS[@]} > 0 )); then
+        echo -e "  ${_GRN}●${_RST} vscode    ${_DIM}${_VS_PRIMARY_LABEL} v${_VS_PRIMARY_VER}${_RST}"
+        if (( ${#_VS_BINS[@]} > 1 )); then
+            _info "          + $(( ${#_VS_BINS[@]} - 1 )) other installation(s)"
+        fi
+    else
+        echo -e "  ${_DIM}○ vscode    not detected (optional — enables sampling tier)${_RST}"
     fi
 
-    # Bridge
+    # ── Bridge ──
     if [[ -n "$_VS_BRIDGE_VER" ]]; then
         if [[ "$_VS_BRIDGE_VER" == "$_VS_VSIX_VER" ]]; then
             echo -e "  ${_GRN}●${_RST} bridge    ${_DIM}v${_VS_BRIDGE_VER} (up to date)${_RST}"
         elif [[ -n "$_VS_VSIX_VER" ]]; then
-            echo -e "  ${_YLW}●${_RST} bridge    ${_DIM}v${_VS_BRIDGE_VER} (v${_VS_VSIX_VER} available — run ./init.sh setup-vscode --build)${_RST}"
+            echo -e "  ${_YLW}●${_RST} bridge    ${_DIM}v${_VS_BRIDGE_VER} (v${_VS_VSIX_VER} available — ./init.sh setup-vscode --build)${_RST}"
         else
             echo -e "  ${_GRN}●${_RST} bridge    ${_DIM}v${_VS_BRIDGE_VER}${_RST}"
         fi
-    else
-        echo -e "  ${_RED}○${_RST} bridge    ${_DIM}not installed — run ./init.sh setup-vscode${_RST}"
+    elif (( ${#_VS_BINS[@]} > 0 )); then
+        echo -e "  ${_RED}○${_RST} bridge    ${_DIM}not installed — ./init.sh setup-vscode${_RST}"
     fi
 
-    # Health probe (live check against running MCP server)
-    _probe_mcp_sampling
+    # ── Health ──
     if [[ "$_VS_HEALTH" == "ok" ]]; then
         echo -e "  ${_GRN}●${_RST} health    ${_DIM}MCP sampling endpoint responding${_RST}"
     elif [[ -z "$_VS_HEALTH" ]] || [[ "$_VS_HEALTH" == *"curl"* ]]; then
         echo -e "  ${_DIM}○ health    cannot verify (curl unavailable)${_RST}"
     elif ! _probe_port "$MCP_PORT"; then
-        echo -e "  ${_RED}○${_RST} health    ${_DIM}MCP server not running — start with ./init.sh start${_RST}"
+        echo -e "  ${_RED}○${_RST} health    ${_DIM}MCP server not running — ./init.sh start${_RST}"
     else
         echo -e "  ${_RED}●${_RST} health    ${_DIM}${_VS_HEALTH}${_RST}"
     fi
 
-    # Sampling pre-approval
+    # ── Sampling config ──
     if [[ -n "$_VS_BRIDGE_VER" ]] && $_VS_SAMPLING_OK; then
-        echo -e "  ${_GRN}●${_RST} sampling  ${_DIM}pre-approved, pipeline ready${_RST}"
+        echo -e "  ${_GRN}●${_RST} sampling  ${_DIM}pre-approved in settings.json${_RST}"
     elif [[ -n "$_VS_BRIDGE_VER" ]]; then
-        echo -e "  ${_YLW}●${_RST} sampling  ${_DIM}bridge installed but not pre-approved in settings.json${_RST}"
-    else
-        echo -e "  ${_DIM}○ sampling  bridge required — run ./init.sh setup-vscode${_RST}"
+        echo -e "  ${_YLW}●${_RST} sampling  ${_DIM}not pre-approved — consent dialog on first use${_RST}"
     fi
 
-    # Native MCP discovery
     if $_VS_MCP_JSON; then
         echo -e "  ${_GRN}●${_RST} mcp.json  ${_DIM}native discovery enabled${_RST}"
-    else
-        echo -e "  ${_YLW}○${_RST} mcp.json  ${_DIM}missing — run: git checkout .vscode/mcp.json${_RST}"
+    elif (( ${#_VS_BINS[@]} > 0 )); then
+        echo -e "  ${_YLW}○${_RST} mcp.json  ${_DIM}missing — git checkout .vscode/mcp.json${_RST}"
     fi
+
+    # ── Active tier ──
+    local tier
+    tier=$(_resolve_active_tier)
+    echo ""
+    case "$tier" in
+        internal)
+            echo -e "  ${_GRN}▸${_RST} ${_BLD}Active tier: internal${_RST} ${_DIM}— full pipeline via ${_PROVIDER_LABEL}${_RST}"
+            ;;
+        sampling)
+            echo -e "  ${_GRN}▸${_RST} ${_BLD}Active tier: sampling${_RST} ${_DIM}— pipeline via VS Code Copilot${_RST}"
+            ;;
+        passthrough)
+            echo -e "  ${_YLW}▸${_RST} ${_BLD}Active tier: passthrough${_RST} ${_DIM}— prompt assembly only${_RST}"
+            ;;
+    esac
 
     return 0
 }
