@@ -221,3 +221,125 @@ async def github_logout(
         logger.debug("Audit log write failed", exc_info=True)
 
     return OkResponse()
+
+
+# ---------------------------------------------------------------------------
+# Device Flow — zero-config OAuth (no client secret, no callback URL)
+# ---------------------------------------------------------------------------
+
+
+class DevicePollRequest(BaseModel):
+    device_code: str = Field(description="Device code from the /auth/device request.")
+
+
+class DevicePollResponse(BaseModel):
+    status: str = Field(description="authorization_pending | slow_down | expired_token | success")
+    user: GitHubUserResponse | None = None
+
+
+@router.post("/auth/device")
+async def request_device_code():
+    """Start GitHub Device Flow. Returns user_code for the user to enter at github.com/login/device."""
+    client_id = settings.GITHUB_OAUTH_CLIENT_ID
+    if not client_id:
+        raise HTTPException(
+            500,
+            "GITHUB_OAUTH_CLIENT_ID not configured. Set it in .env to enable GitHub integration.",
+        )
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://github.com/login/device/code",
+            data={
+                "client_id": client_id,
+                "scope": "repo read:user",
+            },
+            headers={"Accept": "application/json"},
+        )
+        data = resp.json()
+
+    if "user_code" not in data:
+        error_desc = data.get("error_description", "Failed to start device flow")
+        logger.warning("GitHub device flow request failed: %s", error_desc)
+        raise HTTPException(400, error_desc)
+
+    logger.info("GitHub device flow started: user_code=%s", data.get("user_code"))
+    return data  # {device_code, user_code, verification_uri, expires_in, interval}
+
+
+@router.post("/auth/device/poll")
+async def poll_device_code(
+    body: DevicePollRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> DevicePollResponse:
+    """Poll GitHub for device authorization status. Call repeatedly at the specified interval."""
+    client_id = settings.GITHUB_OAUTH_CLIENT_ID
+    if not client_id:
+        raise HTTPException(500, "GITHUB_OAUTH_CLIENT_ID not configured.")
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://github.com/login/oauth/access_token",
+            data={
+                "client_id": client_id,
+                "device_code": body.device_code,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+            headers={"Accept": "application/json"},
+        )
+        data = resp.json()
+
+    # Still waiting or error
+    if "error" in data:
+        return DevicePollResponse(status=data["error"])
+
+    # Success — got access token
+    access_token = data.get("access_token")
+    if not access_token:
+        return DevicePollResponse(status="error")
+
+    # Fetch user info
+    github_client = GitHubClient()
+    user = await github_client.get_user(access_token)
+
+    # Encrypt and store token (same as authorization code callback)
+    github_svc = GitHubService(secret_key=settings.resolve_secret_key())
+    encrypted = github_svc.encrypt_token(access_token)
+
+    session_id = request.cookies.get("session_id") or secrets.token_urlsafe(32)
+
+    result = await db.execute(
+        select(GitHubToken).where(GitHubToken.session_id == session_id)
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        existing.token_encrypted = encrypted
+        existing.github_login = user.get("login")
+        existing.github_user_id = str(user.get("id", ""))
+        existing.avatar_url = user.get("avatar_url")
+    else:
+        row = GitHubToken(
+            session_id=session_id,
+            token_encrypted=encrypted,
+            github_login=user.get("login"),
+            github_user_id=str(user.get("id", "")),
+            avatar_url=user.get("avatar_url"),
+        )
+        db.add(row)
+    await db.commit()
+
+    response.set_cookie(
+        "session_id", session_id, httponly=True, max_age=86400 * 14,
+        samesite="lax", secure=_is_secure(), path="/api",
+    )
+    logger.info("GitHub device flow completed: user=%s", user.get("login"))
+
+    return DevicePollResponse(
+        status="success",
+        user=GitHubUserResponse(
+            login=user.get("login"),
+            avatar_url=user.get("avatar_url"),
+        ),
+    )

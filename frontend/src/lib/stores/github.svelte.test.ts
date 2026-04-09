@@ -52,22 +52,28 @@ describe('GitHubStore', () => {
 
   describe('login', () => {
     it('redirects to OAuth URL', async () => {
-      const originalLocation = window.location;
-      delete (window as any).location;
-      (window as any).location = { href: '' };
+      // Device flow: login() calls /github/auth/device and opens a new tab
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
 
       mockFetch([
-        { match: '/github/auth/login', response: { url: 'https://github.com/login/oauth/authorize?...' } },
+        { match: '/github/auth/device', response: {
+          device_code: 'dc-123',
+          user_code: 'ABCD-1234',
+          verification_uri: 'https://github.com/login/device',
+          expires_in: 900,
+          interval: 5,
+        } },
       ]);
       await githubStore.login();
-      expect(window.location.href).toContain('github.com');
-
-      (window as any).location = originalLocation;
+      expect(githubStore.userCode).toBe('ABCD-1234');
+      expect(openSpy).toHaveBeenCalledWith('https://github.com/login/device', '_blank');
+      githubStore.cancelLogin(); // stop polling
+      openSpy.mockRestore();
     });
 
     it('sets error when login API call fails', async () => {
       mockFetch([
-        { match: '/github/auth/login', response: { detail: 'Server error' }, status: 500 },
+        { match: '/github/auth/device', response: { detail: 'Server error' }, status: 500 },
       ]);
       await githubStore.login();
       expect(githubStore.error).toBeTruthy();

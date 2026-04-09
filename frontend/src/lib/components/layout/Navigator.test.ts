@@ -514,7 +514,7 @@ describe('Navigator', () => {
     githubStore.linkedRepo = null;
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'github' } });
-    expect(screen.getByText(/Sign in to GitHub/i)).toBeInTheDocument();
+    expect(screen.getByText(/Connect GitHub to link/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Connect GitHub/i })).toBeInTheDocument();
   });
 

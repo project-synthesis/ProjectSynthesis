@@ -637,13 +637,51 @@
             </button>
           {/if}
         {:else}
-          <p class="empty-note">Sign in to GitHub to link a repository for context-aware optimization.</p>
-          <button
-            class="action-btn action-btn--primary"
-            onclick={() => githubStore.login()}
-          >
-            Connect GitHub
-          </button>
+          {#if githubStore.userCode}
+            <!-- Device flow: show code + waiting state -->
+            <div class="device-flow">
+              <p class="device-heading">Enter this code on GitHub:</p>
+              <div class="device-code">
+                <span class="device-code-text">{githubStore.userCode}</span>
+                <button
+                  class="device-copy-btn"
+                  onclick={() => { navigator.clipboard.writeText(githubStore.userCode ?? ''); }}
+                  title="Copy code"
+                >
+                  Copy
+                </button>
+              </div>
+              <a
+                class="device-link"
+                href={githubStore.verificationUri ?? 'https://github.com/login/device'}
+                target="_blank"
+                rel="noopener"
+              >
+                github.com/login/device
+              </a>
+              <p class="device-status">
+                {#if githubStore.polling}
+                  Waiting for authorization...
+                {:else if githubStore.error}
+                  {githubStore.error}
+                {/if}
+              </p>
+              <button class="action-btn" onclick={() => githubStore.cancelLogin()}>
+                Cancel
+              </button>
+            </div>
+          {:else}
+            <p class="empty-note">Connect GitHub to link repositories for context-aware optimization.</p>
+            {#if githubStore.error}
+              <p class="error-note">{githubStore.error}</p>
+            {/if}
+            <button
+              class="action-btn action-btn--primary"
+              onclick={() => githubStore.login()}
+            >
+              Connect GitHub
+            </button>
+          {/if}
         {/if}
       </div>
     </div>
@@ -1835,5 +1873,62 @@
     display: flex;
     gap: 6px;
     margin-top: 6px;
+  }
+
+  /* Device flow */
+  .device-flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0;
+  }
+  .device-heading {
+    font-size: 11px;
+    color: var(--color-text-dim);
+    margin: 0;
+  }
+  .device-code {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .device-code-text {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--tier-accent, var(--color-neon-cyan));
+  }
+  .device-copy-btn {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-dim);
+    font-size: 10px;
+    padding: 2px 6px;
+    cursor: pointer;
+  }
+  .device-copy-btn:hover {
+    color: var(--color-text);
+    border-color: var(--tier-accent, var(--color-neon-cyan));
+  }
+  .device-link {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--tier-accent, var(--color-neon-cyan));
+    text-decoration: none;
+  }
+  .device-link:hover {
+    text-decoration: underline;
+  }
+  .device-status {
+    font-size: 10px;
+    color: var(--color-text-dim);
+    margin: 0;
+  }
+  .error-note {
+    font-size: 10px;
+    color: var(--color-neon-red);
+    margin: 0 0 4px;
   }
 </style>

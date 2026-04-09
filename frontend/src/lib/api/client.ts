@@ -348,6 +348,26 @@ export interface ProjectInfo {
 }
 export const listProjects = () => apiFetch<ProjectInfo[]>('/projects');
 
+// ---- GitHub Device Flow ----
+export interface DeviceCodeResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+export interface DevicePollResponse {
+  status: 'authorization_pending' | 'slow_down' | 'expired_token' | 'success' | 'error';
+  user?: GitHubUser;
+}
+export const githubDeviceRequest = () =>
+  apiFetch<DeviceCodeResponse>('/github/auth/device', { method: 'POST' });
+export const githubDevicePoll = (deviceCode: string) =>
+  apiFetch<DevicePollResponse>('/github/auth/device/poll', {
+    method: 'POST',
+    body: JSON.stringify({ device_code: deviceCode }),
+  });
+
 // ---- Refinement Types ----
 
 export interface RefinementTurn {
