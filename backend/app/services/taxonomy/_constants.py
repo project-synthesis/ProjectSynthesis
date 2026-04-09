@@ -88,6 +88,14 @@ GLOBAL_PATTERN_MIN_WALL_CLOCK_MINUTES: int = 30
 # re-merges when timing was unlucky.
 SPLIT_MERGE_PROTECTION_MINUTES = 60  # 1 hour
 
+
+# ---------------------------------------------------------------------------
+# HNSW backend threshold (ADR-005 Phase 3B)
+# ---------------------------------------------------------------------------
+# When cluster count >= this on rebuild(), EmbeddingIndex switches from
+# numpy matmul to HNSW (hnswlib) for O(log N) search.
+HNSW_CLUSTER_THRESHOLD: int = 1000
+
 # Maximum times the same member set (by content hash) can fail split before
 # permanent cooldown.  Prevents Groundhog Day loops where the same member
 # pool is repeatedly split and rolled back/merged.

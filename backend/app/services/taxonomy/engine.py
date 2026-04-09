@@ -871,13 +871,9 @@ class TaxonomyEngine:
             cluster.usage_count = 0
             cluster.avg_score = None
 
-        # Reset embedding index by replacing internal arrays
+        # Reset embedding index
         if self._embedding_index is not None:
-            async with self._embedding_index._lock:
-                self._embedding_index._matrix = np.empty(
-                    (0, self._embedding_index._dim), dtype=np.float32,
-                )
-                self._embedding_index._ids = []
+            await self._embedding_index.reset()
 
         await db.flush()
 
