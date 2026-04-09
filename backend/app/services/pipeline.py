@@ -192,9 +192,20 @@ class PipelineOrchestrator:
 
         try:
             # ---------------------------------------------------------------
-            # Phase 0: Explore — REMOVED (now handled by ContextEnrichmentService).
-            # Background synthesis runs on repo link/reindex. Per-prompt curated
-            # retrieval runs in enrich(). codebase_context arrives pre-populated.
+            # Enrichment trace — log what context was provided (no LLM call)
+            if self.trace_logger and context_sources:
+                self.trace_logger.log_phase(
+                    trace_id=trace_id, phase="enrichment",
+                    duration_ms=0,
+                    tokens_in=0, tokens_out=0,
+                    model="none", provider=provider.name,
+                    result={
+                        "has_codebase_context": codebase_context is not None,
+                        "context_chars": len(codebase_context) if codebase_context else 0,
+                        "repo_full_name": repo_full_name,
+                        "context_sources": context_sources,
+                    },
+                )
 
             # ---------------------------------------------------------------
             # Phase 1: Analyze
@@ -832,6 +843,7 @@ class PipelineOrchestrator:
                 duration_ms=duration_ms,
                 status="completed",
                 trace_id=trace_id,
+                repo_full_name=repo_full_name,
                 context_sources=context_sources or {},
                 original_scores=original_scores.model_dump() if original_scores else None,
                 score_deltas=deltas,

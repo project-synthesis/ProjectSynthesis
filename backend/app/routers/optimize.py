@@ -350,6 +350,7 @@ def _serialize_optimization(opt: Optimization, *, cluster_id: str | None = None)
         scoring_mode=opt.scoring_mode,
         duration_ms=opt.duration_ms,
         status=opt.status,
+        repo_full_name=opt.repo_full_name,
         context_sources=opt.context_sources,
         created_at=opt.created_at.isoformat() if opt.created_at else None,
         intent_label=opt.intent_label,

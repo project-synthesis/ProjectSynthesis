@@ -126,6 +126,11 @@ class CodebaseExplorer:
         # 4. Cap at EXPLORE_MAX_FILES
         max_files = settings.EXPLORE_MAX_FILES
         selected_paths = ranked_paths[:max_files]
+        logger.info(
+            "explore_rank: repo=%s tree=%d indexable=%d selected=%d top5=%s",
+            repo_full_name, len(tree), len(indexable), len(selected_paths),
+            selected_paths[:5],
+        )
 
         # 5. Parallel file reads with bounded concurrency
         semaphore = asyncio.Semaphore(10)
@@ -198,8 +203,8 @@ class CodebaseExplorer:
         )
 
         logger.info(
-            "Explore synthesis complete for %s@%s: %d chars context",
-            repo_full_name, branch, len(result.context),
+            "explore_synthesis: repo=%s branch=%s files_read=%d synthesis_chars=%d",
+            repo_full_name, branch, len(file_paths_list), len(result.context),
         )
 
         # Cache the result

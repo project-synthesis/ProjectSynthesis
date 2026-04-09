@@ -38,6 +38,9 @@ class EnrichedContext:
     context_sources: MappingProxyType[str, bool] = field(
         default_factory=lambda: MappingProxyType({}),
     )
+    enrichment_meta: MappingProxyType[str, Any] = field(
+        default_factory=lambda: MappingProxyType({}),
+    )
 
     # -- Convenience accessors (avoid repeated null-guard boilerplate) --
 
@@ -62,9 +65,12 @@ class EnrichedContext:
         return self.analysis.format_summary() if self.analysis else None
 
     @property
-    def context_sources_dict(self) -> dict[str, bool]:
-        """Plain dict copy of context_sources for JSON/DB serialization."""
-        return dict(self.context_sources)
+    def context_sources_dict(self) -> dict[str, Any]:
+        """Plain dict copy of context_sources + enrichment metadata for JSON/DB serialization."""
+        result: dict[str, Any] = dict(self.context_sources)
+        if self.enrichment_meta:
+            result["enrichment_meta"] = dict(self.enrichment_meta)
+        return result
 
 
 class ContextEnrichmentService:
@@ -132,6 +138,7 @@ class ContextEnrichmentService:
         #    once on link/reindex), (b) per-prompt curated retrieval (file-specific
         #    outlines ranked by semantic similarity to the prompt).
         codebase_context: str | None = None
+        enrichment_meta_dict: dict[str, Any] = {}
         if repo_full_name:
             # Resolve branch from LinkedRepo if not explicitly provided
             if not repo_branch:
@@ -150,24 +157,33 @@ class ContextEnrichmentService:
                     repo_branch = "main"
             branch = repo_branch
 
+            enrichment_meta_dict["repo_full_name"] = repo_full_name
+            enrichment_meta_dict["repo_branch"] = branch
+
             # 3a. Cached explore synthesis (architectural context)
             explore_synthesis = await self._get_explore_synthesis(
                 repo_full_name, branch, db,
             )
+            enrichment_meta_dict["explore_synthesis"] = {
+                "present": explore_synthesis is not None,
+                "char_count": len(explore_synthesis) if explore_synthesis else 0,
+            }
 
             # 3b. Per-prompt curated index retrieval
-            curated = await self._query_index_context(
+            curated_text, curated_meta = await self._query_index_context(
                 repo_full_name, branch, raw_prompt,
                 task_type, analysis.domain if analysis else None, db,
             )
+            if curated_meta:
+                enrichment_meta_dict["curated_retrieval"] = curated_meta
 
             # Combine: synthesis first (overview), then curated (prompt-specific)
-            if explore_synthesis and curated:
-                codebase_context = f"{explore_synthesis}\n\n---\n\n{curated}"
+            if explore_synthesis and curated_text:
+                codebase_context = f"{explore_synthesis}\n\n---\n\n{curated_text}"
             elif explore_synthesis:
                 codebase_context = explore_synthesis
-            elif curated:
-                codebase_context = curated
+            elif curated_text:
+                codebase_context = curated_text
 
         # 4. Adaptation state — ALL tiers, task_type-aware
         #    Skipped when preferences explicitly disable adaptation.
@@ -185,6 +201,14 @@ class ContextEnrichmentService:
         codebase_context = self._cap_codebase_context(codebase_context)
         adaptation = self._cap_adaptation_state(adaptation)
 
+        # 6b. Enrichment metadata — track truncation
+        if enrichment_meta_dict:
+            combined_chars = len(codebase_context) if codebase_context else 0
+            enrichment_meta_dict["combined_context_chars"] = combined_chars
+            enrichment_meta_dict["was_truncated"] = (
+                combined_chars >= settings.MAX_CODEBASE_CONTEXT_CHARS
+            )
+
         # 7. Context sources audit (frozen via MappingProxyType)
         sources = MappingProxyType({
             "workspace_guidance": guidance is not None,
@@ -194,6 +218,20 @@ class ContextEnrichmentService:
             "heuristic_analysis": analysis is not None,
         })
 
+        # 8. Log enrichment summary
+        if repo_full_name:
+            _cr = enrichment_meta_dict.get("curated_retrieval", {})
+            logger.info(
+                "enrichment: tier=%s repo=%s explore=%s curated_files=%d "
+                "curated_top=%.3f context_chars=%d truncated=%s",
+                tier, repo_full_name,
+                "yes" if enrichment_meta_dict.get("explore_synthesis", {}).get("present") else "no",
+                _cr.get("files_included", 0),
+                _cr.get("top_relevance_score", 0.0),
+                enrichment_meta_dict.get("combined_context_chars", 0),
+                enrichment_meta_dict.get("was_truncated", False),
+            )
+
         return EnrichedContext(
             raw_prompt=raw_prompt,
             workspace_guidance=guidance,
@@ -202,6 +240,7 @@ class ContextEnrichmentService:
             applied_patterns=patterns,
             analysis=analysis,
             context_sources=sources,
+            enrichment_meta=MappingProxyType(enrichment_meta_dict) if enrichment_meta_dict else MappingProxyType({}),
         )
 
     async def _resolve_workspace_guidance(
@@ -267,8 +306,11 @@ class ContextEnrichmentService:
         task_type: str | None,
         domain: str | None,
         db: AsyncSession,
-    ) -> str | None:
-        """Query pre-built index for curated codebase context."""
+    ) -> tuple[str | None, dict | None]:
+        """Query pre-built index for curated codebase context.
+
+        Returns ``(context_text, retrieval_metadata)`` tuple.
+        """
         try:
             from app.services.repo_index_service import RepoIndexService
             svc = RepoIndexService(db, self._github_client, self._embedding_service)
@@ -277,10 +319,17 @@ class ContextEnrichmentService:
                 task_type=task_type, domain=domain,
             )
             if result:
-                return result.context_text
+                meta = {
+                    "files_included": result.files_included,
+                    "total_files_indexed": result.total_files_indexed,
+                    "top_relevance_score": round(result.top_relevance_score, 3),
+                    "index_freshness": result.index_freshness,
+                    "files": result.selected_files,
+                }
+                return result.context_text, meta
         except Exception:
             logger.debug("Curated index retrieval failed", exc_info=True)
-        return None
+        return None, None
 
     async def _resolve_adaptation(
         self, db: AsyncSession, task_type: str,

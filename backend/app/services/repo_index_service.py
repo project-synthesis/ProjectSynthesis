@@ -5,7 +5,7 @@ import hashlib
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -58,6 +58,7 @@ class CuratedCodebaseContext:
     total_files_indexed: int
     index_freshness: str
     top_relevance_score: float
+    selected_files: list[dict] = field(default_factory=list)  # [{"path": ..., "score": ...}]
 
 
 # ---------------------------------------------------------------------------
@@ -505,11 +506,20 @@ class RepoIndexService:
         if not selected:
             return None
 
+        logger.info(
+            "curated_context: repo=%s branch=%s query_len=%d indexed=%d "
+            "above_min_sim=%d after_diversity=%d top_score=%.3f",
+            repo_full_name, branch, len(query), len(rows),
+            len(boosted), len(selected),
+            selected[0][1] if selected else 0.0,
+        )
+
         # Budget packing
         parts: list[str] = []
         total_chars = 0
         files_included = 0
         top_score = selected[0][1] if selected else 0.0
+        selected_files_meta: list[dict] = []
 
         for idx, score in selected:
             row = rows[idx]
@@ -519,6 +529,8 @@ class RepoIndexService:
             parts.append(entry)
             total_chars += len(entry)
             files_included += 1
+            if len(selected_files_meta) < 20:
+                selected_files_meta.append({"path": row.file_path, "score": round(score, 3)})
 
         if not parts:
             return None
@@ -538,6 +550,7 @@ class RepoIndexService:
             total_files_indexed=len(rows),
             index_freshness=freshness,
             top_relevance_score=top_score,
+            selected_files=selected_files_meta,
         )
         # Cache result
         _curated_cache[cache_key] = (time.time(), result)

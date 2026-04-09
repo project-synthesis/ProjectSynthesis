@@ -527,6 +527,21 @@ async def run_sampling_pipeline(
             "trace_id": trace_id, "phase": "explore", "state": "skipped",
         })
 
+    # Enrichment trace — log what context was provided (no LLM call)
+    if trace_logger and context_sources:
+        trace_logger.log_phase(
+            trace_id=trace_id, phase="enrichment",
+            duration_ms=0,
+            tokens_in=0, tokens_out=0,
+            model="none", provider="mcp_sampling",
+            result={
+                "has_codebase_context": codebase_context is not None,
+                "context_chars": len(codebase_context) if codebase_context else 0,
+                "repo_full_name": repo_full_name,
+                "context_sources": context_sources,
+            },
+        )
+
     # ------------------------------------------------------------------
     # Phase 1: Analyze
     # ------------------------------------------------------------------
@@ -1074,6 +1089,7 @@ async def run_sampling_pipeline(
             duration_ms=elapsed_ms,
             tokens_by_phase=phase_durations,
             models_by_phase=model_ids,
+            repo_full_name=repo_full_name,
             context_sources=context_sources,
             status="completed",
             trace_id=trace_id,
