@@ -103,21 +103,30 @@ async def _load_active_nodes(
 
     if project_id:
         # Load only clusters under this project's domain subtree
-        domain_ids_q = await db.execute(
-            select(PromptCluster.id).where(
-                PromptCluster.parent_id == project_id,
-                PromptCluster.state == "domain",
-            )
-        )
-        domain_ids = {row[0] for row in domain_ids_q.all()}
+        from app.services.taxonomy.family_ops import _get_project_domain_ids
+        domain_ids = await _get_project_domain_ids(db, project_id)
 
         if not domain_ids:
             return []
 
+        # Include clusters under this project's domains AND cross-project
+        # clusters that contain this project's optimizations (ADR-005 spec §3)
+        from sqlalchemy import or_
+
+        from app.models import Optimization
+
+        cross_project_cluster_ids = select(Optimization.cluster_id).where(
+            Optimization.project_id == project_id,
+            Optimization.cluster_id.isnot(None),
+        ).distinct().scalar_subquery()
+
         result = await db.execute(
             select(PromptCluster).where(
                 PromptCluster.state.notin_(excluded),
-                PromptCluster.parent_id.in_(domain_ids),
+                or_(
+                    PromptCluster.parent_id.in_(domain_ids),
+                    PromptCluster.id.in_(cross_project_cluster_ids),
+                ),
             )
         )
     else:

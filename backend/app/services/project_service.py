@@ -113,13 +113,13 @@ async def resolve_project_id(
     if not repo_full_name:
         return legacy_project_id
 
-    lr = (await db.execute(
+    project_node_id = (await db.execute(
         select(LinkedRepo.project_node_id)
         .where(LinkedRepo.full_name == repo_full_name)
         .limit(1)
     )).scalar_one_or_none()
 
-    if lr:
-        return lr
+    if project_node_id:
+        return project_node_id
 
     return legacy_project_id

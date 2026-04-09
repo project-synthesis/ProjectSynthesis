@@ -401,6 +401,10 @@ async def assign_cluster(
             clusters = list(_cluster_q.scalars().all())
         else:
             clusters = []
+            logger.debug(
+                "Project %s has no domain nodes — Tier 1 empty, will try cross-project",
+                project_id[:8] if project_id else "?",
+            )
     else:
         _cluster_q = await db.execute(
             select(PromptCluster).where(
@@ -552,7 +556,8 @@ async def assign_cluster(
                         # Update embedding index with new centroid
                         if embedding_index is not None:
                             await embedding_index.upsert(
-                                matched.id, new_centroid
+                                matched.id, new_centroid,
+                                project_id=project_id,  # ADR-005
                             )
 
                         # Recompute cluster task_type as majority of members
@@ -676,7 +681,8 @@ async def assign_cluster(
 
                             if embedding_index is not None:
                                 await embedding_index.upsert(
-                                    c_matched.id, new_centroid
+                                    c_matched.id, new_centroid,
+                                    project_id=project_id,  # ADR-005
                                 )
                             await _recompute_cluster_task_type(db, c_matched)
 
@@ -780,7 +786,9 @@ async def assign_cluster(
 
     # Update embedding index with new centroid
     if embedding_index is not None:
-        await embedding_index.upsert(new_cluster.id, embedding)
+        await embedding_index.upsert(
+            new_cluster.id, embedding, project_id=project_id,  # ADR-005
+        )
 
     logger.debug(
         "Created new PromptCluster: id=%s label='%s' domain=%s parent=%s",
