@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# ADR-005: Adaptive scheduler measurement (Phase 1 — measurement only)
+# ADR-005: Adaptive scheduler (Phase 1 measurement + Phase 3A decisions)
 # ---------------------------------------------------------------------------
 
 
@@ -79,19 +79,37 @@ class WarmCycleMeasurement:
     duration_ms: int
 
 
+@dataclass
+class SchedulerDecision:
+    """Result of adaptive scheduler mode decision."""
+    mode: str  # "all_dirty" | "round_robin"
+    project_id: str | None = None
+    scoped_dirty_ids: set[str] | None = None
+
+    @property
+    def is_round_robin(self) -> bool:
+        return self.mode == "round_robin"
+
+
 class AdaptiveScheduler:
     """Self-tuning warm path scheduler (ADR-005).
 
     Phase 1: measurement only (always all-dirty mode).
-    Phase 3: adds round-robin branching when data shows need.
+    Phase 3A: adds round-robin branching when data shows need.
     """
 
     _WINDOW_SIZE = 10
     _BOOTSTRAP_TARGET_MS = 10_000  # 10s default until enough data
+    _BOOTSTRAP_BOUNDARY: int = 20  # dirty count fallback during bootstrap
+    _STARVATION_LIMIT: int = 3     # max consecutive skipped cycles
 
     def __init__(self) -> None:
         self._window: list[WarmCycleMeasurement] = []
         self._target_cycle_ms: int = self._BOOTSTRAP_TARGET_MS
+        self._skip_counts: dict[str, int] = {}
+        self._last_mode: str = "all_dirty"
+        self._last_project_id: str | None = None
+        self._last_dirty_by_project: dict[str, set[str]] | None = None
 
     @property
     def target_cycle_ms(self) -> int:
@@ -109,13 +127,113 @@ class AdaptiveScheduler:
             quantiles = statistics.quantiles(durations, n=4)
             self._target_cycle_ms = int(quantiles[2])  # 75th percentile
 
+    def _compute_boundary(self) -> int:
+        """Dirty count at which predicted duration equals target.
+
+        Uses simple linear regression on the rolling window.
+        Returns bootstrap fallback if insufficient data.
+        """
+        if len(self._window) < self._WINDOW_SIZE:
+            return self._BOOTSTRAP_BOUNDARY
+
+        xs = [m.dirty_count for m in self._window]
+        ys = [m.duration_ms for m in self._window]
+        n = len(xs)
+        sum_x = sum(xs)
+        sum_y = sum(ys)
+        sum_xy = sum(x * y for x, y in zip(xs, ys))
+        sum_xx = sum(x * x for x in xs)
+
+        denom = n * sum_xx - sum_x * sum_x
+        if abs(denom) < 1e-9:
+            return self._BOOTSTRAP_BOUNDARY  # degenerate: all same dirty count
+
+        slope = (n * sum_xy - sum_x * sum_y) / denom
+        intercept = (sum_y - slope * sum_x) / n
+
+        if slope <= 0:
+            return 999  # duration doesn't grow with dirty count
+
+        boundary = (self._target_cycle_ms - intercept) / slope
+        result = max(1, int(boundary))
+
+        if result == 1:
+            logger.warning(
+                "AdaptiveScheduler: boundary clamped to 1 "
+                "(slope=%.2f intercept=%.0f target=%d)",
+                slope, intercept, self._target_cycle_ms,
+            )
+        return result
+
+    def decide_mode(
+        self,
+        dirty_ids: set[str] | None,
+        dirty_by_project: dict[str, set[str]] | None = None,
+    ) -> SchedulerDecision:
+        """Decide scheduling mode for this warm cycle."""
+        if dirty_ids is None:
+            self._last_mode = "all_dirty"
+            return SchedulerDecision("all_dirty")
+
+        boundary = self._compute_boundary()
+        if len(dirty_ids) <= boundary:
+            self._last_mode = "all_dirty"
+            return SchedulerDecision("all_dirty")
+
+        if not dirty_by_project:
+            self._last_mode = "all_dirty"
+            return SchedulerDecision("all_dirty")
+
+        project_id, scoped = self._pick_priority_project(dirty_by_project)
+        self._last_mode = "round_robin"
+        self._last_project_id = project_id
+        self._last_dirty_by_project = dirty_by_project
+        return SchedulerDecision("round_robin", project_id, scoped)
+
+    def _pick_priority_project(
+        self,
+        dirty_by_project: dict[str, set[str]],
+    ) -> tuple[str, set[str]]:
+        """Pick the project to process. Starved projects get priority."""
+        # Check for starved projects first (longest-starved wins)
+        starved = [
+            (pid, self._skip_counts.get(pid, 0))
+            for pid in dirty_by_project
+            if self._skip_counts.get(pid, 0) >= self._STARVATION_LIMIT
+        ]
+        if starved:
+            starved.sort(key=lambda x: -x[1])  # longest-starved first
+            chosen_pid = starved[0][0]
+            self._skip_counts[chosen_pid] = 0
+            for other_pid in dirty_by_project:
+                if other_pid != chosen_pid:
+                    self._skip_counts[other_pid] = self._skip_counts.get(other_pid, 0) + 1
+            return (chosen_pid, dirty_by_project[chosen_pid])
+
+        # Normal priority: most dirty clusters
+        ranked = sorted(
+            dirty_by_project.items(),
+            key=lambda kv: len(kv[1]),
+            reverse=True,
+        )
+        chosen_pid = ranked[0][0]
+
+        for pid in dirty_by_project:
+            if pid == chosen_pid:
+                self._skip_counts[pid] = 0
+            else:
+                self._skip_counts[pid] = self._skip_counts.get(pid, 0) + 1
+
+        return (chosen_pid, dirty_by_project[chosen_pid])
+
     def snapshot(self) -> dict:
         """Return scheduler state for logging/observability."""
         return {
             "target_cycle_ms": self._target_cycle_ms,
             "window_size": len(self._window),
-            "mode": "all_dirty",  # Phase 1: always all-dirty
+            "mode": self._last_mode,
             "bootstrapping": len(self._window) < self._WINDOW_SIZE,
+            "boundary": self._compute_boundary(),
         }
 
 
