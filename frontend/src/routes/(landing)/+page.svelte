@@ -161,7 +161,7 @@
             <h3 class="pipeline-phase__title" style="color:var(--color-neon-cyan);">ANALYZE</h3>
           </div>
           <p class="pipeline-phase__text">
-            Classifies across seven task types. 6-layer heuristic analysis detects weaknesses. Selects from six strategies with 0.7 confidence gate. Matches meta-patterns from the knowledge graph.
+            Classifies across 7 task types. 6-layer heuristic analysis detects weaknesses. Selects from 6 strategies with 0.7 confidence gate. Matches meta-patterns from the knowledge graph.
           </p>
           <div class="pipeline-phase__tags">
             <span class="pipeline-tag" style="border-color:var(--color-neon-cyan);color:var(--color-neon-cyan);">coding</span>
@@ -301,7 +301,7 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- SECTION 3.5: KNOWLEDGE GRAPH                                 -->
+  <!-- SECTION 3: KNOWLEDGE GRAPH                                    -->
   <!-- ============================================================ -->
   <section id="knowledge-graph" class="section" aria-labelledby="kg-heading">
     <h2 id="kg-heading" class="section-heading example-heading">Evolutionary Knowledge Graph</h2>
@@ -412,7 +412,7 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- SECTION 4: CAPABILITIES                                      -->
+  <!-- SECTION 4: CAPABILITIES (6-CARD GRID)                         -->
   <!-- ============================================================ -->
   <section id="capabilities" class="section" aria-labelledby="capabilities-heading">
     <h2 id="capabilities-heading" class="section-heading integrations-heading">Beyond the Pipeline.</h2>
@@ -474,7 +474,7 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- SECTION 5: WORKS EVERYWHERE                                  -->
+  <!-- SECTION 5: THREE TIERS                                       -->
   <!-- ============================================================ -->
   <section id="integrations" class="section" aria-labelledby="integrations-heading">
     <h2 id="integrations-heading" class="section-heading integrations-heading">Three Tiers. Every Editor.</h2>
@@ -535,7 +535,7 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- SECTION 5: GET STARTED + TRUST                               -->
+  <!-- SECTION 6: GET STARTED + TRUST                               -->
   <!-- ============================================================ -->
   <section id="trust" class="trust-section" aria-labelledby="cta-heading">
     <p class="trust-mission">
@@ -770,6 +770,11 @@
     gap: 6px;
     opacity: 0;
     animation: phase-type-in 400ms var(--ease-spring) both;
+  }
+
+  @keyframes phase-type-in {
+    0% { opacity: 0; transform: translateY(4px); }
+    100% { opacity: 1; transform: translateY(0); }
   }
 
   .mockup__badge {
