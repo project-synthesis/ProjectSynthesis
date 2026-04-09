@@ -372,6 +372,12 @@ async def reindex_repo(
     from app.services.embedding_service import EmbeddingService
     from app.services.repo_index_service import RepoIndexService
 
+    _reindex_provider = getattr(
+        getattr(request.app.state, "routing", None), "state", None,
+    )
+    _reindex_provider = _reindex_provider.provider if _reindex_provider else None
+    _reindex_repo = linked.full_name
+
     async def _bg_index():
         async with async_session_factory() as bg_db:
             svc = RepoIndexService(
@@ -379,7 +385,41 @@ async def reindex_repo(
                 github_client=GitHubClient(),
                 embedding_service=EmbeddingService(),
             )
-            await svc.build_index(linked.full_name, branch, token)
+            await svc.build_index(_reindex_repo, branch, token)
+
+        # Refresh explore synthesis (same pattern as link_repo)
+        if _reindex_provider:
+            try:
+                from app.services.codebase_explorer import CodebaseExplorer
+                from app.services.prompt_loader import PromptLoader
+
+                explorer = CodebaseExplorer(
+                    prompt_loader=PromptLoader(),
+                    github_client=GitHubClient(),
+                    embedding_service=EmbeddingService(),
+                    provider=_reindex_provider,
+                )
+                synthesis = await explorer.explore(
+                    raw_prompt="Describe the project architecture, key patterns, and conventions",
+                    repo_full_name=_reindex_repo,
+                    branch=branch,
+                    token=token,
+                )
+                if synthesis:
+                    async with async_session_factory() as bg_db2:
+                        from app.models import RepoIndexMeta
+                        meta_q = await bg_db2.execute(
+                            select(RepoIndexMeta).where(
+                                RepoIndexMeta.repo_full_name == _reindex_repo,
+                                RepoIndexMeta.branch == branch,
+                            )
+                        )
+                        meta = meta_q.scalar_one_or_none()
+                        if meta:
+                            meta.explore_synthesis = synthesis
+                            await bg_db2.commit()
+            except Exception as synth_exc:
+                logger.warning("Reindex explore synthesis failed: %s", synth_exc)
 
     asyncio.create_task(_bg_index())
     return {"status": "indexing", "repo": linked.full_name, "branch": branch}

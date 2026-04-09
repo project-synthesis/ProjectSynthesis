@@ -133,7 +133,22 @@ class ContextEnrichmentService:
         #    outlines ranked by semantic similarity to the prompt).
         codebase_context: str | None = None
         if repo_full_name:
-            branch = repo_branch or "main"
+            # Resolve branch from LinkedRepo if not explicitly provided
+            if not repo_branch:
+                try:
+                    from sqlalchemy import select as _sel_br
+
+                    from app.models import LinkedRepo
+                    _lr_q = await db.execute(
+                        _sel_br(LinkedRepo).where(
+                            LinkedRepo.full_name == repo_full_name,
+                        ).limit(1)
+                    )
+                    _lr = _lr_q.scalar_one_or_none()
+                    repo_branch = (_lr.branch or _lr.default_branch) if _lr else "main"
+                except Exception:
+                    repo_branch = "main"
+            branch = repo_branch
 
             # 3a. Cached explore synthesis (architectural context)
             explore_synthesis = await self._get_explore_synthesis(

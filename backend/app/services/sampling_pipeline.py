@@ -498,6 +498,7 @@ async def run_sampling_pipeline(
     *,
     repo_full_name: str | None = None,
     applied_pattern_ids: list[str] | None = None,
+    codebase_context: str | None = None,  # pre-computed by enrichment service
 ) -> dict:
     """Run the full pipeline via MCP sampling (IDE's LLM).
 
@@ -547,33 +548,18 @@ async def run_sampling_pipeline(
     })
 
     # ------------------------------------------------------------------
-    # Phase 0: Explore (optional — codebase context injection)
+    # Phase 0: Codebase context (pre-computed by enrichment service)
     # ------------------------------------------------------------------
-    codebase_context: str | None = None
-    explore_enabled = prefs.get("pipeline.enable_explore", prefs_snapshot)
-
-    if explore_enabled and repo_full_name:
+    # The enrichment service already ran explore synthesis + curated
+    # retrieval. Use the pre-computed result instead of a separate LLM call.
+    if codebase_context:
+        context_sources["explore"] = True
+        logger.info(
+            "Sampling pipeline: using pre-computed codebase context (%d chars)",
+            len(codebase_context),
+        )
         await notify_event_bus("optimization_status", {
-            "trace_id": trace_id, "phase": "explore", "state": "running",
-        })
-        phase_t0 = time.monotonic()
-        try:
-            logger.info("Sampling pipeline Phase 0: Explore")
-            codebase_context = await _run_explore_phase(
-                ctx, loader, prompt, repo_full_name,
-            )
-            if codebase_context:
-                context_sources["explore"] = True
-                logger.info(
-                    "Sampling explore context injected (%d chars)",
-                    len(codebase_context),
-                )
-        except Exception as exc:
-            logger.warning("Sampling explore failed (non-fatal): %s", exc)
-        phase_durations["explore_ms"] = int((time.monotonic() - phase_t0) * 1000)
-        await notify_event_bus("optimization_status", {
-            "trace_id": trace_id, "phase": "explore",
-            "state": "complete" if codebase_context else "skipped",
+            "trace_id": trace_id, "phase": "explore", "state": "complete",
         })
     else:
         await notify_event_bus("optimization_status", {

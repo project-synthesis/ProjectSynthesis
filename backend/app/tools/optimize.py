@@ -136,6 +136,7 @@ async def handle_optimize(
                 enrichment.workspace_guidance,
                 repo_full_name=repo_full_name,
                 applied_pattern_ids=applied_pattern_ids,
+                codebase_context=enrichment.codebase_context,
             )
             return _sampling_result_to_output(result)
         except Exception as exc:

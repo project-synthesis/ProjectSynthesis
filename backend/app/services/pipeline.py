@@ -192,45 +192,9 @@ class PipelineOrchestrator:
 
         try:
             # ---------------------------------------------------------------
-            # Phase 0: Explore (optional — codebase context injection)
-            # ---------------------------------------------------------------
-            explore_enabled = prefs.get("pipeline.enable_explore", prefs_snapshot)
-            if explore_enabled and repo_full_name and github_token and codebase_context is None:
-                yield PipelineEvent(event="status", data={"stage": "explore", "state": "running"})
-                try:
-                    from app.services.codebase_explorer import CodebaseExplorer
-                    from app.services.embedding_service import EmbeddingService
-                    from app.services.github_client import GitHubClient
-
-                    phase_start = time.monotonic()
-                    explorer = CodebaseExplorer(
-                        prompt_loader=self.prompt_loader,
-                        github_client=GitHubClient(),
-                        embedding_service=EmbeddingService(),
-                        provider=provider,
-                    )
-                    branch = "main"
-                    codebase_context = await explorer.explore(
-                        raw_prompt=raw_prompt,
-                        repo_full_name=repo_full_name,
-                        branch=branch,
-                        token=github_token,
-                    )
-
-                    explore_duration = int((time.monotonic() - phase_start) * 1000)
-                    phase_durations["explore_ms"] = explore_duration
-
-                    if codebase_context:
-                        logger.info(
-                            "Explore context injected (%d chars) trace_id=%s",
-                            len(codebase_context), trace_id,
-                        )
-                    yield PipelineEvent(event="status", data={"stage": "explore", "state": "complete"})
-                except Exception as exc:
-                    logger.warning(
-                        "Explore failed, proceeding without codebase context: %s", exc,
-                    )
-                    yield PipelineEvent(event="status", data={"stage": "explore", "state": "skipped"})
+            # Phase 0: Explore — REMOVED (now handled by ContextEnrichmentService).
+            # Background synthesis runs on repo link/reindex. Per-prompt curated
+            # retrieval runs in enrich(). codebase_context arrives pre-populated.
 
             # ---------------------------------------------------------------
             # Phase 1: Analyze
