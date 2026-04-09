@@ -26,6 +26,99 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ## Planned
 
+### Integration store — pluggable context providers beyond GitHub
+**Status:** Planned
+**Context:** GitHub is the sole external integration — it provides codebase context for the explore phase and serves as the project creation trigger (ADR-005). This creates two problems: (1) non-developers have zero external context enrichment, and (2) the project system is tightly coupled to GitHub repos.
+
+**Vision:** A VS Code-style integration "store" where GitHub is one installable provider among many. Each integration is a self-contained plugin that provides: a context source (documents for the explore phase), a project trigger (linking creates a project node), and optionally domain keyword seeds and heuristic weakness signals for its vertical.
+
+**Architecture:**
+- **ContextProvider protocol** — each integration implements `list_documents(project_id) -> list[Document]` and `fetch_document(id) -> str`. The existing `ContextEnrichmentService` dispatches to whichever provider is linked for the active project. GitHub's current implementation becomes the first provider, not a special case
+- **Project decoupling** — project nodes (`state="project"`) are created by any provider, not just GitHub. A Notion integration creates a project node when the user links a Notion workspace. A local-files integration creates one when the user points to a directory. The `LinkedRepo` model generalizes to `LinkedSource` (or the provider stores its own link model)
+- **Provider lifecycle** — install (enable provider), configure (auth + link a source), unlink (preserve data, clear link), uninstall (disable provider). Each provider brings its own auth flow (GitHub OAuth, Google OAuth, Notion API key, no auth for local files)
+- **Frontend: Integrations panel** — new Navigator section (alongside Strategies, History, Clusters, GitHub, Settings) showing installed providers with install/configure/unlink controls. Replaces the current GitHub-specific Navigator section
+
+**Candidate providers:**
+
+| Provider | Vertical | Context source | Auth |
+|----------|----------|---------------|------|
+| GitHub | Developers | Repo files, README, architecture docs | OAuth |
+| Google Drive | Business/marketing | Documents, spreadsheets, brand guidelines | OAuth |
+| Notion | Product/content | Pages, databases, knowledge bases | API key |
+| Local filesystem | Anyone | Any directory on disk | None |
+| Confluence | Enterprise | Wiki pages, project specs | API token |
+| Figma | Design | Design system docs, component specs | API key |
+
+**Impact on ADR-005 project system:** The current `LinkedRepo.project_node_id` pattern generalizes. Each provider creates its own link record with a `project_node_id` FK. Project resolution in `process_optimization()` checks the active provider's link, not just `LinkedRepo`. The two-tier cluster assignment, per-project Q metrics, and dirty-set tracking work identically regardless of which provider created the project.
+
+**Prerequisite:** ADR-006 (universal engine principle). The integration store is the concrete mechanism that makes the universal engine accessible to non-developer verticals.
+
+**Files:** New `backend/app/services/integrations/` package (provider protocol, registry, lifecycle). Refactor `github_repos.py` → provider implementation. New `backend/app/routers/integrations.py`. Frontend `Integrations` panel component. Migration for `LinkedSource` generalization or per-provider link tables.
+
+### Non-developer onboarding pathway
+**Status:** Exploring
+**Context:** The current UI assumes developer context at multiple touchpoints: GitHub OAuth in the sidebar, "Clusters" and "Taxonomy" jargon, developer-focused seed agents, codebase scanning references in Settings. A non-developer (marketer, writer, business analyst) arriving at the app would encounter an experience that feels foreign and exclusionary, even though the engine works perfectly for their prompts.
+
+**Problem:** It's not that features need to change — it's that the UI presentation needs to adapt based on who the user is. A marketer doesn't need to see GitHub integration, and the taxonomy visualization should use language like "Your prompt patterns" instead of "Clusters."
+
+**Proposed approaches:**
+
+1. **Vertical-aware onboarding** — first-run flow asks "What do you primarily use AI for?" with options (coding, writing, marketing, analysis, etc.). Selection configures: which integrations are highlighted, what seed agents appear in the SeedModal, what language the UI uses for taxonomy concepts, and which Navigator sections are visible by default. Developer scaffold remains default; non-developer pathways de-emphasize GitHub/IDE features without removing them.
+
+2. **Adaptive UI labels** — taxonomy concepts get user-facing aliases based on the active vertical. "Clusters" → "Pattern groups" for non-developers. "Domains" → "Categories." "Meta-patterns" → "Proven techniques." The underlying data model is unchanged — only display labels adapt. This could be driven by a simple `vertical: "developer" | "general"` preference.
+
+3. **Content-driven differentiation** — rather than changing the UI, add non-developer seed agents (per ADR-006 playbook) and let the taxonomy organically discover non-developer domains. The UI stays the same, but the content it surfaces (patterns, suggestions, domain names) naturally adapts to the user's prompt type. Lowest effort, relies on organic discovery.
+
+**Recommended:** Start with (3) — add marketing/writing/business seed agents per ADR-006 playbook. Then (2) — adaptive labels based on a vertical preference. Then (1) — full vertical-aware onboarding. Each step is independently valuable and shippable.
+
+**Spec:** [ADR-006](../adr/ADR-006-universal-prompt-engine.md) (Universal Prompt Engine — vertical rollout playbook)
+
+### Hierarchical topology navigation — project → domain → cluster → prompt
+**Status:** Planned
+**Context:** The current 3D topology view (`SemanticTopology`) renders ALL nodes in a single scene: project nodes, domain nodes, active clusters, candidates, mature clusters, templates — 76+ nodes at current scale. At 200+ clusters across 3 projects, this becomes visually overwhelming. Domain nodes (structural grouping) and active clusters (semantic content) serve different purposes but are rendered identically in the same space. The user has no way to "zoom into" a project or domain to see only its contents.
+
+**Vision:** A hierarchical drill-down topology inspired by filesystem navigation. Each level of the taxonomy hierarchy gets its own view with appropriate aesthetics and interaction patterns:
+
+**Level 0: Project Space** — the outermost view showing project nodes as large entities with gravitational relationships. Distance between projects reflects semantic similarity of their content. Size reflects optimization count. Color reflects the project's dominant domain. Projects with cross-project GlobalPatterns have visible connection lines. Double-click a project to drill into it.
+
+**Level 1: Domain Map** (per project) — shows the domains within a selected project. Each domain is a region or cluster with its own color (from the existing domain palette). Size reflects member count. Distance reflects domain overlap (how often prompts cross domain boundaries). Sub-domains are nested. No active clusters visible at this level — just the categorical structure. Double-click a domain to drill into it.
+
+**Level 2: Cluster View** (per domain) — the current topology experience, but scoped to a single domain's clusters only. No domain nodes in this view — they're the parent you drilled from. Clusters shown with the existing lifecycle state coloring (active, mature, template, candidate). Cluster size reflects member count. Distance reflects centroid similarity. Force layout + UMAP positioning as today. Double-click a cluster to drill into it.
+
+**Level 3: Prompt Detail** (per cluster) — individual optimizations within a cluster. Each node is a prompt/optimization. Size reflects score. Color reflects improvement delta. Position reflects embedding proximity within the cluster. Hovering shows the prompt text. Clicking loads it in the editor. This level doesn't exist today — it's a new visualization that replaces the current cluster detail panel's optimization list with a spatial view.
+
+**Navigation:**
+- Breadcrumb bar at top: `All Projects › user/backend-api › backend › API Endpoint Patterns`
+- Back button / Escape returns to parent level
+- Animation: smooth zoom-in transition when drilling down, zoom-out when going back (like macOS folder zoom)
+- Each level preserves its camera position when returning (no reset)
+- Ctrl+F search works across all levels (highlights matching node at whatever level it lives)
+
+**Per-level aesthetics:**
+- Level 0 (projects): large glowing orbs, minimal, wide spacing, slow drift. Ambient starfield background
+- Level 1 (domains): colored regions with soft boundaries, domain labels prominent, keyword clouds visible on hover
+- Level 2 (clusters): current wireframe contour style, lifecycle state encoding, force layout. This is the most data-dense level
+- Level 3 (prompts): small nodes, text-preview on hover, score-gradient coloring, tight clustering
+
+**Technical approach:**
+- Each level is a separate Three.js scene (or scene state) with its own camera, lighting, and node renderer
+- Transition between levels is animated (camera fly-through + node scale/fade)
+- Data loading is lazy — Level 2 and 3 data fetched on drill-down, not at initial load
+- The existing `TopologyData`, `TopologyRenderer`, `TopologyInteraction` components refactor into level-aware variants
+- `GET /api/clusters/tree?project_id=...` (ADR-005) provides the per-project data. New endpoints needed for per-domain and per-cluster detail views
+- `TopologyWorker` force simulation runs per-level (different force parameters for each level)
+
+**Impact on existing features:**
+- State filter tabs (active/mature/template/candidate) move to Level 2 only
+- Activity panel stays global (shows events from all levels)
+- Inspector panel adapts to the current level (project stats at L0, domain stats at L1, cluster detail at L2, prompt detail at L3)
+- Pattern suggestion on paste searches across the current project's clusters (Level 2 scope)
+- SeedModal targets the current project (Level 0 scope)
+
+**Prerequisites:** ADR-005 Phase 2A (project nodes and tree endpoint with project filter). The integration store (above) for project creation beyond GitHub.
+
+**Files:** Major frontend refactor. New `TopologyLevel0`, `TopologyLevel1`, `TopologyLevel2`, `TopologyLevel3` components. Refactored `TopologyNavigation` with breadcrumb + back. New `topology-state.svelte.ts` store for current level + drill path. New backend endpoints for per-domain cluster lists and per-cluster optimization lists with spatial data. Updated `TopologyWorker` with per-level force configs.
+
 ### MCP routing fallback — per-client capability awareness
 **Status:** Planned
 **Context:** MCP tool calls from non-sampling clients (e.g., Claude Code) are routed to the sampling tier when a sampling-capable client (VS Code bridge) is also connected. The call fails with "Method not found" because the calling client doesn't support `sampling/createMessage`. The internal provider (CLI/API) is available but bypassed because `caller="mcp"` + `sampling_capable=true` (global flag) routes to sampling.
@@ -100,15 +193,12 @@ Living document tracking planned improvements. Items are prioritized but not sch
 **Files:** `database.py` (engine), `config.py` (DATABASE_URL), `main.py`/`mcp_server.py` (PRAGMA removal), `docker-compose.yml` (new), all test fixtures.
 
 ### Project workspaces — explicit project_id override
-**Status:** Exploring
-**Context:** ADR-005 Phase 2A implements session-based project resolution: optimizations inherit their project from the session's linked GitHub repo. This covers the primary use case (one repo per session) but doesn't support:
-- MCP callers without GitHub auth (always routes to Legacy project)
-- Users who want to target a specific project from the REST API
-- Automation/batch workflows that need explicit project scoping
+**Status:** Exploring (subsumed by integration store)
+**Context:** ADR-005 Phase 2A implements session-based project resolution: optimizations inherit their project from the session's linked GitHub repo. This covers the primary use case (one repo per session) but doesn't support MCP callers without GitHub auth, REST API targeting, or automation workflows.
 
-**Proposed enhancement:** Add optional `project_id` parameter to `POST /api/optimize` and `synthesis_optimize` MCP tool. When provided, overrides session-based resolution. When absent, falls back to session lookup (current ADR-005 behavior). Requires project CRUD endpoints (`POST /api/projects`, `GET /api/projects`) so callers can discover valid project IDs.
+**Proposed enhancement:** Add optional `project_id` parameter to `POST /api/optimize` and `synthesis_optimize` MCP tool. Requires project CRUD endpoints (`POST /api/projects`, `GET /api/projects`).
 
-**Prerequisite:** ADR-005 Phase 2A (session-based project resolution) must ship first.
+**Note:** This becomes part of the integration store design — when projects are decoupled from GitHub, explicit project_id selection is a natural consequence. The CRUD endpoints would serve both the integration store UI and the API override.
 **Spec:** `docs/adr/ADR-005-taxonomy-scaling-architecture.md` (Section 1: Data Model)
 
 ### LLM domain classification accuracy
