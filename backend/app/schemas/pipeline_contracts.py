@@ -131,10 +131,11 @@ class AnalysisResult(BaseModel):
     )
     domain: str = Field(
         default="general",
-        description="Domain classification. Use a known domain if it matches "
-        "(backend, frontend, database, data, devops, security, fullstack). "
-        "If none match, use a descriptive domain name (e.g., 'marketing', "
-        "'finance', 'saas'). Only use 'general' if truly domain-agnostic.",
+        description="Single-word domain classification. Known technical domains: "
+        "backend, frontend, database, data, devops, security, fullstack. "
+        "If none match, use a single-word domain for the subject area. "
+        "Sub-domains use 'parent-qualifier' format. "
+        "Only use 'general' if truly domain-agnostic.",
     )
 
 

@@ -24,10 +24,9 @@ Analyze the prompt above and determine:
    - Docker, CI/CD, Kubernetes, Terraform, deployment, monitoring, nginx → **devops**
    - Auth, encryption, JWT, OAuth, XSS, CSRF, injection, vulnerabilities, CORS → **security**
    - Prompt equally requires BOTH frontend UI AND backend server work → **fullstack**
-   - SaaS-specific business logic: subscription management, tenant isolation, onboarding flow design, usage metering, SaaS pricing tiers, churn strategy, customer success playbooks → **saas**
-   - None of the above match → **use a descriptive domain name** (e.g., "marketing", "finance", "education", "legal", "design"). Only use "general" if the prompt is truly domain-agnostic with no identifiable subject area.
+   - None of the above match → **invent a single-word domain name** that captures the prompt's subject area (e.g., "marketing", "finance", "education", "legal", "design"). Domains must be a single word — sub-domains use the format "parent-qualifier" (e.g., "backend-auth", "design-ux", "data-ml"). Only use "general" if the prompt is truly domain-agnostic with no identifiable subject area.
 
-   Classify by WHAT the prompt asks you to BUILD or ANALYZE, not by the business context it serves. A CSV dedup script for a SaaS product is "data". RBAC for a SaaS app is "backend" or "security". Image upload for a SaaS dashboard is "fullstack". Release notes or changelog writing is "writing" task in "general" domain. Only use "saas" when the prompt's primary concern is SaaS-specific business logic that doesn't fit any technical domain above.
+   Classify by WHAT the prompt asks you to BUILD or ANALYZE, not by the business context it serves. A CSV dedup script for a marketing team is "data". RBAC for a web app is "backend" or "security". Onboarding flow design is "design", not the business vertical it serves.
 4. **Weaknesses** — List specific, actionable problems. Be concrete: "no output format specified" not "could be improved."
 5. **Strengths** — What does this prompt already do well? Even weak prompts have strengths.
 6. **Strategy** — Select the single best strategy from the available list above. Always commit to a specific strategy — "auto" should be a last resort, not a default. Match the strategy to the task type:
