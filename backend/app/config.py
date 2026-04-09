@@ -33,11 +33,14 @@ class Settings(BaseSettings):
     )
 
     # --- GitHub OAuth ---
+    # Official Project Synthesis GitHub App (public, device flow — no secret needed)
     GITHUB_OAUTH_CLIENT_ID: str = Field(
-        default="", description="GitHub OAuth app client ID for repo linking.",
+        default="Iv23liQ3ajwpg6yjr7Yi",
+        description="GitHub App client ID for device flow auth.",
     )
     GITHUB_OAUTH_CLIENT_SECRET: str = Field(
-        default="", description="GitHub OAuth app client secret.",
+        default="",
+        description="Only for authorization code flow (deployed instances).",
     )
 
     # --- Security ---
