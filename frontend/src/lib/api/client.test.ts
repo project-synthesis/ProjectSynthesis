@@ -390,7 +390,7 @@ describe('githubMe', () => {
   it('calls GET /github/auth/me', async () => {
     const mock = mockFetch([{ match: '/github/auth/me', response: { login: 'testuser', avatar_url: 'https://example.com/avatar.png' } }]);
     const result = await githubMe();
-    expect(result.login).toBe('testuser');
+    expect(result!.login).toBe('testuser');
     const [url] = mock.mock.calls[0];
     expect(url).toContain('/github/auth/me');
   });
@@ -441,7 +441,7 @@ describe('githubLinked', () => {
   it('calls GET /github/repos/linked', async () => {
     const mock = mockFetch([{ match: '/github/repos/linked', response: { id: 'repo-1', full_name: 'user/my-repo', default_branch: 'main', branch: null, language: null } }]);
     const result = await githubLinked();
-    expect(result.full_name).toBe('user/my-repo');
+    expect(result!.full_name).toBe('user/my-repo');
     const [url] = mock.mock.calls[0];
     expect(url).toContain('/github/repos/linked');
   });
