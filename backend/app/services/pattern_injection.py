@@ -407,6 +407,24 @@ async def auto_inject_patterns(
                 exc, trace_id,
             )
 
+    # ADR-005 Phase 2B: provenance for global injections
+    if optimization_id:
+        from app.models import OptimizationPattern
+
+        for ip in injected:
+            if ip.source == "global" and ip.source_id:
+                try:
+                    prov = OptimizationPattern(
+                        optimization_id=optimization_id,
+                        cluster_id=ip.cluster_id or "unknown",
+                        global_pattern_id=ip.source_id,
+                        relationship="global_injected",
+                        similarity=ip.similarity,
+                    )
+                    db.add(prov)
+                except Exception as prov_exc:
+                    logger.warning("GlobalPattern provenance failed: %s", prov_exc)
+
     # Detailed injection chain log for observability
     if cluster_meta:
         cluster_summary = ", ".join(
