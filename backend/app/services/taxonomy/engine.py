@@ -173,7 +173,7 @@ class TaxonomyEngine:
         # ADR-005: Dirty-set tracking for warm path optimization.
         # Hot path marks clusters as dirty when members change.
         # Warm path snapshots and clears at cycle start.
-        self._dirty_set: set[str] = set()
+        self._dirty_set: dict[str, str | None] = {}  # cluster_id -> project_id (Phase 3A)
         # ADR-005: Adaptive scheduler — rolling window of warm cycle timings.
         self._scheduler = AdaptiveScheduler()
         # ADR-005 Phase 2A: project resolution caches
@@ -181,19 +181,33 @@ class TaxonomyEngine:
         self._legacy_project_id: str | None = None  # cached Legacy project node ID
         self._last_global_pattern_check: float = 0.0  # monotonic, Phase 2B
 
-    def mark_dirty(self, cluster_id: str) -> None:
+    def mark_dirty(self, cluster_id: str, project_id: str | None = None) -> None:
         """Mark a cluster as needing warm-path processing."""
-        self._dirty_set.add(cluster_id)
+        self._dirty_set[cluster_id] = project_id
 
-    def snapshot_dirty_set(self) -> set[str]:
-        """Snapshot the dirty set and clear it atomically.
+    def snapshot_dirty_set_with_projects(self) -> tuple[set[str], dict[str, set[str]]]:
+        """Snapshot dirty set with per-project breakdown.
 
-        Returns the set of cluster IDs that need processing.
+        Returns (all_ids, per_project_ids) where per_project_ids maps
+        project_id -> set of cluster_ids. Clusters with project_id=None
+        are grouped under "legacy".
         Safe under asyncio cooperative scheduling (no await between read and clear).
         """
-        snapshot = set(self._dirty_set)
+        snapshot = dict(self._dirty_set)
         self._dirty_set.clear()
-        return snapshot
+        all_ids = set(snapshot.keys())
+        by_project: dict[str, set[str]] = {}
+        for cid, pid in snapshot.items():
+            by_project.setdefault(pid or "legacy", set()).add(cid)
+        return all_ids, by_project
+
+    def snapshot_dirty_set(self) -> set[str]:
+        """Snapshot and clear. Returns cluster IDs only (no project breakdown).
+
+        Backward-compatible wrapper — delegates to snapshot_dirty_set_with_projects.
+        """
+        all_ids, _ = self.snapshot_dirty_set_with_projects()
+        return all_ids
 
     def is_first_warm_cycle(self) -> bool:
         """True if this is the first warm cycle after server restart.

@@ -24,7 +24,7 @@ async def test_warm_path_passes_dirty_set_to_phases():
 
     # After snapshot, marking new IDs starts a fresh set
     engine.mark_dirty("cluster-3")
-    assert engine._dirty_set == {"cluster-3"}
+    assert set(engine._dirty_set.keys()) == {"cluster-3"}
 
 
 @pytest.mark.asyncio
