@@ -187,7 +187,7 @@
       return;
     }
     // Link with selected project (or null for auto-create)
-    await githubStore.linkRepo(fullName, selectedProjectId ?? undefined);
+    await githubStore.linkRepo(fullName, selectedProjectId || undefined);
     repoPickerOpen = false;
     linkingRepo = null;
     selectedProjectId = null;
