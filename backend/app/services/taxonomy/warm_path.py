@@ -540,6 +540,42 @@ async def execute_warm_path(
         )
 
     # ------------------------------------------------------------------
+    # Phase 4.5: Global Pattern Promotion + Validation (ADR-005 Phase 2B)
+    # Runs every Nth cycle with wall-clock gate. Full scan (ignores dirty_ids).
+    # ------------------------------------------------------------------
+    import time as _gp_time  # noqa: PLC0415
+
+    from app.services.taxonomy._constants import (
+        GLOBAL_PATTERN_CYCLE_INTERVAL,
+        GLOBAL_PATTERN_MIN_WALL_CLOCK_MINUTES,
+    )
+
+    _gp_age_gate = (engine._warm_path_age % GLOBAL_PATTERN_CYCLE_INTERVAL == 0)
+    _gp_wall_gate = (
+        _gp_time.monotonic() - engine._last_global_pattern_check
+        >= GLOBAL_PATTERN_MIN_WALL_CLOCK_MINUTES * 60
+    )
+
+    if _gp_age_gate and _gp_wall_gate:
+        try:
+            async with session_factory() as db:
+                from app.services.taxonomy.global_patterns import run_global_pattern_phase
+                gp_stats = await run_global_pattern_phase(db, engine._warm_path_age)
+                await db.commit()
+                engine._last_global_pattern_check = _gp_time.monotonic()
+                if gp_stats.get("promoted", 0) or gp_stats.get("demoted", 0) or gp_stats.get("retired", 0):
+                    logger.info(
+                        "Phase 4.5 (global patterns): promoted=%d demoted=%d re_promoted=%d retired=%d evicted=%d",
+                        gp_stats.get("promoted", 0),
+                        gp_stats.get("demoted", 0),
+                        gp_stats.get("re_promoted", 0),
+                        gp_stats.get("retired", 0),
+                        gp_stats.get("evicted", 0),
+                    )
+        except Exception as gp_exc:
+            logger.warning("Phase 4.5 (global patterns) failed (non-fatal): %s", gp_exc)
+
+    # ------------------------------------------------------------------
     # Phase 5: Discover — fresh session, always commits
     # ADR-005: Full scan — domain discovery needs complete cluster state
     # ------------------------------------------------------------------

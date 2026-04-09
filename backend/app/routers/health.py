@@ -88,6 +88,7 @@ class HealthResponse(BaseModel):
     injection_stats: dict[str, int] = Field(
         default_factory=dict, description="Pattern injection provenance counts.",
     )
+    global_patterns: dict[str, int] = Field(default_factory=dict)
     # Cross-service probe results (only populated when probes=True)
     services: dict[str, ServiceStatus] | None = Field(
         default=None, description="Live probe results for each service.",
@@ -270,6 +271,21 @@ async def health_check(
     except Exception:
         logger.debug("Health check domain_count query failed", exc_info=True)
 
+    # ADR-005 Phase 2B: global patterns stats
+    from app.models import GlobalPattern
+    try:
+        gp_active = (await db.scalar(
+            select(func.count()).where(GlobalPattern.state == "active")
+        )) or 0
+        gp_demoted = (await db.scalar(
+            select(func.count()).where(GlobalPattern.state == "demoted")
+        )) or 0
+        gp_retired = (await db.scalar(
+            select(func.count()).where(GlobalPattern.state == "retired")
+        )) or 0
+    except Exception:
+        gp_active = gp_demoted = gp_retired = 0
+
     # Pipeline metrics
     score_health: ScoreHealth | None = None
     avg_duration_ms: int | None = None
@@ -343,6 +359,12 @@ async def health_check(
         domain_ceiling=DOMAIN_COUNT_CEILING,
         project_count=project_count,
         injection_stats=injection_stats,
+        global_patterns={
+            "active": gp_active,
+            "demoted": gp_demoted,
+            "retired": gp_retired,
+            "total": gp_active + gp_demoted + gp_retired,
+        },
         services=services_result,
         cross_service=cross_service_result,
         timestamp=datetime.now(UTC).isoformat(),
