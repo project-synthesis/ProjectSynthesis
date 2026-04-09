@@ -296,6 +296,11 @@ class ForgeStore {
     this.originalScores = opt.original_scores ?? null;
     this.scoreDeltas = opt.score_deltas ?? null;
 
+    // Restore suggestions so refinement store can seed from them on page reload
+    if (opt.suggestions?.length) {
+      this.initialSuggestions = opt.suggestions;
+    }
+
     // Bidirectional family link — auto-select in patterns store so Inspector shows family detail.
     // Always call selectCluster (even with null) to clear stale Inspector state
     // from a previous optimization that had a different cluster.
