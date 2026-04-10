@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app._version import __version__
-from app.config import DATA_DIR, PROMPTS_DIR, settings
+from app.config import DATA_DIR, PROJECT_ROOT, PROMPTS_DIR, settings
 from app.services.event_bus import event_bus
 from app.services.file_watcher import watch_strategy_files
 from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
@@ -218,6 +218,25 @@ async def lifespan(app: FastAPI):
         watch_seed_agent_files(PROMPTS_DIR / "seed-agents")
     )
     app.state.agent_watcher_task = agent_watcher_task
+
+    # Start update checker (background — non-blocking)
+    from app.services.update_service import UpdateService
+    _update_svc = UpdateService(project_root=PROJECT_ROOT)
+    app.state.update_service = _update_svc
+
+    async def _run_update_check():
+        try:
+            await _update_svc.check_for_updates()
+            if _update_svc.status and _update_svc.status.update_available:
+                logger.info(
+                    "Update available: %s -> %s",
+                    _update_svc.status.current_version,
+                    _update_svc.status.latest_version,
+                )
+        except Exception as exc:
+            logger.warning("Update check failed: %s", exc)
+
+    asyncio.create_task(_run_update_check())
 
     # Track in-flight extraction tasks for graceful shutdown
     extraction_tasks: set[asyncio.Task[None]] = set()
@@ -1205,6 +1224,12 @@ except ImportError:
 try:
     from app.routers.monitoring import router as monitoring_router
     app.include_router(monitoring_router)
+except ImportError:
+    pass
+
+try:
+    from app.routers.update import router as update_router
+    app.include_router(update_router)
 except ImportError:
     pass
 
