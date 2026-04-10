@@ -158,6 +158,9 @@
   let repoPickerOpen = $state(false);
   let repoSearch = $state('');
   let projects = $state<ProjectInfo[]>([]);
+  const projectLabelMap = $derived<Record<string, string>>(
+    Object.fromEntries(projects.map(p => [p.id, p.label]))
+  );
   let selectedProjectId = $state<string | null>(null);
   let linkingRepo = $state<string | null>(null);
 
@@ -228,6 +231,14 @@
       .then(([s, p, k]) => { settings = s; providers = p; apiKeyStatus = k; })
       .catch(() => {});
     // preferencesStore.init() is called from +layout.svelte — no duplicate here
+  });
+
+  // Load project labels for history row badges (one-time, matches settingsLoaded pattern)
+  let projectsLoaded = false;
+  $effect(() => {
+    if (projectsLoaded) return;
+    projectsLoaded = true;
+    listProjects().then(p => { projects = p; }).catch(() => {});
   });
 
   // Auto-refresh history when real-time events arrive from any source
@@ -533,6 +544,11 @@
                   <span class="row-time">{formatRelativeTime(item.created_at)}</span>
                 </span>
                 <div class="history-meta">
+                  {#if item.project_id && projectLabelMap[item.project_id]}
+                    <span class="row-project font-mono" use:tooltip={`Project: ${projectLabelMap[item.project_id]}`}>
+                      {projectLabelMap[item.project_id].slice(0, 2).toUpperCase()}
+                    </span>
+                  {/if}
                   <span class="row-badge font-mono">{item.strategy_used || 'auto'}</span>
                   <span
                     class="row-score font-mono"
@@ -567,6 +583,15 @@
     <div class="panel">
       <header class="panel-header">
         <span class="section-heading">GitHub</span>
+        {#if githubStore.connectionState === 'ready'}
+          <span class="connection-badge" style="color: var(--color-text-dim)">connected</span>
+        {:else if githubStore.connectionState === 'linked'}
+          <span class="connection-badge" style="color: var(--color-neon-cyan)">indexing</span>
+        {:else if githubStore.connectionState === 'expired'}
+          <span class="connection-badge" style="color: var(--color-neon-red)">expired</span>
+        {:else if githubStore.connectionState === 'authenticated'}
+          <span class="connection-badge" style="color: var(--color-neon-yellow)">no repo</span>
+        {/if}
       </header>
       <div class="panel-body">
         {#if githubStore.linkedRepo}
@@ -591,6 +616,16 @@
           </div>
 
           {#if githubTab === 'info'}
+            <!-- Auth-expired banner with reconnect (inside linkedRepo branch) -->
+            {#if githubStore.connectionState === 'expired'}
+              <div class="auth-expired-banner">
+                <span class="error-note" style="margin: 0;">GitHub session expired</span>
+                <button
+                  class="action-btn action-btn--primary"
+                  onclick={() => githubStore.reconnect()}
+                >Reconnect</button>
+              </div>
+            {/if}
             <div class="card-terminal">
               <div class="data-row">
                 <span class="data-label">Repo</span>
@@ -608,12 +643,10 @@
                   <span class="data-value">{githubStore.linkedRepo.language}</span>
                 </div>
               {/if}
-              {#if githubStore.linkedRepo.project_label}
-                <div class="data-row">
-                  <span class="data-label">Project</span>
-                  <span class="data-value font-mono">{githubStore.linkedRepo.project_label}</span>
-                </div>
-              {/if}
+              <div class="data-row">
+                <span class="data-label">Project</span>
+                <span class="data-value font-mono">{githubStore.linkedRepo.project_label ?? '(pending)'}</span>
+              </div>
               {#if githubStore.indexStatus}
                 <div class="data-row">
                   <span class="data-label">Index</span>
@@ -668,15 +701,7 @@
             </div>
           </div>
 
-          {#if githubStore.authExpired}
-            <p class="error-note">GitHub session expired.</p>
-            <button
-              class="action-btn action-btn--primary"
-              onclick={() => { githubStore.authExpired = false; githubStore.logout(); githubStore.login(); }}
-            >
-              Reconnect GitHub
-            </button>
-          {:else if !repoPickerOpen}
+          {#if !repoPickerOpen}
             <button
               class="action-btn action-btn--primary"
               onclick={openRepoPicker}
@@ -1650,6 +1675,29 @@
     align-items: center;
     gap: 6px;
     width: 100%;
+  }
+
+  .auth-expired-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    border: 1px solid var(--color-neon-red);
+    background: transparent;
+  }
+  .connection-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    margin-left: auto;
+  }
+  .row-project {
+    font-size: 9px;
+    color: var(--color-text-dim);
+    border: 1px solid var(--color-border-subtle);
+    padding: 0 3px;
+    white-space: nowrap;
   }
 
   .row-score {
