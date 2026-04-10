@@ -4,6 +4,22 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.21-dev — 2026-04-10
+
+### Added
+- **`scripts/release.sh`** — one-command release workflow: version sync, changelog extraction, commit, tag, push, GitHub Release creation, dev bump. Closes the gap where git tags existed without corresponding GitHub Releases (Tier 3 changelog enrichment)
+
+### Changed
+- **CLAUDE.md** — added `./init.sh update [tag]` to services command table
+- **frontend/CLAUDE.md** — added `pattern-graph-guide.svelte.ts` to store table, `update_available`/`update_complete` SSE events
+
+### Fixed
+- **init.sh `_do_update` path resolution** — `_REAL_SCRIPT_DIR` now fails explicitly if unset (was silent fallback to `/tmp/`). All paths use `$BACKEND_DIR`/`$FRONTEND_DIR` (was relative `cd backend`)
+- **init.sh alembic failure handling** — migration errors now roll back `git checkout` and exit (was warn-and-continue). Matches Python `apply_update()` behavior
+- **init.sh post-checkout validation** — added venv sanity check before alembic/restart to catch broken deps early
+- **init.sh version validation** — conditional checkmark (was unconditional). Added alembic `(head)` check to validation output
+- **Update 202 response race** — deferred restart spawn via `asyncio.sleep(1)` task ensures HTTP response flushes before `init.sh restart` kills the backend process
+
 ## v0.3.20 — 2026-04-10
 
 ### Added

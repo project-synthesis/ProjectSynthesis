@@ -49,6 +49,7 @@ The script handles: version sync → commit → tag → push → GitHub Release 
 ./init.sh status       # show running/stopped with PIDs
 ./init.sh logs         # tail all service logs
 ./init.sh setup-vscode # install VS Code bridge extension for sampling
+./init.sh update [tag] # auto-update to latest release (or specific tag)
 ```
 
 Logs: `data/backend.log`, `data/frontend.log`, `data/mcp.log`

@@ -52,6 +52,7 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `internal-guide.svelte.ts` | Internal tier guide modal state |
 | `guide-factory.svelte.ts` | Tier guide factory |
 | `tier-onboarding.svelte.ts` | Tier onboarding flow state |
+| `pattern-graph-guide.svelte.ts` | Pattern graph keyboard shortcuts/interaction hints modal |
 | `update.svelte.ts` | Auto-update state: available version, changelog, dialog, restart progress, health polling. SSE-driven via `update_available`/`update_complete` events. `localStorage` persistence for detached HEAD warning dismissal |
 
 ## Component layout
