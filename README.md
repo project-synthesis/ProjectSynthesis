@@ -55,11 +55,11 @@ cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install 
 # Set up frontend
 cd ../frontend && npm install
 
-# Start everything
+# Start everything (auto-detects provider + VS Code bridge)
 cd .. && ./init.sh start
 
-# Open in browser
-open http://localhost:5199
+# Open the app
+open http://localhost:5199/app
 ```
 
 The backend auto-detects your provider (Claude CLI first, then API key). No configuration needed if Claude CLI is installed.
@@ -108,14 +108,15 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 |---------|------|---------|
 | Backend | 8000 | FastAPI API + pipeline orchestration |
 | Frontend | 5199 | SvelteKit dev server |
-| MCP Server | 8001 | 12-tool MCP server for IDE integration |
+| MCP Server | 8001 | 13-tool MCP server for IDE integration |
 
 ```bash
-./init.sh start     # start all (with preflight checks + health probes)
-./init.sh stop      # graceful stop (process group kill, no orphans)
-./init.sh restart   # stop + start
-./init.sh status    # show PIDs and ports
-./init.sh logs      # tail all logs
+./init.sh start        # start all (provider detection + bridge install + health probes)
+./init.sh stop         # graceful stop (process group kill, no orphans)
+./init.sh restart      # stop + start
+./init.sh status       # service health + VS Code + provider + active tier
+./init.sh logs         # tail all logs
+./init.sh setup-vscode # install/update VS Code bridge extension
 ```
 
 ## Features

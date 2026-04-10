@@ -4,8 +4,43 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.20-dev — 2026-04-09
+
 ### Added
-- **VS Code frictionless setup** — `./init.sh setup-vscode` detects VS Code across standard, snap, flatpak, Insiders, Codium, and custom paths, then installs/updates the MCP Copilot Bridge extension automatically. Created missing `.vscode/mcp.json` for native MCP discovery. Fixed dangling `serverSampling` reference in `.vscode/settings.json`
+- **VS Code frictionless setup** — `./init.sh setup-vscode` detects VS Code across standard, snap, flatpak, Insiders, Codium, and custom paths, then installs/updates the MCP Copilot Bridge extension. Auto-installs on `./init.sh start` (silent when up-to-date)
+- **Provider detection in init.sh** — detects Claude CLI (OAuth/MAX), `ANTHROPIC_API_KEY` (env), and stored API credentials. Shows active routing tier preview (internal/sampling/passthrough) on start/restart
+- **VS Code bridge health probe** — post-start JSON-RPC initialize request validates MCP sampling endpoint. Targeted diagnostics on failure (not running, timeout, HTTP error)
+- **Pipeline status dashboard** — `./init.sh status` shows provider, VS Code, bridge version, MCP health, sampling config, native discovery, and active tier in a single view
+- **Landing page "Launch App" links** — primary CTA in hero, navbar, and trust section. App URL printed on every `./init.sh start`
+- **Dynamic changelog** — `/changelog` page auto-renders from `docs/CHANGELOG.md` via Vite `?raw` import. No manual frontend updates needed
+- **Landing page beta update** — all sections updated for v0.3.19 capabilities: 13 tools, 6 strategies, 3-tier routing, evolutionary knowledge graph, new Capabilities section (6 cards: refinement, seeding, codebase context, observability, learning loops, multi-project)
+- **Refinement trade-off awareness** — `suggest.md` receives score deltas and trajectory (improving/degrading/oscillating). Net-positive impact required, conciseness guard when <6.0, anti-circular suggestions, dimension protection >7.5
+- **Refinement score guardrails** — `refine.md` receives current scores and strongest dimensions. Compression directive prevents length bloat. Trade-off rule prevents net-negative changes
+- **Brand guidelines in repo** — `.claude/skills/brand-guidelines/` surfaced for contributors (SKILL.md + 3 reference files)
+
+### Changed
+- **init.sh startup flow** — bridge install moved to pre-start (Phase 1), services launch (Phase 2), health verification (Phase 3). Bridge ready before MCP server comes up
+- **Suggestion chips vertical layout** — full-text display (was 200px truncated). Tooltip shows suggestion text (was showing source field). Column layout replaces inline row
+- **Conciseness heuristic rebalanced** — tiered structural density bonus: +1.0 base, +0.5 per structural tier (cap +3.0). Code + headers = info-dense format. Prevents structured prompts from being penalized for domain-term repetition
+- **Integrations section reframed as routing tiers** — Passthrough / IDE Sampling / Internal Provider (was Zero Cost / Your IDE / Codebase-Aware)
+- **Inspector model display** — shows model for current phase (was showing last-received model from previous phase)
+
+### Fixed
+- **Health probe false sampling registration** — `init.sh` health check sent `capabilities: { sampling: {} }`, causing sampling_capable flap on every startup. Now uses empty capabilities
+- **Refinement stream resilience** — added `serverConfirmed` flag, generation-based cancellation, 20s recovery polling. Handles hot-reload, network drops, rapid cancel
+- **Refinement race condition** — recovery polling loop now cancelled by generation counter when new refine/cancel/reset starts
+- **Session restore suggestions** — `loadFromRecord` now populates `initialSuggestions` from DB. Suggestions survive page reload and session restore
+- **Pipeline running events missing model** — all 4 phase running events (analyze, optimize, score, suggest) now include the resolved model ID
+- **Navbar button alignment** — consistent 22px height, flexbox gap, unified CTA styling
+- **Missing @keyframes phase-type-in** — mockup animation was silently broken
+- **Section numbering** — HTML + CSS comments renumbered after Capabilities section insert
+- **Footer label mismatch** — "Live Example" → "Example" to match navbar
+- **Focus-visible states** — added on all interactive elements (navbar, buttons, footer, cards)
+- **Unused Logo import** — removed from landing page script block
+- **Changelog parser type safety** — validates category labels before unsafe cast
+- **MCP tool count** — updated from 11/12 to 13 across CLAUDE.md, README.md, AGENTS.md, ADR-001, and VS Code bridge package.json
+- **Bridge extension metadata** — added `synthesis_seed` and `synthesis_explain` to `languageModelTools` and `languageModelToolSets` (was 11, now 13)
+- **Batch pipeline suggest template** — added missing `score_deltas`/`score_trajectory` variables
 
 ## v0.3.19-dev — 2026-04-09
 
