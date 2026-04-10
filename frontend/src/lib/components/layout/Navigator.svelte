@@ -544,7 +544,7 @@
                   <span class="row-time">{formatRelativeTime(item.created_at)}</span>
                 </span>
                 <div class="history-meta">
-                  {#if item.project_id && projectLabelMap[item.project_id]}
+                  {#if item.project_id && projectLabelMap[item.project_id] && projects.length > 1}
                     <span class="row-project font-mono" use:tooltip={`Project: ${projectLabelMap[item.project_id]}`}>
                       {projectLabelMap[item.project_id].slice(0, 2).toUpperCase()}
                     </span>
