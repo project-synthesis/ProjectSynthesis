@@ -154,7 +154,9 @@
   let confirmDeleteTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ---- GitHub repo picker state ----
-  let githubTab = $state<'info' | 'files'>('info');
+  let githubTab = $state<'info' | 'files'>(
+    (typeof localStorage !== 'undefined' && localStorage.getItem('synthesis:github_tab') as 'info' | 'files') || 'info'
+  );
   let repoPickerOpen = $state(false);
   let repoSearch = $state('');
   let projects = $state<ProjectInfo[]>([]);
@@ -333,6 +335,11 @@
     }
   });
 
+  // Persist GitHub tab selection across sessions
+  $effect(() => {
+    try { localStorage.setItem('synthesis:github_tab', githubTab); } catch { /* noop */ }
+  });
+
   // Fix 7: Reset historyLoaded when a new optimization completes
   $effect(() => {
     if (forgeStore.status === 'complete') {
@@ -377,7 +384,7 @@
   {#if node.type === 'dir'}
     <button
       class="tree-item tree-item--dir"
-      style="padding-left: {8 + depth * 12}px"
+      style="padding-left: {6 + depth * 12}px"
       onclick={() => githubStore.toggleTreeNode(node.path)}
     >
       <span class="tree-arrow">{node.expanded ? '▾' : '▸'}</span>
@@ -392,7 +399,7 @@
     <button
       class="tree-item tree-item--file"
       class:tree-item--active={githubStore.selectedFile === node.path}
-      style="padding-left: {8 + depth * 12}px"
+      style="padding-left: {6 + depth * 12}px"
       onclick={() => githubStore.loadFileContent(node.path)}
     >
       <span class="tree-name">{node.name}</span>
@@ -596,16 +603,20 @@
       <div class="panel-body">
         {#if githubStore.linkedRepo}
           <!-- Tab selector: Info / Files -->
-          <div class="github-tabs">
+          <div class="github-tabs" role="tablist">
             <button
               class="github-tab"
               class:github-tab--active={githubTab === 'info'}
               onclick={() => { githubTab = 'info'; }}
+              role="tab"
+              aria-selected={githubTab === 'info'}
             >Info</button>
             <button
               class="github-tab"
               class:github-tab--active={githubTab === 'files'}
               onclick={() => { githubTab = 'files'; if (githubStore.fileTree.length === 0) githubStore.loadFileTree(); githubStore.loadIndexStatus(); }}
+              role="tab"
+              aria-selected={githubTab === 'files'}
             >Files
               {#if githubStore.indexStatus?.status === 'building'}
                 <span class="index-badge index-badge--building">...</span>
@@ -1420,7 +1431,7 @@
   }
 
   .strat-name {
-    font-size: 11px;
+    font-size: 10px;
     font-family: var(--font-sans);
     font-weight: 400;
     color: var(--color-text-primary);
@@ -1435,14 +1446,14 @@
   .strat-tag {
     font-size: 9px;
     font-family: var(--font-mono);
-    color: rgba(122, 122, 158, 0.6);
+    color: color-mix(in srgb, var(--color-text-dim) 60%, transparent);
     white-space: nowrap;
     flex: 1;
     min-width: 0;
   }
 
   .strat-edit {
-    font-size: 11px;
+    font-size: 10px;
     font-family: var(--font-mono);
     color: var(--color-text-dim);
     background: transparent;
@@ -1546,7 +1557,7 @@
   .history-row {
     height: auto;
     min-height: 20px;
-    padding: 2px 6px 2px 8px;
+    padding: 2px 6px;
     flex-direction: column;
     align-items: stretch;
     gap: 1px;
@@ -1629,7 +1640,7 @@
     font-size: 10px;
     font-family: inherit;
     background: var(--color-bg-secondary);
-    border: 1px solid var(--accent, var(--color-border));
+    border: 1px solid var(--accent, var(--color-border-subtle));
     color: var(--color-text-primary);
     padding: 0 4px;
     outline: none;
@@ -1646,7 +1657,7 @@
     background: transparent;
     cursor: pointer;
     padding: 0;
-    transition: color 200ms;
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .rename-btn-inline.save {
@@ -1681,15 +1692,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    padding: 6px 8px;
+    gap: 6px;
+    padding: 4px 6px;
     margin-bottom: 6px;
     border: 1px solid var(--color-neon-red);
-    background: transparent;
+    background: color-mix(in srgb, var(--color-neon-red) 4%, transparent);
   }
   .connection-badge {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     margin-left: auto;
   }
   .row-project {
@@ -1714,7 +1727,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding: 4px 6px 4px 10px;
+    padding: 4px 6px;
     border-left: 1px solid var(--color-border-subtle);
   }
 
@@ -1759,7 +1772,7 @@
     height: 20px;
     padding: 0 4px;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 10px;
     background: var(--color-bg-input);
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-primary);
@@ -1804,7 +1817,7 @@
 
   .pref-btn--danger {
     color: var(--color-neon-red);
-    border-color: rgba(255, 51, 102, 0.3);
+    border-color: color-mix(in srgb, var(--color-neon-red) 30%, transparent);
   }
 
   /* ---- Preference selects ---- */
@@ -1812,7 +1825,7 @@
     height: 20px;
     padding: 0 4px;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 10px;
     background: var(--color-bg-input);
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-primary);
@@ -1862,7 +1875,7 @@
 
   /* Green toggle variant — sampling tier accent */
   .toggle-track--green.toggle-track--on {
-    background: rgba(34, 255, 136, 0.15);
+    background: color-mix(in srgb, var(--color-neon-green) 15%, transparent);
     border-color: var(--color-neon-green);
   }
 
@@ -1872,7 +1885,7 @@
 
   /* Yellow toggle variant — passthrough tier accent */
   .toggle-track--yellow.toggle-track--on {
-    background: rgba(251, 191, 36, 0.15);
+    background: color-mix(in srgb, var(--color-neon-yellow) 15%, transparent);
     border-color: var(--color-neon-yellow);
   }
 
@@ -1893,7 +1906,7 @@
     padding: 3px 6px;
     margin: 2px 0;
     border-left: 1px solid var(--color-neon-orange);
-    background: rgba(255, 140, 0, 0.06);
+    background: color-mix(in srgb, var(--color-neon-orange) 6%, transparent);
     line-height: 1.4;
   }
 
@@ -1923,7 +1936,7 @@
   }
 
   .accordion-heading:hover {
-    background: transparent;
+    background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
     border-color: transparent;
   }
 
@@ -1954,17 +1967,22 @@
   /* Repo picker */
   .search-input {
     width: 100%;
-    padding: 4px 8px;
-    background: transparent;
-    border: 1px solid var(--color-border);
-    color: var(--color-text);
-    font-family: var(--font-mono);
-    font-size: 11px;
+    height: 18px;
+    padding: 0 4px;
     margin-bottom: 6px;
+    background: var(--color-bg-input);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-primary);
+    font-size: 10px;
+    font-family: var(--font-sans);
     outline: none;
+    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .search-input:focus {
-    border-color: var(--tier-accent, var(--color-neon-cyan));
+    border-color: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 30%, transparent);
+  }
+  .search-input::placeholder {
+    color: var(--color-text-dim);
   }
   .repo-list {
     display: flex;
@@ -1978,16 +1996,18 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 4px 6px;
+    height: 20px;
+    padding: 0 6px;
     background: transparent;
     border: none;
-    color: var(--color-text);
+    color: var(--color-text-primary);
     cursor: pointer;
     text-align: left;
-    font-size: 11px;
+    font-size: 10px;
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1), background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .repo-item:hover {
-    background: var(--color-surface-hover);
+    background: var(--color-bg-hover);
   }
   .repo-name {
     flex: 1;
@@ -1996,7 +2016,7 @@
     white-space: nowrap;
   }
   .repo-meta {
-    font-size: 10px;
+    font-size: 9px;
     color: var(--color-text-dim);
     margin-left: 6px;
     flex-shrink: 0;
@@ -2005,8 +2025,8 @@
     margin-bottom: 6px;
   }
   .picker-heading {
-    font-size: 11px;
-    color: var(--color-text);
+    font-size: 10px;
+    color: var(--color-text-primary);
     margin-bottom: 4px;
   }
   .radio-row {
@@ -2014,8 +2034,8 @@
     align-items: center;
     gap: 6px;
     padding: 3px 0;
-    font-size: 11px;
-    color: var(--color-text);
+    font-size: 10px;
+    color: var(--color-text-primary);
     cursor: pointer;
   }
   .radio-row input[type="radio"] {
@@ -2032,11 +2052,11 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    padding: 12px 0;
+    gap: 6px;
+    padding: 6px 0;
   }
   .device-heading {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--color-text-dim);
     margin: 0;
   }
@@ -2051,8 +2071,8 @@
     font-weight: 700;
     letter-spacing: 4px;
     color: var(--tier-accent, var(--color-neon-cyan));
-    padding: 6px 12px;
-    border: 1px solid var(--color-border);
+    padding: 4px 6px;
+    border: 1px solid var(--color-border-subtle);
   }
   .device-instructions {
     font-size: 10px;
@@ -2075,35 +2095,48 @@
   /* GitHub tabs */
   .github-tabs {
     display: flex;
-    gap: 0;
-    margin-bottom: 8px;
-    border-bottom: 1px solid var(--color-border);
+    align-items: stretch;
+    height: 24px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    flex-shrink: 0;
   }
   .github-tab {
-    flex: 1;
-    padding: 4px 0;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--color-text-dim);
-    font-size: 10px;
-    font-family: var(--font-mono);
-    cursor: pointer;
-    text-align: center;
-    display: flex;
+    flex: 1 1 0%;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
+    height: 100%;
+    padding: 0;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--color-text-dim);
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
     gap: 4px;
+    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                background 150ms cubic-bezier(0.16, 1, 0.3, 1);
   }
-  .github-tab:hover { color: var(--color-text); }
+  .github-tab:hover {
+    color: var(--color-text-primary);
+    background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
+  }
   .github-tab--active {
     color: var(--tier-accent, var(--color-neon-cyan));
     border-bottom-color: var(--tier-accent, var(--color-neon-cyan));
   }
+  .github-tab:focus-visible {
+    outline-offset: -1px;
+  }
   .index-badge {
     font-size: 9px;
     padding: 0 3px;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-subtle);
     color: var(--color-text-dim);
   }
   .index-badge--building {
@@ -2122,15 +2155,17 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 8px;
-    font-size: 11px;
+    height: 20px;
+    padding: 0 6px;
+    font-size: 10px;
     font-family: var(--font-mono);
-    color: var(--color-text);
+    color: var(--color-text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     width: 100%;
     text-align: left;
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1), background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .tree-item--dir {
     background: transparent;
@@ -2138,15 +2173,15 @@
     cursor: pointer;
     color: var(--tier-accent, var(--color-neon-cyan));
   }
-  .tree-item--dir:hover { background: var(--color-surface-hover); }
+  .tree-item--dir:hover { background: var(--color-bg-hover); }
   .tree-item--file {
     color: var(--color-text-dim);
     background: transparent;
     border: none;
     cursor: pointer;
   }
-  .tree-item--file:hover { background: var(--color-surface-hover); }
-  .tree-item--active { background: var(--color-surface-hover); color: var(--color-text); }
+  .tree-item--file:hover { background: var(--color-bg-hover); }
+  .tree-item--active { background: var(--color-bg-hover); color: var(--color-text-primary); }
   .tree-arrow { font-size: 8px; width: 8px; flex-shrink: 0; }
   .tree-name { overflow: hidden; text-overflow: ellipsis; }
   .tree-size {
@@ -2162,7 +2197,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 4px 8px;
+    padding: 4px 6px;
     border-bottom: 1px solid var(--color-border-subtle);
   }
   .file-viewer-path {
@@ -2177,17 +2212,17 @@
     border: none;
     color: var(--color-text-dim);
     cursor: pointer;
-    font-size: 11px;
+    font-size: 10px;
     padding: 0 4px;
   }
-  .file-viewer-close:hover { color: var(--color-text); }
+  .file-viewer-close:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
   .file-viewer-content {
     overflow: auto;
     flex: 1;
     min-height: 0;
     font-size: 10px;
     line-height: 1.5;
-    padding: 8px;
+    padding: 6px;
     margin: 0;
     color: var(--color-text-dim);
     white-space: pre;
