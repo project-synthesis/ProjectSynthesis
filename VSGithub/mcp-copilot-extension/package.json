@@ -606,6 +606,104 @@
         "userDescription": "Iteratively improve an optimized prompt with specific instructions.",
         "modelDescription": "Iteratively improve an optimized prompt with specific instructions.\n\n    Call after synthesis_optimize when the result needs targeted improvement.\n    Each call is a fresh pipeline invocation (not multi-turn accumulation).\n    Returns the refined prompt, updated scores, score deltas, and suggestions.\n\n    Chain: Call synthesis_feedback after the final refinement to close the loop.\n    ",
         "icon": "$(edit)"
+      },
+      {
+        "name": "synthesis_seed",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "seed"
+        ],
+        "toolReferenceName": "synthesis_seed",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "project_description": {
+              "description": "Project description for prompt generation (20+ chars).",
+              "title": "Project Description",
+              "type": "string"
+            },
+            "workspace_path": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "default": null,
+              "description": "Absolute path to workspace root for context extraction.",
+              "title": "Workspace Path"
+            },
+            "repo_full_name": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "default": null,
+              "description": "GitHub repo in 'owner/repo' format for explore phase.",
+              "title": "Repo Full Name"
+            },
+            "prompt_count": {
+              "default": 30,
+              "description": "Target total prompts (5-100).",
+              "title": "Prompt Count",
+              "type": "integer"
+            },
+            "agents": {
+              "anyOf": [
+                { "items": { "type": "string" }, "type": "array" },
+                { "type": "null" }
+              ],
+              "default": null,
+              "description": "Specific agent names. None = all enabled.",
+              "title": "Agents"
+            },
+            "prompts": {
+              "anyOf": [
+                { "items": { "type": "string" }, "type": "array" },
+                { "type": "null" }
+              ],
+              "default": null,
+              "description": "User-provided prompts (bypasses generation).",
+              "title": "Prompts"
+            }
+          },
+          "required": [
+            "project_description"
+          ],
+          "title": "synthesis_seedArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis seed",
+        "userDescription": "Seed the taxonomy by generating and optimizing diverse prompts.",
+        "modelDescription": "Seed the taxonomy by generating and optimizing diverse prompts.\n\n    Two modes:\n    1. Generated (default): Provide project_description. Agents generate\n       diverse prompts which are optimized through the full pipeline.\n    2. Provided: Supply prompts list directly for batch optimization.\n\n    The taxonomy discovers clusters, domains, and patterns organically\n    from the optimized results.\n    ",
+        "icon": "$(database)"
+      },
+      {
+        "name": "synthesis_explain",
+        "tags": [
+          "mcp",
+          "synthesis",
+          "explain"
+        ],
+        "toolReferenceName": "synthesis_explain",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "properties": {
+            "optimization_id": {
+              "description": "Optimization ID or trace_id to explain.",
+              "title": "Optimization Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "optimization_id"
+          ],
+          "title": "synthesis_explainArguments",
+          "type": "object"
+        },
+        "displayName": "Synthesis explain",
+        "userDescription": "Get a plain-English explanation of what an optimization changed and why.",
+        "modelDescription": "Get a plain-English explanation of what an optimization changed and why.\n\n    Call after synthesis_optimize or synthesis_get_optimization to understand\n    the result in non-technical terms. Returns a brief summary, specific\n    change descriptions, the strategy used, and the score improvement.\n\n    Chain: Call synthesis_get_optimization first to browse results,\n    then this tool to explain one.\n    ",
+        "icon": "$(comment-discussion)"
       }
     ],
     "languageModelToolSets": [
@@ -625,7 +723,9 @@
           "synthesis_get_optimization",
           "synthesis_match",
           "synthesis_feedback",
-          "synthesis_refine"
+          "synthesis_refine",
+          "synthesis_seed",
+          "synthesis_explain"
         ]
       }
     ]
