@@ -2,6 +2,7 @@
 
 import logging
 import secrets
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import GitHubToken
+from app.models import GitHubToken, LinkedRepo
 from app.services.github_client import GitHubClient
 from app.services.github_service import GitHubService
 
@@ -40,8 +41,76 @@ class OkResponse(BaseModel):
     ok: bool = Field(default=True, description="Operation success indicator.")
 
 
+async def _refresh_token_if_expired(
+    token_row: GitHubToken,
+    db: AsyncSession,
+) -> bool:
+    """Refresh an expired GitHub access token using the stored refresh token.
+
+    Returns True if refresh succeeded (token_row is updated in-place),
+    False if refresh is not possible or failed.
+    """
+    # Check if token has expired
+    if not token_row.expires_at:
+        return False  # No expiry tracked — non-expiring token or legacy
+    if token_row.expires_at.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc):
+        return False  # Not expired yet
+
+    # Need refresh — check if we have a refresh token
+    if not token_row.refresh_token_encrypted:
+        logger.warning("GitHub access token expired but no refresh token stored (session=%s)", token_row.session_id[:8])
+        return False
+
+    github_svc = GitHubService(secret_key=settings.resolve_secret_key())
+    refresh_token = github_svc.decrypt_token(token_row.refresh_token_encrypted)
+
+    # Exchange refresh token for new access token
+    client_id = settings.GITHUB_OAUTH_CLIENT_ID
+    if not client_id:
+        return False
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://github.com/login/oauth/access_token",
+                data={
+                    "client_id": client_id,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+                headers={"Accept": "application/json"},
+            )
+            data = resp.json()
+    except Exception as exc:
+        logger.warning("GitHub token refresh request failed: %s", exc)
+        return False
+
+    new_access_token = data.get("access_token")
+    if not new_access_token:
+        logger.warning("GitHub token refresh returned no access_token: %s", data.get("error", "unknown"))
+        return False
+
+    # Update stored tokens
+    token_row.token_encrypted = github_svc.encrypt_token(new_access_token)
+    if data.get("refresh_token"):
+        token_row.refresh_token_encrypted = github_svc.encrypt_token(data["refresh_token"])
+    if data.get("expires_in"):
+        token_row.expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(data["expires_in"]))
+    if data.get("refresh_token_expires_in"):
+        refresh_exp = int(data["refresh_token_expires_in"])
+        token_row.refresh_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=refresh_exp)
+    await db.commit()
+    logger.info("GitHub token refreshed (session=%s)", token_row.session_id[:8])
+    return True
+
+
 async def _get_session_token(request: Request, db: AsyncSession) -> tuple[str, str]:
-    """Get session_id and decrypted token from request cookie."""
+    """Get session_id and decrypted token from request cookie.
+
+    Automatically refreshes the access token via the stored refresh token
+    if the access token has expired.  This handles GitHub Apps with
+    "Expire user authorization tokens" enabled (8-hour default expiry).
+    """
     session_id = request.cookies.get("session_id")
     if not session_id:
         raise HTTPException(401, "Not authenticated")
@@ -51,6 +120,13 @@ async def _get_session_token(request: Request, db: AsyncSession) -> tuple[str, s
     token_row = result.scalar_one_or_none()
     if not token_row:
         raise HTTPException(401, "Not authenticated")
+
+    # Auto-refresh if access token has expired
+    if token_row.expires_at and token_row.expires_at.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
+        refreshed = await _refresh_token_if_expired(token_row, db)
+        if not refreshed:
+            raise HTTPException(401, "GitHub token expired and refresh failed. Please reconnect.")
+
     github_svc = GitHubService(secret_key=settings.resolve_secret_key())
     return session_id, github_svc.decrypt_token(token_row.token_encrypted)
 
@@ -116,6 +192,16 @@ async def github_callback(
     github_svc = GitHubService(secret_key=settings.resolve_secret_key())
     encrypted = github_svc.encrypt_token(access_token)
 
+    # Token expiry + refresh token (for GitHub Apps with expiring tokens)
+    now = datetime.now(timezone.utc)
+    expires_in = int(data["expires_in"]) if data.get("expires_in") else None
+    expires_at = now + timedelta(seconds=expires_in) if expires_in else None
+    refresh_encrypted = (
+        github_svc.encrypt_token(data["refresh_token"]) if data.get("refresh_token") else None
+    )
+    refresh_exp = int(data["refresh_token_expires_in"]) if data.get("refresh_token_expires_in") else None
+    refresh_expires_at = now + timedelta(seconds=refresh_exp) if refresh_exp else None
+
     session_id = request.cookies.get("session_id") or secrets.token_urlsafe(32)
 
     result = await db.execute(
@@ -127,6 +213,9 @@ async def github_callback(
         existing.github_login = user.get("login")
         existing.github_user_id = str(user.get("id", ""))
         existing.avatar_url = user.get("avatar_url")
+        existing.expires_at = expires_at
+        existing.refresh_token_encrypted = refresh_encrypted
+        existing.refresh_token_expires_at = refresh_expires_at
     else:
         row = GitHubToken(
             session_id=session_id,
@@ -134,6 +223,9 @@ async def github_callback(
             github_login=user.get("login"),
             github_user_id=str(user.get("id", "")),
             avatar_url=user.get("avatar_url"),
+            expires_at=expires_at,
+            refresh_token_encrypted=refresh_encrypted,
+            refresh_token_expires_at=refresh_expires_at,
         )
         db.add(row)
     await db.commit()
@@ -170,22 +262,58 @@ async def github_callback(
 @router.get("/auth/me")
 async def github_me(
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> GitHubUserResponse:
-    """Return current user info from stored token."""
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        raise HTTPException(401, "Not authenticated")
+    """Return current user info, validating the token is still live with GitHub.
+
+    If the stored token has been revoked or expired, clean it up and return 401
+    so the frontend shows the reconnect prompt instead of stale cached data.
+    """
+    session_id, token = await _get_session_token(request, db)
+    # Validate token is still accepted by GitHub
+    client = GitHubClient()
+    try:
+        user = await client.get_user(token)
+    except Exception:
+        # Token revoked/expired — clean up all stale data for this session:
+        # token, linked repo, and session cookie.  This prevents orphan linked
+        # repos that reference a dead token, which is the root cause of the
+        # confusing "connected in Info tab but 401 on Files" state.
+        logger.warning(
+            "GitHub token validation failed for session %s — cleaning up",
+            session_id[:8],
+        )
+        result = await db.execute(
+            select(GitHubToken).where(GitHubToken.session_id == session_id)
+        )
+        token_row = result.scalar_one_or_none()
+        if token_row:
+            await db.delete(token_row)
+        # Also remove the linked repo tied to this session
+        result = await db.execute(
+            select(LinkedRepo).where(LinkedRepo.session_id == session_id)
+        )
+        linked_row = result.scalar_one_or_none()
+        if linked_row:
+            await db.delete(linked_row)
+        await db.commit()
+        response.delete_cookie("session_id", path="/api")
+        raise HTTPException(401, "GitHub token expired or revoked. Please reconnect.")
+    # Update cached user info if it changed
     result = await db.execute(
         select(GitHubToken).where(GitHubToken.session_id == session_id)
     )
     token_row = result.scalar_one_or_none()
-    if not token_row:
-        raise HTTPException(401, "Not authenticated")
+    if token_row:
+        token_row.github_login = user.get("login", token_row.github_login)
+        token_row.avatar_url = user.get("avatar_url", token_row.avatar_url)
+        token_row.github_user_id = str(user.get("id", token_row.github_user_id))
+        await db.commit()
     return GitHubUserResponse(
-        login=token_row.github_login,
-        avatar_url=token_row.avatar_url,
-        github_user_id=token_row.github_user_id,
+        login=user.get("login", ""),
+        avatar_url=user.get("avatar_url"),
+        github_user_id=str(user.get("id", "")),
     )
 
 
@@ -304,9 +432,25 @@ async def poll_device_code(
     github_client = GitHubClient()
     user = await github_client.get_user(access_token)
 
-    # Encrypt and store token (same as authorization code callback)
+    # Encrypt and store token + refresh token (for expiring GitHub App tokens)
     github_svc = GitHubService(secret_key=settings.resolve_secret_key())
     encrypted = github_svc.encrypt_token(access_token)
+
+    # Compute expiry timestamps from GitHub's response
+    now = datetime.now(timezone.utc)
+    expires_in = int(data["expires_in"]) if data.get("expires_in") else None
+    expires_at = now + timedelta(seconds=expires_in) if expires_in else None
+    refresh_encrypted = (
+        github_svc.encrypt_token(data["refresh_token"]) if data.get("refresh_token") else None
+    )
+    refresh_exp = int(data["refresh_token_expires_in"]) if data.get("refresh_token_expires_in") else None
+    refresh_expires_at = now + timedelta(seconds=refresh_exp) if refresh_exp else None
+
+    if data.get("refresh_token"):
+        logger.info(
+            "GitHub token has refresh support (expires_in=%s, refresh_expires_in=%s)",
+            data.get("expires_in"), data.get("refresh_token_expires_in"),
+        )
 
     session_id = request.cookies.get("session_id") or secrets.token_urlsafe(32)
 
@@ -319,6 +463,9 @@ async def poll_device_code(
         existing.github_login = user.get("login")
         existing.github_user_id = str(user.get("id", ""))
         existing.avatar_url = user.get("avatar_url")
+        existing.expires_at = expires_at
+        existing.refresh_token_encrypted = refresh_encrypted
+        existing.refresh_token_expires_at = refresh_expires_at
     else:
         row = GitHubToken(
             session_id=session_id,
@@ -326,6 +473,9 @@ async def poll_device_code(
             github_login=user.get("login"),
             github_user_id=str(user.get("id", "")),
             avatar_url=user.get("avatar_url"),
+            expires_at=expires_at,
+            refresh_token_encrypted=refresh_encrypted,
+            refresh_token_expires_at=refresh_expires_at,
         )
         db.add(row)
     await db.commit()

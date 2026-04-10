@@ -425,7 +425,12 @@ class TestGitHubAuth:
 
         try:
             app_client.cookies.set("session_id", "test-session-me")
-            resp = await app_client.get("/api/github/auth/me")
+            # Mock GitHub API validation (github_me now validates tokens live)
+            from unittest.mock import AsyncMock, patch
+            mock_user = {"login": "testuser", "id": 12345, "avatar_url": "https://avatars.example.com/u/12345"}
+            with patch("app.routers.github_auth.GitHubClient") as mock_client_cls:
+                mock_client_cls.return_value.get_user = AsyncMock(return_value=mock_user)
+                resp = await app_client.get("/api/github/auth/me")
             assert resp.status_code == 200
             data = resp.json()
             assert data["login"] == "testuser"

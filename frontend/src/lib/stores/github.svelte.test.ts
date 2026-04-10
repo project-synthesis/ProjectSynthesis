@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { githubStore } from './github.svelte';
+import { clustersStore } from './clusters.svelte';
 import { mockFetch } from '../test-utils';
 
 describe('GitHubStore', () => {
   beforeEach(() => {
     githubStore._reset();
+    clustersStore._reset();
   });
 
   afterEach(() => {
@@ -187,6 +189,19 @@ describe('GitHubStore', () => {
       ]);
       await githubStore.unlinkRepo();
       expect(githubStore.error).toBeTruthy();
+    });
+
+    it('calls clustersStore cleanup on successful unlink (F16)', async () => {
+      mockFetch([
+        { match: '/github/repos/unlink', response: {} },
+        // invalidateClusters will call loadTree
+        { match: '/clusters/taxonomy', response: { nodes: [], stats: null } },
+      ]);
+      const selectSpy = vi.spyOn(clustersStore, 'selectCluster');
+      const invalidateSpy = vi.spyOn(clustersStore, 'invalidateClusters');
+      await githubStore.unlinkRepo();
+      expect(selectSpy).toHaveBeenCalledWith(null);
+      expect(invalidateSpy).toHaveBeenCalled();
     });
   });
 });

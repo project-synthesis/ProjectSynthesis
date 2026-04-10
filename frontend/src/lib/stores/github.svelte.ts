@@ -7,6 +7,7 @@ import {
 import type {
   GitHubUser, LinkedRepo, GitHubRepository, RepoTreeEntry, IndexStatus,
 } from '$lib/api/client';
+import { clustersStore } from '$lib/stores/clusters.svelte';
 
 export interface TreeNode {
   name: string;
@@ -44,6 +45,28 @@ class GitHubStore {
   fileContent = $state<string | null>(null);
   fileLoading = $state(false);
 
+  /**
+   * Check if an error is a 401 auth failure and flag the session as expired.
+   * Clears user state so the UI immediately shows "session expired" with a
+   * reconnect button — even on tabs that had stale data from a previous
+   * successful load.  Returns true if the error was a 401 (caller should
+   * abort further work).
+   */
+  private _handleAuthError(err: unknown): boolean {
+    const is401 = (
+      (err && typeof err === 'object' && 'status' in err && (err as { status: number }).status === 401)
+      || (() => {
+        const msg = err instanceof Error ? err.message : String(err);
+        return msg.includes('401') || msg.toLowerCase().includes('not authenticated') || msg.toLowerCase().includes('expired or revoked');
+      })()
+    );
+    if (!is401) return false;
+    this.authExpired = true;
+    this.user = null;
+    this.error = 'GitHub session expired. Please reconnect.';
+    return true;
+  }
+
   async checkAuth() {
     try {
       const user = await githubMe();
@@ -54,8 +77,10 @@ class GitHubStore {
       } else {
         this.user = null;
       }
-    } catch {
+    } catch (err) {
       this.user = null;
+      // Detect token revoked/expired (backend validates with GitHub on /auth/me)
+      this._handleAuthError(err);
     }
   }
 
@@ -145,13 +170,10 @@ class GitHubStore {
       this.repos = response.repos;
       this.authExpired = false;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Operation failed';
-      // Detect expired/revoked token (backend returns 401)
-      if (msg.includes('401') || msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('revoked')) {
-        this.authExpired = true;
+      if (this._handleAuthError(err)) {
         this.error = 'GitHub session expired. Please reconnect.';
       } else {
-        this.error = msg;
+        this.error = err instanceof Error ? err.message : 'Operation failed';
       }
     } finally {
       this.loading = false;
@@ -187,6 +209,9 @@ class GitHubStore {
       this.fileTree = [];
       this.branches = [];
       this.indexStatus = null;
+      // Clean cluster state: project-tagged clusters may be stale after unlink
+      clustersStore.selectCluster(null);
+      clustersStore.invalidateClusters();
     } catch (err: unknown) {
       this.error = err instanceof Error ? err.message : 'Operation failed';
     }
@@ -195,26 +220,31 @@ class GitHubStore {
   // -- Repo browsing --
 
   async loadBranches() {
-    if (!this.linkedRepo) return;
+    if (!this.linkedRepo || this.authExpired) return;
     const [owner, repo] = this.linkedRepo.full_name.split('/');
     try {
       const data = await githubBranches(owner, repo);
       this.branches = data.branches;
-    } catch {
+    } catch (err) {
+      if (this._handleAuthError(err)) return;
       this.branches = [];
     }
   }
 
   async loadFileTree() {
-    if (!this.linkedRepo) return;
+    if (!this.linkedRepo || this.authExpired) return;
     const [owner, repo] = this.linkedRepo.full_name.split('/');
     const branch = this.linkedRepo.branch ?? this.linkedRepo.default_branch;
     this.treeLoading = true;
     try {
       const data = await githubTree(owner, repo, branch);
       this.fileTree = this._buildTreeNodes(data.tree);
-    } catch {
-      this.fileTree = [];
+    } catch (err) {
+      if (this._handleAuthError(err)) {
+        this.fileTree = [];
+      } else {
+        this.fileTree = [];
+      }
     } finally {
       this.treeLoading = false;
     }
@@ -226,11 +256,13 @@ class GitHubStore {
   }
 
   async reindex() {
+    if (this.authExpired) return;
     try {
       await githubReindex();
       this.indexStatus = { status: 'building', file_count: 0, indexed_at: null };
       this.pollIndexStatus();
     } catch (err: unknown) {
+      if (this._handleAuthError(err)) return;
       this.error = err instanceof Error ? err.message : 'Reindex failed';
     }
   }
@@ -252,7 +284,7 @@ class GitHubStore {
   }
 
   async loadFileContent(filePath: string) {
-    if (!this.linkedRepo) return;
+    if (!this.linkedRepo || this.authExpired) return;
     const [owner, repo] = this.linkedRepo.full_name.split('/');
     const branch = this.linkedRepo.branch ?? this.linkedRepo.default_branch;
     this.selectedFile = filePath;
@@ -261,7 +293,8 @@ class GitHubStore {
     try {
       const data = await githubFileContent(owner, repo, filePath, branch);
       this.fileContent = data.content;
-    } catch {
+    } catch (err) {
+      if (this._handleAuthError(err)) return;
       this.fileContent = null;
       this.error = `Failed to load ${filePath}`;
     } finally {
