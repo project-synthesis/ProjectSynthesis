@@ -73,6 +73,8 @@ test-results/
 !.claude/hooks/*
 !.claude/agents/
 !.claude/agents/*
+!.claude/skills/
+!.claude/skills/**
 .claude_settings.json
 claude-progress.txt
 
