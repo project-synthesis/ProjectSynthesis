@@ -666,6 +666,12 @@
                   </span>
                 </div>
               {/if}
+              {#if githubStore.linkedRepo.linked_at}
+                <div class="data-row">
+                  <span class="data-label">Linked</span>
+                  <span class="data-value">{formatRelativeTime(githubStore.linkedRepo.linked_at)}</span>
+                </div>
+              {/if}
             </div>
             <div class="github-actions">
               <button class="action-btn" onclick={() => githubStore.unlinkRepo()}>UNLINK</button>
@@ -705,11 +711,11 @@
             {/if}
           {/if}
         {:else if githubStore.user}
-          <div class="card-terminal">
-            <div class="data-row">
-              <span class="data-label">User</span>
-              <span class="data-value font-mono">{githubStore.user.login}</span>
-            </div>
+          <div class="github-user-card">
+            {#if githubStore.user.avatar_url}
+              <img class="github-avatar" src={githubStore.user.avatar_url} alt={githubStore.user.login} width="32" height="32" />
+            {/if}
+            <span class="github-username font-mono">{githubStore.user.login}</span>
           </div>
 
           {#if !repoPickerOpen}
@@ -764,10 +770,26 @@
                     class="repo-item"
                     onclick={() => confirmLinkRepo(repo.full_name)}
                   >
-                    <span class="repo-name font-mono">{repo.full_name}</span>
-                    {#if repo.language}
-                      <span class="repo-meta">{repo.language}</span>
+                    <div class="repo-item-header">
+                      <span class="repo-name font-mono">{repo.full_name}</span>
+                      <span class="repo-item-badges">
+                        {#if repo.private}
+                          <span class="repo-badge repo-badge--private">priv</span>
+                        {/if}
+                        {#if repo.language}
+                          <span class="repo-meta">{repo.language}</span>
+                        {/if}
+                      </span>
+                    </div>
+                    {#if repo.description}
+                      <span class="repo-desc">{repo.description.length > 60 ? repo.description.slice(0, 60) + '...' : repo.description}</span>
                     {/if}
+                    <span class="repo-item-meta">
+                      {#if repo.stargazers_count > 0}
+                        <span class="repo-stars font-mono">{repo.stargazers_count}</span>
+                      {/if}
+                      <span class="repo-updated">{formatRelativeTime(repo.updated_at)}</span>
+                    </span>
                   </button>
                 {/each}
               </div>
@@ -1994,20 +2016,68 @@
   }
   .repo-item {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    height: 20px;
-    padding: 0 6px;
+    flex-direction: column;
+    gap: 1px;
+    padding: 4px 6px;
     background: transparent;
     border: none;
+    border-left: 1px solid transparent;
     color: var(--color-text-primary);
     cursor: pointer;
     text-align: left;
     font-size: 10px;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1), background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .repo-item:hover {
     background: var(--color-bg-hover);
+    border-left-color: var(--tier-accent, var(--color-neon-cyan));
+  }
+  .repo-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 4px;
+  }
+  .repo-item-badges {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .repo-badge {
+    font-size: 8px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 3px;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-dim);
+  }
+  .repo-badge--private {
+    color: var(--color-neon-yellow);
+    border-color: color-mix(in srgb, var(--color-neon-yellow) 30%, transparent);
+  }
+  .repo-desc {
+    font-size: 9px;
+    font-family: var(--font-sans);
+    color: var(--color-text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .repo-item-meta {
+    display: flex;
+    gap: 6px;
+    font-size: 9px;
+    color: var(--color-text-dim);
+  }
+  .repo-stars::before {
+    content: '\2605 ';
+  }
+  .repo-updated {
+    font-family: var(--font-mono);
   }
   .repo-name {
     flex: 1;
@@ -2020,6 +2090,20 @@
     color: var(--color-text-dim);
     margin-left: 6px;
     flex-shrink: 0;
+  }
+  .github-user-card {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+  }
+  .github-avatar {
+    border: 1px solid var(--color-border-subtle);
+    flex-shrink: 0;
+  }
+  .github-username {
+    font-size: 10px;
+    color: var(--color-text-primary);
   }
   .repo-picker-project {
     margin-bottom: 6px;

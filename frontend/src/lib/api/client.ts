@@ -140,7 +140,6 @@ export interface GitHubRepository {
 }
 
 export interface LinkedRepo {
-  id: string;
   full_name: string;
   default_branch: string;
   branch: string | null;

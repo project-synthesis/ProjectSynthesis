@@ -25,7 +25,7 @@ describe('GitHubStore', () => {
     it('sets user when /github/auth/me returns 200', async () => {
       mockFetch([
         { match: '/github/auth/me', response: { login: 'octocat', avatar_url: 'https://example.com/avatar' } },
-        { match: '/github/repos/linked', response: { id: 'repo-1', full_name: 'octocat/hello', default_branch: 'main', branch: null, language: 'TypeScript' } },
+        { match: '/github/repos/linked', response: { full_name: 'octocat/hello', default_branch: 'main', branch: null, language: 'TypeScript' } },
       ]);
       await githubStore.checkAuth();
       expect(githubStore.user).not.toBeNull();
@@ -41,7 +41,7 @@ describe('GitHubStore', () => {
     });
 
     it('loads linked repo after successful auth', async () => {
-      const linkedRepo = { id: 'repo-1', full_name: 'octocat/hello', default_branch: 'main', branch: null, language: 'TypeScript' };
+      const linkedRepo = { full_name: 'octocat/hello', default_branch: 'main', branch: null, language: 'TypeScript' };
       mockFetch([
         { match: '/github/auth/me', response: { login: 'octocat', avatar_url: 'https://example.com/avatar' } },
         { match: '/github/repos/linked', response: linkedRepo },
@@ -83,7 +83,7 @@ describe('GitHubStore', () => {
   describe('logout', () => {
     it('clears user and linked repo', async () => {
       githubStore.user = { login: 'octocat', avatar_url: 'https://example.com/avatar' };
-      githubStore.linkedRepo = { id: 'repo-1', full_name: 'octocat/hello', default_branch: 'main', branch: null, language: null };
+      githubStore.linkedRepo = { full_name: 'octocat/hello', default_branch: 'main', branch: null, language: null };
       mockFetch([
         { match: '/github/auth/logout', response: null },
       ]);
@@ -175,7 +175,7 @@ describe('GitHubStore', () => {
 
   describe('unlinkRepo', () => {
     it('clears linkedRepo on success', async () => {
-      githubStore.linkedRepo = { id: 'repo-1', full_name: 'octocat/hello', default_branch: 'main', branch: null, language: null };
+      githubStore.linkedRepo = { full_name: 'octocat/hello', default_branch: 'main', branch: null, language: null };
       mockFetch([
         { match: '/github/repos/unlink', response: null },
       ]);
@@ -217,7 +217,7 @@ describe('GitHubStore', () => {
 
     it('returns expired when authExpired is true even with linkedRepo', () => {
       githubStore.authExpired = true;
-      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      githubStore.linkedRepo = { full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
       expect(githubStore.connectionState).toBe('expired');
     });
 
@@ -228,20 +228,20 @@ describe('GitHubStore', () => {
 
     it('returns linked when user + linkedRepo but indexStatus is null', () => {
       githubStore.user = { login: 'test', avatar_url: '', github_user_id: '1' } as any;
-      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      githubStore.linkedRepo = { full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
       expect(githubStore.connectionState).toBe('linked');
     });
 
     it('returns linked when user + linkedRepo + indexStatus building', () => {
       githubStore.user = { login: 'test', avatar_url: '', github_user_id: '1' } as any;
-      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      githubStore.linkedRepo = { full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
       githubStore.indexStatus = { status: 'building', file_count: 0, indexed_at: null } as any;
       expect(githubStore.connectionState).toBe('linked');
     });
 
     it('returns ready when user + linkedRepo + indexStatus ready', () => {
       githubStore.user = { login: 'test', avatar_url: '', github_user_id: '1' } as any;
-      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      githubStore.linkedRepo = { full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
       githubStore.indexStatus = { status: 'ready', file_count: 42, indexed_at: '2026-01-01' } as any;
       expect(githubStore.connectionState).toBe('ready');
     });
@@ -251,7 +251,7 @@ describe('GitHubStore', () => {
     it('clears authExpired, linkedRepo, error, and browsing state then calls login', async () => {
       const loginSpy = vi.spyOn(githubStore, 'login').mockResolvedValue(undefined);
       githubStore.authExpired = true;
-      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      githubStore.linkedRepo = { full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
       githubStore.fileTree = [{ name: 'f', path: 'f', type: 'file' }] as any;
       githubStore.branches = ['main'];
       githubStore.indexStatus = { status: 'ready', file_count: 10, indexed_at: '2026-01-01' } as any;

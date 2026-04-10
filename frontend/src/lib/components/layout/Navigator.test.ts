@@ -541,7 +541,6 @@ describe('Navigator', () => {
     const user = userEvent.setup();
     githubStore.user = { login: 'testuser', avatar_url: '' };
     githubStore.linkedRepo = {
-      id: '1',
       full_name: 'testuser/myrepo',
       default_branch: 'main',
       branch: 'main',
@@ -549,9 +548,9 @@ describe('Navigator', () => {
     };
     defaultFetchHandlers();
     render(Navigator, { props: { active: 'github' } });
-    expect(screen.getByText('testuser/myrepo')).toBeInTheDocument();
+    expect(screen.getByText('myrepo')).toBeInTheDocument();
     expect(screen.getByText('TypeScript')).toBeInTheDocument();
-    const unlinkBtn = screen.getByRole('button', { name: /^Unlink$/i });
+    const unlinkBtn = screen.getByRole('button', { name: /^UNLINK$/i });
     await user.click(unlinkBtn);
     expect(githubStore.unlinkRepo).toHaveBeenCalled();
   });
