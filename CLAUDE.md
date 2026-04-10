@@ -16,12 +16,21 @@ Guidance for Claude Code when working in this repository. **Keep all CLAUDE.md f
 | `-dev` suffix | Unreleased work on main | 0.2.0-dev |
 
 **Release workflow:**
+```bash
+./scripts/release.sh              # release current version (strips -dev)
+./scripts/release.sh 0.4.0        # release a specific version
+./scripts/release.sh --dry-run    # preview without changes
+```
+The script handles: version sync → commit → tag → push → GitHub Release (with changelog body) → dev bump. Requires `gh` CLI authenticated.
+
+**Manual alternative:**
 1. Edit `version.json` (remove `-dev` or bump)
 2. Run `./scripts/sync-version.sh`
 3. Move `docs/CHANGELOG.md` items from `## Unreleased` to `## vX.Y.Z — YYYY-MM-DD`
 4. Commit: `release: vX.Y.Z`
 5. Tag: `git tag vX.Y.Z && git push origin main --tags`
-6. Bump to next dev: edit `version.json` to next version with `-dev`, run sync, commit `chore: bump to X.Y.Z-dev`
+6. Create GitHub Release: `gh release create vX.Y.Z --notes-file <changelog> --latest`
+7. Bump to next dev: edit `version.json` to next version with `-dev`, run sync, commit `chore: bump to X.Y.Z-dev`
 
 **Changelog convention:** Every user-visible change gets a line in `docs/CHANGELOG.md` under `## Unreleased`. Categories: `Added`, `Changed`, `Fixed`, `Removed`. Write in past tense, start with a verb.
 
