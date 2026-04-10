@@ -68,7 +68,11 @@ def compare_versions(local: str, remote: str) -> int:
 
 
 def _parse_latest_tag(tag_output: str) -> str | None:
-    """Parse the latest stable semver tag from git tag --sort=-v:refname output."""
+    """Parse the latest stable semver tag from git tag --sort=-v:refname output.
+
+    Skips -dev and pre-release tags — only stable releases trigger auto-update.
+    Use ``./scripts/release.sh`` to create stable releases from -dev versions.
+    """
     for line in tag_output.strip().splitlines():
         tag = line.strip()
         if not tag:
