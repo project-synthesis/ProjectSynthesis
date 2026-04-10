@@ -1058,10 +1058,16 @@ case "${1:-start}" in
         _REAL_SCRIPT_DIR="$SCRIPT_DIR" exec "$_tmp" _do_update "$@"
         ;;
     _do_update)
-        # Restore SCRIPT_DIR from the original invocation (temp file resolves to /tmp/)
-        SCRIPT_DIR="${_REAL_SCRIPT_DIR:-$SCRIPT_DIR}"
+        # Restore SCRIPT_DIR from the original invocation (temp file resolves to /tmp/).
+        # _REAL_SCRIPT_DIR MUST be set by the update) case — fail explicitly if missing.
+        if [ -z "${_REAL_SCRIPT_DIR:-}" ]; then
+            echo "  ✗ _REAL_SCRIPT_DIR not set. Use './init.sh update', not '_do_update' directly."
+            exit 1
+        fi
+        SCRIPT_DIR="$_REAL_SCRIPT_DIR"
         BACKEND_DIR="$SCRIPT_DIR/backend"
         FRONTEND_DIR="$SCRIPT_DIR/frontend"
+        DATA_DIR="$SCRIPT_DIR/data"
         cd "$SCRIPT_DIR" || exit 1
 
         shift  # consume _do_update arg
@@ -1090,7 +1096,7 @@ case "${1:-start}" in
         echo "  Current: v$_current"
         echo "  Target:  $_update_tag"
 
-        # Capture old HEAD for dep diffing
+        # Capture old HEAD for dep diffing and rollback
         _old_head=$(git rev-parse HEAD)
 
         # Fetch and checkout
@@ -1112,13 +1118,26 @@ case "${1:-start}" in
             (cd "$FRONTEND_DIR" && npm ci --silent)
         fi
 
-        # Run alembic migrations
-        echo "  Running database migrations..."
-        if ! (cd "$BACKEND_DIR" && source .venv/bin/activate && python -m alembic upgrade head 2>&1); then
-            echo "  ! Migration warning: alembic upgrade may have failed. Check backend logs."
+        # Validate environment before proceeding (catch venv/node issues early)
+        echo "  Validating environment..."
+        if ! (cd "$BACKEND_DIR" && source .venv/bin/activate && python -c "import fastapi" 2>/dev/null); then
+            echo "  ✗ Backend venv broken after checkout. Run: cd backend && pip install -r requirements.txt"
+            git checkout "$_old_head" 2>/dev/null
+            exit 1
         fi
 
-        # Restart services (use the NEW init.sh from the checked-out tag)
+        # Run alembic migrations (fail hard + rollback on error)
+        echo "  Running database migrations..."
+        if ! (cd "$BACKEND_DIR" && source .venv/bin/activate && python -m alembic upgrade head 2>&1); then
+            echo "  ✗ Migration failed. Rolling back to previous version."
+            git checkout "$_old_head" 2>/dev/null
+            exit 1
+        fi
+
+        # Restart services (use the NEW init.sh from the checked-out tag).
+        # Note: Python's apply_update() calls "init.sh restart" (not "update") —
+        # Python handles checkout+deps+alembic itself, then only needs a restart.
+        # This _do_update path is for manual CLI usage only.
         echo "  Restarting services..."
         "$SCRIPT_DIR/init.sh" restart
 
@@ -1127,6 +1146,11 @@ case "${1:-start}" in
         echo "  Validation:"
         _new_version=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/version.json'))['version'])" 2>/dev/null || echo "unknown")
         _actual_tag=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "none")
+        _alembic_ok=false
+        if (cd "$BACKEND_DIR" && source .venv/bin/activate && python -m alembic current 2>/dev/null | grep -q "(head)"); then
+            _alembic_ok=true
+        fi
+
         if [ "$_actual_tag" = "$_update_tag" ]; then
             echo "    ✓ Tag: HEAD at $_actual_tag"
         else
@@ -1136,6 +1160,11 @@ case "${1:-start}" in
             echo "    ✓ Version: v$_new_version"
         else
             echo "    ✗ Version: could not read version.json"
+        fi
+        if $_alembic_ok; then
+            echo "    ✓ Migrations: alembic at head"
+        else
+            echo "    ! Migrations: could not verify alembic status"
         fi
 
         # Clean up temp file

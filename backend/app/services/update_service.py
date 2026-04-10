@@ -411,15 +411,21 @@ class UpdateService:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }))
 
-            import subprocess as _sp
-            _sp.Popen(
-                [str(self._root / "init.sh"), "restart"],
-                start_new_session=True,
-                stdout=_sp.DEVNULL,
-                stderr=_sp.DEVNULL,
-                close_fds=True,
-                cwd=str(self._root),
-            )
+            # Spawn detached restart after a brief delay so the 202 response
+            # flushes to the client before init.sh kills the backend process.
+            async def _deferred_restart():
+                await asyncio.sleep(1)
+                import subprocess as _sp
+                _sp.Popen(
+                    [str(self._root / "init.sh"), "restart"],
+                    start_new_session=True,
+                    stdout=_sp.DEVNULL,
+                    stderr=_sp.DEVNULL,
+                    close_fds=True,
+                    cwd=str(self._root),
+                )
+
+            asyncio.create_task(_deferred_restart())
 
             return {"status": "restarting", "tag": tag}
 
