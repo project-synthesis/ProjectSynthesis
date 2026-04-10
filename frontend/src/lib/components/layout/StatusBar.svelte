@@ -1,4 +1,6 @@
 <script lang="ts">
+  import UpdateBadge from '$lib/components/shared/UpdateBadge.svelte';
+  import { updateStore } from '$lib/stores/update.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import TierBadge from '$lib/components/shared/TierBadge.svelte';
@@ -157,6 +159,9 @@
         {@const ti = trendInfo(stats.q_trend)}
         <span class="statusbar-trend" style="color: {ti.color}">{ti.char}</span>
       {/if}
+    {/if}
+    {#if updateStore.updateAvailable || updateStore.updating}
+      <UpdateBadge />
     {/if}
     <span class="status-kbd" aria-label="Open command palette with Ctrl+K">Ctrl+K</span>
   </div>

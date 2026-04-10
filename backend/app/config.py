@@ -1,5 +1,6 @@
 """Application configuration via pydantic-settings."""
 
+import re
 import secrets
 from pathlib import Path
 
@@ -149,6 +150,12 @@ class Settings(BaseSettings):
         default="claude-haiku-4-5", description="Default Haiku model ID for suggest/explore/extract phases.",
     )
 
+    # --- Auto-Update ---
+    UPSTREAM_REPO: str = Field(
+        default="project-synthesis/ProjectSynthesis",
+        description="GitHub owner/repo for upstream update checks.",
+    )
+
     # --- Traces ---
     TRACE_RETENTION_DAYS: int = Field(
         default=30, description="Number of days to retain JSONL trace files before cleanup.",
@@ -185,3 +192,5 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+UPDATE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$")

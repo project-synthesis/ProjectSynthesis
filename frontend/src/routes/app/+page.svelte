@@ -10,6 +10,7 @@
   import type { HealthResponse } from '$lib/api/client';
   import { triggerTierGuide } from '$lib/stores/tier-onboarding.svelte';
   import { routing } from '$lib/stores/routing.svelte';
+  import { updateStore } from '$lib/stores/update.svelte';
 
   let backendError = $state<string | null>(null);
   let eventSource: EventSource | null = null;
@@ -149,6 +150,13 @@
         // Seed agent files were hot-reloaded — notify SeedModal to refresh agent list
         window.dispatchEvent(new CustomEvent('agent-changed', { detail: data }));
       }
+      if (type === 'update_available') {
+        updateStore.receive(data as Record<string, unknown>);
+        addToast('modified', `Update available: v${(data as Record<string, unknown>).latest_version}`);
+      }
+      if (type === 'update_complete') {
+        updateStore.receiveComplete(data as Record<string, unknown>);
+      }
       if (type === 'domain_created') {
         domainStore.invalidate();
       }
@@ -242,7 +250,11 @@
   function healthPoll() {
     getHealth()
       .then(applyHealth)
-      .catch(() => { backendError = 'Cannot connect to backend. Check that services are running.'; });
+      .catch(() => {
+        if (!updateStore.updating) {
+          backendError = 'Cannot connect to backend. Check that services are running.';
+        }
+      });
   }
 
   function applyHealth(h: HealthResponse) {
@@ -277,6 +289,7 @@
   $effect(() => {
     healthPoll();
     domainStore.load();
+    updateStore.load();
     const timer = setInterval(healthPoll, POLL_INTERVAL);
     return () => clearInterval(timer);
   });

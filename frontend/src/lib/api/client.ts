@@ -517,6 +517,27 @@ export const updateStrategy = (name: string, content: string) =>
     body: JSON.stringify({ content }),
   });
 
+// --- Update ---
+export interface UpdateStatusResponse {
+  current_version: string;
+  latest_version: string | null;
+  latest_tag: string | null;
+  update_available: boolean;
+  changelog: string | null;
+  changelog_entries: { category: string; text: string }[] | null;
+  checked_at: string | null;
+  detection_tier: string;
+}
+
+export const getUpdateStatus = () =>
+  apiFetch<UpdateStatusResponse>('/update/status');
+
+export const applyUpdate = (tag: string) =>
+  apiFetch<{ status: string; tag: string; message: string }>('/update/apply', {
+    method: 'POST',
+    body: JSON.stringify({ tag }),
+  });
+
 // ---- Real-time event stream ----
 
 export type EventHandler = (type: string, data: Record<string, unknown>) => void;
@@ -534,6 +555,8 @@ export function connectEventStream(onEvent: EventHandler): EventSource {
         'domain_created', 'routing_state_changed',
         'seed_batch_progress',
         'agent_changed',
+        'update_available',
+        'update_complete',
     ];
     for (const type of eventTypes) {
         es.addEventListener(type, (e: MessageEvent) => {

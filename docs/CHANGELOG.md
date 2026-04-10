@@ -4,6 +4,13 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- Auto-update detection on startup (3-tier: git tags, raw fetch, GitHub Releases API)
+- Persistent StatusBar badge when a newer version is available
+- One-click update dialog with changelog display and detached HEAD warning
+- `./init.sh update [tag]` CLI subcommand for terminal-based updates
+- Post-update validation suite (version, tag, migration checks)
+
 ## v0.3.20-dev — 2026-04-09
 
 ### Added

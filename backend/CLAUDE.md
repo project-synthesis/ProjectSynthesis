@@ -57,6 +57,7 @@ Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MOD
 | `events.py` | `GET /api/events` (SSE), `POST /api/events/_publish` (cross-process) |
 | `domains.py` | `GET /api/domains`, `POST /api/domains/{id}/promote` |
 | `seed.py` | `POST /api/seed` (batch seeding), `GET /api/seed/agents` (agent metadata for UI) |
+| `update.py` | `GET /api/update/status`, `POST /api/update/apply` (202) |
 | `clusters.py` | CRUD, match, tree, stats, templates, recluster, reassign, repair, activity (ring buffer + JSONL history). Activity endpoints MUST be before `{cluster_id}` dynamic route. Read endpoints use `db.autoflush=False`. Legacy 301 for `/api/patterns/*`, `/api/taxonomy/*` |
 
 Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (in-memory via `limits`).
