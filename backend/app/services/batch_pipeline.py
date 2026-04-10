@@ -375,6 +375,8 @@ async def run_single_prompt(
                     "scores": _json.dumps(optimized_scores.model_dump(), indent=2),
                     "weaknesses": ", ".join(analysis.weaknesses) if analysis.weaknesses else "none identified",
                     "strategy_used": effective_strategy,
+                    "score_deltas": "batch seed — no previous deltas",
+                    "score_trajectory": "first turn",
                 })
                 suggest_result: SuggestionsOutput = await call_provider_with_retry(
                     provider,
