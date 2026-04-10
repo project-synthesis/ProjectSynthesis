@@ -109,3 +109,16 @@ class GitHubClient:
         if data.get("encoding") == "base64":
             return base64.b64decode(data["content"]).decode(errors="replace")
         return data.get("content", "")
+
+    async def get_release_by_tag(
+        self, token: str, full_name: str, tag: str
+    ) -> dict | None:
+        """Fetch GitHub release info by tag name. Returns None on 404."""
+        resp = await self._client.get(
+            f"{GITHUB_API}/repos/{full_name}/releases/tags/{tag}",
+            headers=self._headers(token),
+        )
+        if resp.status_code == 404:
+            return None
+        _check(resp)
+        return resp.json()
