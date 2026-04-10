@@ -224,6 +224,7 @@ async def optimize(
                 codebase_context=enrichment.codebase_context,
                 adaptation_state=enrichment.adaptation_state,
                 context_sources=enrichment.context_sources_dict,
+                repo_full_name=effective_repo,
                 applied_pattern_ids=body.applied_pattern_ids,
                 taxonomy_engine=get_taxonomy_engine(app=request.app),
                 domain_resolver=getattr(request.app.state, "domain_resolver", None),
