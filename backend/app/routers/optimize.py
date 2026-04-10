@@ -132,12 +132,30 @@ async def optimize(
     from app.config import PROJECT_ROOT
     effective_workspace = body.workspace_path or str(PROJECT_ROOT)
 
+    # Auto-resolve repo_full_name from session's linked repo if not provided.
+    # This ensures codebase context is always injected when a repo is linked,
+    # even if the caller doesn't explicitly pass it.
+    effective_repo = body.repo_full_name
+    if not effective_repo:
+        try:
+            from app.models import LinkedRepo
+            session_id = request.cookies.get("session_id")
+            if session_id:
+                linked = (await db.execute(
+                    select(LinkedRepo).where(LinkedRepo.session_id == session_id)
+                )).scalar_one_or_none()
+                if linked:
+                    effective_repo = linked.full_name
+                    logger.debug("Auto-resolved repo from session: %s", effective_repo)
+        except Exception:
+            pass  # Non-fatal — proceed without codebase context
+
     enrichment = await context_service.enrich(
         raw_prompt=body.prompt,
         tier=decision.tier,
         db=db,
         workspace_path=effective_workspace,
-        repo_full_name=body.repo_full_name,
+        repo_full_name=effective_repo,
         applied_pattern_ids=body.applied_pattern_ids,
         preferences_snapshot=prefs_snapshot,
     )

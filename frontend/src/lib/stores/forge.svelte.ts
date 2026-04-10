@@ -6,6 +6,7 @@ import {
 import type { OptimizationResult, DimensionScores, SSEEvent } from '$lib/api/client';
 import { editorStore } from '$lib/stores/editor.svelte';
 import { clustersStore } from '$lib/stores/clusters.svelte';
+import { githubStore } from '$lib/stores/github.svelte';
 import { addToast } from '$lib/stores/toast.svelte';
 
 export type ForgeStatus = 'idle' | 'analyzing' | 'optimizing' | 'scoring' | 'complete' | 'error' | 'passthrough';
@@ -160,6 +161,7 @@ class ForgeStore {
         }
       },
       patternIds,
+      githubStore.linkedRepo?.full_name,
     );
   }
 

@@ -262,6 +262,7 @@ export function optimizeSSE(
   onError: (err: Error) => void,
   onComplete: () => void,
   appliedPatternIds?: string[] | null,
+  repoFullName?: string | null,
 ): AbortController {
   return streamSSE(
     '/optimize',
@@ -269,6 +270,7 @@ export function optimizeSSE(
       prompt,
       strategy: strategy || undefined,
       applied_pattern_ids: appliedPatternIds?.length ? appliedPatternIds : undefined,
+      repo_full_name: repoFullName || undefined,
     }),
     onEvent,
     onError,

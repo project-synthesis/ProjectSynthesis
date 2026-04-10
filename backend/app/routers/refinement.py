@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import PROMPTS_DIR
@@ -114,31 +115,67 @@ async def refine(
     else:
         branch_id = body.branch_id or versions[-1].branch_id
 
-    # --- Context enrichment for refinement (previously missing) ---
-    # Fetch workspace guidance and adaptation state so the refine.md template
-    # gets the same context as the regular optimize pipeline.
+    # --- Context enrichment for refinement ---
+    # Use the same ContextEnrichmentService as the optimize endpoint so
+    # refinement gets workspace guidance + repo codebase context + adaptation.
     _codebase_guidance: str | None = None
+    _codebase_context: str | None = None
     _adaptation_state: str | None = None
-    try:
-        from pathlib import Path
 
-        from app.config import PROJECT_ROOT
-        from app.services.workspace_intelligence import WorkspaceIntelligence
-        wi = WorkspaceIntelligence()
-        _codebase_guidance = wi.analyze([Path(PROJECT_ROOT)])
-    except Exception:
-        pass  # Degrade gracefully — workspace guidance is optional
-
-    if prefs_snapshot.get("pipeline", {}).get("enable_adaptation", True):
+    context_service = getattr(request.app.state, "context_service", None)
+    if context_service:
         try:
-            from app.services.adaptation_tracker import AdaptationTracker
-            from app.services.prompt_loader import PromptLoader
-            tracker = AdaptationTracker(db, PromptLoader(PROMPTS_DIR))
-            _adaptation_state = await tracker.render_adaptation_state(
-                opt.task_type or "general",
+            # Auto-resolve repo from session or optimization's stored repo_full_name
+            _repo = opt.repo_full_name
+            if not _repo:
+                try:
+                    from app.models import LinkedRepo
+                    session_id = request.cookies.get("session_id")
+                    if session_id:
+                        linked = (await db.execute(
+                            select(LinkedRepo).where(LinkedRepo.session_id == session_id)
+                        )).scalar_one_or_none()
+                        if linked:
+                            _repo = linked.full_name
+                except Exception:
+                    pass
+
+            from app.config import PROJECT_ROOT
+            enrichment = await context_service.enrich(
+                raw_prompt=opt.optimized_prompt or opt.raw_prompt,
+                tier=decision.tier,
+                db=db,
+                workspace_path=str(PROJECT_ROOT),
+                repo_full_name=_repo,
+                preferences_snapshot=prefs_snapshot,
             )
+            _codebase_guidance = enrichment.workspace_guidance
+            _codebase_context = enrichment.codebase_context
+            _adaptation_state = enrichment.adaptation_state
         except Exception:
-            pass  # Degrade gracefully — adaptation is optional
+            logger.debug("Context enrichment failed for refinement", exc_info=True)
+    else:
+        # Fallback: workspace guidance only (no repo context)
+        try:
+            from pathlib import Path
+
+            from app.config import PROJECT_ROOT
+            from app.services.workspace_intelligence import WorkspaceIntelligence
+            wi = WorkspaceIntelligence()
+            _codebase_guidance = wi.analyze([Path(PROJECT_ROOT)])
+        except Exception:
+            pass
+
+        if prefs_snapshot.get("pipeline", {}).get("enable_adaptation", True):
+            try:
+                from app.services.adaptation_tracker import AdaptationTracker
+                from app.services.prompt_loader import PromptLoader
+                tracker = AdaptationTracker(db, PromptLoader(PROMPTS_DIR))
+                _adaptation_state = await tracker.render_adaptation_state(
+                    opt.task_type or "general",
+                )
+            except Exception:
+                pass
 
     async def event_stream():
         yield format_sse("routing", {
@@ -149,6 +186,7 @@ async def refine(
             async for event in ref_svc.create_refinement_turn(
                 body.optimization_id, branch_id, body.refinement_request,
                 codebase_guidance=_codebase_guidance,
+                codebase_context=_codebase_context,
                 adaptation_state=_adaptation_state,
             ):
                 yield format_sse(event.event, event.data)
