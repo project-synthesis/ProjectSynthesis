@@ -202,7 +202,10 @@ class PipelineOrchestrator:
                     result={
                         "has_codebase_context": codebase_context is not None,
                         "context_chars": len(codebase_context) if codebase_context else 0,
-                        "repo_full_name": repo_full_name,
+                        "repo_full_name": (
+                            repo_full_name
+                            or (context_sources or {}).get("enrichment_meta", {}).get("repo_full_name")
+                        ),
                         "context_sources": context_sources,
                     },
                 )
@@ -957,7 +960,7 @@ class PipelineOrchestrator:
             # ---------------------------------------------------------------
             # Final event
             # ---------------------------------------------------------------
-            result = PipelineResult(
+            _result_kwargs = dict(
                 id=opt_id,
                 trace_id=trace_id,
                 raw_prompt=raw_prompt,
@@ -982,6 +985,18 @@ class PipelineOrchestrator:
                 intent_label=analysis.intent_label,
                 domain=effective_domain,
             )
+            try:
+                result = PipelineResult(**_result_kwargs)
+            except Exception as val_err:
+                logger.warning(
+                    "PipelineResult validation failed, retrying with sanitized "
+                    "context_sources: %s", val_err,
+                )
+                _result_kwargs["context_sources"] = {
+                    k: v for k, v in (context_sources or {}).items()
+                    if isinstance(v, (bool, str, int, float, type(None)))
+                }
+                result = PipelineResult(**_result_kwargs)
 
             if optimized_scores:
                 logger.info(

@@ -311,6 +311,10 @@ class RepoIndexMeta(Base):
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
+    __table_args__ = (
+        Index("idx_repo_index_meta_repo_branch", "repo_full_name", "branch", unique=True),
+    )
+
 
 # --- Refinement tables (Section 13) ---
 # RefinementBranch defined first since RefinementTurn has FK to it.

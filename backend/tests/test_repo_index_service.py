@@ -328,3 +328,60 @@ class TestCuratedRetrieval:
         )
         assert result is not None
         assert result.files_included == 2  # third file exceeds budget
+
+
+# ---------------------------------------------------------------------------
+# Unique constraint and upsert tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_or_create_meta_idempotent(db_session):
+    """Calling _get_or_create_meta twice returns the same row, no duplicates."""
+    svc = _make_svc(db_session)
+    meta1 = await svc._get_or_create_meta("owner/repo", "main")
+    meta2 = await svc._get_or_create_meta("owner/repo", "main")
+    assert meta1.id == meta2.id
+
+    from sqlalchemy import func, select as sa_select
+    count_q = await db_session.execute(
+        sa_select(func.count()).select_from(RepoIndexMeta).where(
+            RepoIndexMeta.repo_full_name == "owner/repo",
+            RepoIndexMeta.branch == "main",
+        )
+    )
+    assert count_q.scalar() == 1
+
+
+@pytest.mark.asyncio
+async def test_unique_constraint_prevents_duplicates(db_session):
+    """DB-level unique constraint rejects duplicate (repo_full_name, branch)."""
+    from sqlalchemy.exc import IntegrityError
+
+    meta1 = RepoIndexMeta(
+        repo_full_name="owner/repo", branch="main",
+        status="ready", file_count=5,
+    )
+    db_session.add(meta1)
+    await db_session.flush()
+
+    meta2 = RepoIndexMeta(
+        repo_full_name="owner/repo", branch="main",
+        status="pending", file_count=0,
+    )
+    db_session.add(meta2)
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+    await db_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_get_or_create_meta(db_session):
+    """Parallel upsert calls resolve to the same row."""
+    import asyncio
+
+    svc = _make_svc(db_session)
+    results = await asyncio.gather(
+        svc._get_or_create_meta("owner/repo", "main"),
+        svc._get_or_create_meta("owner/repo", "main"),
+    )
+    assert results[0].id == results[1].id

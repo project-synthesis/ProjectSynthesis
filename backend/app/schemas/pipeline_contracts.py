@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Canonical task type values — must match the analyze.md template prompt
 TaskType = Literal["coding", "writing", "analysis", "creative", "data", "system", "general"]
@@ -380,6 +380,17 @@ class PipelineResult(BaseModel):
     )
 
     model_config = {"extra": "allow"}
+
+    @field_validator("context_sources", mode="before")
+    @classmethod
+    def _coerce_context_sources(cls, v: Any) -> dict[str, Any]:
+        """Accept None, MappingProxyType, and mixed-type dicts gracefully."""
+        if v is None:
+            return {}
+        from collections.abc import Mapping
+        if isinstance(v, Mapping):
+            return dict(v)
+        return {}
 
 
 __all__ = [

@@ -5,12 +5,14 @@ import hashlib
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable
 
 import numpy as np
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -606,16 +608,24 @@ class RepoIndexService:
     async def _get_or_create_meta(
         self, repo_full_name: str, branch: str
     ) -> RepoIndexMeta:
+        # Atomic upsert — prevents duplicate rows from concurrent calls
+        stmt = sqlite_insert(RepoIndexMeta).values(
+            id=str(uuid.uuid4()),
+            repo_full_name=repo_full_name,
+            branch=branch,
+            status="pending",
+            file_count=0,
+        ).on_conflict_do_nothing(
+            index_elements=["repo_full_name", "branch"],
+        )
+        await self._db.execute(stmt)
+        await self._db.flush()
+
+        # Fetch the (possibly pre-existing) row
         meta = await self.get_index_status(repo_full_name, branch)
-        if meta is None:
-            meta = RepoIndexMeta(
-                repo_full_name=repo_full_name,
-                branch=branch,
-                status="pending",
-                file_count=0,
-            )
-            self._db.add(meta)
-            await self._db.flush()
+        assert meta is not None, (
+            f"RepoIndexMeta for {repo_full_name}@{branch} must exist after upsert"
+        )
         return meta
 
     async def _read_file(

@@ -291,9 +291,9 @@ class ContextEnrichmentService:
                     RepoIndexMeta.repo_full_name == repo_full_name,
                     RepoIndexMeta.branch == branch,
                     RepoIndexMeta.explore_synthesis.isnot(None),
-                ).limit(1)
+                )
             )
-            return meta_q.scalar_one_or_none()
+            return meta_q.scalar()
         except Exception:
             logger.debug("Explore synthesis lookup failed", exc_info=True)
             return None

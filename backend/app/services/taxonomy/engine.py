@@ -1063,14 +1063,63 @@ class TaxonomyEngine:
                 cluster.member_count = expected
                 mc_fixed += 1
         stats["member_count_fixed"] = mc_fixed
+
+        # --- 5. Reconcile orphaned project_id references ---
+        # Find optimizations whose project_id references a non-existent
+        # PromptCluster (state='project') and fix them via the cluster
+        # ancestry chain: cluster → domain (parent_id) → project (parent_id).
+        valid_project_ids = {
+            c.id for c in active_clusters if c.state == "project"  # type: ignore[attr-defined]
+        }
+        # Also include domain-state nodes for the ancestry walk
+        all_nodes_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.in_(["project", "domain"])
+            )
+        )
+        all_structural = {n.id: n for n in all_nodes_q.scalars().all()}
+        # Build parent lookup
+        parent_map: dict[str, str | None] = {
+            n.id: n.parent_id for n in all_structural.values()
+        }
+        # Also need domain parents for active clusters
+        for cluster in active_clusters:
+            if cluster.parent_id:
+                parent_map.setdefault(cluster.id, cluster.parent_id)
+
+        orphan_q = await db.execute(
+            select(Optimization).where(
+                Optimization.project_id.isnot(None),
+                ~Optimization.project_id.in_(valid_project_ids) if valid_project_ids else Optimization.project_id.isnot(None),
+            )
+        )
+        orphan_opts = orphan_q.scalars().all()
+        project_fixed = 0
+        for opt in orphan_opts:
+            # Walk: cluster_id → parent (domain) → parent (project)
+            cursor = opt.cluster_id
+            resolved = None
+            for _ in range(3):  # max depth
+                if not cursor:
+                    break
+                if cursor in valid_project_ids:
+                    resolved = cursor
+                    break
+                cursor = parent_map.get(cursor)
+            if resolved and resolved != opt.project_id:
+                opt.project_id = resolved
+                project_fixed += 1
+        stats["project_id_fixed"] = project_fixed
         await db.flush()
 
         logger.info(
             "Data integrity repair: join=%d created/%d deleted, "
-            "meta=%d created/%d deleted, coherence=%d computed",
+            "meta=%d created/%d deleted, coherence=%d computed, "
+            "project_id=%d fixed",
             stats["join_created"], stats["join_deleted"],
             stats["meta_patterns_created"], stats["meta_patterns_deleted"],
             stats["coherence_computed"],
+            project_fixed,
         )
         return stats
 

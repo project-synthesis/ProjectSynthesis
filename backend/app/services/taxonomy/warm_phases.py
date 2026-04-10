@@ -2828,6 +2828,8 @@ async def phase_refresh(
                 """Extract patterns using LLM only — no DB access."""
                 texts: list[str] = []
                 for opt in opts[:5]:
+                    if not opt.optimized_prompt:
+                        continue  # skip optimizations without optimized text
                     try:
                         # Direct LLM call instead of extract_meta_patterns() to
                         # avoid shared DB session in parallel coroutines.

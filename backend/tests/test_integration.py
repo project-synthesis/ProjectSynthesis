@@ -561,7 +561,12 @@ class TestPassthroughEndToEnd:
         assert resp.status_code == 200
         normal_events = _parse_sse_events(resp.text)
         normal_complete = next(
-            e for e in normal_events if e.get("event") == "optimization_complete"
+            (e for e in normal_events if e.get("event") == "optimization_complete"),
+            None,
+        )
+        assert normal_complete is not None, (
+            f"optimization_complete event missing from SSE stream. "
+            f"Events received: {[e.get('event') for e in normal_events]}"
         )
         normal_id = normal_complete["id"]
 
@@ -585,9 +590,11 @@ class TestPassthroughEndToEnd:
         assert resp.json()["scoring_mode"] == "heuristic"
 
         normal_trace = next(
-            e.get("trace_id") for e in normal_events
-            if e.get("event") == "optimization_start"
+            (e.get("trace_id") for e in normal_events
+             if e.get("event") == "optimization_start"),
+            None,
         )
+        assert normal_trace is not None, "optimization_start event missing"
         resp = await app_client.get(f"/api/optimize/{normal_trace}")
         assert resp.status_code == 200
         assert resp.json()["scoring_mode"] != "heuristic"

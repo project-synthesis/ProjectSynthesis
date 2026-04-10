@@ -24,6 +24,7 @@ router = APIRouter(prefix="/api/github", tags=["github"])
 def _github_error_to_http(exc: GitHubApiError) -> HTTPException:
     """Convert a GitHubApiError to a FastAPI HTTPException with appropriate status code."""
     if exc.status_code == 401:
+        logger.warning("GitHub token expired or revoked — user must reconnect: %s", exc.message)
         return HTTPException(401, "GitHub token expired or revoked. Please reconnect your GitHub account.")
     if exc.status_code == 403:
         return HTTPException(403, f"GitHub API access denied: {exc.message}")
@@ -197,9 +198,9 @@ async def link_repo(
                                 select(RepoIndexMeta).where(
                                     RepoIndexMeta.repo_full_name == _idx_repo,
                                     RepoIndexMeta.branch == _idx_branch,
-                                ).limit(1)
+                                )
                             )
-                            meta = meta_q.scalar_one_or_none()
+                            meta = meta_q.scalars().first()
                             if meta:
                                 meta.explore_synthesis = synthesis
                                 await bg_db2.commit()
@@ -357,9 +358,9 @@ async def get_index_status(
         select(RepoIndexMeta).where(
             RepoIndexMeta.repo_full_name == linked.full_name,
             RepoIndexMeta.branch == (linked.branch or linked.default_branch),
-        ).order_by(RepoIndexMeta.indexed_at.desc()).limit(1)
+        ).order_by(RepoIndexMeta.indexed_at.desc())
     )
-    meta = meta_q.scalar_one_or_none()
+    meta = meta_q.scalars().first()
     if not meta:
         return {"status": "not_indexed", "file_count": 0, "indexed_at": None}
     return {
@@ -432,9 +433,9 @@ async def reindex_repo(
                             select(RepoIndexMeta).where(
                                 RepoIndexMeta.repo_full_name == _reindex_repo,
                                 RepoIndexMeta.branch == branch,
-                            ).limit(1)
+                            )
                         )
-                        meta = meta_q.scalar_one_or_none()
+                        meta = meta_q.scalars().first()
                         if meta:
                             meta.explore_synthesis = synthesis
                             await bg_db2.commit()

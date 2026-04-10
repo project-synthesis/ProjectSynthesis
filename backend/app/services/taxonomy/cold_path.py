@@ -259,10 +259,25 @@ async def execute_cold_path(
     # only HDBSCAN sees the blended signal.
     # ------------------------------------------------------------------
     cluster_result = batch_cluster(blended_embeddings, min_cluster_size=3)
+    _hdbscan_ms = int((_time.monotonic() - _cold_t2) * 1000)
     logger.info(
         "Cold path: Step 5 (HDBSCAN) %.1fs — %d clusters, %d noise",
-        _time.monotonic() - _cold_t2, cluster_result.n_clusters, cluster_result.noise_count,
+        _hdbscan_ms / 1000, cluster_result.n_clusters, cluster_result.noise_count,
     )
+    try:
+        get_event_logger().log_decision(
+            path="cold", op="hdbscan", decision="complete",
+            context={
+                "clusters_found": cluster_result.n_clusters,
+                "noise_count": cluster_result.noise_count,
+                "input_nodes": len(blended_embeddings),
+                "noise_pct": round(cluster_result.noise_count / max(len(blended_embeddings), 1) * 100, 1),
+                "silhouette": round(cluster_result.silhouette, 4),
+                "duration_ms": _hdbscan_ms,
+            },
+        )
+    except RuntimeError:
+        pass
 
     if cluster_result.n_clusters == 0:
         logger.info(
@@ -481,6 +496,16 @@ async def execute_cold_path(
             "Cold path: repaired %d parent_id links to domain nodes",
             parent_repairs,
         )
+        try:
+            get_event_logger().log_decision(
+                path="cold", op="reconcile", decision="parent_repaired",
+                context={
+                    "parent_repairs": parent_repairs,
+                    "total_nodes": len(all_nodes),
+                },
+            )
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------
     # Step 13: Reconcile member_count from actual Optimization rows
@@ -681,7 +706,19 @@ async def execute_cold_path(
             )
 
     # ------------------------------------------------------------------
-    logger.info("Cold path: Step 17-18 (UMAP) %.1fs", _time.monotonic() - _cold_t6)
+    _umap_ms = int((_time.monotonic() - _cold_t6) * 1000)
+    logger.info("Cold path: Step 17-18 (UMAP) %.1fs", _umap_ms / 1000)
+    try:
+        get_event_logger().log_decision(
+            path="cold", op="umap", decision="projection_complete",
+            context={
+                "nodes_projected": sum(1 for n in all_nodes if n.umap_x is not None),
+                "total_nodes": len(all_nodes),
+                "duration_ms": _umap_ms,
+            },
+        )
+    except RuntimeError:
+        pass
     _cold_t7 = _time.monotonic()
     # Step 19: OKLab coloring with minimum deltaE (skip domain nodes)
     # ------------------------------------------------------------------
@@ -723,13 +760,17 @@ async def execute_cold_path(
 
     # Persist silhouette for warm-path reuse (warm path lacks the full
     # embedding matrix needed for sklearn's silhouette_score).
+    # Save the previous value so we can restore on rollback.
+    _saved_silhouette = engine._last_silhouette
     engine._last_silhouette = cluster_result.silhouette
 
     # ------------------------------------------------------------------
     # Step 22-24: Quality gate — reject regressive refits
     # ------------------------------------------------------------------
     if not is_cold_path_non_regressive(q_before, q_after):
-        # Step 23: Rejected — rollback
+        # Step 23: Rejected — rollback.  Restore in-memory state that was
+        # mutated before the gate check so warm-path Q stays consistent.
+        engine._last_silhouette = _saved_silhouette
         logger.warning(
             "Cold path quality regression: Q_before=%.4f Q_after=%.4f "
             "(epsilon=%.2f) -- rolling back refit",
@@ -778,6 +819,23 @@ async def execute_cold_path(
             )
         except RuntimeError:
             pass
+
+        # Notify frontend even on rejection so topology view refreshes.
+        try:
+            from app.services.event_bus import event_bus
+
+            event_bus.publish(
+                "taxonomy_changed",
+                {
+                    "trigger": "cold_path_rejected",
+                    "nodes_created": 0,
+                    "nodes_updated": 0,
+                    "q_system": q_before,
+                },
+            )
+        except Exception:
+            pass
+
         return ColdPathResult(
             snapshot_id=snap.id,
             q_before=q_before,
