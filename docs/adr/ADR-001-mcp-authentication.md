@@ -5,7 +5,7 @@
 
 ## Context
 
-The MCP server on port 8001 exposes 11 tools for prompt optimization, history, and feedback. Currently unauthenticated — acceptable for local dev but a risk if exposed to untrusted networks. The MCP ecosystem is evolving toward remote Streamable HTTP transport, enabling cloud-hosted IDE plugins (Notion, Figma, etc.) to connect over the network.
+The MCP server on port 8001 exposes 13 tools for prompt optimization, history, and feedback. Currently unauthenticated — acceptable for local dev but a risk if exposed to untrusted networks. The MCP ecosystem is evolving toward remote Streamable HTTP transport, enabling cloud-hosted IDE plugins (Notion, Figma, etc.) to connect over the network.
 
 ## Decision
 

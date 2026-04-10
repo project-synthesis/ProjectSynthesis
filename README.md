@@ -159,7 +159,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 
 ## MCP Integration
 
-The MCP server provides 12 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
+The MCP server provides 13 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
 
 ### Core pipeline tools
 
@@ -182,6 +182,7 @@ The MCP server provides 12 tools with `synthesis_` prefix on port 8001. All tool
 | `synthesis_feedback` | Submit quality feedback to drive strategy adaptation |
 | `synthesis_refine` | Iteratively improve an optimized prompt with specific instructions |
 | `synthesis_seed` | Batch-seed the taxonomy — generate + optimize + persist + cluster |
+| `synthesis_explain` | Plain-English explanation of what an optimization changed and why |
 
 Connect via `.mcp.json` (auto-loaded by Claude Code) or manually at `http://127.0.0.1:8001/mcp`.
 

@@ -15,7 +15,7 @@ Universal guidance for AI coding agents (Cursor, Copilot, Windsurf, Gemini CLI, 
 
 ## MCP tools
 
-11 tools available at `http://127.0.0.1:8001/mcp` (all use `structured_output=True`):
+13 tools available at `http://127.0.0.1:8001/mcp` (all use `structured_output=True`):
 
 ### Core pipeline
 
@@ -37,6 +37,8 @@ Universal guidance for AI coding agents (Cursor, Copilot, Windsurf, Gemini CLI, 
 | `synthesis_refine` | Iteratively improve an optimized prompt with specific instructions (requires local provider) |
 | `synthesis_history` | Query past optimizations with filtering, sorting, and pagination |
 | `synthesis_get_optimization` | Retrieve full details of a specific optimization by ID or trace_id |
+| `synthesis_seed` | Batch-generate diverse prompts via seed agents — bootstraps the knowledge graph taxonomy |
+| `synthesis_explain` | Plain-English explanation of what an optimization changed and why |
 
 ### Recommended workflow
 
@@ -85,7 +87,7 @@ All prompts are in `prompts/`. Edit any file and changes take effect immediately
 - **Pipeline**: 3 phases (analyze → optimize → score), models configurable per phase via preferences
 - **Scoring**: Hybrid — LLM scores blended with model-independent heuristics + z-score normalization
 - **Providers**: Claude CLI (Claude Code subscription) or Anthropic API (auto-detected at startup)
-- **MCP server**: Standalone on port 8001, 11 tools with structured output
+- **MCP server**: Standalone on port 8001, 13 tools with structured output
 - **Routing**: 5-tier priority chain — force_passthrough > force_sampling > internal > auto_sampling > passthrough
 
 ## Key files
@@ -101,7 +103,7 @@ All prompts are in `prompts/`. Edit any file and changes take effect immediately
 | `backend/app/services/routing.py` | 5-tier routing engine (provider, sampling, passthrough) |
 | `backend/app/services/context_enrichment.py` | Unified context enrichment for all tiers |
 | `backend/app/services/file_watcher.py` | Real-time strategy file watching (watchfiles) |
-| `backend/app/mcp_server.py` | MCP server with 11 tools |
+| `backend/app/mcp_server.py` | MCP server with 13 tools |
 | `backend/app/config.py` | All configuration |
 | `backend/app/providers/detector.py` | LLM provider auto-detection |
 | `prompts/manifest.json` | Template variable specs |
