@@ -52,6 +52,7 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `internal-guide.svelte.ts` | Internal tier guide modal state |
 | `guide-factory.svelte.ts` | Tier guide factory |
 | `tier-onboarding.svelte.ts` | Tier onboarding flow state |
+| `update.svelte.ts` | Auto-update state: available version, changelog, dialog, restart progress, health polling. SSE-driven via `update_available`/`update_complete` events. `localStorage` persistence for detached HEAD warning dismissal |
 
 ## Component layout
 
@@ -70,7 +71,7 @@ src/lib/components/
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, DiffView, Logo, MarkdownRenderer, PassthroughGuide,
                 # SamplingGuide, InternalGuide, TierGuide, TierBadge,
-                # ProviderBadge, ScoreCard, Toast
+                # ProviderBadge, ScoreCard, Toast, UpdateBadge
   landing/      # Navbar, Footer, ContentPage, HeroSection, CardGrid, ProseSection,
                 # CodeBlock, MetricBar, StepFlow, Timeline
 ```
@@ -122,8 +123,10 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | `seed_batch_progress` | Dispatched as `seed-batch-progress` DOM CustomEvent for SeedModal progress bar |
 | `preferences_changed` | Preferences store reload |
 | `agent_changed` | Seed agent list refresh (hot-reload on file change) |
+| `update_available` | Update store populated, StatusBar UpdateBadge badge displayed |
+| `update_complete` | Update validation results, success/failure toast |
 
-Fixed 60s health polling for StatusBar display only — no routing decisions from frontend.
+Fixed 60s health polling for StatusBar display only — no routing decisions from frontend. Tightens to 2s during auto-update restart window (120s timeout).
 
 ## Key patterns
 

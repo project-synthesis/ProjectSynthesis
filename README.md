@@ -117,6 +117,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 ./init.sh status       # service health + VS Code + provider + active tier
 ./init.sh logs         # tail all logs
 ./init.sh setup-vscode # install/update VS Code bridge extension
+./init.sh update [tag] # auto-update to latest release (or specific tag)
 ```
 
 ## Features
@@ -155,6 +156,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Pattern suggestion on paste** — cosine-searches active clusters, suggests matches with 1-click apply
 - **Tier-aware UI** — accent color adapts to active routing tier (CLI/API, sampling, passthrough)
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation + phase weight adaptation
+- **Auto-update** — detects new releases on startup (3-tier: git tags, raw fetch, GitHub Releases API). Persistent StatusBar badge, one-click update dialog with changelog, detached HEAD warning, post-update validation. CLI: `./init.sh update [tag]`
 - **API key management** — set/update/remove via UI with Fernet encryption at rest
 - **Trace logging** — per-phase JSONL traces with daily rotation
 
@@ -197,13 +199,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~120s, 1872 tests)
+# Backend tests (~180s, 1932 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (958 tests)
+# Frontend tests (969 tests)
 cd frontend && npm test
 
 # Frontend build
@@ -240,6 +242,8 @@ cd frontend && npm run build
 | `/api/clusters/activity` | GET | Taxonomy decision event feed |
 | `/api/seed` | POST | Batch-seed taxonomy |
 | `/api/seed/agents` | GET | List available seed agents |
+| `/api/update/status` | GET | Auto-update check result (version, tag, changelog) |
+| `/api/update/apply` | POST (202) | Trigger update + restart (two-phase) |
 | `/api/github/auth/device` | POST | Request device code (zero-config OAuth) |
 | `/api/github/auth/device/poll` | POST | Poll for device authorization |
 | `/api/github/auth/login` | GET | Callback OAuth login (fallback) |

@@ -4,12 +4,24 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.20 — 2026-04-10
+
 ### Added
-- Auto-update detection on startup (3-tier: git tags, raw fetch, GitHub Releases API)
-- Persistent StatusBar badge when a newer version is available
-- One-click update dialog with changelog display and detached HEAD warning
-- `./init.sh update [tag]` CLI subcommand for terminal-based updates
-- Post-update validation suite (version, tag, migration checks)
+- **Auto-update system** — 3-tier version detection (git tags, raw GitHub fetch, Releases API). Persistent StatusBar badge, one-click update dialog with changelog + detached HEAD warning. Two-phase trigger-and-resume architecture. Post-update validation suite (version, tag, migration checks). CLI: `./init.sh update [tag]`
+- **`GET /api/update/status`** — cached update check result (version, tag, changelog, detection tier)
+- **`POST /api/update/apply`** — trigger update + detached restart (202 Accepted)
+
+### Fixed
+- **RepoIndexMeta duplicate rows** — unique constraint on `(repo_full_name, branch)` + Alembic migration to deduplicate. Race condition in `_get_or_create_meta()` replaced with SQLite `INSERT...ON CONFLICT DO NOTHING`
+- **PipelineResult ValidationError** — `context_sources` field widened to accept mixed-type dicts (booleans + nested enrichment metadata). Added `@field_validator` coercion + try/except fallback to prevent lost LLM work
+- **Cold-path `_last_silhouette` leak** — save/restore on quality gate rejection prevents Q system corruption after rejected refits
+- **162 orphaned `project_id` references** — data migration + project_id reconciliation added to `repair_data_integrity()`
+- **No `taxonomy_changed` SSE after recluster rollback** — frontend now notified even on cold-path rejection
+- **Pattern extraction crash** — guard against optimizations missing `optimized_prompt`
+- **Enrichment trace `repo_full_name` null** — falls back to `enrichment_meta` nested value
+- **GitHub 401 silent failure** — added `logger.warning` for token expiry visibility
+- **Flaky integration test** — hardened `next()` calls with safe default + diagnostic assertion
+- **Subprocess timeout consistency** — all subprocess calls in UpdateService have explicit `asyncio.wait_for()` timeouts
 
 ## v0.3.20-dev — 2026-04-09
 
