@@ -204,4 +204,90 @@ describe('GitHubStore', () => {
       expect(invalidateSpy).toHaveBeenCalled();
     });
   });
+
+  describe('connectionState (spec: unified state model)', () => {
+    it('returns disconnected when no user, no linkedRepo, no authExpired', () => {
+      expect(githubStore.connectionState).toBe('disconnected');
+    });
+
+    it('returns expired when authExpired is true', () => {
+      githubStore.authExpired = true;
+      expect(githubStore.connectionState).toBe('expired');
+    });
+
+    it('returns expired when authExpired is true even with linkedRepo', () => {
+      githubStore.authExpired = true;
+      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      expect(githubStore.connectionState).toBe('expired');
+    });
+
+    it('returns authenticated when user set but no linkedRepo', () => {
+      githubStore.user = { login: 'test', avatar_url: '', github_user_id: '1' } as any;
+      expect(githubStore.connectionState).toBe('authenticated');
+    });
+
+    it('returns linked when user + linkedRepo but indexStatus is null', () => {
+      githubStore.user = { login: 'test', avatar_url: '', github_user_id: '1' } as any;
+      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      expect(githubStore.connectionState).toBe('linked');
+    });
+
+    it('returns linked when user + linkedRepo + indexStatus building', () => {
+      githubStore.user = { login: 'test', avatar_url: '', github_user_id: '1' } as any;
+      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      githubStore.indexStatus = { status: 'building', file_count: 0, indexed_at: null } as any;
+      expect(githubStore.connectionState).toBe('linked');
+    });
+
+    it('returns ready when user + linkedRepo + indexStatus ready', () => {
+      githubStore.user = { login: 'test', avatar_url: '', github_user_id: '1' } as any;
+      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      githubStore.indexStatus = { status: 'ready', file_count: 42, indexed_at: '2026-01-01' } as any;
+      expect(githubStore.connectionState).toBe('ready');
+    });
+  });
+
+  describe('reconnect (spec: clears state before device flow)', () => {
+    it('clears authExpired, linkedRepo, error, and browsing state then calls login', async () => {
+      const loginSpy = vi.spyOn(githubStore, 'login').mockResolvedValue(undefined);
+      githubStore.authExpired = true;
+      githubStore.linkedRepo = { id: '1', full_name: 'o/r', default_branch: 'main', branch: null, language: null } as any;
+      githubStore.fileTree = [{ name: 'f', path: 'f', type: 'file' }] as any;
+      githubStore.branches = ['main'];
+      githubStore.indexStatus = { status: 'ready', file_count: 10, indexed_at: '2026-01-01' } as any;
+      githubStore.error = 'stale error';
+      await githubStore.reconnect();
+      expect(githubStore.authExpired).toBe(false);
+      expect(githubStore.linkedRepo).toBeNull();
+      expect(githubStore.fileTree).toHaveLength(0);
+      expect(githubStore.branches).toHaveLength(0);
+      expect(githubStore.indexStatus).toBeNull();
+      expect(githubStore.error).toBeNull();
+      expect(loginSpy).toHaveBeenCalled();
+      loginSpy.mockRestore();
+    });
+  });
+
+  describe('checkAuth bug fix (spec: authExpired reset on null)', () => {
+    it('resets authExpired on null return from githubMe', async () => {
+      githubStore.authExpired = true;
+      mockFetch([
+        { match: '/github/auth/me', response: null, status: 200 },
+      ]);
+      await githubStore.checkAuth();
+      expect(githubStore.authExpired).toBe(false);
+      expect(githubStore.linkedRepo).toBeNull();
+    });
+  });
+
+  describe('logout bug fix (spec: authExpired reset)', () => {
+    it('resets authExpired on logout', async () => {
+      githubStore.authExpired = true;
+      mockFetch([
+        { match: '/github/auth/logout', response: { ok: true } },
+      ]);
+      await githubStore.logout();
+      expect(githubStore.authExpired).toBe(false);
+    });
+  });
 });

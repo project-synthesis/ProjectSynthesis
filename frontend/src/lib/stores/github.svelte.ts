@@ -40,6 +40,15 @@ class GitHubStore {
   treeLoading = $state(false);
   indexStatus = $state<IndexStatus | null>(null);
 
+  /** Unified connection state — single source of truth for all UI components. */
+  get connectionState(): 'disconnected' | 'expired' | 'authenticated' | 'linked' | 'ready' {
+    if (this.authExpired) return 'expired';
+    if (!this.user) return 'disconnected';
+    if (!this.linkedRepo) return 'authenticated';
+    if (!this.indexStatus || this.indexStatus.status === 'building') return 'linked';
+    return 'ready';
+  }
+
   // File content viewer state
   selectedFile = $state<string | null>(null);
   fileContent = $state<string | null>(null);
@@ -76,11 +85,13 @@ class GitHubStore {
         await this.loadLinked();
       } else {
         this.user = null;
+        this.linkedRepo = null;
+        this.authExpired = false;
       }
-    } catch (err) {
+    } catch {
+      // Network error — githubMe uses tryFetch so 401s return null, not throw.
+      // Only DNS/CORS failures reach here. Clear user, leave authExpired unchanged.
       this.user = null;
-      // Detect token revoked/expired (backend validates with GitHub on /auth/me)
-      this._handleAuthError(err);
     }
   }
 
@@ -155,11 +166,24 @@ class GitHubStore {
     try {
       await githubLogout();
       this.user = null;
+      this.authExpired = false;
       this.linkedRepo = null;
       this.repos = [];
     } catch (err: unknown) {
       this.error = err instanceof Error ? err.message : 'Operation failed';
     }
+  }
+
+  /** Clear stale auth state and start device flow for re-authentication.
+   *  Clears linkedRepo so the Navigator template falls to the device flow branch. */
+  async reconnect() {
+    this.authExpired = false;
+    this.linkedRepo = null;
+    this.fileTree = [];
+    this.branches = [];
+    this.indexStatus = null;
+    this.error = null;
+    await this.login();
   }
 
   async loadRepos() {
