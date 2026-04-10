@@ -226,12 +226,14 @@
             {#if family.project_ids && family.project_ids.length > 0}
               <div class="meta-row">
                 <span class="meta-label">{family.project_ids.length === 1 ? 'Project' : 'Projects'}</span>
-                <span class="meta-value meta-value--cyan">
-                  {#if family.project_ids.length === 1}
-                    {projectLabels[family.project_ids[0]] ?? family.project_ids.length}
-                  {:else}
-                    {family.project_ids.length}
-                  {/if}
+                <span class="meta-value meta-value--cyan data-value--truncate"
+                  use:tooltip={family.project_ids.map((id: string) => projectLabels[id] ?? id.slice(0, 8)).join(', ')}
+                >
+                  {family.project_ids.map((id: string) => {
+                    const label = projectLabels[id];
+                    if (!label) return id.slice(0, 8);
+                    return label.includes('/') ? label.split('/').pop() : label;
+                  }).join(', ')}
                 </span>
               </div>
             {/if}
