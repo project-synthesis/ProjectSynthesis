@@ -3,11 +3,17 @@
   import { tooltip } from '$lib/actions/tooltip';
 
   let dialogEl = $state<HTMLDivElement | null>(null);
+  let badgeEl = $state<HTMLButtonElement | null>(null);
+  let dialogStyle = $state('');
 
   function toggleDialog(e: MouseEvent) {
     if (updateStore.updating) return;
     e.stopPropagation();
     updateStore.dialogOpen = !updateStore.dialogOpen;
+    if (updateStore.dialogOpen && badgeEl) {
+      const rect = badgeEl.getBoundingClientRect();
+      dialogStyle = `position:fixed;bottom:${window.innerHeight - rect.top + 4}px;right:${window.innerWidth - rect.right}px;`;
+    }
   }
 
   function handleUpdate(e: MouseEvent) {
@@ -16,7 +22,8 @@
   }
 
   function handleClickOutside(e: MouseEvent) {
-    if (dialogEl && !dialogEl.contains(e.target as Node)) {
+    const target = e.target as Node;
+    if (dialogEl && !dialogEl.contains(target) && badgeEl && !badgeEl.contains(target)) {
       updateStore.dialogOpen = false;
     }
   }
@@ -44,12 +51,13 @@
   };
 </script>
 
-<div class="update-badge-wrapper" bind:this={dialogEl}>
+<div class="update-badge-wrapper">
   {#if updateStore.updating}
     <span class="update-badge updating">&#8635; Restarting...</span>
   {:else}
     <button
       class="update-badge available"
+      bind:this={badgeEl}
       onclick={toggleDialog}
       use:tooltip={'Update available — click for details'}
     >
@@ -59,7 +67,7 @@
   {/if}
 
   {#if updateStore.dialogOpen}
-    <div class="update-dialog">
+    <div class="update-dialog" bind:this={dialogEl} style={dialogStyle}>
       <div class="dialog-header">
         <div>
           <div class="dialog-title">Update Available</div>
@@ -164,9 +172,6 @@
     50% { opacity: 0.5; }
   }
   .update-dialog {
-    position: absolute;
-    bottom: 24px;
-    right: 0;
     width: 360px;
     border: 1px solid var(--color-border-subtle, #1a1a2e);
     background: var(--color-bg-secondary, #0d0d14);
