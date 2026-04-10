@@ -173,6 +173,11 @@ class GitHubStore {
   async loadLinked() {
     // tryFetch returns null on 404 (no linked repo) — expected
     this.linkedRepo = await githubLinked();
+    // Fetch index status whenever a linked repo exists so the Info tab
+    // shows "ready (N files)" immediately — not only after visiting Files.
+    if (this.linkedRepo) {
+      this.loadIndexStatus();
+    }
   }
 
   async unlinkRepo() {
