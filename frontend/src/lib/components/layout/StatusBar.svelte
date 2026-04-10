@@ -106,8 +106,16 @@
       <Logo size={14} variant="mark" />
     </div>
     <TierBadge tier={displayTier} provider={forgeStore.provider} degradedFrom={routing.isDegraded ? routing.requestedTier : null} />
-    {#if githubStore.linkedRepo}
-      <span class="status-project" use:tooltip={`Project: ${githubStore.linkedRepo.full_name}`}>{githubStore.linkedRepo.full_name.split('/')[1]}</span>
+    {#if githubStore.connectionState === 'ready'}
+      <span class="status-github" style="color: var(--color-text-dim)"
+        use:tooltip={`GitHub: ${githubStore.linkedRepo?.full_name}`}
+      >{githubStore.linkedRepo?.full_name.split('/')[1]}</span>
+    {:else if githubStore.connectionState === 'linked'}
+      <span class="status-github" style="color: var(--color-neon-cyan)">indexing...</span>
+    {:else if githubStore.connectionState === 'expired'}
+      <span class="status-github" style="color: var(--color-neon-red)">session expired</span>
+    {:else if githubStore.connectionState === 'authenticated'}
+      <span class="status-github" style="color: var(--color-neon-yellow)">no repo</span>
     {/if}
     {#if forgeStore.mcpDisconnected && !routing.isDegraded && !routing.isAutoFallback}
       <span class="status-disconnected" use:tooltip={STATUS_TOOLTIPS.mcp_disconnected}>disconnected</span>
@@ -267,7 +275,7 @@
     white-space: nowrap;
   }
 
-  .status-project {
+  .status-github {
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-text-dim);
