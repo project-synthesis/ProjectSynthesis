@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Project Synthesis — service manager
-# Usage: ./init.sh {start|stop|restart|status|logs|setup-vscode}
+# Usage: ./init.sh {start|stop|restart|reload-mcp|status|logs|setup-vscode}
 set -uo pipefail
 # Note: -e intentionally omitted — we handle errors per-command
 
@@ -1045,6 +1045,22 @@ case "${1:-start}" in
     start)   start_services ;;
     stop)    stop_services ;;
     restart) do_restart ;;
+    reload-mcp)
+        # Restart ONLY the MCP server to pick up backend code changes.
+        # Backend auto-reloads via uvicorn --reload. Frontend is unaffected.
+        # Faster than full restart — only requires one /mcp reconnect.
+        _log "Reloading MCP server..."
+        _ensure_dirs
+        stop_service mcp
+        _wait_port_free "$MCP_PORT" 10 || { _fail "MCP port $MCP_PORT still in use"; exit 1; }
+        _launch mcp
+        _await_ready mcp
+        if [[ ${#FAILED_SERVICES[@]} -gt 0 ]]; then
+            _fail "MCP server failed to start — check data/mcp.log"
+            exit 1
+        fi
+        _info "Run /mcp in Claude Code to reconnect"
+        ;;
     status)  show_status ;;
     logs)    show_logs ;;
     setup-vscode) shift; "$SCRIPT_DIR/scripts/setup-vscode.sh" "$@" ;;

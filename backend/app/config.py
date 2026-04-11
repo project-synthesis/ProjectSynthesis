@@ -99,13 +99,13 @@ class Settings(BaseSettings):
 
     # --- Index Enrichment ---
     INDEX_OUTLINE_MAX_CHARS: int = Field(
-        default=500, description="Maximum characters per file outline in RepoIndexService.",
+        default=2000, description="Maximum characters per file outline in RepoIndexService.",
     )
     INDEX_CURATED_MAX_CHARS: int = Field(
-        default=30000, description="Maximum characters for curated codebase context.",
+        default=80000, description="Maximum characters for curated codebase context.",
     )
     INDEX_CURATED_MIN_SIMILARITY: float = Field(
-        default=0.3, description="Minimum cosine similarity threshold for curated retrieval.",
+        default=0.2, description="Minimum cosine similarity threshold for curated retrieval.",
     )
     INDEX_CURATED_MAX_PER_DIR: int = Field(
         default=3, description="Maximum files per directory in curated retrieval (diversity cap).",

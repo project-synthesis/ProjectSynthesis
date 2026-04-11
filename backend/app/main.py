@@ -578,6 +578,56 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass  # Column already exists
 
+            # Ensure synthesis_status column on repo_index_meta
+            try:
+                async with async_session_factory() as _ss_db:
+                    from sqlalchemy import text as _text_ss
+                    await _ss_db.execute(
+                        _text_ss(
+                            "ALTER TABLE repo_index_meta "
+                            "ADD COLUMN synthesis_status VARCHAR DEFAULT 'pending' NOT NULL"
+                        )
+                    )
+                    await _ss_db.commit()
+            except Exception:
+                pass  # Column already exists
+
+            # Ensure synthesis_error column on repo_index_meta
+            try:
+                async with async_session_factory() as _se_db:
+                    from sqlalchemy import text as _text_se
+                    await _se_db.execute(
+                        _text_se("ALTER TABLE repo_index_meta ADD COLUMN synthesis_error TEXT")
+                    )
+                    await _se_db.commit()
+            except Exception:
+                pass  # Column already exists
+
+            # Backfill: mark existing rows with synthesis as ready
+            try:
+                async with async_session_factory() as _bf_synth_db:
+                    from sqlalchemy import text as _text_bf_synth
+                    await _bf_synth_db.execute(
+                        _text_bf_synth(
+                            "UPDATE repo_index_meta SET synthesis_status = 'ready' "
+                            "WHERE explore_synthesis IS NOT NULL AND synthesis_status = 'pending'"
+                        )
+                    )
+                    await _bf_synth_db.commit()
+            except Exception:
+                pass
+
+            # Ensure content column on repo_file_index (full source for curated context)
+            try:
+                async with async_session_factory() as _rc_db:
+                    from sqlalchemy import text as _text_rc
+                    await _rc_db.execute(
+                        _text_rc("ALTER TABLE repo_file_index ADD COLUMN content TEXT")
+                    )
+                    await _rc_db.commit()
+            except Exception:
+                pass  # Column already exists
+
             # One-time backfill: embed optimized_prompt + transformation for existing rows
             import numpy as np
             from sqlalchemy import select as _bf_select

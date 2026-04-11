@@ -5,10 +5,15 @@ similarity to the user prompt, and synthesizes a structured context
 summary via a Haiku LLM call.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
+import time
 from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
@@ -17,6 +22,9 @@ from app.services.embedding_service import EmbeddingService
 from app.services.explore_cache import ExploreCache
 from app.services.github_client import GitHubClient
 from app.services.prompt_loader import PromptLoader
+
+if TYPE_CHECKING:
+    from app.services.repo_index_service import RepoIndexService
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +68,13 @@ class CodebaseExplorer:
         github_client: GitHubClient,
         embedding_service: EmbeddingService,
         provider: LLMProvider,
+        repo_index_service: RepoIndexService | None = None,
     ) -> None:
         self._loader = prompt_loader
         self._gc = github_client
         self._es = embedding_service
         self._provider = provider
+        self._ris = repo_index_service
 
     async def explore(
         self,
@@ -121,7 +131,7 @@ class CodebaseExplorer:
         ]
 
         # 3. Rank files: semantic search or keyword fallback
-        ranked_paths = await self._rank_files(raw_prompt, indexable)
+        ranked_paths = await self._rank_files(raw_prompt, indexable, repo_full_name, branch)
 
         # 4. Cap at EXPLORE_MAX_FILES
         max_files = settings.EXPLORE_MAX_FILES
@@ -216,21 +226,82 @@ class CodebaseExplorer:
         self,
         raw_prompt: str,
         tree_items: list[dict],
+        repo_full_name: str | None = None,
+        branch: str | None = None,
     ) -> list[str]:
-        """Rank files by semantic similarity or fall back to keyword matching.
+        """Rank files by semantic similarity using index embeddings when available.
 
-        Returns a list of file paths sorted by relevance (most relevant first).
+        Fallback cascade:
+        1. Query pre-computed RepoFileIndex embeddings (richer: path+content)
+        2. Path-embed files missing from the index (added after last indexing)
+        3. If no index or DB failure, path-embed all files (original behavior)
+        4. If embedding entirely unavailable, keyword fallback
         """
         paths = [item["path"] for item in tree_items]
+        t0 = time.monotonic()
+        source = "keyword"  # tracks which path was taken for the final log
 
         try:
-            # Attempt semantic ranking
             query_vec = await self._es.aembed_single(raw_prompt)
-            path_vecs = await self._es.aembed_texts(paths)
-            ranked = self._es.cosine_search(query_vec, path_vecs, top_k=len(paths))
+
+            # Try index embeddings first
+            index_vecs: dict[str, np.ndarray] = {}
+            if self._ris and repo_full_name and branch:
+                try:
+                    t_idx = time.monotonic()
+                    index_vecs = await self._ris.get_embeddings_by_paths(
+                        repo_full_name, branch, paths,
+                    )
+                    logger.debug(
+                        "rank_files: index lookup returned %d/%d embeddings in %.0fms",
+                        len(index_vecs), len(paths),
+                        (time.monotonic() - t_idx) * 1000,
+                    )
+                except Exception:
+                    logger.warning(
+                        "rank_files: index embedding lookup failed for %s@%s — "
+                        "falling back to path embeddings",
+                        repo_full_name, branch, exc_info=True,
+                    )
+
+            # Separate indexed vs unindexed paths
+            if index_vecs:
+                unindexed = [p for p in paths if p not in index_vecs]
+                source = "index"
+                # Path-embed only the missing files
+                if unindexed:
+                    source = "index+path"
+                    t_fb = time.monotonic()
+                    fallback_vecs = await self._es.aembed_texts(unindexed)
+                    for p, v in zip(unindexed, fallback_vecs):
+                        index_vecs[p] = v
+                    logger.debug(
+                        "rank_files: path-embedded %d unindexed files in %.0fms",
+                        len(unindexed), (time.monotonic() - t_fb) * 1000,
+                    )
+                # Build corpus in original path order
+                corpus_vecs = [index_vecs[p] for p in paths]
+            else:
+                # No index available — original path-embedding behavior
+                source = "path"
+                corpus_vecs = await self._es.aembed_texts(paths)
+
+            ranked = self._es.cosine_search(query_vec, corpus_vecs, top_k=len(paths))
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            # Log top scores so we can assess ranking quality
+            top3 = [(paths[idx], round(score, 3)) for idx, score in ranked[:3]]
+            logger.info(
+                "rank_files: source=%s files=%d elapsed=%.0fms top3=%s",
+                source, len(paths), elapsed_ms, top3,
+            )
             return [paths[idx] for idx, _score in ranked]
         except Exception:
-            logger.info("Embedding unavailable — falling back to keyword matching")
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.warning(
+                "rank_files: embedding failed after %.0fms — keyword fallback "
+                "(files=%d)",
+                elapsed_ms, len(paths), exc_info=True,
+            )
             return self._keyword_rank(raw_prompt, paths)
 
     @staticmethod

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
+from app.config import settings
 from app.models import RepoFileIndex, RepoIndexMeta
 from app.services.repo_index_service import (
     RepoIndexService,
@@ -58,6 +59,9 @@ async def test_build_index_creates_meta(db_session):
     assert meta.status == "ready"
     assert meta.head_sha == "abc123"
     assert meta.file_count == 1
+    # Synthesis fields should be at their defaults (synthesis runs separately)
+    assert meta.synthesis_status == "pending"
+    assert meta.synthesis_error is None
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +165,7 @@ class TestStructuredOutlines:
         assert "validate_token" in outline.structural_summary
         assert outline.doc_summary is not None
         assert "authentication" in outline.doc_summary.lower()
-        assert len(outline.structural_summary) <= 500
+        assert len(outline.structural_summary) <= settings.INDEX_OUTLINE_MAX_CHARS
 
     def test_typescript_outline_extracts_exports(self):
         content = (
@@ -204,7 +208,7 @@ class TestStructuredOutlines:
     def test_outline_capped_at_max_chars(self):
         long_content = "\n".join(f"def func_{i}(x): pass" for i in range(200))
         outline = _extract_structured_outline("big.py", long_content)
-        assert len(outline.structural_summary) <= 500
+        assert len(outline.structural_summary) <= settings.INDEX_OUTLINE_MAX_CHARS
 
 
 # ---------------------------------------------------------------------------
@@ -386,3 +390,97 @@ async def test_concurrent_get_or_create_meta(db_session):
         svc._get_or_create_meta("owner/repo", "main"),
     )
     assert results[0].id == results[1].id
+
+
+# ---------------------------------------------------------------------------
+# get_embeddings_by_paths tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_embeddings_by_paths_returns_matching(db_session):
+    """Returns embeddings only for paths that exist in the index."""
+    vec_a = np.random.randn(384).astype(np.float32)
+    vec_b = np.random.randn(384).astype(np.float32)
+
+    db_session.add_all([
+        RepoFileIndex(
+            repo_full_name="o/r", branch="main", file_path="src/a.py",
+            file_sha="sha1", embedding=vec_a.tobytes(),
+        ),
+        RepoFileIndex(
+            repo_full_name="o/r", branch="main", file_path="src/b.py",
+            file_sha="sha2", embedding=vec_b.tobytes(),
+        ),
+    ])
+    await db_session.commit()
+
+    es = MagicMock()
+    es.dimension = 384
+    svc = _make_svc(db_session, embedding_service=es)
+    result = await svc.get_embeddings_by_paths(
+        "o/r", "main", ["src/a.py", "src/b.py", "src/missing.py"],
+    )
+
+    assert set(result.keys()) == {"src/a.py", "src/b.py"}
+    np.testing.assert_array_almost_equal(result["src/a.py"], vec_a)
+    np.testing.assert_array_almost_equal(result["src/b.py"], vec_b)
+
+
+@pytest.mark.asyncio
+async def test_get_embeddings_by_paths_empty_input(db_session):
+    """Empty path list returns empty dict without querying DB."""
+    es = MagicMock()
+    es.dimension = 384
+    svc = _make_svc(db_session, embedding_service=es)
+    result = await svc.get_embeddings_by_paths("o/r", "main", [])
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_get_embeddings_by_paths_skips_null_embeddings(db_session):
+    """Rows with null embeddings are excluded from results."""
+    db_session.add(RepoFileIndex(
+        repo_full_name="o/r", branch="main", file_path="src/no_embed.py",
+        file_sha="sha1", embedding=None,
+    ))
+    await db_session.commit()
+
+    es = MagicMock()
+    es.dimension = 384
+    svc = _make_svc(db_session, embedding_service=es)
+    result = await svc.get_embeddings_by_paths("o/r", "main", ["src/no_embed.py"])
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_get_embeddings_by_paths_skips_wrong_dimension(db_session):
+    """Embeddings with unexpected dimension are silently skipped."""
+    bad_vec = np.zeros(128, dtype=np.float32)  # wrong dim
+    db_session.add(RepoFileIndex(
+        repo_full_name="o/r", branch="main", file_path="src/bad.py",
+        file_sha="sha1", embedding=bad_vec.tobytes(),
+    ))
+    await db_session.commit()
+
+    es = MagicMock()
+    es.dimension = 384
+    svc = _make_svc(db_session, embedding_service=es)
+    result = await svc.get_embeddings_by_paths("o/r", "main", ["src/bad.py"])
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_get_embeddings_by_paths_isolates_repo_branch(db_session):
+    """Embeddings from other repos/branches are not returned."""
+    vec = np.random.randn(384).astype(np.float32)
+    db_session.add(RepoFileIndex(
+        repo_full_name="other/repo", branch="dev", file_path="src/a.py",
+        file_sha="sha1", embedding=vec.tobytes(),
+    ))
+    await db_session.commit()
+
+    es = MagicMock()
+    es.dimension = 384
+    svc = _make_svc(db_session, embedding_service=es)
+    result = await svc.get_embeddings_by_paths("o/r", "main", ["src/a.py"])
+    assert result == {}

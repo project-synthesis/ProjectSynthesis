@@ -33,6 +33,118 @@ def _github_error_to_http(exc: GitHubApiError) -> HTTPException:
     return HTTPException(502, f"GitHub API error ({exc.status_code}): {exc.message}")
 
 
+async def _update_synthesis_status(
+    repo_full_name: str,
+    branch: str,
+    *,
+    status: str,
+    synthesis_text: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Update synthesis_status (and optionally explore_synthesis/error) on RepoIndexMeta.
+
+    Opens its own DB session — safe to call from background tasks.
+    On ``status="ready"``, clears any previous error.
+    On ``status="error"``, preserves existing ``explore_synthesis`` text so
+    stale-but-valid synthesis from a prior run remains usable by enrichment.
+    """
+    from app.database import async_session_factory
+    from app.models import RepoIndexMeta
+
+    try:
+        async with async_session_factory() as db:
+            meta_q = await db.execute(
+                select(RepoIndexMeta).where(
+                    RepoIndexMeta.repo_full_name == repo_full_name,
+                    RepoIndexMeta.branch == branch,
+                )
+            )
+            meta = meta_q.scalars().first()
+            if meta:
+                meta.synthesis_status = status
+                meta.synthesis_error = error
+                if synthesis_text is not None:
+                    meta.explore_synthesis = synthesis_text
+                await db.commit()
+    except Exception:
+        logger.debug("_update_synthesis_status failed for %s@%s", repo_full_name, branch, exc_info=True)
+
+
+async def _run_explore_synthesis(
+    repo_full_name: str,
+    branch: str,
+    token: str,
+    provider: object | None,
+) -> None:
+    """Run Haiku explore synthesis and persist result to RepoIndexMeta.
+
+    Handles all status transitions (running/ready/error/skipped) and never
+    raises — all failures are logged and persisted as ``synthesis_status="error"``.
+    """
+    try:
+        if provider:
+            from app.database import async_session_factory
+            from app.services.codebase_explorer import CodebaseExplorer
+            from app.services.embedding_service import EmbeddingService
+            from app.services.prompt_loader import PromptLoader
+            from app.services.repo_index_service import RepoIndexService
+
+            await _update_synthesis_status(repo_full_name, branch, status="running")
+
+            es = EmbeddingService()
+            gc = GitHubClient()
+            async with async_session_factory() as db:
+                explorer = CodebaseExplorer(
+                    prompt_loader=PromptLoader(PROMPTS_DIR),
+                    github_client=gc,
+                    embedding_service=es,
+                    provider=provider,
+                    repo_index_service=RepoIndexService(db, gc, es),
+                )
+                synthesis = await explorer.explore(
+                    raw_prompt="Describe the project architecture, key patterns, and conventions",
+                    repo_full_name=repo_full_name,
+                    branch=branch,
+                    token=token,
+                )
+            if synthesis:
+                await _update_synthesis_status(
+                    repo_full_name, branch, status="ready",
+                    synthesis_text=synthesis,
+                )
+                logger.info(
+                    "Explore synthesis stored for %s@%s (%d chars)",
+                    repo_full_name, branch, len(synthesis),
+                )
+            else:
+                await _update_synthesis_status(
+                    repo_full_name, branch, status="error",
+                    error="Explore returned empty result",
+                )
+                logger.warning(
+                    "Explore synthesis returned None for %s@%s",
+                    repo_full_name, branch,
+                )
+        else:
+            await _update_synthesis_status(
+                repo_full_name, branch, status="skipped",
+                error="No LLM provider available at indexing time",
+            )
+            logger.info(
+                "No LLM provider — skipping explore synthesis for %s@%s",
+                repo_full_name, branch,
+            )
+    except Exception as exc:
+        logger.warning("Explore synthesis failed (non-fatal) for %s@%s: %s", repo_full_name, branch, exc)
+        try:
+            await _update_synthesis_status(
+                repo_full_name, branch, status="error",
+                error=str(exc)[:500],
+            )
+        except Exception:
+            logger.debug("Failed to persist synthesis error status", exc_info=True)
+
+
 class LinkRepoRequest(BaseModel):
     full_name: str = Field(description="GitHub repo in 'owner/repo' format.")
     branch: str | None = Field(default=None, description="Branch to use (defaults to repo default branch).")
@@ -173,45 +285,9 @@ async def link_repo(
                 )
                 await svc.build_index(_idx_repo, _idx_branch, _idx_token)
 
-            # Step 2: Run explore synthesis and store in RepoIndexMeta
-            try:
-                from app.services.codebase_explorer import CodebaseExplorer
-                from app.services.prompt_loader import PromptLoader
-
-                if _idx_provider:
-                    explorer = CodebaseExplorer(
-                        prompt_loader=PromptLoader(PROMPTS_DIR),
-                        github_client=GitHubClient(),
-                        embedding_service=EmbeddingService(),
-                        provider=_idx_provider,
-                    )
-                    synthesis = await explorer.explore(
-                        raw_prompt="Describe the project architecture, key patterns, and conventions",
-                        repo_full_name=_idx_repo,
-                        branch=_idx_branch,
-                        token=_idx_token,
-                    )
-                    if synthesis:
-                        async with async_session_factory() as bg_db2:
-                            from app.models import RepoIndexMeta
-                            meta_q = await bg_db2.execute(
-                                select(RepoIndexMeta).where(
-                                    RepoIndexMeta.repo_full_name == _idx_repo,
-                                    RepoIndexMeta.branch == _idx_branch,
-                                )
-                            )
-                            meta = meta_q.scalars().first()
-                            if meta:
-                                meta.explore_synthesis = synthesis
-                                await bg_db2.commit()
-                                logger.info(
-                                    "Explore synthesis stored for %s@%s (%d chars)",
-                                    _idx_repo, _idx_branch, len(synthesis),
-                                )
-                else:
-                    logger.debug("No LLM provider available — skipping explore synthesis")
-            except Exception as synth_exc:
-                logger.warning("Background explore synthesis failed (non-fatal): %s", synth_exc)
+            await _run_explore_synthesis(
+                _idx_repo, _idx_branch, _idx_token, _idx_provider,
+            )
 
         asyncio.create_task(_bg_index())
         logger.info("Background indexing triggered for %s@%s", full_name, active_branch)
@@ -350,7 +426,8 @@ async def get_index_status(
     )
     linked = linked_q.scalar_one_or_none()
     if not linked:
-        return {"status": "no_repo", "file_count": 0, "indexed_at": None}
+        return {"status": "no_repo", "file_count": 0, "indexed_at": None,
+                "synthesis_status": None, "synthesis_error": None}
 
     from app.models import RepoIndexMeta
 
@@ -362,12 +439,15 @@ async def get_index_status(
     )
     meta = meta_q.scalars().first()
     if not meta:
-        return {"status": "not_indexed", "file_count": 0, "indexed_at": None}
+        return {"status": "not_indexed", "file_count": 0, "indexed_at": None,
+                "synthesis_status": None, "synthesis_error": None}
     return {
         "status": meta.status,
         "file_count": meta.file_count or 0,
         "head_sha": meta.head_sha,
         "indexed_at": meta.indexed_at.isoformat() if meta.indexed_at else None,
+        "synthesis_status": getattr(meta, "synthesis_status", "pending"),
+        "synthesis_error": getattr(meta, "synthesis_error", None),
     }
 
 
@@ -408,39 +488,9 @@ async def reindex_repo(
             )
             await svc.build_index(_reindex_repo, branch, token)
 
-        # Refresh explore synthesis (same pattern as link_repo)
-        if _reindex_provider:
-            try:
-                from app.services.codebase_explorer import CodebaseExplorer
-                from app.services.prompt_loader import PromptLoader
-
-                explorer = CodebaseExplorer(
-                    prompt_loader=PromptLoader(PROMPTS_DIR),
-                    github_client=GitHubClient(),
-                    embedding_service=EmbeddingService(),
-                    provider=_reindex_provider,
-                )
-                synthesis = await explorer.explore(
-                    raw_prompt="Describe the project architecture, key patterns, and conventions",
-                    repo_full_name=_reindex_repo,
-                    branch=branch,
-                    token=token,
-                )
-                if synthesis:
-                    async with async_session_factory() as bg_db2:
-                        from app.models import RepoIndexMeta
-                        meta_q = await bg_db2.execute(
-                            select(RepoIndexMeta).where(
-                                RepoIndexMeta.repo_full_name == _reindex_repo,
-                                RepoIndexMeta.branch == branch,
-                            )
-                        )
-                        meta = meta_q.scalars().first()
-                        if meta:
-                            meta.explore_synthesis = synthesis
-                            await bg_db2.commit()
-            except Exception as synth_exc:
-                logger.warning("Reindex explore synthesis failed: %s", synth_exc)
+        await _run_explore_synthesis(
+            _reindex_repo, branch, token, _reindex_provider,
+        )
 
     asyncio.create_task(_bg_index())
     return {"status": "indexing", "repo": linked.full_name, "branch": branch}

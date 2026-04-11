@@ -290,6 +290,7 @@ class RepoFileIndex(Base):
     file_path = Column(String, nullable=False)
     file_sha = Column(String, nullable=True)
     file_size_bytes = Column(Integer, nullable=True)
+    content = Column(Text, nullable=True)  # full file source for curated context delivery
     outline = Column(Text, nullable=True)
     embedding = Column(LargeBinary, nullable=True)  # numpy bytes (384*4=1536), matches v2
     updated_at = Column(DateTime, default=_utcnow, nullable=False)
@@ -308,6 +309,8 @@ class RepoIndexMeta(Base):
     indexed_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     explore_synthesis = Column(Text, nullable=True)  # cached Haiku architectural synthesis
+    synthesis_status = Column(String, default="pending", server_default="pending", nullable=False)
+    synthesis_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
