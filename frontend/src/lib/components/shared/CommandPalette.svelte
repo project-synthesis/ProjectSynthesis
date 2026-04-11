@@ -1,13 +1,16 @@
 <script lang="ts">
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
+  import { clustersStore } from '$lib/stores/clusters.svelte';
   import { copyToClipboard } from '$lib/utils/formatting';
+  import { addToast } from '$lib/stores/toast.svelte';
 
   // Actions available in the palette
   interface PaletteAction {
     id: string;
     label: string;
     shortcut?: string;
+    available: () => boolean;
     run: () => void;
   }
 
@@ -26,23 +29,45 @@
     };
   });
 
+  // Reactive availability checks
+  const hasPrompt = $derived(forgeStore.prompt.trim().length >= 20);
+  const canForge = $derived(
+    hasPrompt && (forgeStore.status === 'idle' || forgeStore.status === 'complete' || forgeStore.status === 'error'),
+  );
+  const currentResult = $derived(editorStore.activeResult ?? forgeStore.result);
+  const hasResult = $derived(currentResult?.id != null);
+  const hasOptimizedText = $derived(currentResult?.optimized_prompt != null);
+
   const allActions: PaletteAction[] = [
     {
       id: 'new-prompt',
       label: 'New Prompt',
+      available: () => true,
       run: () => {
         forgeStore.reset();
         window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'editor' }));
+        // Focus the prompt input after switching
+        editorStore.focusPrompt();
         close();
       },
     },
     {
       id: 'forge',
       label: 'Forge',
+      available: () => canForge,
       run: () => {
+        if (!hasPrompt) {
+          addToast('modified', 'Enter a prompt first (20+ characters)');
+          close();
+          return;
+        }
+        if (forgeStore.status === 'analyzing' || forgeStore.status === 'optimizing' || forgeStore.status === 'scoring') {
+          addToast('modified', 'Optimization already in progress');
+          close();
+          return;
+        }
         forgeStore.forge();
-        // Watch for result.id (not traceId) to open result tab — ensures cache key
-        // matches the key used by loadFromRecord → cacheResult(opt.id).
+        // Watch for result.id to open result tab
         forgeCheckInterval = setInterval(() => {
           if (forgeStore.result?.id) {
             clearInterval(forgeCheckInterval!);
@@ -61,35 +86,74 @@
     {
       id: 'view-history',
       label: 'View History',
+      available: () => true,
       run: () => {
         window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'history' }));
         close();
       },
     },
     {
+      id: 'view-topology',
+      label: 'View Topology',
+      available: () => true,
+      run: () => {
+        window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'clusters' }));
+        clustersStore.loadTree();
+        editorStore.openMindmap();
+        close();
+      },
+    },
+    {
       id: 'link-repo',
       label: 'Link Repo',
+      available: () => true,
       run: () => {
         window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'github' }));
         close();
       },
     },
     {
+      id: 'settings',
+      label: 'Settings',
+      available: () => true,
+      run: () => {
+        window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'settings' }));
+        close();
+      },
+    },
+    {
       id: 'toggle-diff',
       label: 'Toggle Diff',
+      available: () => hasResult,
       run: () => {
-        const id = (editorStore.activeResult ?? forgeStore.result)?.id;
-        if (!id) return;
-        editorStore.openDiff(id);
+        const id = currentResult?.id;
+        if (!id) {
+          addToast('modified', 'No result to diff — optimize a prompt first');
+          close();
+          return;
+        }
+        const diffTabId = `diff-${id}`;
+        if (editorStore.activeTabId === diffTabId) {
+          editorStore.closeTab(diffTabId);
+        } else {
+          editorStore.openDiff(id);
+        }
         close();
       },
     },
     {
       id: 'copy-result',
       label: 'Copy Result',
-      run: () => {
-        const text = (editorStore.activeResult ?? forgeStore.result)?.optimized_prompt;
-        if (text) copyToClipboard(text);
+      available: () => hasOptimizedText,
+      run: async () => {
+        const text = currentResult?.optimized_prompt;
+        if (!text) {
+          addToast('modified', 'No result to copy — optimize a prompt first');
+          close();
+          return;
+        }
+        await copyToClipboard(text);
+        addToast('created', 'Copied to clipboard');
         close();
       },
     },
@@ -118,10 +182,14 @@
   }
 
   function select(action: PaletteAction) {
+    if (!action.available()) {
+      // Disabled commands run anyway — their handler shows a toast explaining why
+    }
     action.run();
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    // Ctrl+K: toggle palette
     if (e.ctrlKey && e.key === 'k') {
       e.preventDefault();
       if (open) {
@@ -129,6 +197,13 @@
       } else {
         openPalette();
       }
+      return;
+    }
+    // Ctrl+Enter: forge (global shortcut)
+    if (e.ctrlKey && e.key === 'Enter' && !open) {
+      e.preventDefault();
+      const forgeAction = allActions.find((a) => a.id === 'forge');
+      if (forgeAction) forgeAction.run();
       return;
     }
     if (!open) return;
@@ -191,8 +266,10 @@
           <li
             class="action-item"
             class:selected={i === selectedIndex}
+            class:disabled={!action.available()}
             role="option"
             aria-selected={i === selectedIndex}
+            aria-disabled={!action.available()}
             onmouseenter={() => { selectedIndex = i; }}
             onclick={() => select(action)}
             onkeydown={(e) => { if (e.key === 'Enter') select(action); }}
@@ -276,7 +353,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 32px; /* h-8 */
+    height: 28px;
     padding: 0 10px;
     cursor: pointer;
     transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -287,6 +364,16 @@
   .action-item.selected {
     background: var(--color-bg-hover);
     border-left-color: var(--tier-accent, var(--color-neon-cyan));
+  }
+
+  .action-item.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .action-item.disabled:hover,
+  .action-item.disabled.selected {
+    border-left-color: transparent;
   }
 
   .action-label {

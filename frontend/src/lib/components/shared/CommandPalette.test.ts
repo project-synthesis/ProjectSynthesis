@@ -11,6 +11,7 @@ vi.mock('$lib/stores/forge.svelte', () => ({
     traceId: null,
     status: 'idle',
     result: null,
+    prompt: '',
   },
 }));
 
@@ -18,12 +19,35 @@ vi.mock('$lib/stores/editor.svelte', () => ({
   editorStore: {
     openResult: vi.fn(),
     openDiff: vi.fn(),
+    openMindmap: vi.fn(),
+    closeTab: vi.fn(),
+    focusPrompt: vi.fn(),
+    activeResult: null,
+    activeTabId: 'prompt',
   },
 }));
 
+vi.mock('$lib/stores/clusters.svelte', () => ({
+  clustersStore: {
+    loadTree: vi.fn(),
+  },
+}));
+
+vi.mock('$lib/stores/toast.svelte', () => ({
+  addToast: vi.fn(),
+}));
+
 describe('CommandPalette', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Reset mock property values that persist between tests
+    const { forgeStore } = await import('$lib/stores/forge.svelte');
+    const { editorStore } = await import('$lib/stores/editor.svelte');
+    vi.mocked(forgeStore).result = null;
+    vi.mocked(forgeStore).prompt = '';
+    vi.mocked(forgeStore).status = 'idle' as any;
+    vi.mocked(editorStore).activeResult = null;
+    vi.mocked(editorStore).activeTabId = 'prompt';
   });
 
   afterEach(() => {
@@ -51,7 +75,9 @@ describe('CommandPalette', () => {
     expect(screen.getByText('New Prompt')).toBeInTheDocument();
     expect(screen.getByText('Forge')).toBeInTheDocument();
     expect(screen.getByText('View History')).toBeInTheDocument();
+    expect(screen.getByText('View Topology')).toBeInTheDocument();
     expect(screen.getByText('Link Repo')).toBeInTheDocument();
+    expect(screen.getByText('Settings')).toBeInTheDocument();
     expect(screen.getByText('Toggle Diff')).toBeInTheDocument();
     expect(screen.getByText('Copy Result')).toBeInTheDocument();
   });
@@ -210,15 +236,25 @@ describe('CommandPalette', () => {
     expect(items[0]).toHaveAttribute('aria-selected', 'false');
   });
 
-  it('executes Forge action', async () => {
+  it('shows toast when Forge is invoked without a prompt', async () => {
     const user = userEvent.setup();
-    const { forgeStore } = await import('$lib/stores/forge.svelte');
+    const { addToast } = await import('$lib/stores/toast.svelte');
     render(CommandPalette);
     await user.keyboard('{Control>}k{/Control}');
 
-    // Navigate to Forge (second item)
-    await user.keyboard('{ArrowDown}');
-    await user.keyboard('{Enter}');
+    await user.click(screen.getByText('Forge'));
+
+    expect(addToast).toHaveBeenCalledWith('modified', 'Enter a prompt first (20+ characters)');
+  });
+
+  it('calls forge when prompt is long enough', async () => {
+    const user = userEvent.setup();
+    const { forgeStore } = await import('$lib/stores/forge.svelte');
+    vi.mocked(forgeStore).prompt = 'This is a prompt that is definitely long enough to optimize';
+    render(CommandPalette);
+    await user.keyboard('{Control>}k{/Control}');
+
+    await user.click(screen.getByText('Forge'));
 
     expect(forgeStore.forge).toHaveBeenCalled();
   });
@@ -246,7 +282,7 @@ describe('CommandPalette', () => {
     expect(dispatchSpy).toHaveBeenCalled();
   });
 
-  it('executes Toggle Diff action', async () => {
+  it('executes Toggle Diff when result exists', async () => {
     const user = userEvent.setup();
     const { forgeStore } = await import('$lib/stores/forge.svelte');
     const { editorStore } = await import('$lib/stores/editor.svelte');
@@ -260,9 +296,32 @@ describe('CommandPalette', () => {
     expect(editorStore.openDiff).toHaveBeenCalledWith('diff-1');
   });
 
-  it('executes Copy Result action with existing result', async () => {
+  it('shows toast when Toggle Diff has no result', async () => {
+    const user = userEvent.setup();
+    const { addToast } = await import('$lib/stores/toast.svelte');
+    render(CommandPalette);
+    await user.keyboard('{Control>}k{/Control}');
+
+    await user.click(screen.getByText('Toggle Diff'));
+
+    expect(addToast).toHaveBeenCalledWith('modified', 'No result to diff — optimize a prompt first');
+  });
+
+  it('shows toast when Copy Result has no result', async () => {
+    const user = userEvent.setup();
+    const { addToast } = await import('$lib/stores/toast.svelte');
+    render(CommandPalette);
+    await user.keyboard('{Control>}k{/Control}');
+
+    await user.click(screen.getByText('Copy Result'));
+
+    expect(addToast).toHaveBeenCalledWith('modified', 'No result to copy — optimize a prompt first');
+  });
+
+  it('copies text and shows toast when Copy Result has a result', async () => {
     const user = userEvent.setup();
     const { forgeStore } = await import('$lib/stores/forge.svelte');
+    const { addToast } = await import('$lib/stores/toast.svelte');
     vi.mocked(forgeStore).result = { id: 'copy-1', optimized_prompt: 'Optimized text' } as any;
 
     render(CommandPalette);
@@ -270,8 +329,36 @@ describe('CommandPalette', () => {
 
     await user.click(screen.getByText('Copy Result'));
 
+    expect(addToast).toHaveBeenCalledWith('created', 'Copied to clipboard');
     // Palette should close
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('marks unavailable commands with aria-disabled', async () => {
+    const user = userEvent.setup();
+    render(CommandPalette);
+    await user.keyboard('{Control>}k{/Control}');
+
+    // Forge should be disabled (no prompt), Toggle Diff and Copy Result too (no result)
+    const forgeItem = screen.getByText('Forge').closest('[role="option"]');
+    const diffItem = screen.getByText('Toggle Diff').closest('[role="option"]');
+    const copyItem = screen.getByText('Copy Result').closest('[role="option"]');
+
+    expect(forgeItem).toHaveAttribute('aria-disabled', 'true');
+    expect(diffItem).toHaveAttribute('aria-disabled', 'true');
+    expect(copyItem).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('marks always-available commands as not disabled', async () => {
+    const user = userEvent.setup();
+    render(CommandPalette);
+    await user.keyboard('{Control>}k{/Control}');
+
+    const newPromptItem = screen.getByText('New Prompt').closest('[role="option"]');
+    const historyItem = screen.getByText('View History').closest('[role="option"]');
+
+    expect(newPromptItem).toHaveAttribute('aria-disabled', 'false');
+    expect(historyItem).toHaveAttribute('aria-disabled', 'false');
   });
 
   it('closes palette on overlay click', async () => {
@@ -282,11 +369,8 @@ describe('CommandPalette', () => {
 
     // Click the overlay (the dialog element itself)
     const overlay = screen.getByRole('dialog');
-    // Simulate click on the overlay background
     await user.click(overlay);
 
-    // Palette should close (depending on click target matching currentTarget)
-    // In jsdom, currentTarget === target when clicking the element directly
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
