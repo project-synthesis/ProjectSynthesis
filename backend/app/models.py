@@ -295,6 +295,14 @@ class RepoFileIndex(Base):
     embedding = Column(LargeBinary, nullable=True)  # numpy bytes (384*4=1536), matches v2
     updated_at = Column(DateTime, default=_utcnow, nullable=False)
 
+    __table_args__ = (
+        Index(
+            "idx_repo_file_index_repo_branch_path",
+            "repo_full_name", "branch", "file_path",
+            unique=True,
+        ),
+    )
+
 
 class RepoIndexMeta(Base):
     __tablename__ = "repo_index_meta"

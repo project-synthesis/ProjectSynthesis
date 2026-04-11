@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     )
 
     # --- Index Enrichment ---
+    REPO_INDEX_REFRESH_INTERVAL: int = Field(
+        default=600, description="Seconds between incremental index refresh cycles (0 = disabled).",
+    )
+    REPO_INDEX_REFRESH_CONCURRENCY: int = Field(
+        default=5, description="Max concurrent GitHub API calls per repo during incremental refresh.",
+    )
     INDEX_OUTLINE_MAX_CHARS: int = Field(
         default=2000, description="Maximum characters per file outline in RepoIndexService.",
     )

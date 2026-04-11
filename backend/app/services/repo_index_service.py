@@ -18,13 +18,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import RepoFileIndex, RepoIndexMeta
 from app.services.embedding_service import EmbeddingService
-from app.services.github_client import GitHubClient
+from app.services.github_client import GitHubApiError, GitHubClient
 
 logger = logging.getLogger(__name__)
 
 # Module-level TTL cache for curated context results
 _curated_cache: dict[str, tuple[float, object]] = {}  # key -> (timestamp, result)
 _CURATED_CACHE_TTL = 300  # 5 minutes
+
+
+def invalidate_curated_cache(repo_full_name: str | None = None) -> int:
+    """Evict curated cache entries.
+
+    If ``repo_full_name`` is given, only entries whose cache key was built
+    from that repo are evicted.  Since cache keys are SHA-256 hashes we
+    can't reverse them, so we brute-force evict ALL entries — the TTL is
+    short (5 min) and a full-evict after an incremental update is cheap.
+
+    Returns the number of entries evicted.
+    """
+    count = len(_curated_cache)
+    _curated_cache.clear()
+    return count
 
 # File extensions that are worth indexing (text/code files)
 _INDEXABLE_EXTENSIONS = {
@@ -51,6 +66,15 @@ class FileOutline:
     doc_summary: str | None = None
     size_lines: int = 0
     size_bytes: int = 0
+
+
+@dataclass
+class ProcessedFile:
+    """A file that has been read, outlined, and embedded — ready for persistence."""
+    item: dict  # original tree entry {"path", "sha", "size"}
+    content: str
+    outline: FileOutline
+    embedding: np.ndarray  # 384-dim float32
 
 
 @dataclass
@@ -368,6 +392,17 @@ _TEST_INFRA = frozenset({
 })
 
 
+def _classify_github_error(exc: GitHubApiError) -> str:
+    """Map a GitHub API error to a human-readable skip reason."""
+    if exc.status_code == 401:
+        return "token_expired"
+    if exc.status_code == 403:
+        return "rate_limited"
+    if exc.status_code == 404:
+        return "repo_not_found"
+    return f"github_{exc.status_code}"
+
+
 def _is_test_file(path: str) -> bool:
     """Detect test, spec, benchmark, and test-infrastructure files.
 
@@ -475,55 +510,37 @@ class RepoIndexService:
                 )
             )
 
-            # Phase 1: Read files with bounded concurrency
+            # Phase 1-3: Read, outline, embed via shared pipeline
             t_read = time.monotonic()
-            semaphore = asyncio.Semaphore(10)
-            contents: list[tuple[dict, str | None]] = await asyncio.gather(
-                *[self._read_file(semaphore, token, repo_full_name, branch, item)
-                  for item in indexable]
+            processed, read_failures, embed_failures = await self._read_and_embed_files(
+                items=indexable,
+                token=token,
+                repo_full_name=repo_full_name,
+                branch=branch,
+                concurrency=10,
             )
-            read_ms = (time.monotonic() - t_read) * 1000
-            total_content_chars = sum(len(c) for _, c in contents if c)
+            process_ms = (time.monotonic() - t_read) * 1000
+            total_content_chars = sum(len(pf.content) for pf in processed)
 
-            # Phase 2: Extract structured outlines and build rich embedding text
-            t_outline = time.monotonic()
-            structured = [
-                _extract_structured_outline(item["path"], content) if content else None
-                for item, content in contents
-            ]
-            outlines = [
-                s.structural_summary if s else ""
-                for s in structured
-            ]
-            texts_to_embed = [
-                _build_embedding_text(item["path"], s) if s else item["path"]
-                for (item, _), s in zip(contents, structured)
-            ]
-            outline_ms = (time.monotonic() - t_outline) * 1000
+            if read_failures:
+                logger.warning(
+                    "build_index: %s@%s %d/%d file reads failed",
+                    repo_full_name, branch, read_failures, len(indexable),
+                )
 
-            # Phase 3: Embed
-            t_embed = time.monotonic()
-            embeddings: list[np.ndarray] = []
-            if texts_to_embed:
-                embeddings = await self._es.aembed_texts(texts_to_embed)
-            embed_ms = (time.monotonic() - t_embed) * 1000
-
-            # Phase 4: Persist file index rows (with full content)
+            # Phase 4: Persist file index rows
             t_persist = time.monotonic()
             file_count = 0
-            for idx, (item, content) in enumerate(contents):
-                if content is None:
-                    continue
-                vec: np.ndarray = embeddings[idx] if idx < len(embeddings) else np.zeros(384, dtype=np.float32)
+            for pf in processed:
                 row = RepoFileIndex(
                     repo_full_name=repo_full_name,
                     branch=branch,
-                    file_path=item["path"],
-                    file_sha=item.get("sha"),
-                    file_size_bytes=item.get("size"),
-                    content=content,
-                    outline=outlines[idx],
-                    embedding=vec.astype(np.float32).tobytes(),
+                    file_path=pf.item["path"],
+                    file_sha=pf.item.get("sha"),
+                    file_size_bytes=pf.item.get("size"),
+                    content=pf.content,
+                    outline=pf.outline.structural_summary,
+                    embedding=pf.embedding.tobytes(),
                 )
                 self._db.add(row)
                 file_count += 1
@@ -540,9 +557,11 @@ class RepoIndexService:
 
             logger.info(
                 "build_index complete: repo=%s files=%d content=%dK "
-                "read=%.0fms outline=%.0fms embed=%.0fms persist=%.0fms total=%.0fms",
+                "read_failures=%d embed_failures=%d "
+                "process=%.0fms persist=%.0fms total=%.0fms",
                 repo_full_name, file_count, total_content_chars // 1000,
-                read_ms, outline_ms, embed_ms, persist_ms, total_ms,
+                read_failures, embed_failures,
+                process_ms, persist_ms, total_ms,
             )
 
         except Exception as exc:
@@ -926,6 +945,317 @@ class RepoIndexService:
             )
         )
         await self._db.commit()
+
+    # ------------------------------------------------------------------
+    # Incremental refresh — detect changed files and re-embed only those
+    # ------------------------------------------------------------------
+
+    async def incremental_update(
+        self,
+        repo_full_name: str,
+        branch: str,
+        token: str,
+        concurrency: int = 5,
+    ) -> dict:
+        """Incrementally update the index by diffing the current HEAD tree
+        against stored ``file_sha`` values.
+
+        Only touches rows for files that actually changed, were added, or
+        were removed.  Never calls ``build_index()`` or bulk-deletes index
+        entries.  Skips if a concurrent ``build_index()`` is in progress
+        (``status == 'indexing'``).
+
+        Returns a summary dict::
+
+            {
+                "changed": int, "added": int, "removed": int,
+                "read_failures": int, "embed_failures": int,
+                "skipped_reason": str | None,
+                "elapsed_ms": float,
+            }
+        """
+        t_start = time.monotonic()
+        repo_tag = f"{repo_full_name}@{branch}"
+
+        def _result(
+            changed: int = 0, added: int = 0, removed: int = 0,
+            read_failures: int = 0, embed_failures: int = 0,
+            skipped_reason: str | None = None,
+        ) -> dict:
+            return {
+                "changed": changed, "added": added, "removed": removed,
+                "read_failures": read_failures, "embed_failures": embed_failures,
+                "skipped_reason": skipped_reason,
+                "elapsed_ms": round((time.monotonic() - t_start) * 1000, 1),
+            }
+
+        # ── Guard: meta must exist (build_index must have run) ───────���
+        meta = await self.get_index_status(repo_full_name, branch)
+        if meta is None:
+            logger.info("incremental_update: %s no meta — skipping (needs build_index)", repo_tag)
+            return _result(skipped_reason="no_index")
+
+        if meta.status == "indexing":
+            logger.info("incremental_update: %s currently indexing — skipping", repo_tag)
+            return _result(skipped_reason="indexing")
+
+        # ── Step 1: Quick HEAD SHA check (1 API call) ─────────────────
+        t_sha = time.monotonic()
+        try:
+            current_sha = await self._gc.get_branch_head_sha(token, repo_full_name, branch)
+        except GitHubApiError as exc:
+            reason = _classify_github_error(exc)
+            logger.warning("incremental_update: %s HEAD check failed: %s (%s)", repo_tag, exc, reason)
+            return _result(skipped_reason=reason)
+        except Exception as exc:
+            logger.warning("incremental_update: %s HEAD check failed: %s", repo_tag, exc)
+            return _result(skipped_reason="network_error")
+        sha_ms = (time.monotonic() - t_sha) * 1000
+
+        if current_sha and meta.head_sha == current_sha:
+            logger.debug(
+                "incremental_update: %s HEAD unchanged (%s) sha_check=%.0fms",
+                repo_tag, current_sha[:8], sha_ms,
+            )
+            return _result(skipped_reason="head_unchanged")
+
+        # ── Step 2: Fetch full tree (1 API call) ──────────────────────
+        t_tree = time.monotonic()
+        try:
+            tree = await self._gc.get_tree(token, repo_full_name, branch)
+        except GitHubApiError as exc:
+            reason = _classify_github_error(exc)
+            logger.warning("incremental_update: %s tree fetch failed: %s (%s)", repo_tag, exc, reason)
+            return _result(skipped_reason=reason)
+        except Exception as exc:
+            logger.warning("incremental_update: %s tree fetch failed: %s", repo_tag, exc)
+            return _result(skipped_reason="network_error")
+        tree_ms = (time.monotonic() - t_tree) * 1000
+
+        # Build lookup from current tree (only indexable files)
+        tree_map: dict[str, dict] = {}
+        for item in tree:
+            if _is_indexable(item["path"], item.get("size")):
+                tree_map[item["path"]] = item
+
+        # Load indexed file paths and SHAs
+        db_result = await self._db.execute(
+            select(
+                RepoFileIndex.file_path,
+                RepoFileIndex.file_sha,
+            ).where(
+                RepoFileIndex.repo_full_name == repo_full_name,
+                RepoFileIndex.branch == branch,
+            )
+        )
+        indexed_map: dict[str, str | None] = {
+            row.file_path: row.file_sha for row in db_result.all()
+        }
+
+        # ── Step 3: Classify into changed / added / removed ──────────
+        t_diff = time.monotonic()
+        changed_items: list[dict] = []
+        added_items: list[dict] = []
+        removed_paths: list[str] = []
+
+        for path, item in tree_map.items():
+            if path not in indexed_map:
+                added_items.append(item)
+            elif item.get("sha") and indexed_map[path] != item["sha"]:
+                changed_items.append(item)
+
+        for path in indexed_map:
+            if path not in tree_map:
+                removed_paths.append(path)
+        diff_ms = (time.monotonic() - t_diff) * 1000
+
+        total_delta = len(changed_items) + len(added_items) + len(removed_paths)
+        if total_delta == 0:
+            # SHA differs but no file-level changes (e.g. merge commit)
+            meta.head_sha = current_sha
+            await self._db.commit()
+            logger.info(
+                "incremental_update: %s HEAD changed (%s→%s) but no file diffs "
+                "sha=%.0fms tree=%.0fms",
+                repo_tag, (meta.head_sha or "?")[:8], (current_sha or "?")[:8],
+                sha_ms, tree_ms,
+            )
+            return _result()
+
+        logger.info(
+            "incremental_diff: repo=%s changed=%d added=%d removed=%d "
+            "tree=%d indexed=%d sha=%.0fms tree=%.0fms diff=%.0fms",
+            repo_tag,
+            len(changed_items), len(added_items), len(removed_paths),
+            len(tree_map), len(indexed_map),
+            sha_ms, tree_ms, diff_ms,
+        )
+
+        # ── Step 4: Delete removed file rows ──────────────────────────
+        t_delete = time.monotonic()
+        if removed_paths:
+            await self._db.execute(
+                delete(RepoFileIndex).where(
+                    RepoFileIndex.repo_full_name == repo_full_name,
+                    RepoFileIndex.branch == branch,
+                    RepoFileIndex.file_path.in_(removed_paths),
+                )
+            )
+        delete_ms = (time.monotonic() - t_delete) * 1000
+
+        # ── Step 5-6: Read, embed, and upsert changed/added files ─────
+        t_process = time.monotonic()
+        to_process = changed_items + added_items
+        processed, read_failures, embed_failures = await self._read_and_embed_files(
+            items=to_process,
+            token=token,
+            repo_full_name=repo_full_name,
+            branch=branch,
+            concurrency=concurrency,
+        )
+        process_ms = (time.monotonic() - t_process) * 1000
+
+        if read_failures:
+            logger.warning(
+                "incremental_update: %s %d/%d file reads failed",
+                repo_tag, read_failures, len(to_process),
+            )
+
+        t_persist = time.monotonic()
+        upserted = 0
+        for pf in processed:
+            try:
+                stmt = sqlite_insert(RepoFileIndex).values(
+                    id=str(uuid.uuid4()),
+                    repo_full_name=repo_full_name,
+                    branch=branch,
+                    file_path=pf.item["path"],
+                    file_sha=pf.item.get("sha"),
+                    file_size_bytes=pf.item.get("size"),
+                    content=pf.content,
+                    outline=pf.outline.structural_summary,
+                    embedding=pf.embedding.tobytes(),
+                    updated_at=datetime.now(timezone.utc),
+                ).on_conflict_do_update(
+                    index_elements=["repo_full_name", "branch", "file_path"],
+                    set_={
+                        "file_sha": pf.item.get("sha"),
+                        "file_size_bytes": pf.item.get("size"),
+                        "content": pf.content,
+                        "outline": pf.outline.structural_summary,
+                        "embedding": pf.embedding.tobytes(),
+                        "updated_at": datetime.now(timezone.utc),
+                    },
+                )
+                await self._db.execute(stmt)
+                upserted += 1
+            except Exception as db_exc:
+                logger.warning(
+                    "incremental_update: %s upsert failed for %s: %s",
+                    repo_tag, pf.item["path"], db_exc,
+                )
+        persist_ms = (time.monotonic() - t_persist) * 1000
+
+        # ── Step 7: Update meta ───────────────────────────────────────
+        meta.head_sha = current_sha
+        new_count = (meta.file_count or 0) + len(added_items) - len(removed_paths)
+        meta.file_count = max(0, new_count)  # guard against negative
+        meta.indexed_at = datetime.now(timezone.utc)
+        await self._db.commit()
+
+        total_ms = (time.monotonic() - t_start) * 1000
+        logger.info(
+            "incremental_update_complete: repo=%s changed=%d added=%d removed=%d "
+            "upserted=%d read_fail=%d embed_fail=%d "
+            "sha=%.0fms tree=%.0fms diff=%.0fms delete=%.0fms "
+            "process=%.0fms persist=%.0fms total=%.0fms",
+            repo_tag,
+            len(changed_items), len(added_items), len(removed_paths),
+            upserted, read_failures, embed_failures,
+            sha_ms, tree_ms, diff_ms, delete_ms,
+            process_ms, persist_ms, total_ms,
+        )
+
+        return _result(
+            changed=len(changed_items),
+            added=len(added_items),
+            removed=len(removed_paths),
+            read_failures=read_failures,
+            embed_failures=embed_failures,
+        )
+
+    # ------------------------------------------------------------------
+    # Shared file processing pipeline
+    # ------------------------------------------------------------------
+
+    async def _read_and_embed_files(
+        self,
+        items: list[dict],
+        token: str,
+        repo_full_name: str,
+        branch: str,
+        concurrency: int = 10,
+    ) -> tuple[list[ProcessedFile], int, int]:
+        """Read file content, extract outlines, and batch-embed.
+
+        Shared by ``build_index()`` (full rebuild) and
+        ``incremental_update()`` (selective re-embed).
+
+        Returns:
+            (processed_files, read_failures, embed_failures)
+        """
+        if not items:
+            return [], 0, 0
+
+        # Phase A: Read files with bounded concurrency
+        semaphore = asyncio.Semaphore(concurrency)
+        raw: list[tuple[dict, str | None]] = await asyncio.gather(
+            *[self._read_file(semaphore, token, repo_full_name, branch, it)
+              for it in items]
+        )
+
+        # Phase B: Filter out failed reads, extract outlines + embedding text
+        read_failures = 0
+        valid: list[tuple[dict, str, FileOutline, str]] = []  # (item, content, outline, embed_text)
+        for item, content in raw:
+            if content is None:
+                read_failures += 1
+                continue
+            outline = _extract_structured_outline(item["path"], content)
+            embed_text = _build_embedding_text(item["path"], outline)
+            valid.append((item, content, outline, embed_text))
+
+        if not valid:
+            return [], read_failures, 0
+
+        # Phase C: Batch embed (with fallback to zero vectors on failure)
+        embed_failures = 0
+        try:
+            embeddings = await self._es.aembed_texts(
+                [embed_text for _, _, _, embed_text in valid]
+            )
+        except Exception as exc:
+            logger.error(
+                "_read_and_embed_files: embedding failed for %s@%s (%s) — "
+                "persisting %d files with zero vectors",
+                repo_full_name, branch, exc, len(valid),
+            )
+            embeddings = []
+            embed_failures = len(valid)
+
+        # Phase D: Assemble ProcessedFile results
+        zero_vec = np.zeros(384, dtype=np.float32)
+        processed: list[ProcessedFile] = []
+        for idx, (item, content, outline, _) in enumerate(valid):
+            vec = embeddings[idx] if idx < len(embeddings) else zero_vec
+            processed.append(ProcessedFile(
+                item=item,
+                content=content,
+                outline=outline,
+                embedding=vec.astype(np.float32),
+            ))
+
+        return processed, read_failures, embed_failures
 
     # ------------------------------------------------------------------
     # Helpers

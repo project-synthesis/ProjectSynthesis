@@ -628,6 +628,21 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass  # Column already exists
 
+            # Ensure unique index on repo_file_index (repo, branch, path) for incremental upserts
+            try:
+                async with async_session_factory() as _rfi_idx_db:
+                    from sqlalchemy import text as _text_rfi_idx
+                    await _rfi_idx_db.execute(
+                        _text_rfi_idx(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS "
+                            "idx_repo_file_index_repo_branch_path "
+                            "ON repo_file_index (repo_full_name, branch, file_path)"
+                        )
+                    )
+                    await _rfi_idx_db.commit()
+            except Exception:
+                pass  # Index already exists
+
             # One-time backfill: embed optimized_prompt + transformation for existing rows
             import numpy as np
             from sqlalchemy import select as _bf_select
@@ -908,6 +923,184 @@ async def lifespan(app: FastAPI):
         )
         app.state.context_service = None
 
+    # Start background repo index refresh loop (incremental staleness detection)
+    async def _repo_index_refresh_loop():
+        """Periodically check linked repos for file changes and incrementally
+        re-embed only the diffs.  Runs on a configurable interval (default
+        10 min).  Each repo is checked independently — one failure never
+        blocks other repos or crashes the loop.
+
+        Cycle summary is logged at INFO level after each pass with per-repo
+        breakdown.  Publishes ``index_refreshed`` event on the event bus
+        when files change so the frontend can update.
+        """
+        interval = settings.REPO_INDEX_REFRESH_INTERVAL
+        if interval <= 0:
+            logger.info("Repo index refresh disabled (REPO_INDEX_REFRESH_INTERVAL=0)")
+            return
+
+        # Wait for services to be ready (poll, not sleep)
+        for _ in range(60):
+            if getattr(app.state, "context_service", None):
+                break
+            await asyncio.sleep(1)
+
+        logger.info(
+            "index_refresh_loop: started (interval=%ds, concurrency=%d)",
+            interval, settings.REPO_INDEX_REFRESH_CONCURRENCY,
+        )
+
+        from sqlalchemy import select as _sel_refresh
+
+        from app.database import async_session_factory
+        from app.models import GitHubToken, LinkedRepo
+        from app.services.github_client import GitHubClient
+        from app.services.github_service import GitHubService
+        from app.services.repo_index_service import (
+            RepoIndexService,
+            invalidate_curated_cache,
+        )
+
+        cycle_number = 0
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                cycle_number += 1
+                t_cycle = time.monotonic()
+                try:
+                    async with async_session_factory() as db:
+                        # Find all linked repos
+                        repos = (await db.execute(
+                            _sel_refresh(LinkedRepo)
+                        )).scalars().all()
+
+                        if not repos:
+                            logger.debug("index_refresh_cycle: cycle=%d no linked repos", cycle_number)
+                            continue
+
+                        # Collect session_ids and decrypt tokens
+                        session_ids = {r.session_id for r in repos}
+                        tokens_q = await db.execute(
+                            _sel_refresh(GitHubToken).where(
+                                GitHubToken.session_id.in_(session_ids)
+                            )
+                        )
+                        token_rows = {
+                            t.session_id: t for t in tokens_q.scalars().all()
+                        }
+
+                        github_svc = GitHubService(secret_key=settings.resolve_secret_key())
+                        gc = GitHubClient()
+
+                        # Per-cycle counters
+                        repos_checked = 0
+                        repos_updated = 0
+                        repos_unchanged = 0
+                        repos_skipped = 0
+                        repos_failed = 0
+                        total_changed = 0
+                        total_added = 0
+                        total_removed = 0
+                        updated_repos: list[str] = []
+
+                        for repo in repos:
+                            token_row = token_rows.get(repo.session_id)
+                            if not token_row:
+                                repos_skipped += 1
+                                continue
+
+                            try:
+                                token = github_svc.decrypt_token(token_row.token_encrypted)
+                            except Exception as decrypt_exc:
+                                repos_skipped += 1
+                                logger.warning(
+                                    "index_refresh: %s token decrypt failed: %s",
+                                    repo.full_name, decrypt_exc,
+                                )
+                                continue
+
+                            branch = repo.branch or repo.default_branch or "main"
+                            repos_checked += 1
+                            try:
+                                index_svc = RepoIndexService(
+                                    db=db,
+                                    github_client=gc,
+                                    embedding_service=_shared_embedding_service,
+                                )
+                                result = await index_svc.incremental_update(
+                                    repo_full_name=repo.full_name,
+                                    branch=branch,
+                                    token=token,
+                                    concurrency=settings.REPO_INDEX_REFRESH_CONCURRENCY,
+                                )
+                                file_changes = (
+                                    result["changed"]
+                                    + result["added"]
+                                    + result["removed"]
+                                )
+                                if file_changes > 0:
+                                    repos_updated += 1
+                                    total_changed += result["changed"]
+                                    total_added += result["added"]
+                                    total_removed += result["removed"]
+                                    updated_repos.append(f"{repo.full_name}@{branch}")
+                                elif result["skipped_reason"]:
+                                    repos_unchanged += 1
+                                else:
+                                    repos_unchanged += 1
+                            except Exception as repo_exc:
+                                repos_failed += 1
+                                logger.warning(
+                                    "index_refresh: %s@%s unhandled error: %s",
+                                    repo.full_name, branch, repo_exc,
+                                )
+                                continue
+
+                        # Invalidate curated cache if any repo had changes
+                        if repos_updated > 0:
+                            evicted = invalidate_curated_cache()
+                            logger.info(
+                                "index_refresh: curated cache invalidated (%d entries evicted)",
+                                evicted,
+                            )
+                            # Notify frontend via event bus
+                            try:
+                                event_bus.publish({
+                                    "event": "index_refreshed",
+                                    "data": {
+                                        "repos": updated_repos,
+                                        "changed": total_changed,
+                                        "added": total_added,
+                                        "removed": total_removed,
+                                    },
+                                })
+                            except Exception:
+                                pass  # Event bus publish is best-effort
+
+                    cycle_ms = (time.monotonic() - t_cycle) * 1000
+                    logger.info(
+                        "index_refresh_cycle: cycle=%d checked=%d updated=%d "
+                        "unchanged=%d skipped=%d failed=%d "
+                        "files_changed=%d files_added=%d files_removed=%d "
+                        "elapsed=%.0fms",
+                        cycle_number, repos_checked, repos_updated,
+                        repos_unchanged, repos_skipped, repos_failed,
+                        total_changed, total_added, total_removed,
+                        cycle_ms,
+                    )
+                except Exception as cycle_exc:
+                    cycle_ms = (time.monotonic() - t_cycle) * 1000
+                    logger.error(
+                        "index_refresh_cycle: cycle=%d failed after %.0fms: %s",
+                        cycle_number, cycle_ms, cycle_exc,
+                        exc_info=True,
+                    )
+        except asyncio.CancelledError:
+            logger.info("index_refresh_loop: shutting down after %d cycles", cycle_number)
+
+    refresh_task = asyncio.create_task(_repo_index_refresh_loop())
+    app.state.refresh_task = refresh_task
+
     # Start warm-path periodic timer (Spec Section 6.4 — adaptive interval)
     async def _warm_path_timer():
         """Periodically trigger warm-path re-clustering.
@@ -1048,6 +1241,7 @@ async def lifespan(app: FastAPI):
         t for t in [
             getattr(app.state, "extraction_task", None),
             getattr(app.state, "warm_path_task", None),
+            getattr(app.state, "refresh_task", None),
             getattr(app.state, "watcher_task", None),
             getattr(app.state, "agent_watcher_task", None),
         ]

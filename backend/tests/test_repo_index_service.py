@@ -4,12 +4,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
+from sqlalchemy import select
 
 from app.config import settings
 from app.models import RepoFileIndex, RepoIndexMeta
+from app.services.github_client import GitHubApiError
 from app.services.repo_index_service import (
     RepoIndexService,
+    _classify_github_error,
     _extract_structured_outline,
+    invalidate_curated_cache,
 )
 
 
@@ -484,3 +488,547 @@ async def test_get_embeddings_by_paths_isolates_repo_branch(db_session):
     svc = _make_svc(db_session, embedding_service=es)
     result = await svc.get_embeddings_by_paths("o/r", "main", ["src/a.py"])
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Incremental update tests
+# ---------------------------------------------------------------------------
+
+def _make_incremental_svc(db, tree_items, file_contents, head_sha="new_sha"):
+    """Helper to build a RepoIndexService with mocked GitHub + embedding."""
+    gc = AsyncMock()
+    gc.get_branch_head_sha.return_value = head_sha
+    gc.get_tree.return_value = tree_items
+
+    # Map (path) -> content for get_file_content
+    content_map = file_contents or {}
+
+    async def _read_content(_token, _repo, path, _ref):
+        return content_map.get(path)
+
+    gc.get_file_content = AsyncMock(side_effect=_read_content)
+
+    es = MagicMock()
+    zero_vec = np.zeros(384, dtype=np.float32)
+    es.aembed_texts = AsyncMock(
+        side_effect=lambda texts: [zero_vec for _ in texts]
+    )
+    es.dimension = 384
+
+    return RepoIndexService(db=db, github_client=gc, embedding_service=es)
+
+
+class TestIncrementalUpdate:
+    """Tests for RepoIndexService.incremental_update()."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_meta(self, db_session):
+        """Returns no_index skip when build_index was never run."""
+        svc = _make_incremental_svc(db_session, [], {})
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert result["skipped_reason"] == "no_index"
+
+    @pytest.mark.asyncio
+    async def test_skips_when_indexing_in_progress(self, db_session):
+        """Returns indexing skip when a concurrent build_index is running."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="indexing", file_count=0, head_sha="old",
+        ))
+        await db_session.commit()
+
+        svc = _make_incremental_svc(db_session, [], {})
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert result["skipped_reason"] == "indexing"
+
+    @pytest.mark.asyncio
+    async def test_skips_when_head_unchanged(self, db_session):
+        """No work when HEAD SHA hasn't changed."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="same_sha",
+        ))
+        await db_session.commit()
+
+        svc = _make_incremental_svc(db_session, [], {}, head_sha="same_sha")
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert result["skipped_reason"] == "head_unchanged"
+
+    @pytest.mark.asyncio
+    async def test_detects_changed_files(self, db_session):
+        """Changed files (SHA mismatch) are re-embedded."""
+        vec = np.zeros(384, dtype=np.float32)
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="old_sha",
+        ))
+        db_session.add(RepoFileIndex(
+            repo_full_name="o/r", branch="main",
+            file_path="src/main.py", file_sha="old_file_sha",
+            content="old content", outline="old outline",
+            embedding=vec.tobytes(),
+        ))
+        await db_session.commit()
+
+        tree = [{"path": "src/main.py", "sha": "new_file_sha", "size": 50}]
+        svc = _make_incremental_svc(
+            db_session, tree,
+            {"src/main.py": "def updated(): pass"},
+            head_sha="new_sha",
+        )
+        result = await svc.incremental_update("o/r", "main", "tok")
+
+        assert result["changed"] == 1
+        assert result["added"] == 0
+        assert result["removed"] == 0
+        assert result["skipped_reason"] is None
+
+        # Verify the row was updated
+        row = (await db_session.execute(
+            select(RepoFileIndex).where(RepoFileIndex.file_path == "src/main.py")
+        )).scalar_one()
+        assert row.file_sha == "new_file_sha"
+        assert row.content == "def updated(): pass"
+
+    @pytest.mark.asyncio
+    async def test_detects_added_files(self, db_session):
+        """New files in the tree are indexed."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=0, head_sha="old_sha",
+        ))
+        await db_session.commit()
+
+        tree = [{"path": "src/new.py", "sha": "new_sha_1", "size": 30}]
+        svc = _make_incremental_svc(
+            db_session, tree,
+            {"src/new.py": "def new_func(): pass"},
+            head_sha="new_sha",
+        )
+        result = await svc.incremental_update("o/r", "main", "tok")
+
+        assert result["added"] == 1
+        assert result["changed"] == 0
+        assert result["removed"] == 0
+
+        # Verify the new row exists
+        row = (await db_session.execute(
+            select(RepoFileIndex).where(RepoFileIndex.file_path == "src/new.py")
+        )).scalar_one()
+        assert row.file_sha == "new_sha_1"
+        assert row.content == "def new_func(): pass"
+
+        # Verify meta file_count was incremented
+        meta = (await db_session.execute(
+            select(RepoIndexMeta).where(
+                RepoIndexMeta.repo_full_name == "o/r",
+            )
+        )).scalar_one()
+        assert meta.file_count == 1
+        assert meta.head_sha == "new_sha"
+
+    @pytest.mark.asyncio
+    async def test_detects_removed_files(self, db_session):
+        """Files absent from tree are deleted from the index."""
+        vec = np.zeros(384, dtype=np.float32)
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="old_sha",
+        ))
+        db_session.add(RepoFileIndex(
+            repo_full_name="o/r", branch="main",
+            file_path="src/deleted.py", file_sha="dead_sha",
+            content="old", outline="old", embedding=vec.tobytes(),
+        ))
+        await db_session.commit()
+
+        # Empty tree — file was removed
+        svc = _make_incremental_svc(
+            db_session, [], {}, head_sha="new_sha",
+        )
+        result = await svc.incremental_update("o/r", "main", "tok")
+
+        assert result["removed"] == 1
+        assert result["changed"] == 0
+        assert result["added"] == 0
+
+        # Verify the row is gone
+        count = (await db_session.execute(
+            select(RepoFileIndex).where(
+                RepoFileIndex.repo_full_name == "o/r",
+            )
+        )).scalars().all()
+        assert len(count) == 0
+
+        # Verify file_count decremented
+        meta = (await db_session.execute(
+            select(RepoIndexMeta).where(
+                RepoIndexMeta.repo_full_name == "o/r",
+            )
+        )).scalar_one()
+        assert meta.file_count == 0
+
+    @pytest.mark.asyncio
+    async def test_mixed_changes(self, db_session):
+        """Handles changed + added + removed in a single pass."""
+        vec = np.zeros(384, dtype=np.float32)
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=2, head_sha="old_sha",
+        ))
+        db_session.add(RepoFileIndex(
+            repo_full_name="o/r", branch="main",
+            file_path="src/keep.py", file_sha="keep_sha",
+            content="keep", outline="keep", embedding=vec.tobytes(),
+        ))
+        db_session.add(RepoFileIndex(
+            repo_full_name="o/r", branch="main",
+            file_path="src/modify.py", file_sha="old_mod_sha",
+            content="old", outline="old", embedding=vec.tobytes(),
+        ))
+        db_session.add(RepoFileIndex(
+            repo_full_name="o/r", branch="main",
+            file_path="src/remove.py", file_sha="remove_sha",
+            content="dead", outline="dead", embedding=vec.tobytes(),
+        ))
+        await db_session.commit()
+
+        tree = [
+            {"path": "src/keep.py", "sha": "keep_sha", "size": 20},   # unchanged
+            {"path": "src/modify.py", "sha": "new_mod_sha", "size": 30},  # changed
+            {"path": "src/brand_new.py", "sha": "new_sha", "size": 25},  # added
+            # src/remove.py is absent — removed
+        ]
+        svc = _make_incremental_svc(
+            db_session, tree,
+            {
+                "src/modify.py": "def modified(): pass",
+                "src/brand_new.py": "def brand_new(): pass",
+            },
+            head_sha="new_sha",
+        )
+        result = await svc.incremental_update("o/r", "main", "tok")
+
+        assert result["changed"] == 1
+        assert result["added"] == 1
+        assert result["removed"] == 1
+
+        # Verify final state: 3 files (keep + modify + brand_new)
+        rows = (await db_session.execute(
+            select(RepoFileIndex).where(
+                RepoFileIndex.repo_full_name == "o/r",
+            )
+        )).scalars().all()
+        paths = {r.file_path for r in rows}
+        assert paths == {"src/keep.py", "src/modify.py", "src/brand_new.py"}
+
+    @pytest.mark.asyncio
+    async def test_head_changed_but_no_file_diffs(self, db_session):
+        """Commit with no file changes (e.g. merge commit) just updates SHA."""
+        vec = np.zeros(384, dtype=np.float32)
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="old_sha",
+        ))
+        db_session.add(RepoFileIndex(
+            repo_full_name="o/r", branch="main",
+            file_path="src/main.py", file_sha="same_sha",
+            content="same", outline="same", embedding=vec.tobytes(),
+        ))
+        await db_session.commit()
+
+        tree = [{"path": "src/main.py", "sha": "same_sha", "size": 20}]
+        svc = _make_incremental_svc(
+            db_session, tree, {}, head_sha="new_head_sha",
+        )
+        result = await svc.incremental_update("o/r", "main", "tok")
+
+        assert result["changed"] == 0
+        assert result["added"] == 0
+        assert result["removed"] == 0
+        assert result["skipped_reason"] is None
+
+        # SHA should be updated despite no file changes
+        meta = (await db_session.execute(
+            select(RepoIndexMeta).where(
+                RepoIndexMeta.repo_full_name == "o/r",
+            )
+        )).scalar_one()
+        assert meta.head_sha == "new_head_sha"
+
+    @pytest.mark.asyncio
+    async def test_skips_non_indexable_files(self, db_session):
+        """Non-indexable files in tree are ignored (e.g. binary, too large)."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=0, head_sha="old_sha",
+        ))
+        await db_session.commit()
+
+        tree = [
+            {"path": "image.png", "sha": "img_sha", "size": 50000},   # not indexable ext
+            {"path": "big.py", "sha": "big_sha", "size": 200_000},     # too large
+            {"path": "tests/test_main.py", "sha": "test_sha", "size": 100},  # test file
+        ]
+        svc = _make_incremental_svc(
+            db_session, tree, {}, head_sha="new_sha",
+        )
+        result = await svc.incremental_update("o/r", "main", "tok")
+
+        # All files filtered out — only SHA update
+        assert result["changed"] == 0
+        assert result["added"] == 0
+        assert result["removed"] == 0
+
+
+class TestCuratedCacheInvalidation:
+    def test_invalidate_clears_all(self):
+        """invalidate_curated_cache() clears the module-level cache."""
+        from app.services.repo_index_service import _curated_cache
+
+        # Clear any entries from prior tests, then seed one
+        _curated_cache.clear()
+        _curated_cache["test_key"] = (0.0, "value")
+        assert len(_curated_cache) == 1
+
+        count = invalidate_curated_cache()
+        assert count == 1
+        assert len(_curated_cache) == 0
+
+
+# ---------------------------------------------------------------------------
+# GitHub error classification
+# ---------------------------------------------------------------------------
+
+class TestClassifyGitHubError:
+    def test_401_maps_to_token_expired(self):
+        assert _classify_github_error(GitHubApiError(401, "Bad credentials")) == "token_expired"
+
+    def test_403_maps_to_rate_limited(self):
+        assert _classify_github_error(GitHubApiError(403, "rate limit")) == "rate_limited"
+
+    def test_404_maps_to_repo_not_found(self):
+        assert _classify_github_error(GitHubApiError(404, "Not Found")) == "repo_not_found"
+
+    def test_500_maps_to_generic(self):
+        assert _classify_github_error(GitHubApiError(500, "Internal")) == "github_500"
+
+
+# ---------------------------------------------------------------------------
+# Error resilience tests for incremental_update
+# ---------------------------------------------------------------------------
+
+class TestIncrementalUpdateErrors:
+    """Tests that incremental_update degrades gracefully on errors."""
+
+    @pytest.mark.asyncio
+    async def test_github_401_returns_token_expired(self, db_session):
+        """Expired token returns skip reason, no crash."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="old",
+        ))
+        await db_session.commit()
+
+        gc = AsyncMock()
+        gc.get_branch_head_sha.side_effect = GitHubApiError(401, "Bad credentials")
+        es = MagicMock()
+        svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+        result = await svc.incremental_update("o/r", "main", "bad_token")
+        assert result["skipped_reason"] == "token_expired"
+        assert result["elapsed_ms"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_github_403_returns_rate_limited(self, db_session):
+        """Rate-limited returns skip reason, no crash."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="old",
+        ))
+        await db_session.commit()
+
+        gc = AsyncMock()
+        gc.get_branch_head_sha.side_effect = GitHubApiError(403, "rate limit exceeded")
+        es = MagicMock()
+        svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert result["skipped_reason"] == "rate_limited"
+
+    @pytest.mark.asyncio
+    async def test_github_404_returns_repo_not_found(self, db_session):
+        """Deleted repo returns skip reason, no crash."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="old",
+        ))
+        await db_session.commit()
+
+        gc = AsyncMock()
+        gc.get_branch_head_sha.side_effect = GitHubApiError(404, "Not Found")
+        es = MagicMock()
+        svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert result["skipped_reason"] == "repo_not_found"
+
+    @pytest.mark.asyncio
+    async def test_network_error_on_sha_check(self, db_session):
+        """Network failure during SHA check returns skip reason."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="old",
+        ))
+        await db_session.commit()
+
+        gc = AsyncMock()
+        gc.get_branch_head_sha.side_effect = ConnectionError("timeout")
+        es = MagicMock()
+        svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert result["skipped_reason"] == "network_error"
+
+    @pytest.mark.asyncio
+    async def test_github_error_on_tree_fetch(self, db_session):
+        """GitHub error during tree fetch returns skip reason."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=1, head_sha="old",
+        ))
+        await db_session.commit()
+
+        gc = AsyncMock()
+        gc.get_branch_head_sha.return_value = "new_sha"
+        gc.get_tree.side_effect = GitHubApiError(403, "rate limit")
+        es = MagicMock()
+        svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert result["skipped_reason"] == "rate_limited"
+
+    @pytest.mark.asyncio
+    async def test_partial_read_failures(self, db_session):
+        """Files that fail to read are tracked; successful ones still persist."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=0, head_sha="old",
+        ))
+        await db_session.commit()
+
+        gc = AsyncMock()
+        gc.get_branch_head_sha.return_value = "new_sha"
+        gc.get_tree.return_value = [
+            {"path": "src/good.py", "sha": "sha1", "size": 50},
+            {"path": "src/bad.py", "sha": "sha2", "size": 50},
+        ]
+
+        async def _read(_token, _repo, path, _ref):
+            if "bad" in path:
+                return None  # Simulates read failure
+            return "def good(): pass"
+
+        gc.get_file_content = AsyncMock(side_effect=_read)
+
+        es = MagicMock()
+        zero_vec = np.zeros(384, dtype=np.float32)
+        es.aembed_texts = AsyncMock(return_value=[zero_vec])
+
+        svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+        result = await svc.incremental_update("o/r", "main", "tok")
+
+        assert result["added"] == 2  # Both counted as "added" in diff
+        assert result["read_failures"] == 1  # One failed to read
+        # Only the good file should be persisted
+        rows = (await db_session.execute(
+            select(RepoFileIndex).where(RepoFileIndex.repo_full_name == "o/r")
+        )).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].file_path == "src/good.py"
+
+    @pytest.mark.asyncio
+    async def test_embedding_failure_persists_without_vectors(self, db_session):
+        """Embedding service failure doesn't lose files — persists with zero vectors."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=0, head_sha="old",
+        ))
+        await db_session.commit()
+
+        gc = AsyncMock()
+        gc.get_branch_head_sha.return_value = "new_sha"
+        gc.get_tree.return_value = [
+            {"path": "src/main.py", "sha": "sha1", "size": 50},
+        ]
+        gc.get_file_content = AsyncMock(return_value="def main(): pass")
+
+        es = MagicMock()
+        es.aembed_texts = AsyncMock(side_effect=RuntimeError("model not loaded"))
+
+        svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+        result = await svc.incremental_update("o/r", "main", "tok")
+
+        assert result["added"] == 1
+        assert result["embed_failures"] == 1
+        assert result["skipped_reason"] is None
+
+        # File should still be persisted (with zero vector fallback)
+        row = (await db_session.execute(
+            select(RepoFileIndex).where(RepoFileIndex.file_path == "src/main.py")
+        )).scalar_one()
+        assert row.content == "def main(): pass"
+        assert row.file_sha == "sha1"
+        # Embedding should be a zero vector (fallback)
+        vec = np.frombuffer(row.embedding, dtype=np.float32)
+        np.testing.assert_array_equal(vec, np.zeros(384, dtype=np.float32))
+
+    @pytest.mark.asyncio
+    async def test_file_count_never_negative(self, db_session):
+        """file_count is clamped to 0 even when more files are removed than counted."""
+        db_session.add(RepoIndexMeta(
+            repo_full_name="o/r", branch="main",
+            status="ready", file_count=0,  # Already 0
+            head_sha="old",
+        ))
+        vec = np.zeros(384, dtype=np.float32)
+        db_session.add(RepoFileIndex(
+            repo_full_name="o/r", branch="main",
+            file_path="src/orphan.py", file_sha="dead",
+            content="x", outline="x", embedding=vec.tobytes(),
+        ))
+        await db_session.commit()
+
+        # Orphan file removed (file_count was already 0 — stale count)
+        gc = AsyncMock()
+        gc.get_branch_head_sha.return_value = "new_sha"
+        gc.get_tree.return_value = []  # Empty tree
+        es = MagicMock()
+        svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert result["removed"] == 1
+
+        meta = (await db_session.execute(
+            select(RepoIndexMeta).where(RepoIndexMeta.repo_full_name == "o/r")
+        )).scalar_one()
+        assert meta.file_count == 0  # Clamped, not -1
+
+    @pytest.mark.asyncio
+    async def test_result_includes_elapsed_ms(self, db_session):
+        """Return dict always includes elapsed_ms for observability."""
+        svc = _make_incremental_svc(db_session, [], {})
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert "elapsed_ms" in result
+        assert isinstance(result["elapsed_ms"], float)
+        assert result["elapsed_ms"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_result_includes_failure_counts(self, db_session):
+        """Return dict always includes read_failures and embed_failures."""
+        svc = _make_incremental_svc(db_session, [], {})
+        result = await svc.incremental_update("o/r", "main", "tok")
+        assert "read_failures" in result
+        assert "embed_failures" in result
+        assert result["read_failures"] == 0
+        assert result["embed_failures"] == 0
