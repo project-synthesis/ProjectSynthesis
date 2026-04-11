@@ -19,8 +19,9 @@ _DIM = 384
 
 
 def _fake_embedding(seed: float = 1.0) -> np.ndarray:
-    """Return a deterministic 384-dim float32 vector."""
-    vec = np.full(_DIM, seed, dtype=np.float32)
+    """Return a deterministic 384-dim float32 vector with distinct direction per seed."""
+    rng = np.random.RandomState(int(seed * 1000))
+    vec = rng.randn(_DIM).astype(np.float32)
     norm = np.linalg.norm(vec)
     if norm > 0:
         vec = vec / norm
@@ -53,10 +54,17 @@ def _make_orphan(
 
 
 def _mock_engine() -> MagicMock:
-    """Create a mock TaxonomyEngine with embedding service."""
+    """Create a mock TaxonomyEngine with embedding service.
+
+    Returns different embeddings for each call so the transformation
+    vector (optimized - raw) is non-zero.
+    """
     engine = MagicMock()
     engine._embedding = AsyncMock()
-    engine._embedding.aembed_single = AsyncMock(return_value=_fake_embedding(1.0))
+    # Return different embeddings on successive calls (raw, optimized)
+    engine._embedding.aembed_single = AsyncMock(
+        side_effect=[_fake_embedding(1.0), _fake_embedding(2.0)]
+    )
     engine._embedding_index = MagicMock()
     engine.mark_dirty = MagicMock()
     return engine
@@ -94,7 +102,7 @@ class TestScanOrphans:
         svc = OrphanRecoveryService()
         opt = _make_orphan(
             age_minutes=10,
-            heuristic_flags={"recovery_exhausted": True},
+            heuristic_flags={"_recovery": {"exhausted": True}},
         )
         db_session.add(opt)
         await db_session.commit()
@@ -197,7 +205,7 @@ class TestRetryBudget:
         svc = OrphanRecoveryService()
         opt = _make_orphan(
             age_minutes=10,
-            heuristic_flags={"recovery_attempts": 3},
+            heuristic_flags={"_recovery": {"attempts": 3}},
         )
         db_session.add(opt)
         await db_session.commit()
@@ -217,4 +225,5 @@ class TestRetryBudget:
         )
         refreshed = result.scalar_one()
         assert isinstance(refreshed.heuristic_flags, dict)
-        assert refreshed.heuristic_flags.get("recovery_exhausted") is True
+        rec = refreshed.heuristic_flags.get("_recovery", {})
+        assert rec.get("exhausted") is True

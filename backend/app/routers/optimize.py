@@ -384,7 +384,11 @@ def _serialize_optimization(opt: Optimization, *, cluster_id: str | None = None)
         intent_label=opt.intent_label,
         domain=opt.domain,
         cluster_id=cluster_id,
-        heuristic_flags=opt.heuristic_flags or [],
+        heuristic_flags=(
+            opt.heuristic_flags if isinstance(opt.heuristic_flags, list)
+            else opt.heuristic_flags.get("divergence_flags", []) if isinstance(opt.heuristic_flags, dict)
+            else []
+        ),
         suggestions=opt.suggestions or [],
     )
 

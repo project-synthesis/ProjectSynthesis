@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -37,6 +37,37 @@ logger = logging.getLogger(__name__)
 _STALENESS_MINUTES = 5
 _MAX_ORPHANS_PER_SCAN = 20
 _MAX_RETRY_ATTEMPTS = 3
+# Exponential backoff: attempt 1 → 30s, attempt 2 → 120s, attempt 3 → 480s
+_BACKOFF_BASE_SECONDS = 30
+_BACKOFF_MULTIPLIER = 4
+
+
+# ---------------------------------------------------------------------------
+# Recovery metadata helpers — nested under "_recovery" key in heuristic_flags
+# to avoid colliding with the pipeline's list-of-strings (divergence flags).
+# ---------------------------------------------------------------------------
+
+
+def _get_recovery_meta(flags: Any) -> dict:
+    """Extract the _recovery dict from heuristic_flags (any format)."""
+    if isinstance(flags, dict):
+        return dict(flags.get("_recovery", {}))
+    return {}
+
+
+def _set_recovery_meta(flags: Any, recovery: dict) -> dict:
+    """Return heuristic_flags with updated _recovery key, preserving existing data."""
+    if isinstance(flags, list):
+        # Pipeline wrote a list of divergence flags — wrap in dict
+        return {"divergence_flags": flags, "_recovery": recovery}
+    if isinstance(flags, dict):
+        return {**flags, "_recovery": recovery}
+    return {"_recovery": recovery}
+
+
+def _is_recovery_exhausted(flags: Any) -> bool:
+    """Check if recovery has been exhausted."""
+    return bool(_get_recovery_meta(flags).get("exhausted"))
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +79,7 @@ class OrphanRecoveryService:
     """Scans for and recovers orphan optimizations missing embeddings."""
 
     def __init__(self) -> None:
-        self._orphan_count: int = 0
+        self._last_scan_orphan_count: int = 0
         self._recovered_total: int = 0
         self._failed_total: int = 0
         self._last_scan_at: datetime | None = None
@@ -64,10 +95,10 @@ class OrphanRecoveryService:
 
         Orphans have ``embedding IS NULL``, ``overall_score IS NOT NULL``,
         ``raw_prompt IS NOT NULL``, and ``created_at`` older than
-        ``_STALENESS_MINUTES``.  Post-filters out rows with
-        ``heuristic_flags.recovery_exhausted == True``.
+        ``_STALENESS_MINUTES``.  Post-filters out rows flagged as
+        ``recovery_exhausted`` or still within their backoff window.
         """
-        cutoff = _utcnow() - __import__("datetime").timedelta(minutes=_STALENESS_MINUTES)
+        cutoff = _utcnow() - timedelta(minutes=_STALENESS_MINUTES)
 
         stmt = (
             select(Optimization)
@@ -82,12 +113,21 @@ class OrphanRecoveryService:
         result = await db.execute(stmt)
         candidates = list(result.scalars().all())
 
-        # Post-filter: skip rows flagged as recovery_exhausted
+        now = _utcnow()
         orphans: list[Optimization] = []
         for opt in candidates:
-            flags = opt.heuristic_flags
-            if isinstance(flags, dict) and flags.get("recovery_exhausted"):
+            if _is_recovery_exhausted(opt.heuristic_flags):
                 continue
+            # Exponential backoff: skip if within retry window
+            rec = _get_recovery_meta(opt.heuristic_flags)
+            next_retry = rec.get("next_retry_after")
+            if next_retry:
+                try:
+                    next_dt = datetime.fromisoformat(next_retry)
+                    if now < next_dt:
+                        continue
+                except (ValueError, TypeError):
+                    pass  # Malformed timestamp — allow retry
             orphans.append(opt)
 
         return orphans
@@ -136,28 +176,31 @@ class OrphanRecoveryService:
             return False
 
         # Check retry budget
-        flags = opt.heuristic_flags if isinstance(opt.heuristic_flags, dict) else {}
-        attempts = flags.get("recovery_attempts", 0)
-        if attempts >= _MAX_RETRY_ATTEMPTS:
-            flags["recovery_exhausted"] = True
-            opt.heuristic_flags = {**flags}
+        rec = _get_recovery_meta(opt.heuristic_flags)
+        if rec.get("attempts", 0) >= _MAX_RETRY_ATTEMPTS:
+            rec["exhausted"] = True
+            opt.heuristic_flags = _set_recovery_meta(opt.heuristic_flags, rec)
             return False
 
-        # Compute embeddings OUTSIDE write transaction
+        # --- Compute embeddings (CPU/model inference, no DB writes) ---
         embedding_svc = engine._embedding
         raw_emb = await embedding_svc.aembed_single(opt.raw_prompt)
-        opt.embedding = raw_emb.astype(np.float32).tobytes()
 
+        optimized_emb = None
+        transformation_emb = None
         if opt.optimized_prompt:
             optimized_emb = await embedding_svc.aembed_single(opt.optimized_prompt)
-            opt.optimized_embedding = optimized_emb.astype(np.float32).tobytes()
-
-            # Transformation vector: direction of improvement
             transform = optimized_emb - raw_emb
             t_norm = np.linalg.norm(transform)
             if t_norm > 1e-9:
-                transform = transform / t_norm
-            opt.transformation_embedding = transform.astype(np.float32).tobytes()
+                transformation_emb = (transform / t_norm).astype(np.float32)
+
+        # --- Write embeddings ---
+        opt.embedding = raw_emb.astype(np.float32).tobytes()
+        if optimized_emb is not None:
+            opt.optimized_embedding = optimized_emb.astype(np.float32).tobytes()
+        if transformation_emb is not None:
+            opt.transformation_embedding = transformation_emb.astype(np.float32).tobytes()
 
         # If cluster_id points to an archived cluster, clear it
         if opt.cluster_id:
@@ -211,7 +254,12 @@ class OrphanRecoveryService:
         db: AsyncSession,
         error: Exception,
     ) -> None:
-        """Increment retry counter and record last error in heuristic_flags."""
+        """Increment retry counter, compute next backoff window, record error.
+
+        Recovery metadata is nested under a ``_recovery`` dict key within
+        ``heuristic_flags`` to avoid colliding with the pipeline's list-of-
+        strings format (divergence flags).
+        """
         result = await db.execute(
             select(Optimization).where(Optimization.id == optimization_id)
         )
@@ -219,14 +267,21 @@ class OrphanRecoveryService:
         if opt is None:
             return
 
-        flags = opt.heuristic_flags if isinstance(opt.heuristic_flags, dict) else {}
-        attempts = flags.get("recovery_attempts", 0) + 1
-        flags["recovery_attempts"] = attempts
-        flags["recovery_last_error"] = str(error)[:500]
-        if attempts >= _MAX_RETRY_ATTEMPTS:
-            flags["recovery_exhausted"] = True
-        opt.heuristic_flags = {**flags}
+        rec = _get_recovery_meta(opt.heuristic_flags)
+        attempts = rec.get("attempts", 0) + 1
+        rec["attempts"] = attempts
+        rec["last_error"] = str(error)[:500]
 
+        # Exponential backoff: 30s, 120s, 480s
+        backoff_seconds = _BACKOFF_BASE_SECONDS * (_BACKOFF_MULTIPLIER ** (attempts - 1))
+        rec["next_retry_after"] = (
+            _utcnow() + timedelta(seconds=backoff_seconds)
+        ).isoformat()
+
+        if attempts >= _MAX_RETRY_ATTEMPTS:
+            rec["exhausted"] = True
+
+        opt.heuristic_flags = _set_recovery_meta(opt.heuristic_flags, rec)
         await db.commit()
 
     # ------------------------------------------------------------------
@@ -256,7 +311,17 @@ class OrphanRecoveryService:
             orphans = await self._scan_orphans(scan_db)
             orphan_ids = [o.id for o in orphans]
 
-        self._orphan_count = len(orphan_ids)
+        self._last_scan_orphan_count = len(orphan_ids)
+
+        # Skip event logging and processing when no orphans found
+        if not orphan_ids:
+            return {
+                "scanned": 0,
+                "recovered": 0,
+                "failed": 0,
+                "recovered_total": self._recovered_total,
+                "failed_total": self._failed_total,
+            }
 
         try:
             get_event_logger().log_decision(
@@ -267,6 +332,8 @@ class OrphanRecoveryService:
             )
         except (RuntimeError, Exception):
             pass
+
+        logger.info("Orphan recovery: found %d candidates", len(orphan_ids))
 
         recovered = 0
         failed = 0
@@ -281,12 +348,31 @@ class OrphanRecoveryService:
                         recovered += 1
                         self._last_recovery_at = _utcnow()
 
+                        # Read back cluster info for observability
+                        cluster_id = None
+                        cluster_label = None
+                        opt_row = (await db.execute(
+                            select(Optimization.cluster_id)
+                            .where(Optimization.id == oid)
+                        )).scalar_one_or_none()
+                        if opt_row:
+                            cluster_id = opt_row
+                            cl = (await db.execute(
+                                select(PromptCluster.label)
+                                .where(PromptCluster.id == cluster_id)
+                            )).scalar_one_or_none()
+                            cluster_label = cl
+
                         try:
                             get_event_logger().log_decision(
                                 path="warm",
                                 op="recovery",
                                 decision="success",
-                                context={"optimization_id": oid},
+                                optimization_id=oid,
+                                cluster_id=cluster_id,
+                                context={
+                                    "cluster_label": cluster_label,
+                                },
                             )
                         except (RuntimeError, Exception):
                             pass
@@ -309,9 +395,10 @@ class OrphanRecoveryService:
                         path="warm",
                         op="recovery",
                         decision="failed",
+                        optimization_id=oid,
                         context={
-                            "optimization_id": oid,
-                            "error": str(exc)[:200],
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc)[:200],
                         },
                     )
                 except (RuntimeError, Exception):
@@ -319,6 +406,9 @@ class OrphanRecoveryService:
 
         self._recovered_total += recovered
         self._failed_total += failed
+
+        if recovered or failed:
+            logger.info("Orphan recovery: recovered=%d failed=%d", recovered, failed)
 
         return {
             "scanned": len(orphan_ids),
@@ -335,7 +425,7 @@ class OrphanRecoveryService:
     def get_metrics(self) -> dict[str, Any]:
         """Return current recovery counters for the health endpoint."""
         return {
-            "orphan_count": self._orphan_count,
+            "last_scan_orphan_count": self._last_scan_orphan_count,
             "recovered_total": self._recovered_total,
             "failed_total": self._failed_total,
             "last_scan_at": self._last_scan_at.isoformat() if self._last_scan_at else None,
