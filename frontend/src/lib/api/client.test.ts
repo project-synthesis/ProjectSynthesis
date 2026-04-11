@@ -684,7 +684,7 @@ describe('connectEventStream', () => {
     };
 
     es.__simulateEvent('optimization_created', JSON.stringify({ id: 'opt-1' }));
-    expect(handler).toHaveBeenCalledWith('optimization_created', { id: 'opt-1' });
+    expect(handler).toHaveBeenCalledWith('optimization_created', { id: 'opt-1' }, { seq: null, timestamp: undefined });
     es.close();
   });
 

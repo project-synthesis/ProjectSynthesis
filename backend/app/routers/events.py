@@ -78,17 +78,24 @@ async def publish_event(body: InternalEventRequest, request: Request) -> OkRespo
 
 
 @router.get("/events")
-async def event_stream(request: Request) -> StreamingResponse:
+async def event_stream(
+    request: Request,
+    last_event_id: str | None = None,
+) -> StreamingResponse:
     """SSE endpoint -- streams real-time events with periodic keepalive.
 
     Supports ``Last-Event-ID`` header for reconnection replay: when an
     ``EventSource`` reconnects, the browser automatically sends the last
     received ``id`` so the server can replay missed events from its
     in-memory buffer.
+
+    Also accepts ``last_event_id`` as a query parameter for manual
+    reconnection (new ``EventSource`` instances created after custom
+    backoff don't carry the header). The header takes priority.
     """
-    last_event_id = request.headers.get("Last-Event-ID")
+    resolved_last_id = request.headers.get("Last-Event-ID") or last_event_id
     logger.info(
-        "New SSE event stream connection (Last-Event-ID=%s)", last_event_id,
+        "New SSE event stream connection (Last-Event-ID=%s)", resolved_last_id,
     )
 
     async def generate():
@@ -99,9 +106,9 @@ async def event_stream(request: Request) -> StreamingResponse:
         replayed_up_to: int = 0
         try:
             # Replay missed events on reconnection
-            if last_event_id is not None:
+            if resolved_last_id is not None:
                 try:
-                    last_seq = int(last_event_id)
+                    last_seq = int(resolved_last_id)
                     missed = event_bus.replay_since(last_seq)
                     for evt in missed:
                         event_type = evt["event"]
@@ -113,7 +120,7 @@ async def event_stream(request: Request) -> StreamingResponse:
                         "Replayed %d missed events (since seq %d)", len(missed), last_seq,
                     )
                 except (ValueError, TypeError):
-                    logger.warning("Invalid Last-Event-ID: %s", last_event_id)
+                    logger.warning("Invalid Last-Event-ID: %s", resolved_last_id)
 
             # Send sync event with current sequence so client knows its starting point
             yield (

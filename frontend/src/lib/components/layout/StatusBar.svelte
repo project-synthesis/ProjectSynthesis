@@ -15,6 +15,7 @@
   import { STATUS_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import Logo from '$lib/components/shared/Logo.svelte';
   import ScoreSparkline from '$lib/components/shared/ScoreSparkline.svelte';
+  import { sseHealthStore } from '$lib/stores/sse-health.svelte';
   import type { ClusterStats } from '$lib/api/clusters';
 
   function qHealthTooltip(stats: ClusterStats | null): string {
@@ -92,6 +93,18 @@
   // Breadcrumb: [domain] > intent_label (VS Code file-path pattern)
   const breadcrumbDomain = $derived(activeResult?.domain ?? null);
   const breadcrumbLabel = $derived(activeResult?.intent_label ?? null);
+
+  // SSE connection health indicator
+  const sseColor = $derived(
+    sseHealthStore.connectionState === 'healthy'
+      ? 'var(--color-neon-cyan)'
+      : sseHealthStore.connectionState === 'degraded'
+        ? 'var(--color-neon-yellow)'
+        : 'var(--color-neon-red)'
+  );
+  const sseLabel = $derived(
+    sseHealthStore.connectionState === 'disconnected' ? 'SSE \u00D7' : 'SSE'
+  );
 </script>
 
 <div
@@ -186,6 +199,14 @@
     {#if updateStore.updateAvailable || updateStore.updating}
       <UpdateBadge />
     {/if}
+    <span
+      class="status-sse"
+      use:tooltip={sseHealthStore.tooltipText}
+      style="color: {sseColor}"
+    >
+      <span class="status-sse-dot" style="background: {sseColor}"></span>
+      {sseLabel}
+    </span>
     <span class="status-kbd" aria-label="Open command palette with Ctrl+K">Ctrl+K</span>
   </div>
 </div>
@@ -316,5 +337,21 @@
     font-weight: bold;
     margin-left: 1px;
     white-space: nowrap;
+  }
+
+  .status-sse {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
+    cursor: default;
+  }
+
+  .status-sse-dot {
+    width: 5px;
+    height: 5px;
+    flex-shrink: 0;
   }
 </style>

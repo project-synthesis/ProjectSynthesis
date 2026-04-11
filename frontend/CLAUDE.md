@@ -54,6 +54,7 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `tier-onboarding.svelte.ts` | Tier onboarding flow state |
 | `pattern-graph-guide.svelte.ts` | Pattern graph keyboard shortcuts/interaction hints modal |
 | `update.svelte.ts` | Auto-update state: available version, changelog, dialog, restart progress, health polling. SSE-driven via `update_available`/`update_complete` events. `localStorage` persistence for detached HEAD warning dismissal |
+| `sse-health.svelte.ts` | SSE connection health: owns EventSource lifecycle, latency tracking (rolling 100-event window, p50/p95/p99), 3-state degradation detection (healthy/degraded/disconnected), exponential backoff reconnection (1s-16s cap, 10 attempts, ±20% jitter), 90s staleness detection. StatusBar indicator reads `connectionState` and `tooltipText` |
 
 ## Component layout
 
@@ -127,6 +128,8 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | `agent_changed` | Seed agent list refresh (hot-reload on file change) |
 | `update_available` | Update store populated, StatusBar UpdateBadge badge displayed |
 | `update_complete` | Update validation results, success/failure toast |
+
+**Connection lifecycle**: `sseHealthStore` owns the single `EventSource`. It tracks delivery latency per event, detects degradation (p95 thresholds), and manages reconnection with exponential backoff (replaces browser auto-reconnect). On manual reconnect, sends `?last_event_id=N` query param for server-side replay. `+page.svelte` calls `sseHealthStore.connect(handler, onReconnect)` in `$effect` and `disconnect()` on cleanup.
 
 Fixed 60s health polling for StatusBar display only — no routing decisions from frontend. Tightens to 2s during auto-update restart window (120s timeout).
 

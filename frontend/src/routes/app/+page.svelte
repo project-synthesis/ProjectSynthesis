@@ -6,16 +6,15 @@
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import type { Preferences } from '$lib/stores/preferences.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
-  import { getHealth, connectEventStream } from '$lib/api/client';
+  import { getHealth } from '$lib/api/client';
   import type { HealthResponse } from '$lib/api/client';
   import { triggerTierGuide } from '$lib/stores/tier-onboarding.svelte';
   import { routing } from '$lib/stores/routing.svelte';
   import { updateStore } from '$lib/stores/update.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
+  import { sseHealthStore } from '$lib/stores/sse-health.svelte';
 
   let backendError = $state<string | null>(null);
-  let eventSource: EventSource | null = null;
-  let sseHadError = false;
   let firstHealthReceived = false;
   let pendingGuide = false;
   let pendingHealthDelta: { health: HealthResponse; delta: any } | null = null;
@@ -53,171 +52,167 @@
     }
   }
 
-  // Real-time event stream
+  // Real-time event stream — SSE health store owns the EventSource lifecycle
+  // (latency tracking, degradation detection, exponential backoff reconnection).
   $effect(() => {
-    eventSource = connectEventStream((type, data) => {
-      if (type === 'optimization_created' || type === 'optimization_analyzed' || type === 'refinement_turn') {
-        window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
-        // Toast for optimizations not from the current UI session (e.g., MCP)
-        const isOwnTrace = data.trace_id === forgeStore.traceId || data.trace_id === forgeStore.passthroughTraceId;
-        if (type !== 'refinement_turn' && data.trace_id && !isOwnTrace) {
-          const label = type === 'optimization_analyzed' ? 'analyzed' : 'optimized';
-          addToast('created', `Prompt ${label}`);
-        }
-        // Auto-load optimization results via event bus. Covers IDE-triggered
-        // optimizations via MCP bridge — the web UI was idle but should show
-        // the result (forgeStore.status = idle).
-        if (type === 'optimization_created' && data.trace_id && data.status === 'completed') {
-          const alreadyLoaded = forgeStore.result?.trace_id === data.trace_id;
-          const shouldLoad = forgeStore.status !== 'complete' && !alreadyLoaded;
-          if (shouldLoad) {
-            import('$lib/api/client').then(({ getOptimization }) => {
-              getOptimization(data.trace_id as string).then(opt => {
-                if (opt.status === 'completed' && forgeStore.status !== 'complete') {
-                  forgeStore.loadFromRecord(opt);
-                }
-              }).catch(() => {});
-            });
-          }
-        }
-        // F5: Propagate refinement turns to the refinement store for cross-tab sync
-        if (type === 'refinement_turn') {
-          const d = data as { optimization_id?: string };
-          if (d.optimization_id && d.optimization_id === refinementStore.optimizationId) {
-            refinementStore.reloadTurns(refinementStore.activeBranchId);
-          }
-        }
-      }
-      // F1: Route MCP pipeline progress through forgeStore.handleExternalEvent
-      // instead of direct mutations — single code path for all SSE status events.
-      if (type === 'optimization_status' || type === 'optimization_score_card' || type === 'optimization_start') {
-        forgeStore.handleExternalEvent(type, data as Record<string, unknown>);
-      }
-      if (type === 'optimization_failed') {
-        window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
-        addToast('deleted', (data.error as string) || 'Optimization failed');
-      }
-      if (type === 'feedback_submitted') {
-        window.dispatchEvent(new CustomEvent('feedback-event', { detail: data }));
-        // Inline update in Navigator handles feedback_rating per-row —
-        // no need for full history re-fetch via optimization-event.
-      }
-      if (type === 'strategy_changed') {
-        window.dispatchEvent(new CustomEvent('strategy-changed', { detail: data }));
-      }
-      if (type === 'taxonomy_changed') {
-        clustersStore.invalidateClusters();
-        domainStore.invalidate();
-        addToast('created', 'Taxonomy updated');
-      }
-      if (type === 'taxonomy_activity') {
-        clustersStore.pushActivityEvent(data as unknown as import('$lib/api/clusters').TaxonomyActivityEvent);
-        // Candidate lifecycle toasts
-        const actData = data as { op?: string; decision?: string; context?: Record<string, unknown> };
-        if (actData.op === 'candidate') {
-          const ctx = actData.context ?? {};
-          if (actData.decision === 'candidate_promoted') {
-            addToast('created', `Promoted: ${ctx.cluster_label ?? 'cluster'} → active`);
-          }
-          if (actData.decision === 'candidate_rejected') {
-            const coh = typeof ctx.coherence === 'number' ? ` (coh ${ctx.coherence.toFixed(2)})` : '';
-            const count = typeof ctx.member_count === 'number' ? ` — ${ctx.member_count} members reassigned` : '';
-            addToast('deleted', `Rejected: ${ctx.cluster_label ?? 'cluster'}${coh}${count}`);
-          }
-        }
-        if (actData.op === 'split' && actData.decision === 'split_complete') {
-          const ctx = actData.context ?? {};
-          if (ctx.children_state === 'candidate') {
-            const childCount = typeof ctx.hdbscan_clusters === 'number' ? ctx.hdbscan_clusters : '?';
-            addToast('created', `Split: ${childCount} candidates from ${ctx.parent_label ?? 'cluster'}`);
-          }
-        }
-      }
-      if (type === 'seed_batch_progress') {
-        // F8: Persist seed batch progress in store (survives modal close)
-        clustersStore.updateSeedProgress(data as { phase?: string; completed?: number; total?: number; current_prompt?: string });
-        // Dispatch as a DOM custom event so SeedModal can listen
-        // without being coupled to the SSE layer
-        window.dispatchEvent(new CustomEvent('seed-batch-progress', { detail: data }));
-      }
-      if (type === 'agent_changed') {
-        // Seed agent files were hot-reloaded — notify SeedModal to refresh agent list
-        window.dispatchEvent(new CustomEvent('agent-changed', { detail: data }));
-      }
-      if (type === 'update_available') {
-        updateStore.receive(data as Record<string, unknown>);
-        addToast('modified', `Update available: v${(data as Record<string, unknown>).latest_version}`);
-      }
-      if (type === 'update_complete') {
-        updateStore.receiveComplete(data as Record<string, unknown>);
-      }
-      if (type === 'domain_created') {
-        domainStore.invalidate();
-      }
-      if (type === 'routing_state_changed') {
-        const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
-        const wasSamplingCapable = forgeStore.samplingCapable === true;
-        const prevTier = routing.tier;
-        const delta = forgeStore.updateRoutingState({
-          sampling_capable: d.sampling_capable,
-          mcp_disconnected: !d.mcp_connected,
-          provider: d.provider,
-        });
+    sseHealthStore.connect(
+      (type, data) => {
+        // Sync events are handled by the store internally — skip here.
+        if (type === 'sync') return;
 
-        // Auto-enable force_sampling when sampling becomes available
-        if (delta.samplingChanged) {
-          onSamplingDetected();
-          if (!preferencesStore.pipeline.force_sampling) {
-            // Await the toggle so routing.tier reflects sampling BEFORE
-            // triggering the guide. Without await, the guide reads the stale
-            // tier (internal) because the preference hasn't persisted yet.
-            preferencesStore.setPipelineToggle('force_sampling', true).then(() => {
+        if (type === 'optimization_created' || type === 'optimization_analyzed' || type === 'refinement_turn') {
+          window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
+          // Toast for optimizations not from the current UI session (e.g., MCP)
+          const isOwnTrace = data.trace_id === forgeStore.traceId || data.trace_id === forgeStore.passthroughTraceId;
+          if (type !== 'refinement_turn' && data.trace_id && !isOwnTrace) {
+            const label = type === 'optimization_analyzed' ? 'analyzed' : 'optimized';
+            addToast('created', `Prompt ${label}`);
+          }
+          // Auto-load optimization results via event bus. Covers IDE-triggered
+          // optimizations via MCP bridge — the web UI was idle but should show
+          // the result (forgeStore.status = idle).
+          if (type === 'optimization_created' && data.trace_id && data.status === 'completed') {
+            const alreadyLoaded = forgeStore.result?.trace_id === data.trace_id;
+            const shouldLoad = forgeStore.status !== 'complete' && !alreadyLoaded;
+            if (shouldLoad) {
+              import('$lib/api/client').then(({ getOptimization }) => {
+                getOptimization(data.trace_id as string).then(opt => {
+                  if (opt.status === 'completed' && forgeStore.status !== 'complete') {
+                    forgeStore.loadFromRecord(opt);
+                  }
+                }).catch(() => {});
+              });
+            }
+          }
+          // F5: Propagate refinement turns to the refinement store for cross-tab sync
+          if (type === 'refinement_turn') {
+            const d = data as { optimization_id?: string };
+            if (d.optimization_id && d.optimization_id === refinementStore.optimizationId) {
+              refinementStore.reloadTurns(refinementStore.activeBranchId);
+            }
+          }
+        }
+        // F1: Route MCP pipeline progress through forgeStore.handleExternalEvent
+        // instead of direct mutations — single code path for all SSE status events.
+        if (type === 'optimization_status' || type === 'optimization_score_card' || type === 'optimization_start') {
+          forgeStore.handleExternalEvent(type, data as Record<string, unknown>);
+        }
+        if (type === 'optimization_failed') {
+          window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
+          addToast('deleted', (data.error as string) || 'Optimization failed');
+        }
+        if (type === 'feedback_submitted') {
+          window.dispatchEvent(new CustomEvent('feedback-event', { detail: data }));
+          // Inline update in Navigator handles feedback_rating per-row —
+          // no need for full history re-fetch via optimization-event.
+        }
+        if (type === 'strategy_changed') {
+          window.dispatchEvent(new CustomEvent('strategy-changed', { detail: data }));
+        }
+        if (type === 'taxonomy_changed') {
+          clustersStore.invalidateClusters();
+          domainStore.invalidate();
+          addToast('created', 'Taxonomy updated');
+        }
+        if (type === 'taxonomy_activity') {
+          clustersStore.pushActivityEvent(data as unknown as import('$lib/api/clusters').TaxonomyActivityEvent);
+          // Candidate lifecycle toasts
+          const actData = data as { op?: string; decision?: string; context?: Record<string, unknown> };
+          if (actData.op === 'candidate') {
+            const ctx = actData.context ?? {};
+            if (actData.decision === 'candidate_promoted') {
+              addToast('created', `Promoted: ${ctx.cluster_label ?? 'cluster'} → active`);
+            }
+            if (actData.decision === 'candidate_rejected') {
+              const coh = typeof ctx.coherence === 'number' ? ` (coh ${ctx.coherence.toFixed(2)})` : '';
+              const count = typeof ctx.member_count === 'number' ? ` — ${ctx.member_count} members reassigned` : '';
+              addToast('deleted', `Rejected: ${ctx.cluster_label ?? 'cluster'}${coh}${count}`);
+            }
+          }
+          if (actData.op === 'split' && actData.decision === 'split_complete') {
+            const ctx = actData.context ?? {};
+            if (ctx.children_state === 'candidate') {
+              const childCount = typeof ctx.hdbscan_clusters === 'number' ? ctx.hdbscan_clusters : '?';
+              addToast('created', `Split: ${childCount} candidates from ${ctx.parent_label ?? 'cluster'}`);
+            }
+          }
+        }
+        if (type === 'seed_batch_progress') {
+          // F8: Persist seed batch progress in store (survives modal close)
+          clustersStore.updateSeedProgress(data as { phase?: string; completed?: number; total?: number; current_prompt?: string });
+          // Dispatch as a DOM custom event so SeedModal can listen
+          // without being coupled to the SSE layer
+          window.dispatchEvent(new CustomEvent('seed-batch-progress', { detail: data }));
+        }
+        if (type === 'agent_changed') {
+          // Seed agent files were hot-reloaded — notify SeedModal to refresh agent list
+          window.dispatchEvent(new CustomEvent('agent-changed', { detail: data }));
+        }
+        if (type === 'update_available') {
+          updateStore.receive(data as Record<string, unknown>);
+          addToast('modified', `Update available: v${(data as Record<string, unknown>).latest_version}`);
+        }
+        if (type === 'update_complete') {
+          updateStore.receiveComplete(data as Record<string, unknown>);
+        }
+        if (type === 'domain_created') {
+          domainStore.invalidate();
+        }
+        if (type === 'routing_state_changed') {
+          const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
+          const wasSamplingCapable = forgeStore.samplingCapable === true;
+          const prevTier = routing.tier;
+          const delta = forgeStore.updateRoutingState({
+            sampling_capable: d.sampling_capable,
+            mcp_disconnected: !d.mcp_connected,
+            provider: d.provider,
+          });
+
+          // Auto-enable force_sampling when sampling becomes available
+          if (delta.samplingChanged) {
+            onSamplingDetected();
+            if (!preferencesStore.pipeline.force_sampling) {
+              // Await the toggle so routing.tier reflects sampling BEFORE
+              // triggering the guide. Without await, the guide reads the stale
+              // tier (internal) because the preference hasn't persisted yet.
+              preferencesStore.setPipelineToggle('force_sampling', true).then(() => {
+                triggerTierGuide(routing.tier);
+              });
+            } else {
               triggerTierGuide(routing.tier);
-            });
-          } else {
+            }
+          }
+
+          // Auto-disable force_sampling INSTANTLY when sampling goes away.
+          // Optimistic local update first to prevent UI flash.
+          if (wasSamplingCapable && d.sampling_capable !== true && preferencesStore.pipeline.force_sampling) {
+            preferencesStore.prefs.pipeline.force_sampling = false;
+            preferencesStore.setPipelineToggle('force_sampling', false);
+          }
+
+          if (delta.reconnected) addToast('created', 'MCP client reconnected');
+          if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
+
+          // Only trigger tier guide when the effective tier actually CHANGED.
+          // Without this guard, startup provider_changed events and benign
+          // routing broadcasts (e.g. during recluster) pop the internal
+          // pipeline modal even though the tier hasn't changed.
+          if (!delta.samplingChanged && routing.tier !== prevTier) {
             triggerTierGuide(routing.tier);
           }
         }
-
-        // Auto-disable force_sampling INSTANTLY when sampling goes away.
-        // Optimistic local update first to prevent UI flash.
-        if (wasSamplingCapable && d.sampling_capable !== true && preferencesStore.pipeline.force_sampling) {
-          preferencesStore.prefs.pipeline.force_sampling = false;
-          preferencesStore.setPipelineToggle('force_sampling', false);
+        if (type === 'preferences_changed') {
+          preferencesStore.prefs = data as unknown as Preferences;
         }
-
-        if (delta.reconnected) addToast('created', 'MCP client reconnected');
-        if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
-
-        // Only trigger tier guide when the effective tier actually CHANGED.
-        // Without this guard, startup provider_changed events and benign
-        // routing broadcasts (e.g. during recluster) pop the internal
-        // pipeline modal even though the tier hasn't changed.
-        if (!delta.samplingChanged && routing.tier !== prevTier) {
-          triggerTierGuide(routing.tier);
-        }
-      }
-      if (type === 'preferences_changed') {
-        preferencesStore.prefs = data as unknown as Preferences;
-      }
-    });
-
-    // SSE reconnection reconciliation — EventSource auto-reconnects on error,
-    // but events may have been lost during the gap. The server sends replays
-    // via Last-Event-ID, but as a defense-in-depth we also refetch critical
-    // state when the connection recovers.
-    eventSource.addEventListener('open', () => {
-      if (sseHadError) {
-        sseHadError = false;
+      },
+      // onReconnect — refetch critical state after SSE recovery.
+      () => {
         healthPoll();
         clustersStore.invalidateClusters();
         domainStore.invalidate();
         window.dispatchEvent(new CustomEvent('strategy-changed'));
-      }
-    });
-    eventSource.onerror = () => {
-      sseHadError = true;
-    };
+      },
+    );
 
     const handleLoadOpt = (e: Event) => {
       const traceId = (e as CustomEvent).detail?.trace_id;
@@ -232,7 +227,7 @@
     window.addEventListener('load-optimization', handleLoadOpt);
 
     return () => {
-      eventSource?.close();
+      sseHealthStore.disconnect();
       window.removeEventListener('load-optimization', handleLoadOpt);
     };
   });

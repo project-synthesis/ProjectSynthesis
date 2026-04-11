@@ -6,6 +6,7 @@ import StatusBar from './StatusBar.svelte';
 import { forgeStore } from '$lib/stores/forge.svelte';
 import { preferencesStore } from '$lib/stores/preferences.svelte';
 import { clustersStore } from '$lib/stores/clusters.svelte';
+import { sseHealthStore } from '$lib/stores/sse-health.svelte';
 import type { ClusterNode } from '$lib/api/clusters';
 
 /** Create a minimal active ClusterNode for tree population. */
@@ -29,6 +30,7 @@ describe('StatusBar', () => {
     forgeStore._reset();
     preferencesStore._reset();
     clustersStore._reset();
+    sseHealthStore._reset();
     vi.clearAllMocks();
   });
 
@@ -429,5 +431,58 @@ describe('StatusBar', () => {
     // force_sampling is false (default) — no auto-fallback, no degradation
     render(StatusBar);
     expect(screen.getByText('disconnected')).toBeInTheDocument();
+  });
+
+  // -----------------------------------------------------------------------
+  // SSE health indicator
+  // -----------------------------------------------------------------------
+
+  it('renders SSE indicator (shows "SSE \u00D7" when disconnected)', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    // Store starts disconnected by default.
+    render(StatusBar);
+    expect(screen.getByText('SSE \u00D7')).toBeInTheDocument();
+  });
+
+  it('SSE indicator uses red color when disconnected', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    render(StatusBar);
+    const el = screen.getByText('SSE \u00D7');
+    expect(el.closest('.status-sse')?.getAttribute('style')).toContain('var(--color-neon-red)');
+  });
+
+  it('SSE indicator dot element is present', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    render(StatusBar);
+    const sseEl = screen.getByText('SSE \u00D7').closest('.status-sse');
+    const dot = sseEl?.querySelector('.status-sse-dot');
+    expect(dot).toBeInTheDocument();
+  });
+
+  it('SSE indicator shows "SSE" when healthy', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    sseHealthStore.connectionState = 'healthy';
+    render(StatusBar);
+    // "SSE" without the cross — exact match
+    const sseEls = screen.getAllByText('SSE');
+    expect(sseEls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('SSE indicator uses cyan color when healthy', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    sseHealthStore.connectionState = 'healthy';
+    render(StatusBar);
+    const sseEls = screen.getAllByText('SSE');
+    const el = sseEls.find(e => e.closest('.status-sse'));
+    expect(el?.closest('.status-sse')?.getAttribute('style')).toContain('var(--color-neon-cyan)');
+  });
+
+  it('SSE indicator uses amber color when degraded', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    sseHealthStore.connectionState = 'degraded';
+    render(StatusBar);
+    const sseEls = screen.getAllByText('SSE');
+    const el = sseEls.find(e => e.closest('.status-sse'));
+    expect(el?.closest('.status-sse')?.getAttribute('style')).toContain('var(--color-neon-yellow)');
   });
 });

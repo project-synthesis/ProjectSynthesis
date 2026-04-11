@@ -30,9 +30,17 @@ class MockEventSource {
   }
 
   /** Test helper: simulate server sending a named event */
-  __simulateEvent(type: string, data: string) {
-    const ev = new MessageEvent(type, { data });
+  __simulateEvent(type: string, data: string, lastEventId?: string) {
+    const ev = new MessageEvent(type, { data, lastEventId: lastEventId ?? '' });
     this._listeners[type]?.forEach((fn) => fn(ev));
+  }
+
+  /** Test helper: simulate the 'open' event (fires both property and listener) */
+  __simulateOpen() {
+    this.readyState = MockEventSource.OPEN;
+    const ev = new Event('open');
+    this.onopen?.(ev);
+    this._listeners['open']?.forEach((fn) => (fn as unknown as (ev: Event) => void)(ev));
   }
 
   /** Test helper: simulate error */

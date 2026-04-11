@@ -543,10 +543,35 @@ export const applyUpdate = (tag: string) =>
 
 // ---- Real-time event stream ----
 
-export type EventHandler = (type: string, data: Record<string, unknown>) => void;
+/** Metadata extracted from each SSE event for health tracking. */
+export interface EventMeta {
+    /** The SSE `id` field (sequence number as string), or null. */
+    seq: string | null;
+    /** Server-side Unix timestamp (seconds) from the event payload. */
+    timestamp: number | undefined;
+}
 
-export function connectEventStream(onEvent: EventHandler): EventSource {
-    const es = new EventSource(`${BASE_URL.replace('/api', '')}/api/events`);
+export type EventHandler = (
+    type: string,
+    data: Record<string, unknown>,
+    meta: EventMeta,
+) => void;
+
+/**
+ * Connect to the SSE event stream at `/api/events`.
+ *
+ * @param onEvent - Handler called for each typed event (including `sync`).
+ * @param lastEventId - Optional sequence number for manual reconnection replay.
+ *   Appended as `?last_event_id=` query param (browser auto-reconnect uses
+ *   the `Last-Event-ID` header instead).
+ */
+export function connectEventStream(
+    onEvent: EventHandler,
+    lastEventId?: string,
+): EventSource {
+    let url = `${BASE_URL.replace('/api', '')}/api/events`;
+    if (lastEventId) url += `?last_event_id=${encodeURIComponent(lastEventId)}`;
+    const es = new EventSource(url);
 
     const eventTypes = [
         'optimization_created', 'optimization_analyzed',
@@ -564,13 +589,25 @@ export function connectEventStream(onEvent: EventHandler): EventSource {
     for (const type of eventTypes) {
         es.addEventListener(type, (e: MessageEvent) => {
             try {
-                onEvent(type, JSON.parse(e.data));
+                const parsed = JSON.parse(e.data);
+                onEvent(type, parsed, {
+                    seq: e.lastEventId || null,
+                    timestamp: typeof parsed.timestamp === 'number' ? parsed.timestamp : undefined,
+                });
             } catch { /* malformed event */ }
         });
     }
 
-    // EventSource auto-reconnects on error — consumers can set es.onerror
-    // for reconnection detection (e.g., +page.svelte SSE reconciliation).
+    // Sync event — forwarded for staleness timer reset but excluded from latency tracking.
+    es.addEventListener('sync', (e: MessageEvent) => {
+        try {
+            const parsed = JSON.parse(e.data);
+            onEvent('sync', parsed, {
+                seq: e.lastEventId || null,
+                timestamp: undefined,
+            });
+        } catch { /* ignore */ }
+    });
 
     return es;
 }
