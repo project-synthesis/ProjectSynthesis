@@ -3,7 +3,8 @@
   import { editorStore } from '$lib/stores/editor.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import MarkdownRenderer from '$lib/components/shared/MarkdownRenderer.svelte';
-  import { copyToClipboard } from '$lib/utils/formatting';
+  import { copyToClipboard, formatCompactChars } from '$lib/utils/formatting';
+  import { slide } from 'svelte/transition';
   import { tooltip } from '$lib/actions/tooltip';
   import { ARTIFACT_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
@@ -160,7 +161,7 @@
           <span class="section-title">CHANGES</span>
         </button>
         {#if !changesCollapsed}
-          <div class="changes-body">
+          <div class="changes-body" transition:slide={{ duration: 200 }}>
             <MarkdownRenderer content={result.changes_summary} class="changes-md" />
           </div>
         {/if}
@@ -169,7 +170,7 @@
 
     <!-- Context diagnostics — shows retrieval quality for codebase-aware optimizations -->
     {#if hasContextDiagnostics && curatedRetrieval}
-      {@const files = (curatedRetrieval.files ?? []) as Array<{path: string; score: number; content_chars?: number}>}
+      {@const files = (curatedRetrieval.files ?? []) as Array<{path: string; score: number; content_chars?: number; source?: string}>}
       {@const nearMisses = (curatedRetrieval.near_misses ?? []) as Array<{path: string; score: number}>}
       {@const totalIndexed = (curatedRetrieval.total_files_indexed ?? 0) as number}
       {@const budgetUsed = (curatedRetrieval.budget_used_chars ?? 0) as number}
@@ -187,7 +188,7 @@
           </span>
         </button>
         {#if !contextCollapsed}
-          <div class="context-body">
+          <div class="context-body" transition:slide={{ duration: 200 }}>
             {#if hasDiagnostics}
               <div class="context-stats">
                 <span class="context-stat">
@@ -218,8 +219,11 @@
                   <span class="context-file-rank">{i + 1}</span>
                   <span class="context-file-score" style="color: {file.score >= 0.5 ? 'var(--color-neon-green)' : file.score >= 0.35 ? 'var(--color-neon-cyan)' : 'var(--color-text-dim)'};">{file.score.toFixed(3)}</span>
                   <span class="context-file-path">{file.path}</span>
+                  {#if file.source && file.source !== 'full'}
+                    <span class="context-file-source" style="color: {file.source === 'outline' ? 'var(--color-text-dim)' : 'var(--color-neon-teal)'};">{file.source === 'import-graph' ? 'import' : file.source}</span>
+                  {/if}
                   {#if file.content_chars != null && file.content_chars > 0}
-                    <span class="context-file-chars">{file.content_chars}</span>
+                    <span class="context-file-chars">{formatCompactChars(file.content_chars)}</span>
                   {/if}
                 </div>
               {/each}
@@ -231,7 +235,7 @@
                 {#each nearMisses as miss}
                   <div class="context-file-row context-file-row--miss">
                     <span class="context-file-rank">&mdash;</span>
-                    <span class="context-file-score">{miss.score.toFixed(3)}</span>
+                    <span class="context-file-score" style="color: {miss.score >= 0.5 ? 'var(--color-neon-green)' : miss.score >= 0.35 ? 'var(--color-neon-cyan)' : 'var(--color-text-dim)'};">{miss.score.toFixed(3)}</span>
                     <span class="context-file-path">{miss.path}</span>
                   </div>
                 {/each}
@@ -438,7 +442,7 @@
   /* ---- Context diagnostics ---- */
   .context-summary {
     font-family: var(--font-mono);
-    font-size: 8px;
+    font-size: 9px;
     color: var(--color-text-dim);
     margin-left: auto;
   }
@@ -448,12 +452,12 @@
     border-top: 1px solid var(--color-border-subtle);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
   }
 
   .context-stats {
     display: flex;
-    gap: 12px;
+    gap: 6px;
     flex-wrap: wrap;
   }
 
@@ -485,11 +489,12 @@
   }
 
   .context-list-heading {
-    font-family: var(--font-mono);
-    font-size: 8px;
+    font-family: var(--font-display);
+    font-size: 10px;
+    font-weight: 700;
     color: var(--color-text-dim);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.1em;
     padding: 2px 0;
   }
 
@@ -525,6 +530,15 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+  }
+
+  .context-file-source {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+    opacity: 0.7;
   }
 
   .context-file-chars {

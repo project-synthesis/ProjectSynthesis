@@ -58,6 +58,12 @@ export function parsePrimaryDomain(domain: string | null | undefined): string {
   return (idx >= 0 ? domain.substring(0, idx).trim() : domain.trim()).toLowerCase() || 'general';
 }
 
+/** Format a character count as compact "K" string (e.g. 27286 -> "27.3K"). */
+export function formatCompactChars(chars: number): string {
+  if (chars < 1000) return String(chars);
+  return (chars / 1000).toFixed(1) + 'K';
+}
+
 /** True when the result was produced via a passthrough flow (web or MCP). */
 export function isPassthroughResult(result: { provider?: string } | null | undefined): boolean {
   return result?.provider?.endsWith('_passthrough') === true;
