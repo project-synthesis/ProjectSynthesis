@@ -444,9 +444,18 @@ class RepoIndexService:
             head_sha = await self._gc.get_branch_head_sha(token, repo_full_name, branch)
             tree = await self._gc.get_tree(token, repo_full_name, branch)
 
-            code_ext = [item for item in tree if item["path"].rfind(".") != -1 and item["path"][item["path"].rfind("."):].lower() in _INDEXABLE_EXTENSIONS]
-            test_excluded = [item for item in code_ext if _is_test_file(item["path"])]
-            size_excluded = [item for item in code_ext if item.get("size") is not None and item["size"] > _MAX_FILE_SIZE]
+            code_ext = [
+                item for item in tree
+                if item["path"].rfind(".") != -1
+                and item["path"][item["path"].rfind("."):].lower() in _INDEXABLE_EXTENSIONS
+            ]
+            test_excluded = [
+                item for item in code_ext if _is_test_file(item["path"])
+            ]
+            size_excluded = [
+                item for item in code_ext
+                if item.get("size") is not None and item["size"] > _MAX_FILE_SIZE
+            ]
             indexable = [
                 item for item in tree
                 if _is_indexable(item["path"], item.get("size"))
@@ -474,7 +483,6 @@ class RepoIndexService:
                   for item in indexable]
             )
             read_ms = (time.monotonic() - t_read) * 1000
-            files_read = sum(1 for _, c in contents if c is not None)
             total_content_chars = sum(len(c) for _, c in contents if c)
 
             # Phase 2: Extract structured outlines and build rich embedding text
@@ -681,7 +689,7 @@ class RepoIndexService:
         search_ms = (time.monotonic() - t_search) * 1000
 
         # Relevance filtering + domain-aware thresholds
-        _CROSS_DOMAIN_MIN_SIM = 0.30
+        cross_domain_min_sim = 0.30
         boosted: list[tuple[int, float]] = []
         domain_patterns = _DOMAIN_PATH_PATTERNS.get(domain or "", [])
         cross_domain_filtered = 0
@@ -702,7 +710,7 @@ class RepoIndexService:
             # Apply stricter threshold when the file belongs to a known domain
             # that differs from the prompt's domain (cross-domain noise filter)
             is_cross_domain = file_domain is not None and not is_same_domain
-            effective_min = _CROSS_DOMAIN_MIN_SIM if is_cross_domain else min_sim
+            effective_min = cross_domain_min_sim if is_cross_domain else min_sim
             if score < effective_min:
                 if is_cross_domain and score >= min_sim:
                     cross_domain_filtered += 1
@@ -733,7 +741,6 @@ class RepoIndexService:
         if not selected:
             return None
 
-        filter_ms = (time.monotonic() - t_search) * 1000 - search_ms  # approximate
         logger.info(
             "curated_context: repo=%s query_len=%d indexed=%d "
             "above_threshold=%d cross_domain_cut=%d below_base_cut=%d "
@@ -773,7 +780,8 @@ class RepoIndexService:
             if not body:
                 return False
             label = f"relevance: {score_:.2f}" if source_ != "import-graph" else "import-graph"
-            entry = f"## {row_.file_path} ({label})\n```\n{body}\n```" if row_.content else f"## {row_.file_path} ({label})\n{body}"
+            header = f"## {row_.file_path} ({label})"
+            entry = f"{header}\n```\n{body}\n```" if row_.content else f"{header}\n{body}"
             if total_chars + len(entry) > effective_max:
                 stop_reason = "budget"
                 return False
