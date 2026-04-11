@@ -22,6 +22,8 @@ export interface SceneNode {
   parentId?: string;
   coherence: number;      // [0, 1] → wireframe brightness
   avgScore: number | null; // [1, 10] → color saturation
+  domain: string;          // primary domain (e.g. "backend", "general")
+  memberCount: number;     // member_count from API
 }
 
 /** Opacity by lifecycle state and active filter.
@@ -41,19 +43,19 @@ function stateOpacity(state: string, stateFilter: string | null, hasMatches: boo
   }
   // Filtered tab with matches — matching nodes glow, rest ghosted
   if (state === stateFilter) return 1.0;
-  if (state === 'domain') return 0.5;
+  if (state === 'domain' || state === 'project') return 0.5;
   return 0.25;
 }
 
 /** Size multiplier by lifecycle state.
- * Domain nodes already aggregate children's members for their base size,
- * so the multiplier is moderate — enough to be visually dominant
+ * Structural nodes (domain, project) aggregate children's members for base
+ * size, so the multiplier is moderate — enough to be visually dominant
  * without overwhelming the graph at scale.
  *
  * Note: the final size is clamped to MAX_NODE_SIZE after applying
- * this multiplier, so domains can't blow past the visual budget. */
+ * this multiplier, so structural nodes can't blow past the visual budget. */
 function stateSizeMultiplier(state: string): number {
-  if (state === 'domain') return 1.3;
+  if (state === 'domain' || state === 'project') return 1.3;
   if (state === 'template') return 1.3;
   if (state === 'mature') return 1.15;
   return 1.0;
@@ -181,6 +183,8 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
       parentId: node.parent_id ?? undefined,
       coherence: node.coherence ?? 0.5,
       avgScore: node.avg_score ?? null,
+      domain: parsePrimaryDomain(node.domain),
+      memberCount: node.member_count,
     });
 
     // Hierarchical edges from parent_id

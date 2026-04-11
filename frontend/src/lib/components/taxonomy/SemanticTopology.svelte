@@ -219,13 +219,13 @@
 
       const group = new THREE.Group();
       group.position.set(...node.position);
-      const isDomain = node.state === 'domain';
-      group.userData = { isDomain };
+      const isStructural = node.state === 'domain' || node.state === 'project';
+      group.userData = { isDomain: isStructural };
 
-      // Fill: dark tinted interior (domains slightly darker = edge-dominant)
-      // Non-domain nodes: modulate fill scalar by avgScore for saturation encoding
-      let fillScalar = isDomain ? 0.08 : 0.15;
-      if (!isDomain && node.avgScore != null) {
+      // Fill: dark tinted interior (structural nodes slightly darker = edge-dominant)
+      // Non-structural nodes: modulate fill scalar by avgScore for saturation encoding
+      let fillScalar = isStructural ? 0.08 : 0.15;
+      if (!isStructural && node.avgScore != null) {
         fillScalar *= 0.7 + 0.3 * Math.min(1, Math.max(0, node.avgScore / 10));
       }
       const fillMat = new THREE.MeshBasicMaterial({
@@ -233,11 +233,11 @@
         transparent: true,
         opacity: node.opacity * 0.9,
       });
-      const fill = new THREE.Mesh(isDomain ? domainFillGeo : clusterFillGeo, fillMat);
+      const fill = new THREE.Mesh(isStructural ? domainFillGeo : clusterFillGeo, fillMat);
       fill.scale.setScalar(node.size);
       group.add(fill); // child 0: fill
 
-      if (isDomain) {
+      if (isStructural) {
         // Domain: EdgesGeometry — clean pentagonal structural outlines
         const edgeMat = new THREE.LineBasicMaterial({
           color: node.color,
@@ -970,9 +970,40 @@
   {/if}
   <!-- Hint card is inline in TopologyControls -->
   {#if hoveredNodeId}
-    <div class="topology-tooltip" role="tooltip">
-      {sceneData?.nodes.find(n => n.id === hoveredNodeId)?.label ?? ''}
-    </div>
+    {@const hn = sceneData?.nodes.find(n => n.id === hoveredNodeId)}
+    {#if hn}
+      <div class="topology-tooltip" role="tooltip">
+        {#if hn.state === 'project'}
+          {@const domainIds = new Set(sceneData?.nodes.filter(n => n.parentId === hn.id && n.state === 'domain').map(n => n.id) ?? [])}
+          {@const domainCount = domainIds.size}
+          {@const clusterCount = sceneData?.nodes.filter(n => n.parentId && domainIds.has(n.parentId) && n.state !== 'domain' && n.state !== 'project').length ?? 0}
+          <span class="tt-label">{hn.label.includes('/') ? hn.label.split('/').pop() : hn.label}</span>
+          <span class="tt-sep">&middot;</span>
+          <span class="tt-meta">{domainCount} domains</span>
+          <span class="tt-sep">&middot;</span>
+          <span class="tt-meta">{clusterCount} clusters</span>
+        {:else if hn.state === 'domain'}
+          {@const childCount = sceneData?.nodes.filter(n => n.parentId === hn.id).length ?? 0}
+          <span class="tt-label">{hn.label}</span>
+          <span class="tt-sep">&middot;</span>
+          <span class="tt-meta">{childCount} clusters</span>
+          {#if hn.avgScore != null}
+            <span class="tt-sep">&middot;</span>
+            <span class="tt-score">{hn.avgScore.toFixed(1)}</span>
+          {/if}
+        {:else}
+          <span class="tt-label">{hn.label}</span>
+          <span class="tt-sep">&middot;</span>
+          <span class="tt-domain">{hn.domain}</span>
+          <span class="tt-sep">&middot;</span>
+          <span class="tt-meta">{hn.memberCount}m</span>
+          {#if hn.avgScore != null}
+            <span class="tt-sep">&middot;</span>
+            <span class="tt-score">{hn.avgScore.toFixed(1)}</span>
+          {/if}
+        {/if}
+      </div>
+    {/if}
   {/if}
   {#if clustersStore.taxonomyLoading}
     <div class="topology-loading">Loading taxonomy...</div>
@@ -1036,6 +1067,29 @@
     font-size: 11px;
     font-family: var(--font-mono);
     pointer-events: none;
+  }
+
+  .topology-tooltip .tt-label {
+    color: var(--color-text-primary);
+  }
+
+  .topology-tooltip .tt-sep {
+    color: var(--color-text-dim);
+    margin: 0 2px;
+  }
+
+  .topology-tooltip .tt-domain {
+    color: var(--color-neon-cyan);
+    text-transform: uppercase;
+    font-size: 10px;
+  }
+
+  .topology-tooltip .tt-meta {
+    color: var(--color-text-secondary);
+  }
+
+  .topology-tooltip .tt-score {
+    color: var(--color-neon-green);
   }
 
   .topology-loading,
