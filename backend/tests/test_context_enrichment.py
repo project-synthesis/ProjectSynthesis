@@ -93,14 +93,15 @@ class TestEnrichPassthrough:
 
 class TestEnrichInternal:
     @pytest.mark.asyncio
-    async def test_internal_skips_heuristic_analysis(self, db, tmp_path):
+    async def test_internal_runs_heuristic_for_domain_detection(self, db, tmp_path):
+        """Heuristic analysis runs for ALL tiers to provide domain detection."""
         service = _build_service(tmp_path)
         result = await service.enrich(
             raw_prompt="Implement a REST API endpoint for user login",
             tier="internal", db=db,
         )
-        assert result.analysis is None
-        assert result.context_sources["heuristic_analysis"] is False
+        assert result.analysis is not None
+        assert result.context_sources["heuristic_analysis"] is True
 
     @pytest.mark.asyncio
     async def test_internal_skips_curated_index(self, db, tmp_path):
@@ -162,7 +163,7 @@ class TestEnrichGracefulDegradation:
         )
         expected_keys = {
             "workspace_guidance", "codebase_context", "adaptation",
-            "applied_patterns", "heuristic_analysis",
+            "applied_patterns", "heuristic_analysis", "performance_signals",
         }
         assert expected_keys == set(result.context_sources.keys())
 
@@ -190,14 +191,17 @@ class TestEnrichGracefulDegradation:
 
 class TestEnrichSampling:
     @pytest.mark.asyncio
-    async def test_sampling_tier_skips_heuristic(self, db, tmp_path):
+    async def test_sampling_tier_runs_heuristic_for_domain_detection(self, db, tmp_path):
+        """Heuristic analysis runs for ALL tiers (including sampling) to provide
+        domain detection for curated retrieval cross-domain filtering."""
         service = _build_service(tmp_path)
         result = await service.enrich(
             raw_prompt="Implement a REST API endpoint",
             tier="sampling", db=db,
         )
-        assert result.analysis is None
-        assert result.context_sources["heuristic_analysis"] is False
+        assert result.analysis is not None
+        assert result.analysis.task_type == "coding"
+        assert result.context_sources["heuristic_analysis"] is True
 
     @pytest.mark.asyncio
     async def test_sampling_tier_skips_codebase_context(self, db, tmp_path):

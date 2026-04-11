@@ -540,6 +540,18 @@ class PipelineOrchestrator:
 
             dynamic_max_tokens = compute_optimize_max_tokens(len(raw_prompt))
 
+            logger.info(
+                "optimize_inject: trace_id=%s input_chars=%d (~%d tokens) "
+                "prompt=%d codebase=%d guidance=%d adaptation=%d patterns=%d fewshot=%d",
+                trace_id, len(optimize_msg), len(optimize_msg) // 4,
+                len(raw_prompt),
+                len(codebase_context) if codebase_context else 0,
+                len(codebase_guidance) if codebase_guidance else 0,
+                len(adaptation_state) if adaptation_state else 0,
+                len(applied_patterns_text) if applied_patterns_text else 0,
+                len(few_shot_text) if few_shot_text else 0,
+            )
+
             phase_start = time.monotonic()
             optimization: OptimizationResult = await self._call_provider(
                 provider,

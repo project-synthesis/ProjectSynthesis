@@ -46,6 +46,7 @@ The script handles: version sync → commit → tag → push → GitHub Release 
 ./init.sh              # start all three services
 ./init.sh stop         # graceful stop (process group kill)
 ./init.sh restart      # stop + start
+./init.sh reload-mcp   # restart MCP server only (faster, requires /mcp reconnect)
 ./init.sh status       # show running/stopped with PIDs
 ./init.sh logs         # tail all service logs
 ./init.sh setup-vscode # install VS Code bridge extension for sampling

@@ -218,12 +218,19 @@ async def optimize(
             "reason": decision.reason, "degraded_from": decision.degraded_from,
         })
         try:
+            # Combine adaptation state with performance signals (strategy
+            # perf by domain, anti-patterns, domain keywords). Both are
+            # "historical intelligence" injected into the optimizer template.
+            _adapt = enrichment.adaptation_state or ""
+            if enrichment.performance_signals:
+                _adapt = f"{_adapt}\n\n{enrichment.performance_signals}" if _adapt else enrichment.performance_signals
+
             async for event in orchestrator.run(
                 raw_prompt=body.prompt, provider=decision.provider, db=db,
                 strategy_override=effective_strategy if effective_strategy != "auto" else None,
                 codebase_guidance=enrichment.workspace_guidance,
                 codebase_context=enrichment.codebase_context,
-                adaptation_state=enrichment.adaptation_state,
+                adaptation_state=_adapt or None,
                 context_sources=enrichment.context_sources_dict,
                 repo_full_name=effective_repo,
                 applied_pattern_ids=body.applied_pattern_ids,

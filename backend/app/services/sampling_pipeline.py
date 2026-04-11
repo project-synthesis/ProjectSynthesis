@@ -775,11 +775,27 @@ async def run_sampling_pipeline(
     # Merge auto-injected cluster IDs for usage tracking
     applied_cluster_ids.update(auto_injected_cluster_ids)
 
-    # 4c: Adaptation state
+    # 4c: Adaptation state + performance signals
     adaptation_state: str | None = None
     adaptation_enabled = prefs.get("pipeline.enable_adaptation", prefs_snapshot)
     if adaptation_enabled:
         adaptation_state = await _resolve_adaptation_state(analysis.task_type)
+
+    # Performance signals: strategy perf by domain, anti-patterns, domain keywords
+    try:
+        from app.services.context_enrichment import resolve_performance_signals
+        async with async_session_factory() as _perf_db:
+            perf_signals = await resolve_performance_signals(
+                _perf_db, analysis.task_type, analysis.domain or "general",
+            )
+            if perf_signals:
+                adaptation_state = (
+                    f"{adaptation_state}\n\n{perf_signals}"
+                    if adaptation_state else perf_signals
+                )
+    except Exception:
+        logger.debug("Performance signals resolution failed in sampling pipeline")
+
     if adaptation_state is not None:
         context_sources["adaptation"] = True
 
@@ -812,6 +828,18 @@ async def run_sampling_pipeline(
         "applied_patterns": applied_patterns_text,
         "few_shot_examples": few_shot_text,
     })
+
+    logger.info(
+        "optimize_inject: trace_id=%s input_chars=%d (~%d tokens) "
+        "prompt=%d codebase=%d guidance=%d adaptation=%d patterns=%d fewshot=%d",
+        trace_id, len(optimize_msg), len(optimize_msg) // 4,
+        len(prompt),
+        len(codebase_context) if codebase_context else 0,
+        len(codebase_guidance) if codebase_guidance else 0,
+        len(adaptation_state) if adaptation_state else 0,
+        len(applied_patterns_text) if applied_patterns_text else 0,
+        len(few_shot_text) if few_shot_text else 0,
+    )
 
     dynamic_max_tokens = compute_optimize_max_tokens(len(prompt))
     try:

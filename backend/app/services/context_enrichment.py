@@ -3,7 +3,10 @@
 Single entry point replacing 5 scattered context resolution sites.
 Each tier calls enrich() and receives an EnrichedContext with all
 resolved layers — workspace guidance, codebase context, adaptation,
-applied patterns, and (for passthrough) heuristic analysis.
+applied patterns, performance signals, and heuristic analysis.
+
+Heuristic analysis runs for ALL tiers (not just passthrough) to provide
+domain detection for curated retrieval cross-domain filtering.
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
@@ -25,6 +28,96 @@ from app.services.workspace_intelligence import WorkspaceIntelligence
 logger = logging.getLogger(__name__)
 
 
+async def resolve_performance_signals(
+    db: AsyncSession,
+    task_type: str,
+    domain: str,
+) -> str | None:
+    """Resolve performance signals: strategy perf by domain, anti-patterns, domain keywords.
+
+    Standalone function — callable from both the enrichment service (instance method)
+    and the sampling pipeline (no instance needed). Cheap signals (~150 tokens) from
+    the Optimization table, no LLM calls.
+    """
+    try:
+        from sqlalchemy import func, select
+
+        from app.models import Optimization
+
+        lines: list[str] = []
+
+        # 1. Strategy performance by domain+task_type (top 3)
+        perf_q = await db.execute(
+            select(
+                Optimization.strategy_used,
+                func.avg(Optimization.overall_score).label("avg_score"),
+                func.count().label("n"),
+            ).where(
+                Optimization.task_type == task_type,
+                Optimization.domain == domain,
+                Optimization.overall_score.isnot(None),
+                Optimization.strategy_used.isnot(None),
+            ).group_by(Optimization.strategy_used)
+            .having(func.count() >= 3)
+            .order_by(func.avg(Optimization.overall_score).desc())
+            .limit(3)
+        )
+        top_strategies = perf_q.all()
+        if top_strategies:
+            strat_parts = [
+                f"{r.strategy_used} ({r.avg_score:.1f}, n={r.n})"
+                for r in top_strategies
+            ]
+            lines.append(
+                f"Top strategies for {domain}+{task_type}: "
+                + ", ".join(strat_parts)
+            )
+
+        # 2. Anti-patterns: strategies whose OVERALL average is below 5.5
+        #    for this task_type+domain combo
+        anti_q = await db.execute(
+            select(
+                Optimization.strategy_used,
+                func.avg(Optimization.overall_score).label("avg_score"),
+                func.count().label("n"),
+            ).where(
+                Optimization.task_type == task_type,
+                Optimization.domain == domain,
+                Optimization.overall_score.isnot(None),
+                Optimization.strategy_used.isnot(None),
+            ).group_by(Optimization.strategy_used)
+            .having(func.count() >= 3, func.avg(Optimization.overall_score) < 5.5)
+            .order_by(func.avg(Optimization.overall_score).asc())
+            .limit(2)
+        )
+        anti_patterns = anti_q.all()
+        if anti_patterns:
+            for r in anti_patterns:
+                lines.append(
+                    f"Avoid: {r.strategy_used} averaged {r.avg_score:.1f} "
+                    f"for {domain}+{task_type} (n={r.n})"
+                )
+
+        # 3. Domain keywords from DomainSignalLoader singleton
+        try:
+            from app.services.domain_signal_loader import get_signal_loader
+            loader = get_signal_loader()
+            if loader:
+                domain_signals = loader.signals.get(domain, [])
+                if domain_signals:
+                    keywords = [kw for kw, _weight in domain_signals[:8]]
+                    lines.append(
+                        f"Domain vocabulary: {', '.join(keywords)}"
+                    )
+        except Exception:
+            pass  # DomainSignalLoader may not be initialized
+
+        return "\n".join(lines) if lines else None
+    except Exception:
+        logger.debug("Performance signals resolution failed", exc_info=True)
+        return None
+
+
 @dataclass(frozen=True)
 class EnrichedContext:
     """All resolved context layers for an optimization request."""
@@ -34,6 +127,7 @@ class EnrichedContext:
     codebase_context: str | None = None
     adaptation_state: str | None = None
     applied_patterns: str | None = None
+    performance_signals: str | None = None
     analysis: HeuristicAnalysis | None = None
     context_sources: MappingProxyType[str, bool] = field(
         default_factory=lambda: MappingProxyType({}),
@@ -113,25 +207,29 @@ class ContextEnrichmentService:
         ``MAX_CODEBASE_CONTEXT_CHARS`` and wrapped in ``<untrusted-context>``;
         ``adaptation_state`` is capped at ``MAX_ADAPTATION_CHARS``.
         """
+        import time as _time
+        _t_enrich_start = _time.monotonic()
         prefs = preferences_snapshot or {}
 
         # 1. Workspace guidance — ALL tiers, same path
         guidance = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
 
-        # 2. Analysis — tier-dependent
+        # 2. Analysis — heuristic (zero-LLM) for all tiers.
+        #    Passthrough uses this as the primary analysis. Internal/sampling
+        #    tiers use it only for domain detection in curated retrieval
+        #    (the LLM analyze phase runs later with richer classification).
         analysis: HeuristicAnalysis | None = None
         task_type: str | None = None
-        if tier == "passthrough":
-            try:
-                analysis = await self._heuristic_analyzer.analyze(raw_prompt, db)
-                task_type = analysis.task_type
-            except Exception:
-                logger.exception("Heuristic analysis failed")
-                analysis = HeuristicAnalysis(
-                    task_type="general", domain="general",
-                    intent_label="general optimization", confidence=0.0,
-                )
-                task_type = "general"
+        try:
+            analysis = await self._heuristic_analyzer.analyze(raw_prompt, db)
+            task_type = analysis.task_type
+        except Exception:
+            logger.debug("Heuristic analysis failed during enrichment", exc_info=True)
+            analysis = HeuristicAnalysis(
+                task_type="general", domain="general",
+                intent_label="general optimization", confidence=0.0,
+            )
+            task_type = "general"
 
         # 3. Codebase context — available for ALL tiers when repo is linked.
         #    Two layers: (a) cached Haiku synthesis (architectural overview, computed
@@ -174,8 +272,7 @@ class ContextEnrichmentService:
                 repo_full_name, branch, raw_prompt,
                 task_type, analysis.domain if analysis else None, db,
             )
-            if curated_meta:
-                enrichment_meta_dict["curated_retrieval"] = curated_meta
+            enrichment_meta_dict["curated_retrieval"] = curated_meta
 
             # Combine: synthesis first (overview), then curated (prompt-specific)
             if explore_synthesis and curated_text:
@@ -197,6 +294,12 @@ class ContextEnrichmentService:
             raw_prompt, applied_pattern_ids, db,
         )
 
+        # 5b. Performance signals — strategy perf, domain keywords, anti-patterns
+        perf_signals = await self._resolve_performance_signals(
+            db, effective_task_type,
+            analysis.domain if analysis else "general",
+        )
+
         # 6. Content capping and injection hardening
         codebase_context = self._cap_codebase_context(codebase_context)
         adaptation = self._cap_adaptation_state(adaptation)
@@ -216,20 +319,40 @@ class ContextEnrichmentService:
             "adaptation": adaptation is not None,
             "applied_patterns": patterns is not None,
             "heuristic_analysis": analysis is not None,
+            "performance_signals": perf_signals is not None,
         })
 
         # 8. Log enrichment summary
+        _enrich_ms = (_time.monotonic() - _t_enrich_start) * 1000
+
+        # Compute assembled context size for observability
+        _total_context = sum(
+            len(s) for s in [guidance, codebase_context, adaptation, patterns, perf_signals]
+            if s
+        )
+
         if repo_full_name:
             _cr = enrichment_meta_dict.get("curated_retrieval", {})
             logger.info(
-                "enrichment: tier=%s repo=%s explore=%s curated_files=%d "
-                "curated_top=%.3f context_chars=%d truncated=%s",
+                "enrichment: tier=%s repo=%s explore=%s curated=%s "
+                "curated_files=%d curated_top=%.3f context_chars=%d "
+                "signals=%s total_assembled=%dK elapsed=%.0fms",
                 tier, repo_full_name,
                 "yes" if enrichment_meta_dict.get("explore_synthesis", {}).get("present") else "no",
+                _cr.get("status", "n/a"),
                 _cr.get("files_included", 0),
                 _cr.get("top_relevance_score", 0.0),
                 enrichment_meta_dict.get("combined_context_chars", 0),
-                enrichment_meta_dict.get("was_truncated", False),
+                "perf" if perf_signals else "none",
+                _total_context // 1000,
+                _enrich_ms,
+            )
+        else:
+            logger.info(
+                "enrichment: tier=%s no_repo signals=%s "
+                "total_assembled=%dK elapsed=%.0fms",
+                tier, "perf" if perf_signals else "none",
+                _total_context // 1000, _enrich_ms,
             )
 
         return EnrichedContext(
@@ -238,6 +361,7 @@ class ContextEnrichmentService:
             codebase_context=codebase_context,
             adaptation_state=adaptation,
             applied_patterns=patterns,
+            performance_signals=perf_signals,
             analysis=analysis,
             context_sources=sources,
             enrichment_meta=MappingProxyType(enrichment_meta_dict) if enrichment_meta_dict else MappingProxyType({}),
@@ -306,10 +430,11 @@ class ContextEnrichmentService:
         task_type: str | None,
         domain: str | None,
         db: AsyncSession,
-    ) -> tuple[str | None, dict | None]:
+    ) -> tuple[str | None, dict]:
         """Query pre-built index for curated codebase context.
 
         Returns ``(context_text, retrieval_metadata)`` tuple.
+        Metadata is always populated (with ``status`` field) for observability.
         """
         try:
             from app.services.repo_index_service import RepoIndexService
@@ -320,16 +445,27 @@ class ContextEnrichmentService:
             )
             if result:
                 meta = {
+                    "status": "ready",
                     "files_included": result.files_included,
                     "total_files_indexed": result.total_files_indexed,
                     "top_relevance_score": round(result.top_relevance_score, 3),
                     "index_freshness": result.index_freshness,
                     "files": result.selected_files,
+                    # Retrieval diagnostics
+                    "stop_reason": result.stop_reason,
+                    "budget_used_pct": round(
+                        result.budget_used_chars / max(result.budget_max_chars, 1) * 100, 1,
+                    ),
+                    "budget_used_chars": result.budget_used_chars,
+                    "budget_max_chars": result.budget_max_chars,
+                    "diversity_excluded": result.diversity_excluded_count,
+                    "near_misses": result.near_misses,
                 }
                 return result.context_text, meta
-        except Exception:
-            logger.debug("Curated index retrieval failed", exc_info=True)
-        return None, None
+            return None, {"status": "empty", "files_included": 0}
+        except Exception as exc:
+            logger.warning("Curated index retrieval failed for %s@%s: %s", repo_full_name, branch, exc)
+            return None, {"status": "error", "files_included": 0, "error": str(exc)[:300]}
 
     async def _resolve_adaptation(
         self, db: AsyncSession, task_type: str,
@@ -385,6 +521,15 @@ class ContextEnrichmentService:
         except Exception:
             logger.debug("Pattern resolution failed", exc_info=True)
         return None
+
+    async def _resolve_performance_signals(
+        self,
+        db: AsyncSession,
+        task_type: str,
+        domain: str,
+    ) -> str | None:
+        """Delegate to module-level function (thin wrapper for instance method API)."""
+        return await resolve_performance_signals(db, task_type, domain)
 
     # -- Content capping helpers --
 
