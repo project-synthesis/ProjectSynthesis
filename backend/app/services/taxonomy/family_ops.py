@@ -722,7 +722,7 @@ async def assign_cluster(
                 PromptCluster.label == domain,
             )
         )
-        domain_node = domain_node_q.scalar_one_or_none()
+        domain_node = domain_node_q.scalars().first()
 
     new_cluster = PromptCluster(
         label=label,

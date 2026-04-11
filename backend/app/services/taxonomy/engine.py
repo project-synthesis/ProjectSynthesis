@@ -1534,7 +1534,7 @@ class TaxonomyEngine:
                 PromptCluster.label == "general",
             )
         )
-        general_node = gen_q.scalar_one_or_none()
+        general_node = gen_q.scalars().first()
         if general_node is None:
             logger.debug("No 'general' domain node — skipping discovery")
             return []
@@ -2069,7 +2069,7 @@ class TaxonomyEngine:
                 PromptCluster.label == "general",
             )
         )
-        general = general_q.scalar_one_or_none()
+        general = general_q.scalars().first()
         if not general:
             return
 
@@ -2458,7 +2458,7 @@ class TaxonomyEngine:
                 PromptCluster.label == "general",
             )
         )
-        general_node = general.scalar_one_or_none()
+        general_node = general.scalars().first()
         if not general_node:
             return
 

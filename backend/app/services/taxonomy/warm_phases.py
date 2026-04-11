@@ -111,7 +111,7 @@ async def _record_domain_split_block(
             PromptCluster.label == cluster_domain,
         )
     )
-    domain_node = dn_q.scalar_one_or_none()
+    domain_node = dn_q.scalars().first()
     if not domain_node:
         return
 
@@ -1732,7 +1732,7 @@ async def phase_split_emerge(
                         PromptCluster.label == node.domain,
                     )
                 )
-                _domain_node = _dn_q.scalar_one_or_none()
+                _domain_node = _dn_q.scalars().first()
             if _domain_node:
                 _dn_meta = read_meta(_domain_node.cluster_metadata)
                 _blocked = _dn_meta.get("split_blocked_hashes", [])
