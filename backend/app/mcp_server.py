@@ -287,7 +287,24 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 provider_resolver=lambda: routing.state.provider,
             )
             _shared.set_taxonomy_engine(engine)
-            logger.info("MCP server: TaxonomyEngine initialized (hot-path only)")
+
+            # Load embedding index from disk cache so auto_inject_patterns()
+            # can find relevant clusters. Without this, the MCP process's
+            # embedding index is empty and all pattern injection returns nothing.
+            _index_cache_path = DATA_DIR / "embedding_index.pkl"
+            try:
+                _cache_loaded = await engine.embedding_index.load_cache(_index_cache_path)
+                if _cache_loaded:
+                    logger.info(
+                        "MCP server: EmbeddingIndex loaded from cache (%d entries)",
+                        engine.embedding_index.size,
+                    )
+                else:
+                    logger.info("MCP server: EmbeddingIndex cache not found — injection unavailable")
+            except Exception as idx_exc:
+                logger.warning("MCP server: EmbeddingIndex cache load failed (non-fatal): %s", idx_exc)
+
+            logger.info("MCP server: TaxonomyEngine initialized (hot-path + injection)")
         except Exception as exc:
             logger.warning("MCP server: TaxonomyEngine init failed (non-fatal): %s", exc)
 
