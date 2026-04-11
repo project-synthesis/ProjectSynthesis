@@ -787,6 +787,18 @@ async def assign_cluster(
                 label, pos[0], pos[1], pos[2],
             )
 
+    # Assign color: position-derived OKLab if UMAP available, else inherit from domain
+    from app.services.taxonomy.coloring import generate_color
+
+    if new_cluster.umap_x is not None:
+        new_cluster.color_hex = generate_color(
+            new_cluster.umap_x, new_cluster.umap_y or 0, new_cluster.umap_z or 0,
+        )
+    elif domain_node is not None and domain_node.color_hex:
+        new_cluster.color_hex = domain_node.color_hex
+    else:
+        new_cluster.color_hex = "#7a7a9e"  # fallback gray
+
     # Recount domain node's visible members (excludes archived and domain nodes)
     if domain_node is not None:
         from sqlalchemy import func as _func

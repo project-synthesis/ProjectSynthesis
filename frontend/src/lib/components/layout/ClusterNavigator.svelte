@@ -110,10 +110,11 @@
   );
 
 
-  // Group filtered families by primary domain (ignores qualifier from "primary: qualifier")
+  // Group filtered families by primary domain (ignores qualifier from "primary: qualifier").
+  // Project nodes get their own group keyed by label, not by domain field.
   let grouped = $derived(
     filteredFamilies.reduce<Record<string, ClusterNode[]>>((acc, f) => {
-      const d = parsePrimaryDomain(f.domain);
+      const d = f.state === 'project' ? `project:${f.label}` : parsePrimaryDomain(f.domain);
       if (!acc[d]) acc[d] = [];
       acc[d].push(f);
       return acc;
@@ -327,8 +328,8 @@
             onclick={() => clustersStore.toggleHighlightDomain(domain)}
             use:tooltip={CLUSTER_NAV_TOOLTIPS.highlight_graph}
           >
-            <span class="domain-dot" style="background: {taxonomyColor(domain)};"></span>
-            <span class="domain-label">{domain}</span>
+            <span class="domain-dot" style="background: {taxonomyColor(domain.startsWith('project:') ? 'general' : domain)};"></span>
+            <span class="domain-label">{domain.startsWith('project:') ? domain.slice(8) : domain}</span>
             <span class="domain-count">{grouped[domain].length}</span>
           </button>
           {#each grouped[domain] as family (family.id)}
