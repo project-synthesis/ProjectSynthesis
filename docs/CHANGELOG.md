@@ -4,6 +4,29 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+- **Explore synthesis silently failing** — `RepoIndexMeta.explore_synthesis` reported `present: false` despite successful file indexing because Haiku synthesis errors were swallowed. Added `synthesis_status` and `synthesis_error` columns to track synthesis lifecycle (pending/running/ready/skipped/error). Errors are now persisted instead of silently returning None
+- **CLI provider argument overflow on large repos** — `ClaudeCLIProvider` passed user_message as a command-line argument, hitting OS `ARG_MAX` limit for explore prompts with 500+ files (`[Errno 7] Argument list too long`). User message now piped via stdin, and `OSError` is caught as a non-retryable `ProviderError`
+- **SuggestionChips tests failing after collapsible toggle redesign** — tests now expand the SUGGESTIONS toggle before asserting chip content
+- **connectionState getter returning 'ready' while indexing** — added 'pending' and 'indexing' to in-progress status list so `connectionState` correctly returns 'linked' until indexing completes
+- **Polling breaking after first API response** — `pollIndexStatus()` now checks actual in-progress states (pending/indexing/building) instead of only the client-side 'building' placeholder
+- **Curated retrieval errors swallowed** — `_query_index_context` logged failures at `debug` level with no metadata. Now returns `status` field (`ready`/`empty`/`error`) with error message, logged at `warning` level
+- **Project nodes missing from cluster tree** — `get_tree()` state filter listed 6 states but omitted `"project"`, causing project nodes to be invisible in the topology and Navigator. All domain→project parent links were broken in the UI
+
+### Added
+- **Synthesis status in index-status endpoint** — `GET /api/github/repos/index-status` now returns `synthesis_status` and `synthesis_error` fields, distinguishing between not-indexed, indexed-without-synthesis, and fully-ready states
+- **Synthesis status in Navigator** — Info tab shows color-coded synthesis status (cyan=ready, amber=pending/running, red=error) with error tooltip
+- **History project filter** — tab bar above history list filters optimizations by linked project. Matches ClusterNavigator state-tab aesthetics
+- **History pagination** — "Load more" button appends next 50 items when total exceeds initial page. Resets on SSE invalidation
+- **Topology empty state** — Pattern Graph shows guidance message when taxonomy has no clusters
+- **Cross-tab cluster scroll-to** — selecting a cluster from History or Topology scrolls the ClusterNavigator to the matching row
+
+### Changed
+- **Background synthesis logic deduplicated** — extracted `_run_explore_synthesis()` shared helper used by both `link_repo` and `reindex_repo` background tasks
+- **Brand compliance** — replaced 60+ hardcoded `rgba()` and hex color values across 15 component files with `color-mix(in srgb, var(--token) N%, transparent)` design tokens. Removed 5 `backdrop-filter: blur()` instances. Normalized 3 transition timing outliers (500ms→300ms, 100ms→200ms)
+- **Feedback inline update** — `feedback_submitted` SSE now updates history row `feedback_rating` in place instead of triggering a full history re-fetch
+- **Explore file ranking uses pre-computed index embeddings** — `CodebaseExplorer._rank_files()` now queries `RepoFileIndex` embeddings (path + docstring + structure) instead of creating ephemeral path-only embeddings. Falls back to path-embedding for unindexed files or when no index exists
+
 ## v0.3.25 — 2026-04-10
 
 ### Fixed
