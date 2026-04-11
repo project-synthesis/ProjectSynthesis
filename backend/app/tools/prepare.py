@@ -17,7 +17,7 @@ from app.models import Optimization
 from app.schemas.mcp_models import PrepareOutput
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.preferences import PreferencesService
-from app.tools._shared import DATA_DIR, get_context_service
+from app.tools._shared import DATA_DIR, auto_resolve_repo, get_context_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,9 @@ async def handle_prepare(
                 "Only user workspace directories are allowed." % workspace_path
             )
 
+    # ---- Auto-resolve repo from linked repo if not provided ----
+    effective_repo = await auto_resolve_repo(repo_full_name)
+
     # Resolve strategy: explicit param → user preference → auto
     prefs = PreferencesService(DATA_DIR)
     effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
@@ -72,7 +75,7 @@ async def handle_prepare(
             db=enrich_db,
             workspace_path=effective_workspace,
             mcp_ctx=ctx,
-            repo_full_name=repo_full_name,
+            repo_full_name=effective_repo,
         )
 
     assembled, strategy_name = assemble_passthrough_prompt(
@@ -112,7 +115,7 @@ async def handle_prepare(
             domain=enrichment.domain_value,
             domain_raw=enrichment.domain_value,
             intent_label=enrichment.intent_label,
-            repo_full_name=repo_full_name,
+            repo_full_name=effective_repo,
             context_sources=enrichment.context_sources_dict,
         )
         db.add(pending)

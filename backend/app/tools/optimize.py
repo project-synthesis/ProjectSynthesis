@@ -23,6 +23,7 @@ from app.services.routing import RoutingContext
 from app.services.sampling_pipeline import run_sampling_pipeline
 from app.tools._shared import (
     DATA_DIR,
+    auto_resolve_repo,
     get_context_service,
     get_routing,
     get_taxonomy_engine,
@@ -50,6 +51,9 @@ async def handle_optimize(
             % (len(prompt), settings.MAX_RAW_PROMPT_CHARS)
         )
 
+    # ---- Auto-resolve repo from linked repo if not provided ----
+    effective_repo = await auto_resolve_repo(repo_full_name)
+
     # ---- Hoist: single PreferencesService + snapshot for all paths ----
     prefs = PreferencesService(DATA_DIR)
     prefs_snapshot = prefs.load()
@@ -73,7 +77,7 @@ async def handle_optimize(
             db=enrich_db,
             workspace_path=effective_workspace,
             mcp_ctx=ctx,
-            repo_full_name=repo_full_name,
+            repo_full_name=effective_repo,
             applied_pattern_ids=applied_pattern_ids,
             preferences_snapshot=prefs_snapshot,
         )
@@ -105,7 +109,7 @@ async def handle_optimize(
                 domain=enrichment.domain_value,
                 domain_raw=enrichment.domain_value,
                 intent_label=enrichment.intent_label,
-                repo_full_name=repo_full_name,
+                repo_full_name=effective_repo,
                 context_sources=enrichment.context_sources_dict,
             )
             db.add(pending)
@@ -135,7 +139,7 @@ async def handle_optimize(
                 ctx, prompt,
                 effective_strategy if effective_strategy != "auto" else None,
                 enrichment.workspace_guidance,
-                repo_full_name=repo_full_name,
+                repo_full_name=effective_repo,
                 applied_pattern_ids=applied_pattern_ids,
                 codebase_context=enrichment.codebase_context,
             )
@@ -157,7 +161,7 @@ async def handle_optimize(
 
     logger.info(
         "synthesis_optimize called: prompt_len=%d strategy=%s repo=%s",
-        len(prompt), effective_strategy, repo_full_name,
+        len(prompt), effective_strategy, effective_repo,
     )
 
     async with async_session_factory() as db:
@@ -189,7 +193,7 @@ async def handle_optimize(
             codebase_context=enrichment.codebase_context,
             adaptation_state=enrichment.adaptation_state,
             context_sources=enrichment.context_sources_dict,
-            repo_full_name=repo_full_name,
+            repo_full_name=effective_repo,
             applied_pattern_ids=applied_pattern_ids,
             taxonomy_engine=get_taxonomy_engine(),
             domain_resolver=_mcp_domain_resolver,

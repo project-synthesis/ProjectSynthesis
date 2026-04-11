@@ -19,6 +19,7 @@ __all__ = [
     "DATA_DIR",
     "PROMPTS_DIR",
     "async_session_factory",
+    "auto_resolve_repo",
     "build_scores_dict",
     "get_context_service",
     "get_domain_resolver",
@@ -114,6 +115,34 @@ def set_signal_loader(loader) -> None:
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+async def auto_resolve_repo(repo_full_name: str | None) -> str | None:
+    """Auto-resolve repo_full_name from the active linked repo if not provided.
+
+    MCP tool callers don't have session cookies, so we fall back to the most
+    recently linked repo.  This mirrors the REST endpoint's auto-resolution
+    (``routers/optimize.py``) which uses the session cookie.
+
+    Returns the resolved repo name, or ``None`` if no linked repo exists.
+    """
+    if repo_full_name:
+        return repo_full_name
+    try:
+        from sqlalchemy import select
+
+        from app.models import LinkedRepo
+
+        async with async_session_factory() as db:
+            linked = (await db.execute(
+                select(LinkedRepo).order_by(LinkedRepo.linked_at.desc()).limit(1)
+            )).scalar_one_or_none()
+            if linked:
+                logger.debug("MCP auto-resolved repo: %s", linked.full_name)
+                return linked.full_name
+    except Exception:
+        pass  # Non-fatal — proceed without codebase context
+    return None
 
 
 def build_scores_dict(obj: object) -> dict[str, float] | None:
