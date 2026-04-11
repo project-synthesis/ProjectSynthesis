@@ -434,9 +434,15 @@ async def execute_warm_path(
     mode = engine._scheduler.decide_mode(dirty_ids, dirty_by_project)
     if mode.is_round_robin:
         dirty_ids = mode.scoped_dirty_ids
+        budget_summary = ", ".join(
+            f"{pid}={b}" for pid, b in sorted(
+                (mode.project_budgets or {}).items(),
+            )
+        )
         logger.info(
-            "Warm path: round-robin mode, project='%s' (%d dirty, boundary=%d)",
-            mode.project_id,
+            "Warm path: budget mode, %d projects (%s), scoped=%d dirty, boundary=%d",
+            len(mode.project_budgets or {}),
+            budget_summary,
             len(dirty_ids) if dirty_ids else 0,
             engine._scheduler._compute_boundary(),
         )
@@ -655,7 +661,7 @@ async def execute_warm_path(
     _cycle_duration_ms = int((_time.monotonic() - _cycle_start) * 1000)
     if _total_dirty_count is not None:
         engine._scheduler.record(
-            dirty_count=_total_dirty_count,  # total pre-scoping, not round-robin subset
+            dirty_count=_total_dirty_count,  # total pre-scoping, not budget-scoped subset
             duration_ms=_cycle_duration_ms,
         )
     logger.debug(
@@ -665,21 +671,25 @@ async def execute_warm_path(
         engine._scheduler.snapshot(),
     )
 
-    # ADR-005 Phase 3A: re-inject non-processed dirty clusters after round-robin
+    # ADR-005 Phase 3A: re-inject non-processed dirty clusters after budget allocation
     if mode.is_round_robin and dirty_by_project:
+        _processed = mode.scoped_dirty_ids or set()
+        _reinjected = 0
+        _reinjected_projects = 0
         for pid, cids in dirty_by_project.items():
-            if pid != mode.project_id:
-                for cid in cids:
-                    engine.mark_dirty(cid, project_id=pid)
-        _reinjected = sum(
-            len(cids) for pid, cids in dirty_by_project.items()
-            if pid != mode.project_id
-        )
+            remaining = cids - _processed
+            if remaining:
+                _reinjected_projects += 1
+                # Map "legacy" back to None to match _dirty_set convention
+                raw_pid = None if pid == "legacy" else pid
+                for cid in remaining:
+                    engine.mark_dirty(cid, project_id=raw_pid)
+                _reinjected += len(remaining)
         if _reinjected:
             logger.info(
-                "Warm path: re-injected %d dirty clusters from %d non-processed projects",
+                "Warm path: re-injected %d dirty clusters from %d projects",
                 _reinjected,
-                sum(1 for pid in dirty_by_project if pid != mode.project_id),
+                _reinjected_projects,
             )
 
     return WarmPathResult(

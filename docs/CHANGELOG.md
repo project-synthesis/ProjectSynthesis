@@ -4,6 +4,12 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- **SSE connection health monitoring** — real-time latency tracking (p50/p95/p99 from rolling 100-event window), three-state degradation detection (healthy/degraded/disconnected), and exponential backoff reconnection (1s-16s cap, 10-attempt limit, ±20% jitter). Compact StatusBar indicator with hover tooltip shows connection quality and retry status
+- **SSE query param replay** — `GET /api/events?last_event_id=N` fallback for manual reconnection replay when browser `Last-Event-ID` header is unavailable
+- **Repo index incremental refresh** — background periodic refresh cycle (configurable interval, default 600s) detects changed/added/deleted files via GitHub tree SHA comparison and updates the index incrementally instead of full reindex. Unique composite index on `(repo_full_name, branch, file_path)`
+- **Per-project scheduler budgets** — replaced single-project round-robin with proportional per-project budget allocation in `AdaptiveScheduler`. Each linked project gets an independent quota (proportional to dirty cluster share, minimum floor of 3), per-project starvation counters with boost from largest donor, and observable metrics via `snapshot()`. All projects with dirty clusters served every warm cycle
+
 ## v0.3.27 — 2026-04-11
 
 ### Added

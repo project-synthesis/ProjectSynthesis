@@ -85,6 +85,7 @@ class SchedulerDecision:
     mode: str  # "all_dirty" | "round_robin"
     project_id: str | None = None
     scoped_dirty_ids: set[str] | None = None
+    project_budgets: dict[str, int] | None = None  # per-project cluster budgets
 
     @property
     def is_round_robin(self) -> bool:
@@ -95,13 +96,17 @@ class AdaptiveScheduler:
     """Self-tuning warm path scheduler (ADR-005).
 
     Phase 1: measurement only (always all-dirty mode).
-    Phase 3A: adds round-robin branching when data shows need.
+    Phase 3A: per-project budget allocation when dirty count exceeds
+    boundary. Each project gets a proportional share of the boundary
+    with a guaranteed minimum floor (_MIN_QUOTA), ensuring all projects
+    make progress every cycle.
     """
 
     _WINDOW_SIZE = 10
     _BOOTSTRAP_TARGET_MS = 10_000  # 10s default until enough data
     _BOOTSTRAP_BOUNDARY: int = 20  # dirty count fallback during bootstrap
     _STARVATION_LIMIT: int = 3     # max consecutive skipped cycles
+    _MIN_QUOTA: int = 3            # minimum clusters per project in budget mode
 
     def __init__(self) -> None:
         self._window: list[WarmCycleMeasurement] = []
@@ -110,6 +115,7 @@ class AdaptiveScheduler:
         self._last_mode: str = "all_dirty"
         self._last_project_id: str | None = None
         self._last_dirty_by_project: dict[str, set[str]] | None = None
+        self._last_project_budgets: dict[str, int] | None = None
 
     @property
     def target_cycle_ms(self) -> int:
@@ -165,6 +171,13 @@ class AdaptiveScheduler:
             )
         return result
 
+    def _clear_all_dirty_state(self) -> None:
+        """Reset scheduler state when entering all-dirty mode."""
+        self._skip_counts.clear()
+        self._last_project_id = None
+        self._last_dirty_by_project = None
+        self._last_project_budgets = None
+
     def decide_mode(
         self,
         dirty_ids: set[str] | None,
@@ -173,73 +186,119 @@ class AdaptiveScheduler:
         """Decide scheduling mode for this warm cycle."""
         if dirty_ids is None:
             self._last_mode = "all_dirty"
+            self._clear_all_dirty_state()
             return SchedulerDecision("all_dirty")
 
         boundary = self._compute_boundary()
         if len(dirty_ids) <= boundary:
             self._last_mode = "all_dirty"
+            self._clear_all_dirty_state()
             return SchedulerDecision("all_dirty")
 
         if not dirty_by_project:
             self._last_mode = "all_dirty"
+            self._clear_all_dirty_state()
             return SchedulerDecision("all_dirty")
 
-        project_id, scoped = self._pick_priority_project(dirty_by_project)
+        # Per-project budget allocation
+        budgets, scoped = self._allocate_budgets(dirty_by_project, boundary)
         self._last_mode = "round_robin"
-        self._last_project_id = project_id
+        self._last_project_id = None
         self._last_dirty_by_project = dirty_by_project
-        return SchedulerDecision("round_robin", project_id, scoped)
+        self._last_project_budgets = budgets
+        return SchedulerDecision("round_robin", None, scoped, budgets)
 
-    def _pick_priority_project(
+    def _allocate_budgets(
         self,
         dirty_by_project: dict[str, set[str]],
-    ) -> tuple[str, set[str]]:
-        """Pick the project to process. Starved projects get priority."""
-        # Check for starved projects first (longest-starved wins)
-        starved = [
-            (pid, self._skip_counts.get(pid, 0))
-            for pid in dirty_by_project
+        boundary: int,
+    ) -> tuple[dict[str, int], set[str]]:
+        """Allocate per-project budgets proportionally within boundary.
+
+        Each project gets a share proportional to its dirty count, with a
+        guaranteed minimum floor (_MIN_QUOTA) so small projects always make
+        progress. Starved projects (skip_count >= _STARVATION_LIMIT) get
+        boosted quotas stolen from the largest non-starved project.
+
+        Returns:
+            (project_budgets, scoped_dirty_ids) where scoped_dirty_ids is
+            the union of budget-limited subsets from each project.
+        """
+        total_dirty = sum(len(cids) for cids in dirty_by_project.values())
+        if total_dirty == 0:
+            return {}, set()
+
+        # Step 1: Proportional raw budgets with MIN_QUOTA floor
+        budgets: dict[str, int] = {}
+        for pid, cids in dirty_by_project.items():
+            raw = round(len(cids) / total_dirty * boundary)
+            budgets[pid] = min(max(self._MIN_QUOTA, raw), len(cids))
+
+        # Step 2: Starvation boost — starved projects steal from largest donor
+        starved_pids = [
+            pid for pid in dirty_by_project
             if self._skip_counts.get(pid, 0) >= self._STARVATION_LIMIT
         ]
-        if starved:
-            starved.sort(key=lambda x: -x[1])  # longest-starved first
-            chosen_pid = starved[0][0]
-            self._skip_counts[chosen_pid] = 0
-            for other_pid in dirty_by_project:
-                if other_pid != chosen_pid:
-                    self._skip_counts[other_pid] = self._skip_counts.get(other_pid, 0) + 1
-            return (chosen_pid, dirty_by_project[chosen_pid])
+        if starved_pids:
+            non_starved = [
+                pid for pid in dirty_by_project if pid not in starved_pids
+            ]
+            if non_starved:
+                for spid in starved_pids:
+                    boost = max(0, self._MIN_QUOTA - budgets[spid])
+                    if boost > 0:
+                        # Re-find donor each iteration (budget may have changed)
+                        donor = max(non_starved, key=lambda p: budgets[p])
+                        steal = min(boost, budgets[donor] - self._MIN_QUOTA)
+                        if steal > 0:
+                            budgets[spid] += steal
+                            budgets[donor] -= steal
 
-        # Normal priority: most dirty clusters
-        ranked = sorted(
-            dirty_by_project.items(),
-            key=lambda kv: len(kv[1]),
-            reverse=True,
-        )
-        chosen_pid = ranked[0][0]
+        # Step 3: Build scoped_dirty_ids from budget-limited subsets
+        scoped: set[str] = set()
+        for pid, cids in dirty_by_project.items():
+            scoped.update(list(cids)[:budgets[pid]])
 
+        # Step 4: Update starvation counters
         for pid in dirty_by_project:
-            if pid == chosen_pid:
+            if budgets[pid] > 0:
                 self._skip_counts[pid] = 0
             else:
                 self._skip_counts[pid] = self._skip_counts.get(pid, 0) + 1
 
-        return (chosen_pid, dirty_by_project[chosen_pid])
+        # Step 5: Clean up stale entries (handles project unlinking)
+        stale = [pid for pid in self._skip_counts if pid not in dirty_by_project]
+        for pid in stale:
+            del self._skip_counts[pid]
+
+        # Warn if floors exceeded boundary
+        total_budget = sum(budgets.values())
+        if total_budget > boundary:
+            logger.warning(
+                "AdaptiveScheduler: per-project floors (%d) exceed boundary (%d); "
+                "cycle may exceed target time",
+                total_budget, boundary,
+            )
+
+        return budgets, scoped
 
     def snapshot(self) -> dict:
         """Return scheduler state for logging/observability."""
+        counters = dict(self._skip_counts)
         return {
             "target_cycle_ms": self._target_cycle_ms,
             "window_size": len(self._window),
             "mode": self._last_mode,
             "bootstrapping": len(self._window) < self._WINDOW_SIZE,
             "boundary": self._compute_boundary(),
-            "skip_counts": dict(self._skip_counts),
+            "skip_counts": counters,
+            "starvation_counters": counters,
             "last_project_id": self._last_project_id,
             "dirty_by_project_counts": {
                 pid: len(cids)
                 for pid, cids in (self._last_dirty_by_project or {}).items()
             },
+            "project_budgets": dict(self._last_project_budgets) if self._last_project_budgets else None,
         }
 
 
