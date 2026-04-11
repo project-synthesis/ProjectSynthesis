@@ -27,14 +27,14 @@ TaskType = Literal["coding", "writing", "analysis", "creative", "data", "system"
 # ---------------------------------------------------------------------------
 
 DIMENSION_WEIGHTS: dict[str, float] = {
-    "clarity": 0.20,
-    "specificity": 0.20,
+    "clarity": 0.22,
+    "specificity": 0.22,
     "structure": 0.15,
-    "faithfulness": 0.25,
-    "conciseness": 0.20,
+    "faithfulness": 0.26,
+    "conciseness": 0.15,
 }
 
-SCORING_FORMULA_VERSION: int = 2  # v1=equal-weight mean, v2=weighted mean
+SCORING_FORMULA_VERSION: int = 3  # v1=equal-weight, v2=weighted, v3=reduced conciseness weight
 
 # Strategy names are now fully adaptive — discovered from prompts/strategies/*.md files.
 # No hardcoded Literal. The analyzer outputs a string validated against available files.

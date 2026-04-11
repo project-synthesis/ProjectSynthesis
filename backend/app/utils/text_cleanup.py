@@ -79,6 +79,9 @@ _CONVERSATIONAL_STARTS = (
 )
 
 
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
 def validate_intent_label(label: str, raw_prompt: str | None = None) -> str:
     """Validate and potentially improve a generated intent label.
 
@@ -91,12 +94,22 @@ def validate_intent_label(label: str, raw_prompt: str | None = None) -> str:
     - Starts with conversational filler ("I ", "Please ", "Can ", etc.)
     - Fewer than 2 words
 
+    Also strips trailing parenthetical qualifiers that Haiku sometimes
+    appends (e.g., "(Fully)", "(Complete)", "(Partial)").
+
     On rejection, extracts first 6 meaningful words from raw_prompt as
     fallback. Returns original label if no improvement possible.
 
     Pure function — no I/O, no async.
     """
     stripped = label.strip()
+    if not stripped:
+        stripped = "general"
+
+    # Strip trailing parenthetical qualifiers — LLMs sometimes append
+    # scope words like "(Fully)", "(Complete)", "(Advanced)" that don't
+    # belong in a concise intent label.
+    stripped = _TRAILING_PAREN_RE.sub("", stripped).strip()
     if not stripped:
         stripped = "general"
 

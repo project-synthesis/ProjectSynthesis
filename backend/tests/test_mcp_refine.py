@@ -239,7 +239,12 @@ async def test_refine_happy_path():
     assert result.score_deltas is not None
     assert result.score_deltas["clarity"] == 1.5
     assert result.overall_score is not None
-    assert result.overall_score == round(8.5 * 0.20 + 7.5 * 0.20 + 8.0 * 0.15 + 8.5 * 0.25 + 7.0 * 0.20, 2)
+    from app.schemas.pipeline_contracts import DIMENSION_WEIGHTS
+    expected_overall = round(sum(
+        {"clarity": 8.5, "specificity": 7.5, "structure": 8.0, "faithfulness": 8.5, "conciseness": 7.0}[d] * w
+        for d, w in DIMENSION_WEIGHTS.items()
+    ), 2)
+    assert result.overall_score == expected_overall
     assert result.strategy_used == "chain-of-thought"
     assert len(result.suggestions) == 2
     assert result.suggestions[0]["text"] == "Add concrete examples"

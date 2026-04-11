@@ -74,8 +74,8 @@ class TestDimensionScores:
             faithfulness=9.0,
             conciseness=5.0,
         )
-        # weighted: 8*0.20 + 6*0.20 + 7*0.15 + 9*0.25 + 5*0.20 = 7.1
-        assert scores.overall == 7.1
+        # v3 weights: 8*0.22 + 6*0.22 + 7*0.15 + 9*0.26 + 5*0.15 = 7.22
+        assert scores.overall == 7.22
 
     def test_overall_rounded_to_2_decimals(self):
         _scores = DimensionScores(
@@ -93,8 +93,8 @@ class TestDimensionScores:
             faithfulness=9.4,
             conciseness=5.0,
         )
-        # weighted: 7.1*0.20 + 8.2*0.20 + 6.3*0.15 + 9.4*0.25 + 5.0*0.20 ≈ 7.35
-        assert scores2.overall == 7.35
+        # v3 weights: 7.1*0.22 + 8.2*0.22 + 6.3*0.15 + 9.4*0.26 + 5.0*0.15 = 7.50
+        assert scores2.overall == 7.5
 
     def test_boundary_values_accepted(self):
         scores = DimensionScores(
