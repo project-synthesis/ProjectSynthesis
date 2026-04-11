@@ -334,6 +334,18 @@ async def _resolve_or_create_domain(
         return general
 
     # Auto-bootstrap: create general domain for this project
+    # Assign OKLab color maximally distant from existing domain colors
+    from app.services.taxonomy.coloring import compute_max_distance_color
+
+    color_q = await db.execute(
+        select(PromptCluster.color_hex).where(
+            PromptCluster.state == "domain",
+            PromptCluster.color_hex.isnot(None),
+        )
+    )
+    existing_colors = [row[0] for row in color_q.all() if row[0]]
+    color_hex = compute_max_distance_color(existing_colors)
+
     new_domain = PromptCluster(
         label="general",
         state="domain",
@@ -341,12 +353,14 @@ async def _resolve_or_create_domain(
         task_type="general",
         member_count=0,
         parent_id=project_id,
+        color_hex=color_hex,
+        persistence=1.0,
     )
     db.add(new_domain)
     await db.flush()
     logger.info(
-        "Phase 2A: auto-created 'general' domain under project %s",
-        project_id[:8],
+        "Phase 2A: auto-created 'general' domain under project %s (color=%s)",
+        project_id[:8], color_hex,
     )
     return new_domain
 
