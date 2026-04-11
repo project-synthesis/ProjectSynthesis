@@ -25,7 +25,6 @@ from app.services.taxonomy._constants import (
     GLOBAL_PATTERN_DEDUP_COSINE,
     GLOBAL_PATTERN_DEMOTION_SCORE,
     GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS,
-    GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
     GLOBAL_PATTERN_PROMOTION_MIN_SCORE,
     _utcnow,
 )
@@ -166,10 +165,6 @@ async def _discover_promotion_candidates(db: AsyncSession) -> tuple[int, int]:
             pid = pid_result.scalar_one_or_none()
             if pid:
                 all_project_ids.add(pid)
-
-        # Gate: cross-project breadth
-        if len(all_project_ids) < GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS:
-            continue
 
         # Gate: cluster breadth
         if len(all_cluster_ids) < GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS:

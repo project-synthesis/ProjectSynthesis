@@ -27,6 +27,8 @@ MEGA_CLUSTER_MEMBER_FLOOR = 50  # cold path mega-cluster split threshold
 # Only truly oversized clusters warrant cold-path splitting.
 # Well above SPLIT_MIN_MEMBERS (12) — warm-path handles normal splits.
 
+MAX_PATTERNS_PER_CLUSTER: int = 15  # prune cap after merge-based Phase 4 refresh
+
 
 # ---------------------------------------------------------------------------
 # Multi-embedding HDBSCAN blend weights
@@ -68,7 +70,7 @@ CROSS_PROJECT_THRESHOLD_BOOST: float = 0.15
 GLOBAL_PATTERN_RELEVANCE_BOOST: float = 1.3
 GLOBAL_PATTERN_CAP: int = 500
 GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS: int = 5
-GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS: int = 2
+GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS: int = 1
 GLOBAL_PATTERN_PROMOTION_MIN_SCORE: float = 6.0
 GLOBAL_PATTERN_DEMOTION_SCORE: float = 5.0
 GLOBAL_PATTERN_DEDUP_COSINE: float = 0.90

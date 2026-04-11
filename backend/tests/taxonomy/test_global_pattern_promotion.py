@@ -26,7 +26,7 @@ def test_global_pattern_constants():
     assert GLOBAL_PATTERN_RELEVANCE_BOOST == 1.3
     assert GLOBAL_PATTERN_CAP == 500
     assert GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS == 5
-    assert GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS == 2
+    assert GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS == 1
     assert GLOBAL_PATTERN_PROMOTION_MIN_SCORE == 6.0
     assert GLOBAL_PATTERN_DEMOTION_SCORE == 5.0
     assert GLOBAL_PATTERN_DEDUP_COSINE == 0.90
@@ -332,8 +332,8 @@ async def test_retention_cap_evicts_demoted_first(db: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_no_promotion_below_min_projects(db: AsyncSession):
-    """Pattern in 5 clusters but only 1 project is not promoted."""
+async def test_promotion_single_project_with_cluster_breadth(db: AsyncSession):
+    """Pattern in 5 clusters within 1 project is promoted (cluster breadth is the gate)."""
     from app.services.taxonomy.global_patterns import run_global_pattern_phase
 
     shared_emb = _unit_vec(seed=50)
@@ -353,6 +353,37 @@ async def test_no_promotion_below_min_projects(db: AsyncSession):
     for i, c in enumerate(clusters):
         db.add(MetaPattern(
             cluster_id=c.id, pattern_text="single-project pattern",
+            embedding=emb_bytes, source_count=2,
+            global_source_count=5 if i == 0 else 1,
+        ))
+    await db.flush()
+
+    stats = await run_global_pattern_phase(db, warm_path_age=0.0)
+    assert stats["promoted"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_no_promotion_below_min_clusters(db: AsyncSession):
+    """Pattern in only 4 clusters (below min 5) within 1 project is not promoted."""
+    from app.services.taxonomy.global_patterns import run_global_pattern_phase
+
+    shared_emb = _unit_vec(seed=51)
+    emb_bytes = shared_emb.tobytes()
+
+    clusters = []
+    for i in range(4):
+        c = PromptCluster(label=f"c-{i}", state="active", domain="general", avg_score=8.0)
+        db.add(c)
+        clusters.append(c)
+    await db.flush()
+
+    # All optimizations in the same project
+    for i, c in enumerate(clusters):
+        db.add(Optimization(raw_prompt=f"p-{i}", cluster_id=c.id, project_id="proj-A"))
+
+    for i, c in enumerate(clusters):
+        db.add(MetaPattern(
+            cluster_id=c.id, pattern_text="narrow pattern",
             embedding=emb_bytes, source_count=2,
             global_source_count=5 if i == 0 else 1,
         ))
