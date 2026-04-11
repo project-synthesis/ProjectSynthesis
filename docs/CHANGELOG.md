@@ -2,6 +2,8 @@
 
 All notable changes to Project Synthesis. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
 ## v0.3.29 — 2026-04-11
 
 ### Added
