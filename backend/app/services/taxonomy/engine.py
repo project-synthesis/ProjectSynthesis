@@ -2889,16 +2889,18 @@ class TaxonomyEngine:
 
         violations = []
 
-        # 1. Check for duplicate domain labels
+        # 1. Check for duplicate domain labels under the same parent
+        # Multi-project: same label under different parents is valid (ADR-005)
         result = await db.execute(
-            select(PromptCluster.label, func.count()).where(
+            select(PromptCluster.parent_id, PromptCluster.label, func.count()).where(
                 PromptCluster.state == "domain"
-            ).group_by(PromptCluster.label)
+            ).group_by(PromptCluster.parent_id, PromptCluster.label)
         )
-        for label, count in result:
+        for parent_id, label, count in result:
             if count > 1:
                 violations.append(
-                    f"Duplicate domain label: '{label}' appears {count} times"
+                    f"Duplicate domain label: '{label}' appears {count} times "
+                    f"under parent {parent_id}"
                 )
 
         # 2. Check for orphaned clusters (parent_id points to non-existent node)
