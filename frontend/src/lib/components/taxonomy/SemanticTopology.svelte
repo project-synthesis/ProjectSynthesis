@@ -21,6 +21,7 @@
   import { BeamPool } from './BeamPool';
   import { ClusterPhysics } from './ClusterPhysics';
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
+  import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
   import { buildNodeMap } from './TopologyData';
 
   // Resolved at module level to avoid per-frame allocations
@@ -146,6 +147,16 @@
     }
     _highlightedId = null;
     _highlightedColor = null;
+  }
+
+  /** Set opacity on an edge material — handles both LineBasicMaterial and ShaderMaterial. */
+  function setEdgeOpacity(obj: THREE.LineSegments, value: number): void {
+    const mat = obj.material as any;
+    if (mat.uniforms?.uBaseOpacity) {
+      mat.uniforms.uBaseOpacity.value = value;
+    } else {
+      mat.opacity = value;
+    }
   }
 
   function rebuildScene(data: SceneData): void {
@@ -334,10 +345,13 @@
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       const childCount = childCountByParent.get(parentId) ?? 1;
       const opacity = computeHierarchicalOpacity(childCount);
-      const mat = new THREE.LineBasicMaterial({
-        color: EDGE_COLOR,
+      const uniforms = createEdgeDepthUniforms(EDGE_COLOR, opacity);
+      const mat = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: EDGE_DEPTH_VERTEX,
+        fragmentShader: EDGE_DEPTH_FRAGMENT,
         transparent: true,
-        opacity,
+        depthWrite: false,
       });
       const lines = new THREE.LineSegments(geo, mat);
       lines.userData = { isInterClusterEdge: true, baseOpacity: opacity, parentId };
@@ -879,7 +893,7 @@
       const ud = obj.userData;
       if (ud?.isInterClusterEdge) {
         const base = (ud.baseOpacity as number) ?? 0.4;
-        (obj.material as THREE.LineBasicMaterial).opacity = dimActive ? base * 0.25 : base;
+        setEdgeOpacity(obj, dimActive ? base * 0.25 : base);
       } else if (ud?.isSimilarityEdge || ud?.isInjectionEdge) {
         const mat = obj.material as THREE.LineBasicMaterial;
         const base = ud.baseOpacity as number;
@@ -911,14 +925,14 @@
       if (!hovered) {
         // No hover — restore to base opacity (or dimmed if domain highlight active)
         const dimActive = clustersStore.highlightedDomain != null;
-        (obj.material as THREE.LineBasicMaterial).opacity = dimActive ? base * 0.25 : base;
+        setEdgeOpacity(obj, dimActive ? base * 0.25 : base);
         return;
       }
 
       // Hover active — brighten family, dim the rest
       const edgeParent = ud.parentId as string | undefined;
       const isFamilyEdge = edgeParent != null && edgeParent === activeParent;
-      (obj.material as THREE.LineBasicMaterial).opacity = isFamilyEdge ? Math.min(base * 2.5, 0.6) : base * 0.15;
+      setEdgeOpacity(obj, isFamilyEdge ? Math.min(base * 2.5, 0.6) : base * 0.15);
     });
   });
 
