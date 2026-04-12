@@ -260,8 +260,8 @@ export function buildNodeMap(nodes: SceneNode[]): Map<string, SceneNode> {
  * Base is higher than a standalone 0.4 because the depth shader applies an
  * additional proportional reduction (up to 60% at far distance).
  */
-const DENSITY_OPACITY_BASE = 0.8;
-const DENSITY_OPACITY_CAP = 8;
+const DENSITY_OPACITY_BASE = 1.0;
+const DENSITY_OPACITY_CAP = 10;
 
 export function computeHierarchicalOpacity(childCount: number): number {
   if (childCount <= 0) return DENSITY_OPACITY_BASE;
