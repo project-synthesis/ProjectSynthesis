@@ -23,8 +23,8 @@ from app.services.pipeline_constants import (
     VALID_TASK_TYPES,
 )
 from app.services.preferences import PreferencesService
-from app.services.strategy_loader import StrategyLoader
 from app.services.project_service import resolve_repo_project
+from app.services.strategy_loader import StrategyLoader
 from app.tools._shared import DATA_DIR, get_domain_resolver
 from app.utils.text_cleanup import parse_domain, split_prompt_and_changes, title_case_label, validate_intent_label
 

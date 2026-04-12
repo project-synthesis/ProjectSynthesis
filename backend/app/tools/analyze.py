@@ -19,12 +19,12 @@ from app.schemas.pipeline_contracts import AnalysisResult, ScoreResult
 from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.preferences import PreferencesService
+from app.services.project_service import resolve_repo_project
 from app.services.prompt_loader import PromptLoader
 from app.services.routing import RoutingContext
 from app.services.sampling_pipeline import run_sampling_analyze
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
-from app.services.project_service import resolve_repo_project
 from app.tools._shared import DATA_DIR, get_domain_resolver, get_routing, get_taxonomy_engine
 
 logger = logging.getLogger(__name__)

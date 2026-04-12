@@ -71,8 +71,8 @@ from app.services.pipeline_constants import (
     semantic_upgrade_general,
 )
 from app.services.preferences import PreferencesService
-from app.services.prompt_loader import PromptLoader
 from app.services.project_service import resolve_repo_project
+from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.utils.text_cleanup import split_prompt_and_changes
