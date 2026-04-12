@@ -24,6 +24,7 @@ from app.services.pipeline_constants import (
 )
 from app.services.preferences import PreferencesService
 from app.services.strategy_loader import StrategyLoader
+from app.services.project_service import resolve_repo_project
 from app.tools._shared import DATA_DIR, get_domain_resolver
 from app.utils.text_cleanup import parse_domain, split_prompt_and_changes, title_case_label, validate_intent_label
 
@@ -76,6 +77,9 @@ async def handle_save_result(
                 clean_scores[k] = max(1.0, min(10.0, float(v)))
             except (ValueError, TypeError):
                 clean_scores[k] = 5.0
+
+    # Resolve repo → project chain so project_id is set at creation time
+    _resolved_repo, _resolved_project_id = await resolve_repo_project()
 
     # Persist — look up pending optimization created by prepare, or create new
     async with async_session_factory() as db:
@@ -177,6 +181,11 @@ async def handle_save_result(
             opt.status = "completed"
             if context_snapshot:
                 opt.codebase_context_snapshot = context_snapshot
+            # Ensure project_id is set (may be missing from prepare_optimization)
+            if not opt.project_id and _resolved_project_id:
+                opt.project_id = _resolved_project_id
+            if not opt.repo_full_name and _resolved_repo:
+                opt.repo_full_name = _resolved_repo
             opt_id = opt.id
         else:
             opt_id = str(uuid.uuid4())
@@ -215,6 +224,8 @@ async def handle_save_result(
                 suggestions=suggestions,
                 status="completed",
                 trace_id=trace_id,
+                repo_full_name=_resolved_repo,
+                project_id=_resolved_project_id,
                 codebase_context_snapshot=context_snapshot,
             )
             db.add(opt)

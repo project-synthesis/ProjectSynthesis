@@ -60,6 +60,7 @@ class PendingOptimization:
     heuristic_flags: list | None = None
     suggestions: list | None = None
     repo_full_name: str | None = None
+    project_id: str | None = None
     context_sources: dict | None = None
     error: str | None = None  # Non-None if this prompt failed
 
@@ -623,6 +624,14 @@ async def run_batch(
         return_exceptions=True,
     )
 
+    # Stamp project_id on all completed results (resolve once, not per-prompt)
+    from app.services.project_service import resolve_repo_project
+    _, _batch_project_id = await resolve_repo_project(repo_full_name)
+    if _batch_project_id:
+        for r in results:
+            if r is not None and r.status == "completed":
+                r.project_id = _batch_project_id
+
     return [r for r in results if r is not None]
 
 
@@ -720,6 +729,7 @@ async def bulk_persist(
                         heuristic_flags=pending.heuristic_flags,
                         suggestions=pending.suggestions,
                         repo_full_name=pending.repo_full_name,
+                        project_id=pending.project_id,
                         context_sources=pending.context_sources,
                     )
                     db.add(db_opt)

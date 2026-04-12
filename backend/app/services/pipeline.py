@@ -50,6 +50,7 @@ from app.services.pipeline_constants import (
     semantic_upgrade_general,
 )
 from app.services.preferences import PreferencesService
+from app.services.project_service import resolve_project_id
 from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
@@ -848,6 +849,14 @@ class PipelineOrchestrator:
             # ---------------------------------------------------------------
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
+            # Resolve project_id from repo chain (non-fatal)
+            _pip_project_id: str | None = None
+            if repo_full_name:
+                try:
+                    _pip_project_id = await resolve_project_id(db, repo_full_name)
+                except Exception:
+                    pass
+
             db_opt = Optimization(
                 id=opt_id,
                 raw_prompt=raw_prompt,
@@ -876,6 +885,7 @@ class PipelineOrchestrator:
                 status="completed",
                 trace_id=trace_id,
                 repo_full_name=repo_full_name,
+                project_id=_pip_project_id,
                 context_sources=context_sources or {},
                 original_scores=original_scores.model_dump() if original_scores else None,
                 score_deltas=deltas,

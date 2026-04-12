@@ -19,6 +19,7 @@ from app.services.event_notification import notify_event_bus
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
+from app.services.project_service import resolve_repo_project
 from app.services.routing import RoutingContext
 from app.services.sampling_pipeline import run_sampling_pipeline
 from app.tools._shared import (
@@ -96,6 +97,7 @@ async def handle_optimize(
             applied_patterns=enrichment.applied_patterns,
         )
         trace_id = str(uuid.uuid4())
+        _, _pt_project_id = await resolve_repo_project(effective_repo)
         async with async_session_factory() as db:
             pending = Optimization(
                 id=str(uuid.uuid4()),
@@ -110,6 +112,7 @@ async def handle_optimize(
                 domain_raw=enrichment.domain_value,
                 intent_label=enrichment.intent_label,
                 repo_full_name=effective_repo,
+                project_id=_pt_project_id,
                 context_sources=enrichment.context_sources_dict,
             )
             db.add(pending)

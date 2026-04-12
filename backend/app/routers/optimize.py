@@ -23,6 +23,7 @@ from app.services.pipeline_constants import (
     VALID_TASK_TYPES,
 )
 from app.services.preferences import PreferencesService
+from app.services.project_service import resolve_project_id
 from app.services.taxonomy import get_engine as get_taxonomy_engine
 from app.utils.sse import format_sse
 from app.utils.text_cleanup import split_prompt_and_changes, title_case_label, validate_intent_label
@@ -69,6 +70,7 @@ class OptimizationDetail(BaseModel):
     domain: str | None = Field(default=None, description="Domain category (backend, frontend, database, etc.).")
     repo_full_name: str | None = Field(default=None, description="GitHub repo (owner/repo) linked during optimization.")
     cluster_id: str | None = Field(default=None, description="Pattern family ID this optimization belongs to.")
+    project_id: str | None = Field(default=None, description="Project node ID (ADR-005) this optimization belongs to.")
     heuristic_flags: list[str] = Field(
         default_factory=list,
         description="Dimensions where LLM and heuristic scores diverge significantly.",
@@ -175,6 +177,12 @@ async def optimize(
 
         trace_id = str(uuid.uuid4())
         opt_id = str(uuid.uuid4())
+        _pt_project_id: str | None = None
+        if effective_repo:
+            try:
+                _pt_project_id = await resolve_project_id(db, effective_repo)
+            except Exception:
+                pass
         pending = Optimization(
             id=opt_id, raw_prompt=body.prompt, status="pending",
             trace_id=trace_id, provider="web_passthrough", routing_tier="passthrough",
@@ -185,6 +193,7 @@ async def optimize(
             intent_label=enrichment.intent_label,
             context_sources=enrichment.context_sources_dict,
             repo_full_name=effective_repo,
+            project_id=_pt_project_id,
         )
         db.add(pending)
         await db.commit()
@@ -384,6 +393,7 @@ def _serialize_optimization(opt: Optimization, *, cluster_id: str | None = None)
         intent_label=opt.intent_label,
         domain=opt.domain,
         cluster_id=cluster_id,
+        project_id=opt.project_id,
         heuristic_flags=(
             opt.heuristic_flags if isinstance(opt.heuristic_flags, list)
             else opt.heuristic_flags.get("divergence_flags", []) if isinstance(opt.heuristic_flags, dict)
@@ -483,6 +493,13 @@ async def passthrough_prepare(
     trace_id = str(uuid.uuid4())
     opt_id = str(uuid.uuid4())
 
+    _pt2_project_id: str | None = None
+    if body.repo_full_name:
+        try:
+            _pt2_project_id = await resolve_project_id(db, body.repo_full_name)
+        except Exception:
+            pass
+
     pending = Optimization(
         id=opt_id,
         raw_prompt=body.prompt,
@@ -497,6 +514,7 @@ async def passthrough_prepare(
         intent_label=enrichment.intent_label,
         context_sources=enrichment.context_sources_dict,
         repo_full_name=body.repo_full_name,
+        project_id=_pt2_project_id,
     )
     db.add(pending)
     await db.commit()

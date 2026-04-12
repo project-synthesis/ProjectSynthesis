@@ -72,6 +72,7 @@ from app.services.pipeline_constants import (
 )
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
+from app.services.project_service import resolve_repo_project
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.utils.text_cleanup import split_prompt_and_changes
@@ -1094,6 +1095,9 @@ async def run_sampling_pipeline(
     elapsed_ms = int((time.monotonic() - start) * 1000)
     opt_id = str(uuid.uuid4())
 
+    # Resolve project_id from repo chain (non-fatal)
+    _, _project_id = await resolve_repo_project(repo_full_name)
+
     async with async_session_factory() as db:
         db_opt = Optimization(
             id=opt_id,
@@ -1120,6 +1124,7 @@ async def run_sampling_pipeline(
             tokens_by_phase=phase_durations,
             models_by_phase=model_ids,
             repo_full_name=repo_full_name,
+            project_id=_project_id,
             context_sources=context_sources,
             status="completed",
             trace_id=trace_id,
@@ -1402,6 +1407,9 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
     opt_id = str(uuid.uuid4())
     trace_id = str(uuid.uuid4())
 
+    # Resolve repo → project chain (no repo_full_name param in analyze-only path)
+    _sa_repo, _sa_project_id = await resolve_repo_project()
+
     async with async_session_factory() as db:
         opt = Optimization(
             id=opt_id,
@@ -1429,6 +1437,8 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
             duration_ms=total_ms,
             tokens_by_phase=phase_durations,
             models_by_phase={"analyze": _analyze_model, "score": _score_model},
+            repo_full_name=_sa_repo,
+            project_id=_sa_project_id,
             context_sources=context_sources,
         )
         db.add(opt)

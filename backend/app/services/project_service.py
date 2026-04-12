@@ -10,6 +10,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import async_session_factory
 from app.models import LinkedRepo, PromptCluster
 
 logger = logging.getLogger(__name__)
@@ -133,3 +134,35 @@ async def resolve_project_id(
         return project_node_id
 
     return legacy_project_id
+
+
+async def resolve_repo_project(
+    repo_full_name: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve repo_full_name (auto if None) and project_id in one call.
+
+    When *repo_full_name* is ``None``, auto-resolves from the most recently
+    linked repo.  Opens a single short-lived session for both lookups.
+
+    Returns:
+        ``(repo_full_name, project_id)`` tuple.  Both may be ``None``.
+        Non-fatal — returns partial results on any failure.
+    """
+    try:
+        async with async_session_factory() as db:
+            if not repo_full_name:
+                linked = (await db.execute(
+                    select(LinkedRepo)
+                    .order_by(LinkedRepo.linked_at.desc())
+                    .limit(1)
+                )).scalar_one_or_none()
+                if linked:
+                    repo_full_name = linked.full_name
+
+            if not repo_full_name:
+                return None, None
+
+            project_id = await resolve_project_id(db, repo_full_name)
+            return repo_full_name, project_id
+    except Exception:
+        return repo_full_name, None

@@ -17,6 +17,7 @@ from app.models import Optimization
 from app.schemas.mcp_models import PrepareOutput
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.preferences import PreferencesService
+from app.services.project_service import resolve_repo_project
 from app.tools._shared import DATA_DIR, auto_resolve_repo, get_context_service
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ async def handle_prepare(
     trace_id = str(uuid.uuid4())
 
     # Store pending optimization with raw_prompt for later save_result linkage
+    _, _prep_project_id = await resolve_repo_project(effective_repo)
     async with async_session_factory() as db:
         pending = Optimization(
             id=str(uuid.uuid4()),
@@ -116,6 +118,7 @@ async def handle_prepare(
             domain_raw=enrichment.domain_value,
             intent_label=enrichment.intent_label,
             repo_full_name=effective_repo,
+            project_id=_prep_project_id,
             context_sources=enrichment.context_sources_dict,
         )
         db.add(pending)

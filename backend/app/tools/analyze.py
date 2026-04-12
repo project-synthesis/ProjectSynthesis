@@ -24,6 +24,7 @@ from app.services.routing import RoutingContext
 from app.services.sampling_pipeline import run_sampling_analyze
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
+from app.services.project_service import resolve_repo_project
 from app.tools._shared import DATA_DIR, get_domain_resolver, get_routing, get_taxonomy_engine
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,9 @@ async def handle_analyze(
     opt_id = str(uuid.uuid4())
     trace_id = str(uuid.uuid4())
 
+    # Resolve repo → project chain so project_id is set at creation time
+    resolved_repo, resolved_project_id = await resolve_repo_project()
+
     async with async_session_factory() as db:
         opt = Optimization(
             id=opt_id,
@@ -179,6 +183,8 @@ async def handle_analyze(
             overall_score=overall,
             domain_raw=domain_raw,
             cluster_id=cluster_id,
+            repo_full_name=resolved_repo,
+            project_id=resolved_project_id,
             provider=provider.name,
             routing_tier="internal",
             model_used=analyzer_model,

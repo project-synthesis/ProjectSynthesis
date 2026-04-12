@@ -62,6 +62,7 @@ export interface OptimizationResult {
   intent_label: string | null;
   domain: string | null;
   cluster_id: string | null;
+  project_id: string | null;
   heuristic_flags: string[];
   repo_full_name?: string | null;
   suggestions: Array<{ text: string; source: string }>;
