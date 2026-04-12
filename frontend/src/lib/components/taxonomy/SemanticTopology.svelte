@@ -159,6 +159,58 @@
     }
   }
 
+  /** Build curved edge geometry from start→end with a perpendicular arc.
+   *  The midpoint is offset perpendicular to the edge direction, creating
+   *  a gentle arc. `arcIndex` and `arcTotal` spread siblings into a fan. */
+  function buildCurvePositions(
+    start: [number, number, number],
+    end: [number, number, number],
+    arcIndex: number,
+    arcTotal: number,
+  ): Float32Array {
+    const SEGMENTS = 12;
+    const positions = new Float32Array((SEGMENTS + 1) * 3);
+
+    // Midpoint
+    const mx = (start[0] + end[0]) / 2;
+    const my = (start[1] + end[1]) / 2;
+    const mz = (start[2] + end[2]) / 2;
+
+    // Edge direction
+    const dx = end[0] - start[0];
+    const dy = end[1] - start[1];
+    const dz = end[2] - start[2];
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+
+    // Perpendicular offset — use cross product with up vector
+    // If edge is near-vertical, use right vector instead
+    const upX = 0, upY = 1, upZ = 0;
+    let px = dy * upZ - dz * upY;
+    let py = dz * upX - dx * upZ;
+    let pz = dx * upY - dy * upX;
+    const pLen = Math.sqrt(px * px + py * py + pz * pz) || 1;
+    px /= pLen; py /= pLen; pz /= pLen;
+
+    // Fan offset: spread siblings apart. Center index = 0 offset.
+    const spread = arcTotal > 1 ? (arcIndex - (arcTotal - 1) / 2) / arcTotal : 0;
+    const arcMagnitude = len * 0.15 + spread * len * 0.2;
+
+    const ctrlX = mx + px * arcMagnitude;
+    const ctrlY = my + py * arcMagnitude;
+    const ctrlZ = mz + pz * arcMagnitude;
+
+    // Quadratic bezier: B(t) = (1-t)²·start + 2(1-t)t·ctrl + t²·end
+    for (let i = 0; i <= SEGMENTS; i++) {
+      const t = i / SEGMENTS;
+      const t1 = 1 - t;
+      positions[i * 3]     = t1 * t1 * start[0] + 2 * t1 * t * ctrlX + t * t * end[0];
+      positions[i * 3 + 1] = t1 * t1 * start[1] + 2 * t1 * t * ctrlY + t * t * end[1];
+      positions[i * 3 + 2] = t1 * t1 * start[2] + 2 * t1 * t * ctrlZ + t * t * end[2];
+    }
+
+    return positions;
+  }
+
   function rebuildScene(data: SceneData): void {
     if (!renderer) return;
 
@@ -316,8 +368,9 @@
     // if both endpoints exist in the scene, regardless of LOD visibility.
     // This prevents child clusters from appearing "orphaned" when their
     // domain parent is at the edge of a visibility threshold.
-    // Group hierarchical edges by parent for density-adaptive opacity
-    const edgesByParent = new Map<string, number[]>();
+    // Group hierarchical edges by parent — store endpoint pairs for curve building
+    interface HierEdge { from: [number, number, number]; to: [number, number, number] }
+    const edgesByParent = new Map<string, HierEdge[]>();
     for (const edge of data.edges) {
       if (edge.type !== 'hierarchical') continue;
       const from = _sceneNodeMap.get(edge.from);
@@ -325,7 +378,7 @@
       if (!from || !to) continue;
       if (edge.distance != null && edge.distance < EDGE_PROXIMITY_THRESHOLD) continue;
       const bucket = edgesByParent.get(edge.from) ?? [];
-      bucket.push(...from.position, ...to.position);
+      bucket.push({ from: from.position, to: to.position });
       edgesByParent.set(edge.from, bucket);
     }
 
@@ -339,12 +392,34 @@
 
     const hierarchicalGroup = new THREE.Group();
     hierarchicalGroup.userData = { isInterClusterEdgeGroup: true };
-    for (const [parentId, positions] of edgesByParent) {
-      if (positions.length === 0) continue;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const CURVE_SEGMENTS = 12;
+    for (const [parentId, edges] of edgesByParent) {
+      if (edges.length === 0) continue;
       const childCount = childCountByParent.get(parentId) ?? 1;
       const opacity = computeHierarchicalOpacity(childCount);
+
+      // Build per-edge curves and merge into one geometry
+      const allPositions: number[] = [];
+      const allIndices: number[] = [];
+      let vertexOffset = 0;
+
+      for (let arcIdx = 0; arcIdx < edges.length; arcIdx++) {
+        const e = edges[arcIdx];
+        const curvePos = buildCurvePositions(e.from, e.to, arcIdx, edges.length);
+        for (let i = 0; i < curvePos.length; i++) {
+          allPositions.push(curvePos[i]);
+        }
+        // Line strip indices for LineSegments (pairs)
+        for (let i = 0; i < CURVE_SEGMENTS; i++) {
+          allIndices.push(vertexOffset + i, vertexOffset + i + 1);
+        }
+        vertexOffset += CURVE_SEGMENTS + 1;
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(allPositions, 3));
+      geo.setIndex(allIndices);
+
       const uniforms = createEdgeDepthUniforms(EDGE_COLOR, opacity);
       const mat = new THREE.ShaderMaterial({
         uniforms,
@@ -671,23 +746,33 @@
               // Re-enable hierarchical edges — rebuild geometry with settled positions
               renderer?.scene.traverse((obj) => {
                 if (obj.userData?.isInterClusterEdgeGroup) {
-                  // Rebuild each child LineSegments with settled positions
                   for (const child of (obj as THREE.Group).children) {
                     const ls = child as THREE.LineSegments;
                     const parentId = ls.userData?.parentId;
                     if (!parentId || !_sceneNodeMap) continue;
-                    const positions: number[] = [];
+                    const hierEdges: { from: [number, number, number]; to: [number, number, number] }[] = [];
                     for (const edge of formSceneData.edges) {
                       if (edge.type !== 'hierarchical' || edge.from !== parentId) continue;
                       const from = _sceneNodeMap.get(edge.from);
                       const to = _sceneNodeMap.get(edge.to);
                       if (!from || !to) continue;
                       if (edge.distance != null && edge.distance < EDGE_PROXIMITY_THRESHOLD) continue;
-                      positions.push(...from.position, ...to.position);
+                      hierEdges.push({ from: from.position, to: to.position });
                     }
-                    if (positions.length > 0) {
-                      ls.geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                    if (hierEdges.length === 0) continue;
+                    const allPositions: number[] = [];
+                    const allIndices: number[] = [];
+                    let vertexOffset = 0;
+                    const SEGMENTS = 12;
+                    for (let arcIdx = 0; arcIdx < hierEdges.length; arcIdx++) {
+                      const e = hierEdges[arcIdx];
+                      const curvePos = buildCurvePositions(e.from, e.to, arcIdx, hierEdges.length);
+                      for (let i = 0; i < curvePos.length; i++) allPositions.push(curvePos[i]);
+                      for (let i = 0; i < SEGMENTS; i++) allIndices.push(vertexOffset + i, vertexOffset + i + 1);
+                      vertexOffset += SEGMENTS + 1;
                     }
+                    ls.geometry.setAttribute('position', new THREE.Float32BufferAttribute(allPositions, 3));
+                    ls.geometry.setIndex(allIndices);
                   }
                   obj.visible = true;
                 }
