@@ -38,6 +38,9 @@
    *  Used by buildCurvePositions and callers for index construction. */
   const CURVE_SEGMENTS = 12;
 
+  /** Endpoint pair for hierarchical edge curve building. */
+  interface HierEdge { from: [number, number, number]; to: [number, number, number] }
+
   // Edge groups — persisted across rebuilds for visibility toggle
   let similarityEdgeGroup: THREE.Group | null = null;
   let injectionEdgeGroup: THREE.Group | null = null;
@@ -117,6 +120,9 @@
   let _removeDomainRotation: (() => void) | null = null;
   let _removeFormationAnim: (() => void) | null = null;
 
+  // Persisted edge grouping — shared between rebuildScene and formation rebuild
+  let _edgesByParent: Map<string, HierEdge[]> = new Map();
+
   // External highlight tracking (for family selection sync)
   let _highlightedId: string | null = null;
   let _highlightedColor: number | null = null;
@@ -161,6 +167,21 @@
     } else {
       mat.opacity = value;
     }
+  }
+
+  /** Merge multiple curved edges into a single geometry's position + index arrays.
+   *  Used by both initial rebuildScene and formation animation rebuild. */
+  function buildMergedCurveGeometry(edges: HierEdge[]): { positions: number[]; indices: number[] } {
+    const positions: number[] = [];
+    const indices: number[] = [];
+    let offset = 0;
+    for (let i = 0; i < edges.length; i++) {
+      const cp = buildCurvePositions(edges[i].from, edges[i].to, i, edges.length);
+      for (let j = 0; j < cp.length; j++) positions.push(cp[j]);
+      for (let j = 0; j < CURVE_SEGMENTS; j++) indices.push(offset + j, offset + j + 1);
+      offset += CURVE_SEGMENTS + 1;
+    }
+    return { positions, indices };
   }
 
   /** Build curved edge geometry from start→end with a perpendicular arc.
@@ -374,25 +395,22 @@
     // Build node map once — used for edge building, beam targeting, and edge group opacity
     _sceneNodeMap = buildNodeMap(data.nodes);
 
-    // Build edges — hierarchical edges (parent→child) are always drawn
-    // if both endpoints exist in the scene, regardless of LOD visibility.
-    // This prevents child clusters from appearing "orphaned" when their
-    // domain parent is at the edge of a visibility threshold.
-    // Group hierarchical edges by parent — store endpoint pairs for curve building
-    interface HierEdge { from: [number, number, number]; to: [number, number, number] }
-    const edgesByParent = new Map<string, HierEdge[]>();
+    // Group hierarchical edges by parent — proximity-suppressed edges excluded.
+    // Persisted in _edgesByParent so the formation animation rebuild can
+    // reconstruct curves from settled positions without re-scanning all edges.
+    _edgesByParent = new Map<string, HierEdge[]>();
     for (const edge of data.edges) {
       if (edge.type !== 'hierarchical') continue;
       const from = _sceneNodeMap.get(edge.from);
       const to = _sceneNodeMap.get(edge.to);
       if (!from || !to) continue;
       if (edge.distance != null && edge.distance < EDGE_PROXIMITY_THRESHOLD) continue;
-      const bucket = edgesByParent.get(edge.from) ?? [];
+      let bucket = _edgesByParent.get(edge.from);
+      if (!bucket) { bucket = []; _edgesByParent.set(edge.from, bucket); }
       bucket.push({ from: from.position, to: to.position });
-      edgesByParent.set(edge.from, bucket);
     }
 
-    // Count total visible children per parent (including proximity-suppressed ones)
+    // Count total children per parent (including proximity-suppressed ones)
     // so opacity scales by actual density, not by visible-edge count
     const childCountByParent = new Map<string, number>();
     for (const edge of data.edges) {
@@ -402,32 +420,15 @@
 
     const hierarchicalGroup = new THREE.Group();
     hierarchicalGroup.userData = { isInterClusterEdgeGroup: true };
-    for (const [parentId, edges] of edgesByParent) {
+    for (const [parentId, edges] of _edgesByParent) {
       if (edges.length === 0) continue;
       const childCount = childCountByParent.get(parentId) ?? 1;
       const opacity = computeHierarchicalOpacity(childCount);
-
-      // Build per-edge curves and merge into one geometry
-      const allPositions: number[] = [];
-      const allIndices: number[] = [];
-      let vertexOffset = 0;
-
-      for (let arcIdx = 0; arcIdx < edges.length; arcIdx++) {
-        const e = edges[arcIdx];
-        const curvePos = buildCurvePositions(e.from, e.to, arcIdx, edges.length);
-        for (let i = 0; i < curvePos.length; i++) {
-          allPositions.push(curvePos[i]);
-        }
-        // Line strip indices for LineSegments (pairs)
-        for (let i = 0; i < CURVE_SEGMENTS; i++) {
-          allIndices.push(vertexOffset + i, vertexOffset + i + 1);
-        }
-        vertexOffset += CURVE_SEGMENTS + 1;
-      }
+      const { positions: curvePositions, indices: curveIndices } = buildMergedCurveGeometry(edges);
 
       const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(allPositions, 3));
-      geo.setIndex(allIndices);
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(curvePositions, 3));
+      geo.setIndex(curveIndices);
 
       const uniforms = createEdgeDepthUniforms(EDGE_COLOR, opacity);
       const mat = new THREE.ShaderMaterial({
@@ -752,35 +753,21 @@
               _removeFormationAnim?.();
               _removeFormationAnim = null;
 
-              // Re-enable hierarchical edges — rebuild geometry with settled positions
+              // Re-enable hierarchical edges — rebuild curves from settled positions.
+              // Uses _edgesByParent (persisted from rebuildScene) to avoid re-scanning
+              // all edges. Node positions were lerped to settled values above, so
+              // _sceneNodeMap positions are already at their final locations.
               renderer?.scene.traverse((obj) => {
                 if (obj.userData?.isInterClusterEdgeGroup) {
                   for (const child of (obj as THREE.Group).children) {
                     const ls = child as THREE.LineSegments;
-                    const parentId = ls.userData?.parentId;
-                    if (!parentId || !_sceneNodeMap) continue;
-                    const hierEdges: { from: [number, number, number]; to: [number, number, number] }[] = [];
-                    for (const edge of formSceneData.edges) {
-                      if (edge.type !== 'hierarchical' || edge.from !== parentId) continue;
-                      const from = _sceneNodeMap.get(edge.from);
-                      const to = _sceneNodeMap.get(edge.to);
-                      if (!from || !to) continue;
-                      if (edge.distance != null && edge.distance < EDGE_PROXIMITY_THRESHOLD) continue;
-                      hierEdges.push({ from: from.position, to: to.position });
-                    }
-                    if (hierEdges.length === 0) continue;
-                    const allPositions: number[] = [];
-                    const allIndices: number[] = [];
-                    let vertexOffset = 0;
-                    for (let arcIdx = 0; arcIdx < hierEdges.length; arcIdx++) {
-                      const e = hierEdges[arcIdx];
-                      const curvePos = buildCurvePositions(e.from, e.to, arcIdx, hierEdges.length);
-                      for (let i = 0; i < curvePos.length; i++) allPositions.push(curvePos[i]);
-                      for (let i = 0; i < CURVE_SEGMENTS; i++) allIndices.push(vertexOffset + i, vertexOffset + i + 1);
-                      vertexOffset += CURVE_SEGMENTS + 1;
-                    }
-                    ls.geometry.setAttribute('position', new THREE.Float32BufferAttribute(allPositions, 3));
-                    ls.geometry.setIndex(allIndices);
+                    const parentId = ls.userData?.parentId as string | undefined;
+                    if (!parentId) continue;
+                    const edges = _edgesByParent.get(parentId);
+                    if (!edges || edges.length === 0) continue;
+                    const { positions, indices } = buildMergedCurveGeometry(edges);
+                    ls.geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                    ls.geometry.setIndex(indices);
                   }
                   obj.visible = true;
                 }
