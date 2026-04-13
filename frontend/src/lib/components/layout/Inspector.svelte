@@ -230,16 +230,27 @@
                 onclick={startRename}
                 use:tooltip={family.label}
                 aria-label="Click to rename: {family.label}"
-              >{family.label}</button>
+              >{selectedIsSubDomain ? parseSubDomainLabel(family.label) : family.label}</button>
             {/if}
-            <span
-              class="domain-badge"
-              style="background: {taxonomyColor(family.domain)};"
-            >{family.domain}</span>
-            <span
-              class="state-badge"
-              style="color: {stateColor(family.state)}; border-color: {stateColor(family.state)};"
-            >{family.state}</span>
+            {#if selectedIsSubDomain && selectedParentDomainLabel}
+              <span
+                class="domain-badge"
+                style="background: {taxonomyColor(selectedParentDomainLabel)};"
+              >{selectedParentDomainLabel}</span>
+              <span
+                class="state-badge"
+                style="color: {taxonomyColor(family.domain)}; border-color: {taxonomyColor(family.domain)};"
+              >Sub-domain</span>
+            {:else}
+              <span
+                class="domain-badge"
+                style="background: {taxonomyColor(family.domain)};"
+              >{family.domain}</span>
+              <span
+                class="state-badge"
+                style="color: {stateColor(family.state)}; border-color: {stateColor(family.state)};"
+              >{family.state}</span>
+            {/if}
             <button
               class="dismiss-btn"
               onclick={dismissFamily}
