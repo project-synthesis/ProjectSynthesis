@@ -79,7 +79,7 @@
       clustersStore.invalidateClusters();
       renaming = false;
     } catch {
-      // keep rename input open on error
+      addToast('deleted', 'Rename failed');
     }
     renameSaving = false;
   }
@@ -707,7 +707,7 @@
     cursor: pointer;
     margin-top: 4px;
     opacity: 0.6;
-    transition: opacity 150ms, color 150ms;
+    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1), color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .phase-cancel:hover {

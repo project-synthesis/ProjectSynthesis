@@ -7,9 +7,10 @@
   import { addToast, type ToastAction } from '$lib/stores/toast.svelte';
   import { scoreColor, taxonomyColor } from '$lib/utils/colors';
   import { formatScore, formatRelativeTime } from '$lib/utils/formatting';
+  import { clustersStore } from '$lib/stores/clusters.svelte';
   import { forceSamplingTooltip, forcePassthroughTooltip } from '$lib/utils/mcp-tooltips';
   import { STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
-  import { ROUTING_TOOLTIPS, SCORING_TOOLTIPS, STRATEGY_TOOLTIPS } from '$lib/utils/ui-tooltips';
+  import { ROUTING_TOOLTIPS, SCORING_TOOLTIPS, STRATEGY_TOOLTIPS, GITHUB_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import { tooltip } from '$lib/actions/tooltip';
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
   import { samplingGuide } from '$lib/stores/sampling-guide.svelte';
@@ -423,6 +424,22 @@
     if (name === 'auto') return forgeStore.strategy === null;
     return forgeStore.strategy === name;
   }
+
+  // Cross-tab cluster navigation — look up cluster label from taxonomy tree.
+  // Excludes structural nodes (domain/project) since only real clusters are linked to optimizations.
+  const clusterLabelMap = $derived<Record<string, string>>(
+    Object.fromEntries(
+      clustersStore.taxonomyTree
+        .filter(n => n.state !== 'domain' && n.state !== 'project' && n.label)
+        .map(n => [n.id, n.label!])
+    )
+  );
+
+  function navigateToCluster(e: Event, clusterId: string): void {
+    e.stopPropagation();
+    clustersStore.selectCluster(clusterId);
+    window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'clusters' }));
+  }
 </script>
 
 {#snippet treeNode(node: TreeNode, depth: number)}
@@ -613,6 +630,17 @@
                       {projectLabelMap[item.project_id].slice(0, 2).toUpperCase()}
                     </span>
                   {/if}
+                  {#if item.cluster_id && clusterLabelMap[item.cluster_id]}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <span
+                      class="row-cluster font-mono"
+                      role="link"
+                      tabindex="-1"
+                      use:tooltip={`Cluster: ${clusterLabelMap[item.cluster_id]}`}
+                      onclick={(e) => navigateToCluster(e, item.cluster_id!)}
+                      onkeydown={(e) => { if (e.key === 'Enter') navigateToCluster(e, item.cluster_id!); }}
+                    >{clusterLabelMap[item.cluster_id].slice(0, 8)}</span>
+                  {/if}
                   <span class="row-badge font-mono">{item.strategy_used || 'auto'}</span>
                   <span
                     class="row-score font-mono"
@@ -687,7 +715,7 @@
               {#if githubStore.indexStatus?.status === 'building'}
                 <span class="index-badge index-badge--building">...</span>
               {:else if githubStore.indexStatus?.file_count}
-                <span class="index-badge">{githubStore.indexStatus.file_count}</span>
+                <span class="index-badge" use:tooltip={GITHUB_TOOLTIPS.indexed_file_count}>{githubStore.indexStatus.file_count}</span>
               {/if}
             </button>
           </div>
@@ -725,7 +753,7 @@
                 <span class="data-value data-value--truncate font-mono">{githubStore.linkedRepo.project_label ? (githubStore.linkedRepo.project_label.includes('/') ? githubStore.linkedRepo.project_label.split('/').pop() : githubStore.linkedRepo.project_label) : '(pending)'}</span>
               </div>
               {#if githubStore.indexStatus}
-                <div class="data-row">
+                <div class="data-row" use:tooltip={GITHUB_TOOLTIPS.indexed_file_count}>
                   <span class="data-label">Index</span>
                   <span class="data-value" class:data-value--cyan={githubStore.indexStatus.status === 'ready'}>
                     {githubStore.indexStatus.status} ({githubStore.indexStatus.file_count} files)
@@ -1513,7 +1541,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    height: 22px;
+    height: 20px;
     padding: 0 6px;
     background: transparent;
     border: 1px solid transparent;
@@ -1667,8 +1695,7 @@
     border-left: 1px solid var(--accent, transparent);
     transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
                 border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+                background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .history-row:hover {
@@ -1730,8 +1757,8 @@
     outline: none;
     max-width: 120px;
     text-overflow: ellipsis;
-    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .history-project-select:hover,
@@ -1770,7 +1797,7 @@
 
   .row-prompt {
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 400;
     color: var(--color-text-primary);
     white-space: nowrap;
     overflow: hidden;
@@ -1868,6 +1895,26 @@
     white-space: nowrap;
   }
 
+  .row-cluster {
+    font-size: 8px;
+    color: var(--color-text-dim);
+    border: 1px solid var(--color-border-subtle);
+    background: transparent;
+    padding: 0 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 64px;
+    cursor: pointer;
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .row-cluster:hover {
+    color: var(--tier-accent, var(--color-neon-cyan));
+    border-color: var(--tier-accent, var(--color-neon-cyan));
+  }
+
   .row-score {
     font-size: 10px;
     flex-shrink: 0;
@@ -1888,17 +1935,16 @@
 
   .skeleton-bar {
     height: 8px;
-    background: linear-gradient(90deg, var(--color-bg-card) 25%, var(--color-bg-hover) 50%, var(--color-bg-card) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1500ms ease-in-out infinite;
+    background: var(--color-bg-card);
+    animation: skeleton-pulse 1500ms ease-in-out infinite;
   }
 
   .skeleton-wide { width: 85%; }
   .skeleton-narrow { width: 55%; }
 
-  @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
+  @keyframes skeleton-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
   }
 
   /* ---- Info blocks ---- */
@@ -2348,15 +2394,15 @@
     background: transparent;
     color: var(--color-text-dim);
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 700;
     font-family: var(--font-mono);
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.03em;
     gap: 4px;
-    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                background 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .github-tab:hover {
     color: var(--color-text-primary);
@@ -2380,8 +2426,8 @@
     border-color: var(--color-neon-yellow);
   }
   .data-value--cyan { color: var(--tier-accent, var(--color-neon-cyan)); }
-  .data-value--amber { color: var(--color-neon-yellow, #f5a623); }
-  .data-value--red { color: var(--color-neon-red, #ff2255); }
+  .data-value--amber { color: var(--color-neon-yellow); }
+  .data-value--red { color: var(--color-neon-red); }
 
   /* File tree */
   .file-tree {

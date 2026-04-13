@@ -12,6 +12,7 @@
   let showOriginal = $state(false);
   let renderMarkdown = $state(true);
   let changesCollapsed = $state(true);
+  let enrichmentCollapsed = $state(true);
   let contextCollapsed = $state(true);
 
   // Use per-tab cached result if available, fall back to global forgeStore.result
@@ -28,6 +29,37 @@
   const hasContextDiagnostics = $derived(
     curatedRetrieval != null && (curatedRetrieval.files_included as number) > 0
   );
+
+  // Enrichment telemetry — pipeline observability for the enrichment process
+  const enrichmentMeta = $derived.by(() => {
+    return result?.context_sources?.enrichment_meta as Record<string, unknown> | undefined;
+  });
+  const contextSources = $derived.by(() => {
+    if (!result?.context_sources) return null;
+    const { enrichment_meta: _, ...sources } = result.context_sources;
+    return sources as Record<string, boolean>;
+  });
+  const hasEnrichmentData = $derived(contextSources != null && Object.keys(contextSources).length > 0);
+  const activeLayerCount = $derived(
+    contextSources ? Object.values(contextSources).filter(Boolean).length : 0
+  );
+  const totalLayerCount = $derived(
+    contextSources ? Object.keys(contextSources).length : 0
+  );
+
+  // Pipeline execution order for layer display (not alphabetical)
+  const LAYER_ORDER: { key: string; label: string }[] = [
+    { key: 'heuristic_analysis',    label: 'Heuristic Analysis' },
+    { key: 'codebase_context',      label: 'Codebase Context' },
+    { key: 'strategy_intelligence', label: 'Strategy Intelligence' },
+    { key: 'applied_patterns',      label: 'Applied Patterns' },
+    { key: 'cluster_injection',     label: 'Pattern Injection' },
+    { key: 'few_shot_examples',     label: 'Few-Shot Examples' },
+    // Deprecated keys — shown only if present in legacy data
+    { key: 'workspace_guidance',    label: 'Workspace Guidance' },
+    { key: 'adaptation',            label: 'Adaptation State' },
+    { key: 'performance_signals',   label: 'Performance Signals' },
+  ];
 
   // The displayed prompt: original, selected refinement version, or latest optimized
   const displayPrompt = $derived.by(() => {
@@ -168,6 +200,185 @@
       </div>
     {/if}
 
+    <!-- Enrichment telemetry — pipeline layer observability -->
+    {#if hasEnrichmentData && contextSources}
+      <div class="changes-section">
+        <button class="changes-toggle" onclick={() => enrichmentCollapsed = !enrichmentCollapsed} aria-expanded={!enrichmentCollapsed}>
+          <span class="toggle-indicator">{enrichmentCollapsed ? '▸' : '▾'}</span>
+          <span class="section-title">ENRICHMENT</span>
+          <span class="header-metrics"><span class="header-metric"><span class="header-metric-value">{activeLayerCount}/{totalLayerCount}</span> layers</span></span>
+        </button>
+        {#if !enrichmentCollapsed}
+          <div class="enrichment-body" transition:slide={{ duration: 200 }}>
+            <!-- Classification: task type + domain (from heuristic analysis) -->
+            {#if result?.task_type || result?.domain || enrichmentMeta?.enrichment_profile}
+              <div class="enrichment-classification">
+                {#if enrichmentMeta?.enrichment_profile}
+                  <span class="enrichment-tag">
+                    <span class="stat-label">profile</span>
+                    <span class="stat-value">{(enrichmentMeta.enrichment_profile as string).replace('_', ' ')}</span>
+                  </span>
+                {/if}
+                {#if result?.task_type}
+                  <span class="enrichment-tag">
+                    <span class="stat-label">task</span>
+                    <span class="stat-value">{result.task_type}</span>
+                  </span>
+                {/if}
+                {#if result?.domain}
+                  <span class="enrichment-tag">
+                    <span class="stat-label">domain</span>
+                    <span class="stat-value">{result.domain}</span>
+                  </span>
+                {/if}
+                {#if result?.strategy_used}
+                  <span class="enrichment-tag">
+                    <span class="stat-label">strategy</span>
+                    <span class="stat-value stat-ok">{result.strategy_used}</span>
+                  </span>
+                {/if}
+                {#if enrichmentMeta?.heuristic_disambiguation}
+                  {@const dis = enrichmentMeta.heuristic_disambiguation as Record<string, unknown>}
+                  {#if dis.original_task_type && dis.corrected_to}
+                    <span class="enrichment-tag">
+                      <span class="stat-label">corrected</span>
+                      <span class="stat-value stat-ok">{dis.original_task_type} &rarr; {dis.corrected_to}</span>
+                    </span>
+                  {/if}
+                {/if}
+                {#if enrichmentMeta?.llm_classification_fallback}
+                  <span class="enrichment-tag">
+                    <span class="stat-label">llm fallback</span>
+                    <span class="stat-value stat-ok">haiku</span>
+                  </span>
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Layer list: pipeline execution order, single column -->
+            <div class="enrichment-layers">
+              {#each LAYER_ORDER as layer (layer.key)}
+                {#if contextSources[layer.key] !== undefined}
+                  {@const active = contextSources[layer.key]}
+                  <div class="enrichment-row" class:enrichment-row--active={active}>
+                    <span class="enrichment-dot"></span>
+                    <span class="enrichment-label">{layer.label}</span>
+                  </div>
+                {/if}
+              {/each}
+            </div>
+
+            <!-- Retrieval diagnostics row -->
+            {#if curatedRetrieval || enrichmentMeta?.explore_synthesis || enrichmentMeta?.combined_context_chars != null}
+              <div class="enrichment-diagnostics">
+                {#if curatedRetrieval}
+                  {@const status = curatedRetrieval.status as string}
+                  {@const filesIncluded = (curatedRetrieval.files_included ?? 0) as number}
+                  {@const reason = curatedRetrieval.reason as string | undefined}
+                  <span class="context-stat">
+                    <span class="stat-label">curated</span>
+                    <span class="stat-value" class:stat-skip={status === 'skipped_task_type'} class:stat-ok={filesIncluded > 0}>
+                      {#if status === 'skipped_task_type'}
+                        skipped
+                      {:else if status === 'empty' || filesIncluded === 0}
+                        0 files
+                      {:else}
+                        {filesIncluded} files
+                      {/if}
+                    </span>
+                  </span>
+                  {#if status === 'skipped_task_type' && reason}
+                    <span class="context-stat">
+                      <span class="stat-label">skip</span>
+                      <span class="stat-value stat-skip">{reason}</span>
+                    </span>
+                  {/if}
+                {/if}
+                {#if enrichmentMeta?.explore_synthesis}
+                  {@const synth = enrichmentMeta.explore_synthesis as {present: boolean; char_count: number}}
+                  <span class="context-stat">
+                    <span class="stat-label">synthesis</span>
+                    <span class="stat-value" class:stat-ok={synth.present} class:stat-skip={!synth.present}>
+                      {synth.present ? `${(synth.char_count / 1000).toFixed(1)}K` : 'absent'}
+                    </span>
+                  </span>
+                {/if}
+                {#if enrichmentMeta?.workspace_as_fallback}
+                  <span class="context-stat">
+                    <span class="stat-label">workspace</span>
+                    <span class="stat-value stat-ok">fallback</span>
+                  </span>
+                {/if}
+                {#if enrichmentMeta?.combined_context_chars != null}
+                  <span class="context-stat">
+                    <span class="stat-label">budget</span>
+                    <span class="stat-value" class:stat-warn={enrichmentMeta.was_truncated}>
+                      {((enrichmentMeta.combined_context_chars as number) / 1000).toFixed(1)}K{#if enrichmentMeta.was_truncated} truncated{/if}
+                    </span>
+                  </span>
+                {/if}
+                {#if enrichmentMeta?.strategy_intelligence_fallback}
+                  <span class="context-stat">
+                    <span class="stat-label">strategy</span>
+                    <span class="stat-value stat-ok">fallback (cross-domain)</span>
+                  </span>
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Strategy intelligence detail — shows what rankings were injected -->
+            {#if enrichmentMeta?.strategy_intelligence_detail}
+              <div class="enrichment-detail">
+                <div class="enrichment-detail-heading">STRATEGY RANKINGS</div>
+                <pre class="enrichment-detail-text">{enrichmentMeta.strategy_intelligence_detail}</pre>
+              </div>
+            {/if}
+
+            <!-- Domain signal scores — shows which domains matched during heuristic classification -->
+            {#if enrichmentMeta?.domain_signals}
+              {@const signals = enrichmentMeta.domain_signals as Record<string, number>}
+              {@const entries = Object.entries(signals).sort((a, b) => (b[1] as number) - (a[1] as number))}
+              {#if entries.length > 0}
+                <div class="enrichment-diagnostics">
+                  <span class="stat-label">domain signals</span>
+                  {#each entries as [domain, score]}
+                    <span class="context-stat">
+                      <span class="stat-value">{domain}</span>
+                      <span class="stat-value" style="opacity: 0.6;">{(score as number).toFixed(1)}</span>
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+            {/if}
+
+            <!-- Divergence alerts — tech stack conflicts between prompt and codebase -->
+            {#if enrichmentMeta?.divergences}
+              {@const divs = enrichmentMeta.divergences as Array<{prompt_tech: string; codebase_tech: string; category: string; severity: string}>}
+              {@const divSource = (enrichmentMeta.divergence_source ?? 'unknown') as string}
+              {#if divs.length > 0}
+                <div class="enrichment-detail">
+                  <div class="enrichment-detail-heading">DIVERGENCES</div>
+                  {#each divs as d}
+                    <div class="context-stat" style="margin-bottom: 2px;">
+                      <span class="stat-label">{d.category}</span>
+                      <span class="stat-value" class:stat-warn={d.severity === 'conflict'} class:stat-ok={d.severity === 'migration'}>
+                        {d.prompt_tech} &ne; {d.codebase_tech}
+                      </span>
+                      <span class="stat-value" style="font-size: 8px; opacity: 0.6;">{d.severity}</span>
+                    </div>
+                  {/each}
+                  <div class="context-stat" style="margin-top: 2px;">
+                    <span class="stat-label">source</span>
+                    <span class="stat-value">{divSource === 'synthesis_fallback' ? 'synthesis (profile skipped codebase)' : divSource}</span>
+                  </div>
+                </div>
+              {/if}
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     <!-- Context diagnostics — shows retrieval quality for codebase-aware optimizations -->
     {#if hasContextDiagnostics && curatedRetrieval}
       {@const files = (curatedRetrieval.files ?? []) as Array<{path: string; score: number; content_chars?: number; source?: string}>}
@@ -183,8 +394,11 @@
         <button class="changes-toggle" onclick={() => contextCollapsed = !contextCollapsed} aria-expanded={!contextCollapsed}>
           <span class="toggle-indicator">{contextCollapsed ? '▸' : '▾'}</span>
           <span class="section-title">CONTEXT</span>
-          <span class="context-summary">
-            {files.length}/{totalIndexed} files{#if hasDiagnostics} &middot; {budgetPct.toFixed(0)}% budget{/if}
+          <span class="header-metrics">
+            <span class="header-metric"><span class="header-metric-value">{files.length}/{totalIndexed}</span> files</span>
+            {#if hasDiagnostics}
+              <span class="header-metric"><span class="header-metric-value">{budgetPct.toFixed(0)}%</span> budget</span>
+            {/if}
           </span>
         </button>
         {#if !contextCollapsed}
@@ -254,7 +468,8 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     min-width: 0;
     max-width: 100%;
   }
@@ -439,12 +654,29 @@
     line-height: 1;
   }
 
-  /* ---- Context diagnostics ---- */
-  .context-summary {
+  /* ---- Section header metrics (shared by ENRICHMENT + CONTEXT) ---- */
+  .header-metrics {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: auto;
+  }
+
+  .header-metric {
     font-family: var(--font-mono);
     font-size: 9px;
     color: var(--color-text-dim);
-    margin-left: auto;
+    letter-spacing: 0.02em;
+  }
+
+  .header-metric + .header-metric::before {
+    content: '\00b7';
+    margin-right: 3px;
+    color: color-mix(in srgb, var(--color-text-dim) 40%, transparent);
+  }
+
+  .header-metric-value {
+    color: var(--color-text-secondary);
   }
 
   .context-body {
@@ -480,6 +712,109 @@
 
   .stat-warn {
     color: var(--color-neon-yellow);
+  }
+
+  .stat-skip {
+    color: var(--color-text-dim);
+    font-style: italic;
+  }
+
+  .stat-ok {
+    color: var(--color-neon-cyan);
+  }
+
+  /* ---- Enrichment telemetry ---- */
+
+  .enrichment-body {
+    padding: 4px 6px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .enrichment-classification {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .enrichment-tag {
+    display: flex;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+  }
+
+  .enrichment-layers {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .enrichment-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 18px;
+  }
+
+  .enrichment-dot {
+    width: 5px;
+    height: 5px;
+    flex-shrink: 0;
+    background: var(--color-bg-hover);
+    border: 1px solid var(--color-border-subtle);
+  }
+
+  .enrichment-row--active .enrichment-dot {
+    background: var(--color-neon-green);
+    border-color: var(--color-neon-green);
+  }
+
+  .enrichment-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .enrichment-row--active .enrichment-label {
+    color: var(--color-text-secondary);
+  }
+
+  .enrichment-diagnostics {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding-top: 3px;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .enrichment-detail {
+    padding-top: 3px;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .enrichment-detail-heading {
+    font-family: var(--font-display);
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--color-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 2px;
+  }
+
+  .enrichment-detail-text {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-secondary);
+    white-space: pre-wrap;
+    margin: 0;
+    line-height: 1.5;
   }
 
   .context-file-list {

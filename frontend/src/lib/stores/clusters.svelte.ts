@@ -7,7 +7,7 @@
 
 import {
   matchPattern, getClusterDetail, getClusterTree, getClusterStats,
-  getClusterTemplates, getClusterSimilarityEdges, getClusterInjectionEdges,
+  getClusterSimilarityEdges, getClusterInjectionEdges,
   getClusterActivity, getClusterActivityHistory,
   type ClusterMatchResponse, type ClusterDetail, type ClusterNode, type ClusterStats,
   type SimilarityEdge, type InjectionEdge, type TaxonomyActivityEvent,
@@ -274,16 +274,6 @@ class ClusterStore {
       // already set clusterDetailLoading=true synchronously before its
       // first await, so there's no visible flash of false.
       this.clusterDetailLoading = false;
-    }
-  }
-
-  /** Load template clusters. */
-  async loadTemplates(): Promise<void> {
-    try {
-      const resp = await getClusterTemplates({ limit: 100 });
-      this.templates = resp.items;
-    } catch (err) {
-      console.warn('Template load failed:', err);
     }
   }
 

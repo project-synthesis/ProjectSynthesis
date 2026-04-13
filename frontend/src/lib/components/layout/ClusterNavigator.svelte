@@ -472,7 +472,7 @@
     font-family: var(--font-mono);
     font-size: 9px;
     font-weight: 700;
-    color: var(--tab-state-color, #7a7a9e);
+    color: var(--tab-state-color, var(--color-text-dim));
     margin-left: 2px;
   }
 
@@ -971,16 +971,15 @@
 
   .skeleton-bar {
     height: 6px;
-    background: linear-gradient(90deg, var(--color-bg-card) 25%, var(--color-bg-hover) 50%, var(--color-bg-card) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1500ms ease-in-out infinite;
+    background: var(--color-bg-card);
+    animation: skeleton-pulse 1500ms ease-in-out infinite;
   }
 
   .skeleton-wide { width: 80%; }
   .skeleton-narrow { width: 50%; }
 
-  @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
+  @keyframes skeleton-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
   }
 </style>

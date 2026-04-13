@@ -125,6 +125,29 @@ export const TIER_TOOLTIPS = {
   degraded: 'Requested tier unavailable',
 };
 
+// ---------------------------------------------------------------------------
+// GitHub: Index & file count
+// ---------------------------------------------------------------------------
+
+export const GITHUB_TOOLTIPS = {
+  indexed_file_count:
+    'INDEXED SOURCE FILES\n' +
+    'Files embedded for semantic retrieval.\n' +
+    '\n' +
+    'EXCLUDED FROM INDEX\n' +
+    ' \u2022 Test dirs: test/ __tests__/ spec/ cypress/ e2e/\n' +
+    ' \u2022 Test files: *.test.* *.spec.* test_* *.stories.*\n' +
+    ' \u2022 Test infra: conftest.py jest.config.* vitest.config.*\n' +
+    ' \u2022 Large files: > 100 KB\n' +
+    ' \u2022 Non-source: binaries, images, lock files\n' +
+    '\n' +
+    'INDEXED EXTENSIONS\n' +
+    ' .py .js .ts .jsx .tsx .svelte .vue .go .rs\n' +
+    ' .java .rb .c .cpp .cs .swift .kt .scala\n' +
+    ' .md .yaml .json .toml .html .css .scss\n' +
+    ' .sh .sql .graphql',
+};
+
 export const PASSTHROUGH_TOOLTIPS = {
   guide_btn: 'How passthrough works',
 };

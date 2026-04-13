@@ -23,6 +23,19 @@
   let reclustering = $state(false);
 
   const filteredCounts = $derived(clustersStore.clusterCounts);
+  /** Filter-aware label for the ambient badge. Show the count matching the
+   *  current state filter so the badge stays coherent with the topology's
+   *  highlight-and-dim visual pattern. */
+  const ambientLabel = $derived.by(() => {
+    const f = clustersStore.stateFilter;
+    if (f === null) return `${clustersStore.liveClusterCount} clusters`;
+    if (f === 'active') return `${filteredCounts.active} active`;
+    if (f === 'candidate') return `${filteredCounts.candidate} candidates`;
+    if (f === 'template') return `${filteredCounts.template} templates`;
+    // mature/archived: count from filteredTaxonomyTree directly
+    const count = clustersStore.filteredTaxonomyTree.filter(n => n.state === f).length;
+    return `${count} ${f}`;
+  });
 
   // --- Auto-hide controls ---
   let controlsVisible = $state(false);
@@ -161,7 +174,7 @@
 
   <!-- AMBIENT: Cluster count — bottom center -->
   <div class="hud-cluster-badge" class:hud-ambient--hidden={controlsVisible}>
-    <span>{filteredCounts.active} clusters</span>
+    <span>{ambientLabel}</span>
   </div>
 
   <!-- HINT CARD: Compact shortcut cheat-sheet -->

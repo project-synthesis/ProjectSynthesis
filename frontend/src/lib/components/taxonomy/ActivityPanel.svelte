@@ -781,7 +781,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    font-size: 7.5px;
+    font-size: 8px;
   }
 
   .ap-ctx-val {

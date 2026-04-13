@@ -13,7 +13,6 @@
   // Pattern Graph hint card is built into TopologyControls (inline, no separate component)
   import * as THREE from 'three';
   import { triggerRecluster } from '$lib/api/clusters';
-  import type { TaxonomyActivityEvent } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
   import { stateColor } from '$lib/utils/colors';
   import { parsePrimaryDomain } from '$lib/utils/formatting';
@@ -1170,10 +1169,15 @@
   {/if}
   {#if clustersStore.taxonomyLoading}
     <div class="topology-loading">Loading taxonomy...</div>
-  {:else if !clustersStore.taxonomyError && clustersStore.filteredTaxonomyTree.length === 0}
+  {:else if !clustersStore.taxonomyError && clustersStore.taxonomyTree.length === 0}
     <div class="topology-empty">
       <span class="topology-empty-label">No clusters yet</span>
       <span class="topology-empty-hint">Forge a prompt to start building the taxonomy</span>
+    </div>
+  {:else if !clustersStore.taxonomyError && clustersStore.filteredTaxonomyTree.length === 0 && clustersStore.stateFilter !== null}
+    <div class="topology-empty">
+      <span class="topology-empty-label">No {clustersStore.stateFilter} clusters</span>
+      <span class="topology-empty-hint">Switch the state filter to view other clusters</span>
     </div>
   {/if}
   {#if clustersStore.taxonomyError}
