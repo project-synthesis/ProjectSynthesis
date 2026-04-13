@@ -78,9 +78,17 @@ class ClusterStore {
     // Second pass: include domain nodes only if they have visible children.
     // Without this, empty domains (e.g. "devops" with 0 active clusters)
     // show as orphan headers in the active tab and topology graph.
+    //
+    // Two inclusion paths:
+    //   1. Top-level domains: their label matches a child cluster's domain field
+    //   2. Sub-domains: any visible child cluster has parent_id pointing to them
     const childDomains = new Set(childNodes.map(n => (n.domain ?? 'general').split(':')[0].trim().toLowerCase()));
+    const childParentIds = new Set(childNodes.map(n => n.parent_id).filter(Boolean));
     const domainNodes = tree.filter(
-      node => node.state === 'domain' && childDomains.has(node.label?.toLowerCase() ?? '')
+      node => node.state === 'domain' && (
+        childDomains.has(node.label?.toLowerCase() ?? '') ||
+        childParentIds.has(node.id)
+      )
     );
 
     return [...domainNodes, ...childNodes];
