@@ -309,7 +309,24 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             except Exception as idx_exc:
                 logger.warning("MCP server: EmbeddingIndex cache load failed (non-fatal): %s", idx_exc)
 
-            logger.info("MCP server: TaxonomyEngine initialized (hot-path + injection)")
+            # Periodic embedding index reload — picks up warm-path updates
+            # so MCP pattern matching stays fresh (saved every ~5 min by backend).
+            async def _refresh_embedding_index() -> None:
+                while True:
+                    await asyncio.sleep(600)  # 10 minutes
+                    try:
+                        loaded = await engine.embedding_index.load_cache(_index_cache_path)
+                        if loaded:
+                            logger.info(
+                                "MCP: embedding index refreshed (%d entries)",
+                                engine.embedding_index.size,
+                            )
+                    except Exception:
+                        logger.debug("MCP: embedding index refresh failed", exc_info=True)
+
+            asyncio.create_task(_refresh_embedding_index())
+
+            logger.info("MCP server: TaxonomyEngine initialized (hot-path + injection + index refresh)")
         except Exception as exc:
             logger.warning("MCP server: TaxonomyEngine init failed (non-fatal): %s", exc)
 

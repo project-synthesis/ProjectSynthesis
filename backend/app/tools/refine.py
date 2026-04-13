@@ -141,6 +141,7 @@ async def handle_refine(
             refinement_request=refinement_request,
             codebase_guidance=None,  # workspace guidance folded into codebase_context
             divergence_alerts=enrichment.divergence_alerts if enrichment else None,
+            applied_patterns=enrichment.applied_patterns if enrichment else None,
         ):
             if event.event == "refinement_complete":
                 final_event_data = event.data

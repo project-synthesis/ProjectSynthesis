@@ -121,6 +121,7 @@ async def refine(
     _codebase_context: str | None = None
     _adaptation_state: str | None = None
     _divergence_alerts: str | None = None
+    _applied_patterns: str | None = None
 
     context_service = getattr(request.app.state, "context_service", None)
     if context_service:
@@ -152,6 +153,7 @@ async def refine(
             _codebase_context = enrichment.codebase_context
             _adaptation_state = enrichment.strategy_intelligence
             _divergence_alerts = enrichment.divergence_alerts
+            _applied_patterns = enrichment.applied_patterns
         except Exception:
             logger.debug("Context enrichment failed for refinement", exc_info=True)
     else:
@@ -182,6 +184,7 @@ async def refine(
                 codebase_context=_codebase_context,
                 adaptation_state=_adaptation_state,
                 divergence_alerts=_divergence_alerts,
+                applied_patterns=_applied_patterns,
             ):
                 yield format_sse(event.event, event.data)
         except Exception as exc:

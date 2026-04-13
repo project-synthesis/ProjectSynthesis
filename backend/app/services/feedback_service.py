@@ -103,6 +103,38 @@ class FeedbackService:
         # adapt toward profiles that correlate with high overall_score values,
         # computed periodically during warm-path refresh.
 
+        # Pattern feedback loop: boost source_count for patterns that
+        # contributed to thumbs_up results. This influences future injection
+        # ranking and GlobalPattern promotion.
+        try:
+            from sqlalchemy import update as sa_update
+
+            from app.models import MetaPattern, OptimizationPattern
+            pat_q = await self._session.execute(
+                select(OptimizationPattern.meta_pattern_id).where(
+                    OptimizationPattern.optimization_id == optimization_id,
+                    OptimizationPattern.meta_pattern_id.isnot(None),
+                )
+            )
+            pattern_ids = [r[0] for r in pat_q.all()]
+            if pattern_ids and rating == "thumbs_up":
+                await self._session.execute(
+                    sa_update(MetaPattern)
+                    .where(MetaPattern.id.in_(pattern_ids))
+                    .values(source_count=MetaPattern.source_count + 1)
+                )
+                logger.info(
+                    "pattern_feedback: optimization=%s rating=%s patterns_boosted=%d",
+                    optimization_id, rating, len(pattern_ids),
+                )
+            elif pattern_ids:
+                logger.info(
+                    "pattern_feedback: optimization=%s rating=%s patterns=%d (no boost for thumbs_down)",
+                    optimization_id, rating, len(pattern_ids),
+                )
+        except Exception:
+            logger.debug("Pattern feedback tracking failed (non-fatal)", exc_info=True)
+
         # Publish real-time event for cross-source notifications
         try:
             from app.services.event_bus import event_bus

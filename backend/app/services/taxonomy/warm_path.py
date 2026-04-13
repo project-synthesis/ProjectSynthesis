@@ -586,6 +586,17 @@ async def execute_warm_path(
         if refresh_result.injection_effectiveness:
             engine._injection_effectiveness = refresh_result.injection_effectiveness
 
+    # Save embedding index to disk so MCP process can reload it.
+    # Without this, MCP's disk-cached index goes stale after warm-path
+    # adds new clusters/patterns. Saved every warm cycle (~5 min).
+    try:
+        from app.config import DATA_DIR
+        _idx_path = DATA_DIR / "embedding_index.pkl"
+        await engine.embedding_index.save_cache(_idx_path)
+        logger.debug("Embedding index saved (%d entries)", engine.embedding_index.size)
+    except Exception as _idx_exc:
+        logger.warning("Embedding index save failed (non-fatal): %s", _idx_exc)
+
     # ------------------------------------------------------------------
     # Phase 4.25: Sub-domain meta-pattern aggregation
     # Rolls up child-cluster patterns into sub-domain nodes.

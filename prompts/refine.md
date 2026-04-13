@@ -24,6 +24,10 @@
 
 {{divergence_alerts}}
 
+<applied-meta-patterns>
+{{applied_patterns}}
+</applied-meta-patterns>
+
 <strategy-intelligence>
 {{strategy_intelligence}}
 </strategy-intelligence>

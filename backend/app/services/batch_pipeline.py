@@ -218,6 +218,7 @@ async def run_single_prompt(
                         taxonomy_engine=taxonomy_engine,
                         db=_enrich_db,
                         trace_id=trace_id,
+                        optimization_id=opt_id,
                     )
                 if injected:
                     applied_patterns_text = format_injected_patterns(injected)
