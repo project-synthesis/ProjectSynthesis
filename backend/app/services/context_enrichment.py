@@ -1,9 +1,9 @@
 """Unified context enrichment service for all routing tiers.
 
-Single entry point replacing 5 scattered context resolution sites.
+Single entry point replacing scattered context resolution sites.
 Each tier calls enrich() and receives an EnrichedContext with all
-resolved layers — workspace guidance, codebase context, adaptation,
-applied patterns, performance signals, and heuristic analysis.
+resolved layers — codebase context (including workspace guidance as
+fallback), strategy intelligence, applied patterns, and heuristic analysis.
 
 Heuristic analysis runs for ALL tiers (not just passthrough) to provide
 domain detection for curated retrieval cross-domain filtering.
@@ -14,6 +14,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -27,17 +28,233 @@ from app.services.workspace_intelligence import WorkspaceIntelligence
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Enrichment profiles — match enrichment depth to use case
+# ---------------------------------------------------------------------------
+
+PROFILE_CODE_AWARE = "code_aware"
+PROFILE_KNOWLEDGE_WORK = "knowledge_work"
+PROFILE_COLD_START = "cold_start"
+
+_COLD_START_THRESHOLD = 10  # optimization count below which cold-start profile activates
+
+# Task types where curated codebase retrieval (L3b) provides high value.
+# Non-coding prompts (writing, creative, general) waste ~40% of the context
+# window on irrelevant source files.
+_CODEBASE_TASK_TYPES = frozenset({"coding", "system", "data"})
+
+# Escape-hatch keywords: even for non-coding task types, if the prompt
+# mentions code-related concepts, curated retrieval is still valuable.
+_CODE_ESCAPE_KEYWORDS = frozenset({
+    "code", "function", "class", "api", "endpoint", "database", "schema",
+    "sql", "query", "import", "module", "script", "bug", "debug",
+    "refactor", "deploy", "migration", "config", "dockerfile",
+})
+
+
+def select_enrichment_profile(
+    task_type: str,
+    repo_linked: bool,
+    optimization_count: int,
+) -> str:
+    """Select enrichment profile based on observable state.
+
+    Pure function — no I/O, no side effects. Determines which context layers
+    to activate for this request.
+
+    Profiles:
+        code_aware     — All layers active. Coding/system/data task with repo linked.
+        knowledge_work — Skip codebase context. Writing/creative/analysis/general tasks.
+        cold_start     — Skip strategy intelligence + patterns. < 10 optimizations.
+    """
+    if optimization_count < _COLD_START_THRESHOLD:
+        return PROFILE_COLD_START
+    if task_type in _CODEBASE_TASK_TYPES and repo_linked:
+        return PROFILE_CODE_AWARE
+    return PROFILE_KNOWLEDGE_WORK
+
+
+# ---------------------------------------------------------------------------
+# B1: Prompt-context divergence detection
+# ---------------------------------------------------------------------------
+
+_TECH_VOCABULARY: dict[str, dict[str, set[str]]] = {
+    "database": {
+        "postgresql": {"postgresql", "postgres", "psycopg", "asyncpg", "pg_"},
+        "mysql": {"mysql", "mariadb", "pymysql", "mysqlclient"},
+        "sqlite": {"sqlite", "aiosqlite", "sqlite3"},
+        "mongodb": {"mongodb", "pymongo", "motor", "mongosh"},
+        "redis": {"redis"},
+    },
+    "framework": {
+        "fastapi": {"fastapi"},
+        "django": {"django"},
+        "flask": {"flask"},
+        "express": {"express", "expressjs"},
+        "nextjs": {"nextjs", "next.js"},
+        "rails": {"rails", "ruby on rails"},
+        "spring": {"spring", "springframework", "spring boot"},
+    },
+    "language": {
+        "python": {"python", "pyproject", "setuptools", ".py"},
+        "javascript": {"javascript", "node_modules"},
+        "typescript": {"typescript", "tsconfig"},
+        "java": {"java", "maven", "gradle"},
+        "go": {"golang", "go.mod", "go.sum"},
+        "rust": {"rust", "cargo.toml", "rustc"},
+        "ruby": {"ruby", "gemfile", "bundler"},
+    },
+}
+
+# Pairs within the same category that are NOT conflicts
+_COMPAT_PAIRS = frozenset({
+    ("typescript", "javascript"),  # TS is a superset of JS
+    ("javascript", "typescript"),
+})
+
+# Technologies that are always additive (no conflict even if different category tech exists)
+_ADDITIVE_TECHS = frozenset({
+    "redis", "celery", "rabbitmq", "docker", "kubernetes", "nginx",
+    "terraform", "prometheus", "grafana", "elasticsearch",
+})
+
+_MIGRATION_KEYWORDS = frozenset({
+    "migrate", "migration", "upgrade", "switch to", "replace with",
+    "move to", "transition to", "port to", "convert to",
+})
+
+
+@dataclass(frozen=True)
+class Divergence:
+    """A detected tech stack conflict between prompt and codebase context."""
+
+    prompt_tech: str
+    codebase_tech: str
+    category: str
+    severity: str  # "conflict" | "migration"
+
+
+def _extract_techs(text: str) -> dict[str, set[str]]:
+    """Extract technology mentions from text, grouped by category.
+
+    Uses word-boundary-aware matching to avoid false positives
+    (e.g., "flask" in "flasks", "go" in "going").
+    Multi-word aliases and aliases containing dots/punctuation use
+    substring matching (same pattern as _TASK_TYPE_SIGNALS).
+
+    Returns {category: {tech_name, ...}} for each tech found.
+    """
+    if not text:
+        return {}
+    text_lower = text.lower()
+    found: dict[str, set[str]] = {}
+    for category, techs in _TECH_VOCABULARY.items():
+        for tech_name, aliases in techs.items():
+            for alias in aliases:
+                # Multi-word or dotted aliases: substring match
+                if " " in alias or "." in alias:
+                    matched = alias in text_lower
+                else:
+                    # Single-word aliases: word boundary match
+                    matched = bool(re.search(r"\b" + re.escape(alias) + r"\b", text_lower))
+                if matched:
+                    found.setdefault(category, set()).add(tech_name)
+                    break  # one alias match is enough per tech
+    return found
+
+
+def detect_divergences(
+    raw_prompt: str,
+    codebase_context: str | None,
+) -> list[Divergence]:
+    """Compare tech mentions in prompt vs codebase context.
+
+    Returns a list of Divergence objects for any conflicts detected.
+    Only runs when codebase_context is available (repo linked + synthesis/curated).
+    """
+    if not codebase_context:
+        return []
+
+    prompt_techs = _extract_techs(raw_prompt)
+    codebase_techs = _extract_techs(codebase_context)
+
+    if not prompt_techs or not codebase_techs:
+        return []
+
+    # Check for migration keywords in the prompt (NOT codebase — Alembic migrations are noise).
+    # Multi-word patterns like "replace...with" are checked with a word-window scan
+    # since the user may write "Replace our X layer with Y" (words between "replace" and "with").
+    prompt_lower = raw_prompt.lower()
+    prompt_words = prompt_lower.split()
+    has_migration = any(kw in prompt_lower for kw in _MIGRATION_KEYWORDS)
+    _migration_match: str | None = None
+    if has_migration:
+        _migration_match = next((kw for kw in _MIGRATION_KEYWORDS if kw in prompt_lower), None)
+    else:
+        # Window-based check for "replace...with" and "rewrite...in" patterns
+        for i, w in enumerate(prompt_words):
+            if w == "replace":
+                if "with" in prompt_words[i + 1 : i + 8]:
+                    has_migration = True
+                    _migration_match = "replace...with (window)"
+                    break
+            elif w == "rewrite":
+                if "in" in prompt_words[i + 1 : i + 6]:
+                    has_migration = True
+                    _migration_match = "rewrite...in (window)"
+                    break
+
+    logger.debug(
+        "divergence_scan: prompt_techs=%s codebase_techs=%s migration=%s match=%s",
+        prompt_techs, codebase_techs, has_migration, _migration_match,
+    )
+
+    divergences: list[Divergence] = []
+    for category, prompt_set in prompt_techs.items():
+        codebase_set = codebase_techs.get(category, set())
+        if not codebase_set:
+            continue  # no codebase tech in this category — can't conflict
+
+        for p_tech in prompt_set:
+            # Skip additive technologies
+            if p_tech in _ADDITIVE_TECHS:
+                continue
+            # Skip if the tech IS in the codebase (no conflict)
+            if p_tech in codebase_set:
+                continue
+            # Skip compatible pairs (TS/JS)
+            compatible = any(
+                (p_tech, c_tech) in _COMPAT_PAIRS for c_tech in codebase_set
+            )
+            if not compatible:
+                # Genuine divergence — determine severity
+                severity = "migration" if has_migration else "conflict"
+                c_tech = next(iter(codebase_set))
+                divergences.append(Divergence(
+                    prompt_tech=p_tech,
+                    codebase_tech=c_tech,
+                    category=category,
+                    severity=severity,
+                ))
+
+    return divergences
+
 
 async def resolve_performance_signals(
     db: AsyncSession,
     task_type: str,
     domain: str,
-) -> str | None:
+) -> tuple[str | None, bool]:
     """Resolve performance signals: strategy perf by domain, anti-patterns, domain keywords.
 
     Standalone function — callable from both the enrichment service (instance method)
     and the sampling pipeline (no instance needed). Cheap signals (~150 tokens) from
     the Optimization table, no LLM calls.
+
+    Returns:
+        Tuple of (formatted signals text or None, fallback_used flag).
+        When the exact domain+task_type query is empty, falls back to
+        task_type-only across all domains (C1 domain-relaxed fallback).
     """
     try:
         from sqlalchemy import func, select
@@ -47,56 +264,86 @@ async def resolve_performance_signals(
         lines: list[str] = []
 
         # 1. Strategy performance by domain+task_type (top 3)
+        _strategy_base = select(
+            Optimization.strategy_used,
+            func.avg(Optimization.overall_score).label("avg_score"),
+            func.count().label("n"),
+        ).where(
+            Optimization.task_type == task_type,
+            Optimization.overall_score.isnot(None),
+            Optimization.strategy_used.isnot(None),
+        )
+
+        # Exact match first (domain + task_type)
         perf_q = await db.execute(
-            select(
-                Optimization.strategy_used,
-                func.avg(Optimization.overall_score).label("avg_score"),
-                func.count().label("n"),
-            ).where(
-                Optimization.task_type == task_type,
-                Optimization.domain == domain,
-                Optimization.overall_score.isnot(None),
-                Optimization.strategy_used.isnot(None),
-            ).group_by(Optimization.strategy_used)
+            _strategy_base.where(Optimization.domain == domain)
+            .group_by(Optimization.strategy_used)
             .having(func.count() >= 3)
             .order_by(func.avg(Optimization.overall_score).desc())
             .limit(3)
         )
         top_strategies = perf_q.all()
+        strategy_fallback = False
+
+        # C1: Domain-relaxed fallback when exact match returns nothing
+        if not top_strategies:
+            fallback_q = await db.execute(
+                _strategy_base
+                .group_by(Optimization.strategy_used)
+                .having(func.count() >= 3)
+                .order_by(func.avg(Optimization.overall_score).desc())
+                .limit(3)
+            )
+            top_strategies = fallback_q.all()
+            if top_strategies:
+                strategy_fallback = True
+                logger.info(
+                    "strategy_intelligence: exact=%s+%s empty, fallback to %s-only (%d strategies)",
+                    task_type, domain, task_type, len(top_strategies),
+                )
+
         if top_strategies:
             strat_parts = [
                 f"{r.strategy_used} ({r.avg_score:.1f}, n={r.n})"
                 for r in top_strategies
             ]
-            lines.append(
-                f"Top strategies for {domain}+{task_type}: "
-                + ", ".join(strat_parts)
-            )
+            scope = f"{task_type} (across all domains)" if strategy_fallback else f"{domain}+{task_type}"
+            lines.append(f"Top strategies for {scope}: " + ", ".join(strat_parts))
 
-        # 2. Anti-patterns: strategies whose OVERALL average is below 5.5
-        #    for this task_type+domain combo
+        # 2. Anti-patterns: strategies whose average is below 5.5
         anti_q = await db.execute(
-            select(
-                Optimization.strategy_used,
-                func.avg(Optimization.overall_score).label("avg_score"),
-                func.count().label("n"),
-            ).where(
-                Optimization.task_type == task_type,
-                Optimization.domain == domain,
-                Optimization.overall_score.isnot(None),
-                Optimization.strategy_used.isnot(None),
-            ).group_by(Optimization.strategy_used)
+            _strategy_base.where(Optimization.domain == domain)
+            .group_by(Optimization.strategy_used)
             .having(func.count() >= 3, func.avg(Optimization.overall_score) < 5.5)
             .order_by(func.avg(Optimization.overall_score).asc())
             .limit(2)
         )
         anti_patterns = anti_q.all()
+        anti_fallback = False
+
+        # C1: Anti-pattern fallback (independent of strategy fallback)
+        if not anti_patterns:
+            anti_fb_q = await db.execute(
+                _strategy_base
+                .group_by(Optimization.strategy_used)
+                .having(func.count() >= 3, func.avg(Optimization.overall_score) < 5.5)
+                .order_by(func.avg(Optimization.overall_score).asc())
+                .limit(2)
+            )
+            anti_patterns = anti_fb_q.all()
+            if anti_patterns:
+                anti_fallback = True
+
         if anti_patterns:
+            scope = f"{task_type} (across all domains)" if anti_fallback else f"{domain}+{task_type}"
             for r in anti_patterns:
                 lines.append(
                     f"Avoid: {r.strategy_used} averaged {r.avg_score:.1f} "
-                    f"for {domain}+{task_type} (n={r.n})"
+                    f"for {scope} (n={r.n})"
                 )
+
+        # Unified fallback flag — either strategy or anti-pattern needed the fallback
+        fallback_used = strategy_fallback or anti_fallback
 
         # 3. Domain keywords from DomainSignalLoader singleton
         try:
@@ -112,10 +359,70 @@ async def resolve_performance_signals(
         except Exception:
             pass  # DomainSignalLoader may not be initialized
 
-        return "\n".join(lines) if lines else None
+        return ("\n".join(lines) if lines else None, fallback_used)
     except Exception:
         logger.debug("Performance signals resolution failed", exc_info=True)
-        return None
+        return None, False
+
+
+async def resolve_strategy_intelligence(
+    db: AsyncSession,
+    task_type: str,
+    domain: str,
+) -> tuple[str | None, bool]:
+    """Unified strategy intelligence — merges performance signals + user adaptation feedback.
+
+    Combines domain+task-type strategy performance data with user approval ratings
+    into a single strategy advisory.
+
+    Standalone function — callable from the enrichment service, sampling pipeline,
+    batch pipeline, and refinement fallback paths.
+
+    Returns:
+        Tuple of (formatted strategy intelligence string or None, fallback_used flag).
+        The fallback flag indicates whether the domain-relaxed fallback (C1) was used
+        for performance signals.
+    """
+    sections: list[str] = []
+    fallback_used = False
+
+    # 1. Score-based strategy rankings + anti-patterns + domain keywords
+    perf, fallback_used = await resolve_performance_signals(db, task_type, domain)
+    if perf:
+        sections.append(perf)
+
+    # 2. Feedback-based affinities from AdaptationTracker
+    try:
+        from app.services.adaptation_tracker import AdaptationTracker
+
+        tracker = AdaptationTracker(db)
+        affinities = await tracker.get_affinities(task_type)
+
+        if affinities:
+            aff_lines: list[str] = []
+            for strategy, data in sorted(
+                affinities.items(),
+                key=lambda x: x[1]["approval_rate"],
+                reverse=True,
+            ):
+                total = data["thumbs_up"] + data["thumbs_down"]
+                rate = data["approval_rate"]
+                aff_lines.append(
+                    f"  {strategy}: {rate:.0%} approval ({total} feedbacks)"
+                )
+            sections.append("User feedback:\n" + "\n".join(aff_lines))
+
+        # 3. Blocked strategies (approval < 0.3 with 5+ feedbacks)
+        blocked = await tracker.get_blocked_strategies(task_type)
+        if blocked:
+            sections.append(
+                "Blocked strategies (low approval): "
+                + ", ".join(sorted(blocked))
+            )
+    except Exception:
+        logger.debug("Adaptation data resolution failed", exc_info=True)
+
+    return ("\n\n".join(sections) if sections else None, fallback_used)
 
 
 @dataclass(frozen=True)
@@ -123,12 +430,15 @@ class EnrichedContext:
     """All resolved context layers for an optimization request."""
 
     raw_prompt: str
-    workspace_guidance: str | None = None
     codebase_context: str | None = None
-    adaptation_state: str | None = None
+    strategy_intelligence: str | None = None
     applied_patterns: str | None = None
-    performance_signals: str | None = None
     analysis: HeuristicAnalysis | None = None
+
+    # Deprecated aliases — kept for backward compat with legacy consumers.
+    # Both resolve to the same data as strategy_intelligence.
+    adaptation_state: str | None = None
+    performance_signals: str | None = None
     context_sources: MappingProxyType[str, bool] = field(
         default_factory=lambda: MappingProxyType({}),
     )
@@ -159,6 +469,55 @@ class EnrichedContext:
         return self.analysis.format_summary() if self.analysis else None
 
     @property
+    def divergence_alerts(self) -> str | None:
+        """Render divergences as alert text with intent classification instructions.
+
+        Returns the full instruction block that tells the optimizer LLM to
+        classify intent as OVERSIGHT, DELIBERATE CHANGE, UPGRADE, or STANDALONE.
+        Returns None when no divergences were detected.
+        """
+        divergences = self.enrichment_meta.get("divergences")
+        if not divergences:
+            return None
+        conflict_lines = []
+        for d in divergences:
+            conflict_lines.append(
+                f'The prompt mentions "{d["prompt_tech"]}" but the linked codebase '
+                f'uses "{d["codebase_tech"]}" ({d["category"]}).'
+            )
+        conflicts = "\n".join(conflict_lines)
+        return (
+            f"TECHNOLOGY DIVERGENCE DETECTED\n\n{conflicts}\n\n"
+            "Before optimizing, determine the user's intent:\n\n"
+            "1. OVERSIGHT — The user casually names the technology without "
+            "explicitly asking to switch stacks. The prompt uses generic "
+            "patterns that exist in both technologies.\n"
+            "   → Optimize for the codebase's actual stack. Note the "
+            "correction in changes summary.\n\n"
+            "2. DELIBERATE CHANGE — The user explicitly asks to replace, "
+            "rewrite, migrate, or switch technologies. Even if the change "
+            "seems architecturally questionable, respect the stated intent.\n"
+            "   → Optimize for the requested technology change. Include a "
+            "brief advisory noting what the migration entails given the "
+            "current codebase, but do NOT override the user's request.\n\n"
+            "3. UPGRADE — The user wants the mentioned technology because "
+            "the prompt references features EXCLUSIVE to it that the current "
+            "stack cannot provide.\n"
+            "   → Optimize for a migration path with codebase-aware "
+            "considerations.\n\n"
+            "4. STANDALONE — The prompt is unrelated to the linked codebase.\n"
+            "   → Optimize as-is. Ignore codebase context.\n\n"
+            "CRITICAL: Never silently override an explicit user instruction "
+            "like 'replace X with Y' or 'rewrite in Z'. If the user asks "
+            "for a technology change, that is DELIBERATE CHANGE — optimize "
+            "for what they asked, with advisory context.\n\n"
+            "DEFAULT: If the prompt just names the technology without "
+            "explicitly requesting a change, treat as OVERSIGHT.\n\n"
+            "State your determination and why in your changes summary "
+            "under '## Stack Divergence'."
+        )
+
+    @property
     def context_sources_dict(self) -> dict[str, Any]:
         """Plain dict copy of context_sources + enrichment metadata for JSON/DB serialization."""
         result: dict[str, Any] = dict(self.context_sources)
@@ -186,6 +545,22 @@ class ContextEnrichmentService:
         self._github_client = github_client
         self._taxonomy_engine = taxonomy_engine
 
+    @staticmethod
+    def _should_skip_curated(task_type: str, raw_prompt: str) -> tuple[bool, str | None]:
+        """Determine whether curated codebase retrieval should be skipped.
+
+        Returns (True, reason) when the task type is non-coding AND the prompt
+        contains no code-related escape keywords.  Returns (False, None) otherwise.
+        """
+        if task_type in _CODEBASE_TASK_TYPES:
+            return False, None
+        # Escape hatch: check for code-related keywords in the prompt
+        prompt_lower = raw_prompt.lower()
+        for kw in _CODE_ESCAPE_KEYWORDS:
+            if kw in prompt_lower:
+                return False, None
+        return True, f"task_type={task_type}, no code keywords detected"
+
     async def enrich(
         self,
         raw_prompt: str,
@@ -200,28 +575,33 @@ class ContextEnrichmentService:
     ) -> EnrichedContext:
         """Resolve all context layers for the given tier.
 
-        ``preferences_snapshot``, when provided, gates optional layers:
-        - ``enable_adaptation``: if ``False``, skip adaptation state resolution.
+        Enrichment profile (code_aware / knowledge_work / cold_start) is auto-selected
+        based on task_type, repo link, and optimization count. The profile gates which
+        layers are activated — cold_start skips strategy intelligence and patterns;
+        knowledge_work skips codebase context.
 
-        Content capping is applied inline: ``codebase_context`` is capped at
-        ``MAX_CODEBASE_CONTEXT_CHARS`` and wrapped in ``<untrusted-context>``;
-        ``adaptation_state`` is capped at ``MAX_ADAPTATION_CHARS``.
+        ``preferences_snapshot``, when provided, gates optional layers:
+        - ``enable_strategy_intelligence``: if ``False``, skip strategy intelligence.
+          Falls back to ``enable_adaptation`` for backward compat.
+
+        Content capping is applied inline: ``codebase_context`` at
+        ``MAX_CODEBASE_CONTEXT_CHARS``; ``strategy_intelligence`` at ``MAX_ADAPTATION_CHARS``.
         """
         import time as _time
         _t_enrich_start = _time.monotonic()
         prefs = preferences_snapshot or {}
 
-        # 1. Workspace guidance — ALL tiers, same path
-        guidance = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
-
-        # 2. Analysis — heuristic (zero-LLM) for all tiers.
+        # 1. Analysis — heuristic (zero-LLM) for all tiers.
         #    Passthrough uses this as the primary analysis. Internal/sampling
         #    tiers use it only for domain detection in curated retrieval
         #    (the LLM analyze phase runs later with richer classification).
         analysis: HeuristicAnalysis | None = None
         task_type: str | None = None
+        _enable_llm_fallback = prefs.get("enable_llm_classification_fallback", True)
         try:
-            analysis = await self._heuristic_analyzer.analyze(raw_prompt, db)
+            analysis = await self._heuristic_analyzer.analyze(
+                raw_prompt, db, enable_llm_fallback=_enable_llm_fallback,
+            )
             task_type = analysis.task_type
         except Exception:
             logger.debug("Heuristic analysis failed during enrichment", exc_info=True)
@@ -231,13 +611,59 @@ class ContextEnrichmentService:
             )
             task_type = "general"
 
-        # 3. Codebase context — available for ALL tiers when repo is linked.
-        #    Two layers: (a) cached Haiku synthesis (architectural overview, computed
-        #    once on link/reindex), (b) per-prompt curated retrieval (file-specific
-        #    outlines ranked by semantic similarity to the prompt).
+        # 1a. Track disambiguation, LLM fallback, and domain signals for observability
+        if analysis and analysis.disambiguation_applied:
+            _disambiguation_info = {
+                "original_task_type": analysis.disambiguation_from,
+                "corrected_to": analysis.task_type,
+            }
+        else:
+            _disambiguation_info = None
+        _llm_fallback = analysis.llm_fallback_applied if analysis else False
+
+        # 1b. Enrichment profile selection — determines which layers to activate.
+        #     Pure function of observable state: task_type, repo link, history depth.
+        opt_count = 0
+        try:
+            from sqlalchemy import func
+            from sqlalchemy import select as _sel_count
+
+            from app.models import Optimization
+            _count_q = await db.execute(
+                _sel_count(func.count()).select_from(Optimization)
+            )
+            opt_count = _count_q.scalar() or 0
+        except Exception:
+            logger.debug("Optimization count query failed, defaulting to 0")
+
+        profile = select_enrichment_profile(
+            task_type or "general",
+            repo_full_name is not None,
+            opt_count,
+        )
+        enrichment_meta_dict: dict[str, Any] = {"enrichment_profile": profile}
+        if _disambiguation_info:
+            enrichment_meta_dict["heuristic_disambiguation"] = _disambiguation_info
+        if analysis and analysis.domain_scores:
+            enrichment_meta_dict["domain_signals"] = analysis.domain_scores
+        if _llm_fallback:
+            enrichment_meta_dict["llm_classification_fallback"] = True
+        skipped_layers: list[str] = []
+
+        # 2. Codebase context — unified layer combining three sources:
+        #    (a) Cached Haiku synthesis (architectural overview)
+        #    (b) Per-prompt curated retrieval (task-gated)
+        #    (c) Workspace guidance (fallback when synthesis is absent)
+        #
+        #    Workspace guidance is a strict subset of synthesis when a repo is
+        #    linked — it detects tech stack from manifests, which synthesis
+        #    already covers. It only has unique value when IDE is connected
+        #    without a repo (MCP roots or filesystem path).
         codebase_context: str | None = None
-        enrichment_meta_dict: dict[str, Any] = {}
-        if repo_full_name:
+        skip_codebase = profile == PROFILE_KNOWLEDGE_WORK
+        if skip_codebase:
+            skipped_layers.append("codebase_context")
+        if repo_full_name and not skip_codebase:
             # Resolve branch from LinkedRepo if not explicitly provided
             if not repo_branch:
                 try:
@@ -258,7 +684,7 @@ class ContextEnrichmentService:
             enrichment_meta_dict["repo_full_name"] = repo_full_name
             enrichment_meta_dict["repo_branch"] = branch
 
-            # 3a. Cached explore synthesis (architectural context)
+            # 2a. Cached explore synthesis (architectural context) — always fetched
             explore_synthesis = await self._get_explore_synthesis(
                 repo_full_name, branch, db,
             )
@@ -267,12 +693,34 @@ class ContextEnrichmentService:
                 "char_count": len(explore_synthesis) if explore_synthesis else 0,
             }
 
-            # 3b. Per-prompt curated index retrieval
-            curated_text, curated_meta = await self._query_index_context(
-                repo_full_name, branch, raw_prompt,
-                task_type, analysis.domain if analysis else None, db,
+            # 2b. Workspace guidance as fallback when synthesis is absent
+            if not explore_synthesis:
+                ws_fallback = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
+                if ws_fallback:
+                    explore_synthesis = ws_fallback
+                    enrichment_meta_dict["workspace_as_fallback"] = True
+
+            # 2c. Per-prompt curated index retrieval — task-gated
+            skip_curated, skip_reason = self._should_skip_curated(
+                task_type or "general", raw_prompt,
             )
-            enrichment_meta_dict["curated_retrieval"] = curated_meta
+            if skip_curated:
+                curated_text = None
+                enrichment_meta_dict["curated_retrieval"] = {
+                    "status": "skipped_task_type",
+                    "files_included": 0,
+                    "reason": skip_reason,
+                }
+                logger.info(
+                    "Curated retrieval skipped: %s (repo=%s)",
+                    skip_reason, repo_full_name,
+                )
+            else:
+                curated_text, curated_meta = await self._query_index_context(
+                    repo_full_name, branch, raw_prompt,
+                    task_type, analysis.domain if analysis else None, db,
+                )
+                enrichment_meta_dict["curated_retrieval"] = curated_meta
 
             # Combine: synthesis first (overview), then curated (prompt-specific)
             if explore_synthesis and curated_text:
@@ -282,44 +730,118 @@ class ContextEnrichmentService:
             elif curated_text:
                 codebase_context = curated_text
 
-        # 4. Adaptation state — ALL tiers, task_type-aware
-        #    Skipped when preferences explicitly disable adaptation.
-        adaptation: str | None = None
+        elif not skip_codebase:
+            # No repo linked — workspace guidance is the only codebase context source
+            ws_guidance = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
+            if ws_guidance:
+                codebase_context = ws_guidance
+                enrichment_meta_dict["workspace_as_fallback"] = True
+
+        # 3. Divergence detection — compare prompt tech vs codebase stack.
+        #    When profile=knowledge_work skips codebase context but a repo IS linked,
+        #    still fetch the synthesis (cheap cached lookup) for divergence detection.
+        #    The synthesis tells us the tech stack even when we don't inject it into the LLM.
+        _divergence_source = codebase_context
+        if not _divergence_source and repo_full_name and skip_codebase:
+            # Lightweight synthesis-only fetch for divergence detection
+            try:
+                if not repo_branch:
+                    repo_branch = "main"
+                _synth_for_div = await self._get_explore_synthesis(
+                    repo_full_name, repo_branch, db,
+                )
+                if _synth_for_div:
+                    _divergence_source = _synth_for_div
+                    logger.debug(
+                        "divergence_detection: using synthesis for skipped-codebase profile (repo=%s)",
+                        repo_full_name,
+                    )
+            except Exception:
+                logger.debug("Synthesis fetch for divergence detection failed", exc_info=True)
+
+        if _divergence_source:
+            _div_source_type = "codebase" if codebase_context else "synthesis_fallback"
+            divergences = detect_divergences(raw_prompt, _divergence_source)
+            if divergences:
+                enrichment_meta_dict["divergences"] = [
+                    {"prompt_tech": d.prompt_tech, "codebase_tech": d.codebase_tech,
+                     "category": d.category, "severity": d.severity}
+                    for d in divergences
+                ]
+                # Store source type so UI can show whether full codebase or synthesis was used
+                enrichment_meta_dict["divergence_source"] = _div_source_type
+                _div_summary = "; ".join(
+                    f"{d.prompt_tech}≠{d.codebase_tech}({d.category},{d.severity})"
+                    for d in divergences
+                )
+                logger.info(
+                    "divergence_detected: count=%d source=%s details=[%s]",
+                    len(divergences), _div_source_type, _div_summary,
+                )
+
+        # 4. Strategy intelligence — unified layer merging performance signals
+        #    and user adaptation feedback into a single strategy advisory.
+        #    Gated by preference + profile (cold-start skips — no history yet).
+        strategy_intel: str | None = None
         effective_task_type = task_type or "general"
-        if prefs.get("enable_adaptation", True):
-            adaptation = await self._resolve_adaptation(db, effective_task_type)
+        skip_si = profile == PROFILE_COLD_START
+        if skip_si:
+            skipped_layers.append("strategy_intelligence")
+        else:
+            enable_si = prefs.get(
+                "enable_strategy_intelligence",
+                prefs.get("enable_adaptation", True),
+            )
+            if enable_si:
+                strategy_intel, si_fallback = await resolve_strategy_intelligence(
+                    db, effective_task_type,
+                    analysis.domain if analysis else "general",
+                )
+                if strategy_intel:
+                    enrichment_meta_dict["strategy_intelligence_detail"] = (
+                        strategy_intel[:500] if len(strategy_intel) > 500
+                        else strategy_intel
+                    )
+                if si_fallback:
+                    enrichment_meta_dict["strategy_intelligence_fallback"] = True
 
-        # 5. Applied patterns — ALL tiers
-        patterns = await self._resolve_patterns(
-            raw_prompt, applied_pattern_ids, db,
-        )
+        # E1: Track strategy intelligence hit rate
+        try:
+            from app.services.classification_agreement import get_classification_agreement
+            get_classification_agreement().record_strategy_intel(
+                had_intel=strategy_intel is not None,
+            )
+        except Exception:
+            pass
 
-        # 5b. Performance signals — strategy perf, domain keywords, anti-patterns
-        perf_signals = await self._resolve_performance_signals(
-            db, effective_task_type,
-            analysis.domain if analysis else "general",
-        )
+        # 5. Applied patterns — profile-gated (cold-start skips — no clusters yet).
+        patterns: str | None = None
+        if profile == PROFILE_COLD_START:
+            skipped_layers.append("applied_patterns")
+        else:
+            patterns = await self._resolve_patterns(
+                raw_prompt, applied_pattern_ids, db,
+            )
 
         # 6. Content capping and injection hardening
         codebase_context = self._cap_codebase_context(codebase_context)
-        adaptation = self._cap_adaptation_state(adaptation)
+        strategy_intel = self._cap_strategy_intelligence(strategy_intel)
 
-        # 6b. Enrichment metadata — track truncation
-        if enrichment_meta_dict:
-            combined_chars = len(codebase_context) if codebase_context else 0
-            enrichment_meta_dict["combined_context_chars"] = combined_chars
-            enrichment_meta_dict["was_truncated"] = (
-                combined_chars >= settings.MAX_CODEBASE_CONTEXT_CHARS
-            )
+        # 6b. Enrichment metadata — track truncation and profile
+        combined_chars = len(codebase_context) if codebase_context else 0
+        enrichment_meta_dict["combined_context_chars"] = combined_chars
+        enrichment_meta_dict["was_truncated"] = (
+            combined_chars >= settings.MAX_CODEBASE_CONTEXT_CHARS
+        )
+        if skipped_layers:
+            enrichment_meta_dict["profile_skipped_layers"] = skipped_layers
 
         # 7. Context sources audit (frozen via MappingProxyType)
         sources = MappingProxyType({
-            "workspace_guidance": guidance is not None,
             "codebase_context": codebase_context is not None,
-            "adaptation": adaptation is not None,
+            "strategy_intelligence": strategy_intel is not None,
             "applied_patterns": patterns is not None,
             "heuristic_analysis": analysis is not None,
-            "performance_signals": perf_signals is not None,
         })
 
         # 8. Log enrichment summary
@@ -327,42 +849,43 @@ class ContextEnrichmentService:
 
         # Compute assembled context size for observability
         _total_context = sum(
-            len(s) for s in [guidance, codebase_context, adaptation, patterns, perf_signals]
+            len(s) for s in [codebase_context, strategy_intel, patterns]
             if s
         )
 
         if repo_full_name:
             _cr = enrichment_meta_dict.get("curated_retrieval", {})
             logger.info(
-                "enrichment: tier=%s repo=%s explore=%s curated=%s "
+                "enrichment: tier=%s profile=%s repo=%s explore=%s curated=%s "
                 "curated_files=%d curated_top=%.3f context_chars=%d "
-                "signals=%s total_assembled=%dK elapsed=%.0fms",
-                tier, repo_full_name,
+                "strategy_intel=%s total_assembled=%dK elapsed=%.0fms",
+                tier, profile, repo_full_name,
                 "yes" if enrichment_meta_dict.get("explore_synthesis", {}).get("present") else "no",
                 _cr.get("status", "n/a"),
                 _cr.get("files_included", 0),
                 _cr.get("top_relevance_score", 0.0),
                 enrichment_meta_dict.get("combined_context_chars", 0),
-                "perf" if perf_signals else "none",
+                "yes" if strategy_intel else "none",
                 _total_context // 1000,
                 _enrich_ms,
             )
         else:
             logger.info(
-                "enrichment: tier=%s no_repo signals=%s "
+                "enrichment: tier=%s profile=%s no_repo strategy_intel=%s "
                 "total_assembled=%dK elapsed=%.0fms",
-                tier, "perf" if perf_signals else "none",
+                tier, profile, "yes" if strategy_intel else "none",
                 _total_context // 1000, _enrich_ms,
             )
 
         return EnrichedContext(
             raw_prompt=raw_prompt,
-            workspace_guidance=guidance,
             codebase_context=codebase_context,
-            adaptation_state=adaptation,
+            strategy_intelligence=strategy_intel,
             applied_patterns=patterns,
-            performance_signals=perf_signals,
             analysis=analysis,
+            # Deprecated aliases — mirror strategy_intelligence for backward compat
+            adaptation_state=strategy_intel,
+            performance_signals=strategy_intel,
             context_sources=sources,
             enrichment_meta=MappingProxyType(enrichment_meta_dict) if enrichment_meta_dict else MappingProxyType({}),
         )
@@ -472,18 +995,6 @@ class ContextEnrichmentService:
             logger.warning("Curated index retrieval failed for %s@%s: %s", repo_full_name, branch, exc)
             return None, {"status": "error", "files_included": 0, "error": str(exc)[:300]}
 
-    async def _resolve_adaptation(
-        self, db: AsyncSession, task_type: str,
-    ) -> str | None:
-        """Resolve adaptation state for the given task type."""
-        try:
-            from app.services.adaptation_tracker import AdaptationTracker
-            tracker = AdaptationTracker(db)
-            return await tracker.render_adaptation_state(task_type)
-        except Exception:
-            logger.debug("Adaptation state unavailable", exc_info=True)
-        return None
-
     async def _resolve_patterns(
         self,
         raw_prompt: str,
@@ -527,15 +1038,6 @@ class ContextEnrichmentService:
             logger.debug("Pattern resolution failed", exc_info=True)
         return None
 
-    async def _resolve_performance_signals(
-        self,
-        db: AsyncSession,
-        task_type: str,
-        domain: str,
-    ) -> str | None:
-        """Delegate to module-level function (thin wrapper for instance method API)."""
-        return await resolve_performance_signals(db, task_type, domain)
-
     # -- Content capping helpers --
 
     @staticmethod
@@ -556,14 +1058,14 @@ class ContextEnrichmentService:
         )
 
     @staticmethod
-    def _cap_adaptation_state(text: str | None) -> str | None:
-        """Cap adaptation state to configured maximum."""
+    def _cap_strategy_intelligence(text: str | None) -> str | None:
+        """Cap strategy intelligence to configured maximum."""
         if text is None:
             return None
         capped = text[: settings.MAX_ADAPTATION_CHARS]
         if len(capped) < len(text):
             logger.info(
-                "Truncated adaptation_state from %d to %d chars",
+                "Truncated strategy_intelligence from %d to %d chars",
                 len(text), settings.MAX_ADAPTATION_CHARS,
             )
         return capped

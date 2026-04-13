@@ -45,6 +45,7 @@ DEFAULTS: dict[str, Any] = {
         "enable_explore": True,
         "enable_scoring": True,
         "enable_adaptation": True,
+        "enable_llm_classification_fallback": True,
         "force_sampling": False,
         "force_passthrough": False,
         "optimizer_effort": "high",
@@ -64,6 +65,7 @@ DEFAULTS: dict[str, Any] = {
 
 _PIPELINE_TOGGLES = (
     "enable_explore", "enable_scoring", "enable_adaptation",
+    "enable_llm_classification_fallback",
     "force_sampling", "force_passthrough",
 )
 

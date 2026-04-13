@@ -19,13 +19,14 @@
 </strongest-dimensions>
 
 <codebase-context>
-{{codebase_guidance}}
 {{codebase_context}}
 </codebase-context>
 
-<adaptation>
-{{adaptation_state}}
-</adaptation>
+{{divergence_alerts}}
+
+<strategy-intelligence>
+{{strategy_intelligence}}
+</strategy-intelligence>
 
 <strategy>
 {{strategy_instructions}}

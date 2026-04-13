@@ -155,6 +155,7 @@ class RefinementService:
         codebase_guidance: str | None = None,
         codebase_context: str | None = None,
         adaptation_state: str | None = None,
+        divergence_alerts: str | None = None,
     ) -> AsyncGenerator[PipelineEvent, None]:
         """Run a refinement pipeline and yield SSE events.
 
@@ -268,6 +269,7 @@ class RefinementService:
             "adaptation_state": adaptation_state,
             "current_scores": scores_str,
             "strongest_dimensions": strongest_str,
+            "divergence_alerts": divergence_alerts,
         })
 
         # Dynamic output budget matching the main pipeline (128K cap with streaming)

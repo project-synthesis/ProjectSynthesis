@@ -168,11 +168,12 @@ async def optimize(
             prompts_dir=PROMPTS_DIR,
             raw_prompt=body.prompt,
             strategy_name=effective_strategy,
-            codebase_guidance=enrichment.workspace_guidance,
-            adaptation_state=enrichment.adaptation_state,
+            codebase_guidance=None,  # workspace guidance now folded into codebase_context
+            adaptation_state=enrichment.strategy_intelligence,
             analysis_summary=enrichment.analysis_summary,
             codebase_context=enrichment.codebase_context,
             applied_patterns=enrichment.applied_patterns,
+            divergence_alerts=enrichment.divergence_alerts,
         )
 
         trace_id = str(uuid.uuid4())
@@ -227,24 +228,20 @@ async def optimize(
             "reason": decision.reason, "degraded_from": decision.degraded_from,
         })
         try:
-            # Combine adaptation state with performance signals (strategy
-            # perf by domain, anti-patterns, domain keywords). Both are
-            # "historical intelligence" injected into the optimizer template.
-            _adapt = enrichment.adaptation_state or ""
-            if enrichment.performance_signals:
-                _adapt = f"{_adapt}\n\n{enrichment.performance_signals}" if _adapt else enrichment.performance_signals
-
             async for event in orchestrator.run(
                 raw_prompt=body.prompt, provider=decision.provider, db=db,
                 strategy_override=effective_strategy if effective_strategy != "auto" else None,
-                codebase_guidance=enrichment.workspace_guidance,
+                codebase_guidance=None,  # workspace guidance now folded into codebase_context
                 codebase_context=enrichment.codebase_context,
-                adaptation_state=_adapt or None,
+                adaptation_state=enrichment.strategy_intelligence,
                 context_sources=enrichment.context_sources_dict,
                 repo_full_name=effective_repo,
                 applied_pattern_ids=body.applied_pattern_ids,
                 taxonomy_engine=get_taxonomy_engine(app=request.app),
                 domain_resolver=getattr(request.app.state, "domain_resolver", None),
+                heuristic_task_type=enrichment.task_type,
+                heuristic_domain=enrichment.domain_value,
+                divergence_alerts=enrichment.divergence_alerts,
             ):
                 yield format_sse(event.event, event.data)
         except Exception as exc:
@@ -483,11 +480,12 @@ async def passthrough_prepare(
         prompts_dir=PROMPTS_DIR,
         raw_prompt=body.prompt,
         strategy_name=requested_strategy,
-        codebase_guidance=enrichment.workspace_guidance,
-        adaptation_state=enrichment.adaptation_state,
+        codebase_guidance=None,  # workspace guidance now folded into codebase_context
+        adaptation_state=enrichment.strategy_intelligence,
         analysis_summary=enrichment.analysis_summary,
         codebase_context=enrichment.codebase_context,
         applied_patterns=enrichment.applied_patterns,
+        divergence_alerts=enrichment.divergence_alerts,
     )
 
     trace_id = str(uuid.uuid4())

@@ -170,6 +170,9 @@ class PipelineOrchestrator:
         applied_pattern_ids: list[str] | None = None,
         taxonomy_engine: Any | None = None,
         domain_resolver: Any | None = None,
+        heuristic_task_type: str | None = None,
+        heuristic_domain: str | None = None,
+        divergence_alerts: str | None = None,
     ) -> AsyncGenerator[PipelineEvent, None]:
         """Execute the full pipeline, yielding SSE events."""
         trace_id = str(uuid.uuid4())
@@ -333,6 +336,20 @@ class PipelineOrchestrator:
                 # Startup race or no domain_resolver — default to "general"
                 effective_domain = "general"
 
+            # E1: Heuristic vs LLM classification agreement tracking
+            if heuristic_task_type is not None:
+                try:
+                    from app.services.classification_agreement import get_classification_agreement
+                    get_classification_agreement().record(
+                        heuristic_task_type=heuristic_task_type,
+                        heuristic_domain=heuristic_domain or "general",
+                        llm_task_type=effective_task_type,
+                        llm_domain=effective_domain,
+                        prompt_snippet=raw_prompt[:80],
+                    )
+                except Exception:
+                    logger.debug("Classification agreement tracking failed", exc_info=True)
+
             # ---------------------------------------------------------------
             # Phase 1.5: Domain Mapping (Spec Section 4.2)
             # ---------------------------------------------------------------
@@ -452,19 +469,21 @@ class PipelineOrchestrator:
                 data={"stage": "optimize", "state": "running", "model": model_ids["optimize"]},
             )
 
-            adaptation_enabled = prefs.get("pipeline.enable_adaptation", prefs_snapshot)
-            if not adaptation_enabled:
+            enable_si = prefs.get(
+                "pipeline.enable_strategy_intelligence",
+                prefs.get("pipeline.enable_adaptation", prefs_snapshot),
+            )
+            if not enable_si:
                 adaptation_state = None
             elif adaptation_state is None:
-                # Resolve on-demand when not pre-provided (parity with sampling pipeline)
+                # Resolve on-demand when not pre-provided by enrichment service
                 try:
-                    from app.services.adaptation_tracker import AdaptationTracker
-                    tracker = AdaptationTracker(db)
-                    adaptation_state = await tracker.render_adaptation_state(
-                        analysis.task_type,
+                    from app.services.context_enrichment import resolve_strategy_intelligence
+                    adaptation_state, _ = await resolve_strategy_intelligence(
+                        db, analysis.task_type, analysis.domain or "general",
                     )
                 except Exception as exc:
-                    logger.debug("Adaptation state unavailable: %s", exc)
+                    logger.debug("Strategy intelligence unavailable: %s", exc)
 
             strategy_instructions = self.strategy_loader.load(effective_strategy)
             analysis_summary = (
@@ -537,6 +556,7 @@ class PipelineOrchestrator:
                 "adaptation_state": adaptation_state,
                 "applied_patterns": applied_patterns_text,
                 "few_shot_examples": few_shot_text,
+                "divergence_alerts": divergence_alerts,
             })
 
             dynamic_max_tokens = compute_optimize_max_tokens(len(raw_prompt))

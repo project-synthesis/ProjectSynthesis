@@ -72,6 +72,13 @@ class HeuristicAnalysis:
     strengths: list[str] = field(default_factory=list)
     recommended_strategy: str = "auto"
     confidence: float = 0.0
+    # Disambiguation tracking (set when A2 technical verb+noun override fires)
+    disambiguation_applied: bool = False
+    disambiguation_from: str | None = None
+    # Domain signal scores (A3 observability — which domains matched and with what weight)
+    domain_scores: dict[str, float] | None = None
+    # LLM fallback tracking (set when A4 confidence-gated LLM classification fires)
+    llm_fallback_applied: bool = False
 
     def format_summary(self) -> str:
         """Format analysis as a human-readable string for template injection."""
@@ -92,6 +99,14 @@ class HeuristicAnalysis:
             f"Recommended strategy: {self.recommended_strategy}"
             f" (confidence: {self.confidence:.2f})"
         )
+        if self.disambiguation_applied:
+            parts.append(
+                f"Disambiguation: {self.disambiguation_from} \u2192 {self.task_type}"
+            )
+        if self.llm_fallback_applied:
+            parts.append(
+                f"LLM classification fallback: applied (from {self.disambiguation_from or 'ambiguous'})"
+            )
         return "\n".join(parts)
 
 
@@ -99,20 +114,49 @@ class HeuristicAnalysis:
 
 _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
     "coding": [
+        # Compound signals (high weight — override single-word collisions)
+        # Compound signals (high weight — override single-word collisions like "design" → creative)
+        ("design a system", 1.3), ("design a service", 1.3),
+        ("design a schema", 1.2), ("design an api", 1.3),
+        ("design a database", 1.2), ("design a pipeline", 1.2),
+        ("design and implement", 1.3), ("design a middleware", 1.2),
+        ("create a migration", 1.1), ("create an endpoint", 1.1),
+        ("create a service", 1.1), ("create a middleware", 1.1),
+        ("build a service", 1.2), ("build a system", 1.2),
+        ("build an api", 1.2), ("build a queue", 1.1),
+        ("add a feature", 1.0), ("add an endpoint", 1.1),
+        ("delivery system", 1.1), ("retry logic", 1.0),
+        ("dead letter", 1.0), ("rate limiter", 1.0),
+        # Single-word signals
         ("implement", 1.0), ("refactor", 1.0), ("debug", 0.9),
         ("function", 0.7), ("api", 0.8), ("endpoint", 0.8),
         ("bug", 0.9), ("test", 0.7), ("deploy", 0.6),
         ("class", 0.6), ("module", 0.6), ("code", 0.5),
         ("fix", 0.6), ("build", 0.7), ("migrate", 0.7),
         ("database", 0.5), ("calculate", 0.6),
+        ("backend", 0.6), ("frontend", 0.5), ("middleware", 0.7),
+        ("websocket", 0.7), ("server", 0.5), ("schema", 0.6),
+        ("kubernetes", 0.6), ("docker", 0.5), ("ci/cd", 0.7),
+        ("helm", 0.6), ("graphql", 0.7), ("microservice", 0.7),
     ],
     "writing": [
+        # Compound signals
+        ("design a campaign", 1.1), ("create content", 1.0),
+        ("write a blog", 1.2), ("write an article", 1.2),
+        ("write a guide", 1.1),
+        # Single-word signals
         ("write", 0.6), ("draft", 0.9), ("blog", 1.0),
         ("article", 1.0), ("essay", 1.0), ("copy", 0.8),
         ("tone", 0.7), ("audience", 0.6), ("narrative", 0.8),
         ("publish", 0.7), ("editorial", 0.9),
     ],
     "analysis": [
+        # Compound signals
+        ("generate a report", 1.1), ("sales report", 1.0),
+        ("quarterly report", 1.0), ("build a dashboard", 1.0),
+        ("analyze the data", 1.1), ("evaluate the performance", 1.0),
+        ("year-over-year", 0.9), ("compare revenue", 0.9),
+        # Single-word signals
         ("analyze", 1.0), ("compare", 0.9), ("evaluate", 0.9),
         ("review", 0.7), ("assess", 0.9), ("critique", 0.8),
         ("pros and cons", 0.9), ("trade-off", 0.8), ("tradeoff", 0.8),
@@ -135,6 +179,25 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
         ("setup", 0.5), ("infrastructure", 0.7), ("prompt engineer", 0.9),
     ],
 }
+
+# --- A4: Confidence-gated LLM fallback thresholds ---
+_LLM_CLASSIFICATION_CONFIDENCE_GATE = 0.5  # heuristic confidence below this triggers check
+_LLM_CLASSIFICATION_MARGIN_GATE = 0.2      # margin between top 2 categories below this triggers LLM
+
+# --- Technical verb + noun disambiguation ---
+# When a technical verb appears with a technical noun in the first sentence,
+# the prompt is almost certainly coding-related, even if "design" or "create"
+# triggered the creative category. Checked post-classification.
+_TECHNICAL_VERBS = frozenset({
+    "design", "create", "build", "set", "configure", "add", "implement",
+    "refactor", "debug", "migrate", "deploy", "test", "develop",
+})
+_TECHNICAL_NOUNS = frozenset({
+    "system", "service", "api", "endpoint", "schema", "database",
+    "middleware", "pipeline", "queue", "cache", "scheduler", "server",
+    "backend", "frontend", "module", "library", "framework", "migration",
+    "table", "index", "model", "route", "handler", "worker",
+})
 
 # Pre-compiled word-boundary patterns for task_type keywords.
 # Built once at import time to avoid recompilation in hot loops.
@@ -207,14 +270,27 @@ _AUDIENCE_KEYWORDS = {
 
 
 class HeuristicAnalyzer:
-    """Zero-LLM prompt classifier and weakness detector."""
+    """Prompt classifier and weakness detector.
+
+    Primarily zero-LLM (keyword-based). Falls back to a fast Haiku LLM call
+    when heuristic confidence is ambiguous (A4 confidence-gated fallback).
+    """
 
     async def analyze(
         self, raw_prompt: str, db: AsyncSession,
+        *,
+        enable_llm_fallback: bool = True,
     ) -> HeuristicAnalysis:
-        """Classify prompt and detect weaknesses without any LLM calls."""
+        """Classify prompt and detect weaknesses. May invoke LLM for ambiguous cases.
+
+        Args:
+            raw_prompt: The user's raw prompt text.
+            db: Async database session.
+            enable_llm_fallback: When False, skip A4 confidence-gated LLM fallback.
+                Controlled by ``enable_llm_classification_fallback`` preference.
+        """
         try:
-            return await self._analyze_inner(raw_prompt, db)
+            return await self._analyze_inner(raw_prompt, db, enable_llm_fallback=enable_llm_fallback)
         except Exception:
             logger.exception("Heuristic analysis failed — returning general fallback")
             return HeuristicAnalysis(
@@ -225,15 +301,55 @@ class HeuristicAnalyzer:
 
     async def _analyze_inner(
         self, raw_prompt: str, db: AsyncSession,
+        *, enable_llm_fallback: bool = True,
     ) -> HeuristicAnalysis:
         prompt_lower = raw_prompt.lower()
         words = prompt_lower.split()
         first_sentence = prompt_lower.split(".")[0] if "." in prompt_lower else prompt_lower
 
         # Layer 1: Keyword classification
-        task_type, task_confidence = self._classify(
+        task_type, task_confidence, all_scores = self._classify(
             prompt_lower, first_sentence, _TASK_TYPE_SIGNALS,
         )
+
+        # Layer 1b: Technical verb disambiguation (A2)
+        disambiguation_applied = False
+        disambiguation_from: str | None = None
+        if task_type in ("creative", "general"):
+            if self._check_technical_disambiguation(first_sentence):
+                coding_score = self._score_category(
+                    prompt_lower, first_sentence, _TASK_TYPE_SIGNALS["coding"],
+                )
+                if coding_score > 0:
+                    disambiguation_from = task_type
+                    task_type = "coding"
+                    task_confidence = max(task_confidence, coding_score, 0.6)
+                    disambiguation_applied = True
+                    logger.info(
+                        "heuristic_disambiguation: %s → coding, prompt=%.80s",
+                        disambiguation_from, raw_prompt,
+                    )
+
+        # Layer 1c: Confidence-gated LLM fallback (A4)
+        # When heuristic confidence is low AND top two categories are close,
+        # defer to a fast Haiku call for classification.
+        # Gated by enable_llm_fallback preference (default True) to support zero-LLM workflows.
+        llm_fallback_applied = False
+        if enable_llm_fallback and not disambiguation_applied and task_confidence < _LLM_CLASSIFICATION_CONFIDENCE_GATE:
+            sorted_vals = sorted(all_scores.values(), reverse=True)
+            margin = (sorted_vals[0] - sorted_vals[1]) if len(sorted_vals) >= 2 else 999
+            if margin < _LLM_CLASSIFICATION_MARGIN_GATE:
+                llm_result = await self._classify_with_llm(raw_prompt, db)
+                if llm_result:
+                    disambiguation_from = task_type
+                    task_type = llm_result[0]
+                    task_confidence = 0.8  # LLM classification is higher confidence than heuristic
+                    llm_fallback_applied = True
+                    logger.info(
+                        "llm_classification_fallback: heuristic=%s → llm=%s domain=%s margin=%.2f prompt=%.80s",
+                        disambiguation_from, task_type, llm_result[1], margin, raw_prompt,
+                    )
+
         # Domain classification via DomainSignalLoader (dynamic signals)
         word_set = set(words)
         loader = _get_signal_loader()
@@ -299,22 +415,115 @@ class HeuristicAnalyzer:
             strengths=strengths,
             recommended_strategy=strategy,
             confidence=round(confidence, 2),
+            disambiguation_applied=disambiguation_applied,
+            disambiguation_from=disambiguation_from,
+            domain_scores={k: round(v, 2) for k, v in domain_scores.items()} if domain_scores else None,
+            llm_fallback_applied=llm_fallback_applied,
         )
+
+    @staticmethod
+    def _check_technical_disambiguation(first_sentence: str) -> bool:
+        """Check if the first sentence contains a technical verb + noun pair.
+
+        Scans for any verb from _TECHNICAL_VERBS followed within 4 words by a
+        noun from _TECHNICAL_NOUNS. Handles articles/prepositions in between
+        (e.g., "design a REST api", "build the caching system").
+        Words are stripped of trailing punctuation before matching.
+        """
+        # Strip punctuation from each word so "system." matches "system"
+        words = [w.strip(".,;:!?()[]{}\"'") for w in first_sentence.split()]
+        for i, word in enumerate(words):
+            if word in _TECHNICAL_VERBS:
+                # Check next 4 words for a technical noun
+                for j in range(i + 1, min(i + 5, len(words))):
+                    if words[j] in _TECHNICAL_NOUNS:
+                        return True
+        return False
+
+    @staticmethod
+    async def _classify_with_llm(
+        raw_prompt: str,
+        db: AsyncSession,
+    ) -> tuple[str, str] | None:
+        """Fast LLM classification fallback using Haiku.
+
+        Returns (task_type, domain) or None on failure.
+        Only called when heuristic confidence is ambiguous (A4 gate).
+        Minimal prompt — ~500 input tokens, ~20 output tokens.
+        """
+        try:
+            from pydantic import BaseModel as _BaseModel
+
+            from app.config import settings
+            from app.providers.detector import detect_provider
+
+            provider = detect_provider()
+            if provider is None:
+                logger.debug("llm_classification_fallback: no provider available")
+                return None
+
+            # Build known domains list
+            known_domains = ["backend", "frontend", "database", "devops", "security", "general"]
+            try:
+                from app.services.domain_signal_loader import get_signal_loader
+                loader = get_signal_loader()
+                if loader and loader.signals:
+                    known_domains = list(loader.signals.keys()) + ["general"]
+            except Exception:
+                pass
+
+            prompt_text = (
+                "Classify this prompt into exactly one task type and one domain.\n\n"
+                "Task types: coding, writing, analysis, creative, data, system, general\n"
+                f"Domains: {', '.join(known_domains)}\n\n"
+                f"Prompt: {raw_prompt[:500]}\n\n"
+                "Return the classification."
+            )
+
+            class _ClassificationResult(_BaseModel):
+                task_type: str
+                domain: str
+
+            result = await provider.complete_parsed(
+                model=getattr(settings, "MODEL_HAIKU", "claude-haiku-4-5-20251001"),
+                system_prompt="You are a prompt classifier.",
+                user_message=prompt_text,
+                output_format=_ClassificationResult,
+                max_tokens=100,
+            )
+
+            task_type = result.task_type
+            domain = result.domain
+
+            # Validate task_type
+            valid_types = {"coding", "writing", "analysis", "creative", "data", "system", "general"}
+            if task_type not in valid_types:
+                task_type = "general"
+
+            logger.info(
+                "llm_classification_result: task_type=%s domain=%s",
+                task_type, domain,
+            )
+            return task_type, domain
+
+        except Exception:
+            logger.debug("llm_classification_fallback failed", exc_info=True)
+            return None
 
     def _classify(
         self, prompt_lower: str, first_sentence: str,
         signals: dict[str, list[tuple[str, float]]],
-    ) -> tuple[str, float]:
-        """Score all categories and return (best_category, confidence)."""
+    ) -> tuple[str, float, dict[str, float]]:
+        """Score all categories and return (best_category, confidence, all_scores)."""
         scores: dict[str, float] = {}
         for category, keywords in signals.items():
             scores[category] = self._score_category(
                 prompt_lower, first_sentence, keywords,
             )
         if not scores or max(scores.values()) == 0:
-            return "general", 0.0
+            return "general", 0.0, scores
         best = max(scores, key=scores.get)  # type: ignore[arg-type]
-        return best, min(1.0, scores[best])
+        return best, min(1.0, scores[best]), scores
 
     @staticmethod
     def _score_category(

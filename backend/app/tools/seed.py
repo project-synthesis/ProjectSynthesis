@@ -225,7 +225,6 @@ async def handle_seed(
             embedding_service=EmbeddingService(),
             max_parallel=max_parallel,
             codebase_context=codebase_context if not prompts else None,
-            workspace_guidance=workspace_profile if not prompts else None,
             batch_id=batch_id,
             session_factory=async_session_factory,
             taxonomy_engine=_taxonomy_engine,

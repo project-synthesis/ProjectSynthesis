@@ -117,10 +117,10 @@ async def refine(
 
     # --- Context enrichment for refinement ---
     # Use the same ContextEnrichmentService as the optimize endpoint so
-    # refinement gets workspace guidance + repo codebase context + adaptation.
-    _codebase_guidance: str | None = None
+    # refinement gets codebase context (incl. workspace fallback) + strategy intelligence.
     _codebase_context: str | None = None
     _adaptation_state: str | None = None
+    _divergence_alerts: str | None = None
 
     context_service = getattr(request.app.state, "context_service", None)
     if context_service:
@@ -149,30 +149,23 @@ async def refine(
                 repo_full_name=_repo,
                 preferences_snapshot=prefs_snapshot,
             )
-            _codebase_guidance = enrichment.workspace_guidance
             _codebase_context = enrichment.codebase_context
-            _adaptation_state = enrichment.adaptation_state
+            _adaptation_state = enrichment.strategy_intelligence
+            _divergence_alerts = enrichment.divergence_alerts
         except Exception:
             logger.debug("Context enrichment failed for refinement", exc_info=True)
     else:
-        # Fallback: workspace guidance only (no repo context)
-        try:
-            from pathlib import Path
-
-            from app.config import PROJECT_ROOT
-            from app.services.workspace_intelligence import WorkspaceIntelligence
-            wi = WorkspaceIntelligence()
-            _codebase_guidance = wi.analyze([Path(PROJECT_ROOT)])
-        except Exception:
-            pass
-
-        if prefs_snapshot.get("pipeline", {}).get("enable_adaptation", True):
+        # Fallback: strategy intelligence only (workspace guidance
+        # requires ContextEnrichmentService which owns WorkspaceIntelligence)
+        _enable_si = prefs_snapshot.get("pipeline", {}).get(
+            "enable_strategy_intelligence",
+            prefs_snapshot.get("pipeline", {}).get("enable_adaptation", True),
+        )
+        if _enable_si:
             try:
-                from app.services.adaptation_tracker import AdaptationTracker
-                from app.services.prompt_loader import PromptLoader
-                tracker = AdaptationTracker(db, PromptLoader(PROMPTS_DIR))
-                _adaptation_state = await tracker.render_adaptation_state(
-                    opt.task_type or "general",
+                from app.services.context_enrichment import resolve_strategy_intelligence
+                _adaptation_state, _ = await resolve_strategy_intelligence(
+                    db, opt.task_type or "general", opt.domain or "general",
                 )
             except Exception:
                 pass
@@ -185,9 +178,10 @@ async def refine(
         try:
             async for event in ref_svc.create_refinement_turn(
                 body.optimization_id, branch_id, body.refinement_request,
-                codebase_guidance=_codebase_guidance,
+                codebase_guidance=None,  # workspace guidance now folded into codebase_context
                 codebase_context=_codebase_context,
                 adaptation_state=_adaptation_state,
+                divergence_alerts=_divergence_alerts,
             ):
                 yield format_sse(event.event, event.data)
         except Exception as exc:

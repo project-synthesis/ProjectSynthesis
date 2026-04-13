@@ -27,9 +27,8 @@ def _mock_context_service(guidance="", **overrides):
     """Create a mock ContextEnrichmentService that returns an EnrichedContext."""
     enrichment = EnrichedContext(
         raw_prompt="mock",
-        workspace_guidance=overrides.get("workspace_guidance", guidance or None),
-        codebase_context=overrides.get("codebase_context"),
-        adaptation_state=overrides.get("adaptation_state"),
+        codebase_context=overrides.get("codebase_context", guidance or None),
+        strategy_intelligence=overrides.get("strategy_intelligence"),
         applied_patterns=overrides.get("applied_patterns"),
         analysis=overrides.get("analysis"),
         context_sources=overrides.get("context_sources", {}),

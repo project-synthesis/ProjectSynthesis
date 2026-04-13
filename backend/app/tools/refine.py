@@ -128,8 +128,6 @@ async def handle_refine(
             workspace_path=workspace_path,
             mcp_ctx=ctx,
         )
-        guidance = enrichment.workspace_guidance
-
         # Consume the refinement generator to completion
         logger.info(
             "synthesis_refine: starting turn on branch=%s from_version=%d",
@@ -141,7 +139,8 @@ async def handle_refine(
             optimization_id=optimization_id,
             branch_id=branch.id,
             refinement_request=refinement_request,
-            codebase_guidance=guidance,
+            codebase_guidance=None,  # workspace guidance folded into codebase_context
+            divergence_alerts=enrichment.divergence_alerts if enrichment else None,
         ):
             if event.event == "refinement_complete":
                 final_event_data = event.data

@@ -7,13 +7,14 @@
 </analysis>
 
 <codebase-context>
-{{codebase_guidance}}
 {{codebase_context}}
 </codebase-context>
 
-<adaptation>
-{{adaptation_state}}
-</adaptation>
+{{divergence_alerts}}
+
+<strategy-intelligence>
+{{strategy_intelligence}}
+</strategy-intelligence>
 
 <applied-meta-patterns>
 {{applied_patterns}}

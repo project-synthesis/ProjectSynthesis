@@ -72,7 +72,6 @@ async def run_single_prompt(
     embedding_service: EmbeddingService,
     *,
     codebase_context: str | None = None,
-    workspace_guidance: str | None = None,
     repo_full_name: str | None = None,
     batch_id: str = "",
     agent_name: str = "",
@@ -247,31 +246,32 @@ async def run_single_prompt(
             except Exception as _fs_exc:
                 logger.debug("Few-shot retrieval failed for prompt %d: %s", prompt_index, _fs_exc)
 
-        # Render adaptation state (strategy affinity from user feedback)
+        # Strategy intelligence (unified adaptation + performance signals)
         adaptation_text: str | None = None
         if session_factory is not None:
             try:
-                from app.services.adaptation_tracker import AdaptationTracker
-                async with session_factory() as _adapt_db:
-                    tracker = AdaptationTracker(_adapt_db, prompt_loader)
-                    adaptation_text = await tracker.render_adaptation_state(
+                from app.services.context_enrichment import resolve_strategy_intelligence
+                async with session_factory() as _si_db:
+                    adaptation_text, _ = await resolve_strategy_intelligence(
+                        _si_db,
                         analysis.task_type or "general",
+                        analysis.domain or "general",
                     )
                 if adaptation_text:
-                    context_flags["adaptation"] = True
-            except Exception as _at_exc:
-                logger.debug("Adaptation state failed for prompt %d: %s", prompt_index, _at_exc)
+                    context_flags["strategy_intelligence"] = True
+            except Exception as _si_exc:
+                logger.debug("Strategy intelligence failed for prompt %d: %s", prompt_index, _si_exc)
 
         # --- Phase 2: Optimize ---
         optimize_msg = prompt_loader.render("optimize.md", {
             "raw_prompt": raw_prompt,
             "analysis_summary": analysis_summary,
             "strategy_instructions": strategy_instructions,
-            "codebase_guidance": workspace_guidance,
             "codebase_context": codebase_context,
-            "adaptation_state": adaptation_text,
+            "strategy_intelligence": adaptation_text,
             "applied_patterns": applied_patterns_text,
             "few_shot_examples": few_shot_text,
+            "divergence_alerts": None,  # batch pipeline doesn't detect divergences
         })
         dynamic_max_tokens = compute_optimize_max_tokens(len(raw_prompt))
         optimization: OptimizationResult = await call_provider_with_retry(
@@ -483,7 +483,6 @@ async def run_batch(
     *,
     max_parallel: int = 10,
     codebase_context: str | None = None,
-    workspace_guidance: str | None = None,
     repo_full_name: str | None = None,
     batch_id: str | None = None,
     on_progress: Any | None = None,
@@ -522,7 +521,6 @@ async def run_batch(
                 prompt_loader=prompt_loader,
                 embedding_service=embedding_service,
                 codebase_context=codebase_context,
-                workspace_guidance=workspace_guidance,
                 repo_full_name=repo_full_name,
                 batch_id=batch_id,
                 prompt_index=index,
@@ -552,7 +550,6 @@ async def run_batch(
                         prompt_loader=prompt_loader,
                         embedding_service=embedding_service,
                         codebase_context=codebase_context,
-                        workspace_guidance=workspace_guidance,
                         repo_full_name=repo_full_name,
                         batch_id=batch_id,
                         prompt_index=index,

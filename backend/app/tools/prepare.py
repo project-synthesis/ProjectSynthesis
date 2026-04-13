@@ -83,11 +83,12 @@ async def handle_prepare(
         prompts_dir=PROMPTS_DIR,
         raw_prompt=prompt,
         strategy_name=effective_strategy,
-        codebase_guidance=enrichment.workspace_guidance,
-        adaptation_state=enrichment.adaptation_state,
+        codebase_guidance=None,
+        adaptation_state=enrichment.strategy_intelligence,
         analysis_summary=enrichment.analysis_summary,
         codebase_context=enrichment.codebase_context,
         applied_patterns=enrichment.applied_patterns,
+        divergence_alerts=enrichment.divergence_alerts,
     )
 
     # Enforce max_context_tokens budget

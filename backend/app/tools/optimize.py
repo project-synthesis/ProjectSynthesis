@@ -90,11 +90,12 @@ async def handle_optimize(
             prompts_dir=PROMPTS_DIR,
             raw_prompt=prompt,
             strategy_name=effective_strategy,
-            codebase_guidance=enrichment.workspace_guidance,
-            adaptation_state=enrichment.adaptation_state,
+            codebase_guidance=None,
+            adaptation_state=enrichment.strategy_intelligence,
             analysis_summary=enrichment.analysis_summary,
             codebase_context=enrichment.codebase_context,
             applied_patterns=enrichment.applied_patterns,
+            divergence_alerts=enrichment.divergence_alerts,
         )
         trace_id = str(uuid.uuid4())
         _, _pt_project_id = await resolve_repo_project(effective_repo)
@@ -141,10 +142,13 @@ async def handle_optimize(
             result = await run_sampling_pipeline(
                 ctx, prompt,
                 effective_strategy if effective_strategy != "auto" else None,
-                enrichment.workspace_guidance,
+                None,
                 repo_full_name=effective_repo,
                 applied_pattern_ids=applied_pattern_ids,
                 codebase_context=enrichment.codebase_context,
+                heuristic_task_type=enrichment.task_type,
+                heuristic_domain=enrichment.domain_value,
+                divergence_alerts=enrichment.divergence_alerts,
             )
             return _sampling_result_to_output(result)
         except Exception as exc:
@@ -192,14 +196,17 @@ async def handle_optimize(
             provider=decision.provider,
             db=db,
             strategy_override=effective_strategy if effective_strategy != "auto" else None,
-            codebase_guidance=enrichment.workspace_guidance,
+            codebase_guidance=None,
             codebase_context=enrichment.codebase_context,
-            adaptation_state=enrichment.adaptation_state,
+            adaptation_state=enrichment.strategy_intelligence,
             context_sources=enrichment.context_sources_dict,
             repo_full_name=effective_repo,
             applied_pattern_ids=applied_pattern_ids,
             taxonomy_engine=get_taxonomy_engine(),
             domain_resolver=_mcp_domain_resolver,
+            heuristic_task_type=enrichment.task_type,
+            heuristic_domain=enrichment.domain_value,
+            divergence_alerts=enrichment.divergence_alerts,
         ):
             if event.event in forward_events:
                 await notify_event_bus(f"optimization_{event.event}", event.data)

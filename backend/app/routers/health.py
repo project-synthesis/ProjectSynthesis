@@ -92,6 +92,9 @@ class HealthResponse(BaseModel):
         default=None, description="Score lift: injected vs non-injected optimizations.",
     )
     recovery: dict | None = Field(default=None, description="Orphan recovery metrics.")
+    classification_agreement: dict | None = Field(
+        default=None, description="Heuristic vs LLM classification agreement rates.",
+    )
     global_patterns: dict[str, int] = Field(default_factory=dict)
     # Cross-service probe results (only populated when probes=True)
     services: dict[str, ServiceStatus] | None = Field(
@@ -341,6 +344,16 @@ async def health_check(
         request.app.state, "injection_effectiveness", None
     )
 
+    # E1: Classification agreement rates
+    agreement_data: dict | None = None
+    try:
+        from app.services.classification_agreement import get_classification_agreement
+        _agr = get_classification_agreement()
+        if _agr.total > 0:
+            agreement_data = _agr.rates()
+    except Exception:
+        pass
+
     # Orphan recovery metrics
     recovery_metrics: dict | None = None
     try:
@@ -382,6 +395,7 @@ async def health_check(
         injection_stats=injection_stats,
         injection_effectiveness=injection_effectiveness,
         recovery=recovery_metrics,
+        classification_agreement=agreement_data,
         global_patterns={
             "active": gp_active,
             "demoted": gp_demoted,

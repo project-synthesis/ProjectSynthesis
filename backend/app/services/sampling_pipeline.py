@@ -461,6 +461,9 @@ async def run_sampling_pipeline(
     repo_full_name: str | None = None,
     applied_pattern_ids: list[str] | None = None,
     codebase_context: str | None = None,  # pre-computed by enrichment service
+    heuristic_task_type: str | None = None,
+    heuristic_domain: str | None = None,
+    divergence_alerts: str | None = None,
 ) -> dict:
     """Run the full pipeline via MCP sampling (IDE's LLM).
 
@@ -648,6 +651,20 @@ async def run_sampling_pipeline(
         )
         effective_domain = "general"
 
+    # E1: Heuristic vs LLM classification agreement tracking
+    if heuristic_task_type is not None:
+        try:
+            from app.services.classification_agreement import get_classification_agreement
+            get_classification_agreement().record(
+                heuristic_task_type=heuristic_task_type,
+                heuristic_domain=heuristic_domain or "general",
+                llm_task_type=effective_task_type,
+                llm_domain=effective_domain,
+                prompt_snippet=prompt[:80],
+            )
+        except Exception:
+            logger.debug("Classification agreement tracking failed", exc_info=True)
+
     # Domain mapping (Spec Section 4.2, 4.4)
     domain_raw = (getattr(analysis, "domain", None) or "general")[:MAX_DOMAIN_RAW_LENGTH]  # pre-gate, truncated
     cluster_id = None
@@ -776,29 +793,24 @@ async def run_sampling_pipeline(
     # Merge auto-injected cluster IDs for usage tracking
     applied_cluster_ids.update(auto_injected_cluster_ids)
 
-    # 4c: Adaptation state + performance signals
+    # 4c: Strategy intelligence (unified adaptation + performance signals)
     adaptation_state: str | None = None
-    adaptation_enabled = prefs.get("pipeline.enable_adaptation", prefs_snapshot)
-    if adaptation_enabled:
-        adaptation_state = await _resolve_adaptation_state(analysis.task_type)
-
-    # Performance signals: strategy perf by domain, anti-patterns, domain keywords
-    try:
-        from app.services.context_enrichment import resolve_performance_signals
-        async with async_session_factory() as _perf_db:
-            perf_signals = await resolve_performance_signals(
-                _perf_db, analysis.task_type, analysis.domain or "general",
-            )
-            if perf_signals:
-                adaptation_state = (
-                    f"{adaptation_state}\n\n{perf_signals}"
-                    if adaptation_state else perf_signals
+    enable_si = prefs.get(
+        "pipeline.enable_strategy_intelligence",
+        prefs.get("pipeline.enable_adaptation", prefs_snapshot),
+    )
+    if enable_si:
+        try:
+            from app.services.context_enrichment import resolve_strategy_intelligence
+            async with async_session_factory() as _si_db:
+                adaptation_state, _ = await resolve_strategy_intelligence(
+                    _si_db, analysis.task_type, analysis.domain or "general",
                 )
-    except Exception:
-        logger.debug("Performance signals resolution failed in sampling pipeline")
+        except Exception:
+            logger.debug("Strategy intelligence resolution failed in sampling pipeline")
 
     if adaptation_state is not None:
-        context_sources["adaptation"] = True
+        context_sources["strategy_intelligence"] = True
 
     # Few-shot example retrieval (show, don't tell)
     few_shot_text: str | None = None
@@ -828,6 +840,7 @@ async def run_sampling_pipeline(
         "adaptation_state": adaptation_state,
         "applied_patterns": applied_patterns_text,
         "few_shot_examples": few_shot_text,
+        "divergence_alerts": divergence_alerts,
     })
 
     logger.info(
@@ -1573,17 +1586,7 @@ async def _increment_pattern_usage(cluster_ids: set[str]) -> None:
         logger.warning("Sampling usage increment failed: %s", exc)
 
 
-async def _resolve_adaptation_state(task_type: str) -> str | None:
-    """Render adaptation state for the given task type."""
-    try:
-        from app.services.adaptation_tracker import AdaptationTracker
-
-        async with async_session_factory() as db:
-            tracker = AdaptationTracker(db)
-            return await tracker.render_adaptation_state(task_type)
-    except Exception as exc:
-        logger.warning("Failed to resolve adaptation state in sampling: %s", exc)
-        return None
+    # _resolve_adaptation_state() removed — replaced by resolve_strategy_intelligence()
 
 
 async def _check_intent_drift(

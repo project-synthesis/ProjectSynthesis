@@ -3277,6 +3277,36 @@ async def phase_refresh(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# A3 helper — shared by domain and sub-domain discovery
+# ---------------------------------------------------------------------------
+
+
+async def _auto_enrich_domain_signals(
+    db: AsyncSession,
+    domain_labels: list[str],
+) -> None:
+    """Extract and register keyword signals for newly discovered domains (A3).
+
+    Shared helper used by both ``_propose_domains()`` and
+    ``_propose_sub_domains()`` hooks in ``phase_discover()``.
+    Fails silently — signal enrichment is non-critical.
+    """
+    try:
+        from app.services.domain_signal_extractor import extract_domain_signals
+        from app.services.domain_signal_loader import get_signal_loader
+
+        loader = get_signal_loader()
+        if not loader:
+            return
+        for domain_label in domain_labels:
+            signals = await extract_domain_signals(db, domain_label)
+            if signals:
+                loader.register_signals(domain_label, signals)
+    except Exception as exc:
+        logger.debug("A3 domain signal auto-enrichment failed: %s", exc)
+
+
 # Phase 5 — Discover
 # ---------------------------------------------------------------------------
 
@@ -3311,6 +3341,9 @@ async def phase_discover(
         except RuntimeError:
             pass
 
+        # A3: Auto-enrich domain signals from newly discovered domains
+        await _auto_enrich_domain_signals(db, new_domains)
+
     # --- Sub-domain discovery (intra-domain HDBSCAN) ---
     try:
         new_sub_domains = await engine._propose_sub_domains(db)
@@ -3330,6 +3363,9 @@ async def phase_discover(
                 )
             except RuntimeError:
                 pass
+
+            # A3: Auto-enrich signals for sub-domains too
+            await _auto_enrich_domain_signals(db, new_sub_domains)
     except Exception as sub_exc:
         logger.warning(
             "Sub-domain discovery failed (non-fatal): %s", sub_exc

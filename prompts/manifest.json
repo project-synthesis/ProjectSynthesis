@@ -1,14 +1,14 @@
 {
   "agent-guidance.md": {"required": [], "optional": []},
   "analyze.md": {"required": ["raw_prompt", "available_strategies", "known_domains"], "optional": []},
-  "optimize.md": {"required": ["raw_prompt", "strategy_instructions", "analysis_summary"], "optional": ["codebase_guidance", "codebase_context", "adaptation_state", "applied_patterns", "few_shot_examples"]},
+  "optimize.md": {"required": ["raw_prompt", "strategy_instructions", "analysis_summary"], "optional": ["codebase_context", "strategy_intelligence", "applied_patterns", "few_shot_examples", "divergence_alerts"]},
   "scoring.md": {"required": [], "optional": []},
   "explore.md": {"required": ["raw_prompt", "file_contents", "file_paths"], "optional": []},
   "explore-guidance.md": {"required": [], "optional": []},
   "adaptation.md": {"required": ["task_type_affinities"], "optional": []},
-  "refine.md": {"required": ["current_prompt", "refinement_request", "original_prompt", "strategy_instructions"], "optional": ["codebase_guidance", "codebase_context", "adaptation_state", "current_scores", "strongest_dimensions"]},
+  "refine.md": {"required": ["current_prompt", "refinement_request", "original_prompt", "strategy_instructions"], "optional": ["codebase_context", "strategy_intelligence", "current_scores", "strongest_dimensions", "divergence_alerts"]},
   "suggest.md": {"required": ["optimized_prompt", "scores", "weaknesses", "strategy_used"], "optional": ["score_deltas", "score_trajectory"]},
-  "passthrough.md": {"required": ["raw_prompt", "scoring_rubric_excerpt"], "optional": ["strategy_instructions", "codebase_guidance", "codebase_context", "adaptation_state", "analysis_summary", "applied_patterns"]},
+  "passthrough.md": {"required": ["raw_prompt", "scoring_rubric_excerpt"], "optional": ["strategy_instructions", "codebase_context", "strategy_intelligence", "analysis_summary", "applied_patterns", "divergence_alerts"]},
   "extract_patterns.md": {"required": ["raw_prompt", "optimized_prompt", "intent_label", "domain_raw", "strategy_used"], "optional": ["taxonomy_context"]},
   "seed.md": {"required": ["project_description", "prompts_per_run", "task_types", "phase_context"]}
 }

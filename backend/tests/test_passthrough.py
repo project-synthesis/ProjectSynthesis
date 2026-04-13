@@ -1057,18 +1057,32 @@ class TestPassthroughService:
         )
         assert "<strategy>" in assembled
 
-    def test_assemble_with_codebase_guidance(self):
-        """Codebase guidance is injected when provided."""
+    def test_assemble_with_codebase_context(self):
+        """Codebase context (including workspace guidance fallback) is injected."""
         from app.config import PROMPTS_DIR
         from app.services.passthrough import assemble_passthrough_prompt
 
-        guidance = "# Project Structure\n- src/\n- tests/"
+        context = "# Project Structure\n- src/\n- tests/"
         assembled, _ = assemble_passthrough_prompt(
             prompts_dir=PROMPTS_DIR,
             raw_prompt=VALID_PROMPT,
-            codebase_guidance=guidance,
+            codebase_context=context,
         )
         assert "Project Structure" in assembled
+
+    def test_assemble_with_divergence_alerts(self):
+        """Divergence alerts are injected into assembled prompt when present."""
+        from app.config import PROMPTS_DIR
+        from app.services.passthrough import assemble_passthrough_prompt
+
+        alerts = "TECHNOLOGY DIVERGENCE DETECTED\npostgresql vs sqlite"
+        assembled, _ = assemble_passthrough_prompt(
+            prompts_dir=PROMPTS_DIR,
+            raw_prompt=VALID_PROMPT,
+            divergence_alerts=alerts,
+        )
+        assert "TECHNOLOGY DIVERGENCE DETECTED" in assembled
+        assert "postgresql vs sqlite" in assembled
 
 
 # ---------------------------------------------------------------------------

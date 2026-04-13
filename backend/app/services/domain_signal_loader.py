@@ -142,6 +142,45 @@ class DomainSignalLoader:
         self._patterns = patterns
 
     # ------------------------------------------------------------------
+    # Runtime signal registration (A3 auto-enrichment)
+    # ------------------------------------------------------------------
+
+    def register_signals(
+        self, domain: str, keywords: list[tuple[str, float]],
+    ) -> None:
+        """Register keyword signals for a domain at runtime.
+
+        Called by the domain signal extractor after the warm path discovers
+        new domains. Immediately available for subsequent heuristic calls.
+        Safe under asyncio cooperative scheduling (no await between read/write).
+        """
+        if not keywords:
+            return
+        self._signals[domain] = keywords
+        self._precompile_patterns()
+        logger.info(
+            "register_signals: domain=%s keywords=%d (e.g. %s)",
+            domain, len(keywords),
+            ", ".join(kw for kw, _ in keywords[:3]),
+        )
+        # Taxonomy observability — Activity Panel
+        try:
+            from app.services.taxonomy.event_logger import get_event_logger
+            get_event_logger().log_decision(
+                path="warm",
+                op="signal_enrichment",
+                decision="signals_registered",
+                context={
+                    "domain": domain,
+                    "keyword_count": len(keywords),
+                    "keywords": [kw for kw, _ in keywords[:5]],
+                    "total_domains_with_signals": len(self._signals),
+                },
+            )
+        except RuntimeError:
+            pass  # Event logger not initialized
+
+    # ------------------------------------------------------------------
     # Classification helpers
     # ------------------------------------------------------------------
 
@@ -170,6 +209,7 @@ class DomainSignalLoader:
 
         - Empty or no-signal signals dict → ``"general"``
         - No domain scores at all → ``"general"``
+        - Both ``backend`` and ``frontend`` ≥ 1.5 → ``"fullstack"``
         - Top domain score < 1.0 → ``"general"``
         - Secondary domain also ≥ 1.0 → ``"primary: secondary"``
         - Otherwise → primary domain label

@@ -195,7 +195,7 @@ async def test_refine_happy_path():
         mock_results.append(r)
 
     # Mock context enrichment service
-    mock_enrichment = EnrichedContext(raw_prompt="mock", workspace_guidance=None)
+    mock_enrichment = EnrichedContext(raw_prompt="mock")
     mock_ctx_svc = AsyncMock()
     mock_ctx_svc.enrich.return_value = mock_enrichment
 

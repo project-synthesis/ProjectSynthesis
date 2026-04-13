@@ -49,6 +49,7 @@ def assemble_passthrough_prompt(
     adaptation_state: str | None = None,
     analysis_summary: str | None = None,
     applied_patterns: str | None = None,
+    divergence_alerts: str | None = None,
 ) -> tuple[str, str]:
     """Assemble a full passthrough optimization prompt from templates.
 
@@ -61,6 +62,7 @@ def assemble_passthrough_prompt(
         adaptation_state: Optional adaptation state content.
         analysis_summary: Optional heuristic analysis results.
         applied_patterns: Optional proven patterns from taxonomy engine.
+        divergence_alerts: Optional tech stack divergence alert text.
 
     Returns:
         (assembled_prompt, resolved_strategy_name) tuple.
@@ -86,6 +88,7 @@ def assemble_passthrough_prompt(
         "adaptation_state": adaptation_state,
         "analysis_summary": analysis_summary,
         "applied_patterns": applied_patterns,
+        "divergence_alerts": divergence_alerts,
     })
 
     return assembled, resolved_name
