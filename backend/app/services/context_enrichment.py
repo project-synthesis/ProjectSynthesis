@@ -648,6 +648,10 @@ class ContextEnrichmentService:
             enrichment_meta_dict["domain_signals"] = analysis.domain_scores
         if _llm_fallback:
             enrichment_meta_dict["llm_classification_fallback"] = True
+        if analysis:
+            enrichment_meta_dict["task_type_signal_source"] = analysis.task_type_signal_source
+            if analysis.task_type_scores:
+                enrichment_meta_dict["task_type_scores"] = analysis.task_type_scores
         skipped_layers: list[str] = []
 
         # 2. Codebase context — unified layer combining three sources:

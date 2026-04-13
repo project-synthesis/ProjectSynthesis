@@ -79,6 +79,9 @@ class HeuristicAnalysis:
     domain_scores: dict[str, float] | None = None
     # LLM fallback tracking (set when A4 confidence-gated LLM classification fires)
     llm_fallback_applied: bool = False
+    # Task-type signal source tracking
+    task_type_signal_source: str = "static"  # "dynamic" | "static"
+    task_type_scores: dict[str, float] | None = None  # raw scores per task type
 
     def format_summary(self) -> str:
         """Format analysis as a human-readable string for template injection."""
@@ -350,6 +353,13 @@ class HeuristicAnalyzer:
             prompt_lower, first_sentence, _TASK_TYPE_SIGNALS,
         )
 
+        # Track whether dynamic or static signals were used for classification
+        _has_dynamic_singles = bool(_TASK_TYPE_SIGNALS.get(task_type)) and any(
+            " " not in kw for kw, _ in _TASK_TYPE_SIGNALS.get(task_type, [])
+            if (kw, _) not in _STATIC_COMPOUND_SIGNALS.get(task_type, [])
+        )
+        _signal_source = "dynamic" if _has_dynamic_singles else "static"
+
         # Layer 1b: Technical verb disambiguation (A2)
         disambiguation_applied = False
         disambiguation_from: str | None = None
@@ -457,6 +467,8 @@ class HeuristicAnalyzer:
             disambiguation_from=disambiguation_from,
             domain_scores={k: round(v, 2) for k, v in domain_scores.items()} if domain_scores else None,
             llm_fallback_applied=llm_fallback_applied,
+            task_type_signal_source=_signal_source,
+            task_type_scores={k: round(v, 2) for k, v in all_scores.items()} if all_scores else None,
         )
 
     @staticmethod
