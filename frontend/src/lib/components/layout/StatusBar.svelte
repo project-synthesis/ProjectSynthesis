@@ -9,7 +9,7 @@
   import { githubStore } from '$lib/stores/github.svelte';
   import { taxonomyColor, qHealthColor } from '$lib/utils/colors';
   import { getPhaseLabel } from '$lib/utils/dimensions';
-  import { formatScore, trendInfo } from '$lib/utils/formatting';
+  import { formatScore, trendInfo, parseSubDomainLabel } from '$lib/utils/formatting';
   import { assessTaxonomyHealth } from '$lib/utils/taxonomy-health';
   import { tooltip } from '$lib/actions/tooltip';
   import { STATUS_TOOLTIPS } from '$lib/utils/ui-tooltips';
@@ -94,6 +94,21 @@
   const breadcrumbDomain = $derived(activeResult?.domain ?? null);
   const breadcrumbLabel = $derived(activeResult?.intent_label ?? null);
 
+  // Resolve sub-domain display label via tree hierarchy (parent_id, not string matching).
+  const breadcrumbDisplayDomain = $derived.by(() => {
+    const raw = breadcrumbDomain;
+    if (!raw) return null;
+    const tree = clustersStore.taxonomyTree;
+    if (!tree.length) return raw;
+    const domainNode = tree.find(
+      n => n.state === 'domain' && n.label?.toLowerCase() === raw.toLowerCase()
+    );
+    if (!domainNode?.parent_id) return raw;
+    const parentNode = tree.find(n => n.id === domainNode.parent_id && n.state === 'domain');
+    if (!parentNode) return raw;
+    return parseSubDomainLabel(raw, parentNode.label);
+  });
+
   // SSE connection health indicator
   const sseColor = $derived(
     sseHealthStore.connectionState === 'healthy'
@@ -150,7 +165,7 @@
       {#if breadcrumbLabel}
         <span class="status-breadcrumb">
           {#if breadcrumbDomain}
-            <span class="status-breadcrumb-domain" style="color: {taxonomyColor(breadcrumbDomain)};">{breadcrumbDomain}</span>
+            <span class="status-breadcrumb-domain" style="color: {taxonomyColor(breadcrumbDomain)};">{breadcrumbDisplayDomain}</span>
             <span class="status-breadcrumb-sep">&rsaquo;</span>
           {/if}
           <span class="status-breadcrumb-label">{breadcrumbLabel}</span>
