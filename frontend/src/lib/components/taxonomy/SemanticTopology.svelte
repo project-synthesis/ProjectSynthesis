@@ -15,7 +15,7 @@
   import { triggerRecluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
   import { stateColor } from '$lib/utils/colors';
-  import { parsePrimaryDomain } from '$lib/utils/formatting';
+  import { parsePrimaryDomain, parseSubDomainLabel } from '$lib/utils/formatting';
   import type { ClusterNode } from '$lib/api/clusters';
   import { BeamPool } from './BeamPool';
   import { ClusterPhysics } from './ClusterPhysics';
@@ -313,24 +313,6 @@
     const domainPointsGeo = new THREE.BufferGeometry();
     domainPointsGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertArray, 3));
 
-    // SUB-DOMAIN NODES: Octahedron — intermediate structural nodes between
-    // domains (dodecahedron) and clusters (icosahedron).
-    const subDomainFillGeo = new THREE.OctahedronGeometry(1, 2);
-    const subDomainEdgesBase = new THREE.OctahedronGeometry(1, 0);
-    const subDomainEdgesGeo = new THREE.EdgesGeometry(subDomainEdgesBase, 1);
-    const subDomainVertPositions = subDomainEdgesBase.getAttribute('position');
-    const subDomainUniqueVerts = new Map<string, [number, number, number]>();
-    for (let i = 0; i < subDomainVertPositions.count; i++) {
-      const x = subDomainVertPositions.getX(i);
-      const y = subDomainVertPositions.getY(i);
-      const z = subDomainVertPositions.getZ(i);
-      const key = `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`;
-      if (!subDomainUniqueVerts.has(key)) subDomainUniqueVerts.set(key, [x, y, z]);
-    }
-    const subDomainVertArray = new Float32Array([...subDomainUniqueVerts.values()].flat());
-    const subDomainPointsGeo = new THREE.BufferGeometry();
-    subDomainPointsGeo.setAttribute('position', new THREE.Float32BufferAttribute(subDomainVertArray, 3));
-
     const domainGroups: THREE.Group[] = [];
     for (const node of data.nodes) {
       if (!node.visible) continue;
@@ -352,7 +334,7 @@
         transparent: true,
         opacity: node.opacity * 0.9,
       });
-      const fillGeo = isSubDomain ? subDomainFillGeo : isStructural ? domainFillGeo : clusterFillGeo;
+      const fillGeo = isStructural ? domainFillGeo : clusterFillGeo;
       const fill = new THREE.Mesh(fillGeo, fillMat);
       fill.scale.setScalar(node.size);
       group.add(fill); // child 0: fill
@@ -364,7 +346,7 @@
           transparent: true,
           opacity: node.opacity * 0.9,
         });
-        const edges = new THREE.LineSegments(isSubDomain ? subDomainEdgesGeo : domainEdgesGeo, edgeMat);
+        const edges = new THREE.LineSegments(domainEdgesGeo, edgeMat);
         edges.scale.setScalar(node.size);
         group.add(edges); // child 1: edges
 
@@ -376,7 +358,7 @@
           opacity: node.opacity * 0.95,
           sizeAttenuation: true,
         });
-        const points = new THREE.Points(isSubDomain ? subDomainPointsGeo : domainPointsGeo, pointsMat);
+        const points = new THREE.Points(domainPointsGeo, pointsMat);
         points.scale.setScalar(node.size);
         group.add(points); // child 2: vertex points
 
@@ -525,7 +507,10 @@
         isMid && text.length > 14 ? text.slice(0, 14).trimEnd() + '\u2026' : text;
       for (const node of data.nodes) {
         if (!node.visible) continue;
-        const sprite = labels.getOrCreate(node.id, truncLabel(node.label), node.color);
+        const displayLabel = node.isSubDomain
+          ? parseSubDomainLabel(node.label, node.domain)
+          : node.label;
+        const sprite = labels.getOrCreate(node.id, truncLabel(displayLabel), node.color);
         sprite.position.set(node.position[0], node.position[1] + node.size + 0.5, node.position[2]);
         if (node.state === 'template') {
           templateSprites.push(sprite);
