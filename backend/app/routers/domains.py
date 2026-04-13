@@ -47,6 +47,7 @@ async def list_domains(db: AsyncSession = Depends(get_db)) -> list[DomainInfo]:
                 member_count=d.member_count,
                 avg_score=d.avg_score,
                 source=source,
+                parent_id=d.parent_id,
             ))
         return domains
     except OperationalError as exc:

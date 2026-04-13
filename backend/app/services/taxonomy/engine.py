@@ -1882,6 +1882,11 @@ class TaxonomyEngine:
 
             # Run HDBSCAN
             cluster_result = batch_cluster(embs_blended, min_cluster_size=SUB_DOMAIN_HDBSCAN_MIN_CLUSTER)
+            coherence_floor = min(mean_coh, SUB_DOMAIN_COHERENCE_CEILING)
+            logger.info(
+                "Sub-domain HDBSCAN for '%s': %d groups found, floor=%.2f",
+                domain_node.label, cluster_result.n_clusters, coherence_floor,
+            )
             if cluster_result.n_clusters < 2:
                 logger.info(
                     "Sub-domain HDBSCAN found no sub-structure in '%s'",
@@ -1906,6 +1911,19 @@ class TaxonomyEngine:
                 mask = cluster_result.labels == gid
                 group_indices = [i for i in range(len(opt_data)) if mask[i]]
                 if len(group_indices) < SUB_DOMAIN_MIN_GROUP_MEMBERS:
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover", decision="sub_domain_group_filtered",
+                            context={
+                                "parent_domain": domain_node.label,
+                                "group_id": gid,
+                                "group_members": len(group_indices),
+                                "reason": "too_small",
+                                "threshold": SUB_DOMAIN_MIN_GROUP_MEMBERS,
+                            },
+                        )
+                    except RuntimeError:
+                        pass
                     continue
 
                 group_embs = [embs_raw[i] for i in group_indices]
@@ -1917,6 +1935,20 @@ class TaxonomyEngine:
                 #   since sub-groups can't exceed an already-coherent parent
                 coherence_floor = min(mean_coh, SUB_DOMAIN_COHERENCE_CEILING)
                 if group_coherence <= coherence_floor:
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover", decision="sub_domain_group_filtered",
+                            context={
+                                "parent_domain": domain_node.label,
+                                "group_id": gid,
+                                "group_members": len(group_indices),
+                                "group_coherence": round(group_coherence, 4),
+                                "coherence_floor": round(coherence_floor, 4),
+                                "reason": "below_floor",
+                            },
+                        )
+                    except RuntimeError:
+                        pass
                     continue
 
                 # Compute centroid

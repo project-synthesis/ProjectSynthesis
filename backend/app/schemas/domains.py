@@ -12,3 +12,4 @@ class DomainInfo(BaseModel):
     member_count: int = 0
     avg_score: float | None = None
     source: str = "seed"  # seed | discovered | manual
+    parent_id: str | None = None
