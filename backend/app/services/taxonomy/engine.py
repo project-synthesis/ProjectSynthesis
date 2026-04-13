@@ -2018,8 +2018,9 @@ class TaxonomyEngine:
                         seed_cluster=seed,
                         parent_domain_id=domain_node.id,
                     )
-                    # Override centroid from seed (flush may have cleared it)
+                    # Override centroid and coherence from seed (flush may have cleared them)
                     sub_node.centroid_embedding = group["centroid"].astype(np.float32).tobytes()
+                    sub_node.coherence = group["coherence"]
 
                     # Re-parent clusters: set domain to PARENT domain label
                     # so strategy intelligence queries find them under "backend"
