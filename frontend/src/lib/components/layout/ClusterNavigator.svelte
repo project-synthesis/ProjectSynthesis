@@ -494,6 +494,7 @@
               onclick={() => toggleSubDomain(sub.id)}
             >
               <span class="subdomain-chevron">{collapsedSubDomains.has(sub.id) ? '\u25B8' : '\u25BE'}</span>
+              <span class="domain-dot" style="background: {taxonomyColor(sub.label)};"></span>
               <span class="subdomain-label">{sub.displayLabel}</span>
               <span class="subdomain-count">{sub.clusters.length}</span>
             </button>
@@ -979,7 +980,7 @@
     align-items: center;
     gap: 4px;
     width: 100%;
-    height: 18px;
+    height: 20px;
     padding: 0 6px 0 12px;
     background: transparent;
     border: none;
@@ -1001,13 +1002,15 @@
   .subdomain-label {
     flex: 1;
     min-width: 0;
-    font-size: 9px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: 700;
     color: var(--color-text-dim);
     text-overflow: ellipsis;
     overflow: hidden;
     white-space: nowrap;
     text-align: left;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
   }
 
   .subdomain-count {
