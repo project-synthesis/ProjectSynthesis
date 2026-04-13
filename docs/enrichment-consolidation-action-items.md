@@ -14,7 +14,7 @@
 | Sprint 1 | A1 compound keywords + A2 verb disambiguation | **Shipped** |
 | Sprint 2 | C1+E1+B1+B2+A3+A4 (6 items) | **Shipped** |
 
-**Test coverage**: 2102 backend tests, 1038 frontend tests, 0 errors, 0 warnings.
+**Test coverage** (v0.3.30, 2026-04-13): 2107 backend tests, 1038 frontend tests, 0 errors, 0 warnings.
 
 ---
 

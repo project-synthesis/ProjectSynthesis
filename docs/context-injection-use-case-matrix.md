@@ -1,21 +1,36 @@
 # Context Injection Use-Case Matrix
 
-> Decision document for optimizing the enrichment engine across user personas, entry points, and execution tiers. Produced 2026-04-12.
+> Decision document for optimizing the enrichment engine across user personas, entry points, and execution tiers. Produced 2026-04-12. **Consolidation shipped in v0.3.30** — see Appendix C for decision log.
 
-## 1. System Inventory
+## Post-Consolidation Architecture (v0.3.30)
 
-### 1.1 Context Injection Layers (Current: 7)
+The enrichment engine consolidated 7 layers into 4 active context sources, gated by auto-selected profiles:
 
-| # | Layer | Cost | Always-On | Precondition |
-|---|-------|------|-----------|--------------|
-| L1 | Workspace Guidance | Low (filesystem scan) | Yes | MCP roots or filesystem path |
-| L2 | Heuristic Analysis | Negligible (regex + keyword) | Yes | None |
-| L3a | Codebase Synthesis | Medium (Haiku LLM, cached) | No | Linked repo with completed index |
-| L3b | Curated Retrieval | High (embedding search + 80K chars) | No | Linked repo with completed index |
-| L4 | Adaptation State | Low (DB query) | No | `enable_adaptation` pref + feedback history |
-| L5 | Applied Patterns | Medium (composite fusion + DB) | No | Taxonomy clusters with meta-patterns |
-| L6 | Performance Signals | Low (DB aggregate) | No | Optimization history (3+ per strategy) |
-| L7 | Few-shot Examples | Medium (dual embedding search) | No | Optimization history (score >= 7.5) |
+| Source | Contents | Profile Gate |
+|--------|----------|--------------|
+| `heuristic_analysis` | 6-layer classifier (A1-A4), domain signals, divergence detection | All profiles |
+| `codebase_context` | Explore synthesis + curated retrieval + workspace fallback | `code_aware` only |
+| `strategy_intelligence` | Strategy rankings + adaptation feedback + anti-patterns + domain keywords | Skip `cold_start` |
+| `applied_patterns` | Meta-pattern injection via composite fusion | Skip `cold_start` |
+
+**Profiles**: `code_aware` (coding + repo), `knowledge_work` (non-coding tasks), `cold_start` (< 10 optimizations).
+
+## 1. Pre-Consolidation System Inventory (Historical)
+
+> The layer numbering below reflects the pre-consolidation architecture. L1 was collapsed into L3 fallback, L4+L6 merged into `strategy_intelligence`, L7 merged into L5 pipeline. See Appendix C.
+
+### 1.1 Context Injection Layers (Pre-consolidation: 7)
+
+| # | Layer | Cost | Always-On | Precondition | v0.3.30 Status |
+|---|-------|------|-----------|--------------|----------------|
+| L1 | Workspace Guidance | Low (filesystem scan) | Yes | MCP roots or filesystem path | **Collapsed into L3 fallback** |
+| L2 | Heuristic Analysis | Negligible (regex + keyword) | Yes | None | Active (+ A1-A4 accuracy pipeline) |
+| L3a | Codebase Synthesis | Medium (Haiku LLM, cached) | No | Linked repo with completed index | Active |
+| L3b | Curated Retrieval | High (embedding search + 80K chars) | No | Linked repo with completed index | Active (task-gated) |
+| L4 | Adaptation State | Low (DB query) | No | `enable_adaptation` pref + feedback history | **Merged into strategy_intelligence** |
+| L5 | Applied Patterns | Medium (composite fusion + DB) | No | Taxonomy clusters with meta-patterns | Active |
+| L6 | Performance Signals | Low (DB aggregate) | No | Optimization history (3+ per strategy) | **Merged into strategy_intelligence** |
+| L7 | Few-shot Examples | Medium (dual embedding search) | No | Optimization history (score >= 7.5) | Active (within L5 pipeline) |
 
 ### 1.2 Embedding Dimensions (Current: 4 fusion signals)
 

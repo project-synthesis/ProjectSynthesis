@@ -252,21 +252,37 @@ To track improvement, measure:
 | Strategy intelligence hit rate | `strategy_intel=yes` / total enrichments | Currently ~50% (rough estimate from E2E testing) |
 | Misclassification-induced empty enrichment | Prompts where heuristic says non-coding but LLM says coding | Unknown |
 
+## Implementation Status (v0.3.30)
+
+All Tier 1 and most Tier 2 items shipped in v0.3.30:
+
+| Item | Spec ID | Status | Implementation |
+|------|---------|--------|----------------|
+| Compound keyword signals | A1 / Tier 1a | **Shipped** | `_TASK_TYPE_SIGNALS` with multi-word entries |
+| Technical verb disambiguation | A2 / Tier 1c | **Shipped** | `_check_technical_disambiguation()` in `heuristic_analyzer.py` |
+| Domain signal auto-enrichment | A3 / Tier 1b | **Shipped** | `domain_signal_extractor.py` + warm-path hooks |
+| Confidence-gated LLM fallback | A4 / Tier 2a | **Shipped** | `_classify_with_llm()` with `enable_llm_classification_fallback` preference |
+| Classification agreement tracking | E1 | **Shipped** | `classification_agreement.py` singleton |
+| Semantic embedding nearest-neighbor | Tier 3a | Deferred | Requires architecture evaluation |
+
+Full tracking: [`docs/enrichment-consolidation-action-items.md`](enrichment-consolidation-action-items.md)
+
 ## Relationship to Context Injection Matrix
 
 This document is a dependency of the [Context Injection Use-Case Matrix](context-injection-use-case-matrix.md):
 
-- **Phase 1** (Task-Gated Curated Retrieval) gates on `task_type` — misclassification skips curated context for coding prompts classified as creative
-- **Phase 2** (Strategy Intelligence) queries by `task_type + domain` — misclassification returns no data
-- **Phase 4** (Enrichment Profiles) selects profile based on `task_type` — misclassification selects the wrong profile
-- **Tier 1 fixes (P0)** should ship before Phase 4 to ensure enrichment profiles are selected correctly
+- **Phase 1** (Task-Gated Curated Retrieval) gates on `task_type` — shipped
+- **Phase 2** (Strategy Intelligence) queries by `task_type + domain` — shipped with C1 domain-relaxed fallback
+- **Phase 4** (Enrichment Profiles) selects profile based on `task_type` — shipped
 
 ## Files Reference
 
-| File | Role | Changes Needed |
-|------|------|----------------|
-| `backend/app/services/heuristic_analyzer.py` | Core classifier — keyword scoring, task type, domain, intent | Compound signals, technical verb disambiguation |
-| `backend/app/services/domain_signal_loader.py` | Domain keyword signal registry | Auto-enrichment from taxonomy |
-| `backend/app/services/context_enrichment.py` | Enrichment orchestrator — consumes heuristic output | Confidence-gated fallback (Tier 2) |
-| `backend/app/services/taxonomy/warm_phases.py` | Warm-path lifecycle — domain discovery | Domain signal extraction hook (Tier 1b) |
-| `backend/tests/test_heuristic_analyzer.py` | 35+ tests for classifier | Add compound signal + disambiguation tests |
+| File | Role | Status |
+|------|------|--------|
+| `backend/app/services/heuristic_analyzer.py` | 6-layer classifier with A1-A4 | Shipped |
+| `backend/app/services/domain_signal_loader.py` | Domain keyword signal registry | Shipped (+ `register_signals()`) |
+| `backend/app/services/domain_signal_extractor.py` | TF-IDF keyword extraction (A3) | Shipped |
+| `backend/app/services/context_enrichment.py` | Enrichment orchestrator | Shipped (profiles + divergence + strategy intel) |
+| `backend/app/services/classification_agreement.py` | E1 agreement tracking | Shipped |
+| `backend/app/services/taxonomy/warm_phases.py` | A3 domain signal hooks | Shipped |
+| `backend/tests/test_heuristic_analyzer.py` | 62 tests for classifier | Shipped |

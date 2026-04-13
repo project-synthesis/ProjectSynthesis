@@ -74,7 +74,7 @@ Living document tracking planned improvements. Items are prioritized but not sch
 **Spec:** [ADR-006](../adr/ADR-006-universal-prompt-engine.md) (Universal Prompt Engine — vertical rollout playbook)
 
 ### Hierarchical topology navigation — project → domain → cluster → prompt
-**Status:** Planned
+**Status:** Planned (edge system shipped in v0.3.30 — curved bundling, depth attenuation, domain coloring, focus-reveal)
 **Context:** The current 3D topology view (`SemanticTopology`) renders ALL nodes in a single scene: project nodes, domain nodes, active clusters, candidates, mature clusters, templates — 76+ nodes at current scale. At 200+ clusters across 3 projects, this becomes visually overwhelming. Domain nodes (structural grouping) and active clusters (semantic content) serve different purposes but are rendered identically in the same space. The user has no way to "zoom into" a project or domain to see only its contents.
 
 **Vision:** A hierarchical drill-down topology inspired by filesystem navigation. Each level of the taxonomy hierarchy gets its own view with appropriate aesthetics and interaction patterns:
@@ -214,34 +214,21 @@ Living document tracking planned improvements. Items are prioritized but not sch
 **Spec:** `docs/adr/ADR-005-taxonomy-scaling-architecture.md` (Section 1: Data Model)
 
 ### LLM domain classification accuracy
-**Status:** Exploring
-**Context:** E2E testing revealed three systemic domain classification failures — all traced to infrastructure bugs, not LLM limitations:
-
-1. **Schema vs template contradiction** (v0.3.8-dev fix) — `AnalysisResult.domain` Pydantic field description said "Be specific — 'REST API design' is better than 'backend'", steering the LLM to write free-form strings that didn't match any domain node. Fixed: description now says "Primary domain from the known domains list."
-
-2. **Confidence gate rejecting known domains** (v0.3.8-dev fix) — `DomainResolver.resolve()` applied the confidence gate (0.6) BEFORE checking domain node membership. Known labels like "backend" were rejected when the analyzer's overall confidence was low. Fixed: known domains bypass the gate; gate only applies to unknown domains.
-
-3. **Manual gate in sampling_analyze** (v0.3.8-dev fix) — `run_sampling_analyze()` had a hardcoded `if confidence < 0.6: domain = "general"` that bypassed the resolver entirely. Fixed: all three pipeline paths now use `DomainResolver.resolve()`.
-
-**Key insight:** The LLM was outputting correct domain labels all along (`domain_raw=backend`, `domain_raw=security`, `domain_raw=devops`). The infrastructure was silently overriding them to "general."
+**Status:** Partially shipped (v0.3.30), remaining items exploring
+**Context:** Three systemic domain classification failures fixed in v0.3.8-dev (schema contradiction, confidence gate, manual gate). v0.3.30 shipped the heuristic accuracy pipeline: compound keywords (A1), technical verb disambiguation (A2), TF-IDF domain signal auto-enrichment (A3), and confidence-gated Haiku LLM fallback (A4). Classification agreement tracking (E1) provides ongoing measurement. Prompt-context divergence detection (B1+B2) ships tech stack conflict alerts.
 
 **Remaining future optimizations:**
-- **Constrained decoding** — `Literal` enum on `AnalysisResult.domain` field to restrict LLM output to known domain labels at the schema level
-- **Dynamic text fallback keywords** — `_build_analysis_from_text()` uses hardcoded keywords instead of loading from domain node metadata via `DomainSignalLoader`
-- **DomainResolver cache key** — cache currently stores `primary → resolved` without confidence context. An unknown domain cached as "general" at low confidence persists even if a later request has high confidence. Self-corrects on `load()` calls but could be improved with confidence-aware caching
-- **Hybrid override** — run heuristic classifier in parallel with LLM, prefer heuristic when confidence is high and LLM disagrees
-- **Agentic verification** — post-classification agent reviews the domain assignment against the prompt content and corrects mismatches
+- **Constrained decoding** — `Literal` enum on `AnalysisResult.domain` to restrict LLM output at schema level
+- **Dynamic text fallback keywords** — `_build_analysis_from_text()` uses hardcoded keywords instead of `DomainSignalLoader`
+- **DomainResolver confidence-aware caching** — unknown domain cached as "general" at low confidence persists. Self-corrects on `load()` but could improve
+- **C2: Heuristic-to-LLM reconciliation** — use accumulated E1 disagreement data to adjust keyword weights over time. Requires signal_adjuster.py (Sprint 3)
+- **E1b: Cross-process agreement bridge** — MCP process agreement data invisible to health endpoint. Needs HTTP POST forwarding (Sprint 3)
 
-**Heuristic classifier refresh (2026-04-12):** Enrichment consolidation work revealed keyword collision failures in the zero-LLM heuristic analyzer — "Design a webhook system" classified as `creative` instead of `coding` because "Design" triggers the creative keyword (weight 0.7). Cascading impact: strategy intelligence, curated retrieval gating, and enrichment profile selection all depend on accurate heuristic `task_type`. P0 fixes: compound keyword signals + technical verb disambiguation. Full analysis: [`docs/heuristic-analyzer-refresh.md`](heuristic-analyzer-refresh.md). Related: [Context Injection Use-Case Matrix](context-injection-use-case-matrix.md) Appendix C decision log.
-
-**Prompt–context divergence detection (2026-04-12):** E2E testing revealed that when a prompt explicitly names a technology (e.g., "PostgreSQL") that conflicts with the linked codebase's actual stack (SQLite/aiosqlite), the optimizer silently adopts the prompt's technology with no conflict flag. The 86K chars of codebase context become dead weight. Requires a reconciliation layer in the enrichment pipeline that detects tech stack mismatches (database engine, framework, language) and injects a `<divergence-alert>` for the optimizer to acknowledge. Must distinguish genuine conflicts from legitimate additions ("add Redis") and planned migrations ("migrate to PostgreSQL"). P1 priority. Spec: [`docs/heuristic-analyzer-refresh.md`](heuristic-analyzer-refresh.md) section 5 + improvement 1d.
-
-**Removed (v0.3.8-dev):** "fullstack" seed domain — was causing LLM misclassification. Will be discovered organically when users optimize prompts that genuinely span both frontend and backend equally.
+**Specs:** [`docs/heuristic-analyzer-refresh.md`](heuristic-analyzer-refresh.md), [`docs/enrichment-consolidation-action-items.md`](enrichment-consolidation-action-items.md), [`docs/specs/phase-a-heuristic-accuracy-a3-a4.md`](specs/phase-a-heuristic-accuracy-a3-a4.md)
 
 ### Pipeline progress visualization
-**Status:** Planned
-**Context:** During optimization (2+ minutes for Opus), the web UI shows only a 3-step phase indicator (Analyzing → Optimizing → Scoring) with step counters. The internal tier streams SSE phase events correctly, but there's no rich progress experience — no estimated time remaining, no streaming preview, no per-phase timing. The sampling and passthrough tiers have different progress patterns that should also be visualized distinctly. A unified pipeline progress component would adapt to the active tier and show meaningful real-time feedback.
-**Quick fixes shipped (v0.3.8-dev):** Replaced spinning cube with 3-step phase indicator in Inspector, added step counter `[1/3]` in StatusBar, tier-aware accent colors, model ID display during processing.
+**Status:** Partially shipped
+**Context:** v0.3.8-dev shipped phase indicator + step counter in Inspector/StatusBar. Rich progress (estimated time, streaming preview, per-phase timing, tier-adaptive visualization) remains planned.
 
 ### Passthrough refinement UX
 **Status:** Deferred
@@ -251,6 +238,21 @@ Living document tracking planned improvements. Items are prioritized but not sch
 ---
 
 ## Completed (recent)
+
+### Enrichment engine consolidation (v0.3.30)
+Unified context enrichment with auto-selected profiles (code_aware/knowledge_work/cold_start), task-gated curated retrieval, strategy intelligence merge, workspace guidance collapse. Heuristic accuracy pipeline: compound keywords (A1), verb disambiguation (A2), TF-IDF domain signal auto-enrichment (A3), confidence-gated Haiku fallback (A4). Prompt-context divergence detection (B1+B2), domain-relaxed fallback queries (C1), classification agreement tracking (E1). 2107 backend tests. Full spec: [`docs/enrichment-consolidation-action-items.md`](enrichment-consolidation-action-items.md).
+
+### Hierarchical edge system (v0.3.30)
+Curved edge bundling in 3D topology with depth-based attenuation shader, density-adaptive opacity, proximity suppression, focus-reveal on hover, domain-colored edges. 5-phase hierarchical edge declutter.
+
+### Injection effectiveness + orphan recovery (v0.3.29)
+Warm-path Phase 4 measures mean score lift for pattern-injected vs non-injected optimizations. Orphan recovery detects failed hot-path extractions and retries with exponential backoff. Project node UX with dodecahedron geometry and rich inspector mode.
+
+### SSE health + incremental refresh + per-project scheduling (v0.3.28)
+Real-time SSE latency tracking (p50/p95/p99), degradation detection, exponential backoff reconnection. Repo index incremental refresh via SHA comparison. Per-project scheduler budgets with proportional quotas.
+
+### Full source context + import graph + curated retrieval (v0.3.27)
+Curated retrieval delivers actual file source code (not outlines). Import-graph expansion, test file exclusion, cross-domain noise filter, performance signals, context diagnostic panel. Skip-and-continue budget packing, source-type soft caps.
 
 ### Alembic migration for domain nodes (v0.3.8-dev)
 Idempotent migration `a1b2c3d4e5f6`: adds `cluster_metadata` column, `ix_prompt_cluster_state_label` index, `uq_prompt_cluster_domain_label` partial unique index, seeds 7 domain nodes with keyword metadata, re-parents existing clusters, backfills `Optimization.domain`. Also fixed async env.py commit for DML persistence.
