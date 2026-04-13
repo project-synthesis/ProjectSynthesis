@@ -230,7 +230,7 @@
                 onclick={startRename}
                 use:tooltip={family.label}
                 aria-label="Click to rename: {family.label}"
-              >{selectedIsSubDomain ? parseSubDomainLabel(family.label) : family.label}</button>
+              >{selectedIsSubDomain && selectedParentDomainLabel ? parseSubDomainLabel(family.label, selectedParentDomainLabel) : family.label}</button>
             {/if}
             {#if selectedIsSubDomain && selectedParentDomainLabel}
               <span
