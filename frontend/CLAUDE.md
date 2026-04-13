@@ -45,7 +45,7 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `preferences.svelte.ts` | Persistent user preferences loaded from backend |
 | `toast.svelte.ts` | Toast notification queue with `addToast()` API |
 | `routing.svelte.ts` | Derived routing state mirroring backend 5-tier priority chain. Reactive tier resolver |
-| `clusters.svelte.ts` | Cluster state: paste detection (50-char delta, 300ms debounce), suggestion lifecycle (10s auto-dismiss), tree/stats, detail, template spawning, `StateFilter` + `filteredTaxonomyTree`, async `invalidateClusters()` with ghost-selection guard, seed batch progress (`seedBatchActive`/`seedBatchProgress`). Activity panel state: `activityEvents`, `activityOpen`, `pushActivityEvent()`, `toggleActivity()`, `loadActivity()` with JSONL history fallback |
+| `clusters.svelte.ts` | Cluster state: two-path pattern detection (typing 800ms + paste 300ms debounce, 30-char min, AbortController), persistent suggestion (no auto-dismiss), `applySuggestion()` returns `{ids, clusterLabel}`, tree/stats, detail, template spawning with `patternIds`, `StateFilter` + `filteredTaxonomyTree`, async `invalidateClusters()` with ghost-selection guard, seed batch progress. Activity panel state: `activityEvents`, `activityOpen`, `pushActivityEvent()`, `toggleActivity()`, `loadActivity()` with JSONL history fallback |
 | `domains.svelte.ts` | API-driven domain palette. `colorFor()` resolves domain→hex with keyword fallback. Invalidated on `domain_created`/`taxonomy_changed` SSE |
 | `passthrough-guide.svelte.ts` | Passthrough workflow guide modal (visibility, "don't show again") |
 | `sampling-guide.svelte.ts` | Sampling tier guide modal state |
@@ -139,7 +139,7 @@ Fixed 60s health polling for StatusBar display only — no routing decisions fro
 - **Svelte 5 runes**: `$state`, `$derived`, `$effect` for reactive state throughout
 - **Store pattern**: files export reactive class instances (not Svelte 4 writable stores)
 - **Session persistence**: forge store saves `last_trace_id` to `localStorage`; page refresh restores from DB
-- **Paste detection**: clusters store watches 50-char deltas with 300ms debounce, auto-dismisses suggestions after 10s
+- **Pattern detection**: two-path — typing (800ms debounce, 30-char min) + paste (300ms, 30-char delta). AbortController cancels in-flight requests. No auto-dismiss. `applySuggestion()` returns `{ids, clusterLabel}` for persistent chip bar. `appliedPatternLabel` on forge store for UI confirmation
 - **Toggle safety**: disabled conditions prefixed with `!currentValue &&` — toggle already ON is always interactive
 - **Routing reactivity**: frontend is purely reactive — receives `routing_state_changed` SSE, never makes routing decisions
 - **GitHub connection state**: `githubStore.connectionState` getter (5 states) replaces ad-hoc null checks. `reconnect()` clears `linkedRepo` before Device Flow so template falls to auth branch. `_handleAuthError()` centralizes 401 detection. Tab selection persisted to `localStorage` key `synthesis:github_tab`

@@ -2,7 +2,36 @@
 
 All notable changes to Project Synthesis. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## Unreleased
+## v0.3.31 — 2026-04-13
+
+### Added
+- **Live pattern detection on typing** — two-path detection replaces paste-only system: typing path (800ms debounce, 30-char min) + paste path (300ms, 30-char delta). Patterns now surface as users type, not just on paste. AbortController cancels in-flight requests. Persistent chip bar below textarea confirms applied patterns
+- **Proven template promotion system** — backend-validated quality gates (avg_score >= 6.0 + members/usage), `promoted_at` timestamp on all promotions, taxonomy event logging for manual state changes. Warm-path Phase 0 health check: demote templates below score 5.5 or coherence 0.4, archive empty+unused ghosts. Phase 4 recomputes preferred_strategy for templates after mutations
+- **Template preview card** — inline expandable card in ClusterNavigator showing pattern texts, best prompt excerpt, score. Two actions: "Load Prompt + Patterns" (full template load) and "Apply Patterns Only" (keep user's prompt, inject template patterns)
+- **Post-optimization pattern attribution** — `applied_pattern_texts` stored in `enrichment_meta` across all tiers (passthrough via enrichment, internal/sampling via pipeline). ForgeArtifact renders injected pattern texts with source cluster labels in enrichment section
+- **Template Inspector enhancements** — usage stats ("Applied to N optimizations"), pattern effectiveness % (source_count/member_count), demote button for template-state clusters
+- **ADR-007: Live Pattern Intelligence** — architecture for 3-tier progressive context awareness during prompt authoring (future: context panel, enrichment preview, proactive hints)
+- **Task-type signal extraction** — TF-IDF mining from taxonomy discoveries, wired into lifespan + warm path + MCP. Dynamic `_TASK_TYPE_SIGNALS` with compound keyword preservation
+- **Sub-domain meta-pattern aggregation** (Phase 4.25) — rolls up child cluster patterns into sub-domain nodes
+
+### Changed
+- **Pattern suggestion banner** — shows pattern text previews (top 3), domain color dot, "Apply N" with count. No auto-dismiss — stays until Apply/Skip/new match
+- **Match endpoint hardened** — rate limited (30/min), max_length=8000 on prompt_text
+- **Match thresholds recalibrated** — lowered for raw embeddings (family 0.55, cluster 0.45, candidate 0.65). Composite fusion removed from match_prompt() for cross-process consistency between backend and MCP
+- **MCP embedding index freshness** — refresh interval reduced from 600s to 30s, event-driven reload on taxonomy_changed for zero-stale guarantee
+- **meta_pattern_count** added to ClusterNode in tree endpoint (single GROUP BY query)
+- **Passthrough tier** now gets full-quality pattern injection (auto_inject_patterns with composite fusion, cross-cluster, GlobalPattern 1.3x boost) and few-shot examples
+
+### Fixed
+- **CRITICAL: Strategy intelligence silently lost** — all templates (optimize.md, passthrough.md, refine.md) used `{{strategy_intelligence}}` but all pipeline render calls passed `"adaptation_state"` key. Strategy performance rankings, anti-patterns, and user feedback were computed but never injected. Only batch_pipeline was correct
+- **MCP refine tool missing enrichment layers** — codebase_context and strategy_intelligence not forwarded to create_refinement_turn (REST refine was correct)
+- **MCP match returning "none" for valid prompts** — composite fusion used process-local engine state that diverged between backend and MCP. Removed fusion from match_prompt; both processes now produce identical results
+- **Usage count inflation** — auto_inject_patterns now returns only cluster IDs that actually contributed patterns, preventing inflation for embedding-matched clusters with no MetaPattern records
+- Fixed sub-domain nodes not included in filteredTaxonomyTree
+- Fixed sub-domain coherence not set at creation time
+- Fixed sub-domain labels stored as parent-prefixed instead of qualifier-only
+- Fixed sub-domain patterns not included in injection pipeline
+- Fixed domain mapping setting wrong domain on Optimization records
 
 ## v0.3.30 — 2026-04-13
 
