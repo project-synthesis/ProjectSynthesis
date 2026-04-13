@@ -338,8 +338,8 @@
       const group = new THREE.Group();
       group.position.set(...node.position);
       const isStructural = node.state === 'domain' || node.state === 'project';
-      const isSubDomain = (node as any).isSubDomain === true;
-      group.userData = { isStructural };
+      const isSubDomain = node.isSubDomain;
+      group.userData = { isStructural, isSubDomain };
 
       // Fill: dark tinted interior (structural nodes slightly darker = edge-dominant)
       // Non-structural nodes: modulate fill scalar by avgScore for saturation encoding
