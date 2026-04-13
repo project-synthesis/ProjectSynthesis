@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { formatScore, formatDelta, truncateText, copyToClipboard, isPassthroughResult, parseSubDomainLabel } from './formatting';
+import { formatScore, formatDelta, truncateText, copyToClipboard, isPassthroughResult } from './formatting';
 
 describe('formatScore', () => {
   it('formats a number with 1 decimal by default', () => {
@@ -87,28 +87,5 @@ describe('copyToClipboard', () => {
     document.execCommand = execCommand;
     const result = await copyToClipboard('hello');
     expect(result).toBe(false);
-  });
-});
-
-describe('parseSubDomainLabel', () => {
-  it('strips parent prefix', () => {
-    expect(parseSubDomainLabel('backend-async-system-reliability', 'backend'))
-      .toBe('async-system-reliability');
-  });
-
-  it('returns full label without parent', () => {
-    expect(parseSubDomainLabel('backend-auth')).toBe('backend-auth');
-  });
-
-  it('returns full label when no prefix match', () => {
-    expect(parseSubDomainLabel('frontend-auth', 'backend')).toBe('frontend-auth');
-  });
-
-  it('is case-insensitive', () => {
-    expect(parseSubDomainLabel('Backend-Auth', 'backend')).toBe('Auth');
-  });
-
-  it('handles top-level domain unchanged', () => {
-    expect(parseSubDomainLabel('backend', 'backend')).toBe('backend');
   });
 });

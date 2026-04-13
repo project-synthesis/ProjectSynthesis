@@ -58,20 +58,6 @@ export function parsePrimaryDomain(domain: string | null | undefined): string {
   return (idx >= 0 ? domain.substring(0, idx).trim() : domain.trim()).toLowerCase() || 'general';
 }
 
-/**
- * Strip the parent domain prefix from a sub-domain label.
- * "backend-async-system-reliability" with parent "backend" → "async-system-reliability"
- * Returns the full label if no parent match or no parent provided.
- */
-export function parseSubDomainLabel(label: string, parentLabel?: string): string {
-  if (!parentLabel) return label;
-  const prefix = parentLabel.toLowerCase() + '-';
-  if (label.toLowerCase().startsWith(prefix)) {
-    return label.slice(prefix.length);
-  }
-  return label;
-}
-
 /** Format a character count as compact "K" string (e.g. 27286 -> "27.3K"). */
 export function formatCompactChars(chars: number): string {
   if (chars < 1000) return String(chars);
