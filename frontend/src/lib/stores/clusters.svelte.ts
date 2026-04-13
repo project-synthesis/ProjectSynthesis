@@ -19,9 +19,10 @@ export function isOrphanNode(node: { member_count: number; usage_count: number }
   return node.member_count === 0 && node.usage_count === 0;
 }
 
-const PASTE_CHAR_DELTA = 50;
-const PASTE_DEBOUNCE_MS = 300;
-const SUGGESTION_AUTO_DISMISS_MS = 10_000;
+const PASTE_CHAR_DELTA = 30;         // chars delta to detect paste event
+const PASTE_DEBOUNCE_MS = 300;       // fast debounce for paste
+const TYPING_DEBOUNCE_MS = 800;      // longer debounce for keystroke typing
+const MIN_PROMPT_LENGTH = 30;        // don't match fragments shorter than this
 
 /** Shape of a match result from the cluster match endpoint. */
 export type ClusterMatch = NonNullable<ClusterMatchResponse['match']>;
@@ -114,10 +115,12 @@ class ClusterStore {
     return { active, candidate, template };
   });
 
-  // Internal
+  // Internal — pattern detection
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private _dismissTimer: ReturnType<typeof setTimeout> | null = null;
   private _lastLength = 0;
+  private _lastMatchedText = '';        // avoid re-matching identical content
+  private _skippedClusterId: string | null = null;  // prevent re-showing skipped suggestion
+  private _matchAbort: AbortController | null = null;  // cancel in-flight match requests
   private _loadGeneration = 0;
   private _clusterGeneration = 0;
 
@@ -139,54 +142,78 @@ class ClusterStore {
   }
 
   /**
-   * Called on paste/input — checks if content delta exceeds threshold,
-   * debounces, then calls the match endpoint.
+   * Called on every input event — two-path detection:
+   * - Path A (paste): delta >= 30 chars → fast 300ms debounce
+   * - Path B (typing): prompt >= 30 chars → slower 800ms debounce
+   * Aborts in-flight requests when new input arrives.
    */
   checkForPatterns(text: string): void {
     const delta = Math.abs(text.length - this._lastLength);
     this._lastLength = text.length;
 
-    if (delta < PASTE_CHAR_DELTA) return;
+    // Don't match fragments
+    if (text.length < MIN_PROMPT_LENGTH) return;
 
-    // Debounce
+    // Skip if content hasn't meaningfully changed from last match
+    const trimmed = text.trim();
+    if (trimmed === this._lastMatchedText) return;
+
+    // Determine debounce: fast for paste, slow for typing
+    const isPaste = delta >= PASTE_CHAR_DELTA;
+    const debounceMs = isPaste ? PASTE_DEBOUNCE_MS : TYPING_DEBOUNCE_MS;
+
+    // Clear existing debounce timer
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
+
     this._debounceTimer = setTimeout(async () => {
+      // Abort any in-flight match request
+      if (this._matchAbort) this._matchAbort.abort();
+      this._matchAbort = new AbortController();
+
+      const signal = this._matchAbort.signal;
       try {
-        const resp = await matchPattern(text);
+        const resp = await matchPattern(trimmed, signal);
+        this._lastMatchedText = trimmed;
+
         if (resp.match) {
+          // Don't re-show a skipped suggestion for the same cluster
+          if (this._skippedClusterId === resp.match.cluster.id) return;
           this.suggestion = resp.match;
           this.suggestionVisible = true;
-          this._startDismissTimer();
         } else {
           this.suggestion = null;
           this.suggestionVisible = false;
         }
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         console.warn('Pattern match failed:', err);
       }
-    }, PASTE_DEBOUNCE_MS);
+    }, debounceMs);
   }
 
   /**
-   * User clicked [Apply] — returns the meta-pattern IDs for pipeline injection.
+   * User clicked [Apply] — returns the meta-pattern IDs + cluster label
+   * for pipeline injection and UI confirmation chip.
    */
-  applySuggestion(): string[] | null {
+  applySuggestion(): { ids: string[]; clusterLabel: string } | null {
     if (!this.suggestion) return null;
     const ids = this.suggestion.meta_patterns.map(mp => mp.id);
+    const clusterLabel = this.suggestion.cluster.label;
+    this._skippedClusterId = null;  // clear skip on apply
     this.dismissSuggestion();
-    return ids;
+    return { ids, clusterLabel };
   }
 
   /**
-   * User clicked [Skip] or auto-dismiss timer fired.
+   * User clicked [Skip] — hides suggestion and prevents re-showing
+   * the same cluster until a new match fires.
    */
   dismissSuggestion(): void {
+    if (this.suggestion) {
+      this._skippedClusterId = this.suggestion.cluster.id;
+    }
     this.suggestion = null;
     this.suggestionVisible = false;
-    if (this._dismissTimer) {
-      clearTimeout(this._dismissTimer);
-      this._dismissTimer = null;
-    }
   }
 
   async loadTree(): Promise<void> {
@@ -289,7 +316,7 @@ class ClusterStore {
    *  Returns the prompt, strategy, and label so the caller (ClusterNavigator)
    *  can write them to forgeStore/editorStore without a circular import.
    *  Returns null on empty optimizations or API failure. */
-  async spawnTemplate(clusterId: string): Promise<{ prompt: string; strategy: string | null; label: string } | null> {
+  async spawnTemplate(clusterId: string): Promise<{ prompt: string; strategy: string | null; label: string; patternIds: string[] } | null> {
     try {
       const detail = await getClusterDetail(clusterId);
       if (!detail?.optimizations?.length) return null;
@@ -299,10 +326,14 @@ class ClusterStore {
         (b.overall_score ?? 0) > (a.overall_score ?? 0) ? b : a
       );
 
+      // Collect template's meta-pattern IDs for explicit injection
+      const patternIds = (detail.meta_patterns ?? []).map((p) => p.id);
+
       return {
         prompt: best.raw_prompt ?? '',
         strategy: detail.preferred_strategy ?? null,
         label: detail.label,
+        patternIds,
       };
     } catch (err) {
       console.warn('spawnTemplate failed:', err);
@@ -414,19 +445,14 @@ class ClusterStore {
     this.seedBatchActive = false;
     this.seedBatchProgress = { completed: 0, total: 0, current: '' };
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
-    if (this._dismissTimer) clearTimeout(this._dismissTimer);
+    if (this._matchAbort) this._matchAbort.abort();
     this._debounceTimer = null;
-    this._dismissTimer = null;
+    this._matchAbort = null;
     this._lastLength = 0;
+    this._lastMatchedText = '';
+    this._skippedClusterId = null;
     this._loadGeneration = 0;
     this._clusterGeneration = 0;
-  }
-
-  private _startDismissTimer(): void {
-    if (this._dismissTimer) clearTimeout(this._dismissTimer);
-    this._dismissTimer = setTimeout(() => {
-      this.dismissSuggestion();
-    }, SUGGESTION_AUTO_DISMISS_MS);
   }
 }
 

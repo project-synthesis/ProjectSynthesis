@@ -100,7 +100,7 @@ describe('ClusterStore', () => {
       expect(clustersStore.suggestionVisible).toBe(false);
     });
 
-    it('auto-dismisses suggestion after 10 seconds', async () => {
+    it('suggestion stays visible until explicitly dismissed (no auto-dismiss)', async () => {
       const clusterMatch = mockClusterMatch();
       mockFetch([
         { match: '/clusters/match', response: { match: clusterMatch } },
@@ -108,42 +108,37 @@ describe('ClusterStore', () => {
       clustersStore.checkForPatterns('A'.repeat(60));
       await flushAll();
       expect(clustersStore.suggestionVisible).toBe(true);
-      // Now advance 10s to fire the auto-dismiss timer
-      vi.advanceTimersByTime(10_000);
-      expect(clustersStore.suggestionVisible).toBe(false);
-      expect(clustersStore.suggestion).toBeNull();
+      // Advance well past old 10s timer — suggestion should persist
+      vi.advanceTimersByTime(30_000);
+      expect(clustersStore.suggestionVisible).toBe(true);
     });
 
-    it('uses delta from previous call to calculate change', async () => {
+    it('fires on typing path when prompt >= 30 chars with 800ms debounce', async () => {
       const fetchMock = mockFetch([
         { match: '/clusters/match', response: { match: null } },
       ]);
-      // First call: 30 chars from baseline 0 -> delta=30, not triggered
-      clustersStore.checkForPatterns('A'.repeat(30));
-      await flushAll();
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      // Second call: goes from 30 to 60 -> delta=30, still not triggered
-      clustersStore.checkForPatterns('A'.repeat(60));
-      await flushAll();
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      // Third call: goes from 60 to 0 -> delta=60, should trigger
-      clustersStore.checkForPatterns('');
-      await flushAll();
+      // Type 30 chars one at a time — delta=1 each time (typing path)
+      for (let i = 1; i <= 30; i++) {
+        clustersStore.checkForPatterns('A'.repeat(i));
+      }
+      // 300ms (paste debounce) — should NOT have fired yet (typing uses 800ms)
+      vi.advanceTimersByTime(300);
+      await vi.runAllTimersAsync();
+      // At this point the 800ms timer should have fired
       expect(fetchMock).toHaveBeenCalledOnce();
     });
   });
 
   describe('applySuggestion', () => {
-    it('returns meta-pattern IDs from suggestion', () => {
+    it('returns meta-pattern IDs and cluster label from suggestion', () => {
       const mp1 = mockMetaPattern({ id: 'mp-1' });
       const mp2 = mockMetaPattern({ id: 'mp-2' });
       clustersStore.suggestion = mockClusterMatch({
+        cluster: { id: 'c-1', label: 'Test Cluster', domain: 'backend', member_count: 5 },
         meta_patterns: [mp1 as any, mp2 as any],
       }) as any;
-      const ids = clustersStore.applySuggestion();
-      expect(ids).toEqual(['mp-1', 'mp-2']);
+      const result = clustersStore.applySuggestion();
+      expect(result).toEqual({ ids: ['mp-1', 'mp-2'], clusterLabel: 'Test Cluster' });
     });
 
     it('clears suggestion after apply', () => {

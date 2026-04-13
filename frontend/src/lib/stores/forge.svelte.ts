@@ -35,8 +35,9 @@ class ForgeStore {
   // Initial suggestions from the pipeline (before any refinement turns exist)
   initialSuggestions = $state<Array<Record<string, string>>>([]);
 
-  // Applied meta-pattern IDs from knowledge graph paste detection
+  // Applied meta-pattern IDs from pattern detection or template selection
   appliedPatternIds = $state<string[] | null>(null);
+  appliedPatternLabel = $state<string | null>(null);
 
   // Cluster link (set when optimization is linked to a prompt cluster)
   clusterId = $state<string | null>(null);
@@ -126,6 +127,7 @@ class ForgeStore {
     this.passthroughStrategy = null;
     this.initialSuggestions = [];
     this.appliedPatternIds = null;
+    this.appliedPatternLabel = null;
     this.clusterId = null;
     this.routingDecision = null;
     this.phaseModels = {};
@@ -501,6 +503,7 @@ class ForgeStore {
     this.passthroughStrategy = null;
     this.initialSuggestions = [];
     this.appliedPatternIds = null;
+    this.appliedPatternLabel = null;
     this.clusterId = null;
     this.routingDecision = null;
     this.phaseModels = {};

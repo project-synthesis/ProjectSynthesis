@@ -125,8 +125,9 @@
 <div class="prompt-edit">
   <!-- Editor area (top — takes all available space) -->
   <div class="editor-area">
-    <PatternSuggestion onApply={(patternIds) => {
-      forgeStore.appliedPatternIds = patternIds;
+    <PatternSuggestion onApply={(result) => {
+      forgeStore.appliedPatternIds = result.ids;
+      forgeStore.appliedPatternLabel = result.clusterLabel;
     }} />
     <textarea
       class="prompt-textarea"
@@ -136,6 +137,16 @@
       spellcheck="false"
       aria-label="Prompt editor"
     ></textarea>
+    {#if forgeStore.appliedPatternIds && forgeStore.appliedPatternIds.length > 0}
+      <div class="applied-chip">
+        <span class="chip-text">{forgeStore.appliedPatternIds.length} patterns{forgeStore.appliedPatternLabel ? ` from "${forgeStore.appliedPatternLabel}"` : ''}</span>
+        <button
+          class="chip-clear"
+          onclick={() => { forgeStore.appliedPatternIds = null; forgeStore.appliedPatternLabel = null; }}
+          aria-label="Clear applied patterns"
+        >&times;</button>
+      </div>
+    {/if}
   </div>
 
   <!-- Action bar (bottom — strategy select + phase label + synthesize button) -->
@@ -200,6 +211,38 @@
 
   .prompt-textarea::placeholder {
     color: var(--color-text-dim);
+  }
+
+  /* Applied patterns chip — persistent indicator below textarea */
+  .applied-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px;
+    background: color-mix(in srgb, var(--color-neon-cyan) 8%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--color-neon-cyan) 25%, transparent);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--color-neon-cyan);
+    flex-shrink: 0;
+  }
+
+  .chip-text {
+    flex: 1;
+  }
+
+  .chip-clear {
+    background: none;
+    border: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+  }
+
+  .chip-clear:hover {
+    color: var(--color-text-primary);
   }
 
   /* Action bar — bottom of the prompt editor */

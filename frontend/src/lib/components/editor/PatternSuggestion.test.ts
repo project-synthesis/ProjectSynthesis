@@ -19,8 +19,8 @@ describe('PatternSuggestion', () => {
     return mockClusterMatch({
       cluster: { id: 'fam-1', label: 'API endpoint patterns', domain: 'backend', member_count: 3 },
       meta_patterns: [
-        mockMetaPattern({ id: 'mp-1', pattern_text: 'Include error handling' }),
-        mockMetaPattern({ id: 'mp-2', pattern_text: 'Use consistent naming' }),
+        mockMetaPattern({ id: 'mp-1', pattern_text: 'Include error handling', source_count: 5 }),
+        mockMetaPattern({ id: 'mp-2', pattern_text: 'Use consistent naming', source_count: 3 }),
       ],
       similarity: 0.85,
       ...overrides,
@@ -46,7 +46,7 @@ describe('PatternSuggestion', () => {
     expect(screen.getByRole('alert')).toBeInTheDocument();
   });
 
-  it('displays the family intent label in the suggestion banner', () => {
+  it('displays the cluster label in the suggestion banner', () => {
     clustersStore.suggestion = makeSuggestion() as never;
     clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
@@ -60,39 +60,31 @@ describe('PatternSuggestion', () => {
     expect(screen.getByText(/85%/)).toBeInTheDocument();
   });
 
-  it('shows meta-pattern count', () => {
+  it('shows pattern text previews', () => {
     clustersStore.suggestion = makeSuggestion() as never;
     clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
-    expect(screen.getByText(/2 meta-patterns available/)).toBeInTheDocument();
+    expect(screen.getByText('Include error handling')).toBeInTheDocument();
+    expect(screen.getByText('Use consistent naming')).toBeInTheDocument();
   });
 
-  it('shows singular meta-pattern text when only one', () => {
-    clustersStore.suggestion = makeSuggestion({
-      meta_patterns: [mockMetaPattern({ id: 'mp-1' })],
-    }) as never;
-    clustersStore.suggestionVisible = true;
-    render(PatternSuggestion, { props: { onApply: vi.fn() } });
-    expect(screen.getByText(/1 meta-pattern available/)).toBeInTheDocument();
-  });
-
-  it('renders Apply and Skip buttons', () => {
+  it('renders Apply with count and Skip buttons', () => {
     clustersStore.suggestion = makeSuggestion() as never;
     clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply: vi.fn() } });
-    expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Apply 2/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument();
   });
 
-  it('calls applySuggestion and onApply with pattern IDs when Apply is clicked', async () => {
+  it('calls applySuggestion and onApply with pattern IDs and label when Apply is clicked', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();
     clustersStore.suggestion = makeSuggestion() as never;
     clustersStore.suggestionVisible = true;
     render(PatternSuggestion, { props: { onApply } });
 
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(onApply).toHaveBeenCalledWith(['mp-1', 'mp-2']);
+    await user.click(screen.getByRole('button', { name: /Apply/ }));
+    expect(onApply).toHaveBeenCalledWith({ ids: ['mp-1', 'mp-2'], clusterLabel: 'API endpoint patterns' });
   });
 
   it('calls dismissSuggestion when Skip is clicked', async () => {
