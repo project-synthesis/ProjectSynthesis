@@ -507,8 +507,8 @@
         isMid && text.length > 14 ? text.slice(0, 14).trimEnd() + '\u2026' : text;
       for (const node of data.nodes) {
         if (!node.visible) continue;
-        const displayLabel = node.isSubDomain
-          ? parseSubDomainLabel(node.label, node.domain)
+        const displayLabel = node.isSubDomain && node.parentDomainLabel
+          ? parseSubDomainLabel(node.label, node.parentDomainLabel)
           : node.label;
         const sprite = labels.getOrCreate(node.id, truncLabel(displayLabel), node.color);
         sprite.position.set(node.position[0], node.position[1] + node.size + 0.5, node.position[2]);
