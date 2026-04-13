@@ -491,9 +491,9 @@
           {#each group.subDomains as sub (sub.id)}
             <button
               class="subdomain-header"
+              class:subdomain-header--collapsed={collapsedSubDomains.has(sub.id)}
               onclick={() => toggleSubDomain(sub.id)}
             >
-              <span class="subdomain-chevron">{collapsedSubDomains.has(sub.id) ? '\u25B8' : '\u25BE'}</span>
               <span class="domain-dot" style="background: {taxonomyColor(sub.label)};"></span>
               <span class="subdomain-label">{sub.displayLabel}</span>
               <span class="subdomain-count">{sub.clusters.length}</span>
@@ -993,10 +993,12 @@
     background: var(--color-bg-hover);
   }
 
-  .subdomain-chevron {
-    font-size: 8px;
-    color: var(--color-text-dim);
-    width: 10px;
+  .subdomain-header--collapsed {
+    opacity: 0.6;
+  }
+
+  .subdomain-header--collapsed:hover {
+    opacity: 1;
   }
 
   .subdomain-label {
