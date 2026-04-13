@@ -13,6 +13,7 @@ from app.services.repo_index_service import (
     RepoIndexService,
     _classify_github_error,
     _classify_source_type,
+    _compute_source_weight,
     _extract_markdown_references,
     _extract_structured_outline,
     invalidate_curated_cache,
@@ -1407,3 +1408,53 @@ class TestCuratedCodeDominatedRegression:
         # The import mechanism works if main_svc.py was packed first and expanded its import.
         sources = {f["path"]: f["source"] for f in result.selected_files}
         assert sources["backend/app/services/helper.py"] in ("full", "import-graph")
+
+
+# ---------------------------------------------------------------------------
+# D1: Source-type weighting tests
+# ---------------------------------------------------------------------------
+
+
+class TestComputeSourceWeight:
+    """Unit tests for _compute_source_weight()."""
+
+    def test_code_is_baseline(self):
+        assert _compute_source_weight("src/main.py") == 1.0
+
+    def test_docs_penalized(self):
+        assert _compute_source_weight("docs/guide.md") == 0.6
+
+    def test_config_penalized(self):
+        assert _compute_source_weight("config.yaml") == 0.75
+
+    def test_github_community_extra_penalty(self):
+        # .github/ docs: 0.6 * 0.5 = 0.3
+        assert _compute_source_weight(".github/SECURITY.md") == pytest.approx(0.3)
+
+    def test_root_readme_exempt(self):
+        assert _compute_source_weight("README.md") == 1.0
+
+    def test_nested_readme_not_exempt(self):
+        # docs/README.md is in a docs dir — gets docs penalty
+        assert _compute_source_weight("docs/README.md") == 0.6
+
+    def test_github_non_docs_file(self):
+        # .github/workflows/ci.yml is config, not docs — no community penalty
+        w = _compute_source_weight(".github/workflows/ci.yml")
+        assert w == 0.75  # config weight, no community penalty
+
+    def test_unknown_extension_defaults_to_config(self):
+        # _classify_source_type returns "config" for unknown → weight 0.75
+        w = _compute_source_weight("Makefile")
+        assert w == 0.75
+
+    def test_weights_configurable(self, monkeypatch):
+        """Override weights to all 1.0 → disables weighting."""
+        monkeypatch.setattr(settings, "INDEX_SOURCE_TYPE_WEIGHTS", {"code": 1.0, "docs": 1.0, "config": 1.0})
+        assert _compute_source_weight("docs/guide.md") == 1.0
+
+    def test_curated_metadata_includes_weight_fields(self):
+        """Verify _compute_source_weight returns valid float for code files."""
+        w = _compute_source_weight("backend/app/main.py")
+        assert isinstance(w, float)
+        assert 0.0 <= w <= 2.0

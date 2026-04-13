@@ -241,6 +241,11 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         set_event_logger(_tel)
         logger.info("MCP lifespan: TaxonomyEventLogger initialized")
 
+        # E1b: Enable cross-process forwarding for classification agreement
+        from app.services.classification_agreement import get_classification_agreement
+        get_classification_agreement()._cross_process = True
+        logger.info("MCP lifespan: ClassificationAgreement cross-process forwarding enabled")
+
         # Initialize structured error logger for MCP process
         from app.services.error_logger import ErrorLogger as _ErrLogger
         from app.services.error_logger import set_error_logger as _set_err

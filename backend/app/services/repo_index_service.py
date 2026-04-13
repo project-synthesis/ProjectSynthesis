@@ -402,6 +402,30 @@ def _classify_source_type(file_path: str) -> str:
     return "config"
 
 
+def _compute_source_weight(file_path: str) -> float:
+    """Compute multiplicative source-type weight for a file path.
+
+    Applies base weight from ``INDEX_SOURCE_TYPE_WEIGHTS`` config, plus
+    additional penalty for ``.github/`` community files.  Root ``README.md``
+    is exempt from docs penalty (high-value architectural overview).
+    """
+    source_type = _classify_source_type(file_path)
+    weights = settings.INDEX_SOURCE_TYPE_WEIGHTS
+    base_weight = weights.get(source_type, 1.0)
+
+    lower = file_path.lower()
+
+    # Root README is high-value — exempt from docs penalty
+    if lower in ("readme.md", "readme.txt", "readme.rst"):
+        return 1.0
+
+    # .github/ community files get additional penalty
+    if lower.startswith(".github/") and source_type == "docs":
+        return base_weight * settings.INDEX_GITHUB_COMMUNITY_PENALTY
+
+    return base_weight
+
+
 # ---------------------------------------------------------------------------
 # Markdown reference extraction for doc-aware import-graph expansion
 # ---------------------------------------------------------------------------
@@ -770,6 +794,7 @@ class RepoIndexService:
         # Relevance filtering + domain-aware thresholds
         cross_domain_min_sim = 0.30
         boosted: list[tuple[int, float]] = []
+        raw_score_by_path: dict[str, float] = {}  # D1: track pre-weighted scores for metadata
         domain_patterns = _DOMAIN_PATH_PATTERNS.get(domain or "", [])
         cross_domain_filtered = 0
         below_base_filtered = 0
@@ -796,7 +821,11 @@ class RepoIndexService:
                 else:
                     below_base_filtered += 1
                 continue
-            effective_score = score
+            raw_score_by_path[rows[idx].file_path] = score
+            # D1: Source-type weighting — code > config > docs
+            source_weight = _compute_source_weight(rows[idx].file_path)
+            effective_score = score * source_weight
+            # Domain boost stacks multiplicatively
             if is_same_domain:
                 effective_score *= domain_boost
             boosted.append((idx, effective_score))
@@ -915,6 +944,8 @@ class RepoIndexService:
                 selected_files_meta.append({
                     "path": row_.file_path,
                     "score": round(score_, 3),
+                    "raw_similarity": round(raw_score_by_path.get(row_.file_path, score_), 3),
+                    "source_weight": round(_compute_source_weight(row_.file_path), 2),
                     "content_chars": len(body),
                     "source": source_,
                     "source_type": st,
@@ -982,6 +1013,8 @@ class RepoIndexService:
                 near_misses.append({
                     "path": rows[idx].file_path,
                     "score": round(score, 3),
+                    "raw_similarity": round(raw_score_by_path.get(rows[idx].file_path, score), 3),
+                    "source_weight": round(_compute_source_weight(rows[idx].file_path), 2),
                 })
 
         if not parts:

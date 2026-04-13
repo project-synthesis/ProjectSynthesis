@@ -1,5 +1,7 @@
 """Tests for ClassificationAgreement tracker."""
 
+from unittest.mock import patch
+
 from app.services.classification_agreement import (
     ClassificationAgreement,
     _reset_agreement,
@@ -102,3 +104,52 @@ class TestClassificationAgreement:
         agr = ClassificationAgreement()
         rates = agr.rates()
         assert rates["strategy_intelligence_hit_rate"] == 0.0
+
+
+class TestCrossProcessForwarding:
+    """E1b: Cross-process classification agreement bridge tests."""
+
+    def test_cross_process_default_false(self):
+        agr = ClassificationAgreement()
+        assert agr._cross_process is False
+
+    def test_cross_process_record_fires_forward(self):
+        agr = ClassificationAgreement(_cross_process=True)
+        with patch.object(agr, "_forward") as mock_fwd:
+            agr.record("coding", "backend", "writing", "general")
+            mock_fwd.assert_called_once()
+            call_args = mock_fwd.call_args
+            assert call_args[0][0] == "classification_agreement_record"
+            assert call_args[0][1]["heuristic_task_type"] == "coding"
+            assert call_args[0][1]["llm_task_type"] == "writing"
+
+    def test_cross_process_strategy_intel_fires_forward(self):
+        agr = ClassificationAgreement(_cross_process=True)
+        with patch.object(agr, "_forward") as mock_fwd:
+            agr.record_strategy_intel(had_intel=True)
+            mock_fwd.assert_called_once()
+            assert mock_fwd.call_args[0][0] == "classification_agreement_strategy_intel"
+            assert mock_fwd.call_args[0][1]["had_intel"] is True
+
+    def test_forward_failure_preserves_local_state(self):
+        """Forward failure must not prevent local counter increment."""
+        agr = ClassificationAgreement(_cross_process=True)
+        # Patch _forward entirely to simulate total failure — record() calls
+        # _forward after incrementing counters, so local state is always set.
+        with patch.object(agr, "_forward", side_effect=Exception("network down")):
+            # _forward is called inside record() but record() doesn't wrap
+            # it in try/except — however, _forward itself catches exceptions.
+            # We sidestep by patching _forward to raise, which bubbles up.
+            # The test verifies counters were incremented BEFORE the forward call.
+            try:
+                agr.record("coding", "backend", "writing", "general")
+            except Exception:
+                pass
+        assert agr.total == 1  # local state preserved before forward
+
+    def test_backend_record_does_not_reforward(self):
+        """Backend singleton has _cross_process=False -> no forwarding."""
+        agr = ClassificationAgreement()  # default: _cross_process=False
+        with patch.object(agr, "_forward") as mock_fwd:
+            agr.record("coding", "backend", "coding", "backend")
+            mock_fwd.assert_not_called()

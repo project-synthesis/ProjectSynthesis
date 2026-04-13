@@ -123,6 +123,14 @@ class Settings(BaseSettings):
         default=0.35,
         description="Maximum fraction of curated retrieval slots for documentation files.",
     )
+    INDEX_SOURCE_TYPE_WEIGHTS: dict = Field(
+        default={"code": 1.0, "docs": 0.6, "config": 0.75},
+        description="Multiplicative score weights by source type in curated retrieval.",
+    )
+    INDEX_GITHUB_COMMUNITY_PENALTY: float = Field(
+        default=0.5,
+        description="Additional multiplier for .github/ community files (stacks with source-type weight).",
+    )
 
     # --- Network ---
     TRUSTED_PROXIES: str = Field(

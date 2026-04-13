@@ -1721,8 +1721,10 @@ class TaxonomyEngine:
 
         from app.services.pipeline_constants import DOMAIN_COUNT_CEILING
         from app.services.taxonomy._constants import (
+            SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS,
             SUB_DOMAIN_COHERENCE_CEILING,
             SUB_DOMAIN_HDBSCAN_MIN_CLUSTER,
+            SUB_DOMAIN_MIN_CLUSTERS,
             SUB_DOMAIN_MIN_GROUP_MEMBERS,
             SUB_DOMAIN_MIN_MEMBERS,
         )
@@ -1774,15 +1776,28 @@ class TaxonomyEngine:
             coherences = [c.coherence for c in children if c.coherence is not None]
             mean_coh = float(np.mean(coherences)) if coherences else 0.0
 
-            # Only log when the evaluation would actually trigger sub-domain
-            # discovery. Previous "close to threshold" logging produced 960+
-            # noise events per day from domains that pass the member threshold
-            # but never the coherence threshold.
-            would_trigger = (
-                total_members >= SUB_DOMAIN_MIN_MEMBERS
-                and bool(coherences)
-                and mean_coh < SUB_DOMAIN_COHERENCE_CEILING
+            # Two trigger paths for sub-domain discovery:
+            #   1. Coherence path (original): many members + low coherence
+            #   2. Cluster-count path: many child clusters + enough members
+            # The cluster-count path catches structurally complex domains
+            # (e.g., SaaS with 23 clusters) where high per-cluster coherence
+            # masks genuine semantic diversity.
+            active_cluster_count = len(children)
+            passes_members = total_members >= SUB_DOMAIN_MIN_MEMBERS
+            passes_coherence = (
+                bool(coherences) and mean_coh < SUB_DOMAIN_COHERENCE_CEILING
             )
+            passes_clusters = (
+                active_cluster_count >= SUB_DOMAIN_MIN_CLUSTERS
+                and total_members >= SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS
+            )
+            would_trigger = (passes_members and passes_coherence) or passes_clusters
+            trigger_path = (
+                "both" if (passes_members and passes_coherence) and passes_clusters
+                else "cluster_count" if passes_clusters
+                else "coherence"
+            )
+
             if would_trigger:
                 try:
                     get_event_logger().log_decision(
@@ -1791,29 +1806,25 @@ class TaxonomyEngine:
                         context={
                             "domain_label": domain_node.label,
                             "total_members": total_members,
-                            "cluster_count": len(children),
+                            "cluster_count": active_cluster_count,
                             "mean_coherence": round(mean_coh, 4) if coherences else None,
-                            "passes_members": total_members >= SUB_DOMAIN_MIN_MEMBERS,
-                            "passes_coherence": mean_coh < SUB_DOMAIN_COHERENCE_CEILING if coherences else False,
-                            "would_trigger": would_trigger,
+                            "passes_members": passes_members,
+                            "passes_coherence": passes_coherence,
+                            "passes_clusters": passes_clusters,
+                            "trigger_path": trigger_path,
+                            "would_trigger": True,
                         },
                     )
                 except RuntimeError:
                     pass
 
-            # Early-exit checks (after logging so skipped domains are visible)
-            if total_members < SUB_DOMAIN_MIN_MEMBERS:
+            # Early-exit: neither trigger path fires
+            if not would_trigger:
                 continue
-
-            # Check mean coherence — if already coherent, no subdivision needed
-            if not coherences:
-                continue
-            if mean_coh >= SUB_DOMAIN_COHERENCE_CEILING:
-                continue
-
             logger.info(
-                "Sub-domain candidate: '%s' (%d members, %d clusters, mean_coh=%.3f)",
-                domain_node.label, total_members, len(children), mean_coh,
+                "Sub-domain candidate: '%s' (%d members, %d clusters, mean_coh=%.3f, path=%s)",
+                domain_node.label, total_members, active_cluster_count, mean_coh,
+                trigger_path,
             )
 
             # Collect ALL member embeddings from this domain's clusters

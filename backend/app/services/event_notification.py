@@ -30,6 +30,8 @@ _CRITICAL_EVENTS = frozenset({
     "taxonomy_changed",
     "domain_created",
     "taxonomy_activity",
+    "classification_agreement_record",
+    "classification_agreement_strategy_intel",
 })
 
 # Longer timeout for events that may arrive during warm-path processing,

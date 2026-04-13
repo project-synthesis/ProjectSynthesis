@@ -107,6 +107,8 @@ SUB_DOMAIN_MIN_MEMBERS = 20         # domain must have ≥20 total members
 SUB_DOMAIN_COHERENCE_CEILING = 0.50 # mean child coherence must be below this
 SUB_DOMAIN_MIN_GROUP_MEMBERS = 5    # each HDBSCAN group needs ≥5 members
 SUB_DOMAIN_HDBSCAN_MIN_CLUSTER = 5  # HDBSCAN min_cluster_size parameter
+SUB_DOMAIN_MIN_CLUSTERS = 12        # cluster-count path: ≥12 active children
+SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS = 30  # cluster-count path also requires ≥30 members
 
 
 # ---------------------------------------------------------------------------

@@ -74,6 +74,28 @@ async def publish_event(body: InternalEventRequest, request: Request) -> OkRespo
                 _mirror_exc,
             )
 
+    # E1b: Cross-process classification agreement bridge
+    if body.event_type == "classification_agreement_record":
+        try:
+            from app.services.classification_agreement import get_classification_agreement
+            get_classification_agreement().record(
+                heuristic_task_type=body.data.get("heuristic_task_type", ""),
+                heuristic_domain=body.data.get("heuristic_domain", ""),
+                llm_task_type=body.data.get("llm_task_type", ""),
+                llm_domain=body.data.get("llm_domain", ""),
+                prompt_snippet=body.data.get("prompt_snippet", ""),
+            )
+        except Exception as _ca_exc:
+            logger.warning("Cross-process classification_agreement record failed: %s", _ca_exc)
+    elif body.event_type == "classification_agreement_strategy_intel":
+        try:
+            from app.services.classification_agreement import get_classification_agreement
+            get_classification_agreement().record_strategy_intel(
+                had_intel=body.data.get("had_intel", False),
+            )
+        except Exception as _si_exc:
+            logger.warning("Cross-process strategy_intel record failed: %s", _si_exc)
+
     return OkResponse()
 
 
