@@ -313,7 +313,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             # so MCP pattern matching stays fresh (saved every ~5 min by backend).
             async def _refresh_embedding_index() -> None:
                 while True:
-                    await asyncio.sleep(600)  # 10 minutes
+                    await asyncio.sleep(30)  # 30 seconds — match parity with backend
                     try:
                         loaded = await engine.embedding_index.load_cache(_index_cache_path)
                         if loaded:
@@ -408,13 +408,30 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             except Exception:
                 logger.error("MCP domain cache reload failed", exc_info=True)
 
+        async def _reload_embedding_index_from_cache() -> None:
+            """Reload embedding index from disk cache saved by backend warm path."""
+            try:
+                _taxonomy_engine = _shared.get_taxonomy_engine()
+                if _taxonomy_engine is None:
+                    return
+                _idx_path = DATA_DIR / "embedding_index.pkl"
+                loaded = await _taxonomy_engine.embedding_index.load_cache(_idx_path)
+                if loaded:
+                    logger.info(
+                        "MCP: embedding index reloaded on event (%d entries)",
+                        _taxonomy_engine.embedding_index.size,
+                    )
+            except Exception:
+                logger.debug("MCP: event-driven embedding index reload failed", exc_info=True)
+
         async def _domain_event_listener() -> None:
-            """Background task: reload domain caches on taxonomy_changed / domain_created."""
+            """Background task: reload caches on taxonomy_changed / domain_created."""
             try:
                 async for event in _mcp_event_bus.subscribe():
                     event_type = event.get("event", "")
                     if event_type in ("domain_created", "taxonomy_changed"):
                         asyncio.create_task(_reload_domain_caches())
+                        asyncio.create_task(_reload_embedding_index_from_cache())
             except Exception:
                 logger.debug("MCP domain event listener exited", exc_info=True)
 

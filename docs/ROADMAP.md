@@ -26,6 +26,17 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ## Planned
 
+### Live pattern intelligence — real-time context awareness during prompt authoring
+**Status:** Planned
+**Spec:** [ADR-007](adr/ADR-007-live-pattern-intelligence.md)
+**Context:** The pattern suggestion system only triggers on paste events (50+ char delta). Users typing prompts keystroke-by-keystroke receive zero guidance from the taxonomy's accumulated knowledge until they submit. The backend already has every capability needed — embedding search (~200ms), heuristic classification (~30ms), strategy intelligence (~100ms) — all well within typing debounce tolerances.
+
+**Scope:** 3-tier progressive intelligence: (1) live pattern matching as the user types (replaces paste-only detection), (2) enrichment preview showing classification, weaknesses, and strategy recommendations before submission, (3) proactive inline hints for strategy mismatches, missing repo context, and refinement opportunities. New `POST /api/clusters/preview-enrichment` endpoint, new `ContextPanel.svelte` sidebar, deprecation of single-banner `PatternSuggestion.svelte`. Each tier is independently shippable.
+
+**Impact:** Transforms optimization from a black box into a transparent authoring partner. Users see matched patterns, detected weaknesses, and strategy recommendations while typing — before they submit.
+
+---
+
 ### Integration store — pluggable context providers beyond GitHub
 **Status:** Planned
 **Context:** GitHub is the sole external integration — it provides codebase context for the explore phase and serves as the project creation trigger (ADR-005). This creates two problems: (1) non-developers have zero external context enrichment, and (2) the project system is tightly coupled to GitHub repos.
