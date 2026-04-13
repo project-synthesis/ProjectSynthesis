@@ -587,6 +587,15 @@ async def execute_warm_path(
             engine._injection_effectiveness = refresh_result.injection_effectiveness
 
     # ------------------------------------------------------------------
+    # Phase 4.25: Sub-domain meta-pattern aggregation
+    # Rolls up child-cluster patterns into sub-domain nodes.
+    # ------------------------------------------------------------------
+    async with session_factory() as db:
+        from app.services.taxonomy.warm_phases import aggregate_sub_domain_patterns
+        _sub_agg = await aggregate_sub_domain_patterns(db)
+        await db.commit()
+
+    # ------------------------------------------------------------------
     # Phase 4.5: Global Pattern Promotion + Validation (ADR-005 Phase 2B)
     # Runs every Nth cycle with wall-clock gate. Full scan (ignores dirty_ids).
     # ------------------------------------------------------------------

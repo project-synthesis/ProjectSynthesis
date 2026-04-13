@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -3277,6 +3277,118 @@ async def phase_refresh(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4.25: Sub-domain meta-pattern aggregation
+# ---------------------------------------------------------------------------
+
+
+async def aggregate_sub_domain_patterns(
+    db: AsyncSession,
+) -> int:
+    """Aggregate meta-patterns from child clusters into sub-domain nodes.
+
+    For each sub-domain (state='domain' with parent_id pointing to another
+    domain), collect MetaPatterns from all child clusters, rank by
+    source_count, and store top MAX_PATTERNS_PER_CLUSTER as the sub-domain's
+    own patterns.  Non-critical — sub-domains function without patterns.
+
+    Returns the number of sub-domains that received aggregated patterns.
+    """
+    from app.services.taxonomy._constants import MAX_PATTERNS_PER_CLUSTER
+
+    try:
+        # Find all domain node IDs
+        domain_q = await db.execute(
+            select(PromptCluster.id).where(PromptCluster.state == "domain")
+        )
+        domain_ids = {r[0] for r in domain_q.all()}
+
+        # Find sub-domain nodes: state="domain" with parent_id in domain_ids
+        sub_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.parent_id.in_(domain_ids),
+            )
+        )
+        sub_domains = list(sub_q.scalars().all())
+        if not sub_domains:
+            return 0
+
+        aggregated = 0
+        for sub in sub_domains:
+            # Find child clusters of this sub-domain
+            child_q = await db.execute(
+                select(PromptCluster.id).where(
+                    PromptCluster.parent_id == sub.id,
+                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                )
+            )
+            child_ids = [r[0] for r in child_q.all()]
+            if not child_ids:
+                continue
+
+            # Collect patterns from all child clusters
+            pat_q = await db.execute(
+                select(MetaPattern).where(
+                    MetaPattern.cluster_id.in_(child_ids),
+                ).order_by(MetaPattern.source_count.desc())
+            )
+            child_patterns = list(pat_q.scalars().all())
+            if not child_patterns:
+                continue
+
+            # Delete existing sub-domain patterns (they're aggregated, not extracted)
+            await db.execute(
+                delete(MetaPattern).where(MetaPattern.cluster_id == sub.id)
+            )
+
+            # Take top patterns by source_count, cap at MAX_PATTERNS_PER_CLUSTER
+            seen_texts: set[str] = set()
+            inserted = 0
+            for pat in child_patterns:
+                text_key = pat.pattern_text.strip().lower()
+                if text_key in seen_texts:
+                    continue
+                seen_texts.add(text_key)
+
+                db.add(MetaPattern(
+                    cluster_id=sub.id,
+                    pattern_text=pat.pattern_text,
+                    embedding=pat.embedding,
+                    source_count=pat.source_count,
+                    global_source_count=pat.global_source_count,
+                ))
+                inserted += 1
+                if inserted >= MAX_PATTERNS_PER_CLUSTER:
+                    break
+
+            if inserted > 0:
+                aggregated += 1
+
+        if aggregated > 0:
+            try:
+                get_event_logger().log_decision(
+                    path="warm",
+                    op="discover",
+                    decision="sub_domain_patterns_aggregated",
+                    context={
+                        "sub_domains_processed": len(sub_domains),
+                        "sub_domains_with_patterns": aggregated,
+                    },
+                )
+            except RuntimeError:
+                pass
+            logger.info(
+                "Sub-domain pattern aggregation: %d/%d sub-domains received patterns",
+                aggregated, len(sub_domains),
+            )
+
+        return aggregated
+
+    except Exception:
+        logger.warning("Sub-domain pattern aggregation failed (non-fatal)", exc_info=True)
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # A3 helper — shared by domain and sub-domain discovery
 # ---------------------------------------------------------------------------
