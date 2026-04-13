@@ -99,6 +99,7 @@ src/routes/
 | `formatting.ts` | Display formatting (numbers, dates, text truncation) |
 | `strategies.ts` | Strategy display name/description helpers |
 | `mcp-tooltips.ts` | MCP tool tooltip content for UI hints |
+| `ui-tooltips.ts` | Structured tooltip builders (e.g., GitHub index file count) |
 
 ## Brand and design system
 

@@ -33,7 +33,7 @@ Project Synthesis is built as a **universal prompt optimization engine**. The co
 
 **Adding a new vertical requires no code changes.** The extension points are all content:
 - **Seed agents** — drop `.md` files in `prompts/seed-agents/` (hot-reloaded)
-- **Domain keywords** — bootstrap classification for new subject areas via migration
+- **Domain keywords** — bootstrap classification for new subject areas via migration (or let A3 auto-extract from taxonomy discoveries)
 - **Weakness signals** — domain-specific quality detection rules
 - **Context providers** — pluggable integrations beyond GitHub (Google Drive, Notion, local files)
 
@@ -138,9 +138,16 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Orphan recovery** — automatic detection and recovery of optimizations where hot-path extraction failed, with exponential backoff and health metrics
 - **3D taxonomy visualization** — Three.js interactive topology with LOD tiers, diegetic UI, state filter tabs, click-to-focus navigation, force-directed layout. Project nodes as dodecahedrons with rich hover tooltips and dedicated inspector mode
 
+### Context Intelligence
+- **Enrichment profiles** — auto-selected per request: `code_aware` (all layers, coding+repo), `knowledge_work` (skip codebase, non-coding), `cold_start` (skip strategy+patterns, <10 optimizations). Profile gates which context layers activate
+- **Strategy intelligence** — unified advisory merging score-based strategy rankings, anti-patterns, domain keywords, and user feedback affinities. Domain-relaxed fallback queries across all domains when exact match is empty
+- **Prompt-context divergence detection** — two-layer system flags tech stack conflicts between prompt and codebase (e.g., PostgreSQL prompt vs SQLite codebase). Optimizer classifies intent as OVERSIGHT, DELIBERATE CHANGE, UPGRADE, or STANDALONE
+- **Heuristic accuracy pipeline** — compound keywords, technical verb+noun disambiguation, TF-IDF domain signal auto-enrichment from taxonomy discoveries, and confidence-gated Haiku LLM fallback for ambiguous classifications
+- **Classification agreement tracking** — heuristic vs LLM comparison after every analysis phase, exposed in health endpoint
+
 ### Developer Integration (First Vertical)
 - **GitHub integration** — zero-config Device Flow OAuth (no secrets, no callback URL). Link a repo, browse files, and get codebase-aware optimization. Background indexing with incremental refresh builds semantic file embeddings + Haiku architectural synthesis
-- **Three-layer codebase context** — cached explore synthesis (architectural overview, once per repo) + per-prompt curated retrieval (full source delivery, 80K char cap, import-graph + doc-ref expansion, source-type balanced) + performance signals. Background incremental refresh keeps the index current. Zero request-time LLM calls — all tiers receive identical pre-computed context
+- **Three-layer codebase context** — cached explore synthesis (architectural overview, once per repo) + per-prompt curated retrieval (full source delivery, 80K char cap, import-graph + doc-ref expansion, source-type balanced, task-gated for non-coding skipping) + performance signals. Zero request-time LLM calls
 - **MCP server** — use from any MCP-compatible IDE (VS Code, Claude Code, etc.)
 - **VS Code bridge extension** — MCP Copilot Bridge for sampling-based optimization through the IDE's own LLM
 - **Passthrough mode** — IDE's own LLM does the optimization; server provides context + heuristic analysis + hybrid scoring
@@ -200,13 +207,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~150s, 2008 tests)
+# Backend tests (~270s, 2107 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1028 tests)
+# Frontend tests (1038 tests)
 cd frontend && npm test
 
 # Frontend build

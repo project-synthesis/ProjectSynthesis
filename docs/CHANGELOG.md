@@ -4,43 +4,32 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.30 — 2026-04-13
+
 ### Added
-- **Enrichment profiles** — auto-selected profiles (code_aware / knowledge_work / cold_start) match enrichment depth to use case. Cold-start (< 10 optimizations) skips strategy intelligence and patterns; knowledge-work skips codebase context for non-coding prompts. Profile tracked in `enrichment_meta` and displayed in UI ENRICHMENT panel
-- **Strategy intelligence** — unified layer merging performance signals (score-based rankings, anti-patterns, domain keywords) with adaptation feedback (user approval rates, blocked strategies). Replaces separate adaptation_state and performance_signals layers. `resolve_strategy_intelligence()` standalone function used by all pipeline paths
-- **Task-gated curated retrieval** — non-coding prompts (writing, creative, general) skip the 80K-char curated file retrieval, saving context window budget. Escape-hatch keywords prevent false skips when non-coding prompts mention code concepts
-- **Enrichment telemetry panel** — ForgeArtifact ENRICHMENT section shows profile, classification (task/domain/strategy), layer activation status, strategy rankings detail, curated/synthesis/budget diagnostics, and workspace fallback indicator
-- **GitHub index file count tooltip** — structured tooltip explaining what files are indexed vs pruned (test dirs, large files, non-source extensions)
-- **Prompt-context divergence detection** (B1+B2) — two-layer detection of tech stack conflicts between prompt and linked codebase. Layer 1 (keyword) detects framework/database/language mismatches; Layer 2 (LLM intent) classifies as OVERSIGHT, DELIBERATE CHANGE, UPGRADE, or STANDALONE. Divergence alerts injected into optimizer template. Four categories with severity coloring in ENRICHMENT panel
-- **Domain signal auto-enrichment** (A3) — TF-IDF keyword extraction from taxonomy domain member prompts. Quality gates (min 5 members, 0.4 coherence). Hooks into warm-path domain and sub-domain discovery. Signals immediately available for subsequent heuristic classification. Taxonomy event logging for observability
-- **Confidence-gated LLM fallback** (A4) — when heuristic confidence < 0.5 AND top two categories within 0.2 margin, defers to fast Haiku call for task_type + domain classification. Gated by `enable_llm_classification_fallback` preference (default: true). Fallback tracked in `HeuristicAnalysis.llm_fallback_applied` and displayed in ENRICHMENT panel
-- **Domain-relaxed fallback queries** (C1) — strategy intelligence and anti-pattern queries fall back to task_type-only (across all domains) when exact domain+task_type returns empty. Fallback tracked in `enrichment_meta["strategy_intelligence_fallback"]`
-- **Classification agreement tracking** (E1) — compares heuristic vs LLM task_type and domain after every LLM analysis phase. Agreement rates exposed in `GET /api/health` (E1b cross-process bridge pending)
-- **Compound keyword signals** (A1) — multi-word keyword phrases in heuristic analyzer override single-word collisions (e.g., "design a system" → coding overrides "design" → creative)
-- **Technical verb disambiguation** (A2) — technical verbs ("design", "create", "build") paired with technical nouns ("system", "api", "schema") boost coding classification regardless of verb's default category
-- **Domain signal scores in ENRICHMENT panel** — heuristic domain signal weights displayed per-domain for classification observability
-- **LLM fallback badge** — visual indicator in ENRICHMENT panel when A4 confidence-gated LLM fallback was applied
-- **Disambiguation indicator** — visual indicator in ENRICHMENT panel when A2 verb disambiguation changed classification
+- **Enrichment engine consolidation** — unified `ContextEnrichmentService.enrich()` with auto-selected profiles (code_aware / knowledge_work / cold_start), task-gated curated retrieval, and strategy intelligence merging performance signals + adaptation feedback into a single advisory layer. Replaces 7 scattered context layers with 4 profile-gated active layers
+- **Prompt-context divergence detection** — two-layer system detects tech stack conflicts between prompt and linked codebase. Layer 1 (keyword) flags framework/database/language mismatches; Layer 2 (optimizer LLM) classifies intent as OVERSIGHT, DELIBERATE CHANGE, UPGRADE, or STANDALONE. Alerts injected into optimizer template with `{{divergence_alerts}}` variable
+- **Heuristic classifier accuracy** — compound keyword signals (A1), technical verb+noun disambiguation (A2), domain signal auto-enrichment via TF-IDF (A3), and confidence-gated Haiku LLM fallback (A4) with `enable_llm_classification_fallback` preference
+- **Domain-relaxed fallback queries** — strategy intelligence and anti-pattern queries fall back to task_type-only across all domains when exact domain+task_type returns empty
+- **Classification agreement tracking** — compares heuristic vs LLM task_type and domain after every analysis phase. Agreement rates and `strategy_intelligence_hit_rate` exposed in `GET /api/health`
+- **Enrichment telemetry panel** — ForgeArtifact ENRICHMENT section with profile, classification, layer activation, strategy rankings, domain signal scores, divergence alerts, disambiguation and LLM fallback indicators
+- **Hierarchical edge system** — curved edge bundling in 3D topology with depth-based attenuation, density-adaptive opacity, proximity suppression, focus-reveal on hover, and domain-colored edges
+- **Command palette** — wired up with proper business logic for keyboard-driven navigation
 
 ### Changed
-- **Workspace guidance collapsed into codebase context** — workspace guidance (manifest-based tech stack detection) is now a fallback within codebase context when explore synthesis is absent. Removed as independent field from EnrichedContext and context_sources
-- **History cluster badge** — history rows show clickable cluster label for cross-tab navigation to ClusterNavigator
-- **TopologyControls ambient badge** — filter-aware label shows count matching current state filter instead of hardcoded active count
-- **Topology empty state** — distinguishes truly empty taxonomy from empty filter results with appropriate guidance text
+- **Workspace guidance collapsed into codebase context** — now a fallback within codebase context when explore synthesis is absent
+- **History cluster badge** — clickable cluster label for cross-tab navigation to ClusterNavigator
+- **TopologyControls ambient badge** — filter-aware count matching current state filter
 
 ### Fixed
+- Fixed `project_id` not set at creation time across optimization pipelines
+- Fixed MCP tool calls not auto-resolving linked repo for codebase context
+- Fixed intent label generation leaving parenthetical verb suffix artifacts
+- Fixed context injection container brand compliance and data clarity
 - Skeleton loading animations replaced gradient shimmer with solid-color opacity pulse (zero-effects compliance)
-- Removed box-shadow from Navigator history row transition shorthand
 - Standardized hover transition timing to 200ms across Navigator and Inspector
-- Fixed non-standard font weights (Navigator `.row-prompt` 500→400, `.github-tab` 600→700)
-- Removed hardcoded hex color fallbacks in Navigator (`.data-value--amber`, `.data-value--red`)
-- Fixed ClusterNavigator `.cn-tab-badge` hardcoded hex fallback → CSS variable
-- Fixed ActivityPanel `.ap-ctx-key` non-standard font size 7.5px → 8px
-- Fixed Navigator `.strat-row` height 22px → 20px (data row standard)
-- Removed unused `parsePrimaryDomain` import from Navigator
-- Removed unused `TaxonomyActivityEvent` import from SemanticTopology
-- Removed dead `loadTemplates()` method and `getClusterTemplates` import from clusters store
-- Added missing error toast in Inspector `submitRename` catch block
-- Fixed Inspector `.phase-cancel` transition timing 150ms → 200ms with proper easing
+- Fixed non-standard font weights, hardcoded hex fallbacks, and data row heights across Navigator, ClusterNavigator, ActivityPanel, Inspector
+- Removed unused imports and dead code (clusters store, Navigator, SemanticTopology)
 
 ## v0.3.29 — 2026-04-11
 
