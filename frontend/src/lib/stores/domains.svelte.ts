@@ -67,6 +67,13 @@ class DomainStore {
     for (const [label, hex] of Object.entries(this.colors)) {
       if (label !== 'general' && lower.includes(label)) return hex;
     }
+    // Sub-domain parent-prefix fallback: "backend-auth" → try "backend"
+    const lowerDomain = domain.toLowerCase();
+    for (const d of this.domains) {
+      if (lowerDomain.startsWith(d.label.toLowerCase() + '-')) {
+        return d.color_hex ?? FALLBACK_COLOR;
+      }
+    }
     return FALLBACK_COLOR;
   }
 
