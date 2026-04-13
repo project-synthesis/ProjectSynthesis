@@ -274,7 +274,6 @@ async def test_run_sampling_pipeline_full():
         result = await run_sampling_pipeline(
             ctx, "Write a Python function that validates email addresses using regex patterns.",
             None,  # strategy_override
-            None,  # codebase_guidance
         )
 
     assert result["pipeline_mode"] == "sampling"
@@ -433,7 +432,6 @@ async def test_confidence_gate_overrides_strategy():
             ctx,
             "Write a comprehensive essay about the history of philosophy and ethics.",
             None,  # strategy_override
-            None,  # codebase_guidance
         )
 
     # Confidence 0.5 < CONFIDENCE_GATE 0.7 → strategy overridden from analyzer pick.
@@ -503,7 +501,6 @@ async def test_semantic_check_reduces_confidence():
             # Prompt has NO coding keywords — only general language
             "Help me think about how to better organize my daily tasks and routines.",
             None,  # strategy_override
-            None,  # codebase_guidance
         )
 
     # Semantic check drops 0.8 → 0.6, below CONFIDENCE_GATE 0.7 → overrides
@@ -571,7 +568,6 @@ async def test_strategy_override_bypasses_confidence_gate():
             ctx,
             "Write a comprehensive essay about the history of philosophy and ethics.",
             "few-shot",  # Explicit strategy override
-            None,  # codebase_guidance
         )
 
     # Even with confidence 0.3, explicit override wins

@@ -265,15 +265,14 @@ class TestPreferencesGating:
         assert result.context_sources["strategy_intelligence"] is False
 
     @pytest.mark.asyncio
-    async def test_backward_compat_aliases(self, db, tmp_path):
-        """adaptation_state and performance_signals mirror strategy_intelligence."""
+    async def test_strategy_intelligence_tracked_in_sources(self, db, tmp_path):
+        """strategy_intelligence is tracked in context_sources dict."""
         service = _build_service(tmp_path)
         result = await service.enrich(
             raw_prompt="Implement a REST API endpoint",
             tier="passthrough", db=db,
         )
-        assert result.adaptation_state == result.strategy_intelligence
-        assert result.performance_signals == result.strategy_intelligence
+        assert "strategy_intelligence" in result.context_sources
 
 
 class TestDBPersistenceCompat:

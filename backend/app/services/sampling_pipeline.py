@@ -456,7 +456,6 @@ async def run_sampling_pipeline(
     ctx: Context,
     prompt: str,
     strategy_override: str | None,
-    codebase_guidance: str | None,
     *,
     repo_full_name: str | None = None,
     applied_pattern_ids: list[str] | None = None,
@@ -464,6 +463,7 @@ async def run_sampling_pipeline(
     heuristic_task_type: str | None = None,
     heuristic_domain: str | None = None,
     divergence_alerts: str | None = None,
+    pre_resolved_strategy_intelligence: str | None = None,  # pre-computed by enrichment
 ) -> dict:
     """Run the full pipeline via MCP sampling (IDE's LLM).
 
@@ -494,7 +494,7 @@ async def run_sampling_pipeline(
         "explore": False,
         "patterns": False,
         "adaptation": False,
-        "workspace": codebase_guidance is not None,
+        "workspace": codebase_context is not None,
     }
 
     # Trace logger — optional; skip if directory cannot be created
@@ -715,6 +715,18 @@ async def run_sampling_pipeline(
                 )
             if auto_injected_patterns:
                 context_sources["cluster_injection"] = True
+                # Store pattern texts for UI attribution (ForgeArtifact)
+                context_sources.setdefault("enrichment_meta", {})
+                if isinstance(context_sources.get("enrichment_meta"), dict):
+                    context_sources["enrichment_meta"]["applied_pattern_texts"] = [
+                        {
+                            "text": ip.pattern_text,
+                            "source": ip.source or "cluster",
+                            "cluster_label": ip.cluster_label or "",
+                            "similarity": round(ip.similarity, 3) if ip.similarity else None,
+                        }
+                        for ip in auto_injected_patterns
+                    ]
     except Exception as exc:
         logger.warning("Sampling auto-injection failed (non-fatal): %s", exc)
 
@@ -794,22 +806,26 @@ async def run_sampling_pipeline(
     applied_cluster_ids.update(auto_injected_cluster_ids)
 
     # 4c: Strategy intelligence (unified adaptation + performance signals)
-    adaptation_state: str | None = None
+    #     Prefer pre-resolved value from enrichment service to avoid redundant DB queries.
+    strategy_intelligence: str | None = pre_resolved_strategy_intelligence
     enable_si = prefs.get(
         "pipeline.enable_strategy_intelligence",
         prefs.get("pipeline.enable_adaptation", prefs_snapshot),
     )
-    if enable_si:
+    if not enable_si:
+        strategy_intelligence = None
+    elif strategy_intelligence is None:
+        # Fallback: resolve on-demand when enrichment didn't provide
         try:
             from app.services.context_enrichment import resolve_strategy_intelligence
             async with async_session_factory() as _si_db:
-                adaptation_state, _ = await resolve_strategy_intelligence(
+                strategy_intelligence, _ = await resolve_strategy_intelligence(
                     _si_db, analysis.task_type, analysis.domain or "general",
                 )
         except Exception:
             logger.debug("Strategy intelligence resolution failed in sampling pipeline")
 
-    if adaptation_state is not None:
+    if strategy_intelligence is not None:
         context_sources["strategy_intelligence"] = True
 
     # Few-shot example retrieval (show, don't tell)
@@ -835,9 +851,8 @@ async def run_sampling_pipeline(
         "raw_prompt": prompt,
         "analysis_summary": analysis_summary,
         "strategy_instructions": strategy_instructions,
-        "codebase_guidance": codebase_guidance,
         "codebase_context": codebase_context,
-        "adaptation_state": adaptation_state,
+        "strategy_intelligence": strategy_intelligence,
         "applied_patterns": applied_patterns_text,
         "few_shot_examples": few_shot_text,
         "divergence_alerts": divergence_alerts,
@@ -845,12 +860,11 @@ async def run_sampling_pipeline(
 
     logger.info(
         "optimize_inject: trace_id=%s input_chars=%d (~%d tokens) "
-        "prompt=%d codebase=%d guidance=%d adaptation=%d patterns=%d fewshot=%d",
+        "prompt=%d codebase=%d strategy_intel=%d patterns=%d fewshot=%d",
         trace_id, len(optimize_msg), len(optimize_msg) // 4,
         len(prompt),
         len(codebase_context) if codebase_context else 0,
-        len(codebase_guidance) if codebase_guidance else 0,
-        len(adaptation_state) if adaptation_state else 0,
+        len(strategy_intelligence) if strategy_intelligence else 0,
         len(applied_patterns_text) if applied_patterns_text else 0,
         len(few_shot_text) if few_shot_text else 0,
     )
@@ -1586,7 +1600,7 @@ async def _increment_pattern_usage(cluster_ids: set[str]) -> None:
         logger.warning("Sampling usage increment failed: %s", exc)
 
 
-    # _resolve_adaptation_state() removed — replaced by resolve_strategy_intelligence()
+    # _resolve_strategy_intelligence() removed — replaced by resolve_strategy_intelligence()
 
 
 async def _check_intent_drift(

@@ -8,7 +8,7 @@
   "adaptation.md": {"required": ["task_type_affinities"], "optional": []},
   "refine.md": {"required": ["current_prompt", "refinement_request", "original_prompt", "strategy_instructions"], "optional": ["codebase_context", "strategy_intelligence", "applied_patterns", "current_scores", "strongest_dimensions", "divergence_alerts"]},
   "suggest.md": {"required": ["optimized_prompt", "scores", "weaknesses", "strategy_used"], "optional": ["score_deltas", "score_trajectory"]},
-  "passthrough.md": {"required": ["raw_prompt", "scoring_rubric_excerpt"], "optional": ["strategy_instructions", "codebase_context", "strategy_intelligence", "analysis_summary", "applied_patterns", "divergence_alerts"]},
+  "passthrough.md": {"required": ["raw_prompt", "scoring_rubric_excerpt"], "optional": ["strategy_instructions", "codebase_context", "strategy_intelligence", "analysis_summary", "applied_patterns", "few_shot_examples", "divergence_alerts"]},
   "extract_patterns.md": {"required": ["raw_prompt", "optimized_prompt", "intent_label", "domain_raw", "strategy_used"], "optional": ["taxonomy_context"]},
   "seed.md": {"required": ["project_description", "prompts_per_run", "task_types", "phase_context"]}
 }

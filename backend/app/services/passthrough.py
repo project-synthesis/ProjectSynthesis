@@ -44,12 +44,12 @@ def assemble_passthrough_prompt(
     prompts_dir: Path,
     raw_prompt: str,
     strategy_name: str | None = None,
-    codebase_guidance: str | None = None,
     codebase_context: str | None = None,
-    adaptation_state: str | None = None,
+    strategy_intelligence: str | None = None,
     analysis_summary: str | None = None,
     applied_patterns: str | None = None,
     divergence_alerts: str | None = None,
+    few_shot_examples: str | None = None,
 ) -> tuple[str, str]:
     """Assemble a full passthrough optimization prompt from templates.
 
@@ -57,12 +57,12 @@ def assemble_passthrough_prompt(
         prompts_dir: Path to the prompts/ directory.
         raw_prompt: The user's raw prompt to optimize.
         strategy_name: Requested strategy name (None → "auto").
-        codebase_guidance: Optional workspace guidance content.
         codebase_context: Optional curated index context.
-        adaptation_state: Optional adaptation state content.
+        strategy_intelligence: Optional strategy intelligence content.
         analysis_summary: Optional heuristic analysis results.
         applied_patterns: Optional proven patterns from taxonomy engine.
         divergence_alerts: Optional tech stack divergence alert text.
+        few_shot_examples: Optional few-shot examples from past optimizations.
 
     Returns:
         (assembled_prompt, resolved_strategy_name) tuple.
@@ -83,11 +83,11 @@ def assemble_passthrough_prompt(
         "raw_prompt": raw_prompt,
         "strategy_instructions": strategy_instructions,
         "scoring_rubric_excerpt": scoring_excerpt,
-        "codebase_guidance": codebase_guidance,
         "codebase_context": codebase_context,
-        "adaptation_state": adaptation_state,
+        "strategy_intelligence": strategy_intelligence,
         "analysis_summary": analysis_summary,
         "applied_patterns": applied_patterns,
+        "few_shot_examples": few_shot_examples,
         "divergence_alerts": divergence_alerts,
     })
 

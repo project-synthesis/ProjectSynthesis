@@ -16,6 +16,10 @@
 {{applied_patterns}}
 </applied-patterns>
 
+<few-shot-examples>
+{{few_shot_examples}}
+</few-shot-examples>
+
 <strategy-intelligence>
 {{strategy_intelligence}}
 </strategy-intelligence>

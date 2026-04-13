@@ -164,16 +164,31 @@ async def optimize(
 
     if decision.tier == "passthrough":
         # Inline passthrough — stream assembled template via SSE
+
+        # Few-shot retrieval for passthrough (parity with internal/sampling)
+        _pt_few_shot: str | None = None
+        try:
+            from app.services.pattern_injection import (
+                format_few_shot_examples,
+                retrieve_few_shot_examples,
+            )
+            _fs_examples = await retrieve_few_shot_examples(
+                raw_prompt=body.prompt, db=db, trace_id=str(uuid.uuid4()),
+            )
+            _pt_few_shot = format_few_shot_examples(_fs_examples)
+        except Exception:
+            logger.debug("Passthrough few-shot retrieval failed (non-fatal)")
+
         assembled, strategy_name = assemble_passthrough_prompt(
             prompts_dir=PROMPTS_DIR,
             raw_prompt=body.prompt,
             strategy_name=effective_strategy,
-            codebase_guidance=None,  # workspace guidance now folded into codebase_context
-            adaptation_state=enrichment.strategy_intelligence,
+            strategy_intelligence=enrichment.strategy_intelligence,
             analysis_summary=enrichment.analysis_summary,
             codebase_context=enrichment.codebase_context,
             applied_patterns=enrichment.applied_patterns,
             divergence_alerts=enrichment.divergence_alerts,
+            few_shot_examples=_pt_few_shot,
         )
 
         trace_id = str(uuid.uuid4())
@@ -231,9 +246,8 @@ async def optimize(
             async for event in orchestrator.run(
                 raw_prompt=body.prompt, provider=decision.provider, db=db,
                 strategy_override=effective_strategy if effective_strategy != "auto" else None,
-                codebase_guidance=None,  # workspace guidance now folded into codebase_context
                 codebase_context=enrichment.codebase_context,
-                adaptation_state=enrichment.strategy_intelligence,
+                strategy_intelligence=enrichment.strategy_intelligence,
                 context_sources=enrichment.context_sources_dict,
                 repo_full_name=effective_repo,
                 applied_pattern_ids=body.applied_pattern_ids,
@@ -476,16 +490,30 @@ async def passthrough_prepare(
         applied_pattern_ids=body.applied_pattern_ids,
     )
 
+    # Few-shot retrieval for passthrough (parity with internal/sampling)
+    _pt2_few_shot: str | None = None
+    try:
+        from app.services.pattern_injection import (
+            format_few_shot_examples,
+            retrieve_few_shot_examples,
+        )
+        _fs2_examples = await retrieve_few_shot_examples(
+            raw_prompt=body.prompt, db=db, trace_id=str(uuid.uuid4()),
+        )
+        _pt2_few_shot = format_few_shot_examples(_fs2_examples)
+    except Exception:
+        logger.debug("Passthrough few-shot retrieval failed (non-fatal)")
+
     assembled, strategy_name = assemble_passthrough_prompt(
         prompts_dir=PROMPTS_DIR,
         raw_prompt=body.prompt,
         strategy_name=requested_strategy,
-        codebase_guidance=None,  # workspace guidance now folded into codebase_context
-        adaptation_state=enrichment.strategy_intelligence,
+        strategy_intelligence=enrichment.strategy_intelligence,
         analysis_summary=enrichment.analysis_summary,
         codebase_context=enrichment.codebase_context,
         applied_patterns=enrichment.applied_patterns,
         divergence_alerts=enrichment.divergence_alerts,
+        few_shot_examples=_pt2_few_shot,
     )
 
     trace_id = str(uuid.uuid4())

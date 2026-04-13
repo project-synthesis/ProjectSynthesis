@@ -161,9 +161,8 @@ class PipelineOrchestrator:
         db: AsyncSession,
         *,
         strategy_override: str | None = None,
-        codebase_guidance: str | None = None,
         codebase_context: str | None = None,
-        adaptation_state: str | None = None,
+        strategy_intelligence: str | None = None,
         context_sources: dict[str, Any] | None = None,
         repo_full_name: str | None = None,
         github_token: str | None = None,
@@ -458,6 +457,19 @@ class PipelineOrchestrator:
                         if context_sources is None:
                             context_sources = {}
                         context_sources["cluster_injection"] = True
+
+                        # Store pattern texts for UI attribution (ForgeArtifact)
+                        _em = context_sources.get("enrichment_meta")
+                        if isinstance(_em, dict):
+                            _em["applied_pattern_texts"] = [
+                                {
+                                    "text": ip.pattern_text,
+                                    "source": ip.source or "cluster",
+                                    "cluster_label": ip.cluster_label or "",
+                                    "similarity": round(ip.similarity, 3) if ip.similarity else None,
+                                }
+                                for ip in auto_injected_patterns
+                            ]
                 except Exception as exc:
                     logger.warning("Auto-injection failed: %s", exc)
 
@@ -474,12 +486,12 @@ class PipelineOrchestrator:
                 prefs.get("pipeline.enable_adaptation", prefs_snapshot),
             )
             if not enable_si:
-                adaptation_state = None
-            elif adaptation_state is None:
+                strategy_intelligence = None
+            elif strategy_intelligence is None:
                 # Resolve on-demand when not pre-provided by enrichment service
                 try:
                     from app.services.context_enrichment import resolve_strategy_intelligence
-                    adaptation_state, _ = await resolve_strategy_intelligence(
+                    strategy_intelligence, _ = await resolve_strategy_intelligence(
                         db, analysis.task_type, analysis.domain or "general",
                     )
                 except Exception as exc:
@@ -551,9 +563,8 @@ class PipelineOrchestrator:
                 "raw_prompt": raw_prompt,
                 "analysis_summary": analysis_summary,
                 "strategy_instructions": strategy_instructions,
-                "codebase_guidance": codebase_guidance,
                 "codebase_context": codebase_context,
-                "adaptation_state": adaptation_state,
+                "strategy_intelligence": strategy_intelligence,
                 "applied_patterns": applied_patterns_text,
                 "few_shot_examples": few_shot_text,
                 "divergence_alerts": divergence_alerts,
@@ -563,12 +574,11 @@ class PipelineOrchestrator:
 
             logger.info(
                 "optimize_inject: trace_id=%s input_chars=%d (~%d tokens) "
-                "prompt=%d codebase=%d guidance=%d adaptation=%d patterns=%d fewshot=%d",
+                "prompt=%d codebase=%d strategy_intel=%d patterns=%d fewshot=%d",
                 trace_id, len(optimize_msg), len(optimize_msg) // 4,
                 len(raw_prompt),
                 len(codebase_context) if codebase_context else 0,
-                len(codebase_guidance) if codebase_guidance else 0,
-                len(adaptation_state) if adaptation_state else 0,
+                len(strategy_intelligence) if strategy_intelligence else 0,
                 len(applied_patterns_text) if applied_patterns_text else 0,
                 len(few_shot_text) if few_shot_text else 0,
             )

@@ -119,7 +119,7 @@ async def refine(
     # Use the same ContextEnrichmentService as the optimize endpoint so
     # refinement gets codebase context (incl. workspace fallback) + strategy intelligence.
     _codebase_context: str | None = None
-    _adaptation_state: str | None = None
+    _strategy_intelligence: str | None = None
     _divergence_alerts: str | None = None
     _applied_patterns: str | None = None
 
@@ -151,7 +151,7 @@ async def refine(
                 preferences_snapshot=prefs_snapshot,
             )
             _codebase_context = enrichment.codebase_context
-            _adaptation_state = enrichment.strategy_intelligence
+            _strategy_intelligence = enrichment.strategy_intelligence
             _divergence_alerts = enrichment.divergence_alerts
             _applied_patterns = enrichment.applied_patterns
         except Exception:
@@ -166,7 +166,7 @@ async def refine(
         if _enable_si:
             try:
                 from app.services.context_enrichment import resolve_strategy_intelligence
-                _adaptation_state, _ = await resolve_strategy_intelligence(
+                _strategy_intelligence, _ = await resolve_strategy_intelligence(
                     db, opt.task_type or "general", opt.domain or "general",
                 )
             except Exception:
@@ -180,9 +180,8 @@ async def refine(
         try:
             async for event in ref_svc.create_refinement_turn(
                 body.optimization_id, branch_id, body.refinement_request,
-                codebase_guidance=None,  # workspace guidance now folded into codebase_context
                 codebase_context=_codebase_context,
-                adaptation_state=_adaptation_state,
+                strategy_intelligence=_strategy_intelligence,
                 divergence_alerts=_divergence_alerts,
                 applied_patterns=_applied_patterns,
             ):

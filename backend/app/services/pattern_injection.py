@@ -520,7 +520,11 @@ async def auto_inject_patterns(
             trace_id,
         )
 
-    return injected, cluster_ids
+    # Only return cluster IDs that actually contributed patterns — prevents
+    # usage_count inflation for clusters that matched by embedding but had
+    # no MetaPattern records.
+    contributing_ids = list({ip.cluster_id for ip in injected if ip.cluster_id})
+    return injected, contributing_ids
 
 
 # ---------------------------------------------------------------------------

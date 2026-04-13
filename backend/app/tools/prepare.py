@@ -79,16 +79,31 @@ async def handle_prepare(
             repo_full_name=effective_repo,
         )
 
+    # Few-shot retrieval for passthrough (parity with internal/sampling)
+    _pt_few_shot: str | None = None
+    try:
+        from app.services.pattern_injection import (
+            format_few_shot_examples,
+            retrieve_few_shot_examples,
+        )
+        async with async_session_factory() as _fs_db:
+            _fs_examples = await retrieve_few_shot_examples(
+                raw_prompt=prompt, db=_fs_db, trace_id=str(uuid.uuid4()),
+            )
+        _pt_few_shot = format_few_shot_examples(_fs_examples)
+    except Exception:
+        logger.debug("Prepare few-shot retrieval failed (non-fatal)")
+
     assembled, strategy_name = assemble_passthrough_prompt(
         prompts_dir=PROMPTS_DIR,
         raw_prompt=prompt,
         strategy_name=effective_strategy,
-        codebase_guidance=None,
-        adaptation_state=enrichment.strategy_intelligence,
+        strategy_intelligence=enrichment.strategy_intelligence,
         analysis_summary=enrichment.analysis_summary,
         codebase_context=enrichment.codebase_context,
         applied_patterns=enrichment.applied_patterns,
         divergence_alerts=enrichment.divergence_alerts,
+        few_shot_examples=_pt_few_shot,
     )
 
     # Enforce max_context_tokens budget

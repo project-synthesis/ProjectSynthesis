@@ -435,10 +435,6 @@ class EnrichedContext:
     applied_patterns: str | None = None
     analysis: HeuristicAnalysis | None = None
 
-    # Deprecated aliases — kept for backward compat with legacy consumers.
-    # Both resolve to the same data as strategy_intelligence.
-    adaptation_state: str | None = None
-    performance_signals: str | None = None
     context_sources: MappingProxyType[str, bool] = field(
         default_factory=lambda: MappingProxyType({}),
     )
@@ -819,13 +815,20 @@ class ContextEnrichmentService:
             pass
 
         # 5. Applied patterns — profile-gated (cold-start skips — no clusters yet).
+        #    Internal/sampling tiers skip enrichment-level patterns because their
+        #    pipelines call auto_inject_patterns() directly with provenance recording.
         patterns: str | None = None
         if profile == PROFILE_COLD_START:
             skipped_layers.append("applied_patterns")
+        elif tier in ("internal", "sampling"):
+            skipped_layers.append("applied_patterns")
+            enrichment_meta_dict["patterns_deferred_to_pipeline"] = True
         else:
-            patterns = await self._resolve_patterns(
+            patterns, _pattern_details = await self._resolve_patterns(
                 raw_prompt, applied_pattern_ids, db,
             )
+            if _pattern_details:
+                enrichment_meta_dict["applied_pattern_texts"] = _pattern_details
 
         # 6. Content capping and injection hardening
         codebase_context = self._cap_codebase_context(codebase_context)
@@ -887,9 +890,6 @@ class ContextEnrichmentService:
             strategy_intelligence=strategy_intel,
             applied_patterns=patterns,
             analysis=analysis,
-            # Deprecated aliases — mirror strategy_intelligence for backward compat
-            adaptation_state=strategy_intel,
-            performance_signals=strategy_intel,
             context_sources=sources,
             enrichment_meta=MappingProxyType(enrichment_meta_dict) if enrichment_meta_dict else MappingProxyType({}),
         )
@@ -1004,9 +1004,23 @@ class ContextEnrichmentService:
         raw_prompt: str,
         applied_pattern_ids: list[str] | None,
         db: AsyncSession,
-    ) -> str | None:
-        """Resolve applied meta-patterns via taxonomy engine or explicit IDs."""
+    ) -> tuple[str | None, list[dict] | None]:
+        """Resolve applied meta-patterns via full auto-injection + explicit IDs.
+
+        Uses the same ``auto_inject_patterns()`` pipeline as internal/sampling
+        tiers — composite fusion, cross-cluster injection, GlobalPattern boost —
+        so passthrough and refine tiers get identical pattern quality.
+        No provenance recording (``optimization_id`` not available at enrichment).
+
+        Returns:
+            (formatted_text, pattern_details) — pattern_details is a list of
+            dicts with ``text``, ``source``, ``similarity`` for UI attribution.
+        """
         try:
+            pattern_details: list[dict] = []
+
+            # 1. Resolve explicit pattern IDs (user-selected patterns)
+            explicit_text: str | None = None
             if applied_pattern_ids:
                 from sqlalchemy import select
 
@@ -1016,31 +1030,51 @@ class ContextEnrichmentService:
                 )
                 patterns = result.scalars().all()
                 if patterns:
-                    return "\n".join(f"- {p.pattern_text}" for p in patterns)
-
-            # Auto-inject from taxonomy engine via match_prompt()
-            if self._taxonomy_engine and self._embedding_service:
-                try:
-                    from app.services.taxonomy.matching import match_prompt
-                    match = await match_prompt(
-                        raw_prompt, db, self._embedding_service,
+                    explicit_text = (
+                        "The following proven patterns from past optimizations "
+                        "should be applied where relevant:\n"
+                        + "\n".join(f"- {p.pattern_text}" for p in patterns)
                     )
-                    if match and (match.meta_patterns or match.cross_cluster_patterns):
-                        lines = [
-                            f"- {p.pattern_text}"
-                            for p in (match.meta_patterns or [])[:3]
-                            if p.pattern_text
-                        ]
-                        # Include cross-cluster universal patterns
-                        for cp in (match.cross_cluster_patterns or [])[:3]:
-                            if cp.pattern_text:
-                                lines.append(f"- {cp.pattern_text} (cross-cluster)")
-                        return "\n".join(lines) if lines else None
+                    for p in patterns:
+                        pattern_details.append({
+                            "text": p.pattern_text,
+                            "source": "explicit",
+                            "source_count": p.source_count,
+                        })
+
+            # 2. Auto-inject via full taxonomy pipeline (composite fusion,
+            #    cross-cluster, GlobalPattern 1.3x boost — no provenance recording)
+            auto_injected = []
+            if self._taxonomy_engine:
+                try:
+                    import uuid as _uuid
+
+                    from app.services.pattern_injection import (
+                        auto_inject_patterns,
+                    )
+                    auto_injected, _ = await auto_inject_patterns(
+                        raw_prompt=raw_prompt,
+                        taxonomy_engine=self._taxonomy_engine,
+                        db=db,
+                        trace_id=str(_uuid.uuid4()),
+                    )
+                    for ip in auto_injected:
+                        pattern_details.append({
+                            "text": ip.pattern_text,
+                            "source": ip.source or "cluster",
+                            "cluster_label": ip.cluster_label or "",
+                            "similarity": round(ip.similarity, 3) if ip.similarity else None,
+                        })
                 except Exception:
-                    logger.debug("Taxonomy pattern search failed", exc_info=True)
+                    logger.debug("Auto-inject patterns failed in enrichment", exc_info=True)
+
+            # 3. Merge explicit + auto-injected via shared formatter
+            from app.services.pattern_injection import format_injected_patterns
+            formatted = format_injected_patterns(auto_injected, explicit_text)
+            return formatted, pattern_details if pattern_details else None
         except Exception:
             logger.debug("Pattern resolution failed", exc_info=True)
-        return None
+        return None, None
 
     # -- Content capping helpers --
 
