@@ -1527,8 +1527,8 @@ async def phase_reconcile(
     # Templates can degrade via merges, member reassignment, or score drift.
     # Demotion threshold 5.5 provides 0.5-point hysteresis below the 6.0
     # manual promotion gate, preventing promote-demote oscillation.
-    _TEMPLATE_DEMOTE_SCORE = 5.5
-    _TEMPLATE_DEMOTE_COHERENCE = 0.4
+    demote_score = 5.5
+    demote_coherence = 0.4
     try:
         template_nodes = [n for n in live_nodes if n.state == "template"]
         for tpl in template_nodes:
@@ -1559,7 +1559,7 @@ async def phase_reconcile(
                 _log_template_event(tpl.id, "template_demoted", {
                     "reason": "ghost", "member_count": 0, "usage_count": _tpl_usage,
                 })
-            elif _tpl_score < _TEMPLATE_DEMOTE_SCORE or _tpl_coh < _TEMPLATE_DEMOTE_COHERENCE:
+            elif _tpl_score < demote_score or _tpl_coh < demote_coherence:
                 # Quality degraded below demotion threshold
                 tpl.state = "mature"
                 result.templates_demoted += 1
@@ -1569,8 +1569,8 @@ async def phase_reconcile(
                 )
                 _log_template_event(tpl.id, "template_demoted", {
                     "reason": "quality", "avg_score": _tpl_score,
-                    "coherence": _tpl_coh, "threshold_score": _TEMPLATE_DEMOTE_SCORE,
-                    "threshold_coherence": _TEMPLATE_DEMOTE_COHERENCE,
+                    "coherence": _tpl_coh, "threshold_score": demote_score,
+                    "threshold_coherence": demote_coherence,
                 })
         if result.templates_demoted or result.templates_archived:
             await db.flush()
