@@ -472,6 +472,10 @@ async def execute_cold_path(
     # HDBSCAN may have set parent_ids to HDBSCAN group leaders or
     # created self-references. Every non-domain cluster must have
     # parent_id pointing to its domain node (looked up by domain field).
+    # Note: clusters in sub-domains get re-parented to the top-level domain
+    # here because cluster.domain stores the parent domain (e.g., "backend"),
+    # not the sub-domain qualifier. Sub-domain hierarchy is re-discovered
+    # by the warm-path's _propose_sub_domains() in subsequent cycles.
     domain_node_map: dict[str, str] = {}  # domain_label -> domain_node_id
     domain_q = await db.execute(
         select(PromptCluster).where(PromptCluster.state == "domain")

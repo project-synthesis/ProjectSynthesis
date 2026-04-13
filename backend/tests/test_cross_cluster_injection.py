@@ -207,10 +207,14 @@ class TestCrossClusterInjection:
         mock_cc_result = MagicMock()
         mock_cc_result.all.return_value = [cc_row]
 
-        # Order: fusion pattern, cluster metadata, meta-patterns (topic), cross-cluster
+        # Sub-domain parent lookup: no parents
+        mock_parent_result = MagicMock()
+        mock_parent_result.all.return_value = []
+
+        # Order: fusion, cluster meta, parent lookup, meta-patterns (topic), cross-cluster
         db_session.execute = AsyncMock(side_effect=[
             mock_fusion_result,
-            mock_cluster_result, mock_pattern_result, mock_cc_result,
+            mock_cluster_result, mock_parent_result, mock_pattern_result, mock_cc_result,
         ])
 
         with patch(
@@ -403,19 +407,26 @@ class TestCrossClusterInjection:
         mock_pattern_result = MagicMock()
         mock_pattern_result.scalars.return_value.all.return_value = [topic_mp]
 
+        # Sub-domain parent lookup: no parents
+        mock_parent_result = MagicMock()
+        mock_parent_result.all.return_value = []
+
         call_count = 0
 
         async def _side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            # Call 1: fusion pattern signal (output signal uses index, not DB)
+            # Call 1: fusion pattern signal
             if call_count == 1:
                 return mock_fusion_result
             if call_count == 2:
                 return mock_cluster_result
+            # Call 3: sub-domain parent lookup
             if call_count == 3:
+                return mock_parent_result
+            if call_count == 4:
                 return mock_pattern_result
-            # Fourth call (cross-cluster) raises
+            # Fifth call (cross-cluster) raises
             raise RuntimeError("DB connection lost")
 
         db_session.execute = AsyncMock(side_effect=_side_effect)

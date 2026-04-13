@@ -215,20 +215,57 @@ async def auto_inject_patterns(
             cluster_ids = [m[0] for m in matches]
             similarity_map = {m[0]: m[1] for m in matches}
 
-            # Fetch cluster metadata (label, domain) for context
+            # Fetch cluster metadata (label, domain) for context — includes
+            # sub-domain parent IDs that may be added to extended_ids below
             cluster_result = await db.execute(
                 select(PromptCluster.id, PromptCluster.label, PromptCluster.domain).where(
                     PromptCluster.id.in_(cluster_ids)
                 )
             )
-            cluster_meta = {
+            cluster_meta: dict[str, tuple[str, str]] = {
                 row.id: (row.label or "unnamed", row.domain or "general")
                 for row in cluster_result
             }
 
-            # Fetch meta-patterns
+            # Include patterns from sub-domain parents of matched clusters.
+            # Sub-domains aggregate child-cluster patterns (Phase 4.25) and
+            # hold higher-level techniques that span multiple siblings.
+            extended_ids = list(cluster_ids)
+            try:
+                parent_q = await db.execute(
+                    select(PromptCluster.parent_id).where(
+                        PromptCluster.id.in_(cluster_ids),
+                        PromptCluster.parent_id.isnot(None),
+                    )
+                )
+                parent_ids = {r[0] for r in parent_q.all() if r[0]}
+                if parent_ids:
+                    # Check which parents are sub-domains (state='domain' with domain-parent)
+                    sub_q = await db.execute(
+                        select(PromptCluster.id).where(
+                            PromptCluster.id.in_(parent_ids),
+                            PromptCluster.state == "domain",
+                            PromptCluster.parent_id.isnot(None),
+                        )
+                    )
+                    sub_domain_ids = [r[0] for r in sub_q.all()]
+                    extended_ids.extend(sub_domain_ids)
+            except Exception:
+                logger.debug("Sub-domain pattern lookup failed (non-fatal)", exc_info=True)
+
+            # Add sub-domain metadata so injected patterns get proper labels
+            if len(extended_ids) > len(cluster_ids):
+                sub_meta_q = await db.execute(
+                    select(PromptCluster.id, PromptCluster.label, PromptCluster.domain).where(
+                        PromptCluster.id.in_(extended_ids[len(cluster_ids):])
+                    )
+                )
+                for row in sub_meta_q:
+                    cluster_meta[row.id] = (row.label or "unnamed", row.domain or "general")
+
+            # Fetch meta-patterns from matched clusters + their sub-domain parents
             result = await db.execute(
-                select(MetaPattern).where(MetaPattern.cluster_id.in_(cluster_ids))
+                select(MetaPattern).where(MetaPattern.cluster_id.in_(extended_ids))
             )
             patterns = result.scalars().all()
 

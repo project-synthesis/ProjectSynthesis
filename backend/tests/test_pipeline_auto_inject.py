@@ -97,8 +97,12 @@ class TestAutoInjectPatterns:
         mock_pattern_result = MagicMock()
         mock_pattern_result.scalars.return_value.all.return_value = [mp]
 
+        # Sub-domain parent lookup: parent_q returns the parent_id
+        mock_parent_result = MagicMock()
+        mock_parent_result.all.return_value = []  # no sub-domain parents
+
         db_session.execute = AsyncMock(
-            side_effect=[mock_fusion_result, mock_cluster_result, mock_pattern_result]
+            side_effect=[mock_fusion_result, mock_cluster_result, mock_parent_result, mock_pattern_result]
         )
 
         with patch(
@@ -173,12 +177,16 @@ class TestAutoInjectPatterns:
         mock_cluster_result = MagicMock()
         mock_cluster_result.__iter__ = MagicMock(return_value=iter([cluster_row]))
 
+        # Sub-domain parent lookup: no parents
+        mock_parent_result = MagicMock()
+        mock_parent_result.all.return_value = []
+
         # Topic-match execute call: MetaPattern query — no patterns
         mock_pattern_result = MagicMock()
         mock_pattern_result.scalars.return_value.all.return_value = []
 
         db_session.execute = AsyncMock(
-            side_effect=[mock_fusion_result, mock_cluster_result, mock_pattern_result]
+            side_effect=[mock_fusion_result, mock_cluster_result, mock_parent_result, mock_pattern_result]
         )
 
         with patch(
