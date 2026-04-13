@@ -632,6 +632,32 @@ async def execute_warm_path(
             logger.warning("Phase 4.5 (global patterns) failed (non-fatal): %s", gp_exc)
 
     # ------------------------------------------------------------------
+    # Phase 4.75: Task-type signal refresh
+    # Re-extract TF-IDF task-type keywords from optimization history.
+    # ------------------------------------------------------------------
+    try:
+        async with session_factory() as db:
+            from app.services.heuristic_analyzer import set_task_type_signals
+            from app.services.task_type_signal_extractor import extract_task_type_signals
+            tt_signals = await extract_task_type_signals(db)
+            if tt_signals:
+                set_task_type_signals(tt_signals)
+                import json as _tt_json
+
+                from app.config import DATA_DIR
+                _tt_cache = DATA_DIR / "task_type_signals.json"
+                try:
+                    _tt_cache.write_text(_tt_json.dumps(
+                        {k: [[kw, w] for kw, w in v] for k, v in tt_signals.items()},
+                        indent=2,
+                    ))
+                    logger.info("Phase 4.75 (task-type signals): persisted to %s", _tt_cache)
+                except Exception as _persist_exc:
+                    logger.warning("Phase 4.75: persistence failed (%s) — in-memory only", _persist_exc)
+    except Exception as _tt_exc:
+        logger.warning("Phase 4.75 (task-type signals) failed (non-fatal): %s", _tt_exc)
+
+    # ------------------------------------------------------------------
     # Phase 5: Discover — fresh session, always commits
     # ADR-005: Full scan — domain discovery needs complete cluster state
     # ------------------------------------------------------------------

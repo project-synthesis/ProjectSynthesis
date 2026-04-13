@@ -361,6 +361,22 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 "MCP server: domain services init failed (non-fatal): %s", exc,
             )
 
+        # Load dynamic task-type signals from JSON cache (persisted by backend warm path)
+        try:
+            import json as _tt_json
+
+            from app.services.heuristic_analyzer import set_task_type_signals
+            _tt_cache = DATA_DIR / "task_type_signals.json"
+            if _tt_cache.exists():
+                _tt_raw = _tt_json.loads(_tt_cache.read_text())
+                _tt_signals = {k: [(kw, w) for kw, w in v] for k, v in _tt_raw.items()}
+                set_task_type_signals(_tt_signals)
+                logger.info("MCP lifespan: TaskTypeSignals loaded from cache (%d types)", len(_tt_signals))
+            else:
+                logger.info("MCP lifespan: no task_type_signals.json — using static bootstrap")
+        except Exception as _tt_exc:
+            logger.warning("MCP lifespan: TaskTypeSignals cache load failed — static bootstrap: %s", _tt_exc)
+
         # Subscribe to domain events for cache invalidation
         async def _reload_domain_caches() -> None:
             try:

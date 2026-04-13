@@ -289,6 +289,29 @@ async def lifespan(app: FastAPI):
 
             logger.info("Domain services initialized")
 
+            # Extract dynamic task-type signals from optimization history
+            try:
+                from app.services.heuristic_analyzer import set_task_type_signals
+                from app.services.task_type_signal_extractor import extract_task_type_signals
+                async with async_session_factory() as _tt_db:
+                    tt_signals = await extract_task_type_signals(_tt_db)
+                    if tt_signals:
+                        set_task_type_signals(tt_signals)
+                        # Persist for MCP cold-start
+                        import json as _tt_json
+                        _tt_cache = DATA_DIR / "task_type_signals.json"
+                        try:
+                            _tt_cache.write_text(_tt_json.dumps(
+                                {k: [[kw, w] for kw, w in v] for k, v in tt_signals.items()},
+                                indent=2,
+                            ))
+                        except Exception:
+                            logger.debug("Failed to persist task_type_signals.json")
+                    else:
+                        logger.info("TaskTypeSignals: no dynamic signals — using static bootstrap")
+            except Exception as _tt_exc:
+                logger.warning("TaskTypeSignals: startup extraction failed — static bootstrap: %s", _tt_exc)
+
             # Warm-load embedding index from disk cache or active cluster centroids
             _index_cache_path = DATA_DIR / "embedding_index.pkl"
             try:
