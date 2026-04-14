@@ -1639,12 +1639,20 @@ class TaxonomyEngine:
         # general if their hot-path assignment didn't find the domain node.
         try:
             domain_nodes_q = await db.execute(
-                select(PromptCluster.id, PromptCluster.label).where(
+                select(PromptCluster.id, PromptCluster.label, PromptCluster.parent_id).where(
                     PromptCluster.state == "domain",
                     PromptCluster.label != "general",
                 )
             )
-            domain_lookup = {row[1].lower(): row[0] for row in domain_nodes_q}
+            _domain_rows = domain_nodes_q.all()
+            domain_lookup = {row[1].lower(): row[0] for row in _domain_rows}
+            # Map sub-domain labels to their parent domain label so cluster.domain
+            # always uses the top-level domain (matching DomainResolver behavior).
+            _domain_id_to_label = {row[0]: row[1] for row in _domain_rows}
+            _sub_domain_to_parent: dict[str, str] = {}
+            for row_id, label, parent_id in _domain_rows:
+                if parent_id and parent_id in _domain_id_to_label:
+                    _sub_domain_to_parent[label.lower()] = _domain_id_to_label[parent_id].lower()
 
             from collections import Counter as _Counter
 
@@ -1686,12 +1694,16 @@ class TaxonomyEngine:
                     consistency = top_ct / total
                     if top_primary in domain_lookup and consistency >= DOMAIN_DISCOVERY_CONSISTENCY:
                         target_id = domain_lookup[top_primary]
+                        # Sub-domain labels map to parent domain for cluster.domain
+                        # (cluster.parent_id points to the sub-domain node for tree structure)
+                        effective_domain = _sub_domain_to_parent.get(top_primary, top_primary)
                         logger.info(
-                            "Re-parenting '%s' → '%s' (consistency=%.0f%%, %d/%d members)",
-                            cluster.label, top_primary, consistency * 100, top_ct, total,
+                            "Re-parenting '%s' → '%s' (domain=%s, consistency=%.0f%%, %d/%d members)",
+                            cluster.label, top_primary, effective_domain,
+                            consistency * 100, top_ct, total,
                         )
                         cluster.parent_id = target_id
-                        cluster.domain = top_primary
+                        cluster.domain = effective_domain
                         sweep_reparented += 1
                     break  # only check the top non-general candidate
             if sweep_reparented:
