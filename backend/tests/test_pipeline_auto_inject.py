@@ -158,8 +158,8 @@ class TestAutoInjectPatterns:
         assert texts == []
         assert ids == []
 
-    async def test_returns_empty_texts_when_no_db_meta_patterns(self, orchestrator, db_session):
-        """When matches found but no MetaPatterns in DB, returns ([], cluster_ids)."""
+    async def test_returns_empty_when_no_db_meta_patterns(self, orchestrator, db_session):
+        """When matches found but no MetaPatterns in DB, returns ([], []) — no contributing clusters."""
         cluster_id = "cluster-xyz"
         engine = _make_taxonomy_engine(size=1, matches=[(cluster_id, 0.80)])
 
@@ -201,7 +201,8 @@ class TestAutoInjectPatterns:
             )
 
         assert patterns == []
-        assert ids == [cluster_id]
+        # No MetaPatterns → no contributing clusters (only IDs with actual patterns returned)
+        assert ids == []
 
 
 # ---------------------------------------------------------------------------

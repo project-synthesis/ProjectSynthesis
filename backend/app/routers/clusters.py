@@ -567,6 +567,7 @@ async def update_cluster(
         try:
             from app.services.taxonomy.event_logger import get_event_logger
             get_event_logger().log_decision(
+                path="api",
                 op="state_change",
                 cluster_id=cluster_id,
                 decision=f"{old_state}_to_{body.state}",
