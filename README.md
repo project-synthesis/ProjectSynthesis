@@ -147,7 +147,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 
 ### Developer Integration (First Vertical)
 - **GitHub integration** — zero-config Device Flow OAuth (no secrets, no callback URL). Link a repo, browse files, and get codebase-aware optimization. Background indexing with incremental refresh builds semantic file embeddings + Haiku architectural synthesis
-- **Three-layer codebase context** — cached explore synthesis (architectural overview, once per repo) + per-prompt curated retrieval (full source delivery, 80K char cap, import-graph + doc-ref expansion, source-type balanced, task-gated for non-coding skipping) + performance signals. Zero request-time LLM calls
+- **Three-layer codebase context** — cached explore synthesis (architectural overview, once per repo) + per-prompt curated retrieval (full source delivery, 80K char cap, import-graph + doc-ref expansion, source-type balanced, task-gated for non-coding skipping) + performance signals. **Repo relevance gate** prevents same-stack-different-project contamination via hybrid cosine + domain entity overlap scoring. Zero request-time LLM calls
 - **MCP server** — use from any MCP-compatible IDE (VS Code, Claude Code, etc.)
 - **VS Code bridge extension** — MCP Copilot Bridge for sampling-based optimization through the IDE's own LLM
 - **Passthrough mode** — IDE's own LLM does the optimization; server provides context + heuristic analysis + hybrid scoring
@@ -161,7 +161,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Production diff viewer** — unified and split modes with word-level highlighting
 - **Real-time events** — SSE-based event bus with toast notifications, connection health monitoring (latency percentiles, degradation detection, exponential backoff reconnection)
 - **Taxonomy Activity panel** — live feed of all taxonomy decision events with filters and expandable context
-- **Pattern suggestion on paste** — cosine-searches active clusters, suggests matches with 1-click apply
+- **Live pattern detection** — two-path system (typing: 800ms debounce + paste: 300ms) cosine-searches active clusters, suggests matches with 1-click apply. Zero-pattern matches suppressed
 - **Tier-aware UI** — accent color adapts to active routing tier (CLI/API, sampling, passthrough)
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation + phase weight adaptation
 - **Auto-update** — detects new releases on startup (3-tier: git tags, raw fetch, GitHub Releases API). Persistent StatusBar badge, one-click update dialog with changelog, detached HEAD warning, post-update validation. CLI: `./init.sh update [tag]`
@@ -207,13 +207,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (~270s, 2107 tests)
+# Backend tests (2151 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1038 tests)
+# Frontend tests (1037 tests)
 cd frontend && npm test
 
 # Frontend build

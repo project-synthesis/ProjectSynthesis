@@ -7,6 +7,18 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 ### Added
 - **Repo relevance gate (hybrid)** — two-tier gate prevents same-stack-different-project codebase contamination: cosine floor (`REPO_RELEVANCE_FLOOR = 0.20`) for clearly unrelated prompts, domain entity overlap check above the floor via `extract_domain_vocab()` (requires `REPO_DOMAIN_MIN_OVERLAP = 1` project-specific term). Extracts domain vocabulary from explore synthesis by filtering generic programming terms (~110) and tech aliases. Tracked in `enrichment_meta` as `repo_relevance_score`, `repo_relevance_info` (cosine, domain_overlap, domain_matches, decision, reason), and `repo_relevance_skipped`
 
+### Fixed
+- **Taxonomy re-parenting** — Phase 0 reconciliation now re-parents clusters whose `domain` field doesn't match their parent domain node. Sub-domain children are correctly preserved (a cluster with domain=backend under a backend sub-domain is not re-parented)
+- **Sub-domain label mapping** — re-parenting sweep maps sub-domain labels to their parent domain for `cluster.domain`, matching `DomainResolver` behavior
+- **Matching excludes structural nodes** — family-level search now filters `EXCLUDED_STRUCTURAL_STATES` (domain, archived, project), preventing false matches against non-leaf nodes
+- **Matching includes mature/template states** — fallback node search now queries active, candidate, mature, and template states instead of only active and candidate
+- **Leaf cluster pattern loading** — when a matched node has no children (leaf cluster), patterns are loaded directly from the node itself instead of returning empty
+- **Zero-pattern suggestion suppression** — frontend no longer shows pattern suggestion banners when the matched cluster has no meta-patterns
+- **Event logger missing `path=`** — added required `path="api"` parameter to `log_decision()` call in cluster state change endpoint
+
+### Removed
+- Internal plans and spec documents from public repository
+
 ## v0.3.31 — 2026-04-13
 
 ### Added
