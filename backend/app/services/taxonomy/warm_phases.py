@@ -1138,6 +1138,39 @@ async def phase_reconcile(
                 domain_node.member_count = child_count
                 result.member_counts_fixed += 1
 
+        # Re-parent clusters whose domain field doesn't match their parent
+        # domain node. This catches clusters that were classified into a
+        # sub-domain but hot-path assigned them under a different domain.
+        domain_id_by_label: dict[str, str] = {
+            dn.label: dn.id for dn in (await db.execute(
+                select(PromptCluster).where(PromptCluster.state == "domain")
+            )).scalars().all()
+        }
+        misparented_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                PromptCluster.parent_id.isnot(None),
+            )
+        )
+        for cluster in misparented_q.scalars().all():
+            correct_parent = domain_id_by_label.get(cluster.domain)
+            if correct_parent and cluster.parent_id != correct_parent:
+                # Verify the current parent is a domain node (not a sub-domain
+                # that legitimately parents this cluster)
+                current_parent_state = (await db.execute(
+                    select(PromptCluster.state, PromptCluster.label)
+                    .where(PromptCluster.id == cluster.parent_id)
+                )).first()
+                if current_parent_state and current_parent_state.state == "domain":
+                    # Current parent is a domain but not the right one
+                    logger.info(
+                        "Re-parenting cluster '%s' from '%s' to '%s' (domain=%s)",
+                        cluster.label, current_parent_state.label,
+                        cluster.domain, cluster.domain,
+                    )
+                    cluster.parent_id = correct_parent
+                    result.member_counts_fixed += 1
+
         # Reconcile domain node member_count (child cluster count by parent_id)
         domain_q2 = await db.execute(
             select(PromptCluster).where(PromptCluster.state == "domain")
