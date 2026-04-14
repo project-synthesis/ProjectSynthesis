@@ -75,6 +75,108 @@ def select_enrichment_profile(
 
 
 # ---------------------------------------------------------------------------
+# B0: Prompt-repo relevance gate
+# ---------------------------------------------------------------------------
+
+_GENERIC_TERMS = frozenset({
+    # Architecture / structure
+    "service", "services", "model", "models", "controller", "handler",
+    "module", "modules", "interface", "component", "components",
+    "factory", "provider", "middleware", "wrapper", "manager",
+    "backend", "frontend", "system", "systems", "application",
+    "project", "projects", "framework", "library", "package",
+    # CRUD / data
+    "create", "read", "update", "delete", "query", "filter",
+    "request", "response", "result", "results", "payload",
+    "field", "fields", "column", "columns", "table", "tables",
+    "record", "records", "entry", "entries", "item", "items",
+    "database", "migration", "migrations",
+    # Files / config
+    "file", "files", "directory", "path", "config", "configuration",
+    "setting", "settings", "option", "options", "parameter",
+    # Code constructs
+    "function", "method", "class", "instance", "object", "variable",
+    "value", "values", "return", "import", "export", "async", "await",
+    "callback", "promise", "decorator", "annotation",
+    # HTTP / API
+    "endpoint", "route", "router", "server", "client", "port", "host",
+    "header", "headers", "body", "status", "error", "errors",
+    "json", "yaml", "html", "text", "string", "number", "boolean",
+    # Common actions
+    "init", "start", "stop", "setup", "build", "test", "tests",
+    "check", "validate", "parse", "format", "convert", "process",
+    "load", "save", "send", "fetch", "push", "pull",
+    # Generic nouns
+    "name", "title", "description", "content", "type", "types",
+    "state", "data", "info", "meta", "context", "source",
+    "default", "optional", "required", "enabled", "disabled",
+    "base", "core", "utils", "helpers", "common", "shared",
+    "user", "users", "admin", "role", "session", "token",
+    "list", "page", "pagination", "offset", "limit", "total",
+    "schema", "schemas", "validator", "validators",
+    "level", "mode", "version", "index", "count",
+    "event", "events", "action", "actions", "task", "tasks",
+    "null", "none", "true", "false", "undefined",
+    "logging", "logger", "debug", "warning",
+    # Software lifecycle
+    "testing", "deploy", "deployment", "release", "staging",
+    "template", "templates", "phase", "only", "first", "never",
+    "tracking", "active", "calls", "from", "with", "turn",
+})
+
+
+def extract_domain_vocab(synthesis: str) -> frozenset[str]:
+    """Extract domain-specific vocabulary from explore synthesis.
+
+    Tokenizes the synthesis text, keeps words with frequency >= 3, and
+    filters out generic programming terms (:data:`_GENERIC_TERMS`) and
+    tech-stack aliases (:data:`_TECH_VOCABULARY`).  Returns a frozenset
+    of domain-specific terms that characterize the linked repo's domain.
+    """
+    if not synthesis:
+        return frozenset()
+    from collections import Counter
+
+    words = re.findall(r"\b[a-z][a-z_]{3,}\b", synthesis.lower())
+    freq = Counter(words)
+    tech_aliases: set[str] = set()
+    for techs in _TECH_VOCABULARY.values():
+        for aliases in techs.values():
+            tech_aliases.update(aliases)
+    return frozenset(
+        w for w, c in freq.items()
+        if c >= 3 and w not in _GENERIC_TERMS and w not in tech_aliases
+    )
+
+
+async def compute_repo_relevance(
+    raw_prompt: str,
+    explore_synthesis: str,
+    embedding_service: Any,
+) -> float:
+    """Semantic relevance between a prompt and the linked repo's architecture.
+
+    Computes cosine similarity between the prompt embedding and the explore
+    synthesis embedding.  Returns a float in [0.0, 1.0] — higher means the
+    prompt is more likely *about* the linked project rather than merely sharing
+    the same tech stack.
+
+    Used by :func:`ContextEnrichmentService.enrich` to gate codebase context
+    injection.  When the score falls below ``REPO_RELEVANCE_GATE`` the pipeline
+    skips synthesis + curated retrieval, preventing unrelated projects from
+    inheriting the linked repo's internal patterns.
+    """
+    import numpy as np
+
+    prompt_vec = await embedding_service.aembed_single(raw_prompt)
+    synth_vec = await embedding_service.aembed_single(explore_synthesis)
+    return float(
+        np.dot(prompt_vec, synth_vec)
+        / (np.linalg.norm(prompt_vec) * np.linalg.norm(synth_vec) + 1e-9)
+    )
+
+
+# ---------------------------------------------------------------------------
 # B1: Prompt-context divergence detection
 # ---------------------------------------------------------------------------
 
@@ -693,8 +795,38 @@ class ContextEnrichmentService:
                 "char_count": len(explore_synthesis) if explore_synthesis else 0,
             }
 
+            # 2a-gate. Repo relevance gate — skip codebase context when the
+            # prompt is semantically unrelated to the linked repo (same tech
+            # stack but different project).  Only fires when synthesis exists
+            # (can't compute relevance without it).
+            _repo_relevance_skipped = False
+            if explore_synthesis:
+                from app.services.pipeline_constants import REPO_RELEVANCE_GATE
+
+                try:
+                    relevance = await compute_repo_relevance(
+                        raw_prompt, explore_synthesis, self._embedding_service,
+                    )
+                    enrichment_meta_dict["repo_relevance_score"] = round(relevance, 3)
+
+                    if relevance < REPO_RELEVANCE_GATE:
+                        logger.info(
+                            "repo_relevance_gate: score=%.3f < %.2f, "
+                            "skipping codebase context (repo=%s)",
+                            relevance, REPO_RELEVANCE_GATE, repo_full_name,
+                        )
+                        enrichment_meta_dict["repo_relevance_skipped"] = True
+                        explore_synthesis = None
+                        _repo_relevance_skipped = True
+                except Exception:
+                    logger.debug(
+                        "repo_relevance_gate: embedding failed, proceeding without gate",
+                        exc_info=True,
+                    )
+                    enrichment_meta_dict["repo_relevance_error"] = True
+
             # 2b. Workspace guidance as fallback when synthesis is absent
-            if not explore_synthesis:
+            if not explore_synthesis and not _repo_relevance_skipped:
                 ws_fallback = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
                 if ws_fallback:
                     explore_synthesis = ws_fallback
@@ -704,10 +836,18 @@ class ContextEnrichmentService:
             skip_curated, skip_reason = self._should_skip_curated(
                 task_type or "general", raw_prompt,
             )
+            # Also skip curated if repo relevance gate fired
+            if _repo_relevance_skipped:
+                skip_curated = True
+                skip_reason = "repo_relevance_gate"
             if skip_curated:
                 curated_text = None
+                _skip_status = (
+                    "skipped_repo_relevance" if _repo_relevance_skipped
+                    else "skipped_task_type"
+                )
                 enrichment_meta_dict["curated_retrieval"] = {
-                    "status": "skipped_task_type",
+                    "status": _skip_status,
                     "files_included": 0,
                     "reason": skip_reason,
                 }
