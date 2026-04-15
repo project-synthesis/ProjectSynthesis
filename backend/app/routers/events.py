@@ -174,6 +174,11 @@ async def event_stream(
                 except asyncio.TimeoutError:
                     # SSE keepalive comment (ignored by EventSource, keeps connection alive)
                     yield ": keepalive\n\n"
+                except asyncio.CancelledError:
+                    # Uvicorn's graceful shutdown timer expired — exit cleanly
+                    # instead of letting the CancelledError propagate through
+                    # StreamingResponse and produce an ASGI exception traceback.
+                    return
         finally:
             event_bus._subscribers.discard(queue)
             logger.info("SSE subscriber disconnected")

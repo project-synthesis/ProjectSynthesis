@@ -1275,7 +1275,11 @@ async def lifespan(app: FastAPI):
     # subscriber queues so persistent streams close *before* uvicorn's
     # graceful-shutdown timer kicks in (~0ms instead of waiting 3-5s).
     event_bus.shutdown()
-    await asyncio.sleep(0.1)  # yield control so SSE generators return
+    # Allow enough time for SSE generators to detect the sentinel,
+    # yield their final bytes, and exit cleanly.  0.1s was too tight
+    # under load — the StreamingResponse wrapper needs a full event-loop
+    # turn plus network flush before the generator is truly done.
+    await asyncio.sleep(0.5)
 
     # Phase 2: Cancel all background tasks concurrently via gather().
     # Previous code awaited each sequentially (4 × cancel+await blocks).

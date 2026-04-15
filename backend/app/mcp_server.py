@@ -311,12 +311,30 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
             # Periodic embedding index reload — picks up warm-path updates
             # so MCP pattern matching stays fresh (saved every ~5 min by backend).
+            # Uses mtime-based change detection instead of age-based freshness:
+            # the cache file doesn't expire, it just gets out of sync with the DB.
+            # Only reloads when the backend has actually saved a new version.
+            _last_loaded_mtime: float = (
+                _index_cache_path.stat().st_mtime if _index_cache_path.exists() else 0.0
+            )
+
             async def _refresh_embedding_index() -> None:
+                nonlocal _last_loaded_mtime
                 while True:
-                    await asyncio.sleep(30)  # 30 seconds — match parity with backend
+                    await asyncio.sleep(30)
                     try:
-                        loaded = await engine.embedding_index.load_cache(_index_cache_path)
+                        if not _index_cache_path.exists():
+                            continue
+                        current_mtime = _index_cache_path.stat().st_mtime
+                        if current_mtime <= _last_loaded_mtime:
+                            continue  # File unchanged — skip reload
+                        # File has been updated by backend warm path — reload
+                        # regardless of age (bypass max_age_seconds check).
+                        loaded = await engine.embedding_index.load_cache(
+                            _index_cache_path, max_age_seconds=86400,
+                        )
                         if loaded:
+                            _last_loaded_mtime = current_mtime
                             logger.info(
                                 "MCP: embedding index refreshed (%d entries)",
                                 engine.embedding_index.size,

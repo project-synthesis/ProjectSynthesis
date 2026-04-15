@@ -36,11 +36,18 @@ class TraceLogger:
         model: str,
         provider: str,
         result: dict[str, Any] | None = None,
+        *,
+        status: str = "ok",
     ) -> None:
-        """Append one trace entry to today's JSONL file."""
+        """Append one trace entry to today's JSONL file.
+
+        *status* indicates the outcome of the phase: ``"ok"`` (default),
+        ``"error"``, or ``"skipped"``.
+        """
         entry: dict[str, Any] = {
             "trace_id": trace_id,
             "phase": phase,
+            "status": status,
             "duration_ms": duration_ms,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,

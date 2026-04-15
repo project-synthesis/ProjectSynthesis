@@ -153,21 +153,20 @@ async def _probe_service(
         return ServiceStatus(status="down", latency_ms=latency, error=str(exc)[:200])
 
 
-async def _probe_all_services() -> tuple[dict[str, ServiceStatus], dict[str, ServiceStatus]]:
-    """Run all service probes in parallel. Returns (services, cross_service)."""
+async def _probe_all_services(
+    mcp_connected: bool = True,
+) -> tuple[dict[str, ServiceStatus], dict[str, ServiceStatus]]:
+    """Run all service probes in parallel. Returns (services, cross_service).
+
+    When *mcp_connected* is False the MCP probe is skipped entirely —
+    the Streamable HTTP transport returns 400 without a valid session,
+    producing noisy log lines on every health-check cycle.
+    """
     # Direct service probes
     backend_probe = _probe_service(
         "http://127.0.0.1:8000/api/health?probes=false",
     )
     frontend_probe = _probe_service("http://127.0.0.1:5199/")
-    # MCP Streamable HTTP transport requires Accept with both JSON and SSE,
-    # otherwise the server returns 406 Not Acceptable.
-    mcp_probe = _probe_service(
-        "http://127.0.0.1:8001/mcp",
-        method="POST",
-        payload={"jsonrpc": "2.0", "method": "ping", "id": 1},
-        headers={"Accept": "application/json, text/event-stream"},
-    )
 
     # Cross-service probes
     fe_to_be_probe = _probe_service(
@@ -179,36 +178,67 @@ async def _probe_all_services() -> tuple[dict[str, ServiceStatus], dict[str, Ser
         payload={"event_type": "_health_check", "data": {}},
     )
 
-    try:
-        results = await asyncio.wait_for(
-            asyncio.gather(
-                backend_probe, frontend_probe, mcp_probe,
-                fe_to_be_probe, mcp_to_be_probe,
-            ),
-            timeout=_OVERALL_TIMEOUT,
+    if mcp_connected:
+        # MCP Streamable HTTP transport requires Accept with both JSON and SSE,
+        # otherwise the server returns 406 Not Acceptable.
+        mcp_probe = _probe_service(
+            "http://127.0.0.1:8001/mcp",
+            method="POST",
+            payload={"jsonrpc": "2.0", "method": "ping", "id": 1},
+            headers={"Accept": "application/json, text/event-stream"},
         )
-    except asyncio.TimeoutError:
-        timeout_status = ServiceStatus(status="timeout", error="Overall deadline exceeded")
-        results = [timeout_status] * 5
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    backend_probe, frontend_probe, mcp_probe,
+                    fe_to_be_probe, mcp_to_be_probe,
+                ),
+                timeout=_OVERALL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            timeout_status = ServiceStatus(status="timeout", error="Overall deadline exceeded")
+            results = [timeout_status] * 5
+
+        mcp_status = results[2]
+        cross_results = results[3], results[4]
+    else:
+        # No active MCP session — skip the probe to avoid 400 noise
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    backend_probe, frontend_probe,
+                    fe_to_be_probe, mcp_to_be_probe,
+                ),
+                timeout=_OVERALL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            timeout_status = ServiceStatus(status="timeout", error="Overall deadline exceeded")
+            results = [timeout_status] * 4
+
+        mcp_status = ServiceStatus(status="not_connected", error="No active MCP session")
+        cross_results = results[2], results[3]
 
     services = {
         "backend": results[0],
         "frontend": results[1],
-        "mcp": results[2],
+        "mcp": mcp_status,
     }
     cross_service = {
         "frontend_to_backend": ServiceStatus(
-            status="ok" if results[3].status == "up" else "failed",
-            latency_ms=results[3].latency_ms,
-            error=results[3].error,
+            status="ok" if cross_results[0].status == "up" else "failed",
+            latency_ms=cross_results[0].latency_ms,
+            error=cross_results[0].error,
         ),
         "mcp_to_backend": ServiceStatus(
-            status="ok" if results[4].status == "up" else "failed",
-            latency_ms=results[4].latency_ms,
-            error=results[4].error,
+            status="ok" if cross_results[1].status == "up" else "failed",
+            latency_ms=cross_results[1].latency_ms,
+            error=cross_results[1].error,
         ),
     }
     return services, cross_service
+
+
+_CRITICAL_SERVICES = frozenset({"backend", "frontend"})
 
 
 def _compute_overall_status(
@@ -219,20 +249,29 @@ def _compute_overall_status(
     """Determine overall health status.
 
     - healthy: provider available AND all services up
-    - degraded: services up but cross-link broken, OR no provider
-    - unhealthy: any service is down
+    - degraded: optional service down (MCP), cross-link broken, OR no provider
+    - unhealthy: any *critical* service (backend/frontend) is down
     """
     if services is None:
         return "healthy" if provider else "degraded"
 
-    any_down = any(s.status != "up" for s in services.values())
+    critical_down = any(
+        s.status not in ("up", "not_connected")
+        for name, s in services.items()
+        if name in _CRITICAL_SERVICES
+    )
+    optional_down = any(
+        s.status not in ("up",)
+        for name, s in services.items()
+        if name not in _CRITICAL_SERVICES
+    )
     cross_broken = cross_service and any(
         s.status != "ok" for s in cross_service.values()
     )
 
-    if any_down:
+    if critical_down:
         return "unhealthy"
-    if cross_broken or not provider:
+    if optional_down or cross_broken or not provider:
         return "degraded"
     return "healthy"
 
@@ -367,7 +406,10 @@ async def health_check(
     cross_service_result = None
     if probes:
         try:
-            services_result, cross_service_result = await _probe_all_services()
+            _mcp_connected = routing.state.mcp_connected if routing else False
+            services_result, cross_service_result = await _probe_all_services(
+                mcp_connected=_mcp_connected,
+            )
         except Exception as probe_exc:
             logger.warning("Cross-service probes failed: %s", probe_exc)
 
