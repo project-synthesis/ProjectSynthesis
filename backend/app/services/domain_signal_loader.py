@@ -315,6 +315,33 @@ class DomainSignalLoader:
             ", ".join(list(qualifiers.keys())[:3]),
         )
 
+    @staticmethod
+    def find_best_qualifier(
+        text: str, qualifiers: dict[str, list[str]],
+    ) -> tuple[str | None, int]:
+        """Find the qualifier with the most keyword hits in the given text.
+
+        Shared utility used by both hot-path enrichment
+        (``_enrich_domain_qualifier``) and warm-path Phase 5 Source 2
+        (intent_label matching in ``_propose_sub_domains``).
+
+        Args:
+            text: Lowercased text to scan for keywords.
+            qualifiers: Mapping of qualifier name → keyword list.
+
+        Returns:
+            Tuple of (best_qualifier_name, hit_count). Returns (None, 0) if
+            no qualifier has any keyword hits.
+        """
+        best: str | None = None
+        best_hits = 0
+        for name, keywords in qualifiers.items():
+            hits = sum(1 for kw in keywords if kw in text)
+            if hits > best_hits:
+                best_hits = hits
+                best = name
+        return best, best_hits
+
     def stats(self) -> dict:
         """Return diagnostic stats for the health endpoint."""
         return {

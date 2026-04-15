@@ -301,16 +301,15 @@ def _enrich_domain_qualifier(domain: str, prompt_lower: str) -> str:
     if not qualifiers:
         return domain
 
-    best_qualifier: str | None = None
-    best_hits = 0
+    from app.services.domain_signal_loader import DomainSignalLoader
 
-    for qualifier_name, keywords in qualifiers.items():
-        hits = sum(1 for kw in keywords if kw in prompt_lower)
-        if hits >= 1 and hits > best_hits:
-            best_hits = hits
-            best_qualifier = qualifier_name
+    best_qualifier, best_hits = DomainSignalLoader.find_best_qualifier(
+        prompt_lower, qualifiers,
+    )
 
-    if best_qualifier:
+    from app.services.taxonomy._constants import SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS
+
+    if best_qualifier and best_hits >= SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS:
         logger.debug(
             "qualifier_enrichment: domain=%s qualifier=%s hits=%d",
             primary, best_qualifier, best_hits,

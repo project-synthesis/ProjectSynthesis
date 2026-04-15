@@ -1742,6 +1742,7 @@ class TaxonomyEngine:
         from app.services.taxonomy._constants import (
             SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH,
             SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+            SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS,
             SUB_DOMAIN_QUALIFIER_MIN_MEMBERS,
             SUB_DOMAIN_QUALIFIER_SCALE_RATE,
         )
@@ -1932,6 +1933,17 @@ class TaxonomyEngine:
 
             if not domain_qualifiers and cached_vocab and isinstance(cached_vocab, dict):
                 domain_qualifiers = cached_vocab
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="vocab_fallback_to_cache",
+                        context={
+                            "domain": domain_node.label,
+                            "cached_groups": len(cached_vocab),
+                        },
+                    )
+                except RuntimeError:
+                    pass
 
             # Push vocab to DomainSignalLoader for hot-path enrichment
             if domain_qualifiers:
@@ -1995,8 +2007,14 @@ class TaxonomyEngine:
             # Build a set of known qualifier names for Source 1 validation.
             # LLM-generated qualifiers like "backend auth middleware" are noise
             # unless they match a known organic qualifier name or a dynamic keyword.
+            # Normalize all entries with space→dash replacement so multi-word
+            # dynamic keywords (e.g. "api gateway") match parsed qualifiers
+            # that are normalized the same way (e.g. "api-gateway").
             known_qualifiers: set[str] = set(domain_qualifiers.keys())
-            known_qualifiers.update(kw.lower() for kw, _ in dynamic_keywords)
+            for kw, _ in dynamic_keywords:
+                kw_lower = kw.lower()
+                known_qualifiers.add(kw_lower)
+                known_qualifiers.add(kw_lower.replace(" ", "-"))
 
             for domain_raw, intent_label, cluster_id, raw_prompt in opt_rows:
                 qualifier: str | None = None
@@ -2014,17 +2032,15 @@ class TaxonomyEngine:
                             qualifier = q
                             source_from_raw += 1
 
-                # Source 2: fallback to intent_label keyword match (static vocab)
+                # Source 2: fallback to intent_label keyword match (organic vocab)
                 if not qualifier and intent_label and domain_qualifiers:
+                    from app.services.domain_signal_loader import DomainSignalLoader
+
                     intent_lower = intent_label.lower()
-                    best_q: str | None = None
-                    best_hits = 0
-                    for q_name, keywords in domain_qualifiers.items():
-                        hits = sum(1 for kw in keywords if kw in intent_lower)
-                        if hits > best_hits:
-                            best_hits = hits
-                            best_q = q_name
-                    if best_q and best_hits >= 1:
+                    best_q, best_hits = DomainSignalLoader.find_best_qualifier(
+                        intent_lower, domain_qualifiers,
+                    )
+                    if best_q and best_hits >= SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS:
                         qualifier = best_q
                         source_from_intent += 1
                         intent_qualifier_counts[best_q] += 1
