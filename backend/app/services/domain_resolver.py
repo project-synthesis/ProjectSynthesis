@@ -56,6 +56,18 @@ class DomainResolver:
     def domain_labels(self) -> set[str]:
         return set(self._domain_labels)
 
+    def remove_label(self, label: str) -> None:
+        """Remove a domain/sub-domain label from the resolver.
+
+        Called when a sub-domain is dissolved. Clears it from the label set,
+        the sub-domain parent map, and the resolution cache so future
+        optimizations do not resolve to the (now-archived) sub-domain.
+        """
+        lbl = label.lower()
+        self._domain_labels.discard(lbl)
+        self._sub_domain_parent.pop(lbl, None)
+        self._cache.pop(lbl, None)
+
     def add_label(self, label: str, *, parent_label: str | None = None) -> None:
         """Register a new domain label at runtime (e.g., after sub-domain discovery).
 

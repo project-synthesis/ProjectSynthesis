@@ -1800,10 +1800,13 @@ class TaxonomyEngine:
                     pass
 
             # Re-evaluate existing sub-domains for dissolution
+            dissolved_this_cycle: set[str] = set()
             if existing_sub_count > 0:
                 dissolved = await self._reevaluate_sub_domains(
                     db, domain_node, existing_labels,
                 )
+                # Block same-cycle re-creation of dissolved labels (flip-flop prevention)
+                dissolved_this_cycle.update(d.lower().replace(" ", "-") for d in dissolved)
                 if dissolved:
                     # Update sub-domain count after dissolution
                     existing_sub_q2 = await db.execute(
@@ -2183,16 +2186,20 @@ class TaxonomyEngine:
                 if not passed:
                     continue
 
-                # Check label dedup
+                # Check label dedup + flip-flop prevention
                 sub_label = qualifier.lower().replace(" ", "-")[:30]
-                if sub_label in existing_labels:
+                if sub_label in existing_labels or sub_label in dissolved_this_cycle:
+                    skip_reason = (
+                        "dissolved_this_cycle" if sub_label in dissolved_this_cycle
+                        else "already_exists"
+                    )
                     try:
                         get_event_logger().log_decision(
                             path="warm", op="discover",
                             decision="sub_domain_skipped",
                             context={
                                 "qualifier": sub_label,
-                                "reason": "already_exists",
+                                "reason": skip_reason,
                                 "domain": domain_node.label,
                             },
                         )
@@ -2436,6 +2443,15 @@ class TaxonomyEngine:
                     child.parent_id = domain_node.id
                     reparented += 1
 
+            # --- Safety: reparent any optimizations directly on the sub-domain ---
+            # By architecture, domain nodes shouldn't have optimizations assigned
+            # to them, but if any exist they must not be orphaned.
+            await db.execute(
+                _sa_update(Optimization)
+                .where(Optimization.cluster_id == sub.id)
+                .values(cluster_id=domain_node.id)
+            )
+
             # --- Merge meta-patterns: reassign cluster_id from sub to parent ---
             mp_result = await db.execute(
                 _sa_update(MetaPattern)
@@ -2467,8 +2483,20 @@ class TaxonomyEngine:
             except (KeyError, ValueError, AttributeError):
                 pass
 
-            # Remove from existing_labels so it can be re-discovered if signals recover
+            # Remove from existing_labels so it can be re-discovered in FUTURE cycles.
+            # The dissolved_this_cycle set (returned to caller) prevents same-cycle
+            # re-creation, which would cause a flip-flop loop.
             existing_labels.discard(sub_qualifier)
+
+            # Clear from DomainResolver cache so new optimizations don't resolve
+            # to the (now-archived) sub-domain label.
+            try:
+                from app.services.domain_resolver import get_domain_resolver
+                resolver = get_domain_resolver()
+                if resolver:
+                    resolver.remove_label(sub.label)
+            except (ValueError, Exception):
+                pass
 
             dissolved.append(sub.label)
 

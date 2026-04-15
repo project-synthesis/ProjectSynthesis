@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -3797,10 +3797,20 @@ async def phase_archive_empty_sub_domains(
         sub.weighted_member_sum = 0.0
         sub.scored_count = 0
 
-        # Delete MetaPatterns owned by this sub-domain
-        await db.execute(
-            delete(MetaPattern).where(MetaPattern.cluster_id == sub.id)
-        )
+        # Merge MetaPatterns into parent domain (not delete — prevents
+        # OptimizationPattern FK orphaning and follows the "prompts are
+        # permanent, meta-patterns merge" philosophy).
+        if sub.parent_id:
+            await db.execute(
+                update(MetaPattern)
+                .where(MetaPattern.cluster_id == sub.id)
+                .values(cluster_id=sub.parent_id)
+            )
+        else:
+            # No parent — delete as last resort (shouldn't happen for sub-domains)
+            await db.execute(
+                delete(MetaPattern).where(MetaPattern.cluster_id == sub.id)
+            )
 
         # Remove from in-memory indices
         try:
