@@ -121,6 +121,16 @@ SUB_DOMAIN_ARCHIVAL_IDLE_HOURS: int = 1
 
 
 # ---------------------------------------------------------------------------
+# Maintenance phase cadence
+# ---------------------------------------------------------------------------
+# Maintenance phases (discover, archive, audit) run independently of the
+# dirty-cluster gate on this cadence.  Every Nth warm cycle, maintenance
+# runs even when no clusters were modified.  Retries after transient
+# failure are immediate (next cycle), bypassing this cadence.
+MAINTENANCE_CYCLE_INTERVAL: int = 6  # ~30 min at default 5-min warm interval
+
+
+# ---------------------------------------------------------------------------
 # Spectral split algorithm
 # ---------------------------------------------------------------------------
 SPECTRAL_K_RANGE = (2, 3, 4)            # k values to try
