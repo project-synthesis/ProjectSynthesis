@@ -113,20 +113,21 @@
 
   // Filter families for display.
   // - Domain nodes excluded: they serve as group headers, not child items
-  // - Templates have their own dedicated section — exclude from main list
+  // - Templates appear in BOTH the PROVEN TEMPLATES showcase AND their domain
+  //   group — removing them from the hierarchy left sub-domains with only
+  //   template children appearing empty in the navigator
   // - Orphan + state filtering already applied by store's filteredTaxonomyTree
   let filteredFamilies = $derived(
     families.filter(f => {
       if (f.state === 'domain') return false;
-      if (showTemplates && f.state === 'template') return false;
       return true;
     })
   );
 
   // Badge count reflects the TOTAL matching clusters, not the paginated view.
-  // Counts from allFamilies (pre-pagination) excluding domains and templates.
+  // Counts from allFamilies (pre-pagination) excluding domains.
   const totalFamilies = $derived(
-    allFamilies.filter(f => f.state !== 'domain' && !(showTemplates && f.state === 'template')).length
+    allFamilies.filter(f => f.state !== 'domain').length
   );
 
 
@@ -381,16 +382,6 @@
     {/if}
   </div>
 
-  <!-- Column headers — OUTSIDE scrollable area, sticky at top -->
-  {#if !searchActive && loaded && totalFamilies > 0}
-    <div class="column-headers">
-      <span class="col-label col-label--name"></span>
-      <span class="col-label col-label--members">mbr</span>
-      <span class="col-label col-label--usage">use</span>
-      <span class="col-label col-label--score">score</span>
-    </div>
-  {/if}
-
   <div class="panel-body">
     {#if searchActive}
       <!-- Search results (local filtering from taxonomy tree) -->
@@ -483,6 +474,16 @@
               </div>
             {/if}
           {/each}
+        </div>
+      {/if}
+
+      <!-- Column headers — between templates and domain groups -->
+      {#if totalFamilies > 0}
+        <div class="column-headers">
+          <span class="col-label col-label--name"></span>
+          <span class="col-label col-label--members">mbr</span>
+          <span class="col-label col-label--usage">use</span>
+          <span class="col-label col-label--score">score</span>
         </div>
       {/if}
 

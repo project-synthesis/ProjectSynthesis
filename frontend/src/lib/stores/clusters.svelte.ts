@@ -69,11 +69,17 @@ class ClusterStore {
     const filter = this.stateFilter;
     const tree = this.taxonomyTree;
 
-    // First pass: collect non-domain nodes that pass the filter
+    // First pass: collect non-domain nodes that pass the filter.
+    // 'active' filter shows ALL living states (active + mature + template +
+    // candidate) — it represents the working taxonomy, not just the literal
+    // "active" lifecycle state.  Other filters are exact-match.
+    const _LIVING_STATES = new Set(['active', 'mature', 'template', 'candidate']);
     const childNodes = tree.filter(node => {
       if (node.state === 'domain') return false;
       if (isOrphanNode(node)) return false;
-      return filter === null || node.state === filter;
+      if (filter === null) return true;
+      if (filter === 'active') return _LIVING_STATES.has(node.state);
+      return node.state === filter;
     });
 
     // Second pass: include domain nodes only if they have visible children.
