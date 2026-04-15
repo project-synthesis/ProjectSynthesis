@@ -107,11 +107,14 @@ HNSW_CLUSTER_THRESHOLD: int = 1000
 # Sub-domains are discovered from domain_raw qualifiers ("backend: auth")
 # and intent_label keyword fallback — not from embedding proximity.
 # Adaptive threshold: max(LOW, HIGH - SCALE_RATE * total_members).
+# MIN_KEYWORD_HITS = 1 because the domain is already confirmed by
+# classification — a single keyword hit is strong enough to select
+# the specific qualifier within that domain.
 SUB_DOMAIN_QUALIFIER_MIN_MEMBERS = 5       # minimum optimizations with this qualifier
 SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH = 0.60  # threshold for small domains
 SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW = 0.40   # threshold floor for large domains
 SUB_DOMAIN_QUALIFIER_SCALE_RATE = 0.004       # per-member threshold reduction
-SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS = 2     # minimum keyword hits to accept a qualifier
+SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS = 1       # minimum keyword hits to accept a qualifier
 
 # Sub-domain archival — much shorter than the 90-day top-level domain threshold.
 # Sub-domains are created and reparented within a single Phase 5 call, so one
