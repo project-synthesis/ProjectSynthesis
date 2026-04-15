@@ -95,6 +95,9 @@ class HealthResponse(BaseModel):
     classification_agreement: dict | None = Field(
         default=None, description="Heuristic vs LLM classification agreement rates.",
     )
+    qualifier_vocab: dict | None = Field(
+        default=None, description="Organic qualifier vocabulary cache stats.",
+    )
     global_patterns: dict[str, int] = Field(default_factory=dict)
     # Cross-service probe results (only populated when probes=True)
     services: dict[str, ServiceStatus] | None = Field(
@@ -401,6 +404,16 @@ async def health_check(
     except Exception:
         pass
 
+    # Organic qualifier vocabulary stats
+    qualifier_vocab_stats: dict | None = None
+    try:
+        from app.services.domain_signal_loader import get_signal_loader
+        _loader = get_signal_loader()
+        if _loader:
+            qualifier_vocab_stats = _loader.stats()
+    except Exception:
+        pass
+
     # Cross-service probes (skip when called as self-check to prevent recursion)
     services_result = None
     cross_service_result = None
@@ -438,6 +451,7 @@ async def health_check(
         injection_effectiveness=injection_effectiveness,
         recovery=recovery_metrics,
         classification_agreement=agreement_data,
+        qualifier_vocab=qualifier_vocab_stats,
         global_patterns={
             "active": gp_active,
             "demoted": gp_demoted,
