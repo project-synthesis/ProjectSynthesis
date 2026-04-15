@@ -1729,7 +1729,7 @@ class TaxonomyEngine:
 
         Three signal sources per optimization (priority cascade):
           1. ``domain_raw`` sub-qualifier via ``parse_domain()`` (primary)
-          2. ``intent_label`` keyword match against static vocabulary (fallback)
+          2. ``intent_label`` keyword match against organic vocabulary (fallback)
           3. ``raw_prompt`` keyword match against dynamic TF-IDF signals from
              the domain node's ``cluster_metadata.signal_keywords`` (fallback)
 
@@ -1835,13 +1835,18 @@ class TaxonomyEngine:
             current_cluster_count = len(child_ids)
 
             # Regenerate if no cache or cluster count changed by ≥30%
+            is_first_generation = not cached_vocab
             stale = (
-                not cached_vocab
+                is_first_generation
                 or abs(current_cluster_count - cached_cluster_count)
                 > max(2, cached_cluster_count * 0.3)
             )
             if stale and self._provider:
+                import time as _vocab_time
+
                 from app.services.taxonomy.labeling import generate_qualifier_vocabulary
+
+                _vocab_start = _vocab_time.monotonic()
 
                 # Gather cluster labels with member counts for LLM context
                 cluster_info_q = await db.execute(
@@ -1852,13 +1857,37 @@ class TaxonomyEngine:
                 cluster_info = [
                     (r[0], r[1] or 0) for r in cluster_info_q.all()
                 ]
-                generated = await generate_qualifier_vocabulary(
-                    provider=self._provider,
-                    domain_label=domain_node.label,
-                    cluster_labels=cluster_info,
-                    model=settings.MODEL_HAIKU,
-                )
+                try:
+                    generated = await generate_qualifier_vocabulary(
+                        provider=self._provider,
+                        domain_label=domain_node.label,
+                        cluster_labels=cluster_info,
+                        model=settings.MODEL_HAIKU,
+                    )
+                except Exception as gen_exc:
+                    generated = {}
+                    logger.warning(
+                        "Vocab generation failed for '%s': %s",
+                        domain_node.label, gen_exc,
+                    )
+                    self._maintenance_pending = True
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover",
+                            decision="vocab_generation_failed",
+                            context={
+                                "domain": domain_node.label,
+                                "error": str(gen_exc)[:200],
+                                "fallback": "cached" if cached_vocab else "none",
+                            },
+                        )
+                    except RuntimeError:
+                        pass
+
+                _vocab_ms = round((_vocab_time.monotonic() - _vocab_start) * 1000, 1)
+
                 if generated:
+                    old_groups = len(cached_vocab) if cached_vocab and isinstance(cached_vocab, dict) else 0
                     domain_qualifiers = generated
                     # Cache in metadata for future cycles
                     domain_node.cluster_metadata = write_meta(
@@ -1866,20 +1895,42 @@ class TaxonomyEngine:
                         generated_qualifiers=generated,
                         generated_qualifiers_cluster_count=current_cluster_count,
                     )
+                    # Emit the appropriate event: first generation vs refresh
+                    _event_decision = "vocab_generated" if is_first_generation else "vocab_refreshed"
+                    _event_context: dict = {
+                        "domain": domain_node.label,
+                        "groups": len(generated),
+                        "total_keywords": sum(len(kws) for kws in generated.values()),
+                        "cluster_count": current_cluster_count,
+                        "generation_ms": _vocab_ms,
+                    }
+                    if not is_first_generation:
+                        _event_context["reason"] = "cluster_count_changed"
+                        _event_context["old_groups"] = old_groups
+                        _event_context["new_groups"] = len(generated)
                     try:
                         get_event_logger().log_decision(
                             path="warm", op="discover",
-                            decision="sub_domain_vocab_generated",
+                            decision=_event_decision,
+                            context=_event_context,
+                        )
+                    except RuntimeError:
+                        pass
+                elif not generated and is_first_generation and not cached_vocab:
+                    # Generation failed AND no cached vocab — domain has no vocab at all
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover",
+                            decision="vocab_unavailable",
                             context={
                                 "domain": domain_node.label,
-                                "groups": len(generated),
-                                "qualifiers": list(generated.keys()),
-                                "cluster_count": current_cluster_count,
+                                "reason": "generation_failed_no_cache",
                             },
                         )
                     except RuntimeError:
                         pass
-            elif cached_vocab and isinstance(cached_vocab, dict):
+
+            if not domain_qualifiers and cached_vocab and isinstance(cached_vocab, dict):
                 domain_qualifiers = cached_vocab
 
             # Push vocab to DomainSignalLoader for hot-path enrichment
@@ -1927,7 +1978,7 @@ class TaxonomyEngine:
                             "domain": domain_node.label,
                             "dynamic_keyword_count": len(dynamic_keywords),
                             "top_keywords": [kw for kw, _ in dynamic_keywords[:5]],
-                            "has_static_vocab": bool(domain_qualifiers),
+                            "has_organic_vocab": bool(domain_qualifiers),
                         },
                     )
                 except RuntimeError:
@@ -1943,7 +1994,7 @@ class TaxonomyEngine:
 
             # Build a set of known qualifier names for Source 1 validation.
             # LLM-generated qualifiers like "backend auth middleware" are noise
-            # unless they match a known static qualifier name or a dynamic keyword.
+            # unless they match a known organic qualifier name or a dynamic keyword.
             known_qualifiers: set[str] = set(domain_qualifiers.keys())
             known_qualifiers.update(kw.lower() for kw, _ in dynamic_keywords)
 
@@ -2025,6 +2076,7 @@ class TaxonomyEngine:
                             "dynamic": source_from_dynamic,
                         },
                         "qualifier_counts": dict(qualifier_counts.most_common(10)),
+                        "vocab_source": "organic",
                     },
                 )
             except RuntimeError:
