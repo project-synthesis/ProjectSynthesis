@@ -1,136 +1,93 @@
-"""Tests for the sub-domain discovery cluster-count trigger.
+"""Tests for signal-driven sub-domain discovery threshold logic.
 
-Validates that the OR-logic trigger fires sub-domain discovery when a domain
-has many child clusters (structural diversity) even if per-cluster coherence
-is high. Also verifies backward compatibility with the original coherence path.
+Validates the adaptive threshold formula and qualifier evaluation
+that replaced the HDBSCAN-based trigger.
 """
 
 from __future__ import annotations
 
 from app.services.taxonomy._constants import (
-    SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS,
-    SUB_DOMAIN_COHERENCE_CEILING,
-    SUB_DOMAIN_MIN_CLUSTERS,
-    SUB_DOMAIN_MIN_MEMBERS,
+    SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH,
+    SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+    SUB_DOMAIN_QUALIFIER_MIN_MEMBERS,
+    SUB_DOMAIN_QUALIFIER_SCALE_RATE,
 )
 
 
-def _evaluate_trigger(
-    total_members: int,
-    cluster_count: int,
-    mean_coherence: float | None,
-) -> tuple[bool, str]:
-    """Replicate the trigger logic from engine._propose_sub_domains().
-
-    Returns (would_trigger, trigger_path).
-    """
-    coherences_present = mean_coherence is not None
-    passes_members = total_members >= SUB_DOMAIN_MIN_MEMBERS
-    passes_coherence = (
-        coherences_present and mean_coherence < SUB_DOMAIN_COHERENCE_CEILING
+def _adaptive_threshold(total_members: int) -> float:
+    """Replicate the adaptive threshold formula from _propose_sub_domains()."""
+    return max(
+        SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+        SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH
+        - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_members,
     )
-    passes_clusters = (
-        cluster_count >= SUB_DOMAIN_MIN_CLUSTERS
-        and total_members >= SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS
-    )
-    would_trigger = (passes_members and passes_coherence) or passes_clusters
-    trigger_path = (
-        "both" if (passes_members and passes_coherence) and passes_clusters
-        else "cluster_count" if passes_clusters
-        else "coherence"
-    )
-    return would_trigger, trigger_path
 
 
-class TestSubDomainClusterCountTrigger:
-    """Tests for the dual-path sub-domain trigger logic."""
+class TestAdaptiveThreshold:
+    """Tests for the signal-driven adaptive threshold formula."""
 
-    def test_cluster_count_trigger_fires_high_coherence(self):
-        """SaaS scenario: 15 clusters, 60 members, coherence 0.85 -> triggers via cluster-count."""
-        fires, path = _evaluate_trigger(
-            total_members=60,
-            cluster_count=15,
-            mean_coherence=0.85,
-        )
-        assert fires is True
-        assert path == "cluster_count"
+    def test_small_domain_high_threshold(self):
+        """20-member domain requires ~52% consistency."""
+        t = _adaptive_threshold(20)
+        assert 0.51 < t < 0.53
 
-    def test_skips_below_min_clusters(self):
-        """10 clusters (below 12), high coherence -> does NOT trigger."""
-        fires, _path = _evaluate_trigger(
-            total_members=40,
-            cluster_count=10,
-            mean_coherence=0.85,
-        )
-        assert fires is False
+    def test_medium_domain_moderate_threshold(self):
+        """30-member domain requires ~48% consistency."""
+        t = _adaptive_threshold(30)
+        assert 0.47 < t < 0.49
 
-    def test_skips_below_cluster_path_min_members(self):
-        """15 clusters but only 20 members (below 30) -> cluster path skips."""
-        fires, _path = _evaluate_trigger(
-            total_members=20,
-            cluster_count=15,
-            mean_coherence=0.85,
-        )
-        assert fires is False
+    def test_large_domain_floor_threshold(self):
+        """50+ member domain hits the 40% floor."""
+        t = _adaptive_threshold(50)
+        assert t == SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW
 
-    def test_coherence_path_still_works(self):
-        """Original path: 5 clusters, 25 members, coherence 0.35 -> triggers via coherence."""
-        fires, path = _evaluate_trigger(
-            total_members=25,
-            cluster_count=5,
-            mean_coherence=0.35,
-        )
-        assert fires is True
-        assert path == "coherence"
+    def test_very_large_domain_stays_at_floor(self):
+        """200-member domain stays at 40% floor."""
+        t = _adaptive_threshold(200)
+        assert t == SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW
 
-    def test_both_paths_fire(self):
-        """Both conditions met: 14 clusters, 50 members, coherence 0.40 -> trigger_path='both'."""
-        fires, path = _evaluate_trigger(
-            total_members=50,
-            cluster_count=14,
-            mean_coherence=0.40,
-        )
-        assert fires is True
-        assert path == "both"
-
-    def test_coherence_path_requires_coherence_data(self):
-        """No coherence data (None) -> coherence path cannot fire."""
-        fires, _path = _evaluate_trigger(
-            total_members=25,
-            cluster_count=5,
-            mean_coherence=None,
-        )
-        assert fires is False
-
-    def test_coherence_floor_uses_min_for_cluster_count_path(self):
-        """When cluster-count path triggers (high parent coherence), the quality
-        gate uses SUB_DOMAIN_COHERENCE_CEILING as floor, not the parent mean."""
-        from app.services.taxonomy._constants import SUB_DOMAIN_COHERENCE_CEILING
-
-        # Simulate: parent coherence 0.94, groups at 0.56 and 0.73
-        # Without fix: both fail (< 0.94)
-        # With fix: floor = min(0.94, 0.50) = 0.50, both pass
-        parent_mean = 0.94
-        floor = min(parent_mean, SUB_DOMAIN_COHERENCE_CEILING)
-        assert floor == SUB_DOMAIN_COHERENCE_CEILING  # 0.50, not 0.94
-        assert 0.56 > floor  # group passes
-        assert 0.73 > floor  # group passes
-        assert 0.47 <= floor  # low-coherence group correctly rejected
-
-    def test_coherence_floor_uses_parent_mean_for_coherence_path(self):
-        """When coherence path triggers (low parent coherence), the quality
-        gate uses the parent mean as floor (original behavior preserved)."""
-        from app.services.taxonomy._constants import SUB_DOMAIN_COHERENCE_CEILING
-
-        parent_mean = 0.35
-        floor = min(parent_mean, SUB_DOMAIN_COHERENCE_CEILING)
-        assert floor == parent_mean  # 0.35, not 0.50
-        assert 0.40 > floor  # group slightly above parent passes
-        assert 0.30 <= floor  # group below parent rejected
+    def test_threshold_decreases_monotonically(self):
+        """Threshold never increases as domain grows."""
+        prev = 1.0
+        for size in range(1, 200):
+            t = _adaptive_threshold(size)
+            assert t <= prev
+            prev = t
 
     def test_constants_have_expected_values(self):
         """Verify constants are set to planned values."""
-        assert SUB_DOMAIN_MIN_CLUSTERS == 12
-        assert SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS == 30
-        assert SUB_DOMAIN_MIN_MEMBERS == 20
-        assert SUB_DOMAIN_COHERENCE_CEILING == 0.50
+        assert SUB_DOMAIN_QUALIFIER_MIN_MEMBERS == 5
+        assert SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH == 0.60
+        assert SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW == 0.40
+        assert SUB_DOMAIN_QUALIFIER_SCALE_RATE == 0.004
+
+
+class TestQualifierEvaluation:
+    """Tests for qualifier pass/fail logic."""
+
+    def test_qualifier_fails_above_threshold_small_domain(self):
+        """8 out of 20 (40%) with threshold at 52% -> FAIL."""
+        total = 20
+        count = 8
+        threshold = _adaptive_threshold(total)
+        assert count / total < threshold
+
+    def test_qualifier_passes_large_domain(self):
+        """25 out of 60 (41.7%) with threshold at 40% -> PASS."""
+        total = 60
+        count = 25
+        threshold = _adaptive_threshold(total)
+        assert count / total >= threshold
+        assert count >= SUB_DOMAIN_QUALIFIER_MIN_MEMBERS
+
+    def test_qualifier_fails_too_few_members(self):
+        """3 out of 10 (30%) -> fails min members even if consistency passes."""
+        count = 3
+        assert count < SUB_DOMAIN_QUALIFIER_MIN_MEMBERS
+
+    def test_fragmented_distribution_no_subdomain(self):
+        """5 qualifiers each at 20% in a 50-member domain -> none pass 40% floor."""
+        total = 50
+        threshold = _adaptive_threshold(total)
+        for q_count in [10, 10, 10, 10, 10]:
+            assert q_count / total < threshold

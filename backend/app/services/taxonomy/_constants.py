@@ -79,16 +79,18 @@ GLOBAL_PATTERN_MIN_WALL_CLOCK_MINUTES: int = 30
 
 
 # ---------------------------------------------------------------------------
-# Sub-domain discovery
+# Split protection
 # ---------------------------------------------------------------------------
-# When a domain's total member count exceeds this AND its mean child coherence
-# is below the ceiling, HDBSCAN is used to discover semantic sub-groups that
-# can be promoted to sub-domain nodes.
-# Split child merge protection window — must be longer than the warm path
-# interval (default 300s = 5 min) to survive at least 2 warm cycles.
-# Previously 30 minutes, which was barely enough and caused Groundhog Day
-# re-merges when timing was unlucky.
+# Merge protection window — must be longer than the warm path interval
+# (default 300s = 5 min) to survive at least 2 warm cycles.  Previously
+# 30 minutes, which was barely enough and caused Groundhog Day re-merges
+# when timing was unlucky.
 SPLIT_MERGE_PROTECTION_MINUTES = 60  # 1 hour
+
+# Maximum times the same member set (by content hash) can fail split before
+# permanent cooldown.  Prevents Groundhog Day loops where the same member
+# pool is repeatedly split and rolled back/merged.
+SPLIT_CONTENT_HASH_MAX_RETRIES = 2
 
 
 # ---------------------------------------------------------------------------
@@ -98,17 +100,24 @@ SPLIT_MERGE_PROTECTION_MINUTES = 60  # 1 hour
 # numpy matmul to HNSW (hnswlib) for O(log N) search.
 HNSW_CLUSTER_THRESHOLD: int = 1000
 
-# Maximum times the same member set (by content hash) can fail split before
-# permanent cooldown.  Prevents Groundhog Day loops where the same member
-# pool is repeatedly split and rolled back/merged.
-SPLIT_CONTENT_HASH_MAX_RETRIES = 2
 
-SUB_DOMAIN_MIN_MEMBERS = 20         # domain must have ≥20 total members
-SUB_DOMAIN_COHERENCE_CEILING = 0.50 # mean child coherence must be below this
-SUB_DOMAIN_MIN_GROUP_MEMBERS = 5    # each HDBSCAN group needs ≥5 members
-SUB_DOMAIN_HDBSCAN_MIN_CLUSTER = 5  # HDBSCAN min_cluster_size parameter
-SUB_DOMAIN_MIN_CLUSTERS = 12        # cluster-count path: ≥12 active children
-SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS = 30  # cluster-count path also requires ≥30 members
+# ---------------------------------------------------------------------------
+# Sub-domain discovery (signal-driven)
+# ---------------------------------------------------------------------------
+# Sub-domains are discovered from domain_raw qualifiers ("backend: auth")
+# and intent_label keyword fallback — not from embedding proximity.
+# Adaptive threshold: max(LOW, HIGH - SCALE_RATE * total_members).
+SUB_DOMAIN_QUALIFIER_MIN_MEMBERS = 5       # minimum optimizations with this qualifier
+SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH = 0.60  # threshold for small domains
+SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW = 0.40   # threshold floor for large domains
+SUB_DOMAIN_QUALIFIER_SCALE_RATE = 0.004       # per-member threshold reduction
+SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS = 2     # minimum keyword hits to accept a qualifier
+
+# Sub-domain archival — much shorter than the 90-day top-level domain threshold.
+# Sub-domains are created and reparented within a single Phase 5 call, so one
+# that is empty by the next warm cycle is genuinely orphaned.  1 hour is enough
+# to survive a few warm cycles while preventing accumulation.
+SUB_DOMAIN_ARCHIVAL_IDLE_HOURS: int = 1
 
 
 # ---------------------------------------------------------------------------

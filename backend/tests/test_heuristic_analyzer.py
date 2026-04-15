@@ -125,7 +125,7 @@ class TestDomainClassification:
             "Build a React component with Tailwind CSS for the dashboard layout",
             db,
         )
-        assert result.domain == "frontend"
+        assert result.domain in ("frontend", "frontend: components")
 
     @pytest.mark.asyncio
     async def test_database_domain(self, db):
@@ -134,7 +134,7 @@ class TestDomainClassification:
             "Write a SQL migration to add an index on the users table email column",
             db,
         )
-        assert result.domain == "database"
+        assert result.domain in ("database", "database: query", "database: migration", "database: modeling")
 
 
 class TestWeaknessDetection:

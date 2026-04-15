@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import PROMPTS_DIR, settings
@@ -1717,36 +1717,31 @@ class TaxonomyEngine:
         return created
 
     async def _propose_sub_domains(self, db: AsyncSession) -> list[str]:
-        """Discover sub-domains within oversized domains using HDBSCAN.
+        """Discover sub-domains from domain_raw qualifier signals.
 
-        When a domain has many members but low mean coherence across its
-        children, the domain is too broad. This method clusters the domain's
-        member embeddings to find semantic sub-groups, then promotes qualifying
-        groups to sub-domain nodes (state="domain", parent_id=parent_domain).
+        Scans each domain's linked optimizations for sub-qualifier signals
+        (e.g., "backend: auth").  When a qualifier appears in enough
+        optimizations (adaptive threshold), a sub-domain node is created.
+
+        Three signal sources per optimization (priority cascade):
+          1. ``domain_raw`` sub-qualifier via ``parse_domain()`` (primary)
+          2. ``intent_label`` keyword match against static vocabulary (fallback)
+          3. ``raw_prompt`` keyword match against dynamic TF-IDF signals from
+             the domain node's ``cluster_metadata.signal_keywords`` (fallback)
 
         Returns:
             List of newly created sub-domain labels.
         """
-        import asyncio
-
-        import numpy as np
+        from collections import Counter
 
         from app.services.pipeline_constants import DOMAIN_COUNT_CEILING
         from app.services.taxonomy._constants import (
-            SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS,
-            SUB_DOMAIN_COHERENCE_CEILING,
-            SUB_DOMAIN_HDBSCAN_MIN_CLUSTER,
-            SUB_DOMAIN_MIN_CLUSTERS,
-            SUB_DOMAIN_MIN_GROUP_MEMBERS,
-            SUB_DOMAIN_MIN_MEMBERS,
+            SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH,
+            SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+            SUB_DOMAIN_QUALIFIER_MIN_MEMBERS,
+            SUB_DOMAIN_QUALIFIER_SCALE_RATE,
         )
-        from app.services.taxonomy.clustering import (
-            batch_cluster,
-            blend_embeddings,
-            compute_pairwise_coherence,
-            l2_normalize_1d,
-        )
-        from app.services.taxonomy.labeling import generate_label
+        from app.utils.text_cleanup import parse_domain
 
         created: list[str] = []
 
@@ -1764,7 +1759,10 @@ class TaxonomyEngine:
         )
         existing_labels = {r[0].lower() for r in existing_q.all() if r[0]}
 
-        # Find oversized domains
+        # Load qualifier vocabulary for intent_label fallback
+        from app.services.heuristic_analyzer import _DOMAIN_QUALIFIERS
+
+        # Find domains to evaluate
         domain_q = await db.execute(
             select(PromptCluster).where(
                 PromptCluster.state == "domain",
@@ -1774,314 +1772,388 @@ class TaxonomyEngine:
         domains = list(domain_q.scalars().all())
 
         for domain_node in domains:
-            # Get active children
+            # Idempotency guard: skip domains that already have sub-domains
+            existing_sub_q = await db.execute(
+                select(func.count()).where(
+                    PromptCluster.parent_id == domain_node.id,
+                    PromptCluster.state == "domain",
+                )
+            )
+            existing_sub_count = existing_sub_q.scalar() or 0
+            if existing_sub_count > 0:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="sub_domain_domain_skipped",
+                        context={
+                            "domain": domain_node.label,
+                            "existing_sub_domain_count": existing_sub_count,
+                        },
+                    )
+                except RuntimeError:
+                    pass
+                continue
+
+            # Get active child cluster IDs
             children_q = await db.execute(
-                select(PromptCluster).where(
+                select(PromptCluster.id).where(
                     PromptCluster.parent_id == domain_node.id,
                     PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
                 )
             )
-            children = list(children_q.scalars().all())
-
-            # Compute metrics for threshold evaluation (needed for log event)
-            total_members = sum(c.member_count or 0 for c in children)
-            coherences = [c.coherence for c in children if c.coherence is not None]
-            mean_coh = float(np.mean(coherences)) if coherences else 0.0
-
-            # Two trigger paths for sub-domain discovery:
-            #   1. Coherence path (original): many members + low coherence
-            #   2. Cluster-count path: many child clusters + enough members
-            # The cluster-count path catches structurally complex domains
-            # (e.g., SaaS with 23 clusters) where high per-cluster coherence
-            # masks genuine semantic diversity.
-            active_cluster_count = len(children)
-            passes_members = total_members >= SUB_DOMAIN_MIN_MEMBERS
-            passes_coherence = (
-                bool(coherences) and mean_coh < SUB_DOMAIN_COHERENCE_CEILING
-            )
-            passes_clusters = (
-                active_cluster_count >= SUB_DOMAIN_MIN_CLUSTERS
-                and total_members >= SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS
-            )
-            would_trigger = (passes_members and passes_coherence) or passes_clusters
-            trigger_path = (
-                "both" if (passes_members and passes_coherence) and passes_clusters
-                else "cluster_count" if passes_clusters
-                else "coherence"
-            )
-
-            if would_trigger:
-                try:
-                    get_event_logger().log_decision(
-                        path="warm", op="discover", decision="sub_domain_evaluation",
-                        cluster_id=domain_node.id,
-                        context={
-                            "domain_label": domain_node.label,
-                            "total_members": total_members,
-                            "cluster_count": active_cluster_count,
-                            "mean_coherence": round(mean_coh, 4) if coherences else None,
-                            "passes_members": passes_members,
-                            "passes_coherence": passes_coherence,
-                            "passes_clusters": passes_clusters,
-                            "trigger_path": trigger_path,
-                            "would_trigger": True,
-                        },
-                    )
-                except RuntimeError:
-                    pass
-
-            # Early-exit: neither trigger path fires
-            if not would_trigger:
+            child_ids = [r[0] for r in children_q.all()]
+            if not child_ids:
                 continue
-            logger.info(
-                "Sub-domain candidate: '%s' (%d members, %d clusters, mean_coh=%.3f, path=%s)",
-                domain_node.label, total_members, active_cluster_count, mean_coh,
-                trigger_path,
-            )
 
-            # Collect ALL member embeddings from this domain's clusters
-            child_ids = [c.id for c in children]
+            # Collect qualifier signals from linked optimizations
             opt_q = await db.execute(
                 select(
-                    Optimization.id,
-                    Optimization.embedding,
-                    Optimization.optimized_embedding,
-                    Optimization.transformation_embedding,
+                    Optimization.domain_raw,
                     Optimization.intent_label,
                     Optimization.cluster_id,
+                    Optimization.raw_prompt,
                 ).where(
                     Optimization.cluster_id.in_(child_ids),
-                    Optimization.embedding.isnot(None),
                 )
             )
             opt_rows = opt_q.all()
-
-            if len(opt_rows) < SUB_DOMAIN_MIN_MEMBERS:
+            total_opts = len(opt_rows)
+            if total_opts < SUB_DOMAIN_QUALIFIER_MIN_MEMBERS:
                 continue
 
-            # Build blended embeddings
-            embs_raw: list[np.ndarray] = []
-            embs_blended: list[np.ndarray] = []
-            opt_data: list[dict] = []
-            for row in opt_rows:
+            # Build qualifier vocabulary: static (curated) → LLM-generated → dynamic (TF-IDF)
+            domain_qualifiers = _DOMAIN_QUALIFIERS.get(domain_node.label, {})
+
+            # For domains without static vocabulary, generate one from cluster
+            # labels via Haiku.  Cached in cluster_metadata["generated_qualifiers"]
+            # and refreshed when cluster count changes significantly.
+            meta = read_meta(domain_node.cluster_metadata)
+            if not domain_qualifiers:
+                cached_vocab = meta.get("generated_qualifiers")
+                cached_cluster_count = meta.get("generated_qualifiers_cluster_count", 0)
+                current_cluster_count = len(child_ids)
+
+                # Regenerate if no cache or cluster count changed by ≥30%
+                stale = (
+                    not cached_vocab
+                    or abs(current_cluster_count - cached_cluster_count)
+                    > max(2, cached_cluster_count * 0.3)
+                )
+                if stale and self._provider:
+                    from app.services.taxonomy.labeling import generate_qualifier_vocabulary
+
+                    # Gather cluster labels with member counts for LLM context
+                    cluster_info_q = await db.execute(
+                        select(PromptCluster.label, PromptCluster.member_count).where(
+                            PromptCluster.id.in_(child_ids),
+                        )
+                    )
+                    cluster_info = [
+                        (r[0], r[1] or 0) for r in cluster_info_q.all()
+                    ]
+                    generated = await generate_qualifier_vocabulary(
+                        provider=self._provider,
+                        domain_label=domain_node.label,
+                        cluster_labels=cluster_info,
+                        model=settings.MODEL_HAIKU,
+                    )
+                    if generated:
+                        domain_qualifiers = generated
+                        # Cache in metadata for future cycles
+                        domain_node.cluster_metadata = write_meta(
+                            domain_node.cluster_metadata,
+                            generated_qualifiers=generated,
+                            generated_qualifiers_cluster_count=current_cluster_count,
+                        )
+                        try:
+                            get_event_logger().log_decision(
+                                path="warm", op="discover",
+                                decision="sub_domain_vocab_generated",
+                                context={
+                                    "domain": domain_node.label,
+                                    "groups": len(generated),
+                                    "qualifiers": list(generated.keys()),
+                                    "cluster_count": current_cluster_count,
+                                },
+                            )
+                        except RuntimeError:
+                            pass
+                elif cached_vocab and isinstance(cached_vocab, dict):
+                    domain_qualifiers = cached_vocab
+
+            # Load dynamic signal_keywords from domain node metadata.
+            # These are TF-IDF-extracted keywords already on every domain node,
+            # providing qualifier coverage as a final fallback.
+            dynamic_keywords: list[tuple[str, float]] = []
+            for item in meta.get("signal_keywords", []):
                 try:
-                    raw = np.frombuffer(row.embedding, dtype=np.float32).copy()
-                    opt_emb = (
-                        np.frombuffer(row.optimized_embedding, dtype=np.float32).copy()
-                        if row.optimized_embedding else None
-                    )
-                    trans_emb = (
-                        np.frombuffer(row.transformation_embedding, dtype=np.float32).copy()
-                        if row.transformation_embedding else None
-                    )
-                    embs_raw.append(raw)
-                    embs_blended.append(blend_embeddings(raw=raw, optimized=opt_emb, transformation=trans_emb))
-                    opt_data.append({
-                        "id": row.id,
-                        "cluster_id": row.cluster_id,
-                        "intent_label": row.intent_label,
-                        "raw": raw,
-                    })
-                except (ValueError, TypeError) as _sd_exc:
-                    logger.warning(
-                        "Corrupt embedding in sub-domain HDBSCAN, opt=%s: %s",
-                        row.id, _sd_exc,
-                    )
+                    kw, weight = item[0], float(item[1])
+                    if isinstance(kw, str) and len(kw) >= 3 and weight >= 0.5:
+                        dynamic_keywords.append((kw, weight))
+                except (IndexError, TypeError, ValueError):
                     continue
 
-            if len(embs_blended) < SUB_DOMAIN_MIN_MEMBERS:
-                continue
-
-            # Run HDBSCAN
-            cluster_result = batch_cluster(embs_blended, min_cluster_size=SUB_DOMAIN_HDBSCAN_MIN_CLUSTER)
-            coherence_floor = min(mean_coh, SUB_DOMAIN_COHERENCE_CEILING)
-            logger.info(
-                "Sub-domain HDBSCAN for '%s': %d groups found, floor=%.2f",
-                domain_node.label, cluster_result.n_clusters, coherence_floor,
-            )
-            if cluster_result.n_clusters < 2:
-                logger.info(
-                    "Sub-domain HDBSCAN found no sub-structure in '%s'",
-                    domain_node.label,
-                )
+            if dynamic_keywords:
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover", decision="sub_domain_no_structure",
+                        path="warm", op="discover",
+                        decision="sub_domain_dynamic_vocab",
                         context={
-                            "parent_domain": domain_node.label,
-                            "total_members": len(embs_blended),
-                            "hdbscan_clusters": cluster_result.n_clusters,
+                            "domain": domain_node.label,
+                            "dynamic_keyword_count": len(dynamic_keywords),
+                            "top_keywords": [kw for kw, _ in dynamic_keywords[:5]],
+                            "has_static_vocab": bool(domain_qualifiers),
                         },
                     )
                 except RuntimeError:
                     pass
+
+            # Extract qualifier per optimization (three-source merge)
+            qualifier_counts: Counter[str] = Counter()
+            qualifier_to_cluster_ids: dict[str, set[str]] = {}
+            intent_qualifier_counts: Counter[str] = Counter()
+            source_from_raw = 0
+            source_from_intent = 0
+            source_from_dynamic = 0
+
+            # Build a set of known qualifier names for Source 1 validation.
+            # LLM-generated qualifiers like "backend auth middleware" are noise
+            # unless they match a known static qualifier name or a dynamic keyword.
+            known_qualifiers: set[str] = set(domain_qualifiers.keys())
+            known_qualifiers.update(kw.lower() for kw, _ in dynamic_keywords)
+
+            for domain_raw, intent_label, cluster_id, raw_prompt in opt_rows:
+                qualifier: str | None = None
+
+                # Source 1: parse qualifier from domain_raw
+                if domain_raw:
+                    _, q = parse_domain(domain_raw)
+                    if q:
+                        # Only accept qualifiers that match a known vocabulary
+                        # term.  LLM-generated qualifiers like "backend auth
+                        # middleware" are long, unique strings that fragment
+                        # counts and never aggregate into sub-domains.
+                        q_normalized = q.lower().replace(" ", "-")
+                        if q in known_qualifiers or q_normalized in known_qualifiers:
+                            qualifier = q
+                            source_from_raw += 1
+
+                # Source 2: fallback to intent_label keyword match (static vocab)
+                if not qualifier and intent_label and domain_qualifiers:
+                    intent_lower = intent_label.lower()
+                    best_q: str | None = None
+                    best_hits = 0
+                    for q_name, keywords in domain_qualifiers.items():
+                        hits = sum(1 for kw in keywords if kw in intent_lower)
+                        if hits > best_hits:
+                            best_hits = hits
+                            best_q = q_name
+                    if best_q and best_hits >= 1:
+                        qualifier = best_q
+                        source_from_intent += 1
+                        intent_qualifier_counts[best_q] += 1
+
+                # Source 3: fallback to raw_prompt match against dynamic keywords
+                if not qualifier and raw_prompt and dynamic_keywords:
+                    prompt_lower = raw_prompt.lower()
+                    intent_lower_s3 = (intent_label or "").lower()
+                    best_dyn: str | None = None
+                    best_dyn_weight = 0.0
+                    dyn_hits = 0
+                    for kw, weight in dynamic_keywords:
+                        kw_lower = kw.lower()
+                        if kw_lower in prompt_lower:
+                            dyn_hits += 1
+                            # Boost keywords that appear in the intent_label —
+                            # the intent is the most concentrated topic signal.
+                            # A keyword in both prompt and intent is more likely
+                            # the core topic than one only in the prompt body.
+                            effective_weight = weight + (0.5 if kw_lower in intent_lower_s3 else 0.0)
+                            if effective_weight > best_dyn_weight:
+                                best_dyn_weight = effective_weight
+                                best_dyn = kw
+                    # Accept with 1 hit if the keyword has high TF-IDF weight
+                    # (≥0.8 = strongly discriminative for this domain).
+                    # Otherwise require 2+ hits to avoid noise.
+                    raw_weight = best_dyn_weight - (0.5 if best_dyn and best_dyn.lower() in intent_lower_s3 else 0.0)
+                    min_hits = 1 if raw_weight >= 0.8 else 2
+                    if best_dyn and dyn_hits >= min_hits:
+                        qualifier = best_dyn.lower().replace(" ", "-")
+                        source_from_dynamic += 1
+
+                if qualifier:
+                    qualifier_counts[qualifier] += 1
+                    qualifier_to_cluster_ids.setdefault(qualifier, set()).add(cluster_id)
+
+            # Log signal scan
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="discover",
+                    decision="sub_domain_signal_scan",
+                    context={
+                        "domain": domain_node.label,
+                        "total_opts": total_opts,
+                        "qualifiers_found": len(qualifier_counts),
+                        "source_breakdown": {
+                            "domain_raw": source_from_raw,
+                            "intent_label": source_from_intent,
+                            "dynamic": source_from_dynamic,
+                        },
+                        "qualifier_counts": dict(qualifier_counts.most_common(10)),
+                    },
+                )
+            except RuntimeError:
+                pass
+
+            # Log intent_label fallback summary when it contributed signals
+            if source_from_intent > 0:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="sub_domain_intent_fallback",
+                        context={
+                            "domain": domain_node.label,
+                            "opt_count": total_opts,
+                            "intent_matches": source_from_intent,
+                            "qualifiers_from_intent": dict(intent_qualifier_counts),
+                        },
+                    )
+                except RuntimeError:
+                    pass
+
+            if not qualifier_counts:
                 continue
 
-            # Evaluate each group
-            groups: list[dict] = []
-            for gid in range(cluster_result.n_clusters):
-                mask = cluster_result.labels == gid
-                group_indices = [i for i in range(len(opt_data)) if mask[i]]
-                if len(group_indices) < SUB_DOMAIN_MIN_GROUP_MEMBERS:
-                    try:
-                        get_event_logger().log_decision(
-                            path="warm", op="discover", decision="sub_domain_group_filtered",
-                            context={
-                                "parent_domain": domain_node.label,
-                                "group_id": gid,
-                                "group_members": len(group_indices),
-                                "reason": "too_small",
-                                "threshold": SUB_DOMAIN_MIN_GROUP_MEMBERS,
-                            },
-                        )
-                    except RuntimeError:
-                        pass
-                    continue
+            # Adaptive threshold
+            threshold = max(
+                SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+                SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH
+                - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
+            )
 
-                group_embs = [embs_raw[i] for i in group_indices]
-                group_coherence = compute_pairwise_coherence(group_embs)
-
-                # Coherence gate: group must demonstrate internal focus.
-                # - Coherence path (low parent mean): group must beat parent
-                # - Cluster-count path (high parent mean): use absolute floor
-                #   since sub-groups can't exceed an already-coherent parent
-                coherence_floor = min(mean_coh, SUB_DOMAIN_COHERENCE_CEILING)
-                if group_coherence <= coherence_floor:
-                    try:
-                        get_event_logger().log_decision(
-                            path="warm", op="discover", decision="sub_domain_group_filtered",
-                            context={
-                                "parent_domain": domain_node.label,
-                                "group_id": gid,
-                                "group_members": len(group_indices),
-                                "group_coherence": round(group_coherence, 4),
-                                "coherence_floor": round(coherence_floor, 4),
-                                "reason": "below_floor",
-                            },
-                        )
-                    except RuntimeError:
-                        pass
-                    continue
-
-                # Compute centroid
-                centroid = l2_normalize_1d(
-                    np.mean(np.stack(group_embs), axis=0).astype(np.float32)
+            # Evaluate each qualifier
+            for qualifier, count in qualifier_counts.most_common():
+                consistency = count / total_opts
+                passed = (
+                    count >= SUB_DOMAIN_QUALIFIER_MIN_MEMBERS
+                    and consistency >= threshold
                 )
 
-                # Collect intent labels for Haiku labeling
-                member_texts = [
-                    opt_data[i]["intent_label"] or ""
-                    for i in group_indices
-                    if opt_data[i]["intent_label"]
-                ][:10]
+                # Log evaluation
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="sub_domain_qualifier_eval",
+                        context={
+                            "domain": domain_node.label,
+                            "qualifier": qualifier,
+                            "count": count,
+                            "total": total_opts,
+                            "consistency_pct": round(consistency * 100, 1),
+                            "threshold_pct": round(threshold * 100, 1),
+                            "passed": passed,
+                        },
+                    )
+                except RuntimeError:
+                    pass
 
-                groups.append({
-                    "indices": group_indices,
-                    "coherence": group_coherence,
-                    "centroid": centroid,
-                    "member_texts": member_texts,
-                    "member_count": len(group_indices),
-                    "cluster_ids": list({opt_data[i]["cluster_id"] for i in group_indices}),
-                })
-
-            if len(groups) < 2:
-                continue
-
-            # Parallel label generation for all groups
-            label_tasks = [
-                generate_label(
-                    provider=self._provider,
-                    member_texts=g["member_texts"],
-                    model=settings.MODEL_HAIKU,
-                )
-                for g in groups
-            ]
-            labels = await asyncio.gather(*label_tasks, return_exceptions=True)
-
-            # Create sub-domain nodes
-            for i, group in enumerate(groups):
-                raw_label = labels[i]
-                if isinstance(raw_label, BaseException) or not raw_label or raw_label == "Unnamed Cluster":
+                if not passed:
                     continue
 
-                # Sub-domain label: qualifier only (no parent prefix).
-                # "async system reliability" → "async-system-reliability"
-                # The parent relationship is expressed via parent_id, not label prefix.
-                qualifier = raw_label.lower().replace(" ", "-")[:30]
-                sub_label = qualifier
-
+                # Check label dedup
+                sub_label = qualifier.lower().replace(" ", "-")[:30]
                 if sub_label in existing_labels:
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover",
+                            decision="sub_domain_skipped",
+                            context={
+                                "qualifier": sub_label,
+                                "reason": "already_exists",
+                                "domain": domain_node.label,
+                            },
+                        )
+                    except RuntimeError:
+                        pass
                     continue
+
+                # Minimum cluster breadth: a sub-domain with only 1 child
+                # cluster is a 1:1 wrapper that adds hierarchy depth without
+                # navigational value.  Require at least 2 distinct clusters
+                # to justify the sub-domain level.
+                matching_cluster_count = len(
+                    qualifier_to_cluster_ids.get(qualifier, set())
+                )
+                if matching_cluster_count < 2:
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover",
+                            decision="sub_domain_skipped",
+                            context={
+                                "qualifier": sub_label,
+                                "reason": "single_cluster",
+                                "domain": domain_node.label,
+                                "cluster_count": matching_cluster_count,
+                                "consistency_pct": round(consistency * 100, 1),
+                            },
+                        )
+                    except RuntimeError:
+                        pass
+                    continue
+
                 if current_domain_count >= DOMAIN_COUNT_CEILING:
                     break
 
                 try:
-                    # Create a temporary seed cluster for the sub-domain
-                    # (needed for _create_domain_node's centroid + keywords)
-                    seed = PromptCluster(
-                        label=sub_label,
-                        centroid_embedding=group["centroid"].astype(np.float32).tobytes(),
-                        member_count=group["member_count"],
-                        coherence=group["coherence"],
-                    )
-
                     sub_node, _ = await self._create_domain_node(
                         db, sub_label, existing_labels,
-                        seed_cluster=seed,
                         parent_domain_id=domain_node.id,
                     )
-                    # Override centroid and coherence from seed (flush may have cleared them)
-                    sub_node.centroid_embedding = group["centroid"].astype(np.float32).tobytes()
-                    sub_node.coherence = group["coherence"]
 
-                    # Re-parent clusters: set domain to PARENT domain label
-                    # so strategy intelligence queries find them under "backend"
+                    # Reparent matching clusters
+                    matching_cluster_ids = qualifier_to_cluster_ids.get(qualifier, set())
                     reparented = 0
-                    for cid in group["cluster_ids"]:
+                    for cid in matching_cluster_ids:
                         cluster = await db.get(PromptCluster, cid)
                         if cluster and cluster.state not in EXCLUDED_STRUCTURAL_STATES:
                             cluster.parent_id = sub_node.id
                             cluster.domain = domain_node.label
                             reparented += 1
 
-                    # Update optimization domain to parent domain for strategy intel
-                    if reparented:
-                        from sqlalchemy import update as sa_update
-                        await db.execute(
-                            sa_update(Optimization)
-                            .where(Optimization.cluster_id.in_(group["cluster_ids"]))
-                            .values(domain=domain_node.label)
-                        )
-
-                    # Position sub-domain near its children
+                    # Position sub-domain in topology
                     await self._set_domain_umap_from_children(db, sub_node)
 
                     created.append(sub_label)
                     existing_labels.add(sub_label)
                     current_domain_count += 1
 
-                    # Update resolver cache so hot-path can use sub-domain immediately
+                    # Update resolver cache
                     try:
                         from app.services.domain_resolver import get_domain_resolver
-                        get_domain_resolver().add_label(sub_label, parent_label=domain_node.label)
+                        get_domain_resolver().add_label(
+                            sub_label, parent_label=domain_node.label,
+                        )
                     except (ValueError, Exception):
-                        pass  # Resolver not initialized (unlikely during warm path)
+                        pass
 
                     logger.info(
-                        "Created sub-domain '%s' under '%s': %d clusters, coherence=%.3f",
-                        sub_label, domain_node.label, reparented, group["coherence"],
+                        "Created sub-domain '%s' under '%s': %d clusters, "
+                        "consistency=%.0f%% (%d/%d)",
+                        sub_label, domain_node.label, reparented,
+                        consistency * 100, count, total_opts,
                     )
 
                     try:
                         get_event_logger().log_decision(
-                            path="warm", op="discover", decision="sub_domain_created",
+                            path="warm", op="discover",
+                            decision="sub_domain_created",
                             cluster_id=sub_node.id,
                             context={
-                                "domain_label": sub_label,
+                                "qualifier": sub_label,
                                 "parent_domain": domain_node.label,
-                                "member_count": group["member_count"],
-                                "coherence": round(group["coherence"], 4),
+                                "member_count": count,
                                 "clusters_reparented": reparented,
+                                "consistency_pct": round(consistency * 100, 1),
                                 "total_domains_after": current_domain_count,
                             },
                         )
@@ -2094,20 +2166,6 @@ class TaxonomyEngine:
                         sub_label, domain_node.label, exc,
                         exc_info=True,
                     )
-                    try:
-                        get_event_logger().log_decision(
-                            path="warm", op="error", decision="sub_domain_failed",
-                            context={
-                                "source": "propose_sub_domains",
-                                "error_type": type(exc).__name__,
-                                "error_message": str(exc)[:500],
-                                "recovery": "skipped",
-                                "domain_label": sub_label,
-                                "parent_domain": domain_node.label,
-                            },
-                        )
-                    except RuntimeError:
-                        pass
                     continue
 
         return created
@@ -2223,17 +2281,30 @@ class TaxonomyEngine:
         )
         existing_colors = [row[0] for row in color_q.all() if row[0]]
         if parent_domain_id:
-            # Sub-domain: derive color from parent's base (same hue, darker)
+            # Sub-domain: derive color from parent's base (same hue, darker).
+            # If the parent's color_hex is NULL (cold path hasn't run yet),
+            # compute a temporary parent color via max-distance then derive
+            # from that — prevents fallback to an unrelated random color.
             from app.services.taxonomy.coloring import derive_sub_domain_color
             parent_color_q = await db.execute(
                 select(PromptCluster.color_hex).where(PromptCluster.id == parent_domain_id)
             )
             parent_color = parent_color_q.scalar()
-            color_hex = (
-                derive_sub_domain_color(parent_color)
-                if parent_color
-                else compute_max_distance_color(existing_colors)
-            )
+            if not parent_color:
+                # Parent domain hasn't been assigned a color yet.
+                # Compute one now and persist it so all future sub-domains
+                # of this parent will be consistent.
+                parent_color = compute_max_distance_color(existing_colors)
+                await db.execute(
+                    update(PromptCluster)
+                    .where(PromptCluster.id == parent_domain_id)
+                    .values(color_hex=parent_color)
+                )
+                logger.info(
+                    "Assigned color %s to parent domain %s (was NULL)",
+                    parent_color, parent_domain_id,
+                )
+            color_hex = derive_sub_domain_color(parent_color)
         else:
             # Top-level domain: maximally distinct from all existing
             color_hex = compute_max_distance_color(existing_colors)
@@ -2373,12 +2444,23 @@ class TaxonomyEngine:
         warm-path reconciliation and cold-path refit for domain nodes
         that still lack UMAP coordinates.
 
-        Uses ``domain`` field matching (not ``parent_id``) because the
-        cold path can reassign parent_id during HDBSCAN re-clustering,
-        leaving tree links stale.
+        Two matching strategies (tried in order):
+        1. ``domain`` field — works for top-level domains where children
+           have ``cluster.domain == domain_node.label``.
+        2. ``parent_id`` fallback — works for sub-domains where children
+           have ``cluster.domain == parent_domain`` (not the sub-domain
+           label) but ``cluster.parent_id == sub_domain_node.id``.
         """
         from sqlalchemy import func as sa_func
 
+        _umap_filter = [
+            PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+            PromptCluster.umap_x.isnot(None),
+            PromptCluster.umap_y.isnot(None),
+            PromptCluster.umap_z.isnot(None),
+        ]
+
+        # Strategy 1: match by domain field (top-level domains)
         row = (await db.execute(
             select(
                 sa_func.avg(PromptCluster.umap_x),
@@ -2387,12 +2469,23 @@ class TaxonomyEngine:
                 sa_func.count(),
             ).where(
                 PromptCluster.domain == domain_node.label,
-                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
-                PromptCluster.umap_x.isnot(None),
-                PromptCluster.umap_y.isnot(None),
-                PromptCluster.umap_z.isnot(None),
+                *_umap_filter,
             )
         )).one_or_none()
+
+        # Strategy 2: fall back to parent_id match (sub-domains)
+        if (not row or row[0] is None) and domain_node.id:
+            row = (await db.execute(
+                select(
+                    sa_func.avg(PromptCluster.umap_x),
+                    sa_func.avg(PromptCluster.umap_y),
+                    sa_func.avg(PromptCluster.umap_z),
+                    sa_func.count(),
+                ).where(
+                    PromptCluster.parent_id == domain_node.id,
+                    *_umap_filter,
+                )
+            )).one_or_none()
 
         if row and row[0] is not None:
             domain_node.umap_x = float(row[0])
@@ -2424,7 +2517,11 @@ class TaxonomyEngine:
     # ------------------------------------------------------------------
 
     async def _suggest_domain_archival(self, db: AsyncSession) -> list[str]:
-        """Identify low-activity discovered domains for potential archival."""
+        """Identify low-activity top-level domains for potential archival.
+
+        Sub-domains are excluded — they are automatically archived by
+        ``phase_archive_empty_sub_domains()`` in Phase 5.5 of the warm path.
+        """
         from datetime import timedelta
 
         from sqlalchemy import and_, or_
@@ -2435,6 +2532,13 @@ class TaxonomyEngine:
         )
 
         cutoff = _utcnow() - timedelta(days=DOMAIN_ARCHIVAL_IDLE_DAYS)
+
+        # Pre-compute domain IDs for sub-domain detection
+        domain_id_q = await db.execute(
+            select(PromptCluster.id).where(PromptCluster.state == "domain")
+        )
+        domain_id_set = set(domain_id_q.scalars().all())
+
         stale = await db.execute(
             select(PromptCluster).where(
                 PromptCluster.state == "domain",
@@ -2454,6 +2558,9 @@ class TaxonomyEngine:
         for domain in stale.scalars():
             meta = read_meta(domain.cluster_metadata)
             if meta["source"] == "seed":
+                continue
+            # Skip sub-domains — handled by phase_archive_empty_sub_domains()
+            if domain.parent_id and domain.parent_id in domain_id_set:
                 continue
             suggestions.append(domain.label)
             logger.info(
@@ -3069,6 +3176,27 @@ class TaxonomyEngine:
                 f"Archived with usage: '{row[1]}' (id={row[0][:8]}) "
                 f"has usage_count={row[2]}"
             )
+
+        # 8. Empty sub-domains — domain nodes parented to another domain
+        #    with 0 active children.  These are typically orphaned by cold
+        #    path refits and will be archived by Phase 5.5.
+        for did in domain_ids:
+            d_node = await db.get(PromptCluster, did)
+            if not d_node or d_node.state != "domain":
+                continue
+            if d_node.parent_id not in domain_ids:
+                continue  # Not a sub-domain
+            child_count_q = await db.execute(
+                select(func.count()).where(
+                    PromptCluster.parent_id == did,
+                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                )
+            )
+            if (child_count_q.scalar() or 0) == 0:
+                violations.append(
+                    f"Empty sub-domain: '{d_node.label}' (id={did[:8]}) "
+                    f"has 0 active children"
+                )
 
         if violations:
             for v in violations:

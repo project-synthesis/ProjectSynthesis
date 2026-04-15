@@ -272,6 +272,97 @@ def _classify_domain(scored: dict[str, float]) -> str:
     return loader.classify(scored)
 
 
+# ---------------------------------------------------------------------------
+# Domain qualifier vocabulary — static per-domain specialization keywords.
+# Used by _enrich_domain_qualifier() to append sub-qualifiers to domain_raw.
+# ---------------------------------------------------------------------------
+_DOMAIN_QUALIFIERS: dict[str, dict[str, list[str]]] = {
+    "backend": {
+        "auth": ["auth", "authentication", "login", "session", "oauth", "jwt", "token"],
+        "api": ["api", "endpoint", "rest", "graphql", "route", "handler"],
+        "database": ["database", "query", "migration", "orm", "schema", "sql"],
+        "performance": ["cache", "performance", "latency", "optimization", "throughput"],
+    },
+    "frontend": {
+        "components": ["component", "widget", "ui", "render", "layout"],
+        "state": ["state", "store", "redux", "context", "reactive"],
+        "styling": ["css", "tailwind", "theme", "responsive", "animation", "dark mode"],
+    },
+    "devops": {
+        "ci-cd": ["ci", "cd", "pipeline", "deploy", "build", "github-actions"],
+        "infra": ["terraform", "docker", "kubernetes", "k8s", "container", "infrastructure"],
+        "monitoring": ["monitoring", "alerting", "observability", "logging", "metrics", "grafana"],
+    },
+    "saas": {
+        "growth": ["metrics", "kpi", "dashboard", "analytics", "growth", "ltv", "cac", "nrr", "mrr", "arr"],
+        "onboarding": ["onboarding", "activation", "signup", "welcome", "tutorial", "getting started"],
+        "pricing": ["pricing", "tier", "subscription", "billing", "plan", "freemium", "free trial"],
+        "investor": ["investor", "board", "fundraise", "series", "pitch", "update", "quarterly"],
+        "churn": ["churn", "retention", "cancellation", "win-back", "engagement", "satisfaction"],
+    },
+    "database": {
+        "migration": ["migration", "migrate", "alembic", "schema change", "upgrade", "downgrade"],
+        "query": ["query", "sql", "index", "performance", "optimization", "slow query", "explain"],
+        "modeling": ["schema", "model", "relationship", "normalization", "table", "entity"],
+    },
+    "security": {
+        "jwt": ["jwt", "token", "bearer", "claims", "refresh token", "access token"],
+        "auth": ["auth", "authentication", "login", "session", "oauth", "sso", "saml", "oidc"],
+        "encryption": ["encryption", "encrypt", "decrypt", "cipher", "aes", "rsa", "hashing"],
+    },
+    "fullstack": {
+        "payments": ["payment", "stripe", "billing", "checkout", "invoice", "subscription"],
+        "rbac": ["rbac", "role", "permission", "access control", "authorization"],
+    },
+    "data": {
+        "ml": ["machine learning", "model", "training", "prediction", "classification", "regression"],
+        "pipeline": ["pipeline", "etl", "transform", "ingest", "batch", "streaming", "airflow"],
+        "visualization": ["visualization", "chart", "plot", "dashboard", "matplotlib", "d3"],
+    },
+}
+
+
+def _enrich_domain_qualifier(domain: str, prompt_lower: str) -> str:
+    """Enrich a plain domain label with a sub-qualifier from prompt keywords.
+
+    If *domain* already contains a qualifier (has ``:``) or is not in the
+    vocabulary, returns the original string unchanged.
+
+    Scans *prompt_lower* for keywords from each qualifier group under the
+    primary domain.  The qualifier with the most keyword hits wins, provided
+    it meets the minimum hit threshold.
+
+    Returns:
+        Enriched domain string (e.g., ``"backend: auth"``) or original.
+    """
+    from app.services.taxonomy._constants import SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS
+
+    if ":" in domain:
+        return domain
+
+    primary = domain.strip().lower()
+    qualifiers = _DOMAIN_QUALIFIERS.get(primary)
+    if not qualifiers:
+        return domain
+
+    best_qualifier: str | None = None
+    best_hits = 0
+
+    for qualifier_name, keywords in qualifiers.items():
+        hits = sum(1 for kw in keywords if kw in prompt_lower)
+        if hits >= SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS and hits > best_hits:
+            best_hits = hits
+            best_qualifier = qualifier_name
+
+    if best_qualifier:
+        logger.debug(
+            "qualifier_enrichment: domain=%s qualifier=%s hits=%d",
+            primary, best_qualifier, best_hits,
+        )
+        return f"{primary}: {best_qualifier}"
+    return domain
+
+
 _DEFAULT_STRATEGY_MAP: dict[str, str] = {
     "coding": "structured-output",
     "writing": "role-playing",
@@ -406,6 +497,8 @@ class HeuristicAnalyzer:
         else:
             domain_scores = {}
         domain = _classify_domain(domain_scores)
+        # Enrich domain with sub-qualifier from prompt keywords
+        domain = _enrich_domain_qualifier(domain, prompt_lower)
         domain_confidence = min(1.0, max(domain_scores.values())) if domain_scores else 0.0
 
         # Layer 2: Structural signals
