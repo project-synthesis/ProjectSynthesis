@@ -618,7 +618,7 @@ class TestSignalDrivenCreation:
             "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
             fake_generate,
         ):
-            created = await engine._propose_sub_domains(db)
+            await engine._propose_sub_domains(db)
 
         # Verify generation was called for "saas" even though it has static vocab
         assert "saas" in generate_calls
