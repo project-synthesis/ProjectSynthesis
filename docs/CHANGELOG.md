@@ -4,20 +4,45 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.34 — 2026-04-15
+
 ### Added
-- **Repo relevance gate (hybrid)** — two-tier gate prevents same-stack-different-project codebase contamination: cosine floor (`REPO_RELEVANCE_FLOOR = 0.20`) for clearly unrelated prompts, domain entity overlap check above the floor via `extract_domain_vocab()` (requires `REPO_DOMAIN_MIN_OVERLAP = 1` project-specific term). Extracts domain vocabulary from explore synthesis by filtering generic programming terms (~110) and tech aliases. Tracked in `enrichment_meta` as `repo_relevance_score`, `repo_relevance_info` (cosine, domain_overlap, domain_matches, decision, reason), and `repo_relevance_skipped`
+- **Signal-driven sub-domain discovery** — replaced HDBSCAN-based sub-domain discovery with a deterministic three-source qualifier pipeline: (1) domain_raw sub-qualifiers via `parse_domain()`, (2) intent_label matching against qualifier vocabulary, (3) raw_prompt matching against dynamic TF-IDF signal_keywords. Adaptive consistency threshold `max(40%, 60% - 0.4% * members)`, minimum 2-cluster breadth guard, full observability with 8 event types per warm cycle
+- **Qualifier enrichment** — heuristic analyzer enriches domain classification with sub-qualifiers via `_enrich_domain_qualifier()` using `_DOMAIN_QUALIFIERS` vocabulary (9 domains: backend, frontend, devops, saas, database, security, fullstack, data). Runs on every prompt at zero LLM cost
+- **LLM-generated qualifier vocabulary** — Haiku analyzes a domain's cluster labels and generates qualifier keyword groups automatically for domains without static vocabulary. Cached in `cluster_metadata["generated_qualifiers"]`, refreshed when cluster count changes by ≥30%. One LLM call per domain, not per optimization
+- **Sub-domain archival phase** (Phase 5.5) — garbage-collects empty and single-child sub-domains after 1h grace period. Reparents children to top-level domain before archiving. Runs after Phase 5 discovery
+- **Sub-domain color derivation** — sub-domain nodes derive color from parent domain (same hue, darker in OKLab). Parent color auto-assigned if NULL at creation time
+- **Tree integrity check 8** — detects empty sub-domain nodes as violations, logged as errors for observability
+- **Repo relevance gate (hybrid)** — two-tier gate prevents same-stack-different-project codebase contamination: cosine floor (`REPO_RELEVANCE_FLOOR = 0.20`) + domain entity overlap via `extract_domain_vocab()`. Tracked in `enrichment_meta`
+- **Architecture reference** — `docs/architecture/sub-domain-discovery.md` covering three-source pipeline, vocabulary tiers, adaptive threshold, readiness dashboard, and lifecycle
+- **Taxonomy Observatory roadmap entry** — vision for live domain/sub-domain lifecycle dashboard with readiness indicators, dynamic steering, and vocabulary transparency
+
+### Changed
+- **Health endpoint** — MCP probe skipped when no active session (eliminates 400 noise). MCP-down produces degraded (200) not unhealthy (503). Only critical services yield 503
+- **EmbeddingIndex MCP refresh** — mtime-based change detection replaces age-based staleness. Eliminates "cache stale" log spam when no sessions are active
+- **SSE shutdown** — CancelledError handled in generator, drain time increased from 0.1s to 0.5s for clean shutdown
+- **Cold path sub-domain preservation** — Step 12 preserves sub-domain parent links instead of flattening all clusters to top-level domain
+- **Phase 0 UMAP reconciliation** — separate loop covers all domain nodes including sub-domains. Two-strategy lookup (domain field → parent_id fallback) for sub-domain UMAP positioning
+- **ACT filter** — shows all living states (active + mature + template + candidate), not just literal `state="active"`
+- **Template visibility** — templates appear in both PROVEN TEMPLATES section and their domain group in the hierarchy
+- **Column headers** — moved below PROVEN TEMPLATES section to align with cluster columns
+- **Trace logger** — added optional `status` field ("ok", "error", "skipped") for observability
 
 ### Fixed
-- **Taxonomy re-parenting** — Phase 0 reconciliation now re-parents clusters whose `domain` field doesn't match their parent domain node. Sub-domain children are correctly preserved (a cluster with domain=backend under a backend sub-domain is not re-parented)
-- **Sub-domain label mapping** — re-parenting sweep maps sub-domain labels to their parent domain for `cluster.domain`, matching `DomainResolver` behavior
-- **Matching excludes structural nodes** — family-level search now filters `EXCLUDED_STRUCTURAL_STATES` (domain, archived, project), preventing false matches against non-leaf nodes
-- **Matching includes mature/template states** — fallback node search now queries active, candidate, mature, and template states instead of only active and candidate
-- **Leaf cluster pattern loading** — when a matched node has no children (leaf cluster), patterns are loaded directly from the node itself instead of returning empty
-- **Zero-pattern suggestion suppression** — frontend no longer shows pattern suggestion banners when the matched cluster has no meta-patterns
-- **Event logger missing `path=`** — added required `path="api"` parameter to `log_decision()` call in cluster state change endpoint
+- **Taxonomy re-parenting** — Phase 0 reconciliation now re-parents clusters whose `domain` field doesn't match their parent domain node. Sub-domain children correctly preserved
+- **Sub-domain label mapping** — re-parenting sweep maps sub-domain labels to their parent domain for `cluster.domain`
+- **Matching excludes structural nodes** — family-level search filters `EXCLUDED_STRUCTURAL_STATES`
+- **Matching includes mature/template states** — fallback queries active, candidate, mature, and template
+- **Leaf cluster pattern loading** — patterns loaded directly from leaf nodes
+- **Zero-pattern suggestion suppression** — frontend hides banners when matched cluster has no meta-patterns
+- **Event logger missing `path=`** — added required parameter to cluster state change endpoint
+- **Sub-domain color inconsistency** — 4 backend sub-domains had wrong colors from NULL parent color fallback. Data repaired, code hardened
+- **Sub-domain creation churn** — HDBSCAN re-ran every warm cycle creating duplicates with different Haiku labels. Replaced with deterministic signal-driven discovery
 
 ### Removed
 - Internal plans and spec documents from public repository
+- HDBSCAN-based sub-domain discovery (batch_cluster, blend_embeddings, generate_label imports within `_propose_sub_domains`)
+- 6 HDBSCAN sub-domain constants (SUB_DOMAIN_MIN_MEMBERS, SUB_DOMAIN_COHERENCE_CEILING, SUB_DOMAIN_MIN_GROUP_MEMBERS, SUB_DOMAIN_HDBSCAN_MIN_CLUSTER, SUB_DOMAIN_MIN_CLUSTERS, SUB_DOMAIN_CLUSTER_PATH_MIN_MEMBERS)
 
 ## v0.3.31 — 2026-04-13
 

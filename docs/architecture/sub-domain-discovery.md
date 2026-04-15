@@ -164,7 +164,7 @@ The logic: small domains need a higher bar because a few outlier prompts can ske
 
 - **Minimum 5 optimizations** with the qualifier (statistical significance)
 - **Minimum 2 distinct clusters** with the qualifier (prevents 1:1 wrapper sub-domains where a single cluster gets wrapped in a sub-domain node for no navigational value)
-- **Domain must not already have sub-domains** (idempotency — prevents the churn cycle where HDBSCAN used to create duplicate sub-domains every warm cycle)
+- **Domain must not already have sub-domains** (idempotency guard — prevents re-evaluation when sub-domains already exist)
 
 ## Sub-Domain Readiness
 
@@ -232,6 +232,6 @@ These events are written to `data/taxonomy_events/decisions-YYYY-MM-DD.jsonl` an
 | `engine.py` | `_propose_sub_domains()` three-source pipeline with vocabulary tiering |
 | `warm_phases.py` | `phase_archive_empty_sub_domains()` cleanup of empty/single-child sub-domains |
 | `_constants.py` | Thresholds: `SUB_DOMAIN_QUALIFIER_*`, `SUB_DOMAIN_ARCHIVAL_IDLE_HOURS` |
-| `cold_path.py` | Step 12: sub-domain parent preservation during HDBSCAN refit |
+| `cold_path.py` | Step 12: sub-domain parent preservation during cold path refit |
 | `domain_signal_loader.py` | Loads `signal_keywords` for Tier 3 dynamic keywords |
 | `cluster_meta.py` | `read_meta()`/`write_meta()` for cached vocabulary in `cluster_metadata` |

@@ -23,7 +23,7 @@ The real value isn't any single optimization — it's what happens over time. Ev
 - **Injects proven techniques** — when you optimize a new prompt, the system searches for relevant patterns from your history and injects them automatically. You get better results because the system remembers what worked before
 - **Shares cross-project knowledge** — techniques that prove universal across 5+ clusters are promoted to durable global patterns and applied everywhere with a 1.3x relevance boost
 
-The taxonomy is self-tuning. Clusters split when they grow incoherent, merge when they're redundant, and retire when they go stale. Domain nodes emerge when enough related prompts accumulate. The warm path processes only clusters that changed since the last cycle. The system scales from 100 to 50,000+ prompts without configuration.
+The taxonomy is self-tuning. Clusters split when they grow incoherent, merge when they're redundant, and retire when they go stale. Domain nodes emerge when enough related prompts accumulate. Sub-domains form organically when specializations concentrate within a domain — the system detects qualifier signals and creates sub-domain hierarchy when the evidence is strong enough (adaptive threshold, minimum 2-cluster breadth). The warm path processes only clusters that changed since the last cycle. The system scales from 100 to 50,000+ prompts without configuration.
 
 ## Direction
 
@@ -95,7 +95,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 | Frontend | SvelteKit 2 (Svelte 5 runes), Tailwind CSS 4 |
 | Database | SQLite (WAL mode) |
 | Visualization | Three.js (3D taxonomy topology with LOD, raycasting, force layout) |
-| Taxonomy | Spectral clustering + HDBSCAN + adaptive cosine thresholds + UMAP 3D + OKLab coloring. Multi-project hierarchy (project → domain → cluster). Organic domain discovery |
+| Taxonomy | Spectral clustering + HDBSCAN + adaptive cosine thresholds + UMAP 3D + OKLab coloring. Multi-project hierarchy (project → domain → sub-domain → cluster). Signal-driven sub-domain discovery with three-tier vocabulary (static + LLM-generated + dynamic TF-IDF) |
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2, 384-dim, CPU). Dual-backend index: numpy (default) + hnswlib HNSW (auto at ≥1000 clusters) |
 | LLM | Configurable per phase — Opus, Sonnet, Haiku (via Settings) |
 | Scoring | Hybrid: LLM + heuristic blending per dimension, z-score normalization (≥30 samples), divergence detection |
@@ -130,7 +130,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Hybrid scoring** — LLM scores blended with heuristic analysis + z-score normalization against historical distribution. Divergence flags when LLM and heuristic disagree by >2.5 points
 
 ### Knowledge Engine
-- **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → cluster → optimizations. Organic domain discovery from user behavior
+- **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Organic domain and sub-domain discovery from user behavior via signal-driven qualifier detection with three-tier vocabulary (static, LLM-generated, dynamic TF-IDF)
 - **Pattern extraction** — reusable techniques extracted from successful optimizations, stored as meta-patterns per cluster
 - **Cross-cluster injection** — universal techniques injected across topic boundaries, ranked by composite relevance
 - **Global pattern tier** — durable patterns promoted from meta-pattern siblings spanning 5+ clusters (single-project OK), injected with 1.3x relevance boost. Validated with demotion/re-promotion hysteresis, 500 retention cap. Injection effectiveness tracked in health endpoint
@@ -207,7 +207,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2151 tests)
+# Backend tests (2177 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
