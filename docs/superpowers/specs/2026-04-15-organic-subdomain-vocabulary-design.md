@@ -86,7 +86,14 @@ Phase 5 (warm path):
 | `backend/app/services/taxonomy/engine.py` (`_propose_sub_domains`) | Remove static vocab gate (line 1835). Always enter the vocabulary generation/refresh path. After generation, call `DomainSignalLoader.refresh_qualifiers()` to push vocab to hot-path cache. Build `known_qualifiers` set from organic vocab only. |
 | `backend/app/services/taxonomy/_constants.py` | Change `SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS` from `2` to `1` |
 | `backend/app/services/domain_signal_loader.py` | Add `get_qualifiers(domain: str) -> dict[str, list[str]]` method (returns cached organic vocab, empty dict on miss). Add `refresh_qualifiers(domain: str, qualifiers: dict)` method (called by Phase 5 after generation). Add `_qualifier_cache: dict[str, dict[str, list[str]]]` instance var. Add `_qualifier_hits: int` and `_qualifier_misses: int` counters. Add qualifier fields to `stats()` return dict. |
-| `backend/app/services/taxonomy/warm_phases.py` | In `phase_discover()`, ensure vocabulary generation runs for all domains before qualifier evaluation. On first cycle (no cached vocab on any domain), generate eagerly. |
+| `backend/app/services/domain_signal_loader.py` (`load()`) | Update `load()` to also read `generated_qualifiers` from domain node `cluster_metadata` into `_qualifier_cache`. This is how the MCP process (which never runs Phase 5) gets qualifier data — it reads from DB on startup via `load()`. |
+| `backend/app/routers/health.py` | Add `qualifier_vocab` field to `HealthResponse` model. Add a block that calls `get_signal_loader().stats()` and maps the qualifier fields into the response dict. Follow the existing pattern used by `ClassificationAgreement.rates()` and `recovery_service.get_metrics()`. |
+| `backend/tests/taxonomy/test_sub_domain_lifecycle.py` | Update `test_intent_label_fallback_matching` and any other tests that import `_DOMAIN_QUALIFIERS` directly — refactor to use organic vocab from `DomainSignalLoader` or inline test fixtures instead. |
+| `backend/app/services/taxonomy/labeling.py` | Update docstring at line 165 that references `_DOMAIN_QUALIFIERS` — replace with reference to organic `generated_qualifiers` metadata format. |
+| `docs/architecture/sub-domain-discovery.md` | Update Tier 1 description: replace "Static vocabulary (`_DOMAIN_QUALIFIERS`)" with "Organic LLM-generated vocabulary (`generated_qualifiers` in domain node metadata)". |
+| Root `CLAUDE.md` and `backend/CLAUDE.md` | Update classifier descriptions that mention `_DOMAIN_QUALIFIERS` vocabulary — replace with organic vocabulary references. |
+
+**Note on `warm_phases.py`:** No structural changes to `phase_discover()` itself. The vocabulary generation/evaluation ordering is per-domain within `_propose_sub_domains()` in `engine.py`. Each domain generates its vocab (if stale) then immediately evaluates qualifiers, then moves to the next domain. There is no cross-domain dependency requiring a two-pass approach.
 
 ---
 
@@ -171,9 +178,15 @@ If a domain node's `signal_keywords` is empty after extraction, log WARNING: `{d
 - Phase 5 with Haiku failure — verify fallback to cached vocab, `_maintenance_pending` set
 - Phase 5 first cycle — verify eager generation for all domains
 - End-to-end: prompt classified as "saas" → enriched to "saas: growth" via organic vocab → Phase 5 counts it as domain_raw source
+- `_maintenance_pending` retry after vocab generation failure — verify the next warm cycle re-attempts vocabulary generation (staleness check catches missing cache even when cluster count hasn't changed)
+- Historical `domain_raw` values with old static qualifier names (e.g., "saas: growth" written by the old static vocab) — verify they are silently ignored in Source 1 when organic vocab uses different qualifier names. This is expected behavior, not an error.
 
 ### Regression Tests
 
-- Existing sub-domain lifecycle tests still pass (frontend/components, database/query creation)
+- Existing sub-domain lifecycle tests still pass after `test_sub_domain_lifecycle.py` is updated to remove `_DOMAIN_QUALIFIERS` import
 - Existing heuristic analyzer tests still pass after `_DOMAIN_QUALIFIERS` removal
 - `_enrich_domain_qualifier()` callers unaffected (function signature unchanged)
+
+### Data Migration Note
+
+Existing `domain_raw` values written against the static vocabulary (e.g., "backend: auth", "database: query") may not match organic vocabulary if Haiku generates different qualifier names. This is acceptable — the static vocabulary had near-zero Source 1 hit rates for most domains (SaaS: 0/71). Future enrichments will use organic qualifiers, and Source 2 (intent_label) + Source 3 (TF-IDF) provide continuity during the transition. No data migration is needed.
