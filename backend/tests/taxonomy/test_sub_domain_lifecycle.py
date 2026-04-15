@@ -545,9 +545,11 @@ class TestSignalDrivenCreation:
     @pytest.mark.asyncio
     async def test_intent_label_fallback_matching(self, db):
         """intent_label keyword matching finds qualifiers from vocabulary."""
-        from app.services.heuristic_analyzer import _DOMAIN_QUALIFIERS
-
-        domain_qualifiers = _DOMAIN_QUALIFIERS.get("backend", {})
+        # Use inline test vocab instead of deleted _DOMAIN_QUALIFIERS
+        domain_qualifiers = {
+            "auth": ["auth", "authentication", "login", "session", "oauth", "jwt", "token"],
+            "api": ["api", "endpoint", "rest", "graphql", "route", "handler"],
+        }
         intent_label = "MCP routing architecture"
         intent_lower = intent_label.lower()
 
@@ -559,5 +561,64 @@ class TestSignalDrivenCreation:
                 best_hits = hits
                 best_q = q_name
 
-        # "routing" doesn't match any backend qualifier keywords
+        # "routing" doesn't match any qualifier keywords
         assert best_q is None or best_hits == 0
+
+    @pytest.mark.asyncio
+    async def test_propose_sub_domains_generates_vocab_for_all_domains(self, db, mock_provider):
+        """Phase 5 generates vocabulary for domains regardless of static vocab presence."""
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        # Create a domain node (e.g., "saas") with child clusters but no cached vocab
+        import numpy as np
+
+        domain = PromptCluster(
+            label="saas", state="domain", domain="saas",
+            color_hex="#00ff00", member_count=0,
+        )
+        db.add(domain)
+        await db.flush()
+
+        cluster_ids = []
+        for i in range(4):
+            cluster = PromptCluster(
+                label=f"SaaS Cluster {i}", state="active", domain="saas",
+                parent_id=domain.id, color_hex="#ff0000", member_count=3,
+                centroid_embedding=np.random.randn(384).astype(np.float32).tobytes(),
+            )
+            db.add(cluster)
+            await db.flush()
+            cluster_ids.append(cluster.id)
+
+        # Add enough optimization rows to pass SUB_DOMAIN_QUALIFIER_MIN_MEMBERS (5)
+        for i, cid in enumerate(cluster_ids[:2]):
+            for j in range(3):
+                opt = Optimization(
+                    raw_prompt=f"saas prompt {i}-{j}",
+                    cluster_id=cid,
+                    domain="saas",
+                    embedding=_random_embedding(i * 10 + j),
+                )
+                db.add(opt)
+
+        await db.commit()
+
+        generate_calls = []
+
+        async def fake_generate(provider, domain_label, cluster_labels, model):
+            generate_calls.append(domain_label)
+            return {"growth": ["metrics", "kpi"], "pricing": ["tier", "billing"]}
+
+        with patch(
+            "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
+            fake_generate,
+        ):
+            created = await engine._propose_sub_domains(db)
+
+        # Verify generation was called for "saas" even though it has static vocab
+        assert "saas" in generate_calls

@@ -1763,9 +1763,6 @@ class TaxonomyEngine:
         )
         existing_labels = {r[0].lower() for r in existing_q.all() if r[0]}
 
-        # Load qualifier vocabulary for intent_label fallback
-        from app.services.heuristic_analyzer import _DOMAIN_QUALIFIERS
-
         # Find domains to evaluate
         domain_q = await db.execute(
             select(PromptCluster).where(
@@ -1825,65 +1822,89 @@ class TaxonomyEngine:
             if total_opts < SUB_DOMAIN_QUALIFIER_MIN_MEMBERS:
                 continue
 
-            # Build qualifier vocabulary: static (curated) → LLM-generated → dynamic (TF-IDF)
-            domain_qualifiers = _DOMAIN_QUALIFIERS.get(domain_node.label, {})
+            # Build qualifier vocabulary: LLM-generated (all domains) → dynamic (TF-IDF)
+            # Always start with empty dict — organic generation fills it for every domain.
+            domain_qualifiers: dict[str, list[str]] = {}
 
-            # For domains without static vocabulary, generate one from cluster
-            # labels via Haiku.  Cached in cluster_metadata["generated_qualifiers"]
-            # and refreshed when cluster count changes significantly.
+            # Generate vocab from cluster labels via Haiku for ALL domains.
+            # Cached in cluster_metadata["generated_qualifiers"] and refreshed
+            # when cluster count changes significantly.
             meta = read_meta(domain_node.cluster_metadata)
-            if not domain_qualifiers:
-                cached_vocab = meta.get("generated_qualifiers")
-                cached_cluster_count = meta.get("generated_qualifiers_cluster_count", 0)
-                current_cluster_count = len(child_ids)
+            cached_vocab = meta.get("generated_qualifiers")
+            cached_cluster_count = meta.get("generated_qualifiers_cluster_count", 0)
+            current_cluster_count = len(child_ids)
 
-                # Regenerate if no cache or cluster count changed by ≥30%
-                stale = (
-                    not cached_vocab
-                    or abs(current_cluster_count - cached_cluster_count)
-                    > max(2, cached_cluster_count * 0.3)
+            # Regenerate if no cache or cluster count changed by ≥30%
+            stale = (
+                not cached_vocab
+                or abs(current_cluster_count - cached_cluster_count)
+                > max(2, cached_cluster_count * 0.3)
+            )
+            if stale and self._provider:
+                from app.services.taxonomy.labeling import generate_qualifier_vocabulary
+
+                # Gather cluster labels with member counts for LLM context
+                cluster_info_q = await db.execute(
+                    select(PromptCluster.label, PromptCluster.member_count).where(
+                        PromptCluster.id.in_(child_ids),
+                    )
                 )
-                if stale and self._provider:
-                    from app.services.taxonomy.labeling import generate_qualifier_vocabulary
+                cluster_info = [
+                    (r[0], r[1] or 0) for r in cluster_info_q.all()
+                ]
+                generated = await generate_qualifier_vocabulary(
+                    provider=self._provider,
+                    domain_label=domain_node.label,
+                    cluster_labels=cluster_info,
+                    model=settings.MODEL_HAIKU,
+                )
+                if generated:
+                    domain_qualifiers = generated
+                    # Cache in metadata for future cycles
+                    domain_node.cluster_metadata = write_meta(
+                        domain_node.cluster_metadata,
+                        generated_qualifiers=generated,
+                        generated_qualifiers_cluster_count=current_cluster_count,
+                    )
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover",
+                            decision="sub_domain_vocab_generated",
+                            context={
+                                "domain": domain_node.label,
+                                "groups": len(generated),
+                                "qualifiers": list(generated.keys()),
+                                "cluster_count": current_cluster_count,
+                            },
+                        )
+                    except RuntimeError:
+                        pass
+            elif cached_vocab and isinstance(cached_vocab, dict):
+                domain_qualifiers = cached_vocab
 
-                    # Gather cluster labels with member counts for LLM context
-                    cluster_info_q = await db.execute(
-                        select(PromptCluster.label, PromptCluster.member_count).where(
-                            PromptCluster.id.in_(child_ids),
-                        )
-                    )
-                    cluster_info = [
-                        (r[0], r[1] or 0) for r in cluster_info_q.all()
-                    ]
-                    generated = await generate_qualifier_vocabulary(
-                        provider=self._provider,
-                        domain_label=domain_node.label,
-                        cluster_labels=cluster_info,
-                        model=settings.MODEL_HAIKU,
-                    )
-                    if generated:
-                        domain_qualifiers = generated
-                        # Cache in metadata for future cycles
-                        domain_node.cluster_metadata = write_meta(
-                            domain_node.cluster_metadata,
-                            generated_qualifiers=generated,
-                            generated_qualifiers_cluster_count=current_cluster_count,
-                        )
+            # Push vocab to DomainSignalLoader for hot-path enrichment
+            if domain_qualifiers:
+                try:
+                    from app.services.domain_signal_loader import get_signal_loader
+                    loader = get_signal_loader()
+                    if loader:
+                        loader.refresh_qualifiers(domain_node.label, domain_qualifiers)
                         try:
                             get_event_logger().log_decision(
                                 path="warm", op="discover",
-                                decision="sub_domain_vocab_generated",
+                                decision="vocab_cache_propagated",
                                 context={
                                     "domain": domain_node.label,
-                                    "groups": len(generated),
-                                    "qualifiers": list(generated.keys()),
-                                    "cluster_count": current_cluster_count,
+                                    "qualifier_count": len(domain_qualifiers),
                                 },
                             )
                         except RuntimeError:
                             pass
-                elif cached_vocab and isinstance(cached_vocab, dict):
-                    domain_qualifiers = cached_vocab
+                except Exception as cache_exc:
+                    logger.warning(
+                        "Failed to propagate vocab to DomainSignalLoader for '%s': %s",
+                        domain_node.label, cache_exc,
+                    )
 
             # Load dynamic signal_keywords from domain node metadata.
             # These are TF-IDF-extracted keywords already on every domain node,
