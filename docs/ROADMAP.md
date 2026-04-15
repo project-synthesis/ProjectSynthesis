@@ -12,15 +12,51 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ## Immediate
 
-### Sub-domain discovery cluster-count trigger
-**Status:** Immediate
-**Context:** The sub-domain discovery system (`_propose_sub_domains()` in engine.py) only triggers when a domain's mean child cluster coherence drops below 0.50. With well-organized taxonomy (the warm path keeps clusters coherent), this threshold is never reached — the SaaS domain has 23 active clusters, 59 members, but mean coherence 0.828.
+### Taxonomy observatory — live domain & sub-domain lifecycle dashboard
+**Status:** Exploring
+**Context:** The taxonomy engine now discovers domains and sub-domains organically from user activity through a three-source signal pipeline (domain_raw qualifiers, static/LLM-generated vocabulary, dynamic TF-IDF keywords). The warm path runs every 5 minutes, making discovery decisions with full observability events logged to JSONL. But this data is only accessible through raw log files and the ActivityPanel's event stream — there's no dedicated view for understanding how the taxonomy evolves over time.
 
-**Diagnosis:** The 0.50 coherence ceiling was designed for domains that grow organically incoherent (many diverse prompts forced into a single mega-cluster). But the taxonomy engine's split/merge/reconcile cycle prevents this — new prompts either join matching clusters (maintaining coherence) or spawn focused new clusters (coherence=1.0). The domain IS diverse (pricing vs metrics vs onboarding vs customer success vs operations) but diversity is captured at the cluster level, not reflected in per-cluster coherence.
+**Vision:** A "Taxonomy Observatory" panel that gives users creative and functional insights into their prompt catalogue's structure, growth trajectory, and optimization opportunities. Inspired by the Tamagotchi/buddy concept — the taxonomy is a living system that the user cultivates through their prompting activity.
 
-**Proposed fix:** Add OR-logic trigger: sub-domain discovery fires if EITHER `(members >= 20 AND mean_coherence < 0.50)` OR `(active_clusters >= 15 AND members >= 30)`. The cluster-count path recognizes that a domain with 15+ clusters is structurally complex enough to benefit from sub-grouping regardless of individual cluster coherence.
+**Core capabilities:**
 
-**Files:** `backend/app/services/taxonomy/_constants.py` (new `SUB_DOMAIN_MIN_CLUSTERS` constant), `backend/app/services/taxonomy/engine.py` (`_propose_sub_domains()` — add second trigger path)
+1. **Domain lifecycle timeline** — visual history of when domains and sub-domains were discovered, how they grew, and which signals triggered their creation. Shows the three-source pipeline contribution per domain (how much came from domain_raw vs vocabulary matching vs dynamic keywords). Users see their taxonomy growing organically as they use the system.
+
+2. **Sub-domain readiness indicators** — for each domain, show which potential sub-domains are approaching the creation threshold. "SaaS pricing is at 17% — needs 40% to form a sub-domain. 23 more pricing-focused prompts would get you there." This steers users toward concentrating their activity in areas where the taxonomy can provide richer organization.
+
+3. **Pattern density heatmap** — which domains/sub-domains have the richest pattern libraries (most MetaPatterns, highest injection rates, best score lift). Highlights where the taxonomy is adding the most value and where it's thin. "Your backend/api patterns have produced +1.2 average score lift across 15 injections. Your saas domain has 71 prompts but no proven templates yet."
+
+4. **Dynamic steering suggestions** — based on taxonomy state, suggest actions that would improve coverage. "You have 14 database clusters but no sub-domains — try more specific database prompts (migrations, query optimization, schema modeling) to help the system organize." This is the "buddy" aspect — the system guides users toward activities that help it serve them better.
+
+5. **Vocabulary transparency** — show which qualifier vocabularies are active per domain (static, LLM-generated, or dynamic TF-IDF), what keywords they contain, and how recently they were refreshed. Users can see exactly why the system classified their prompt as "backend: auth" and provide feedback if the classification is wrong.
+
+6. **Cross-domain pattern flow** — visualize how patterns propagate across domains via GlobalPatterns and cross-cluster injection. Which techniques discovered in one domain are being applied elsewhere? This reveals unexpected connections in the user's prompt engineering practice.
+
+**Steering model (exploratory):** The "buddy" concept needs careful design to avoid being patronizing or noisy. Key principles:
+- Steering is observational, not prescriptive — "here's what the data shows" not "you should do X"
+- Suggestions are contextual — shown when the user is in a relevant domain, not as global notifications
+- The system earns trust by being transparent about its reasoning — every suggestion links to the underlying data
+- Gamification is minimal — progress indicators yes, achievements/badges no
+- The user's prompting freedom is never constrained — steering is purely advisory
+
+**Data sources (already available):**
+- Taxonomy events JSONL (`data/taxonomy_events/`) — full decision history with per-event context
+- Ring buffer (500 events) — real-time stream via SSE `taxonomy_activity` events
+- `GET /api/clusters/tree` — current tree structure with member counts, scores, states
+- `GET /api/clusters/stats` — aggregate statistics
+- `GET /api/clusters/activity` — historical event replay from JSONL
+- Domain node `cluster_metadata` — signal_keywords, generated_qualifiers, signal_member_count
+- Warm path Phase 5 events — qualifier scan results, threshold evaluations, creation/skip decisions
+
+**Open questions:**
+- Should steering suggestions be computed server-side (new endpoint) or client-side (from existing data)?
+- How does the observatory interact with the topology view — separate panel, or integrated as a topology overlay?
+- Should the LLM-generated vocabulary be user-editable (add/remove keywords manually)?
+- How to balance information density with the industrial cyberpunk aesthetic — dense data panels vs. clean minimalism?
+
+**Prerequisites:** Signal-driven sub-domain discovery (shipped), LLM-generated qualifier vocabulary (shipped), taxonomy event observability (shipped). The data infrastructure exists — this is primarily a frontend visualization and UX design challenge.
+
+**Files:** New `frontend/src/lib/components/taxonomy/TaxonomyObservatory.svelte` (main panel). New `backend/app/routers/taxonomy_insights.py` (aggregation endpoint for steering suggestions). Possibly new `frontend/src/lib/stores/observatory.svelte.ts` (state management for timeline and readiness data).
 
 ---
 
