@@ -362,6 +362,10 @@ class TaxonomyEngine:
         self._cluster_project_cache: dict[str, str] = {}  # cluster_id -> project_id
         self._legacy_project_id: str | None = None  # cached Legacy project node ID
         self._last_global_pattern_check: float = 0.0  # monotonic, Phase 2B
+        # Maintenance retry flag — set True when Phase 5 (discover) fails
+        # with a transient error.  Causes the next idle warm cycle to run
+        # maintenance phases regardless of the periodic cadence gate.
+        self._maintenance_pending: bool = False
         # Injection effectiveness — cached by warm path Phase 4, read by health endpoint.
         self._injection_effectiveness: dict | None = None
 

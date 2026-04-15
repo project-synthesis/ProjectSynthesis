@@ -38,3 +38,24 @@ async def test_first_cycle_returns_none_dirty_set():
 
     assert engine.is_first_warm_cycle()
     # On first cycle, caller should treat dirty_set as None (= process all)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_pending_flag_lifecycle():
+    """Engine._maintenance_pending starts False, can be set and cleared."""
+    from app.services.taxonomy.engine import TaxonomyEngine
+
+    mock_embedding = MagicMock()
+    mock_provider = MagicMock()
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+    # Starts False
+    assert engine._maintenance_pending is False
+
+    # Can be set
+    engine._maintenance_pending = True
+    assert engine._maintenance_pending is True
+
+    # Can be cleared
+    engine._maintenance_pending = False
+    assert engine._maintenance_pending is False
