@@ -116,3 +116,88 @@ async def test_domain_without_keywords_skipped(db):
     loader = DomainSignalLoader()
     await loader.load(db)
     assert "empty" not in loader.signals
+
+
+def test_get_qualifiers_returns_empty_on_miss():
+    """get_qualifiers returns empty dict when domain has no cached vocab."""
+    from app.services.domain_signal_loader import DomainSignalLoader
+
+    loader = DomainSignalLoader()
+    result = loader.get_qualifiers("saas")
+    assert result == {}
+
+
+def test_refresh_qualifiers_populates_cache():
+    """refresh_qualifiers stores vocab and get_qualifiers returns it."""
+    from app.services.domain_signal_loader import DomainSignalLoader
+
+    loader = DomainSignalLoader()
+    vocab = {"growth": ["metrics", "kpi", "dashboard"], "pricing": ["tier", "billing"]}
+    loader.refresh_qualifiers("saas", vocab)
+
+    result = loader.get_qualifiers("saas")
+    assert result == vocab
+    assert loader.get_qualifiers("backend") == {}  # other domains unaffected
+
+
+def test_qualifier_hit_miss_counters():
+    """get_qualifiers increments hit/miss counters."""
+    from app.services.domain_signal_loader import DomainSignalLoader
+
+    loader = DomainSignalLoader()
+    loader.refresh_qualifiers("backend", {"auth": ["login"]})
+
+    loader.get_qualifiers("backend")  # hit
+    loader.get_qualifiers("backend")  # hit
+    loader.get_qualifiers("saas")     # miss
+
+    stats = loader.stats()
+    assert stats["qualifier_cache_hits"] == 2
+    assert stats["qualifier_cache_misses"] == 1
+    assert stats["domains_with_vocab"] == 1
+    assert stats["domains_without_vocab"] == 0  # only tracks cache lookups, not all domains
+
+
+def test_stats_returns_qualifier_fields():
+    """stats() includes all qualifier-related fields."""
+    from app.services.domain_signal_loader import DomainSignalLoader
+
+    loader = DomainSignalLoader()
+    stats = loader.stats()
+    assert "qualifier_cache_hits" in stats
+    assert "qualifier_cache_misses" in stats
+    assert "domains_with_vocab" in stats
+    assert "last_qualifier_refresh" in stats
+
+
+@pytest.mark.asyncio
+async def test_load_populates_qualifier_cache_from_metadata(db):
+    """load() reads generated_qualifiers from domain node metadata into cache."""
+    from app.services.domain_signal_loader import DomainSignalLoader
+
+    # Create a domain node with generated_qualifiers in metadata
+    node = PromptCluster(
+        label="saas",
+        state="domain",
+        domain="saas",
+        color_hex="#00ff00",
+        member_count=0,
+        cluster_metadata={
+            "signal_keywords": [["metrics", 0.9]],
+            "generated_qualifiers": {
+                "growth": ["metrics", "kpi", "dashboard"],
+                "pricing": ["tier", "billing", "subscription"],
+            },
+        },
+    )
+    db.add(node)
+    await db.commit()
+
+    loader = DomainSignalLoader()
+    await loader.load(db)
+
+    # Qualifier cache should be populated from metadata
+    qualifiers = loader.get_qualifiers("saas")
+    assert "growth" in qualifiers
+    assert "pricing" in qualifiers
+    assert "metrics" in qualifiers["growth"]

@@ -55,6 +55,12 @@ class DomainSignalLoader:
     def __init__(self) -> None:
         self._signals: dict[str, list[tuple[str, float]]] = {}
         self._patterns: dict[str, re.Pattern[str]] = {}
+        # Organic qualifier vocabulary cache — populated by Phase 5 via
+        # refresh_qualifiers() and by load() from domain node metadata.
+        self._qualifier_cache: dict[str, dict[str, list[str]]] = {}
+        self._qualifier_hits: int = 0
+        self._qualifier_misses: int = 0
+        self._last_qualifier_refresh: str | None = None
 
     # ------------------------------------------------------------------
     # Properties (return copies to protect internal state)
@@ -87,13 +93,25 @@ class DomainSignalLoader:
             clusters = rows.scalars().all()
 
             new_signals: dict[str, list[tuple[str, float]]] = {}
+            new_qualifier_cache: dict[str, dict[str, list[str]]] = {}
             for cluster in clusters:
                 keywords = self._extract_keywords(cluster.cluster_metadata)
                 if keywords:
                     new_signals[cluster.label] = keywords
 
+                # Also load organic qualifier vocabulary from metadata
+                gen_qual = self._extract_generated_qualifiers(cluster.cluster_metadata)
+                if gen_qual:
+                    new_qualifier_cache[cluster.label] = gen_qual
+
             self._signals = new_signals
             self._precompile_patterns()
+            self._qualifier_cache = new_qualifier_cache
+            if new_qualifier_cache:
+                logger.info(
+                    "DomainSignalLoader loaded qualifier vocab for %d domains",
+                    len(new_qualifier_cache),
+                )
 
             total_keywords = sum(len(kws) for kws in new_signals.values())
             logger.info(
@@ -130,6 +148,27 @@ class DomainSignalLoader:
             except (IndexError, TypeError, ValueError):
                 continue
         return pairs
+
+    def _extract_generated_qualifiers(
+        self, metadata: Any,
+    ) -> dict[str, list[str]]:
+        """Extract ``generated_qualifiers`` from cluster_metadata.
+
+        Returns an empty dict when the key is absent or the value is malformed.
+        """
+        if not isinstance(metadata, dict):
+            return {}
+        raw = metadata.get("generated_qualifiers")
+        if not raw or not isinstance(raw, dict):
+            return {}
+        # Validate structure: {str: list[str]}
+        result: dict[str, list[str]] = {}
+        for key, val in raw.items():
+            if isinstance(key, str) and isinstance(val, list):
+                keywords = [v for v in val if isinstance(v, str)]
+                if keywords:
+                    result[key] = keywords
+        return result
 
     def _precompile_patterns(self) -> None:
         """Compile ``\\b<keyword>\\b`` regex for every single-word keyword."""
@@ -238,3 +277,50 @@ class DomainSignalLoader:
                 return f"{primary}: {secondary}"
 
         return primary
+
+    # ------------------------------------------------------------------
+    # Qualifier vocabulary cache (organic sub-domain discovery)
+    # ------------------------------------------------------------------
+
+    def get_qualifiers(self, domain: str) -> dict[str, list[str]]:
+        """Return the organic qualifier vocabulary for a domain.
+
+        Returns an empty dict on cache miss (domain has no vocabulary yet).
+        Never raises.
+        """
+        result = self._qualifier_cache.get(domain.strip().lower(), {})
+        if result:
+            self._qualifier_hits += 1
+        else:
+            self._qualifier_misses += 1
+        return result
+
+    def refresh_qualifiers(
+        self, domain: str, qualifiers: dict[str, list[str]],
+    ) -> None:
+        """Push freshly generated qualifier vocabulary into the cache.
+
+        Called by Phase 5 after Haiku generates vocabulary for a domain.
+        Immediately available for subsequent hot-path enrichment calls.
+        """
+        from datetime import datetime, timezone
+
+        if not qualifiers:
+            return
+        self._qualifier_cache[domain.strip().lower()] = qualifiers
+        self._last_qualifier_refresh = datetime.now(timezone.utc).isoformat()
+        logger.info(
+            "refresh_qualifiers: domain=%s groups=%d (e.g. %s)",
+            domain, len(qualifiers),
+            ", ".join(list(qualifiers.keys())[:3]),
+        )
+
+    def stats(self) -> dict:
+        """Return diagnostic stats for the health endpoint."""
+        return {
+            "qualifier_cache_hits": self._qualifier_hits,
+            "qualifier_cache_misses": self._qualifier_misses,
+            "domains_with_vocab": len(self._qualifier_cache),
+            "domains_without_vocab": 0,  # not tracked globally
+            "last_qualifier_refresh": self._last_qualifier_refresh,
+        }
