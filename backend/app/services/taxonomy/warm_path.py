@@ -3,14 +3,27 @@
 Receives ``engine`` and ``session_factory`` as parameters.  Never imports
 TaxonomyEngine at runtime (uses TYPE_CHECKING only).
 
-Phase order:
-  0. Reconcile   — fresh session, always commits, then compute Q_baseline
-  1. Split/Emerge — speculative (Q gate)
-  2. Merge        — speculative (Q gate)
-  3. Retire       — speculative (Q gate)
-  4. Refresh      — fresh session, always commits
-  5. Discover     — fresh session, always commits
-  6. Audit        — fresh session, creates snapshot
+Two execution groups:
+
+**Lifecycle group** (dirty-cluster-gated):
+  0.   Reconcile    — fresh session, always commits, then compute Q_baseline
+  0.5  Evaluate     — candidate promotion/rejection
+  1.   Split/Emerge — speculative (Q gate)
+  2.   Merge        — speculative (Q gate)
+  3.   Retire       — speculative (Q gate)
+  4.   Refresh      — fresh session, always commits
+  4.25 Sub-domain pattern aggregation
+  4.5  Global pattern promotion/validation (periodic gate)
+  4.75 Task-type signal refresh
+
+**Maintenance group** (cadence-gated, independent of dirty clusters):
+  5.  Discover     — fresh session, try/except with retry flag
+  5.5 Archive      — sub-domain garbage collection
+  6.  Audit        — fresh session, creates snapshot
+
+Maintenance runs every ``MAINTENANCE_CYCLE_INTERVAL`` warm cycles (default 6,
+~30 min at 5-min interval), or immediately when ``engine._maintenance_pending``
+is set after a transient failure.
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
@@ -515,11 +528,12 @@ async def execute_warm_path(
     engine: TaxonomyEngine,
     session_factory: SessionFactory,
 ) -> WarmPathResult:
-    """Orchestrate the complete warm path: 7 phases in strict sequential order.
+    """Orchestrate the complete warm path: lifecycle + maintenance groups.
 
-    Phase 0 (Reconcile) and Phases 4-5 (Refresh, Discover) always commit.
-    Phases 1-3 (Split/Emerge, Merge, Retire) are speculative with per-phase
-    Q gates. Phase 6 (Audit) creates the snapshot.
+    The lifecycle group (Phases 0–4) is gated by dirty clusters — when no
+    clusters have been modified since the last cycle, these phases are skipped.
+    The maintenance group (Phases 5–6) runs via ``execute_maintenance_phases()``
+    on its own cadence or when retrying after a transient failure.
 
     Args:
         engine: TaxonomyEngine instance.
