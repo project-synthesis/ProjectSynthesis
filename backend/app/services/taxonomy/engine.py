@@ -1799,6 +1799,21 @@ class TaxonomyEngine:
                 except RuntimeError:
                     pass
 
+            # Re-evaluate existing sub-domains for dissolution
+            if existing_sub_count > 0:
+                dissolved = await self._reevaluate_sub_domains(
+                    db, domain_node, existing_labels,
+                )
+                if dissolved:
+                    # Update sub-domain count after dissolution
+                    existing_sub_q2 = await db.execute(
+                        select(func.count()).where(
+                            PromptCluster.parent_id == domain_node.id,
+                            PromptCluster.state == "domain",
+                        )
+                    )
+                    existing_sub_count = existing_sub_q2.scalar() or 0
+
             # Get active child cluster IDs — include clusters under
             # existing sub-domains so the qualifier scan sees ALL
             # optimizations in the domain hierarchy.
@@ -2277,6 +2292,214 @@ class TaxonomyEngine:
                     continue
 
         return created
+
+    async def _reevaluate_sub_domains(
+        self,
+        db: AsyncSession,
+        domain_node: PromptCluster,
+        existing_labels: set[str],
+    ) -> list[str]:
+        """Re-evaluate existing sub-domains and dissolve those with degraded consistency.
+
+        For each sub-domain under ``domain_node``:
+        1. Skip if younger than ``SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS``
+        2. Skip if ``source="seed"`` in metadata
+        3. Gather all optimizations under its child clusters
+        4. Re-check qualifier consistency (Source 1 only — domain_raw is the
+           most reliable signal for existing sub-domains)
+        5. If consistency < ``SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR``:
+           a. Reparent all child clusters to the top-level domain
+           b. Merge meta-patterns from sub-domain into parent domain (UPDATE,
+              not DELETE — prompts are never lost)
+           c. Archive the sub-domain node (state="archived", zero metrics)
+           d. Remove from in-memory indices
+           e. Log ``sub_domain_dissolved`` event
+
+        Returns:
+            List of dissolved sub-domain labels.
+        """
+        from sqlalchemy import update as _sa_update
+
+        from app.services.taxonomy._constants import (
+            SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
+            SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS,
+            SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH,
+            SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+            SUB_DOMAIN_QUALIFIER_SCALE_RATE,
+        )
+        from app.utils.text_cleanup import parse_domain as _parse_domain
+
+        dissolved: list[str] = []
+
+        # Load existing sub-domains under this domain
+        sub_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.parent_id == domain_node.id,
+                PromptCluster.state == "domain",
+            )
+        )
+        sub_domains = list(sub_q.scalars().all())
+        if not sub_domains:
+            return dissolved
+
+        now = _utcnow()
+        age_cutoff = now - __import__("datetime").timedelta(hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS)
+
+        for sub in sub_domains:
+            # --- Age gate ---
+            created = sub.created_at
+            if created is not None:
+                if isinstance(created, str):
+                    try:
+                        created = __import__("datetime").datetime.fromisoformat(created)
+                    except (ValueError, TypeError):
+                        created = None
+                if created is not None and created.tzinfo is not None:
+                    created = created.replace(tzinfo=None)
+            if created and created > age_cutoff:
+                continue  # too young — skip
+
+            # --- Seed protection ---
+            meta = read_meta(sub.cluster_metadata)
+            if meta.get("source") == "seed":
+                continue
+
+            # --- Gather all child clusters ---
+            child_q = await db.execute(
+                select(PromptCluster.id).where(
+                    PromptCluster.parent_id == sub.id,
+                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                )
+            )
+            child_ids = [r[0] for r in child_q.all()]
+            if not child_ids:
+                continue  # empty sub-domain — handled by phase_archive_empty_sub_domains
+
+            # --- Collect domain_raw qualifiers from child optimizations ---
+            opt_q = await db.execute(
+                select(Optimization.domain_raw).where(
+                    Optimization.cluster_id.in_(child_ids),
+                )
+            )
+            domain_raws = [r[0] for r in opt_q.all()]
+            total_opts = len(domain_raws)
+            if total_opts == 0:
+                continue
+
+            # Sub-domain label is the qualifier name — normalise for comparison
+            sub_qualifier = sub.label.lower()
+
+            # Count optimizations whose domain_raw qualifier matches this sub-domain
+            matching = 0
+            for dr in domain_raws:
+                if not dr:
+                    continue
+                _, q = _parse_domain(dr)
+                if q and q.lower().replace(" ", "-") == sub_qualifier:
+                    matching += 1
+
+            consistency = matching / total_opts
+
+            # Adaptive threshold (same formula as creation, for context)
+            creation_threshold = max(
+                SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+                SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
+            )
+
+            # Log re-evaluation result
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="discover",
+                    decision="sub_domain_reevaluated",
+                    context={
+                        "domain": domain_node.label,
+                        "sub_domain": sub.label,
+                        "consistency_pct": round(consistency * 100, 1),
+                        "floor_pct": round(SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100, 1),
+                        "threshold_pct": round(creation_threshold * 100, 1),
+                        "passed": consistency >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
+                        "total_opts": total_opts,
+                        "matching": matching,
+                    },
+                )
+            except RuntimeError:
+                pass
+
+            if consistency >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR:
+                continue  # healthy — keep
+
+            # --- Dissolve: reparent children to top-level domain ---
+            reparented = 0
+            for child_id in child_ids:
+                child = await db.get(PromptCluster, child_id)
+                if child and child.state not in EXCLUDED_STRUCTURAL_STATES:
+                    child.parent_id = domain_node.id
+                    reparented += 1
+
+            # --- Merge meta-patterns: reassign cluster_id from sub to parent ---
+            mp_result = await db.execute(
+                _sa_update(MetaPattern)
+                .where(MetaPattern.cluster_id == sub.id)
+                .values(cluster_id=domain_node.id)
+            )
+            patterns_merged = mp_result.rowcount
+
+            # --- Archive the sub-domain node ---
+            sub.state = "archived"
+            sub.archived_at = now
+            sub.member_count = 0
+            sub.usage_count = 0
+            sub.avg_score = None
+            sub.weighted_member_sum = 0.0
+            sub.scored_count = 0
+
+            # Remove from in-memory indices
+            try:
+                self.embedding_index.remove(sub.id)
+            except (KeyError, ValueError):
+                pass
+            try:
+                self.transformation_index.remove(sub.id)
+            except (KeyError, ValueError, AttributeError):
+                pass
+            try:
+                self.optimized_index.remove(sub.id)
+            except (KeyError, ValueError, AttributeError):
+                pass
+
+            # Remove from existing_labels so it can be re-discovered if signals recover
+            existing_labels.discard(sub_qualifier)
+
+            dissolved.append(sub.label)
+
+            logger.info(
+                "Dissolved sub-domain '%s' under '%s': "
+                "consistency=%.0f%% < floor=%.0f%%, "
+                "%d clusters reparented, %d patterns merged",
+                sub.label, domain_node.label,
+                consistency * 100, SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100,
+                reparented, patterns_merged,
+            )
+
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="discover",
+                    decision="sub_domain_dissolved",
+                    cluster_id=sub.id,
+                    context={
+                        "domain": domain_node.label,
+                        "sub_domain": sub.label,
+                        "consistency_pct": round(consistency * 100, 1),
+                        "floor_pct": round(SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100, 1),
+                        "clusters_reparented": reparented,
+                        "meta_patterns_merged": patterns_merged,
+                        "reason": "qualifier_consistency_below_floor",
+                    },
+                )
+            except RuntimeError:
+                pass
+
+        return dissolved
 
     async def _detect_domain_candidates(self, db: AsyncSession) -> None:
         """Detect near-threshold clusters that may become domains soon."""

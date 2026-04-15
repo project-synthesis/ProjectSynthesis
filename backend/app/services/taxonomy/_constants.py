@@ -122,6 +122,11 @@ SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS = 1       # minimum keyword hits to accept
 # to survive a few warm cycles while preventing accumulation.
 SUB_DOMAIN_ARCHIVAL_IDLE_HOURS: int = 1
 
+# Sub-domain dissolution — graceful re-grouping when qualifier consistency degrades.
+# Hysteresis: creation threshold is 0.40-0.60, dissolution at 0.25 prevents flip-flop.
+SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR: float = 0.25
+SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS: int = 6  # don't dissolve freshly created sub-domains
+
 
 # ---------------------------------------------------------------------------
 # Maintenance phase cadence

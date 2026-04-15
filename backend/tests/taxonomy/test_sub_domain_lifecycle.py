@@ -20,6 +20,7 @@ from app.models import MetaPattern, Optimization, PromptCluster
 from app.services.taxonomy._constants import (
     EXCLUDED_STRUCTURAL_STATES,
     SUB_DOMAIN_ARCHIVAL_IDLE_HOURS,
+    SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS,
 )
 from app.services.taxonomy.cluster_meta import write_meta
 
@@ -325,8 +326,10 @@ class TestSubDomainCreationGuard:
     async def test_discovery_continues_with_existing_sub_domains(self, db, mock_provider):
         """Domain with existing sub-domain can still discover new sub-domains."""
         from unittest.mock import AsyncMock, patch
-        from app.services.taxonomy.engine import TaxonomyEngine
+
         import numpy as np
+
+        from app.services.taxonomy.engine import TaxonomyEngine
 
         mock_embedding = AsyncMock()
         engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
@@ -366,6 +369,7 @@ class TestSubDomainCreationGuard:
 
         # Add optimizations — enough to trigger discovery
         from sqlalchemy import select
+
         from app.models import Optimization
         child_clusters_q = await db.execute(
             select(PromptCluster.id).where(
@@ -379,7 +383,11 @@ class TestSubDomainCreationGuard:
             opt = Optimization(
                 raw_prompt=f"test prompt {i}",
                 domain="database",
-                domain_raw="database: migration" if "Migration" in (await db.get(PromptCluster, cid)).label else "database: query",
+                domain_raw=(
+                    "database: migration"
+                    if "Migration" in (await db.get(PromptCluster, cid)).label
+                    else "database: query"
+                ),
                 intent_label=f"migration task {i}" if i >= 3 else f"query task {i}",
                 task_type="coding",
                 cluster_id=cid,
@@ -678,3 +686,276 @@ class TestSignalDrivenCreation:
 
         # Verify generation was called for "saas" even though it has static vocab
         assert "saas" in generate_calls
+
+
+# ---------------------------------------------------------------------------
+# Sub-domain dissolution
+# ---------------------------------------------------------------------------
+
+
+def _make_opt(cluster_id: str, domain_raw: str, seed: int = 0) -> Optimization:
+    return Optimization(
+        raw_prompt=f"test prompt {seed}",
+        domain_raw=domain_raw,
+        cluster_id=cluster_id,
+        embedding=_random_embedding(seed),
+    )
+
+
+def _make_sub_domain(
+    label: str,
+    parent_id: str,
+    *,
+    age_hours: int = 24,
+    source: str = "discovered",
+) -> PromptCluster:
+    """Create a sub-domain node with the given age."""
+    node = _make_domain(label, parent_id=parent_id, source=source)
+    node.created_at = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=age_hours)
+    )
+    return node
+
+
+def _make_engine(mock_provider):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.services.taxonomy.engine import TaxonomyEngine
+
+    mock_embedding = AsyncMock()
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+    # Provide stub indices via private backing attrs so remove() calls are no-ops.
+    # embedding_index / transformation_index / optimized_index are read-only properties.
+    engine._embedding_index = MagicMock()
+    engine._transformation_index = MagicMock()
+    engine._optimized_index = MagicMock()
+    return engine
+
+
+class TestSubDomainDissolution:
+    """Tests for _reevaluate_sub_domains() — graceful dissolution."""
+
+    @pytest.mark.asyncio
+    async def test_healthy_sub_domain_survives(self, db, mock_provider):
+        """Sub-domain with good qualifier consistency is NOT dissolved."""
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("database")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain("query", parent_id=domain.id, age_hours=24)
+        db.add(sub)
+        await db.flush()
+
+        # 3 clusters under sub-domain
+        cluster_ids = []
+        for i in range(3):
+            c = _make_cluster(f"query-cluster-{i}", domain="database", parent_id=sub.id)
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+
+        # 6 optimizations, all with "database: query"
+        for i, cid in enumerate(cluster_ids * 2):
+            db.add(_make_opt(cid, "database: query", seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(db, domain, existing_labels)
+
+        assert dissolved == []
+        await db.refresh(sub)
+        assert sub.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_degraded_sub_domain_dissolved(self, db, mock_provider):
+        """Sub-domain with low qualifier consistency is dissolved."""
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("database")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain("query", parent_id=domain.id, age_hours=24)
+        db.add(sub)
+        await db.flush()
+
+        cluster_ids = []
+        for i in range(3):
+            c = _make_cluster(f"cluster-{i}", domain="database", parent_id=sub.id)
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+
+        # Only 1 out of 6 has "database: query" — consistency ~17%, below floor 25%
+        db.add(_make_opt(cluster_ids[0], "database: query", seed=0))
+        for i in range(1, 6):
+            db.add(_make_opt(cluster_ids[i % 3], "database", seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(db, domain, existing_labels)
+
+        assert "query" in dissolved
+        # State is set in-memory by the engine method (no commit required for check)
+        assert sub.state == "archived"
+
+    @pytest.mark.asyncio
+    async def test_dissolution_reparents_to_top_domain(self, db, mock_provider):
+        """Dissolved sub-domain's children are reparented to the top-level domain."""
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("database")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain("query", parent_id=domain.id, age_hours=24)
+        db.add(sub)
+        await db.flush()
+
+        cluster_ids = []
+        for i in range(2):
+            c = _make_cluster(f"reparent-cluster-{i}", domain="database", parent_id=sub.id)
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+
+        # 0 out of 4 opts have "database: query" — well below floor
+        for i in range(4):
+            db.add(_make_opt(cluster_ids[i % 2], "database", seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(db, domain, existing_labels)
+
+        assert "query" in dissolved
+        for cid in cluster_ids:
+            c = await db.get(PromptCluster, cid)
+            assert c is not None
+            assert c.parent_id == domain.id, (
+                f"cluster {c.label} should be reparented to domain, got {c.parent_id}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_dissolution_merges_meta_patterns(self, db, mock_provider):
+        """Dissolved sub-domain's meta-patterns are merged into parent domain, NOT deleted."""
+        from sqlalchemy import func, select
+
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("database")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain("query", parent_id=domain.id, age_hours=24)
+        db.add(sub)
+        await db.flush()
+
+        # Add clusters with opts to trigger dissolution
+        cluster_ids = []
+        for i in range(2):
+            c = _make_cluster(f"mp-cluster-{i}", domain="database", parent_id=sub.id)
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+        for i in range(4):
+            db.add(_make_opt(cluster_ids[i % 2], "database", seed=i))  # no qualifier match
+
+        # Add MetaPattern rows owned by the sub-domain
+        for i in range(2):
+            mp = MetaPattern(
+                cluster_id=sub.id,
+                pattern_text=f"sub-domain pattern {i}",
+                embedding=_random_embedding(100 + i),
+            )
+            db.add(mp)
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(db, domain, existing_labels)
+
+        assert "query" in dissolved
+
+        # Patterns must be reassigned to domain, NOT deleted
+        remaining_on_sub = (await db.execute(
+            select(func.count()).where(MetaPattern.cluster_id == sub.id)
+        )).scalar()
+        assert remaining_on_sub == 0, "MetaPatterns must not remain on dissolved sub-domain"
+
+        merged_on_domain = (await db.execute(
+            select(func.count()).where(MetaPattern.cluster_id == domain.id)
+        )).scalar()
+        assert merged_on_domain == 2, "MetaPatterns must be merged into parent domain"
+
+    @pytest.mark.asyncio
+    async def test_young_sub_domain_protected(self, db, mock_provider):
+        """Sub-domain younger than min age is NOT dissolved even with low consistency."""
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("database")
+        db.add(domain)
+        await db.flush()
+
+        # Age = 1 hour — well below the 6-hour minimum
+        sub = _make_sub_domain(
+            "query", parent_id=domain.id,
+            age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS - 5,
+        )
+        db.add(sub)
+        await db.flush()
+
+        cluster_ids = []
+        for i in range(2):
+            c = _make_cluster(f"young-cluster-{i}", domain="database", parent_id=sub.id)
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+
+        # All opts with plain "database" — would normally dissolve
+        for i in range(4):
+            db.add(_make_opt(cluster_ids[i % 2], "database", seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(db, domain, existing_labels)
+
+        assert dissolved == []
+        await db.refresh(sub)
+        assert sub.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_seed_sub_domain_protected(self, db, mock_provider):
+        """Seed sub-domain is NEVER dissolved regardless of consistency."""
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("database")
+        db.add(domain)
+        await db.flush()
+
+        # Old seed sub-domain — would be old enough to dissolve
+        sub = _make_sub_domain(
+            "query", parent_id=domain.id,
+            age_hours=48, source="seed",
+        )
+        db.add(sub)
+        await db.flush()
+
+        cluster_ids = []
+        for i in range(2):
+            c = _make_cluster(f"seed-cluster-{i}", domain="database", parent_id=sub.id)
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+
+        # 0 matching qualifier — would dissolve if not seed-protected
+        for i in range(6):
+            db.add(_make_opt(cluster_ids[i % 2], "database", seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(db, domain, existing_labels)
+
+        assert dissolved == []
+        await db.refresh(sub)
+        assert sub.state == "domain"
