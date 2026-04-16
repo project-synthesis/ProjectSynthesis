@@ -138,10 +138,18 @@ Phase 5 (discover) execution order:
      - Scan each non-general domain for new sub-domain candidates
      - Three-source cascade with adaptive threshold
      - Label dedup + flip-flop prevention
+
+  6. Existing post-discovery operations (PRESERVED, not new)
+     - _detect_domain_candidates() — risk monitoring
+     - _monitor_general_health() — general domain health check
+     - _check_signal_staleness() — signal freshness
+     - _suggest_domain_archival() — archival suggestions
+     - verify_domain_tree_integrity() + _repair_tree_violations()
 ```
 
 Steps 2→3: bottom-up dependency — sub-domains dissolve first, then parent is eligible.
 Steps 4→5: creation order — domains form from "general" before sub-domains form within them.
+Step 6: existing operations retained exactly as-is — the refactor adds steps 2-3, not removes existing steps.
 
 ---
 
@@ -173,47 +181,84 @@ Add `remove_domain(label: str)` method:
 
 This is called by `_dissolve_node()` when `clear_signal_loader=True` (domain dissolution only).
 
+### Implementation note: qualifier_index behavior change
+
+The current sub-domain dissolution code clears 3 indices (embedding, transformation, optimized) but NOT `qualifier_index`. The new `_dissolve_node()` clears all 4 indices. This is a behavior fix — sub-domain dissolution will now also clean up qualifier index entries, preventing stale qualifier vectors from persisting for archived sub-domains.
+
 ---
 
 ## Observability
 
-### Events
+Full upstream (decision events) and downstream (outcome events) observability so every lifecycle decision can be traced and validated.
 
-| Path | Op | Decision | Context |
-|------|----|----------|---------|
-| `warm` | `discover` | `domain_reevaluated` | `{domain, consistency_pct, floor_pct, member_count, member_ceiling, has_sub_domains, passed: bool}` |
-| `warm` | `discover` | `domain_dissolved` | `{domain, consistency_pct, floor_pct, clusters_reparented, meta_patterns_merged, reason}` |
-| `warm` | `discover` | `domain_dissolution_blocked` | `{domain, reason: "has_sub_domains"\|"too_young"\|"above_member_ceiling"\|"is_general", detail}` |
+### Upstream Events (decision inputs — what the system evaluated)
 
-Existing events retained:
+| Path | Op | Decision | Context | When |
+|------|----|----------|---------|------|
+| `warm` | `discover` | `domain_reevaluated` | `{domain, consistency_pct, floor_pct, member_count, member_ceiling, has_sub_domains, source: "domain_raw", total_opts, matching_opts, passed: bool}` | Every domain re-evaluation |
+| `warm` | `discover` | `domain_dissolution_blocked` | `{domain, reason: "has_sub_domains"\|"too_young"\|"above_member_ceiling"\|"is_general", sub_domain_count?, age_hours?, member_count?}` | When dissolution prerequisites fail |
+| `warm` | `discover` | `domain_dissolution_eligible` | `{domain, consistency_pct, floor_pct, member_count, age_hours}` | When all prerequisites pass, immediately before dissolution |
+
+### Downstream Events (outcomes — what the system did)
+
+| Path | Op | Decision | Context | When |
+|------|----|----------|---------|------|
+| `warm` | `discover` | `domain_dissolved` | `{domain, consistency_pct, floor_pct, clusters_reparented, meta_patterns_merged, optimizations_reparented, indices_cleared: int, resolver_cleared: bool, loader_cleared: bool, reason}` | After successful dissolution |
+| `warm` | `discover` | `domain_dissolution_failed` | `{domain, error, stage: "reparent"\|"merge_patterns"\|"archive"\|"clear_indices"}` | On transient failure during dissolution |
+| `warm` | `discover` | `dissolve_node_reparented` | `{node_label, node_type: "domain"\|"sub_domain", clusters_moved: int, target_label, meta_patterns_merged: int}` | Per-node dissolution outcome from shared `_dissolve_node()` |
+
+### Existing events retained (unchanged)
+
 - `sub_domain_reevaluated`, `sub_domain_dissolved` — sub-domain lifecycle
 - `domain_created`, `sub_domain_created` — discovery
-- `vocab_generated`, `vocab_refreshed` — vocabulary lifecycle
+- `vocab_generated`, `vocab_refreshed`, `vocab_fallback_to_cache` — vocabulary lifecycle
+- `sub_domain_domain_reevaluated` — sub-domain anchor check
+- `sub_domain_qualifier_eval` — per-qualifier evaluation during discovery
 
 ### Health Endpoint
 
-Extend health response with domain lifecycle stats:
+Extend health response with domain lifecycle stats (cumulative per process lifetime):
 
 ```python
 "domain_lifecycle": {
-    "domains_reevaluated": int,
-    "domains_dissolved": int,
-    "seeds_remaining": int,
-    "dissolution_blocked": int,
+    "domains_reevaluated": int,      # total domain re-evaluations run
+    "domains_dissolved": int,        # total domains dissolved
+    "domains_dissolution_blocked": int,  # blocked by anchor/age/member/general
+    "seeds_remaining": int,          # seed domains still alive (tracks ADR-006 progress)
+    "last_domain_reeval": str | None,  # ISO 8601 timestamp of last re-evaluation cycle
 }
 ```
 
+### Logging (structured, per-operation)
+
+Each lifecycle operation logs at the appropriate level:
+
+| Operation | Level | Message Pattern |
+|-----------|-------|----------------|
+| Domain re-evaluation starts | DEBUG | `"Re-evaluating domain '%s': %d members, %d sub-domains"` |
+| Domain passes re-evaluation | DEBUG | `"Domain '%s' healthy: consistency=%.1f%% >= floor=%.1f%%"` |
+| Domain dissolution blocked | INFO | `"Domain '%s' dissolution blocked: %s"` |
+| Domain dissolution starts | INFO | `"Dissolving domain '%s': consistency=%.1f%% < floor=%.1f%%, %d clusters"` |
+| Domain dissolution complete | INFO | `"Dissolved domain '%s': %d clusters reparented, %d patterns merged"` |
+| Domain dissolution failed | WARNING | `"Domain dissolution failed for '%s' at stage '%s': %s"` |
+| `_dissolve_node()` per-cluster reparent | DEBUG | `"Reparented cluster '%s' from '%s' to '%s'"` |
+| `_dissolve_node()` meta-pattern merge | DEBUG | `"Merged %d meta-patterns from '%s' to '%s'"` |
+| Signal loader domain removed | INFO | `"DomainSignalLoader: removed domain '%s' (signals=%d, qualifiers=%d)"` |
+| Phase 5 cycle summary | INFO | `"Phase 5: domains_reevaluated=%d dissolved=%d blocked=%d created=%d"` |
+
 ### Error Handling
 
-| Component | Failure Mode | Handling |
-|-----------|-------------|----------|
-| `_dissolve_node()` reparenting | Individual cluster reparent fails | Log, continue with remaining clusters |
-| `_dissolve_node()` meta-pattern merge | UPDATE fails | WARNING log, continue (patterns remain on archived node — not lost) |
-| `_dissolve_node()` signal loader removal | remove_domain() fails | WARNING log, continue (stale signals cleared on next load()) |
-| Domain re-evaluation loop | Single domain fails | Log, continue to next domain (no cascade failure) |
-| Sub-domain anchor check | DB error counting sub-domains | Assume sub-domains exist (safe side — skip dissolution) |
+| Component | Failure Mode | Handling | Retry |
+|-----------|-------------|----------|-------|
+| `_dissolve_node()` reparenting | Individual cluster reparent fails | WARNING log + `domain_dissolution_failed` event, continue with remaining clusters | Same cycle (continues) |
+| `_dissolve_node()` meta-pattern merge | UPDATE fails | WARNING log, continue (patterns remain on archived node — not lost) | Next cycle via `_maintenance_pending` |
+| `_dissolve_node()` index clearing | remove() fails | WARNING log, continue (stale entry harmless, cleared on next rebuild) | Cold path |
+| `_dissolve_node()` signal loader removal | `remove_domain()` fails | WARNING log, continue (stale signals cleared on next `load()`) | Next startup |
+| Domain re-evaluation loop | Single domain fails | Log + continue to next domain (no cascade failure) | Next cycle |
+| Sub-domain anchor check | DB error counting sub-domains | Assume sub-domains exist (safe side — skip dissolution), WARNING log | Next cycle |
+| Phase 5 overall | `phase_discover()` raises | Caught by `execute_maintenance_phases()` try/except, `_maintenance_pending = True` | Next cycle |
 
-**Principle:** Same as all taxonomy lifecycle — best-effort, never crashes the warm path, never loses data. Failed dissolution is retried on next cycle via `_maintenance_pending`.
+**Principle:** Same as all taxonomy lifecycle — best-effort, never crashes the warm path, never loses data. Every failure is logged with enough context to diagnose: the operation that failed, the node involved, the error message, and which stage of dissolution was reached before failure.
 
 ---
 
