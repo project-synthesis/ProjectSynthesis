@@ -59,12 +59,12 @@ class TestPhaseWeightsSum:
             assert abs(pw.total - 1.0) < 1e-6, f"{phase}: total={pw.total}"
 
     def test_custom_weights_total(self):
-        pw = PhaseWeights(0.1, 0.2, 0.3, 0.4)
+        pw = PhaseWeights(0.1, 0.2, 0.3, 0.3, 0.1)
         assert abs(pw.total - 1.0) < 1e-6
 
     def test_non_normalized_total(self):
-        pw = PhaseWeights(0.5, 0.5, 0.5, 0.5)
-        assert abs(pw.total - 2.0) < 1e-6
+        pw = PhaseWeights(0.5, 0.5, 0.5, 0.5, 0.5)
+        assert abs(pw.total - 2.5) < 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -79,27 +79,27 @@ class TestPhaseWeightsFloor:
         pw = PhaseWeights.for_phase("analysis")
         enforced = pw.enforce_floor()
         assert abs(enforced.total - 1.0) < 1e-6
-        for w in (enforced.w_topic, enforced.w_transform, enforced.w_output, enforced.w_pattern):
+        for w in (enforced.w_topic, enforced.w_transform, enforced.w_output, enforced.w_pattern, enforced.w_qualifier):
             assert w >= WEIGHT_FLOOR - 1e-9
 
     def test_one_weight_below_floor(self):
-        pw = PhaseWeights(0.90, 0.01, 0.05, 0.04)
+        pw = PhaseWeights(0.85, 0.01, 0.05, 0.04, 0.05)
         enforced = pw.enforce_floor()
         assert abs(enforced.total - 1.0) < 1e-6
         assert enforced.w_transform >= WEIGHT_FLOOR - 1e-9
         assert enforced.w_pattern >= WEIGHT_FLOOR - 1e-9
 
     def test_all_weights_zero(self):
-        pw = PhaseWeights(0.0, 0.0, 0.0, 0.0)
+        pw = PhaseWeights(0.0, 0.0, 0.0, 0.0, 0.0)
         enforced = pw.enforce_floor()
         # Should fall back to equal split
         assert abs(enforced.total - 1.0) < 1e-6
 
     def test_negative_weights_clamped(self):
-        pw = PhaseWeights(-0.5, 0.8, 0.5, 0.2)
+        pw = PhaseWeights(-0.5, 0.8, 0.5, 0.2, 0.0)
         enforced = pw.enforce_floor()
         assert abs(enforced.total - 1.0) < 1e-6
-        for w in (enforced.w_topic, enforced.w_transform, enforced.w_output, enforced.w_pattern):
+        for w in (enforced.w_topic, enforced.w_transform, enforced.w_output, enforced.w_pattern, enforced.w_qualifier):
             assert w >= WEIGHT_FLOOR - 1e-9
 
 
@@ -132,7 +132,7 @@ class TestPhaseWeightsSerialization:
     """from_dict / to_dict round-trip."""
 
     def test_round_trip(self):
-        original = PhaseWeights(0.30, 0.25, 0.20, 0.25)
+        original = PhaseWeights(0.30, 0.20, 0.20, 0.20, 0.10)
         d = original.to_dict()
         restored = PhaseWeights.from_dict(d)
         assert abs(restored.w_topic - original.w_topic) < 1e-9
@@ -143,10 +143,10 @@ class TestPhaseWeightsSerialization:
     def test_to_dict_keys(self):
         pw = PhaseWeights.for_phase("analysis")
         d = pw.to_dict()
-        assert set(d.keys()) == {"w_topic", "w_transform", "w_output", "w_pattern"}
+        assert set(d.keys()) == {"w_topic", "w_transform", "w_output", "w_pattern", "w_qualifier"}
 
     def test_from_dict_with_floats(self):
-        d = {"w_topic": 0.1, "w_transform": 0.2, "w_output": 0.3, "w_pattern": 0.4}
+        d = {"w_topic": 0.1, "w_transform": 0.2, "w_output": 0.3, "w_pattern": 0.3, "w_qualifier": 0.1}
         pw = PhaseWeights.from_dict(d)
         assert abs(pw.total - 1.0) < 1e-6
 
@@ -165,6 +165,7 @@ class TestCompositeQueryFuse:
             transformation=_rand_unit(seed=2),
             output=_rand_unit(seed=3),
             pattern=_rand_unit(seed=4),
+            qualifier=_rand_unit(seed=5),
         )
         weights = PhaseWeights.for_phase("optimization")
         fused = cq.fuse(weights)
@@ -178,6 +179,7 @@ class TestCompositeQueryFuse:
             transformation=_zero(),
             output=_zero(),
             pattern=_zero(),
+            qualifier=_zero(),
         )
         weights = PhaseWeights.for_phase("analysis")
         fused = cq.fuse(weights)
@@ -193,6 +195,7 @@ class TestCompositeQueryFuse:
             transformation=_rand_unit(seed=2),
             output=_zero(),
             pattern=_zero(),
+            qualifier=_zero(),
         )
         fused = cq.fuse(PhaseWeights.for_phase("optimization"))
         assert fused.dtype == np.float32
@@ -212,6 +215,7 @@ class TestCompositeQueryZeroDegradation:
             transformation=_zero(),
             output=_zero(),
             pattern=_zero(),
+            qualifier=_zero(),
         )
         fused = cq.fuse(PhaseWeights.for_phase("analysis"))
         assert float(np.linalg.norm(fused)) < 1e-9
@@ -224,8 +228,9 @@ class TestCompositeQueryZeroDegradation:
             transformation=_zero(),
             output=_zero(),
             pattern=pattern,
+            qualifier=_zero(),
         )
-        weights = PhaseWeights(0.25, 0.25, 0.25, 0.25)
+        weights = PhaseWeights(0.20, 0.20, 0.20, 0.20, 0.20)
         fused = cq.fuse(weights)
         norm = float(np.linalg.norm(fused))
         assert abs(norm - 1.0) < 1e-5
@@ -244,10 +249,11 @@ class TestCompositeQueryZeroDegradation:
             transformation=_zero(),
             output=_zero(),
             pattern=_zero(),
+            qualifier=_zero(),
         )
         # Give topic only 10% weight — but since others are zero,
         # topic should absorb 100%.
-        weights = PhaseWeights(0.10, 0.30, 0.30, 0.30)
+        weights = PhaseWeights(0.10, 0.25, 0.25, 0.25, 0.15)
         fused = cq.fuse(weights)
         cosine = float(np.dot(fused, topic))
         assert cosine > 0.999
@@ -267,9 +273,9 @@ class TestAdaptWeights:
         adapted = adapt_weights(current, successful)
 
         # Each weight should have moved toward the successful profile
-        # w_topic: 0.60 should decrease toward 0.15
+        # w_topic: 0.55 should decrease toward 0.13
         assert adapted.w_topic < current.w_topic
-        # w_output: 0.10 should increase toward 0.45
+        # w_output: 0.10 should increase toward 0.42
         assert adapted.w_output > current.w_output
 
     def test_convergence_over_many_steps(self):
@@ -284,18 +290,19 @@ class TestAdaptWeights:
         assert abs(current.w_transform - target.w_transform) < 0.02
         assert abs(current.w_output - target.w_output) < 0.02
         assert abs(current.w_pattern - target.w_pattern) < 0.02
+        assert abs(current.w_qualifier - target.w_qualifier) < 0.02
 
     def test_result_sums_to_one(self):
-        current = PhaseWeights(0.4, 0.3, 0.2, 0.1)
-        successful = PhaseWeights(0.1, 0.2, 0.3, 0.4)
+        current = PhaseWeights(0.3, 0.25, 0.2, 0.15, 0.1)
+        successful = PhaseWeights(0.1, 0.15, 0.25, 0.3, 0.2)
         adapted = adapt_weights(current, successful)
         assert abs(adapted.total - 1.0) < 1e-6
 
     def test_result_respects_floor(self):
-        current = PhaseWeights(0.97, 0.01, 0.01, 0.01)
-        successful = PhaseWeights(0.97, 0.01, 0.01, 0.01)
+        current = PhaseWeights(0.93, 0.01, 0.01, 0.01, 0.04)
+        successful = PhaseWeights(0.93, 0.01, 0.01, 0.01, 0.04)
         adapted = adapt_weights(current, successful)
-        for w in (adapted.w_topic, adapted.w_transform, adapted.w_output, adapted.w_pattern):
+        for w in (adapted.w_topic, adapted.w_transform, adapted.w_output, adapted.w_pattern, adapted.w_qualifier):
             assert w >= WEIGHT_FLOOR - 1e-9
 
 
@@ -308,17 +315,17 @@ class TestDecayTowardDefaults:
     """decay_toward_defaults drifts weights back to phase defaults."""
 
     def test_single_step_moves_toward_defaults(self):
-        current = PhaseWeights(0.25, 0.25, 0.25, 0.25)  # uniform, not default (analysis default is 0.60/0.15/0.10/0.15)
+        current = PhaseWeights(0.20, 0.20, 0.20, 0.20, 0.20)  # uniform, not default (analysis default is 0.55/0.15/0.10/0.15/0.05)
         decayed = decay_toward_defaults(current, "analysis")
 
-        # w_topic should increase toward 0.60
+        # w_topic should increase toward 0.55
         assert decayed.w_topic > current.w_topic
         # w_transform should decrease toward 0.15
         # (might not decrease if floor enforcement re-normalizes; check direction)
 
     def test_convergence_over_many_steps(self):
         """After many decay steps, weights should approximately match defaults."""
-        current = PhaseWeights(0.25, 0.25, 0.25, 0.25)
+        current = PhaseWeights(0.20, 0.20, 0.20, 0.20, 0.20)
         defaults = PhaseWeights.for_phase("optimization")
 
         for _ in range(1000):
@@ -328,9 +335,10 @@ class TestDecayTowardDefaults:
         assert abs(current.w_transform - defaults.w_transform) < 0.02
         assert abs(current.w_output - defaults.w_output) < 0.02
         assert abs(current.w_pattern - defaults.w_pattern) < 0.02
+        assert abs(current.w_qualifier - defaults.w_qualifier) < 0.02
 
     def test_result_sums_to_one(self):
-        current = PhaseWeights(0.1, 0.2, 0.3, 0.4)
+        current = PhaseWeights(0.1, 0.15, 0.25, 0.35, 0.15)
         decayed = decay_toward_defaults(current, "scoring")
         assert abs(decayed.total - 1.0) < 1e-6
 
@@ -372,6 +380,7 @@ async def test_build_composite_query_all_zeros():
     assert float(np.linalg.norm(cq.transformation)) < 1e-9
     assert float(np.linalg.norm(cq.output)) < 1e-9
     assert float(np.linalg.norm(cq.pattern)) < 1e-9
+    assert float(np.linalg.norm(cq.qualifier)) < 1e-9
 
 
 @pytest.mark.asyncio
@@ -433,10 +442,10 @@ class TestScoreCorrelatedTarget:
 
     def _default_profile(self) -> dict[str, dict[str, float]]:
         return {
-            "analysis": {"w_topic": 0.60, "w_transform": 0.15, "w_output": 0.10, "w_pattern": 0.15},
-            "optimization": {"w_topic": 0.20, "w_transform": 0.35, "w_output": 0.25, "w_pattern": 0.20},
-            "pattern_injection": {"w_topic": 0.25, "w_transform": 0.25, "w_output": 0.20, "w_pattern": 0.30},
-            "scoring": {"w_topic": 0.15, "w_transform": 0.20, "w_output": 0.45, "w_pattern": 0.20},
+            "analysis": {"w_topic": 0.55, "w_transform": 0.15, "w_output": 0.10, "w_pattern": 0.15, "w_qualifier": 0.05},
+            "optimization": {"w_topic": 0.18, "w_transform": 0.30, "w_output": 0.22, "w_pattern": 0.20, "w_qualifier": 0.10},
+            "pattern_injection": {"w_topic": 0.22, "w_transform": 0.22, "w_output": 0.18, "w_pattern": 0.28, "w_qualifier": 0.10},
+            "scoring": {"w_topic": 0.13, "w_transform": 0.18, "w_output": 0.42, "w_pattern": 0.20, "w_qualifier": 0.07},
         }
 
     def test_below_min_samples_returns_none(self):
@@ -460,7 +469,7 @@ class TestScoreCorrelatedTarget:
         assert result is not None
         # With identical profiles, target should match input
         pw = result["analysis"]
-        assert abs(pw.w_topic - 0.60) < 0.02
+        assert abs(pw.w_topic - 0.55) < 0.02
         assert abs(pw.total - 1.0) < 1e-6
 
     def test_high_scorer_dominates(self):
@@ -469,17 +478,17 @@ class TestScoreCorrelatedTarget:
 
         default = self._default_profile()
         alt = {
-            "analysis": {"w_topic": 0.20, "w_transform": 0.40, "w_output": 0.20, "w_pattern": 0.20},
-            "optimization": {"w_topic": 0.20, "w_transform": 0.35, "w_output": 0.25, "w_pattern": 0.20},
-            "pattern_injection": {"w_topic": 0.25, "w_transform": 0.25, "w_output": 0.20, "w_pattern": 0.30},
-            "scoring": {"w_topic": 0.15, "w_transform": 0.20, "w_output": 0.45, "w_pattern": 0.20},
+            "analysis": {"w_topic": 0.20, "w_transform": 0.40, "w_output": 0.20, "w_pattern": 0.15, "w_qualifier": 0.05},
+            "optimization": {"w_topic": 0.18, "w_transform": 0.30, "w_output": 0.22, "w_pattern": 0.20, "w_qualifier": 0.10},
+            "pattern_injection": {"w_topic": 0.22, "w_transform": 0.22, "w_output": 0.18, "w_pattern": 0.28, "w_qualifier": 0.10},
+            "scoring": {"w_topic": 0.13, "w_transform": 0.18, "w_output": 0.42, "w_pattern": 0.20, "w_qualifier": 0.07},
         }
         # 9 mediocre with defaults, 1 excellent with alt profile
         profiles = [(3.0, default)] * 9 + [(10.0, alt)]
         result = compute_score_correlated_target(profiles)
         assert result is not None
-        # The 10.0 scorer's w_topic=0.20 should pull analysis target below 0.60
-        assert result["analysis"].w_topic < 0.55
+        # The 10.0 scorer's w_topic=0.20 should pull analysis target below 0.55
+        assert result["analysis"].w_topic < 0.50
         # The 10.0 scorer's w_transform=0.40 should pull analysis target above 0.15
         assert result["analysis"].w_transform > 0.20
 
@@ -511,7 +520,7 @@ class TestScoreCorrelatedTarget:
 
         # Extreme profile with near-zero weights
         extreme = {
-            "analysis": {"w_topic": 0.97, "w_transform": 0.01, "w_output": 0.01, "w_pattern": 0.01},
+            "analysis": {"w_topic": 0.93, "w_transform": 0.01, "w_output": 0.01, "w_pattern": 0.01, "w_qualifier": 0.04},
         }
         profiles = [(9.0, extreme)] * 15
         result = compute_score_correlated_target(profiles)
@@ -520,16 +529,17 @@ class TestScoreCorrelatedTarget:
         assert pw.w_transform >= WEIGHT_FLOOR - 1e-9
         assert pw.w_output >= WEIGHT_FLOOR - 1e-9
         assert pw.w_pattern >= WEIGHT_FLOOR - 1e-9
+        assert pw.w_qualifier >= WEIGHT_FLOOR - 1e-9
 
     def test_below_median_excluded(self):
         """Below-median optimizations should not influence the target."""
         from app.services.taxonomy.fusion import compute_score_correlated_target
 
         low_profile = {
-            "analysis": {"w_topic": 0.10, "w_transform": 0.70, "w_output": 0.10, "w_pattern": 0.10},
+            "analysis": {"w_topic": 0.10, "w_transform": 0.65, "w_output": 0.10, "w_pattern": 0.10, "w_qualifier": 0.05},
         }
         high_profile = {
-            "analysis": {"w_topic": 0.60, "w_transform": 0.15, "w_output": 0.10, "w_pattern": 0.15},
+            "analysis": {"w_topic": 0.55, "w_transform": 0.15, "w_output": 0.10, "w_pattern": 0.15, "w_qualifier": 0.05},
         }
         # 5 low scorers with extreme profile, 5 high scorers with default
         profiles = [(2.0, low_profile)] * 5 + [(9.0, high_profile)] * 5
@@ -537,14 +547,14 @@ class TestScoreCorrelatedTarget:
         assert result is not None
         # Target should be dominated by the high-scoring default-like profile,
         # not pulled toward the low-scoring extreme profile
-        assert result["analysis"].w_topic > 0.45
+        assert result["analysis"].w_topic > 0.40
 
     def test_missing_phase_in_some_profiles(self):
         """Profiles with missing phases contribute only to phases they contain."""
         from app.services.taxonomy.fusion import compute_score_correlated_target
 
         full = self._default_profile()
-        partial = {"analysis": {"w_topic": 0.30, "w_transform": 0.30, "w_output": 0.20, "w_pattern": 0.20}}
+        partial = {"analysis": {"w_topic": 0.30, "w_transform": 0.30, "w_output": 0.20, "w_pattern": 0.15, "w_qualifier": 0.05}}
         # Mix of full and partial profiles at the same score
         profiles = [(7.0, full)] * 6 + [(7.0, partial)] * 6
         result = compute_score_correlated_target(profiles)
@@ -553,8 +563,8 @@ class TestScoreCorrelatedTarget:
         # optimization appears (from the 6 full profiles that have it)
         assert "optimization" in result
         # analysis target should blend both full and partial contributions
-        # (full has w_topic=0.60, partial has w_topic=0.30)
-        assert result["analysis"].w_topic < 0.55  # pulled down by partial
+        # (full has w_topic=0.55, partial has w_topic=0.30)
+        assert result["analysis"].w_topic < 0.50  # pulled down by partial
 
 
 # ---------------------------------------------------------------------------
@@ -579,17 +589,23 @@ class TestResolveContextualWeights:
         assert writing != analysis
 
     def test_general_matches_defaults(self):
-        """general task type should produce profiles very close to defaults."""
+        """general task type should produce profiles close to defaults.
+
+        The general bias adds +0.05 to w_qualifier, so profiles shift
+        slightly after renormalization. Tolerance is 0.05 to account
+        for this redistribution.
+        """
         from app.services.taxonomy.fusion import resolve_contextual_weights
 
         general = resolve_contextual_weights("general")
         for phase in ("analysis", "optimization", "pattern_injection", "scoring"):
             default = PhaseWeights.for_phase(phase)
             resolved = PhaseWeights.from_dict(general[phase])
-            assert abs(resolved.w_topic - default.w_topic) < 0.01
-            assert abs(resolved.w_transform - default.w_transform) < 0.01
-            assert abs(resolved.w_output - default.w_output) < 0.01
-            assert abs(resolved.w_pattern - default.w_pattern) < 0.01
+            assert abs(resolved.w_topic - default.w_topic) < 0.05
+            assert abs(resolved.w_transform - default.w_transform) < 0.05
+            assert abs(resolved.w_output - default.w_output) < 0.05
+            assert abs(resolved.w_pattern - default.w_pattern) < 0.05
+            assert abs(resolved.w_qualifier - default.w_qualifier) < 0.05
 
     def test_unknown_task_type_uses_general(self):
         """Unknown task types should fall back to general (zero bias)."""
@@ -607,14 +623,17 @@ class TestResolveContextualWeights:
         assert set(result.keys()) == {"analysis", "optimization", "pattern_injection", "scoring"}
 
     def test_all_weights_sum_to_one(self):
-        """Every phase's weights must sum to 1.0 after enforce_floor."""
+        """Every phase's weights must sum to 1.0 after enforce_floor.
+
+        Tolerance accounts for 4-decimal rounding in to_dict across 5 fields.
+        """
         from app.services.taxonomy.fusion import resolve_contextual_weights
 
         for task_type in ("coding", "writing", "analysis", "creative", "data", "system", "general"):
             result = resolve_contextual_weights(task_type)
             for phase, wd in result.items():
                 pw = PhaseWeights.from_dict(wd)
-                assert abs(pw.total - 1.0) < 1e-6, f"{task_type}/{phase}: total={pw.total}"
+                assert abs(pw.total - 1.0) < 1e-3, f"{task_type}/{phase}: total={pw.total}"
 
     def test_all_weights_respect_floor(self):
         """No weight should fall below WEIGHT_FLOOR."""
@@ -624,7 +643,7 @@ class TestResolveContextualWeights:
             result = resolve_contextual_weights(task_type)
             for phase, wd in result.items():
                 pw = PhaseWeights.from_dict(wd)
-                for w in (pw.w_topic, pw.w_transform, pw.w_output, pw.w_pattern):
+                for w in (pw.w_topic, pw.w_transform, pw.w_output, pw.w_pattern, pw.w_qualifier):
                     assert w >= WEIGHT_FLOOR - 1e-9, f"{task_type}/{phase}: w={w}"
 
     def test_coding_emphasizes_transformation(self):
@@ -764,19 +783,19 @@ class TestDecayTowardTarget:
         """With explicit target, should drift toward that target."""
         from app.services.taxonomy.fusion import decay_toward_target
 
-        current = PhaseWeights(0.10, 0.50, 0.20, 0.20)
-        target = PhaseWeights(0.40, 0.20, 0.20, 0.20)
+        current = PhaseWeights(0.10, 0.45, 0.20, 0.15, 0.10)
+        target = PhaseWeights(0.35, 0.15, 0.20, 0.20, 0.10)
         result = decay_toward_target(current, "optimization", target=target, rate=0.5)
-        # Should move w_topic toward 0.40
+        # Should move w_topic toward 0.35
         assert result.w_topic > current.w_topic
-        # Should move w_transform toward 0.20
+        # Should move w_transform toward 0.15
         assert result.w_transform < current.w_transform
 
     def test_decay_without_target_uses_defaults(self):
         """Without explicit target, should drift toward phase defaults."""
         from app.services.taxonomy.fusion import decay_toward_target
 
-        current = PhaseWeights(0.10, 0.50, 0.20, 0.20)
+        current = PhaseWeights(0.10, 0.45, 0.20, 0.15, 0.10)
         defaults = PhaseWeights.for_phase("optimization")
         result = decay_toward_target(current, "optimization")
         # Should move toward defaults
@@ -787,3 +806,26 @@ class TestDecayTowardTarget:
         from app.services.taxonomy.fusion import decay_toward_defaults, decay_toward_target
 
         assert decay_toward_defaults is decay_toward_target
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility and 5-field round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_phase_weights_from_dict_backward_compat():
+    """Old 4-key dicts default w_qualifier to 0.0."""
+    pw = PhaseWeights.from_dict({"w_topic": 0.5, "w_transform": 0.2, "w_output": 0.2, "w_pattern": 0.1})
+    assert pw.w_qualifier == 0.0
+
+
+def test_phase_weights_5_field_roundtrip():
+    """5-field PhaseWeights round-trips through dict."""
+    pw = PhaseWeights(0.3, 0.2, 0.2, 0.2, 0.1)
+    d = pw.to_dict()
+    pw2 = PhaseWeights.from_dict(d)
+    assert abs(pw2.w_qualifier - 0.1) < 1e-3
+    assert abs(pw2.w_topic - 0.3) < 1e-3
+    assert abs(pw2.w_transform - 0.2) < 1e-3
+    assert abs(pw2.w_output - 0.2) < 1e-3
+    assert abs(pw2.w_pattern - 0.2) < 1e-3

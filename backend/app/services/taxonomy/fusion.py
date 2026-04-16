@@ -1,9 +1,9 @@
 """Composite embedding fusion for multi-signal taxonomy queries.
 
-Builds a weighted blend of four embedding signals — topic, transformation,
-output, and pattern — then L2-normalizes the result. PhaseWeights control
-the blend ratio and adapt over time via EMA toward successful profiles and
-decay back to per-phase defaults.
+Builds a weighted blend of five embedding signals — topic, transformation,
+output, pattern, and qualifier — then L2-normalizes the result. PhaseWeights
+control the blend ratio and adapt over time via EMA toward successful profiles
+and decay back to per-phase defaults.
 
 Used by pattern_injection and matching to produce richer queries than
 raw-prompt embedding alone.
@@ -34,12 +34,12 @@ FUSION_PATTERN_TOP_K = 3
 SCORE_ADAPTATION_MIN_SAMPLES = 10
 SCORE_ADAPTATION_LOOKBACK = 200
 
-# Default weight profiles: (w_topic, w_transform, w_output, w_pattern)
-_DEFAULT_PROFILES: dict[str, tuple[float, float, float, float]] = {
-    "analysis": (0.60, 0.15, 0.10, 0.15),
-    "optimization": (0.20, 0.35, 0.25, 0.20),
-    "pattern_injection": (0.25, 0.25, 0.20, 0.30),
-    "scoring": (0.15, 0.20, 0.45, 0.20),
+# Default weight profiles: (w_topic, w_transform, w_output, w_pattern, w_qualifier)
+_DEFAULT_PROFILES: dict[str, tuple[float, float, float, float, float]] = {
+    "analysis":          (0.55, 0.15, 0.10, 0.15, 0.05),
+    "optimization":      (0.18, 0.30, 0.22, 0.20, 0.10),
+    "pattern_injection": (0.22, 0.22, 0.18, 0.28, 0.10),
+    "scoring":           (0.13, 0.18, 0.42, 0.20, 0.07),
 }
 
 # Task-type weight biases — small directional offsets from phase defaults.
@@ -48,13 +48,13 @@ _DEFAULT_PROFILES: dict[str, tuple[float, float, float, float]] = {
 # Each bias reflects a meaningful hypothesis about which signals matter
 # for that task type. The learning loop validates or overrides these.
 _TASK_TYPE_WEIGHT_BIAS: dict[str, dict[str, float]] = {
-    "coding":   {"w_topic": -0.10, "w_transform": +0.15, "w_output": -0.05, "w_pattern": 0.00},
-    "writing":  {"w_topic": -0.05, "w_transform": -0.05, "w_output": +0.15, "w_pattern": -0.05},
-    "analysis": {"w_topic": +0.10, "w_transform": -0.05, "w_output": -0.10, "w_pattern": +0.05},
-    "creative": {"w_topic": -0.10, "w_transform": +0.05, "w_output": +0.10, "w_pattern": -0.05},
-    "data":     {"w_topic": +0.05, "w_transform": +0.10, "w_output": -0.10, "w_pattern": -0.05},
-    "system":   {"w_topic": +0.05, "w_transform": -0.05, "w_output": -0.05, "w_pattern": +0.05},
-    "general":  {"w_topic": 0.00,  "w_transform": 0.00,  "w_output": 0.00,  "w_pattern": 0.00},
+    "coding":   {"w_topic": -0.10, "w_transform": +0.15, "w_output": -0.05, "w_pattern": 0.00, "w_qualifier": +0.15},
+    "writing":  {"w_topic": -0.05, "w_transform": -0.05, "w_output": +0.15, "w_pattern": -0.05, "w_qualifier": +0.05},
+    "analysis": {"w_topic": +0.10, "w_transform": -0.05, "w_output": -0.10, "w_pattern": +0.05, "w_qualifier": +0.12},
+    "creative": {"w_topic": -0.10, "w_transform": +0.05, "w_output": +0.10, "w_pattern": -0.05, "w_qualifier": +0.03},
+    "data":     {"w_topic": +0.05, "w_transform": +0.10, "w_output": -0.10, "w_pattern": -0.05, "w_qualifier": +0.10},
+    "system":   {"w_topic": +0.05, "w_transform": -0.05, "w_output": -0.05, "w_pattern": +0.05, "w_qualifier": +0.10},
+    "general":  {"w_topic": 0.00,  "w_transform": 0.00,  "w_output": 0.00,  "w_pattern": 0.00,  "w_qualifier": +0.05},
 }
 
 # Blend ratio when cluster learned weights are available.
@@ -69,7 +69,7 @@ CLUSTER_LEARNED_BLEND_ALPHA = 0.3
 
 @dataclass
 class PhaseWeights:
-    """Four-signal weight profile for composite query fusion.
+    """Five-signal weight profile for composite query fusion.
 
     Weights should sum to 1.0. Use ``enforce_floor()`` to guarantee
     a minimum of ``WEIGHT_FLOOR`` per dimension while maintaining
@@ -80,11 +80,12 @@ class PhaseWeights:
     w_transform: float
     w_output: float
     w_pattern: float
+    w_qualifier: float
 
     @property
     def total(self) -> float:
         """Sum of all weights."""
-        return self.w_topic + self.w_transform + self.w_output + self.w_pattern
+        return self.w_topic + self.w_transform + self.w_output + self.w_pattern + self.w_qualifier
 
     def enforce_floor(self) -> PhaseWeights:
         """Return a new PhaseWeights with each weight >= WEIGHT_FLOOR, re-normalized to sum=1.
@@ -92,11 +93,12 @@ class PhaseWeights:
         Weights below the floor are pinned at ``WEIGHT_FLOOR``. The
         remaining budget (1.0 minus total floor allocations) is
         distributed proportionally among the non-floored weights.
-        Iterates until stable (at most 4 rounds for 4 weights).
+        Iterates until stable (at most 5 rounds for 5 weights).
         """
-        n = 4
+        n = 5
         raw = [max(self.w_topic, 0.0), max(self.w_transform, 0.0),
-               max(self.w_output, 0.0), max(self.w_pattern, 0.0)]
+               max(self.w_output, 0.0), max(self.w_pattern, 0.0),
+               max(self.w_qualifier, 0.0)]
         result = list(raw)
         pinned = [False] * n
 
@@ -116,7 +118,7 @@ class PhaseWeights:
 
             if not free_indices:
                 # All pinned — equal split
-                return PhaseWeights(0.25, 0.25, 0.25, 0.25)
+                return PhaseWeights(0.20, 0.20, 0.20, 0.20, 0.20)
 
             free_raw_sum = sum(raw[i] for i in free_indices)
             if free_raw_sum < 1e-9:
@@ -128,8 +130,12 @@ class PhaseWeights:
                 for i in free_indices:
                     result[i] = (raw[i] / free_raw_sum) * remaining
 
+            # Break only when no weights were pinned AND redistribution
+            # did not push any free weight below the floor
             if not changed:
-                break
+                needs_another = any(result[i] < WEIGHT_FLOOR for i in free_indices)
+                if not needs_another:
+                    break
 
         # Final precision normalization
         total = sum(result)
@@ -141,6 +147,7 @@ class PhaseWeights:
             w_transform=result[1],
             w_output=result[2],
             w_pattern=result[3],
+            w_qualifier=result[4],
         )
 
     @classmethod
@@ -156,16 +163,18 @@ class PhaseWeights:
             w_transform=profile[1],
             w_output=profile[2],
             w_pattern=profile[3],
+            w_qualifier=profile[4],
         )
 
     @classmethod
     def from_dict(cls, d: dict) -> PhaseWeights:
-        """Construct from a plain dict. Missing keys default to 0.25."""
+        """Construct from a plain dict. Missing keys default to 0.25 (0.0 for qualifier)."""
         return cls(
             w_topic=float(d.get("w_topic", 0.25)),
             w_transform=float(d.get("w_transform", 0.25)),
             w_output=float(d.get("w_output", 0.25)),
             w_pattern=float(d.get("w_pattern", 0.25)),
+            w_qualifier=float(d.get("w_qualifier", 0.0)),
         )
 
     def to_dict(self) -> dict:
@@ -175,6 +184,7 @@ class PhaseWeights:
             "w_transform": round(self.w_transform, 4),
             "w_output": round(self.w_output, 4),
             "w_pattern": round(self.w_pattern, 4),
+            "w_qualifier": round(self.w_qualifier, 4),
         }
 
 
@@ -224,6 +234,7 @@ def resolve_contextual_weights(
             w_transform=base.w_transform + bias.get("w_transform", 0.0),
             w_output=base.w_output + bias.get("w_output", 0.0),
             w_pattern=base.w_pattern + bias.get("w_pattern", 0.0),
+            w_qualifier=base.w_qualifier + bias.get("w_qualifier", 0.0),
         ).enforce_floor()
 
         # Blend toward cluster learned weights if available
@@ -235,6 +246,7 @@ def resolve_contextual_weights(
                 w_transform=biased.w_transform + alpha * (learned.w_transform - biased.w_transform),
                 w_output=biased.w_output + alpha * (learned.w_output - biased.w_output),
                 w_pattern=biased.w_pattern + alpha * (learned.w_pattern - biased.w_pattern),
+                w_qualifier=biased.w_qualifier + alpha * (learned.w_qualifier - biased.w_qualifier),
             ).enforce_floor()
 
         result[phase] = biased.to_dict()
@@ -249,19 +261,21 @@ def resolve_contextual_weights(
 
 @dataclass
 class CompositeQuery:
-    """Four-signal composite embedding query.
+    """Five-signal composite embedding query.
 
     Attributes:
         topic: embed(raw_prompt) — what the user is asking about.
         transformation: mean transformation vector from matched cluster.
         output: embed(optimized_prompt) from best prior optimization.
         pattern: embed(top meta-patterns) — reusable technique signal.
+        qualifier: embed(qualifier keywords) — organic vocabulary signal.
     """
 
     topic: np.ndarray
     transformation: np.ndarray
     output: np.ndarray
     pattern: np.ndarray
+    qualifier: np.ndarray
 
     def fuse(self, weights: PhaseWeights) -> np.ndarray:
         """Weighted blend of available signals, L2-normalized.
@@ -281,8 +295,8 @@ class CompositeQuery:
         from app.services.taxonomy.clustering import weighted_blend
 
         return weighted_blend(
-            signals=[self.topic, self.transformation, self.output, self.pattern],
-            weights=[weights.w_topic, weights.w_transform, weights.w_output, weights.w_pattern],
+            signals=[self.topic, self.transformation, self.output, self.pattern, self.qualifier],
+            weights=[weights.w_topic, weights.w_transform, weights.w_output, weights.w_pattern, weights.w_qualifier],
         )
 
 
@@ -315,6 +329,7 @@ def adapt_weights(
         w_transform=current.w_transform + alpha * (successful.w_transform - current.w_transform),
         w_output=current.w_output + alpha * (successful.w_output - current.w_output),
         w_pattern=current.w_pattern + alpha * (successful.w_pattern - current.w_pattern),
+        w_qualifier=current.w_qualifier + alpha * (successful.w_qualifier - current.w_qualifier),
     )
     return new.enforce_floor()
 
@@ -347,6 +362,7 @@ def decay_toward_target(
         w_transform=current.w_transform + rate * (anchor.w_transform - current.w_transform),
         w_output=current.w_output + rate * (anchor.w_output - current.w_output),
         w_pattern=current.w_pattern + rate * (anchor.w_pattern - current.w_pattern),
+        w_qualifier=current.w_qualifier + rate * (anchor.w_qualifier - current.w_qualifier),
     )
     return new.enforce_floor()
 
@@ -442,6 +458,7 @@ def compute_score_correlated_target(
         w_transform = 0.0
         w_output = 0.0
         w_pattern = 0.0
+        w_qualifier = 0.0
         phase_contribution = 0.0
 
         for (_, pw_json), contribution in zip(scored_profiles, contributions):
@@ -456,16 +473,25 @@ def compute_score_correlated_target(
             w_transform += pw.w_transform * contribution
             w_output += pw.w_output * contribution
             w_pattern += pw.w_pattern * contribution
+            # Skip qualifier dimension for old profiles (w_qualifier=0.0)
+            # to avoid treating "no data" as "zero weight is optimal"
+            if pw.w_qualifier > 0.0:
+                w_qualifier += pw.w_qualifier * contribution
             phase_contribution += contribution
 
         if phase_contribution < 1e-9:
             continue
+
+        # Qualifier dimension: if no profiles had qualifier data,
+        # use the phase default rather than learned zero
+        q_weight = w_qualifier / phase_contribution if w_qualifier > 0 else PhaseWeights.for_phase(phase).w_qualifier
 
         target = PhaseWeights(
             w_topic=w_topic / phase_contribution,
             w_transform=w_transform / phase_contribution,
             w_output=w_output / phase_contribution,
             w_pattern=w_pattern / phase_contribution,
+            w_qualifier=q_weight,
         )
         result[phase] = target.enforce_floor()
 
@@ -500,7 +526,7 @@ async def build_composite_query(
             double-embedding the raw prompt (Errata E2-2).
 
     Returns:
-        CompositeQuery with four signal vectors (some may be zero).
+        CompositeQuery with five signal vectors (some may be zero).
     """
     dim = getattr(embedding_service, "dimension", 384) or 384
 
@@ -585,11 +611,24 @@ async def build_composite_query(
     except Exception:
         logger.debug("build_composite_query: pattern signal unavailable")
 
+    # Signal 5: Qualifier (from qualifier_index if available)
+    qualifier = np.zeros(dim, dtype=np.float32)
+    try:
+        if matched_cluster_id is not None:
+            q_idx = getattr(taxonomy_engine, "_qualifier_index", None)
+            if q_idx:
+                vec = q_idx.get_vector(matched_cluster_id)
+                if vec is not None:
+                    qualifier = vec.astype(np.float32)
+    except Exception:
+        logger.debug("build_composite_query: qualifier signal unavailable")
+
     return CompositeQuery(
         topic=topic,
         transformation=transformation,
         output=output,
         pattern=pattern,
+        qualifier=qualifier,
     )
 
 
