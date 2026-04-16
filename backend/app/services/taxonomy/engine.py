@@ -2439,27 +2439,53 @@ class TaxonomyEngine:
             if not child_ids:
                 continue  # empty sub-domain — handled by phase_archive_empty_sub_domains
 
-            # --- Collect domain_raw qualifiers from child optimizations ---
+            # --- Collect optimizations from child clusters ---
+            # Use ALL three sources (not just Source 1) to match the creation
+            # logic.  Source 1 alone causes false dissolutions when domain_raw
+            # was written under old vocabulary names that don't match the
+            # organic qualifier label.
             opt_q = await db.execute(
-                select(Optimization.domain_raw).where(
+                select(
+                    Optimization.domain_raw,
+                    Optimization.intent_label,
+                ).where(
                     Optimization.cluster_id.in_(child_ids),
                 )
             )
-            domain_raws = [r[0] for r in opt_q.all()]
-            total_opts = len(domain_raws)
+            opt_rows = opt_q.all()
+            total_opts = len(opt_rows)
             if total_opts == 0:
                 continue
 
             # Sub-domain label is the qualifier name — normalise for comparison
             sub_qualifier = sub.label.lower()
 
-            # Count optimizations whose domain_raw qualifier matches this sub-domain
+            # Load organic vocabulary for this domain (Source 2 matching)
+            from app.services.domain_signal_loader import get_signal_loader as _get_loader
+
+            _loader = _get_loader()
+            domain_qualifiers = _loader.get_qualifiers(domain_node.label) if _loader else {}
+            sub_keywords = domain_qualifiers.get(sub_qualifier, [])
+
+            # Count optimizations matching this sub-domain via three sources
             matching = 0
-            for dr in domain_raws:
-                if not dr:
-                    continue
-                _, q = _parse_domain(dr)
-                if q and q.lower().replace(" ", "-") == sub_qualifier:
+            for domain_raw, intent_label in opt_rows:
+                matched = False
+
+                # Source 1: domain_raw qualifier parse
+                if domain_raw and not matched:
+                    _, q = _parse_domain(domain_raw)
+                    if q and q.lower().replace(" ", "-") == sub_qualifier:
+                        matched = True
+
+                # Source 2: intent_label keyword match against organic vocab
+                if not matched and intent_label and sub_keywords:
+                    intent_lower = intent_label.lower()
+                    hits = sum(1 for kw in sub_keywords if kw in intent_lower)
+                    if hits >= 1:
+                        matched = True
+
+                if matched:
                     matching += 1
 
             consistency = matching / total_opts
