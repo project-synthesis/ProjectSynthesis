@@ -1905,7 +1905,9 @@ class TaxonomyEngine:
                         if domain_raw and ':' in domain_raw:
                             _, q = parse_domain(domain_raw)
                             if q:
-                                qualifiers_by_cluster.setdefault(cid, _Counter())[q] += 1
+                                q_norm = q.strip().lower()
+                                if q_norm:
+                                    qualifiers_by_cluster.setdefault(cid, _Counter())[q_norm] += 1
 
                     # Compute centroid similarity matrix (sparse-filled for missing centroids)
                     centroid_vecs: list[np.ndarray] = []
