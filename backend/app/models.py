@@ -70,6 +70,7 @@ class Optimization(Base):
     embedding = Column(LargeBinary, nullable=True)
     optimized_embedding = Column(LargeBinary, nullable=True)
     transformation_embedding = Column(LargeBinary, nullable=True)
+    qualifier_embedding = Column(LargeBinary, nullable=True)  # 384-dim float32 qualifier signal
     phase_weights_json = Column(JSON, nullable=True)
     cluster_id = Column(String, ForeignKey("prompt_cluster.id"), nullable=True)
     project_id = Column(String(36), nullable=True, index=True)  # ADR-005: denormalized project FK
