@@ -61,6 +61,11 @@ class DomainSignalLoader:
         self._qualifier_hits: int = 0
         self._qualifier_misses: int = 0
         self._last_qualifier_refresh: str | None = None
+        # Qualifier embedding cache — keyed by sorted keyword string.
+        # Eliminates repeated MiniLM embedding calls for the same keyword set.
+        self._qualifier_embedding_cache: dict[str, Any] = {}
+        self._qualifier_embeddings_generated: int = 0
+        self._qualifier_embeddings_skipped: int = 0
 
     # ------------------------------------------------------------------
     # Properties (return copies to protect internal state)
@@ -308,12 +313,29 @@ class DomainSignalLoader:
         if not qualifiers:
             return
         self._qualifier_cache[domain.strip().lower()] = qualifiers
+        self.invalidate_qualifier_embedding_cache()
         self._last_qualifier_refresh = datetime.now(timezone.utc).isoformat()
         logger.info(
             "refresh_qualifiers: domain=%s groups=%d (e.g. %s)",
             domain, len(qualifiers),
             ", ".join(list(qualifiers.keys())[:3]),
         )
+
+    # ------------------------------------------------------------------
+    # Qualifier embedding cache (eliminates repeated MiniLM calls)
+    # ------------------------------------------------------------------
+
+    def cache_qualifier_embedding(self, key: str, embedding: Any) -> None:
+        """Cache a qualifier embedding keyed by sorted keyword string."""
+        self._qualifier_embedding_cache[key] = embedding
+
+    def get_cached_qualifier_embedding(self, key: str) -> Any:
+        """Look up a cached qualifier embedding. Returns None on miss."""
+        return self._qualifier_embedding_cache.get(key)
+
+    def invalidate_qualifier_embedding_cache(self) -> None:
+        """Clear all cached qualifier embeddings (called on vocab refresh)."""
+        self._qualifier_embedding_cache.clear()
 
     @staticmethod
     def find_best_qualifier(
@@ -350,4 +372,7 @@ class DomainSignalLoader:
             "domains_with_vocab": len(self._qualifier_cache),
             "domains_without_vocab": 0,  # not tracked globally
             "last_qualifier_refresh": self._last_qualifier_refresh,
+            "qualifier_embeddings_generated": self._qualifier_embeddings_generated,
+            "qualifier_embeddings_skipped": self._qualifier_embeddings_skipped,
+            "qualifier_embedding_cache_size": len(self._qualifier_embedding_cache),
         }

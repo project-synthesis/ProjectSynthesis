@@ -201,3 +201,36 @@ async def test_load_populates_qualifier_cache_from_metadata(db):
     assert "growth" in qualifiers
     assert "pricing" in qualifiers
     assert "metrics" in qualifiers["growth"]
+
+
+def test_qualifier_embedding_cache_hit():
+    """Cached qualifier embeddings are returned without re-embedding."""
+    import numpy as np
+
+    loader = DomainSignalLoader()
+    vec = np.random.randn(384).astype(np.float32)
+    loader.cache_qualifier_embedding("growth|metrics|kpi", vec)
+
+    result = loader.get_cached_qualifier_embedding("growth|metrics|kpi")
+    assert result is not None
+    np.testing.assert_array_equal(result, vec)
+
+
+def test_qualifier_embedding_cache_miss():
+    """Missing keys return None."""
+    loader = DomainSignalLoader()
+    assert loader.get_cached_qualifier_embedding("unknown") is None
+
+
+def test_qualifier_embedding_cache_invalidation():
+    """refresh_qualifiers() clears the embedding cache for that domain."""
+    import numpy as np
+
+    loader = DomainSignalLoader()
+    loader.refresh_qualifiers("saas", {"growth": ["metrics", "kpi"]})
+    vec = np.random.randn(384).astype(np.float32)
+    loader.cache_qualifier_embedding("growth|metrics|kpi", vec)
+
+    # Refresh invalidates cache
+    loader.refresh_qualifiers("saas", {"growth": ["metrics", "kpi", "new"]})
+    assert loader.get_cached_qualifier_embedding("growth|metrics|kpi") is None
