@@ -2400,6 +2400,209 @@ class TaxonomyEngine:
             "meta_patterns_merged": patterns_merged,
         }
 
+    async def _reevaluate_domains(
+        self,
+        db: AsyncSession,
+        existing_labels: set[str],
+    ) -> list[str]:
+        """Re-evaluate top-level domains and dissolve those with degraded consistency.
+
+        Guards (all must pass for dissolution):
+        1. Not "general" (permanent root)
+        2. No surviving sub-domains (bottom-up anchor)
+        3. Age >= DOMAIN_DISSOLUTION_MIN_AGE_HOURS
+        4. Consistency < DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR (Source 1 only)
+        5. member_count <= DOMAIN_DISSOLUTION_MEMBER_CEILING
+
+        Returns list of dissolved domain labels.
+        """
+        from app.services.taxonomy._constants import (
+            DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
+            DOMAIN_DISSOLUTION_MEMBER_CEILING,
+            DOMAIN_DISSOLUTION_MIN_AGE_HOURS,
+        )
+        from app.utils.text_cleanup import parse_domain as _parse_domain
+
+        dissolved: list[str] = []
+
+        # Find the "general" domain node as dissolution target
+        general_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.label == "general",
+            )
+        )
+        general_node = general_q.scalars().first()
+        if not general_node:
+            return dissolved
+
+        # Load all non-general top-level domains
+        domain_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.label != "general",
+            )
+        )
+        domains = list(domain_q.scalars().all())
+
+        now = _utcnow()
+        age_cutoff = now - __import__("datetime").timedelta(hours=DOMAIN_DISSOLUTION_MIN_AGE_HOURS)
+
+        for domain in domains:
+            # Guard 1: "general" already excluded by query
+
+            # Guard 2: sub-domain anchor — bottom-up only
+            sub_count_q = await db.execute(
+                select(func.count()).where(
+                    PromptCluster.parent_id == domain.id,
+                    PromptCluster.state == "domain",
+                )
+            )
+            sub_count = sub_count_q.scalar() or 0
+            if sub_count > 0:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="domain_dissolution_blocked",
+                        context={
+                            "domain": domain.label,
+                            "reason": "has_sub_domains",
+                            "sub_domain_count": sub_count,
+                        },
+                    )
+                except RuntimeError:
+                    pass
+                continue
+
+            # Guard 3: age gate
+            created = domain.created_at
+            if created is not None:
+                if isinstance(created, str):
+                    try:
+                        created = __import__("datetime").datetime.fromisoformat(created)
+                    except (ValueError, TypeError):
+                        created = None
+                if created is not None and created.tzinfo is not None:
+                    created = created.replace(tzinfo=None)
+            if created and created > age_cutoff:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="domain_dissolution_blocked",
+                        context={
+                            "domain": domain.label,
+                            "reason": "too_young",
+                            "age_hours": round((now - created).total_seconds() / 3600, 1) if created else 0,
+                        },
+                    )
+                except RuntimeError:
+                    pass
+                continue
+
+            # Guard 5: member ceiling (check before consistency to avoid unnecessary DB queries)
+            child_q = await db.execute(
+                select(PromptCluster.id).where(
+                    PromptCluster.parent_id == domain.id,
+                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                )
+            )
+            child_ids = [r[0] for r in child_q.all()]
+            if len(child_ids) > DOMAIN_DISSOLUTION_MEMBER_CEILING:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="domain_dissolution_blocked",
+                        context={
+                            "domain": domain.label,
+                            "reason": "above_member_ceiling",
+                            "member_count": len(child_ids),
+                            "ceiling": DOMAIN_DISSOLUTION_MEMBER_CEILING,
+                        },
+                    )
+                except RuntimeError:
+                    pass
+                continue
+
+            # Guard 4: consistency check (Source 1 only — domain_raw primary label)
+            if child_ids:
+                opt_q = await db.execute(
+                    select(Optimization.domain_raw).where(
+                        Optimization.cluster_id.in_(child_ids),
+                    )
+                )
+                domain_raws = [r[0] for r in opt_q.all()]
+                total_opts = len(domain_raws)
+
+                if total_opts > 0:
+                    matching = 0
+                    for dr in domain_raws:
+                        if not dr:
+                            continue
+                        primary, _ = _parse_domain(dr)
+                        if primary == domain.label.lower():
+                            matching += 1
+                    consistency = matching / total_opts
+                else:
+                    consistency = 0.0
+            else:
+                total_opts = 0
+                consistency = 0.0
+
+            # Log re-evaluation
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="discover",
+                    decision="domain_reevaluated",
+                    context={
+                        "domain": domain.label,
+                        "consistency_pct": round(consistency * 100, 1),
+                        "floor_pct": round(DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100, 1),
+                        "member_count": len(child_ids),
+                        "member_ceiling": DOMAIN_DISSOLUTION_MEMBER_CEILING,
+                        "has_sub_domains": False,
+                        "source": "domain_raw",
+                        "total_opts": total_opts,
+                        "passed": consistency >= DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
+                    },
+                )
+            except RuntimeError:
+                pass
+
+            if consistency >= DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR:
+                continue  # healthy
+
+            # --- Dissolve ---
+            logger.info(
+                "Dissolving domain '%s': consistency=%.1f%% < floor=%.1f%%, %d clusters",
+                domain.label, consistency * 100,
+                DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100, len(child_ids),
+            )
+            result = await self._dissolve_node(
+                db, domain, dissolution_target_id=general_node.id,
+                existing_labels=existing_labels,
+                clear_signal_loader=True,
+            )
+            dissolved.append(domain.label)
+
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="discover",
+                    decision="domain_dissolved",
+                    cluster_id=domain.id,
+                    context={
+                        "domain": domain.label,
+                        "consistency_pct": round(consistency * 100, 1),
+                        "floor_pct": round(DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100, 1),
+                        "clusters_reparented": result["clusters_reparented"],
+                        "meta_patterns_merged": result["meta_patterns_merged"],
+                        "reason": "consistency_below_floor",
+                    },
+                )
+            except RuntimeError:
+                pass
+
+        return dissolved
+
     async def _reevaluate_sub_domains(
         self,
         db: AsyncSession,

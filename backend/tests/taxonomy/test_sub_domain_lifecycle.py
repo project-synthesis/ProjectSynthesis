@@ -1087,3 +1087,171 @@ class TestDissolveNode:
             select(func.count()).where(MetaPattern.cluster_id == sub.id)
         )).scalar()
         assert sub_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Domain dissolution
+# ---------------------------------------------------------------------------
+
+
+class TestDomainDissolution:
+    """Tests for _reevaluate_domains() — domain-level dissolution."""
+
+    @pytest.mark.asyncio
+    async def test_general_never_dissolves(self, db, mock_provider):
+        """'general' domain is permanent regardless of content."""
+        from unittest.mock import AsyncMock
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        general = _make_domain("general")
+        general.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        db.add(general)
+        await db.commit()
+
+        existing_labels = {"general"}
+        dissolved = await engine._reevaluate_domains(db, existing_labels)
+        assert dissolved == []
+        assert general.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_domain_with_sub_domain_anchored(self, db, mock_provider):
+        """Domain with surviving sub-domain cannot dissolve (anchor rule)."""
+        from unittest.mock import AsyncMock
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        domain = _make_domain("security")
+        domain.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_domain("token-ops", parent_id=domain.id)
+        db.add(sub)
+        await db.commit()
+
+        existing_labels = {"security", "token-ops"}
+        dissolved = await engine._reevaluate_domains(db, existing_labels)
+        assert dissolved == []
+        assert domain.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_young_domain_protected(self, db, mock_provider):
+        """Domain younger than 48h is not dissolved."""
+        from unittest.mock import AsyncMock
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        domain = _make_domain("devops")
+        domain.created_at = datetime.now(timezone.utc).replace(tzinfo=None)  # just created
+        db.add(domain)
+        await db.commit()
+
+        existing_labels = {"devops"}
+        dissolved = await engine._reevaluate_domains(db, existing_labels)
+        assert dissolved == []
+
+    @pytest.mark.asyncio
+    async def test_large_domain_protected(self, db, mock_provider):
+        """Domain with >5 clusters is not dissolved even with low consistency."""
+        from unittest.mock import AsyncMock
+        from app.services.taxonomy.engine import TaxonomyEngine
+        import numpy as np
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        domain = _make_domain("backend")
+        domain.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        db.add(domain)
+        await db.flush()
+
+        # Add 6 clusters (above ceiling of 5)
+        for i in range(6):
+            cluster = PromptCluster(
+                label=f"Backend Cluster {i}", state="active", domain="backend",
+                parent_id=domain.id, color_hex="#ff0000", member_count=3,
+                centroid_embedding=np.random.randn(384).astype(np.float32).tobytes(),
+            )
+            db.add(cluster)
+        await db.commit()
+
+        existing_labels = {"backend"}
+        dissolved = await engine._reevaluate_domains(db, existing_labels)
+        assert dissolved == []
+
+    @pytest.mark.asyncio
+    async def test_small_inconsistent_domain_dissolves(self, db, mock_provider):
+        """Domain with ≤5 clusters and <15% consistency dissolves."""
+        from unittest.mock import AsyncMock
+        from app.services.taxonomy.engine import TaxonomyEngine
+        import numpy as np
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        # Create "general" as dissolution target
+        general = _make_domain("general")
+        db.add(general)
+        await db.flush()
+
+        domain = _make_domain("devops")
+        domain.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)  # old enough
+        db.add(domain)
+        await db.flush()
+
+        # Add 2 clusters with optimizations that DON'T match "devops"
+        for i in range(2):
+            cluster = PromptCluster(
+                label=f"Misc Cluster {i}", state="active", domain="devops",
+                parent_id=domain.id, color_hex="#ff0000", member_count=3,
+                centroid_embedding=np.random.randn(384).astype(np.float32).tobytes(),
+            )
+            db.add(cluster)
+            await db.flush()
+            for j in range(3):
+                opt = Optimization(
+                    raw_prompt=f"test prompt {i}-{j}",
+                    domain="devops",
+                    domain_raw="backend",  # wrong domain — low consistency
+                    intent_label=f"backend task {j}",
+                    task_type="coding",
+                    cluster_id=cluster.id,
+                )
+                db.add(opt)
+        await db.commit()
+
+        existing_labels = {"devops", "general"}
+        dissolved = await engine._reevaluate_domains(db, existing_labels)
+        assert "devops" in dissolved
+        assert domain.state == "archived"
+
+    @pytest.mark.asyncio
+    async def test_seed_domain_can_dissolve(self, db, mock_provider):
+        """Seed domains are NOT protected — dissolve when they fail consistency."""
+        from unittest.mock import AsyncMock
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        general = _make_domain("general")
+        db.add(general)
+        await db.flush()
+
+        seed_domain = _make_domain("fullstack", source="seed")
+        seed_domain.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        db.add(seed_domain)
+        await db.commit()
+        # No clusters, no optimizations → 0% consistency, 0 members
+
+        existing_labels = {"fullstack", "general"}
+        dissolved = await engine._reevaluate_domains(db, existing_labels)
+        # Empty domain with 0 members and old enough → dissolves
+        assert "fullstack" in dissolved
