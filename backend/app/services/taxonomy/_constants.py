@@ -36,9 +36,10 @@ MAX_PATTERNS_PER_CLUSTER: int = 15  # prune cap after merge-based Phase 4 refres
 # Raw dominates (topic signal), optimized adds output-quality signal,
 # transformation adds technique-direction signal.  When a signal is missing
 # (None or zero vector), its weight is redistributed proportionally.
-CLUSTERING_BLEND_W_RAW = 0.65
+CLUSTERING_BLEND_W_RAW = 0.55
 CLUSTERING_BLEND_W_OPTIMIZED = 0.20
 CLUSTERING_BLEND_W_TRANSFORM = 0.15
+CLUSTERING_BLEND_W_QUALIFIER = 0.10
 
 
 # ---------------------------------------------------------------------------

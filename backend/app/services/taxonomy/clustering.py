@@ -15,6 +15,7 @@ from sklearn.metrics import silhouette_score
 
 from app.services.taxonomy._constants import (
     CLUSTERING_BLEND_W_OPTIMIZED,
+    CLUSTERING_BLEND_W_QUALIFIER,
     CLUSTERING_BLEND_W_RAW,
     CLUSTERING_BLEND_W_TRANSFORM,
     SPECTRAL_K_RANGE,
@@ -138,11 +139,15 @@ def blend_embeddings(
     w_raw: float = CLUSTERING_BLEND_W_RAW,
     w_optimized: float = CLUSTERING_BLEND_W_OPTIMIZED,
     w_transform: float = CLUSTERING_BLEND_W_TRANSFORM,
+    *,
+    qualifier: np.ndarray | None = None,
+    w_qualifier: float = CLUSTERING_BLEND_W_QUALIFIER,
 ) -> np.ndarray:
-    """Blend raw + optimized + transformation embeddings for HDBSCAN clustering.
+    """Blend raw + optimized + transformation + qualifier embeddings for HDBSCAN clustering.
 
     Produces a single 384-dim L2-normalized vector that captures topic (raw),
-    output quality (optimized), and technique direction (transformation).
+    output quality (optimized), technique direction (transformation), and
+    domain qualifier signal (qualifier).
     When a signal is missing (None or near-zero norm), its weight is
     redistributed proportionally to the remaining non-zero signals.
 
@@ -156,6 +161,9 @@ def blend_embeddings(
         w_raw: Weight for the raw signal.
         w_optimized: Weight for the optimized signal.
         w_transform: Weight for the transformation signal.
+        qualifier: 1-D float32 domain qualifier embedding, or None.
+            Must be passed as a keyword argument.
+        w_qualifier: Weight for the qualifier signal.
 
     Returns:
         L2-normalized 384-dim float32 blended embedding.
@@ -172,6 +180,10 @@ def blend_embeddings(
     if transformation is not None:
         signals.append(transformation.astype(np.float32).ravel())
         weights.append(w_transform)
+
+    if qualifier is not None:
+        signals.append(qualifier.astype(np.float32).ravel())
+        weights.append(w_qualifier)
 
     return weighted_blend(signals, weights)
 

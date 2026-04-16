@@ -7,6 +7,7 @@ import numpy as np
 
 from app.services.taxonomy._constants import (
     CLUSTERING_BLEND_W_OPTIMIZED,
+    CLUSTERING_BLEND_W_QUALIFIER,
     CLUSTERING_BLEND_W_RAW,
     CLUSTERING_BLEND_W_TRANSFORM,
 )
@@ -130,7 +131,12 @@ class TestBlendConstants:
     """Verify default constants are sensible."""
 
     def test_weights_sum_to_one(self):
-        total = CLUSTERING_BLEND_W_RAW + CLUSTERING_BLEND_W_OPTIMIZED + CLUSTERING_BLEND_W_TRANSFORM
+        total = (
+            CLUSTERING_BLEND_W_RAW
+            + CLUSTERING_BLEND_W_OPTIMIZED
+            + CLUSTERING_BLEND_W_TRANSFORM
+            + CLUSTERING_BLEND_W_QUALIFIER
+        )
         assert abs(total - 1.0) < 1e-9
 
     def test_raw_dominates(self):
@@ -141,3 +147,20 @@ class TestBlendConstants:
         assert CLUSTERING_BLEND_W_RAW > 0
         assert CLUSTERING_BLEND_W_OPTIMIZED > 0
         assert CLUSTERING_BLEND_W_TRANSFORM > 0
+        assert CLUSTERING_BLEND_W_QUALIFIER > 0
+
+    def test_blend_with_qualifier_signal(self):
+        """Qualifier signal blends into output when provided."""
+        raw = np.array([1, 0, 0, 0], dtype=np.float32)
+        qualifier = np.array([0, 1, 0, 0], dtype=np.float32)
+        blended = blend_embeddings(raw, qualifier=qualifier)
+        assert blended[1] > 0  # qualifier pulled toward [0,1,0,0]
+        assert blended[0] > blended[1]  # raw still dominates (0.55 > 0.10)
+
+    def test_blend_without_qualifier_matches_original(self):
+        """Without qualifier, blend identical to 3-signal blend."""
+        raw = np.array([1, 0, 0, 0], dtype=np.float32)
+        opt = np.array([0, 1, 0, 0], dtype=np.float32)
+        result_no_q = blend_embeddings(raw, optimized=opt)
+        result_with_none = blend_embeddings(raw, optimized=opt, qualifier=None)
+        np.testing.assert_array_almost_equal(result_no_q, result_with_none)
