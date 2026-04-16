@@ -18,6 +18,7 @@ import logging
 import statistics
 import time
 import traceback
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -64,6 +65,16 @@ from app.services.taxonomy.warm_path import WarmPathResult, execute_warm_path
 from app.utils.text_cleanup import is_low_quality_label, parse_domain, validate_intent_label
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary quality metric constants (post-generation observability)
+# ---------------------------------------------------------------------------
+
+_VOCAB_QUALITY_POOR_THRESHOLD = 0.1  # quality below this triggers WARNING log
+_VOCAB_OVERLAP_REPORT_THRESHOLD = 0.7  # include overlapping_pair in event only when pairwise > this
+_VOCAB_ZERO_NORM_EPS = 1e-9  # zero-norm guard for embeddings
+_VOCAB_QUALITY_SCORES_MAXLEN = 500  # rolling window for engine._vocab_quality_scores
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +345,7 @@ class TaxonomyEngine:
         self._embedding_index = EmbeddingIndex(dim=384)
         # Post-generation vocabulary quality scores — observability only.
         # Populated by vocab generation pass; read by health endpoint (Task 5).
-        self._vocab_quality_scores: list[float] = []
+        self._vocab_quality_scores: deque[float] = deque(maxlen=_VOCAB_QUALITY_SCORES_MAXLEN)
         from app.services.taxonomy.transformation_index import TransformationIndex
         self._transformation_index = TransformationIndex(dim=384)
         from app.services.taxonomy.qualifier_index import QualifierIndex
@@ -1997,7 +2008,7 @@ class TaxonomyEngine:
                                 continue
                             emb = await self._embedding.aembed_single(" ".join(gkws))
                             emb_norm = np.linalg.norm(emb)
-                            if emb_norm > 1e-9:
+                            if emb_norm > _VOCAB_ZERO_NORM_EPS:
                                 group_embeddings[gname] = emb / emb_norm
 
                         if len(group_embeddings) >= 2:
@@ -2024,14 +2035,14 @@ class TaxonomyEngine:
                                         "domain": domain_node.label,
                                         "quality_score": _quality_score,
                                         "max_pairwise_cosine": round(_max_pairwise, 4) if _max_pairwise is not None else None,
-                                        "overlapping_pair": _overlapping_pair if (_max_pairwise is not None and _max_pairwise > 0.7) else None,
+                                        "overlapping_pair": _overlapping_pair if (_max_pairwise is not None and _max_pairwise > _VOCAB_OVERLAP_REPORT_THRESHOLD) else None,
                                         "quality_ms": _qm_ms,
                                     },
                                 )
                             except RuntimeError:
                                 pass
 
-                            if _quality_score < 0.1:
+                            if _quality_score < _VOCAB_QUALITY_POOR_THRESHOLD:
                                 logger.warning(
                                     "Vocab quality poor for '%s': score=%.2f (max_pairwise=%.2f between %s)",
                                     domain_node.label, _quality_score,
