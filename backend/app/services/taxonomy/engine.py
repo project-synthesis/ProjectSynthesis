@@ -2373,7 +2373,9 @@ class TaxonomyEngine:
         node.scored_count = 0
 
         # --- Clear all 4 in-memory indices ---
-        for index_name in ("embedding_index", "transformation_index", "optimized_index", "qualifier_index"):
+        # Use public properties where available, private attr for optimized
+        # (which has no @property wrapper — _optimized_index only).
+        for index_name in ("embedding_index", "transformation_index", "_optimized_index", "qualifier_index"):
             try:
                 idx = getattr(self, index_name, None)
                 if idx:
@@ -2453,10 +2455,16 @@ class TaxonomyEngine:
         )
         domains = list(domain_q.scalars().all())
 
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+        from datetime import timezone as _tz
+
         now = _utcnow()
-        age_cutoff = now - __import__("datetime").timedelta(hours=DOMAIN_DISSOLUTION_MIN_AGE_HOURS)
+        age_cutoff = now - _td(hours=DOMAIN_DISSOLUTION_MIN_AGE_HOURS)
 
         for domain in domains:
+            self._domain_lifecycle_stats["domains_reevaluated"] += 1
+
             # Guard 1: "general" already excluded by query
 
             # Guard 2: sub-domain anchor — bottom-up only
@@ -2468,6 +2476,7 @@ class TaxonomyEngine:
             )
             sub_count = sub_count_q.scalar() or 0
             if sub_count > 0:
+                self._domain_lifecycle_stats["dissolution_blocked"] += 1
                 try:
                     get_event_logger().log_decision(
                         path="warm", op="discover",
@@ -2493,6 +2502,7 @@ class TaxonomyEngine:
                 if created is not None and created.tzinfo is not None:
                     created = created.replace(tzinfo=None)
             if created and created > age_cutoff:
+                self._domain_lifecycle_stats["dissolution_blocked"] += 1
                 try:
                     get_event_logger().log_decision(
                         path="warm", op="discover",
@@ -2516,6 +2526,7 @@ class TaxonomyEngine:
             )
             child_ids = [r[0] for r in child_q.all()]
             if len(child_ids) > DOMAIN_DISSOLUTION_MEMBER_CEILING:
+                self._domain_lifecycle_stats["dissolution_blocked"] += 1
                 try:
                     get_event_logger().log_decision(
                         path="warm", op="discover",
@@ -2591,6 +2602,7 @@ class TaxonomyEngine:
                 clear_signal_loader=True,
             )
             dissolved.append(domain.label)
+            self._domain_lifecycle_stats["domains_dissolved"] += 1
 
             try:
                 get_event_logger().log_decision(
@@ -2609,6 +2621,7 @@ class TaxonomyEngine:
             except RuntimeError:
                 pass
 
+        self._domain_lifecycle_stats["last_domain_reeval"] = _dt.now(_tz.utc).isoformat()
         return dissolved
 
     async def _reevaluate_sub_domains(
@@ -3190,7 +3203,6 @@ class TaxonomyEngine:
         )
         suggestions = []
         for domain in stale.scalars():
-            meta = read_meta(domain.cluster_metadata)
             # Skip sub-domains — handled by phase_archive_empty_sub_domains()
             if domain.parent_id and domain.parent_id in domain_id_set:
                 continue

@@ -3982,7 +3982,7 @@ async def phase_archive_empty_sub_domains(
         except (KeyError, ValueError, AttributeError):
             pass
         try:
-            await engine.optimized_index.remove(sub.id)
+            await engine._optimized_index.remove(sub.id)
         except (KeyError, ValueError, AttributeError):
             pass
         try:

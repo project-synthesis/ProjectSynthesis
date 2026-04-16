@@ -82,6 +82,8 @@ class TestSubDomainArchival:
         engine.transformation_index.remove = AsyncMock()
         engine.optimized_index = MagicMock()
         engine.optimized_index.remove = AsyncMock()
+        engine._optimized_index = MagicMock()
+        engine._optimized_index.remove = AsyncMock()
         engine.qualifier_index = MagicMock()
         engine.qualifier_index.remove = AsyncMock()
 
@@ -116,6 +118,8 @@ class TestSubDomainArchival:
         engine.transformation_index.remove = AsyncMock()
         engine.optimized_index = MagicMock()
         engine.optimized_index.remove = AsyncMock()
+        engine._optimized_index = MagicMock()
+        engine._optimized_index.remove = AsyncMock()
         engine.qualifier_index = MagicMock()
         engine.qualifier_index.remove = AsyncMock()
 
@@ -153,6 +157,8 @@ class TestSubDomainArchival:
         engine.transformation_index.remove = AsyncMock()
         engine.optimized_index = MagicMock()
         engine.optimized_index.remove = AsyncMock()
+        engine._optimized_index = MagicMock()
+        engine._optimized_index.remove = AsyncMock()
         engine.qualifier_index = MagicMock()
         engine.qualifier_index.remove = AsyncMock()
 
@@ -191,6 +197,8 @@ class TestSubDomainArchival:
         engine.transformation_index.remove = AsyncMock()
         engine.optimized_index = MagicMock()
         engine.optimized_index.remove = AsyncMock()
+        engine._optimized_index = MagicMock()
+        engine._optimized_index.remove = AsyncMock()
         engine.qualifier_index = MagicMock()
         engine.qualifier_index.remove = AsyncMock()
 
@@ -222,6 +230,8 @@ class TestSubDomainArchival:
         engine.transformation_index.remove = AsyncMock()
         engine.optimized_index = MagicMock()
         engine.optimized_index.remove = AsyncMock()
+        engine._optimized_index = MagicMock()
+        engine._optimized_index.remove = AsyncMock()
         engine.qualifier_index = MagicMock()
         engine.qualifier_index.remove = AsyncMock()
 
@@ -252,6 +262,8 @@ class TestSubDomainArchival:
         engine.transformation_index.remove = AsyncMock()
         engine.optimized_index = MagicMock()
         engine.optimized_index.remove = AsyncMock()
+        engine._optimized_index = MagicMock()
+        engine._optimized_index.remove = AsyncMock()
         engine.qualifier_index = MagicMock()
         engine.qualifier_index.remove = AsyncMock()
 
@@ -281,6 +293,8 @@ class TestSubDomainArchival:
         engine.transformation_index.remove = AsyncMock()
         engine.optimized_index = MagicMock()
         engine.optimized_index.remove = AsyncMock()
+        engine._optimized_index = MagicMock()
+        engine._optimized_index.remove = AsyncMock()
         engine.qualifier_index = MagicMock()
         engine.qualifier_index.remove = AsyncMock()
 
@@ -323,6 +337,8 @@ class TestSubDomainArchival:
         engine.transformation_index.remove = AsyncMock()
         engine.optimized_index = MagicMock()
         engine.optimized_index.remove = AsyncMock()
+        engine._optimized_index = MagicMock()
+        engine._optimized_index.remove = AsyncMock()
         engine.qualifier_index = MagicMock()
         engine.qualifier_index.remove = AsyncMock()
 
@@ -1042,7 +1058,8 @@ class TestDissolveNode:
     async def test_dissolve_merges_meta_patterns(self, db, mock_provider):
         """_dissolve_node() merges meta-patterns into target (not deletes)."""
         from unittest.mock import AsyncMock
-        from sqlalchemy import select, func
+
+        from sqlalchemy import func, select
 
         from app.services.taxonomy.engine import TaxonomyEngine
 
@@ -1094,6 +1111,7 @@ class TestDomainDissolution:
     async def test_general_never_dissolves(self, db, mock_provider):
         """'general' domain is permanent regardless of content."""
         from unittest.mock import AsyncMock
+
         from app.services.taxonomy.engine import TaxonomyEngine
 
         mock_embedding = AsyncMock()
@@ -1113,6 +1131,7 @@ class TestDomainDissolution:
     async def test_domain_with_sub_domain_anchored(self, db, mock_provider):
         """Domain with surviving sub-domain cannot dissolve (anchor rule)."""
         from unittest.mock import AsyncMock
+
         from app.services.taxonomy.engine import TaxonomyEngine
 
         mock_embedding = AsyncMock()
@@ -1136,6 +1155,7 @@ class TestDomainDissolution:
     async def test_young_domain_protected(self, db, mock_provider):
         """Domain younger than 48h is not dissolved."""
         from unittest.mock import AsyncMock
+
         from app.services.taxonomy.engine import TaxonomyEngine
 
         mock_embedding = AsyncMock()
@@ -1154,8 +1174,10 @@ class TestDomainDissolution:
     async def test_large_domain_protected(self, db, mock_provider):
         """Domain with >5 clusters is not dissolved even with low consistency."""
         from unittest.mock import AsyncMock
-        from app.services.taxonomy.engine import TaxonomyEngine
+
         import numpy as np
+
+        from app.services.taxonomy.engine import TaxonomyEngine
 
         mock_embedding = AsyncMock()
         engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
@@ -1183,8 +1205,10 @@ class TestDomainDissolution:
     async def test_small_inconsistent_domain_dissolves(self, db, mock_provider):
         """Domain with ≤5 clusters and <15% consistency dissolves."""
         from unittest.mock import AsyncMock
-        from app.services.taxonomy.engine import TaxonomyEngine
+
         import numpy as np
+
+        from app.services.taxonomy.engine import TaxonomyEngine
 
         mock_embedding = AsyncMock()
         engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
@@ -1229,6 +1253,7 @@ class TestDomainDissolution:
     async def test_seed_domain_can_dissolve(self, db, mock_provider):
         """Seed domains are NOT protected — dissolve when they fail consistency."""
         from unittest.mock import AsyncMock
+
         from app.services.taxonomy.engine import TaxonomyEngine
 
         mock_embedding = AsyncMock()
