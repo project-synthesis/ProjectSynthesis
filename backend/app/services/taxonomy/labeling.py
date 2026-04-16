@@ -12,6 +12,7 @@ are rejected in favor of the existing label.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -28,6 +29,10 @@ _FALLBACK_LABEL = "Unnamed Cluster"
 # Cosine thresholds for label continuity anchor
 _LABEL_DRIFT_REJECT = 0.5   # cosine < this → keep old label
 _LABEL_DRIFT_WARN = 0.7     # cosine < this → warn but accept
+
+# Cosine thresholds for qualifier vocabulary similarity matrix rendering
+_VOCAB_SIM_HIGH = 0.7  # "very similar" threshold in vocab prompt
+_VOCAB_SIM_LOW = 0.3   # "distinct" threshold in vocab prompt
 
 
 class _LabelOutput(BaseModel):
@@ -216,8 +221,13 @@ async def generate_qualifier_vocabulary(
         matrix_lines = ["Cluster similarity (cosine):"]
         for i in range(len(similarity_matrix)):
             for j in range(i + 1, len(similarity_matrix)):
-                sim = similarity_matrix[i][j]
-                hint = " (very similar)" if sim > 0.7 else " (distinct)" if sim < 0.3 else ""
+                try:
+                    sim = float(similarity_matrix[i][j])
+                    if math.isnan(sim) or math.isinf(sim):
+                        continue
+                except (TypeError, ValueError, IndexError):
+                    continue
+                hint = f" (very similar)" if sim > _VOCAB_SIM_HIGH else f" (distinct)" if sim < _VOCAB_SIM_LOW else ""
                 matrix_lines.append(f"  C{i+1}↔C{j+1}: {sim:.2f}{hint}")
         matrix_block = '\n'.join(matrix_lines)
 
@@ -232,7 +242,7 @@ async def generate_qualifier_vocabulary(
                 "(1-2 lowercase words) and 5-10 lowercase keywords that signal that "
                 "specialization in a user's prompt. Keywords should DISCRIMINATE between "
                 "groups — choose words that appear in one specialization but not others. "
-                "Use the similarity matrix to guide grouping: clusters with cosine > 0.7 "
+                f"Use the similarity matrix to guide grouping: clusters with cosine > {_VOCAB_SIM_HIGH} "
                 "should typically belong to the same group. "
                 "Do not include the domain name itself as a keyword."
             ),
