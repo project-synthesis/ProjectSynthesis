@@ -2034,8 +2034,19 @@ class TaxonomyEngine:
                                     context={
                                         "domain": domain_node.label,
                                         "quality_score": _quality_score,
-                                        "max_pairwise_cosine": round(_max_pairwise, 4) if _max_pairwise is not None else None,
-                                        "overlapping_pair": _overlapping_pair if (_max_pairwise is not None and _max_pairwise > _VOCAB_OVERLAP_REPORT_THRESHOLD) else None,
+                                        "max_pairwise_cosine": (
+                                            round(_max_pairwise, 4)
+                                            if _max_pairwise is not None
+                                            else None
+                                        ),
+                                        "overlapping_pair": (
+                                            _overlapping_pair
+                                            if (
+                                                _max_pairwise is not None
+                                                and _max_pairwise > _VOCAB_OVERLAP_REPORT_THRESHOLD
+                                            )
+                                            else None
+                                        ),
                                         "quality_ms": _qm_ms,
                                     },
                                 )

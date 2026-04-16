@@ -227,7 +227,7 @@ async def generate_qualifier_vocabulary(
                         continue
                 except (TypeError, ValueError, IndexError):
                     continue
-                hint = f" (very similar)" if sim > _VOCAB_SIM_HIGH else f" (distinct)" if sim < _VOCAB_SIM_LOW else ""
+                hint = " (very similar)" if sim > _VOCAB_SIM_HIGH else " (distinct)" if sim < _VOCAB_SIM_LOW else ""
                 matrix_lines.append(f"  C{i+1}↔C{j+1}: {sim:.2f}{hint}")
         matrix_block = '\n'.join(matrix_lines)
 
