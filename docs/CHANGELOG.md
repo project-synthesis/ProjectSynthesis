@@ -4,6 +4,38 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.36 — 2026-04-16
+
+### Added
+- **Qualifier-augmented embeddings** — 4th embedding signal (`qualifier_embedding`) from organic Haiku-generated vocabulary. Qualifier keywords embedded as 384-dim vector via `all-MiniLM-L6-v2`, stored per optimization. `QualifierIndex` (same pattern as `TransformationIndex`) tracks per-cluster mean qualifier vectors. Qualifier embedding cache on `DomainSignalLoader` eliminates repeated MiniLM calls for identical keyword sets. Phase 4 backfill (capped 50/cycle) for existing optimizations
+- **5-signal fusion pipeline** — `PhaseWeights` and `CompositeQuery` extended from 4 to 5 signals. `_DEFAULT_PROFILES` and `_TASK_TYPE_WEIGHT_BIAS` updated with per-phase qualifier weights. `compute_score_correlated_target()` skips qualifier dimension for old profiles (`w_qualifier=0.0`) to prevent cold-start bias
+- **Domain dissolution** — `_reevaluate_domains()` evaluates top-level domains with 5 guards: "general" permanent, sub-domain anchor (bottom-up only), age ≥48h, member count ≤5, consistency <15% (Source 1 only). Shared `_dissolve_node()` extracts dissolution logic for both domain and sub-domain paths. Dissolution reparents clusters to "general", merges meta-patterns (not deletes), clears resolver + signal loader
+- **`DomainSignalLoader.remove_domain()`** — clears signals, patterns, qualifier cache, and embedding cache for a dissolved domain. Called by `_dissolve_node()` with `clear_signal_loader=True` for domain-level dissolution
+- **Domain lifecycle health stats** — `domain_lifecycle` field in health endpoint: `domains_reevaluated`, `domains_dissolved`, `dissolution_blocked`, `last_domain_reeval`
+- **Phase 5 execution reorder** — sub-domain re-evaluation → domain re-evaluation → domain discovery → sub-domain discovery → existing post-discovery ops. Bottom-up dependency ensures sub-domains dissolve before parent domains
+- **Cross-sub-domain merge observability** — `merge/cross_sub_domain` event logged when merge winner and loser are in different sub-domains
+
+### Changed
+- **Blend weights** — `CLUSTERING_BLEND_W_RAW` reduced from 0.65 → 0.55. New `CLUSTERING_BLEND_W_QUALIFIER = 0.10`. Total still 1.0 (0.55/0.20/0.15/0.10)
+- **`blend_embeddings()` signature** — `qualifier` added as keyword-only parameter (after `*`). Existing positional callers unaffected
+- **`PhaseWeights.from_dict()` default** — `w_qualifier` defaults to 0.0 (not 0.25) for backward compat with old 4-element profiles
+- **1:1 vocabulary coverage** — `generate_qualifier_vocabulary()` minimum lowered from 3 to 2 clusters. Vocabulary generation decoupled into separate all-domains pass (including "general"). All non-empty domains now have organic vocabulary
+- **Sub-domain re-evaluation** — uses three-source cascade (domain_raw + intent_label + TF-IDF) instead of Source 1 only. Prevents false dissolutions when organic vocab uses different qualifier names than old static vocabulary
+- **Phase 5.5 meta-pattern handling** — changed from DELETE to UPDATE (merge into parent domain), consistent with Phase 5 dissolution
+- **Backend test count** — 2223 tests (up from 2213)
+
+### Fixed
+- **HNSW segfault on Python 3.14** — hnswlib probe uses subprocess to detect SIGILL crash safely. `EmbeddingIndex.rebuild()` catches HNSW build failures and falls back to numpy. HNSW-dependent tests skip on non-functional platforms
+- **Phase 5.5 missing `await`** — 4 async `index.remove()` calls in `phase_archive_empty_sub_domains()` were never awaited, causing stale vectors to persist in live indices
+- **`_optimized_index` attribute name** — `_dissolve_node()` and Phase 5.5 correctly reference private `_optimized_index` (no public property exists). Pre-existing bug silently caught by `AttributeError` handler
+- **Sub-domain flip-flop** — `dissolved_this_cycle` set blocks same-cycle re-creation. Three-source cascade in re-evaluation prevents false dissolution from vocabulary name drift
+- **Cold path `w_raw` formula** — now subtracts `CLUSTERING_BLEND_W_QUALIFIER` to maintain correct proportions during adaptive downweighting
+- **Split path qualifier** — `split_cluster()` now passes `qualifier_embedding` to `blend_embeddings()` and includes it in the split cache query
+- **6 missing `qualifier_index.remove()` calls** — all cluster lifecycle operations (merge, retire, dissolve, archive) now clean up the qualifier index
+
+### Removed
+- **Seed domain protection** — `source="seed"` checks removed from `_reevaluate_sub_domains()`, `phase_archive_empty_sub_domains()`, `_suggest_domain_archival()`, `_check_signal_staleness()`. Seed domains subject to same organic lifecycle per ADR-006
+
 ## v0.3.35 — 2026-04-15
 
 ### Added

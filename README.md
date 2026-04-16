@@ -130,7 +130,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Hybrid scoring** — LLM scores blended with heuristic analysis + z-score normalization against historical distribution. Divergence flags when LLM and heuristic disagree by >2.5 points
 
 ### Knowledge Engine
-- **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Fully organic sub-domain discovery from user behavior via Haiku-generated qualifier vocabulary with three-source signal cascade (domain_raw, intent_label, TF-IDF). Sub-domain lifecycle: re-evaluation every warm cycle, graceful dissolution at low consistency (reparents clusters, merges meta-patterns — prompts never lost), automatic re-discovery when signals recover
+- **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Fully organic domain and sub-domain discovery from user behavior via Haiku-generated qualifier vocabulary. Unified lifecycle: domains and sub-domains re-evaluated every warm cycle with parameterized guards (consistency, age, member count, sub-domain anchoring). Graceful dissolution reparents clusters and merges meta-patterns — prompts are never lost. Qualifier-augmented embeddings (4th signal) enable cross-project specialization-aware clustering. No hardcoded domain assumptions — seed domains dissolve organically when unused (ADR-006)
 - **Pattern extraction** — reusable techniques extracted from successful optimizations, stored as meta-patterns per cluster
 - **Cross-cluster injection** — universal techniques injected across topic boundaries, ranked by composite relevance
 - **Global pattern tier** — durable patterns promoted from meta-pattern siblings spanning 5+ clusters (single-project OK), injected with 1.3x relevance boost. Validated with demotion/re-promotion hysteresis, 500 retention cap. Injection effectiveness tracked in health endpoint
@@ -207,7 +207,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2201 tests)
+# Backend tests (2223 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
