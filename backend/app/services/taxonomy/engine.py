@@ -1800,7 +1800,12 @@ class TaxonomyEngine:
 
         return created
 
-    async def _propose_sub_domains(self, db: AsyncSession) -> list[str]:
+    async def _propose_sub_domains(
+        self,
+        db: AsyncSession,
+        *,
+        vocab_only: bool = False,
+    ) -> list[str]:
         """Discover sub-domains from domain_raw qualifier signals.
 
         Scans each domain's linked optimizations for sub-qualifier signals
@@ -1813,8 +1818,16 @@ class TaxonomyEngine:
           3. ``raw_prompt`` keyword match against dynamic TF-IDF signals from
              the domain node's ``cluster_metadata.signal_keywords`` (fallback)
 
+        Args:
+            db: Async SQLAlchemy session.
+            vocab_only: When True, only runs the qualifier vocabulary
+                generation pass and returns without performing sub-domain
+                discovery. Used by the dedicated vocab-refresh phase which
+                commits the vocab in an isolated session so Haiku-generated
+                qualifiers persist independently of downstream Phase 5 fate.
+
         Returns:
-            List of newly created sub-domain labels.
+            List of newly created sub-domain labels (empty when vocab_only).
         """
         from collections import Counter
 
@@ -2178,6 +2191,15 @@ class TaxonomyEngine:
                         loader.refresh_qualifiers(domain_node.label, cached_vocab)
                 except Exception:
                     pass
+
+        # --- Early return when caller only wants vocab generation ---
+        # The dedicated vocab-refresh phase runs this in an isolated session
+        # that it commits itself. Returning here keeps Haiku-generated
+        # qualifiers persistent independently of downstream Phase 5 fate
+        # (the sub-domain discovery pass below issues many queries that
+        # can trigger autoflush on a poisoned session).
+        if vocab_only:
+            return []
 
         # --- Sub-domain discovery pass: non-general domains only ---
         domain_q = await db.execute(

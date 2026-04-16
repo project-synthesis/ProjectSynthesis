@@ -1112,63 +1112,75 @@ async def merge_meta_pattern(
         True if merged into existing pattern, False if new pattern created.
     """
     try:
-        result = await db.execute(
-            select(MetaPattern).where(MetaPattern.cluster_id == cluster_id)
-        )
-        existing = result.scalars().all()
-
-        pattern_embedding = await embedding_service.aembed_single(pattern_text)
-
-        if existing:
-            embeddings: list[np.ndarray] = []
-            for mp in existing:
-                if mp.embedding:
-                    embeddings.append(
-                        np.frombuffer(mp.embedding, dtype=np.float32)
-                    )
-                else:
-                    embeddings.append(
-                        np.zeros(embedding_service.dimension, dtype=np.float32)
-                    )
-
-            matches = EmbeddingService.cosine_search(
-                pattern_embedding, embeddings, top_k=1
+        # Wrap the entire op in a SAVEPOINT. If the autoflush during SELECT
+        # (or any other DB op below) fails — e.g. transient SQLite lock
+        # contention from the hot path — the savepoint is rolled back
+        # cleanly and only this merge's work is discarded. Without this,
+        # a single flush failure poisons the surrounding phase_refresh
+        # session with PendingRollbackError and every subsequent op
+        # cascade-fails.
+        async with db.begin_nested():
+            result = await db.execute(
+                select(MetaPattern).where(MetaPattern.cluster_id == cluster_id)
             )
-            if matches and matches[0][1] >= PATTERN_MERGE_THRESHOLD:
-                idx, score = matches[0]
-                mp = existing[idx]
-                mp.source_count += 1
-                if len(pattern_text) > len(mp.pattern_text):
-                    mp.pattern_text = pattern_text
-                    mp.embedding = pattern_embedding.astype(np.float32).tobytes()
-                logger.debug(
-                    "Enriched meta-pattern '%s' (cosine=%.3f, count=%d)",
-                    mp.pattern_text[:50],
-                    score,
-                    mp.source_count,
-                )
-                return True
+            existing = result.scalars().all()
 
-        # No match — create new MetaPattern
-        mp = MetaPattern(
-            cluster_id=cluster_id,
-            pattern_text=pattern_text,
-            embedding=pattern_embedding.astype(np.float32).tobytes(),
-            source_count=1,
-        )
-        db.add(mp)
-        logger.debug(
-            "Created new MetaPattern for cluster=%s: '%s'",
-            cluster_id,
-            pattern_text[:50],
-        )
-        return False
+            pattern_embedding = await embedding_service.aembed_single(pattern_text)
+
+            if existing:
+                embeddings: list[np.ndarray] = []
+                for mp in existing:
+                    if mp.embedding:
+                        embeddings.append(
+                            np.frombuffer(mp.embedding, dtype=np.float32)
+                        )
+                    else:
+                        embeddings.append(
+                            np.zeros(embedding_service.dimension, dtype=np.float32)
+                        )
+
+                matches = EmbeddingService.cosine_search(
+                    pattern_embedding, embeddings, top_k=1
+                )
+                if matches and matches[0][1] >= PATTERN_MERGE_THRESHOLD:
+                    idx, score = matches[0]
+                    mp = existing[idx]
+                    mp.source_count += 1
+                    if len(pattern_text) > len(mp.pattern_text):
+                        mp.pattern_text = pattern_text
+                        mp.embedding = pattern_embedding.astype(np.float32).tobytes()
+                    logger.debug(
+                        "Enriched meta-pattern '%s' (cosine=%.3f, count=%d)",
+                        mp.pattern_text[:50],
+                        score,
+                        mp.source_count,
+                    )
+                    return True
+
+            # No match — create new MetaPattern
+            mp = MetaPattern(
+                cluster_id=cluster_id,
+                pattern_text=pattern_text,
+                embedding=pattern_embedding.astype(np.float32).tobytes(),
+                source_count=1,
+            )
+            db.add(mp)
+            logger.debug(
+                "Created new MetaPattern for cluster=%s: '%s'",
+                cluster_id,
+                pattern_text[:50],
+            )
+            return False
 
     except Exception as exc:
+        # Surface the original autoflush-masked exception so we can diagnose
+        # the real root cause (SQLAlchemy wraps flush failures opaquely).
+        root_cause = getattr(exc, "orig", None) or getattr(exc, "__cause__", None)
         logger.warning(
-            "Failed to merge meta-pattern into cluster=%s: %s",
+            "Failed to merge meta-pattern into cluster=%s: %s | root_cause=%r",
             cluster_id,
             exc,
+            root_cause,
         )
         return False
 

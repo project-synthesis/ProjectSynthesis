@@ -438,6 +438,29 @@ async def execute_maintenance_phases(
         phase_results = []
 
     # ------------------------------------------------------------------
+    # Phase 4.95: Qualifier vocabulary refresh — isolated session
+    # Runs vocab generation (Haiku qualifier keywords) in its own session
+    # so they persist independently of Phase 5 discover's autoflush-prone
+    # orchestration. Failures here are non-fatal — Phase 5 still runs.
+    # ------------------------------------------------------------------
+    try:
+        async with session_factory() as db:
+            await engine._propose_sub_domains(db, vocab_only=True)
+            await db.commit()
+    except Exception as vocab_exc:
+        logger.warning(
+            "Phase 4.95 (vocab refresh) failed (non-fatal): %s", vocab_exc,
+        )
+        try:
+            get_event_logger().log_decision(
+                path="warm", op="discover",
+                decision="vocab_refresh_failed",
+                context={"error": str(vocab_exc)[:300]},
+            )
+        except RuntimeError:
+            pass
+
+    # ------------------------------------------------------------------
     # Phase 5: Discover — fresh session, always commits
     # ADR-005: Full scan — domain discovery needs complete cluster state
     # ------------------------------------------------------------------
