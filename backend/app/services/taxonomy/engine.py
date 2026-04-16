@@ -1895,7 +1895,7 @@ class TaxonomyEngine:
                 from app.services.taxonomy.labeling import ClusterVocabContext
 
                 cluster_contexts: list[ClusterVocabContext]
-                similarity_matrix: list[list[float]] | None = None
+                similarity_matrix: list[list[float | None]] | None = None
                 try:
                     from collections import Counter as _Counter
 
@@ -1923,7 +1923,10 @@ class TaxonomyEngine:
                                 if q_norm:
                                     qualifiers_by_cluster.setdefault(cid, _Counter())[q_norm] += 1
 
-                    # Compute centroid similarity matrix (sparse-filled for missing centroids)
+                    # Compute centroid similarity matrix. Cells for clusters
+                    # lacking a centroid are left as None so downstream renderers
+                    # can distinguish "unknown" from "distinct" (0.0 would mislead
+                    # Haiku into treating unknown geometry as orthogonal).
                     centroid_vecs: list[np.ndarray] = []
                     centroid_indices: list[int] = []
                     for i, (cid, label, mc, centroid_bytes) in enumerate(cluster_rows):
@@ -1938,7 +1941,9 @@ class TaxonomyEngine:
                         mat = np.vstack(centroid_vecs)
                         sim = (mat @ mat.T).tolist()
                         n = len(cluster_rows)
-                        similarity_matrix = [[0.0] * n for _ in range(n)]
+                        similarity_matrix = [
+                            [None] * n for _ in range(n)  # type: ignore[list-item]
+                        ]
                         for si, ri in enumerate(centroid_indices):
                             for sj, rj in enumerate(centroid_indices):
                                 similarity_matrix[ri][rj] = sim[si][sj]
@@ -1998,6 +2003,7 @@ class TaxonomyEngine:
                     _quality_score: float | None = None
                     _max_pairwise: float | None = None
                     _overlapping_pair: list[str] | None = None
+                    _qm_ms: float | None = None
                     try:
                         import time as _qm_time
                         _qm_start = _qm_time.monotonic()
@@ -2065,6 +2071,47 @@ class TaxonomyEngine:
                             "Vocab quality metric failed for '%s': %s",
                             domain_node.label, qm_exc,
                         )
+
+                    # Emit enriched vocab observability event (per spec § Observability)
+                    clusters_with_intents = sum(
+                        1 for ctx in cluster_contexts if ctx.intent_labels
+                    )
+                    clusters_with_centroids = 0
+                    if similarity_matrix:
+                        # A cluster has a centroid iff its row has any non-None cell
+                        clusters_with_centroids = sum(
+                            1 for row in similarity_matrix
+                            if any(v is not None for v in row)
+                        )
+                    n_ctx = len(cluster_contexts) or 1
+                    matrix_coverage_pct = round(
+                        100.0 * clusters_with_centroids / n_ctx, 1
+                    )
+
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover",
+                            decision="vocab_generated_enriched",
+                            context={
+                                "domain": domain_node.label,
+                                "groups": len(generated),
+                                "quality_score": _quality_score,
+                                "max_pairwise_cosine": (
+                                    round(_max_pairwise, 4)
+                                    if _max_pairwise is not None
+                                    else None
+                                ),
+                                "clusters_with_intents": clusters_with_intents,
+                                "clusters_with_centroids": clusters_with_centroids,
+                                "matrix_coverage_pct": matrix_coverage_pct,
+                                "generation_ms": _vocab_ms,
+                                "quality_ms": (
+                                    _qm_ms if _quality_score is not None else None
+                                ),
+                            },
+                        )
+                    except RuntimeError:
+                        pass
 
                     domain_node.cluster_metadata = write_meta(
                         domain_node.cluster_metadata,

@@ -171,7 +171,7 @@ async def generate_qualifier_vocabulary(
     provider: LLMProvider | None,
     domain_label: str,
     cluster_contexts: list[ClusterVocabContext],
-    similarity_matrix: list[list[float]] | None,
+    similarity_matrix: list[list[float | None]] | None,
     model: str,
 ) -> dict[str, list[str]]:
     """Generate a qualifier vocabulary from a domain's cluster structure.
@@ -221,8 +221,13 @@ async def generate_qualifier_vocabulary(
         matrix_lines = ["Cluster similarity (cosine):"]
         for i in range(len(similarity_matrix)):
             for j in range(i + 1, len(similarity_matrix)):
+                cell = similarity_matrix[i][j]
+                if cell is None:
+                    # Unknown geometry: one side lacked a centroid. Skip to
+                    # avoid misleading Haiku into treating unknown as distinct.
+                    continue
                 try:
-                    sim = float(similarity_matrix[i][j])
+                    sim = float(cell)
                     if math.isnan(sim) or math.isinf(sim):
                         continue
                 except (TypeError, ValueError, IndexError):
