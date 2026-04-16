@@ -999,3 +999,91 @@ class TestSubDomainDissolution:
         assert dissolved == []
         await db.refresh(sub)
         assert sub.state == "domain"
+
+
+# ---------------------------------------------------------------------------
+# Shared _dissolve_node() extraction
+# ---------------------------------------------------------------------------
+
+
+class TestDissolveNode:
+    """Tests for the shared _dissolve_node() method."""
+
+    @pytest.mark.asyncio
+    async def test_dissolve_reparents_clusters_to_target(self, db, mock_provider):
+        """_dissolve_node() reparents child clusters to the dissolution target."""
+        from unittest.mock import AsyncMock
+
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        # Create domain → sub-domain → child cluster
+        domain = _make_domain("database")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_domain("query", parent_id=domain.id)
+        db.add(sub)
+        await db.flush()
+
+        child = _make_cluster("SQL Queries", domain="database", parent_id=sub.id)
+        db.add(child)
+        await db.commit()
+
+        existing_labels = {"query", "database"}
+        result = await engine._dissolve_node(
+            db, sub, dissolution_target_id=domain.id,
+            existing_labels=existing_labels,
+            clear_signal_loader=False,
+        )
+
+        await db.refresh(child)
+        assert child.parent_id == domain.id  # reparented to domain
+        assert sub.state == "archived"
+        assert "query" not in existing_labels  # label freed
+        assert result["clusters_reparented"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_dissolve_merges_meta_patterns(self, db, mock_provider):
+        """_dissolve_node() merges meta-patterns into target (not deletes)."""
+        from unittest.mock import AsyncMock
+        from sqlalchemy import select, func
+
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        domain = _make_domain("security")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_domain("jwt", parent_id=domain.id)
+        db.add(sub)
+        await db.flush()
+
+        # Add meta-patterns owned by sub-domain
+        mp1 = MetaPattern(cluster_id=sub.id, pattern_text="use refresh tokens", source_count=3)
+        mp2 = MetaPattern(cluster_id=sub.id, pattern_text="rotate keys", source_count=2)
+        db.add_all([mp1, mp2])
+        await db.commit()
+
+        existing_labels = {"jwt", "security"}
+        await engine._dissolve_node(
+            db, sub, dissolution_target_id=domain.id,
+            existing_labels=existing_labels,
+            clear_signal_loader=False,
+        )
+
+        # Patterns should be merged (cluster_id changed), not deleted
+        count = (await db.execute(
+            select(func.count()).where(MetaPattern.cluster_id == domain.id)
+        )).scalar()
+        assert count == 2
+
+        sub_count = (await db.execute(
+            select(func.count()).where(MetaPattern.cluster_id == sub.id)
+        )).scalar()
+        assert sub_count == 0

@@ -2298,6 +2298,108 @@ class TaxonomyEngine:
 
         return created
 
+    async def _dissolve_node(
+        self,
+        db: AsyncSession,
+        node: PromptCluster,
+        dissolution_target_id: str,
+        existing_labels: set[str],
+        clear_signal_loader: bool = False,
+    ) -> dict:
+        """Shared dissolution logic for both domain and sub-domain nodes.
+
+        Reparents child clusters and direct optimizations to the dissolution
+        target, merges meta-patterns (UPDATE not DELETE — prompts never lost),
+        archives the node, clears all 4 indices, clears resolver cache, and
+        optionally clears DomainSignalLoader (domain-level only).
+
+        Args:
+            node: The domain/sub-domain node to dissolve.
+            dissolution_target_id: ID of the node to reparent children to
+                ("general" for domains, parent domain for sub-domains).
+            existing_labels: Label set to discard from (enables re-discovery).
+            clear_signal_loader: If True, also remove from DomainSignalLoader
+                (domain dissolution only — sub-domains don't have loader entries).
+
+        Returns:
+            Dict with keys: clusters_reparented, meta_patterns_merged.
+        """
+        from sqlalchemy import update as _sa_update
+
+        now = _utcnow()
+
+        # --- Reparent child clusters ---
+        child_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.parent_id == node.id,
+                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+            )
+        )
+        reparented = 0
+        for child in child_q.scalars():
+            child.parent_id = dissolution_target_id
+            reparented += 1
+
+        # --- Reparent any direct optimizations (defensive) ---
+        await db.execute(
+            _sa_update(Optimization)
+            .where(Optimization.cluster_id == node.id)
+            .values(cluster_id=dissolution_target_id)
+        )
+
+        # --- Merge meta-patterns into target (UPDATE, not DELETE) ---
+        mp_result = await db.execute(
+            _sa_update(MetaPattern)
+            .where(MetaPattern.cluster_id == node.id)
+            .values(cluster_id=dissolution_target_id)
+        )
+        patterns_merged = mp_result.rowcount
+
+        # --- Archive the node ---
+        node.state = "archived"
+        node.archived_at = now
+        node.member_count = 0
+        node.usage_count = 0
+        node.avg_score = None
+        node.weighted_member_sum = 0.0
+        node.scored_count = 0
+
+        # --- Clear all 4 in-memory indices ---
+        for index_name in ("embedding_index", "transformation_index", "optimized_index", "qualifier_index"):
+            try:
+                idx = getattr(self, index_name, None)
+                if idx:
+                    await idx.remove(node.id)
+            except (KeyError, ValueError, AttributeError):
+                pass
+
+        # --- Clear DomainResolver cache ---
+        try:
+            from app.services.domain_resolver import get_domain_resolver
+            resolver = get_domain_resolver()
+            if resolver:
+                resolver.remove_label(node.label)
+        except (ValueError, Exception):
+            pass
+
+        # --- Optionally clear DomainSignalLoader (domain dissolution only) ---
+        if clear_signal_loader:
+            try:
+                from app.services.domain_signal_loader import get_signal_loader
+                loader = get_signal_loader()
+                if loader:
+                    loader.remove_domain(node.label)
+            except Exception:
+                pass
+
+        # --- Free label for re-discovery ---
+        existing_labels.discard(node.label.lower())
+
+        return {
+            "clusters_reparented": reparented,
+            "meta_patterns_merged": patterns_merged,
+        }
+
     async def _reevaluate_sub_domains(
         self,
         db: AsyncSession,
