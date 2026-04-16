@@ -1,9 +1,30 @@
 """Cross-validate numpy vs HNSW search results (Phase 3B)."""
 
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
 from app.services.taxonomy.embedding_index import EmbeddingIndex, _HnswBackend, _NumpyBackend
+
+# hnswlib crashes with SIGILL on Python 3.14. Skip entire module if non-functional.
+_HNSWLIB_PROBE = (
+    "import hnswlib; idx = hnswlib.Index(space='cosine', dim=4);"
+    " idx.init_index(max_elements=10, ef_construction=10, M=4)"
+)
+try:
+    _probe = subprocess.run(
+        [sys.executable, "-c", _HNSWLIB_PROBE],
+        capture_output=True, timeout=10,
+    )
+    _hnswlib_works = _probe.returncode == 0
+except Exception:
+    _hnswlib_works = False
+
+pytestmark = pytest.mark.skipif(
+    not _hnswlib_works, reason="hnswlib is not functional on this platform"
+)
 
 
 def _random_emb(dim=384, seed=None):

@@ -10,6 +10,8 @@ Covers:
 - HNSW search at 1000 clusters: < 10ms
 """
 
+import subprocess
+import sys
 import time
 
 import numpy as np
@@ -19,6 +21,27 @@ from app.services.taxonomy.embedding_index import (
     EmbeddingIndex,
     _HnswBackend,
     _NumpyBackend,
+)
+
+# hnswlib crashes with SIGILL on Python 3.14 CI runners. Probe in subprocess.
+_HNSWLIB_PROBE = (
+    "import hnswlib; idx = hnswlib.Index(space='cosine', dim=4);"
+    " idx.init_index(max_elements=10, ef_construction=10, M=4)"
+)
+_hnswlib_works = False
+try:
+    _probe = subprocess.run(
+        [sys.executable, "-c", _HNSWLIB_PROBE],
+        capture_output=True,
+        timeout=10,
+    )
+    _hnswlib_works = _probe.returncode == 0
+except Exception:
+    _hnswlib_works = False
+
+requires_hnswlib = pytest.mark.skipif(
+    not _hnswlib_works,
+    reason="hnswlib is not functional on this platform",
 )
 
 DIM = 384  # realistic dimension for MiniLM embeddings
@@ -76,6 +99,7 @@ class TestNumpyBenchmark:
 
 
 class TestHnswBenchmark:
+    @requires_hnswlib
     def test_hnsw_build_1000_clusters(self):
         """HNSW build at 1000 clusters completes without error."""
         backend = _HnswBackend(dim=DIM)
@@ -90,6 +114,7 @@ class TestHnswBenchmark:
         # Build should complete in reasonable time (< 5s even on slow CI)
         assert elapsed_ms < 5000, f"HNSW build at 1000 took {elapsed_ms:.2f}ms"
 
+    @requires_hnswlib
     def test_hnsw_search_1000_clusters(self):
         """HNSW search at 1000 clusters completes in < 10ms."""
         backend = _HnswBackend(dim=DIM)
