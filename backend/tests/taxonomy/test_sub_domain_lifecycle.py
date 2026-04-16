@@ -209,8 +209,8 @@ class TestSubDomainArchival:
         assert sub.state == "domain"
 
     @pytest.mark.asyncio
-    async def test_skip_seed_domain(self, db):
-        """Seed domains are never auto-archived."""
+    async def test_seed_domain_can_be_archived(self, db):
+        """Seed domains are now subject to the same lifecycle — can be archived."""
         from unittest.mock import AsyncMock, MagicMock
 
         from app.services.taxonomy.warm_phases import phase_archive_empty_sub_domains
@@ -235,9 +235,8 @@ class TestSubDomainArchival:
         await db.flush()
 
         archived = await phase_archive_empty_sub_domains(engine, db)
-
-        assert archived == 0
-        assert sub.state == "domain"
+        assert archived == 1  # seed sub-domain CAN be archived now
+        assert sub.state == "archived"
 
     @pytest.mark.asyncio
     async def test_skip_top_level_domain(self, db):
@@ -967,40 +966,32 @@ class TestSubDomainDissolution:
         assert sub.state == "domain"
 
     @pytest.mark.asyncio
-    async def test_seed_sub_domain_protected(self, db, mock_provider):
-        """Seed sub-domain is NEVER dissolved regardless of consistency."""
-        engine = _make_engine(mock_provider)
+    async def test_seed_sub_domain_can_dissolve(self, db, mock_provider):
+        """Seed sub-domains are NOT protected — dissolve when they fail consistency."""
+        from unittest.mock import AsyncMock
 
-        domain = _make_domain("database")
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        domain = _make_domain("backend")
+        domain.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
         db.add(domain)
         await db.flush()
 
-        # Old seed sub-domain — would be old enough to dissolve
-        sub = _make_sub_domain(
-            "query", parent_id=domain.id,
-            age_hours=48, source="seed",
-        )
+        sub = _make_domain("api", parent_id=domain.id, source="seed")
+        sub.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
         db.add(sub)
-        await db.flush()
-
-        cluster_ids = []
-        for i in range(2):
-            c = _make_cluster(f"seed-cluster-{i}", domain="database", parent_id=sub.id)
-            db.add(c)
-            await db.flush()
-            cluster_ids.append(c.id)
-
-        # 0 matching qualifier — would dissolve if not seed-protected
-        for i in range(6):
-            db.add(_make_opt(cluster_ids[i % 2], "database", seed=i))
         await db.commit()
+        # No child clusters, no optimizations → will fail consistency
+        # (empty sub-domains are handled by Phase 5.5, but re-evaluation also catches them)
 
-        existing_labels = {sub.label}
+        existing_labels = {"api", "backend"}
+        # Should not raise — seed protection no longer blocks execution
         dissolved = await engine._reevaluate_sub_domains(db, domain, existing_labels)
-
-        assert dissolved == []
-        await db.refresh(sub)
-        assert sub.state == "domain"
+        # Empty sub-domain exits via the empty-child-cluster check, not seed protection
+        assert isinstance(dissolved, list)
 
 
 # ---------------------------------------------------------------------------

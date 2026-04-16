@@ -3774,7 +3774,6 @@ async def phase_archive_empty_sub_domains(
 
     * Node is ``state="domain"`` with ``parent_id`` pointing to another
       domain node (= sub-domain, not a top-level domain)
-    * ``source != "seed"`` in ``cluster_metadata``
     * Age ≥ ``SUB_DOMAIN_ARCHIVAL_IDLE_HOURS`` (default 24 h)
     * 0 non-structural children by ``parent_id``
     * 0 ``Optimization`` rows referencing ``cluster_id``
@@ -3809,11 +3808,6 @@ async def phase_archive_empty_sub_domains(
     archived = 0
 
     for sub in sub_domains:
-        # Skip seed domains
-        meta = read_meta(sub.cluster_metadata)
-        if meta.get("source") == "seed":
-            continue
-
         # Age gate — don't archive freshly created sub-domains.
         # _utcnow() returns naive UTC (matches SQLAlchemy DateTime round-trip),
         # so created_at must also be naive for comparison.

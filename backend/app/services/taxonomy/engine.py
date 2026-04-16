@@ -2613,11 +2613,10 @@ class TaxonomyEngine:
 
         For each sub-domain under ``domain_node``:
         1. Skip if younger than ``SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS``
-        2. Skip if ``source="seed"`` in metadata
-        3. Gather all optimizations under its child clusters
-        4. Re-check qualifier consistency (Source 1 only — domain_raw is the
+        2. Gather all optimizations under its child clusters
+        3. Re-check qualifier consistency (Source 1 only — domain_raw is the
            most reliable signal for existing sub-domains)
-        5. If consistency < ``SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR``:
+        4. If consistency < ``SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR``:
            a. Reparent all child clusters to the top-level domain
            b. Merge meta-patterns from sub-domain into parent domain (UPDATE,
               not DELETE — prompts are never lost)
@@ -2666,11 +2665,6 @@ class TaxonomyEngine:
                     created = created.replace(tzinfo=None)
             if created and created > age_cutoff:
                 continue  # too young — skip
-
-            # --- Seed protection ---
-            meta = read_meta(sub.cluster_metadata)
-            if meta.get("source") == "seed":
-                continue
 
             # --- Gather all child clusters ---
             child_q = await db.execute(
