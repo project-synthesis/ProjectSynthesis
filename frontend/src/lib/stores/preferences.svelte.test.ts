@@ -159,6 +159,29 @@ describe('PreferencesStore', () => {
     });
   });
 
+  describe('domain readiness notifications', () => {
+    it('DEFAULTS.domain_readiness_notifications is { enabled: false, muted_domain_ids: [] }', () => {
+      // After _reset() the store mirrors DEFAULTS; shape must match the
+      // new backend preferences section added in Cycle 3.
+      preferencesStore._reset();
+      expect(preferencesStore.prefs.domain_readiness_notifications).toEqual({
+        enabled: false,
+        muted_domain_ids: [],
+      });
+    });
+
+    it('preferencesStore.prefs.domain_readiness_notifications returns that shape after _reset()', () => {
+      // Mutate then reset to prove DEFAULTS are actually restored.
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: ['backend'],
+      };
+      preferencesStore._reset();
+      expect(preferencesStore.prefs.domain_readiness_notifications.enabled).toBe(false);
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids).toEqual([]);
+    });
+  });
+
   describe('update error handling', () => {
     it('sets error state on failed PATCH', async () => {
       mockFetch([{
