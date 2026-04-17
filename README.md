@@ -130,7 +130,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Hybrid scoring** — LLM scores blended with heuristic analysis + z-score normalization against historical distribution. Divergence flags when LLM and heuristic disagree by >2.5 points
 
 ### Knowledge Engine
-- **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Fully organic domain and sub-domain discovery from user behavior via Haiku-generated qualifier vocabulary. Unified lifecycle: domains and sub-domains re-evaluated every warm cycle with parameterized guards (consistency, age, member count, sub-domain anchoring). Graceful dissolution reparents clusters and merges meta-patterns — prompts are never lost. Qualifier-augmented embeddings (4th signal) enable cross-project specialization-aware clustering. No hardcoded domain assumptions — seed domains dissolve organically when unused (ADR-006)
+- **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Fully organic domain and sub-domain discovery from user behavior via enriched Haiku-generated qualifier vocabulary (cluster centroid similarity matrix + intent labels + qualifier distribution fed forward, post-generation quality metric tracked). Unified lifecycle: domains and sub-domains re-evaluated every warm cycle with parameterized guards (consistency, age, member count, sub-domain anchoring). Graceful dissolution reparents clusters and merges meta-patterns — prompts are never lost. Qualifier-augmented embeddings (4th signal) enable cross-project specialization-aware clustering. No hardcoded domain assumptions — seed domains dissolve organically when unused (ADR-006)
+- **Domain readiness telemetry** — live `/api/domains/readiness` endpoints expose the three-source qualifier cascade (domain_raw > intent_label > tf_idf), adaptive promotion threshold, and dissolution 5-guard evaluation. Readiness panel + stability meter + emergence list render in the topology inspector so operators see which domains are warming toward a new sub-domain and which are approaching dissolution. 30s TTL cache keyed by `(domain_id, member_count)` so new optimizations naturally invalidate stale entries
 - **Pattern extraction** — reusable techniques extracted from successful optimizations, stored as meta-patterns per cluster
 - **Cross-cluster injection** — universal techniques injected across topic boundaries, ranked by composite relevance
 - **Global pattern tier** — durable patterns promoted from meta-pattern siblings spanning 5+ clusters (single-project OK), injected with 1.3x relevance boost. Validated with demotion/re-promotion hysteresis, 500 retention cap. Injection effectiveness tracked in health endpoint
@@ -207,13 +208,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2223 tests)
+# Backend tests (2253 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1037 tests)
+# Frontend tests (1068 tests)
 cd frontend && npm test
 
 # Frontend build
@@ -240,6 +241,8 @@ cd frontend && npm run build
 | `/api/events` | GET (SSE) | Real-time event stream |
 | `/api/domains` | GET | List domain nodes |
 | `/api/domains/{id}/promote` | POST | Promote cluster to domain |
+| `/api/domains/readiness` | GET | Batch readiness report (stability + emergence) across all domains |
+| `/api/domains/{id}/readiness` | GET | Single-domain readiness (three-source cascade + dissolution guards, `?fresh=true` bypass) |
 | `/api/clusters` | GET | List clusters (paginated, state/domain filter) |
 | `/api/clusters/{id}` | GET | Cluster detail (children, breadcrumb, optimizations, project breakdown) |
 | `/api/clusters/{id}` | PATCH | Rename/state override |

@@ -55,6 +55,8 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `pattern-graph-guide.svelte.ts` | Pattern graph keyboard shortcuts/interaction hints modal |
 | `update.svelte.ts` | Auto-update state: available version, changelog, dialog, restart progress, health polling. SSE-driven via `update_available`/`update_complete` events. `localStorage` persistence for detached HEAD warning dismissal |
 | `sse-health.svelte.ts` | SSE connection health: owns EventSource lifecycle, latency tracking (rolling 100-event window, p50/p95/p99), 3-state degradation detection (healthy/degraded/disconnected), exponential backoff reconnection (1s-16s cap, 10 attempts, ±20% jitter), 90s staleness detection. StatusBar indicator reads `connectionState` and `tooltipText` |
+| `readiness.svelte.ts` | Domain readiness cache with 30s stale window matching backend TTL. Invalidated on `taxonomy_changed`/`domain_created` SSE. Exposes `reports`, `byDomain(id)`, `refresh()`, `fresh()` (bypass server cache) |
+| `nav_collapse.svelte.ts` | Persisted collapse state for sidebar sections. `isOpen(key)`, `toggle(key)`, `collapseAll(prefix?)`. Keys: `readiness`, `templates`, `domain:${name}`, `subdomain:${id}`. Persisted to `localStorage['synthesis:navigator_collapsed']` as JSON array; default-open policy |
 
 ## Component layout
 
@@ -67,13 +69,20 @@ src/lib/components/
                 # TopologyRenderer, TopologyData (state filter graph dimming),
                 # TopologyInteraction, TopologyLabels, TopologyWorker (5-force simulation),
                 # ActivityPanel (mission control terminal — severity-driven rows, path
-                # accent rails, auto-hide cluster links, expandable context cards),
+                # accent rails, auto-hide cluster links, expandable context cards;
+                # recognizes `readiness/*` + `vocab_generated_enriched` ops),
+                # DomainReadinessPanel, DomainStabilityMeter, SubDomainEmergenceList
+                # (readiness surface: 1px-contour gauges, chromatic tier encoding,
+                #  `role="meter"` ARIA, zero-glow per brand spec),
                 # SeedModal (batch seeding modal — agent selector, progress bar, result card)
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
-  shared/       # CommandPalette, DiffView, Logo, MarkdownRenderer, PassthroughGuide,
-                # SamplingGuide, InternalGuide, TierGuide, TierBadge,
-                # ProviderBadge, ScoreCard, Toast, UpdateBadge
+  shared/       # CommandPalette, CollapsibleSectionHeader (whole-bar/split modes,
+                # Snippet-based slots, navCollapse-backed persistence),
+                # DiffView, Logo, MarkdownRenderer (pseudo-XML sanitizer for
+                # optimizer wrapper tags), PassthroughGuide, SamplingGuide,
+                # InternalGuide, TierGuide, TierBadge, ProviderBadge, ScoreCard,
+                # Toast, UpdateBadge
   landing/      # Navbar, Footer, ContentPage, HeroSection, CardGrid, ProseSection,
                 # CodeBlock, MetricBar, StepFlow, Timeline
 ```
@@ -121,7 +130,7 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | `refinement_turn` | Refinement timeline update + `refinementStore.reloadTurns()` for cross-tab sync |
 | `strategy_changed` | Strategy list refresh |
 | `taxonomy_changed` | Cluster/domain store invalidation, topology re-render. Also fires with `trigger: "project_created"` on repo link |
-| `taxonomy_activity` | `clustersStore.pushActivityEvent()` — real-time feed to ActivityPanel |
+| `taxonomy_activity` | `clustersStore.pushActivityEvent()` — real-time feed to ActivityPanel. `readiness/*` ops feed readiness panel; `vocab_generated_enriched` surfaces vocab quality score |
 | `routing_state_changed` | Routing store update, tier availability toasts |
 | `domain_created` | Domain store invalidation |
 | `seed_batch_progress` | `clustersStore.updateSeedProgress()` (persistent) + DOM CustomEvent for SeedModal. StatusBar shows progress when modal closed |
