@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Test-only registry of per-frame callbacks registered via the mocked
+// TopologyRenderer. Lets tests simulate a frame tick by invoking all
+// registered callbacks in order — the production render loop (see
+// `TopologyRenderer.start`) does the same on every `requestAnimationFrame`.
+const _animationCallbacks: Array<() => void> = [];
+const _tickFrame = () => {
+  // Copy first: callbacks may unregister during iteration.
+  const snapshot = _animationCallbacks.slice();
+  for (const cb of snapshot) cb();
+};
+
 // Mock topology modules before any imports that could trigger WebGL
 vi.mock('./TopologyRenderer', () => {
   class TopologyRenderer {
@@ -15,7 +26,13 @@ vi.mock('./TopologyRenderer', () => {
     resize = () => {};
     onLodChange = () => {};
     focusOn = () => {};
-    addAnimationCallback = () => () => {};
+    addAnimationCallback = (cb: () => void) => {
+      _animationCallbacks.push(cb);
+      return () => {
+        const idx = _animationCallbacks.indexOf(cb);
+        if (idx >= 0) _animationCallbacks.splice(idx, 1);
+      };
+    };
   }
   return { TopologyRenderer };
 });
@@ -290,11 +307,13 @@ describe('SemanticTopology — readiness ring overlay', () => {
     readinessStore.loaded = false;
     _sceneOverride.value = null;
     _useRealBuildSceneData.value = false;
+    _animationCallbacks.length = 0;
   });
 
   afterEach(() => {
     _sceneOverride.value = null;
     _useRealBuildSceneData.value = false;
+    _animationCallbacks.length = 0;
   });
 
   it('renders an invisible data-readiness-ring marker per domain node with a tier', async () => {
@@ -561,5 +580,93 @@ describe('SemanticTopology — readiness ring overlay', () => {
       },
       { timeout: 500 },
     );
+  });
+
+  it('re-orients ring meshes per animation frame, not just at build', async () => {
+    // Bug: SemanticTopology calls `mesh.lookAt(camera.position)` once at ring
+    // build time (rebuildScene) and never again. OrbitControls rotation is
+    // the dominant interaction — as the user orbits, ring orientation goes
+    // stale because the camera position relative to the ring changes but
+    // the ring's `lookAt` is never re-invoked.
+    //
+    // Correct fix (per reviewer): hook per-ring billboarding into the
+    // existing per-frame animation loop (same loop that drives
+    // `_removeDomainRotation`). Every frame must re-run `lookAt` for each
+    // readiness ring so the contour continuously faces the camera.
+    //
+    // This test spies on Mesh.prototype.lookAt, forces one readiness ring
+    // to build, snapshots the post-build call count, ticks N animation
+    // frames, and asserts call count grew by at least N (one per frame per
+    // ring). Under the bug, the count stays flat after build.
+    const THREE = await import('three');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const MeshProto = (THREE as any).Mesh.prototype;
+    const lookAtSpy = vi.spyOn(MeshProto, 'lookAt');
+
+    try {
+      _sceneOverride.value = {
+        nodes: [
+          {
+            id: 'd1',
+            position: [0, 0, 0] as [number, number, number],
+            color: '#b44aff',
+            size: 2,
+            opacity: 1,
+            persistence: 1,
+            state: 'domain',
+            label: 'backend',
+            visible: true,
+            coherence: 0.5,
+            avgScore: 7,
+            domain: 'backend',
+            memberCount: 10,
+            isSubDomain: false,
+            readinessTier: 'guarded' as const,
+          },
+        ],
+        edges: [],
+      };
+
+      const { clustersStore } = await import('$lib/stores/clusters.svelte');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      clustersStore.taxonomyTree = [
+        {
+          id: 'd1',
+          label: 'backend',
+          state: 'domain',
+          domain: 'backend',
+          member_count: 10,
+          parent_id: null,
+        } as any,
+      ];
+
+      const { container } = render(SemanticTopology);
+      await new Promise((r) => setTimeout(r, 50));
+      clustersStore.taxonomyTree = [...clustersStore.taxonomyTree];
+
+      // Wait for ring build to complete (DOM marker is our build-done signal).
+      await vi.waitFor(() => {
+        const markers = container.querySelectorAll('[data-readiness-ring="d1"]');
+        expect(markers.length).toBe(1);
+      });
+
+      // Snapshot the post-build call count. Includes the one build-time
+      // lookAt on the ring mesh; may include incidental lookAt calls from
+      // other code paths (labels, etc.) — we only care about the delta.
+      const postBuildCount = lookAtSpy.mock.calls.length;
+
+      // Tick N animation frames. Each frame should re-orient every ring.
+      const N = 5;
+      for (let i = 0; i < N; i++) _tickFrame();
+
+      const postTickCount = lookAtSpy.mock.calls.length;
+      const delta = postTickCount - postBuildCount;
+
+      // Under the fix: delta >= N (one lookAt per ring per frame).
+      // Under the bug: delta === 0 (lookAt is only called at build time).
+      expect(delta).toBeGreaterThanOrEqual(N);
+    } finally {
+      lookAtSpy.mockRestore();
+    }
   });
 });
