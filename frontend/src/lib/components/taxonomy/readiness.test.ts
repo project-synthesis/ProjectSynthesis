@@ -15,7 +15,9 @@ import type {
 import DomainStabilityMeter from './DomainStabilityMeter.svelte';
 import SubDomainEmergenceList from './SubDomainEmergenceList.svelte';
 import DomainReadinessPanel from './DomainReadinessPanel.svelte';
+import DomainReadinessSparkline from './DomainReadinessSparkline.svelte';
 import { readinessStore } from '$lib/stores/readiness.svelte';
+import * as readinessApi from '$lib/api/readiness';
 
 const baseStability = (over: Partial<DomainStabilityReport> = {}): DomainStabilityReport => ({
   consistency: 0.45,
@@ -357,5 +359,31 @@ describe('DomainReadinessPanel', () => {
   it('contains no glow, drop-shadow, or text-shadow', () => {
     const { container } = render(DomainReadinessPanel);
     assertNoGlowShadow(container);
+  });
+});
+
+describe('DomainReadinessSparkline', () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('renders consistency sparkline when history points are available', async () => {
+    vi.spyOn(readinessApi, 'getDomainReadinessHistory').mockResolvedValue({
+      domain_id: 'd1', domain_label: 'backend', window: '24h', bucketed: false,
+      points: [
+        { ts: '2026-04-17T11:00:00Z', consistency: 0.40, dissolution_risk: 0.5,
+          top_candidate_gap: 0.10, stability_tier: 'guarded',
+          emergence_tier: 'warming', is_bucket_mean: false },
+        { ts: '2026-04-17T12:00:00Z', consistency: 0.42, dissolution_risk: 0.5,
+          top_candidate_gap: 0.08, stability_tier: 'guarded',
+          emergence_tier: 'warming', is_bucket_mean: false },
+      ],
+    });
+    const { findByLabelText } = render(DomainReadinessSparkline, {
+      props: { domainId: 'd1', domainLabel: 'backend', metric: 'consistency' },
+    });
+    const sparkline = await findByLabelText(/consistency 24h sparkline/i);
+    expect(sparkline).toBeTruthy();
   });
 });
