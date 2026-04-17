@@ -128,7 +128,7 @@
 
   // Per-domain readiness ring registry — disposed + cleared on each rebuildScene.
   // Sits alongside other scene-registry state so the lifecycle is obvious.
-  const _readinessRings: Map<string, { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial }> = new Map();
+  const _readinessRings: Map<string, { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial; unsubscribe: () => void }> = new Map();
 
   // Flat node lookup for mid-LOD label logic and domain highlight
   let flatNodeMap: Map<string, ClusterNode> = new Map();
@@ -289,6 +289,7 @@
     // lack a `dispose` method. Production renderers always have real
     // THREE.js instances — these guards are defensive and cheap.
     for (const entry of _readinessRings.values()) {
+      entry.unsubscribe();
       if (typeof entry.mesh.geometry?.dispose === 'function') {
         entry.mesh.geometry.dispose();
       }
@@ -451,14 +452,23 @@
       });
       const mesh = new THREE.Mesh(geom, mat);
       mesh.position.set(...node.position);
-      // Billboard toward camera once at build time — avoids per-frame work.
-      // Camera may not orbit dramatically during a single scene; subsequent
-      // rebuildScene calls re-orient. `lookAt` is a no-op in test mocks.
+      // Billboard toward camera at build time so the first frame is correct
+      // without waiting for the animation tick.
       if (renderer.camera?.position) {
         mesh.lookAt(renderer.camera.position as unknown as THREE.Vector3);
       }
       renderer.scene.add(mesh);
-      _readinessRings.set(node.id, { mesh, material: mat });
+      // Per-frame billboard: OrbitControls rotates the camera around the
+      // scene, so a one-time lookAt goes stale. Re-orient each frame.
+      // Capture a non-null reference for the closure (renderer field is
+      // TopologyRenderer | null at the call site).
+      const r = renderer;
+      const unsubscribe = r.addAnimationCallback(() => {
+        if (r.camera?.position) {
+          mesh.lookAt(r.camera.position as unknown as THREE.Vector3);
+        }
+      });
+      _readinessRings.set(node.id, { mesh, material: mat, unsubscribe });
     }
 
     // Domain rotation: ~1 revolution per 50s at 60fps
