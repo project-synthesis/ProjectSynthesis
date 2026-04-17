@@ -440,3 +440,57 @@ class TestEffortPreferences:
         assert svc.get("pipeline.analyzer_effort", snapshot=snap) == "low"
         assert svc.get("pipeline.scorer_effort", snapshot=snap) == "low"
         assert svc.get("pipeline.optimizer_effort", snapshot=snap) == "high"
+
+
+# ── TestDomainReadinessNotifications ──────────────────────────────────
+
+
+class TestDomainReadinessNotifications:
+    """Tests for the domain_readiness_notifications preference section."""
+
+    def test_defaults_include_domain_readiness_notifications(
+        self, svc: PreferencesService
+    ) -> None:
+        prefs = svc.load()
+        assert prefs["domain_readiness_notifications"]["enabled"] is False
+        assert prefs["domain_readiness_notifications"]["muted_domain_ids"] == []
+
+    def test_existing_file_gains_new_notifications_defaults(
+        self, svc: PreferencesService, prefs_file: Path
+    ) -> None:
+        """Simulates upgrading from a preferences file without the notifications section."""
+        prefs_file.write_text(json.dumps({
+            "schema_version": 1,
+            "models": {"analyzer": "sonnet", "optimizer": "opus", "scorer": "sonnet"},
+            "pipeline": {"enable_explore": True, "enable_scoring": True,
+                         "enable_adaptation": True, "force_sampling": False,
+                         "force_passthrough": False, "optimizer_effort": "high"},
+            "defaults": {"strategy": "auto"},
+        }))
+        prefs = svc.load()
+        assert prefs["domain_readiness_notifications"]["enabled"] is False
+        assert prefs["domain_readiness_notifications"]["muted_domain_ids"] == []
+
+    def test_patch_can_enable_notifications_and_mute_domain(
+        self, svc: PreferencesService
+    ) -> None:
+        # The section must be a first-class entry in DEFAULTS so callers can
+        # rely on its presence without patching (mirrors other top-level sections).
+        from app.services.preferences import DEFAULTS
+        assert "domain_readiness_notifications" in DEFAULTS
+        assert DEFAULTS["domain_readiness_notifications"]["enabled"] is False
+        assert DEFAULTS["domain_readiness_notifications"]["muted_domain_ids"] == []
+
+        result = svc.patch({
+            "domain_readiness_notifications": {
+                "enabled": True,
+                "muted_domain_ids": ["abc-123"],
+            }
+        })
+        assert result["domain_readiness_notifications"]["enabled"] is True
+        assert result["domain_readiness_notifications"]["muted_domain_ids"] == ["abc-123"]
+
+        # Persistence roundtrip
+        reloaded = svc.load()
+        assert reloaded["domain_readiness_notifications"]["enabled"] is True
+        assert reloaded["domain_readiness_notifications"]["muted_domain_ids"] == ["abc-123"]
