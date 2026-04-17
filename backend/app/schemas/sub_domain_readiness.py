@@ -10,10 +10,10 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 QualifierSource = Literal["domain_raw", "intent_label", "tf_idf"]
 EmergenceTier = Literal["ready", "warming", "inert"]
@@ -152,14 +152,28 @@ class ReadinessSnapshot(BaseModel):
     member_count: int = Field(ge=0)
     total_opts: int = Field(ge=0)
 
+    @field_validator("ts")
+    @classmethod
+    def _coerce_ts_to_utc(cls, value: datetime) -> datetime:
+        """Normalize ``ts`` to UTC.
+
+        Naive datetimes are assumed-UTC (matches the engine's ``_utcnow()``
+        convention in ``_constants.py``); aware datetimes are converted.
+        Ensures downstream consumers (daily JSONL rotation, time-bucket
+        aggregation) never drift across timezones.
+        """
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
 
 class ReadinessHistoryPoint(BaseModel):
     """One time-series point — either a raw snapshot or a bucket mean."""
 
     ts: datetime
-    consistency: float
-    dissolution_risk: float
-    top_candidate_gap: float | None
+    consistency: float = Field(ge=0.0, le=1.0)
+    dissolution_risk: float = Field(ge=0.0, le=1.0)
+    top_candidate_gap: float | None = None
     stability_tier: StabilityTier
     emergence_tier: EmergenceTier
     is_bucket_mean: bool = Field(
