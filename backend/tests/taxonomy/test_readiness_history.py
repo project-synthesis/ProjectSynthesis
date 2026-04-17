@@ -14,6 +14,7 @@ from app.schemas.sub_domain_readiness import (
     SubDomainEmergenceReport,
 )
 from app.services.taxonomy.readiness_history import (
+    prune_old_snapshots,
     query_history,
     record_snapshot,
 )
@@ -138,3 +139,19 @@ async def test_query_history_7d_buckets_to_hourly_means(tmp_path: Path) -> None:
     assert len(response.points) == 1
     assert response.points[0].is_bucket_mean is True
     assert response.points[0].consistency == pytest.approx(0.50, abs=0.001)
+
+
+def test_prune_old_snapshots_drops_files_past_retention(tmp_path: Path) -> None:
+    """Files older than READINESS_HISTORY_RETENTION_DAYS must be deleted."""
+    from app.services.taxonomy._constants import READINESS_HISTORY_RETENTION_DAYS
+
+    now = datetime.now(timezone.utc)
+    keep = tmp_path / f"snapshots-{(now - timedelta(days=5)).strftime('%Y-%m-%d')}.jsonl"
+    drop = tmp_path / f"snapshots-{(now - timedelta(days=READINESS_HISTORY_RETENTION_DAYS + 2)).strftime('%Y-%m-%d')}.jsonl"
+    keep.write_text("{}\n")
+    drop.write_text("{}\n")
+
+    removed = prune_old_snapshots(base_dir=tmp_path)
+    assert removed == 1
+    assert keep.exists()
+    assert not drop.exists()
