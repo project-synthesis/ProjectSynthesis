@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { buildSceneData, assignLodVisibility, computeHierarchicalOpacity, type SceneNode } from './TopologyData';
 import type { ClusterNode } from '$lib/api/clusters';
 import { domainStore } from '$lib/stores/domains.svelte';
+import { readinessStore } from '$lib/stores/readiness.svelte';
+import type { DomainReadinessReport } from '$lib/api/readiness';
 
 function makeNode(overrides: Partial<ClusterNode> = {}): ClusterNode {
   return {
@@ -306,5 +308,83 @@ describe('computeHierarchicalOpacity', () => {
   it('handles zero/negative gracefully', () => {
     expect(computeHierarchicalOpacity(0)).toBeCloseTo(1.0);
     expect(computeHierarchicalOpacity(-1)).toBeCloseTo(1.0);
+  });
+});
+
+describe('buildSceneData — readiness tier decoration', () => {
+  function makeReadinessReport(overrides: Partial<DomainReadinessReport> = {}): DomainReadinessReport {
+    return {
+      domain_id: 'd1',
+      domain_label: 'backend',
+      member_count: 20,
+      stability: {
+        consistency: 0.3,
+        dissolution_floor: 0.15,
+        hysteresis_creation_threshold: 0.6,
+        age_hours: 72,
+        min_age_hours: 48,
+        member_count: 20,
+        member_ceiling: 5,
+        sub_domain_count: 0,
+        total_opts: 20,
+        guards: {
+          general_protected: false,
+          has_sub_domain_anchor: false,
+          age_eligible: true,
+          above_member_ceiling: true,
+          consistency_above_floor: true,
+        },
+        tier: 'guarded',
+        dissolution_risk: 0.4,
+        would_dissolve: false,
+      },
+      emergence: {
+        threshold: 0.6,
+        threshold_formula: 'max(0.40, 0.60 - 0.004 * members)',
+        min_member_count: 5,
+        total_opts: 20,
+        top_candidate: null,
+        gap_to_threshold: null,
+        ready: false,
+        blocked_reason: 'no_candidates',
+        runner_ups: [],
+        tier: 'inert',
+      },
+      computed_at: '2026-04-17T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    readinessStore._reset();
+    domainStore._reset();
+    domainStore.domains = [
+      { id: 'd1', label: 'backend', color_hex: '#b44aff', member_count: 0, avg_score: null, source: 'seed' },
+    ];
+  });
+
+  it('sets readinessTier on domain SceneNode when a matching report exists', () => {
+    readinessStore.reports = [makeReadinessReport({ domain_id: 'd1' })];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    const domainNode = nodes.find((n) => n.id === 'd1');
+    expect(domainNode?.readinessTier).toBe('guarded');
+  });
+
+  it('leaves readinessTier undefined on non-domain nodes', () => {
+    readinessStore.reports = [makeReadinessReport({ domain_id: 'd1' })];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'active', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
+  });
+
+  it('leaves readinessTier undefined when no matching readiness report exists', () => {
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
   });
 });
