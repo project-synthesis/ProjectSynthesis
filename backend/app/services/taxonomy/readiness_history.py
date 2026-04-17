@@ -20,7 +20,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.config import DATA_DIR
 from app.schemas.sub_domain_readiness import (
@@ -107,7 +107,9 @@ async def record_snapshot(
         logger.warning("readiness snapshot write failed: %s", exc)
 
 
-_WINDOW_DAYS = {"24h": 1, "7d": 7, "30d": 30}
+HistoryWindow = Literal["24h", "7d", "30d"]
+
+_WINDOW_DAYS: dict[HistoryWindow, int] = {"24h": 1, "7d": 7, "30d": 30}
 
 
 def _iter_files_for_window(
@@ -128,6 +130,7 @@ def _iter_files_for_window(
 
 
 def _bucket_key_hour(ts: datetime) -> datetime:
+    """Floor ``ts`` to the enclosing UTC hour — the bucket key for aggregation."""
     return ts.replace(minute=0, second=0, microsecond=0)
 
 
@@ -160,6 +163,7 @@ def _bucket_points(snapshots: list[ReadinessSnapshot]) -> list[ReadinessHistoryP
 
 
 def _raw_points(snapshots: list[ReadinessSnapshot]) -> list[ReadinessHistoryPoint]:
+    """Project snapshots to history points in newest-first order, no aggregation."""
     return [
         ReadinessHistoryPoint(
             ts=s.ts,
@@ -178,7 +182,7 @@ async def query_history(
     *,
     domain_id: str,
     domain_label: str,
-    window: str,
+    window: HistoryWindow,
     base_dir: Path | None = None,
 ) -> ReadinessHistoryResponse:
     """Read snapshots for ``domain_id`` over ``window`` (24h|7d|30d).
@@ -189,9 +193,7 @@ async def query_history(
     if window not in _WINDOW_DAYS:
         raise ValueError(f"invalid window: {window!r} (use 24h|7d|30d)")
     days = _WINDOW_DAYS[window]
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days) if days >= 1 else (
-        datetime.now(timezone.utc) - timedelta(hours=24)
-    )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     snapshots: list[ReadinessSnapshot] = []
     for path in _iter_files_for_window(days=days, base_dir=base_dir):
@@ -219,7 +221,7 @@ async def query_history(
     return ReadinessHistoryResponse(
         domain_id=domain_id,
         domain_label=domain_label,
-        window=window,  # type: ignore[arg-type]
+        window=window,
         bucketed=bucket,
         points=points,
     )
