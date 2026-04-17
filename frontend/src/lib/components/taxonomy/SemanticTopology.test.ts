@@ -137,12 +137,23 @@ vi.mock('three', () => {
   class Group {
     children: unknown[] = [];
     name = '';
+    position = new Vector3();
+    rotation = { y: 0 };
+    userData: Record<string, unknown> = {};
+    scale = { setScalar: () => {} };
     add() {}
     remove() {}
   }
-  class IcosahedronGeometry {}
-  class DodecahedronGeometry {}
-  class EdgesGeometry {}
+  class _GeomBase {
+    getAttribute() {
+      return { count: 0, getX: () => 0, getY: () => 0, getZ: () => 0 };
+    }
+    dispose() {}
+  }
+  class IcosahedronGeometry extends _GeomBase {}
+  class DodecahedronGeometry extends _GeomBase {}
+  class EdgesGeometry extends _GeomBase {}
+  class RingGeometry extends _GeomBase {}
   class MeshBasicMaterial { color = new Color(); opacity = 1; transparent = false; }
   class ShaderMaterial {
     uniforms: Record<string, { value: unknown }> = {};
@@ -156,6 +167,8 @@ vi.mock('three', () => {
     parent: unknown = null;
     visible = true;
     frustumCulled = true;
+    geometry: unknown = null;
+    lookAt() {}
   }
   const _emptyArray = new Float32Array(0);
   class BufferAttribute {
@@ -175,8 +188,18 @@ vi.mock('three', () => {
   class LineBasicMaterial {}
   class LineDashedMaterial {}
   class PointsMaterial {}
-  class LineSegments {}
-  class Points {}
+  class LineSegments {
+    scale = { setScalar: () => {} };
+    userData: Record<string, unknown> = {};
+    material: unknown = null;
+    geometry: unknown = null;
+    computeLineDistances() {}
+  }
+  class Points {
+    scale = { setScalar: () => {} };
+    userData: Record<string, unknown> = {};
+    material: unknown = null;
+  }
   class Sprite {}
   class QuadraticBezierCurve3 {
     v0 = new Vector3(); v1 = new Vector3(); v2 = new Vector3();
@@ -186,7 +209,7 @@ vi.mock('three', () => {
   const DoubleSide = 2;
   return {
     Vector3, Color, Quaternion, Group, IcosahedronGeometry, DodecahedronGeometry,
-    EdgesGeometry, MeshBasicMaterial, ShaderMaterial, Mesh, BufferAttribute,
+    EdgesGeometry, RingGeometry, MeshBasicMaterial, ShaderMaterial, Mesh, BufferAttribute,
     BufferGeometry, Float32BufferAttribute, LineBasicMaterial, LineDashedMaterial,
     PointsMaterial, LineSegments, Points, Sprite, QuadraticBezierCurve3,
     AdditiveBlending, DoubleSide,
@@ -300,6 +323,10 @@ describe('SemanticTopology — readiness ring overlay', () => {
     ];
 
     const { container } = render(SemanticTopology);
+
+    // Trigger the reactive effect by reassigning after onMount registers the renderer
+    await new Promise((r) => setTimeout(r, 50));
+    clustersStore.taxonomyTree = [...clustersStore.taxonomyTree];
 
     await vi.waitFor(() => {
       const markers = container.querySelectorAll('[data-readiness-ring="d1"]');

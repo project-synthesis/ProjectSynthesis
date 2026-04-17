@@ -22,6 +22,13 @@
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
   import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
   import { buildNodeMap } from './TopologyData';
+  import { readinessTierColor, type ReadinessTier } from './readiness-tier';
+
+  // Per-domain readiness ring registry — disposed + cleared on each rebuildScene.
+  const _readinessRings = new Map<
+    string,
+    { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial; lastTier: ReadinessTier }
+  >();
 
   // Resolved at module level to avoid per-frame allocations
   const HIGHLIGHT_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
@@ -260,6 +267,15 @@
     _simScoreCache = null;
     _injWeightCache = null;
 
+    // Dispose + remove previous readiness rings before scene-clear so the
+    // stale meshes don't leak through the disposed-geometry traversal.
+    for (const entry of _readinessRings.values()) {
+      entry.mesh.geometry.dispose();
+      entry.material.dispose();
+      renderer.scene.remove(entry.mesh);
+    }
+    _readinessRings.clear();
+
     // Dispose GPU resources before clearing scene.
     // Track disposed geometries to avoid duplicate dispose on shared instances.
     const disposedGeometries = new Set<THREE.BufferGeometry>();
@@ -385,6 +401,31 @@
       renderer.scene.add(group);
       nodeMeshes.set(node.id, fill);
       interaction?.registerNode(node.id, fill, node);
+    }
+
+    // Readiness rings — per-domain contour ring colored by composite tier.
+    // Only for visible domain nodes with a resolved readinessTier.
+    for (const node of data.nodes) {
+      if (!node.visible) continue;
+      if (node.state !== 'domain') continue;
+      if (!node.readinessTier) continue;
+      const radius = node.size * 1.25;
+      const geom = new THREE.RingGeometry(radius, radius + 0.05, 64);
+      const color = readinessTierColor(node.readinessTier);
+      const mat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color),
+        transparent: true,
+        opacity: node.opacity * 0.9,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.set(...node.position);
+      // Billboard toward camera when available; lookAt is a no-op in test mocks
+      if (renderer.camera?.position) {
+        mesh.lookAt(renderer.camera.position as unknown as THREE.Vector3);
+      }
+      renderer.scene.add(mesh);
+      _readinessRings.set(node.id, { mesh, material: mat, lastTier: node.readinessTier });
     }
 
     // Domain rotation: ~1 revolution per 50s at 60fps
@@ -1121,6 +1162,14 @@
     aria-label="Taxonomy topology visualization"
     tabindex="0"
   ></canvas>
+  {#each sceneData?.nodes.filter((n) => n.state === 'domain' && n.readinessTier) ?? [] as node (node.id)}
+    <span
+      data-readiness-ring={node.id}
+      data-readiness-tier={node.readinessTier}
+      aria-hidden="true"
+      style="display:none"
+    ></span>
+  {/each}
   <TopologyControls
     {lodTier}
     showActivity={clustersStore.activityOpen}
