@@ -112,6 +112,20 @@ const LOD_THRESHOLDS: Record<LODTier, number> = {
  * at call time. When the store is unloaded or lacks a matching report, the
  * field stays undefined and the consumer (`SemanticTopology`) simply omits
  * the contour ring — decoration is purely additive.
+ *
+ * **Hidden reactive dependency (not visible from signature):** this function
+ * reads `readinessStore.byDomain(id)` internally. The read itself is pure
+ * given a fixed store snapshot, but callers that need the rendered scene to
+ * *react* to readiness changes MUST touch `readinessStore.reports` (or
+ * another tracked rune on the store) inside the same `$effect` that invokes
+ * `buildSceneData`. Without an explicit read, Svelte's reactivity tracker
+ * cannot see the dependency and tier decoration will stop updating on SSE
+ * `taxonomy_changed` / `domain_created` events. See `SemanticTopology.svelte`
+ * for the canonical caller pattern: an `$effect` that reads
+ * `readinessStore.reports` alongside `flatNodes` before calling this
+ * function. Intentionally not surfaced as a parameter — threading the
+ * snapshot through would be a breaking refactor, and the store is already
+ * a singleton-scoped reactive source that every caller shares.
  */
 export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: SimilarityEdge[], injectionEdges?: InjectionEdge[], stateFilter?: string | null): SceneData {
   const nodes: SceneNode[] = [];

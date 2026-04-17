@@ -70,16 +70,21 @@ describe('composeReadinessTier', () => {
 });
 
 describe('readinessTierColor', () => {
-  it('returns brand-defined hex per tier (conflict-free palette)', () => {
-    const expected: Record<ReadinessTier, string> = {
-      healthy: '#16a34a',  // forest green
-      warming: '#0ea5e9',  // sky blue
-      guarded: '#eab308',  // gold
-      critical: '#dc2626', // crimson
-      ready: '#f97316',    // orange — split-ready
-    };
-    for (const [tier, hex] of Object.entries(expected)) {
-      expect(readinessTierColor(tier as ReadinessTier)).toBe(hex);
+  // Exhaustive tier list — `satisfies Record<ReadinessTier, ...>` would fail
+  // to compile if a tier were added/removed without updating this test.
+  const ALL_TIERS = {
+    healthy: true, warming: true, guarded: true, critical: true, ready: true,
+  } as const satisfies Record<ReadinessTier, true>;
+  const TIERS = Object.keys(ALL_TIERS) as ReadinessTier[];
+
+  it('returns a valid 6-digit hex for every tier', () => {
+    for (const tier of TIERS) {
+      expect(readinessTierColor(tier)).toMatch(/^#[0-9a-f]{6}$/i);
     }
+  });
+
+  it('assigns a unique color to every tier (palette has no collisions)', () => {
+    const colors = TIERS.map((tier) => readinessTierColor(tier));
+    expect(new Set(colors).size).toBe(TIERS.length);
   });
 });

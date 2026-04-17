@@ -49,6 +49,15 @@ export function readinessTierColor(tier: ReadinessTier): string {
  * Because `ReadinessTier = StabilityTier ∪ {'warming', 'ready'}`, the
  * passthrough branch is total — every `StabilityTier` is a valid
  * `ReadinessTier`, so no default case is required.
+ *
+ * Precondition: `report` MUST be a fully-populated `DomainReadinessReport`
+ * — `report.emergence.tier` and `report.stability.tier` must both be
+ * present. Malformed payloads (missing nested objects) will throw
+ * `TypeError`. This matches sibling pure transforms in `$lib/utils/`
+ * (e.g. `parsePrimaryDomain`, `stateSizeMultiplier`) which trust their
+ * typed inputs rather than silently masking upstream data corruption.
+ * Callers should validate API responses at the fetch boundary
+ * (`$lib/api/readiness.ts`) rather than here.
  */
 export function composeReadinessTier(report: DomainReadinessReport): ReadinessTier {
   const emergenceTier = report.emergence.tier;
