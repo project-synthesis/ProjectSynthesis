@@ -85,3 +85,33 @@ export const getDomainReadiness = (domainId: string, fresh = false) =>
   apiFetch<DomainReadinessReport>(
     `/domains/${encodeURIComponent(domainId)}/readiness${fresh ? '?fresh=true' : ''}`,
   );
+
+// -- History --
+
+export type ReadinessWindow = '24h' | '7d' | '30d';
+
+export interface ReadinessHistoryPoint {
+  ts: string;
+  consistency: number;
+  dissolution_risk: number;
+  top_candidate_gap: number | null;
+  stability_tier: StabilityTier;
+  emergence_tier: EmergenceTier;
+  is_bucket_mean: boolean;
+}
+
+export interface ReadinessHistoryResponse {
+  domain_id: string;
+  domain_label: string;
+  window: ReadinessWindow;
+  bucketed: boolean;
+  points: ReadinessHistoryPoint[];
+}
+
+export const getDomainReadinessHistory = (
+  domainId: string,
+  window: ReadinessWindow = '24h',
+) =>
+  apiFetch<ReadinessHistoryResponse>(
+    `/domains/${encodeURIComponent(domainId)}/readiness/history?window=${window}`,
+  );
