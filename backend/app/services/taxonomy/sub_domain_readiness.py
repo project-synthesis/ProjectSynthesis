@@ -28,7 +28,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, TypedDict
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,12 +61,14 @@ from app.utils.text_cleanup import parse_domain
 
 __all__ = [
     "CascadeResult",
+    "TierCrossing",
     "compute_qualifier_cascade",
     "compute_sub_domain_emergence",
     "compute_domain_stability",
     "compute_domain_readiness",
     "compute_all_domain_readiness",
     "clear_cache",
+    "clear_tier_history",
 ]
 
 
@@ -751,6 +753,17 @@ _event_debounce: dict[str, float] = {}
 _EVENT_DEBOUNCE_SECONDS = 5.0
 
 
+class TierCrossing(TypedDict):
+    """Stable payload shape for a single tier-axis crossing.
+
+    Consumed by ``_detect_crossings`` and (in Task 4) by ``_publish_crossings``.
+    """
+
+    axis: Literal["emergence", "stability"]
+    from_tier: str
+    to_tier: str
+
+
 @dataclass
 class _TierHistoryEntry:
     """Per-domain rolling state for crossing detection.
@@ -776,14 +789,19 @@ class _TierHistoryEntry:
 _tier_history: dict[str, _TierHistoryEntry] = {}
 
 
+def clear_tier_history() -> None:
+    """Drop all per-domain crossing history (test hook + manual reset)."""
+    _tier_history.clear()
+
+
 def _process_axis_crossing(
     *,
     entry: _TierHistoryEntry,
     axis: Literal["emergence", "stability"],
     new_tier: str,
     now: float,
-) -> dict | None:
-    """Update entry for one axis; return crossing dict if one fires."""
+) -> TierCrossing | None:
+    """Update entry for one axis; return a ``TierCrossing`` if one fires."""
     if axis == "emergence":
         stable_attr = "stable_emergence_tier"
         pending_attr = "pending_emergence_tier"
@@ -829,11 +847,7 @@ def _process_axis_crossing(
         setattr(entry, count_attr, 0)
         return None
 
-    crossing = {
-        "axis": axis,
-        "from_tier": stable_tier,
-        "to_tier": new_tier,
-    }
+    crossing = TierCrossing(axis=axis, from_tier=stable_tier, to_tier=new_tier)
     setattr(entry, stable_attr, new_tier)
     setattr(entry, pending_attr, None)
     setattr(entry, count_attr, 0)
@@ -845,14 +859,17 @@ def _detect_crossings(
     report: DomainReadinessReport,
     *,
     now: float,
-) -> list[dict]:
+) -> list[TierCrossing]:
     """Compare report tiers against history; return crossings that fired.
 
-    Each crossing dict has keys: axis, from_tier, to_tier.
+    Each ``TierCrossing`` has keys ``axis``, ``from_tier``, ``to_tier``.
+    The two axes (emergence and stability) are evaluated independently —
+    a spike on one axis never resets the hysteresis counter of the other.
+
     Side effect: mutates ``_tier_history`` for the report's domain.
     """
     entry = _tier_history.setdefault(report.domain_id, _TierHistoryEntry())
-    crossings: list[dict] = []
+    crossings: list[TierCrossing] = []
     for crossing in (
         _process_axis_crossing(
             entry=entry, axis="emergence",

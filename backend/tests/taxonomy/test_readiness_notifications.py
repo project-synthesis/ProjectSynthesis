@@ -13,8 +13,8 @@ from app.schemas.sub_domain_readiness import (
 )
 from app.services.taxonomy.sub_domain_readiness import (
     _detect_crossings,
-    _tier_history,
     clear_cache,
+    clear_tier_history,
 )
 
 
@@ -53,10 +53,10 @@ def _report(
 
 @pytest.fixture(autouse=True)
 def _reset_state():
-    _tier_history.clear()
+    clear_tier_history()
     clear_cache()
     yield
-    _tier_history.clear()
+    clear_tier_history()
     clear_cache()
 
 
