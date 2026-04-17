@@ -1,8 +1,10 @@
 """Tests for the /api/domains router."""
 
 import pytest
+from sqlalchemy import select
 
 from app.models import PromptCluster
+from app.schemas.sub_domain_readiness import ReadinessHistoryResponse
 
 
 class TestListDomains:
@@ -243,11 +245,6 @@ class TestPromoteToDomain:
         color = resp.json()["color_hex"]
         assert color.startswith("#")
         assert len(color) == 7  # #rrggbb format
-
-
-from sqlalchemy import select
-
-from app.schemas.sub_domain_readiness import ReadinessHistoryResponse
 
 
 async def _get_seed_domain(db_session) -> PromptCluster:
