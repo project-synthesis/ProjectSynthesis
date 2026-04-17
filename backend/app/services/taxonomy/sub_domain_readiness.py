@@ -24,6 +24,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -41,6 +42,7 @@ from app.schemas.sub_domain_readiness import (
     QualifierCandidate,
     SubDomainEmergenceReport,
 )
+from app.services.event_bus import event_bus
 from app.services.taxonomy._constants import (
     DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
     DOMAIN_DISSOLUTION_MEMBER_CEILING,
@@ -59,9 +61,12 @@ from app.services.taxonomy.cluster_meta import read_meta
 from app.services.taxonomy.event_logger import get_event_logger
 from app.utils.text_cleanup import parse_domain
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "CascadeResult",
     "TierCrossing",
+    "DomainReadinessChangedEvent",
     "compute_qualifier_cascade",
     "compute_sub_domain_emergence",
     "compute_domain_stability",
@@ -765,6 +770,26 @@ class TierCrossing(TypedDict):
     to_tier: str
 
 
+class DomainReadinessChangedEvent(TypedDict):
+    """Stable wire shape for the ``domain_readiness_changed`` event-bus event.
+
+    Published by ``_publish_crossings`` on every confirmed tier transition.
+    The next Plan C cycle wires a frontend SSE listener to this shape — keep it
+    stable once shipped.  All float fields are rounded to 3 decimal places before
+    publish so JSON comparison in tests is deterministic.
+    """
+
+    domain_id: str
+    domain_label: str
+    axis: Literal["emergence", "stability"]
+    from_tier: str
+    to_tier: str
+    consistency: float
+    gap_to_threshold: float | None
+    would_dissolve: bool
+    ts: str  # ISO-8601 UTC, e.g. "2026-04-17T12:00:00+00:00"
+
+
 @dataclass
 class _TierHistoryEntry:
     """Per-domain rolling state for crossing detection.
@@ -901,14 +926,12 @@ def _publish_crossings(
     automation/logs).  Frontend toast is gated by the user's notifications
     preference and per-domain mute list — those gates live in the frontend.
     """
-    from app.services.event_bus import event_bus
-
     crossings = _detect_crossings(report, now=now)
     if not crossings:
         return
 
     for crossing in crossings:
-        payload = {
+        payload: DomainReadinessChangedEvent = {
             "domain_id": report.domain_id,
             "domain_label": report.domain_label,
             "axis": crossing["axis"],
@@ -926,7 +949,12 @@ def _publish_crossings(
         try:
             event_bus.publish("domain_readiness_changed", payload)
         except Exception:
-            pass
+            logger.debug(
+                "event_bus.publish failed for domain_readiness_changed "
+                "(domain_id=%s axis=%s): %s",
+                report.domain_id, crossing["axis"], "suppressed",
+                exc_info=True,
+            )
         try:
             get_event_logger().log_decision(
                 path="api",
