@@ -35,14 +35,19 @@
    *  safe to call after natural completion. */
   interface TweenHandle { cancel(): void }
 
-  /** Tween `material.color` from `fromHex` → `toHex` over `durationMs`.
+  /** Tween `material.color` from `fromColor` → `toHex` over `durationMs`.
+   *  `fromColor` is a live `THREE.Color` — typically `material.color` at the
+   *  moment of call — so superseding an in-flight tween starts from the
+   *  actual rendered color rather than a stale tier hex (prevents snap-back).
+   *  The source color is cloned so subsequent mutation of `material.color`
+   *  by the RAF step doesn't feed back into the interpolation baseline.
    *  Returns a handle whose `cancel()` stops the RAF chain at the next
    *  frame boundary. Caller must cancel on ring disposal and when
    *  superseding an in-flight tween on the same material — RAF callbacks
    *  can otherwise outlive the ring they animate (use-after-free). */
   function tweenRingColor(
     material: THREE.MeshBasicMaterial,
-    fromColor: string | THREE.Color,
+    fromColor: THREE.Color,
     toHex: string,
     durationMs = 320,
   ): TweenHandle {
@@ -50,10 +55,7 @@
       material.color.set(toHex);
       return { cancel: () => {} };
     }
-    const from =
-      typeof fromColor === 'string'
-        ? new THREE.Color(fromColor)
-        : fromColor.clone();
+    const from = fromColor.clone();
     const to = new THREE.Color(toHex);
     const start = performance.now();
     let rafId = 0;
@@ -192,6 +194,11 @@
   interface ReadinessRingEntry {
     mesh: THREE.Mesh;
     material: THREE.MeshBasicMaterial;
+    /** The tier this ring is currently displaying or tweening toward — i.e.
+     *  the target of the most recent `tweenRingColor` call (or the initial
+     *  tier on first build). Used only for change-detection in the supersede
+     *  branch (`existing.lastTier !== tier`); it is NOT the tween's `from`
+     *  color — that is always `material.color` at the moment of supersede. */
     lastTier: ReadinessTier;
     tween: TweenHandle | null;
   }
