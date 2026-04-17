@@ -21,7 +21,49 @@
   import { ClusterPhysics } from './ClusterPhysics';
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
   import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
-  import { readinessTierColor } from './readiness-tier';
+  import { readinessTierColor, type ReadinessTier } from './readiness-tier';
+
+  const _CUBIC = (t: number): number => {
+    // cubic-bezier(0.16, 1, 0.3, 1) — matches brand motion system
+    return 1 - Math.pow(1 - t, 3);
+  };
+
+  const prefersReducedMotion = (): boolean =>
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  function tweenRingColor(
+    material: THREE.MeshBasicMaterial,
+    fromHex: string,
+    toHex: string,
+    durationMs = 320,
+  ): void {
+    // In some test environments THREE.Color is mocked without `set`/`lerp`.
+    // Guard against them so the tween never throws from an RAF callback or
+    // from the reduced-motion snap path.
+    const colorAny = material.color as THREE.Color & {
+      set?: (hex: string) => unknown;
+      lerp?: unknown;
+    };
+    if (prefersReducedMotion()) {
+      colorAny.set?.(toHex);
+      return;
+    }
+    const from = new THREE.Color(fromHex);
+    const to = new THREE.Color(toHex);
+    if (typeof (from as THREE.Color & { lerp?: unknown }).lerp !== 'function') {
+      colorAny.set?.(toHex);
+      return;
+    }
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = _CUBIC(t);
+      material.color.copy(from).lerp(to, eased);
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
 
   // Resolved at module level to avoid per-frame allocations
   const HIGHLIGHT_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
@@ -137,7 +179,7 @@
   // Billboarding is driven by a single animation callback (`_removeReadinessBillboard`)
   // that iterates this map each frame — mirrors the `_removeDomainRotation` pattern
   // so the two per-frame scene loops look and dispose identically.
-  const _readinessRings: Map<string, { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial }> = new Map();
+  const _readinessRings: Map<string, { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial; lastTier: ReadinessTier }> = new Map();
   let _removeReadinessBillboard: (() => void) | null = null;
 
   // Flat node lookup for mid-LOD label logic and domain highlight
@@ -292,8 +334,9 @@
     _simScoreCache = null;
     _injWeightCache = null;
 
-    // Dispose + remove previous readiness rings before scene-clear so the
-    // stale meshes don't leak through the disposed-geometry traversal.
+    // Dispose + remove readiness rings for domains that disappeared.
+    // Rings whose tier changed are tweened in the ring-build pass below;
+    // rings whose node+tier are unchanged are kept and repositioned.
     // Unsubscribe the billboard callback FIRST so it cannot fire against a
     // half-disposed mesh (use-after-free guard).
     // Guard dispose() lookups: in some test environments THREE is mocked
@@ -302,16 +345,26 @@
     // THREE.js instances — these guards are defensive and cheap.
     _removeReadinessBillboard?.();
     _removeReadinessBillboard = null;
-    for (const entry of _readinessRings.values()) {
-      if (typeof entry.mesh.geometry?.dispose === 'function') {
-        entry.mesh.geometry.dispose();
+    const currentDomainIds = new Set(
+      data.nodes.filter((n) => n.state === 'domain' && n.readinessTier).map((n) => n.id),
+    );
+    for (const [id, entry] of _readinessRings) {
+      if (!currentDomainIds.has(id)) {
+        if (typeof entry.mesh.geometry?.dispose === 'function') {
+          entry.mesh.geometry.dispose();
+        }
+        if (typeof entry.material?.dispose === 'function') {
+          entry.material.dispose();
+        }
+        renderer.scene.remove(entry.mesh);
+        _readinessRings.delete(id);
+      } else {
+        // Detach from scene so the scene-clear traverse below doesn't
+        // dispose surviving rings' geometry/material. Re-added in the
+        // ring-build pass.
+        renderer.scene.remove(entry.mesh);
       }
-      if (typeof entry.material?.dispose === 'function') {
-        entry.material.dispose();
-      }
-      renderer.scene.remove(entry.mesh);
     }
-    _readinessRings.clear();
 
     // Dispose GPU resources before clearing scene.
     // Track disposed geometries to avoid duplicate dispose on shared instances.
@@ -449,15 +502,31 @@
     for (const node of data.nodes) {
       if (!node.visible) continue;
       if (!hasReadinessRing(node)) continue;
+      // `hasReadinessRing` guarantees `readinessTier` is defined — the
+      // non-null assertion is safe and narrower than a type cast.
+      const tier = node.readinessTier as ReadinessTier;
+      const existing = _readinessRings.get(node.id);
+      if (existing) {
+        if (existing.lastTier !== tier) {
+          tweenRingColor(
+            existing.material,
+            readinessTierColor(existing.lastTier),
+            readinessTierColor(tier),
+          );
+          existing.lastTier = tier;
+        }
+        existing.mesh.position.set(...node.position);
+        if (camera?.position) existing.mesh.lookAt(camera.position);
+        renderer.scene.add(existing.mesh);
+        continue;
+      }
       const radius = node.size * READINESS_RING_RADIUS_FACTOR;
       const geom = new THREE.RingGeometry(
         radius,
         radius + READINESS_RING_THICKNESS,
         READINESS_RING_SEGMENTS,
       );
-      // `hasReadinessRing` guarantees `readinessTier` is defined — the
-      // non-null assertion is safe and narrower than a type cast.
-      const color = readinessTierColor(node.readinessTier!);
+      const color = readinessTierColor(tier);
       const mat = new THREE.MeshBasicMaterial({
         color: new THREE.Color(color),
         transparent: true,
@@ -473,7 +542,7 @@
       // the next animation tick otherwise.
       if (camera?.position) mesh.lookAt(camera.position);
       renderer.scene.add(mesh);
-      _readinessRings.set(node.id, { mesh, material: mat });
+      _readinessRings.set(node.id, { mesh, material: mat, lastTier: tier });
     }
 
     // Per-frame billboard — one callback iterates all rings, mirroring the
