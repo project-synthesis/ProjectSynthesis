@@ -206,6 +206,33 @@ class PreferencesService:
                 )
                 pipeline[effort_key] = default_effort
 
+        # Domain readiness notifications section must be a dict with
+        # a bool `enabled` and a list[str] `muted_domain_ids`.
+        notif_default = DEFAULTS["domain_readiness_notifications"]
+        notif = prefs.get("domain_readiness_notifications")
+        if not isinstance(notif, dict):
+            logger.warning(
+                "Invalid domain_readiness_notifications %r — falling back to defaults",
+                notif,
+            )
+            prefs["domain_readiness_notifications"] = copy.deepcopy(notif_default)
+        else:
+            enabled = notif.get("enabled")
+            if not isinstance(enabled, bool):
+                logger.warning(
+                    "Invalid domain_readiness_notifications.enabled %r — falling back to %s",
+                    enabled, notif_default["enabled"],
+                )
+                notif["enabled"] = notif_default["enabled"]
+            muted = notif.get("muted_domain_ids")
+            if not (isinstance(muted, list) and all(isinstance(x, str) for x in muted)):
+                logger.warning(
+                    "Invalid domain_readiness_notifications.muted_domain_ids %r — "
+                    "falling back to %s",
+                    muted, notif_default["muted_domain_ids"],
+                )
+                notif["muted_domain_ids"] = list(notif_default["muted_domain_ids"])
+
     @staticmethod
     def _validate(prefs: dict[str, Any]) -> None:
         """Raise ``ValueError`` for invalid model, strategy, or toggle values."""
@@ -243,6 +270,32 @@ class PreferencesService:
 
         if pipeline.get("force_sampling") and pipeline.get("force_passthrough"):
             raise ValueError("force_sampling and force_passthrough are mutually exclusive")
+
+        notif = prefs.get("domain_readiness_notifications")
+        if notif is not None:
+            if not isinstance(notif, dict):
+                raise ValueError(
+                    "Invalid domain_readiness_notifications: expected dict, "
+                    f"got {type(notif).__name__}"
+                )
+            enabled = notif.get("enabled")
+            if enabled is not None and not isinstance(enabled, bool):
+                raise ValueError(
+                    "Invalid domain_readiness_notifications.enabled: expected bool, "
+                    f"got {type(enabled).__name__}"
+                )
+            muted = notif.get("muted_domain_ids")
+            if muted is not None:
+                if not isinstance(muted, list):
+                    raise ValueError(
+                        "Invalid domain_readiness_notifications.muted_domain_ids: "
+                        f"expected list, got {type(muted).__name__}"
+                    )
+                if not all(isinstance(x, str) for x in muted):
+                    raise ValueError(
+                        "Invalid domain_readiness_notifications.muted_domain_ids: "
+                        "all entries must be strings"
+                    )
 
     def _write(self, prefs: dict[str, Any]) -> None:
         """Atomic write via tempfile + rename, mode 0o644."""

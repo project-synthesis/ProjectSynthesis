@@ -494,3 +494,53 @@ class TestDomainReadinessNotifications:
         reloaded = svc.load()
         assert reloaded["domain_readiness_notifications"]["enabled"] is True
         assert reloaded["domain_readiness_notifications"]["muted_domain_ids"] == ["abc-123"]
+
+    def test_validate_rejects_non_bool_enabled(
+        self, svc: PreferencesService
+    ) -> None:
+        prefs = svc.load()
+        prefs["domain_readiness_notifications"]["enabled"] = "yes"
+        with pytest.raises(ValueError, match="domain_readiness_notifications.enabled"):
+            svc.save(prefs)
+
+    def test_validate_rejects_non_list_muted_domain_ids(
+        self, svc: PreferencesService
+    ) -> None:
+        prefs = svc.load()
+        prefs["domain_readiness_notifications"]["muted_domain_ids"] = "abc"
+        with pytest.raises(ValueError, match="muted_domain_ids"):
+            svc.save(prefs)
+
+    def test_validate_rejects_non_string_entries_in_muted_domain_ids(
+        self, svc: PreferencesService
+    ) -> None:
+        prefs = svc.load()
+        prefs["domain_readiness_notifications"]["muted_domain_ids"] = [1, 2]
+        with pytest.raises(ValueError, match="muted_domain_ids"):
+            svc.save(prefs)
+
+    def test_sanitize_replaces_corrupt_enabled_with_default(
+        self, svc: PreferencesService, prefs_file: Path
+    ) -> None:
+        prefs_file.write_text(json.dumps({
+            "schema_version": 1,
+            "domain_readiness_notifications": {
+                "enabled": "yes",
+                "muted_domain_ids": [],
+            },
+        }))
+        prefs = svc.load()
+        assert prefs["domain_readiness_notifications"]["enabled"] is False
+
+    def test_sanitize_replaces_corrupt_muted_domain_ids_with_default(
+        self, svc: PreferencesService, prefs_file: Path
+    ) -> None:
+        prefs_file.write_text(json.dumps({
+            "schema_version": 1,
+            "domain_readiness_notifications": {
+                "enabled": False,
+                "muted_domain_ids": "abc",
+            },
+        }))
+        prefs = svc.load()
+        assert prefs["domain_readiness_notifications"]["muted_domain_ids"] == []
