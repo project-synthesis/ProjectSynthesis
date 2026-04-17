@@ -15,15 +15,23 @@ import type { DomainReadinessReport } from '$lib/api/readiness';
 
 export type ReadinessTier = 'healthy' | 'warming' | 'guarded' | 'critical' | 'ready';
 
-const TIER_COLORS: Record<ReadinessTier, string> = {
+/**
+ * Brand-defined hex palette per composite tier. Conflict-free against the
+ * domain palette (`$lib/stores/domains.svelte`) and lifecycle state palette
+ * (`$lib/utils/colors`).
+ *
+ * `as const` preserves literal hex types; `satisfies` enforces exhaustive
+ * coverage of `ReadinessTier` without widening the value type to `string`.
+ */
+const TIER_COLORS = {
   healthy: '#16a34a',  // forest green — stable + inert
   warming: '#0ea5e9',  // sky blue — emergence approaching threshold
   guarded: '#eab308',  // gold — stability degrading
   critical: '#dc2626', // crimson — would dissolve next cycle
   ready: '#f97316',    // orange — sub-domain ready to split
-};
+} as const satisfies Record<ReadinessTier, string>;
 
-/** Brand-aligned hex per composite tier. Used by SemanticTopology ring color. */
+/** Resolve the brand-aligned hex for a composite tier (used as ring color). */
 export function readinessTierColor(tier: ReadinessTier): string {
   return TIER_COLORS[tier];
 }
@@ -31,10 +39,16 @@ export function readinessTierColor(tier: ReadinessTier): string {
 /**
  * Compose stability + emergence into a single actionable tier.
  *
- * Priority rules:
+ * Priority rules (emergence dominates stability — splits and forming
+ * sub-domains are more user-actionable than a degrading parent):
  *   1. emergence === 'ready'   → 'ready'   (split is most-actionable signal)
  *   2. emergence === 'warming' → 'warming' (sub-domain forming — still actionable)
- *   3. else stability tier passes through (healthy | guarded | critical)
+ *   3. else the stability tier passes through unchanged
+ *      (healthy | guarded | critical)
+ *
+ * Because `ReadinessTier = StabilityTier ∪ {'warming', 'ready'}`, the
+ * passthrough branch is total — every `StabilityTier` is a valid
+ * `ReadinessTier`, so no default case is required.
  */
 export function composeReadinessTier(report: DomainReadinessReport): ReadinessTier {
   const emergenceTier = report.emergence.tier;

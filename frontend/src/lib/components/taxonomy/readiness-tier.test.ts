@@ -55,6 +55,18 @@ describe('composeReadinessTier', () => {
   it('emergence ready + critical stability → ready (more actionable)', () => {
     expect(composeReadinessTier(build('critical', 'ready'))).toBe('ready');
   });
+
+  it('emergence warming + critical stability → warming (emergence dominates)', () => {
+    expect(composeReadinessTier(build('critical', 'warming'))).toBe('warming');
+  });
+
+  it('emergence warming + guarded stability → warming (emergence dominates)', () => {
+    expect(composeReadinessTier(build('guarded', 'warming'))).toBe('warming');
+  });
+
+  it('emergence ready + guarded stability → ready (emergence dominates)', () => {
+    expect(composeReadinessTier(build('guarded', 'ready'))).toBe('ready');
+  });
 });
 
 describe('readinessTierColor', () => {
