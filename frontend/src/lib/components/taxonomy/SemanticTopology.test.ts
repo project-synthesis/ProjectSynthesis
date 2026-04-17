@@ -175,7 +175,9 @@ vi.mock('three', () => {
     r = 0; g = 0; b = 0;
     constructor() {}
     copy() { return this; }
+    set() { return this; }
     setHex() { return this; }
+    lerp() { return this; }
     multiplyScalar() { return this; }
   }
   class Quaternion {
@@ -923,16 +925,24 @@ describe('SemanticTopology — readiness ring overlay', () => {
     const MeshBasicMaterialClass = (THREE as any).MeshBasicMaterial;
 
     const sceneChildren = lastScene!.children;
+    // Readiness rings live inside a tagged `THREE.Group` (isReadinessRingGroup)
+    // so the scene-clear traverse in `rebuildScene` can't reach them — mirrors
+    // the beam-pool protection pattern. Walk into the group to find rings.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rings = sceneChildren.filter((c: any) =>
+    const ringGroup = sceneChildren.find((c: any) =>
+      c?.userData?.isReadinessRingGroup === true,
+    ) as { children: unknown[] } | undefined;
+    expect(ringGroup).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rings = ringGroup!.children.filter((c: any) =>
       c instanceof (THREE as any).Mesh && c.geometry instanceof RingGeometryClass,
     ) as Array<{ material: { opacity: number } }>;
     expect(rings.length).toBe(2);
 
-    // The production ring-build loop at SemanticTopology.svelte:443 iterates
-    // `data.nodes` in order, so rings[0] corresponds to d1 (first in the
-    // scene override) and rings[1] corresponds to d2. `scene.add` on our
-    // mocked scene preserves insertion order via `children.push`.
+    // The production ring-build loop iterates `data.nodes` in order, so
+    // rings[0] corresponds to d1 (first in the scene override) and rings[1]
+    // corresponds to d2. `group.add` on our mocked group preserves insertion
+    // order via `children.push`.
     const ringD1 = rings[0];
     const ringD2 = rings[1];
     expect(ringD1.material).toBeInstanceOf(MeshBasicMaterialClass);
