@@ -212,6 +212,55 @@
   let _readinessRingGroup: THREE.Group | null = null;
   let _removeReadinessBillboard: (() => void) | null = null;
 
+  /** Single source of truth for readiness ring geometry. Used by both the
+   *  initial-build path and the size-drift rebuild path in `rebuildScene`
+   *  so radius/thickness/segments never diverge between the two. */
+  function buildRingGeometry(size: number): THREE.RingGeometry {
+    const radius = size * READINESS_RING_RADIUS_FACTOR;
+    return new THREE.RingGeometry(
+      radius,
+      radius + READINESS_RING_THICKNESS,
+      READINESS_RING_SEGMENTS,
+    );
+  }
+
+  /** Reconcile an existing readiness ring with the latest scene node: tween
+   *  color on tier change, rebuild geometry on size drift, then update
+   *  position + billboard. Keeps the `rebuildScene` reuse branch readable
+   *  by grouping the four distinct concerns behind one call. Camera is
+   *  passed in because it comes from the renderer and may be undefined in
+   *  test environments. */
+  function updateExistingRing(
+    existing: ReadinessRingEntry,
+    node: SceneNode,
+    tier: ReadinessTier,
+    camera: THREE.Camera | undefined,
+  ): void {
+    if (existing.lastTier !== tier) {
+      // Supersede any in-flight tween so two RAF chains don't race on the
+      // same material. Tween from the currently rendered color (not the
+      // last target) to preserve continuity across rapid tier changes.
+      existing.tween?.cancel();
+      existing.tween = tweenRingColor(
+        existing.material,
+        existing.material.color,
+        readinessTierColor(tier),
+      );
+      existing.lastTier = tier;
+    }
+    if (existing.lastSize !== node.size) {
+      // Size drift: dispose old geometry BEFORE assigning the new one
+      // (GPU resource leak otherwise) and swap in a fresh RingGeometry
+      // sized to the current `node.size`. Keep the mesh (and thus its
+      // parent link + material + tween state) intact.
+      existing.mesh.geometry?.dispose?.();
+      existing.mesh.geometry = buildRingGeometry(node.size);
+      existing.lastSize = node.size;
+    }
+    existing.mesh.position.set(...node.position);
+    if (camera?.position) existing.mesh.lookAt(camera.position);
+  }
+
   /** Per-entry teardown for a readiness ring: cancel any in-flight tween
    *  BEFORE disposing GPU resources so the RAF step can't write to a
    *  disposed material. Scene-graph removal stays at the call site — the
@@ -553,40 +602,10 @@
       const tier = node.readinessTier as ReadinessTier;
       const existing = _readinessRings.get(node.id);
       if (existing) {
-        if (existing.lastTier !== tier) {
-          // Supersede any in-flight tween so two RAF chains don't race on
-          // the same material.
-          existing.tween?.cancel();
-          existing.tween = tweenRingColor(
-            existing.material,
-            existing.material.color,
-            readinessTierColor(tier),
-          );
-          existing.lastTier = tier;
-        }
-        if (existing.lastSize !== node.size) {
-          // Size drift: dispose old geometry and swap in a fresh RingGeometry
-          // sized to the current `node.size`. Keep the mesh (and thus its
-          // parent link + material + tween state) intact.
-          existing.mesh.geometry?.dispose?.();
-          const radius = node.size * READINESS_RING_RADIUS_FACTOR;
-          existing.mesh.geometry = new THREE.RingGeometry(
-            radius,
-            radius + READINESS_RING_THICKNESS,
-            READINESS_RING_SEGMENTS,
-          );
-          existing.lastSize = node.size;
-        }
-        existing.mesh.position.set(...node.position);
-        if (camera?.position) existing.mesh.lookAt(camera.position);
+        updateExistingRing(existing, node, tier, camera);
         continue;
       }
-      const radius = node.size * READINESS_RING_RADIUS_FACTOR;
-      const geom = new THREE.RingGeometry(
-        radius,
-        radius + READINESS_RING_THICKNESS,
-        READINESS_RING_SEGMENTS,
-      );
+      const geom = buildRingGeometry(node.size);
       const color = readinessTierColor(tier);
       const mat = new THREE.MeshBasicMaterial({
         color: new THREE.Color(color),
