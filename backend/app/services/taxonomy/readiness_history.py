@@ -250,7 +250,27 @@ async def query_history(
 
 
 def prune_old_snapshots(*, base_dir: Path | None = None) -> int:
-    """Delete snapshot files older than RETENTION_DAYS. Returns count removed."""
+    """Delete snapshot files older than ``READINESS_HISTORY_RETENTION_DAYS``.
+
+    Scans ``target_dir`` for ``snapshots-YYYY-MM-DD.jsonl`` files, parses
+    the date from each filename (the only authoritative timestamp — file
+    mtime can drift on restores/rsync), and unlinks entries whose day is
+    strictly before the retention cutoff.  A file whose day equals the
+    cutoff is kept (boundary-inclusive retention, matching the 30-day
+    rotation convention used by ``data/taxonomy_events/``).
+
+    Failure modes — never raise, always return a count:
+
+    * Missing ``target_dir`` → returns 0.
+    * Filenames that don't match the date pattern → skipped silently
+      (``ValueError`` from ``strptime``).
+    * ``OSError`` on ``unlink`` (e.g. permission denied, concurrent
+      deletion) → logged at WARNING, iteration continues.
+
+    Safe to run concurrently with ``record_snapshot``: ``unlink`` is
+    atomic, and the writer re-creates the file on next append via
+    ``open("a")``.
+    """
     target_dir = _resolve_dir(base_dir)
     if not target_dir.exists():
         return 0
