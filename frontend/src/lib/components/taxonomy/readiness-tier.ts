@@ -15,7 +15,7 @@ import type { DomainReadinessReport } from '$lib/api/readiness';
 
 export type ReadinessTier = 'healthy' | 'warming' | 'guarded' | 'critical' | 'ready';
 
-const _TIER_COLORS: Record<ReadinessTier, string> = {
+const TIER_COLORS: Record<ReadinessTier, string> = {
   healthy: '#16a34a',  // forest green — stable + inert
   warming: '#0ea5e9',  // sky blue — emergence approaching threshold
   guarded: '#eab308',  // gold — stability degrading
@@ -25,7 +25,7 @@ const _TIER_COLORS: Record<ReadinessTier, string> = {
 
 /** Brand-aligned hex per composite tier. Used by SemanticTopology ring color. */
 export function readinessTierColor(tier: ReadinessTier): string {
-  return _TIER_COLORS[tier];
+  return TIER_COLORS[tier];
 }
 
 /**
@@ -37,8 +37,8 @@ export function readinessTierColor(tier: ReadinessTier): string {
  *   3. else stability tier passes through (healthy | guarded | critical)
  */
 export function composeReadinessTier(report: DomainReadinessReport): ReadinessTier {
-  const e = report.emergence.tier;
-  if (e === 'ready') return 'ready';
-  if (e === 'warming') return 'warming';
+  const emergenceTier = report.emergence.tier;
+  if (emergenceTier === 'ready') return 'ready';
+  if (emergenceTier === 'warming') return 'warming';
   return report.stability.tier;
 }
