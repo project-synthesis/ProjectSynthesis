@@ -58,6 +58,25 @@ describe('dispatchReadinessCrossing', () => {
     expect(toastStore.toasts.length).toBe(0);
   });
 
+  it('dispatchReadinessCrossing is a no-op on repeated calls after muting', () => {
+    // Reactivity to pref changes: first call fires, then muting the
+    // domain suppresses subsequent calls without a re-subscribe.
+    preferencesStore.prefs.domain_readiness_notifications = {
+      enabled: true,
+      muted_domain_ids: [],
+    };
+    dispatchReadinessCrossing(makePayload({ domain_id: 'dom-1' }));
+    expect(toastStore.toasts.length).toBe(1);
+
+    // User mutes the domain (e.g. via panel control).
+    preferencesStore.prefs.domain_readiness_notifications = {
+      enabled: true,
+      muted_domain_ids: ['dom-1'],
+    };
+    dispatchReadinessCrossing(makePayload({ domain_id: 'dom-1' }));
+    expect(toastStore.toasts.length).toBe(1); // no new toast
+  });
+
   it('does not throw on malformed payloads and fires no toast', () => {
     preferencesStore.prefs.domain_readiness_notifications = {
       enabled: true,

@@ -14,6 +14,10 @@
   import { updateStore } from '$lib/stores/update.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import { sseHealthStore } from '$lib/stores/sse-health.svelte';
+  import {
+    dispatchReadinessCrossing,
+    type ReadinessCrossingPayload,
+  } from '$lib/stores/readiness-notifications.svelte';
 
   let backendError = $state<string | null>(null);
   let firstHealthReceived = false;
@@ -160,6 +164,11 @@
         if (type === 'domain_created') {
           domainStore.invalidate();
           readinessStore.invalidate();
+        }
+        if (type === 'domain_readiness_changed') {
+          // Toast dispatcher is gated internally by preferences
+          // (enabled + muted-domain list); safe to call unconditionally.
+          dispatchReadinessCrossing(data as unknown as ReadinessCrossingPayload);
         }
         if (type === 'routing_state_changed') {
           const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
