@@ -20,6 +20,7 @@ import time
 import traceback
 from collections import deque
 from collections.abc import Callable
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,7 @@ from app.services.taxonomy.matching import (
     match_prompt as _match_prompt,
 )
 from app.services.taxonomy.sparkline import compute_sparkline_data
+from app.services.taxonomy.sub_domain_readiness import compute_qualifier_cascade
 from app.services.taxonomy.warm_path import WarmPathResult, execute_warm_path
 from app.utils.text_cleanup import is_low_quality_label, parse_domain, validate_intent_label
 
@@ -753,12 +755,12 @@ class TaxonomyEngine:
                     transform_vec = np.frombuffer(
                         opt.transformation_embedding, dtype=np.float32
                     )
-                    existing = self._transformation_index.get_vector(cluster.id)
-                    if existing is not None:
+                    existing_vec = self._transformation_index.get_vector(cluster.id)
+                    if existing_vec is not None:
                         # Weighted running mean: blend existing mean with new sample
                         # L2 normalization is handled by upsert()
                         member_ct = max(1, (cluster.member_count or 1) - 1)
-                        blended = (existing * member_ct + transform_vec) / (member_ct + 1)
+                        blended = (existing_vec * member_ct + transform_vec) / (member_ct + 1)
                         await self._transformation_index.upsert(cluster.id, blended)
                     else:
                         await self._transformation_index.upsert(
@@ -1019,7 +1021,7 @@ class TaxonomyEngine:
         # Replay hot-path assignment for each optimization (chronological order)
         reassigned = 0
         for opt in optimizations:
-            embedding = np.frombuffer(opt.embedding, dtype=np.float32)
+            embedding = np.frombuffer(opt.embedding, dtype=np.float32)  # type: ignore[arg-type]
             domain_primary, _ = parse_domain(opt.domain or "general")
 
             async with self._lock:
@@ -1095,7 +1097,7 @@ class TaxonomyEngine:
         # --- 1. Rebuild optimization_patterns ---
         # Delete ALL existing (they may be orphaned)
         del_op = await db.execute(sa_delete(OptimizationPattern))
-        stats["join_deleted"] = del_op.rowcount
+        stats["join_deleted"] = del_op.rowcount  # type: ignore[attr-defined]
 
         # Recreate source records for every optimization with a cluster
         opts = (await db.execute(
@@ -1134,7 +1136,7 @@ class TaxonomyEngine:
                 )
             )
         )
-        stats["meta_patterns_deleted"] = del_mp.rowcount
+        stats["meta_patterns_deleted"] = del_mp.rowcount  # type: ignore[attr-defined]
 
         # Re-extract structural patterns for each optimization
         patterns_created = 0
@@ -1146,6 +1148,8 @@ class TaxonomyEngine:
                     raw_prompt=opt.raw_prompt[:2000],
                     optimized_prompt=opt.optimized_prompt[:2000],
                 )
+                if opt.cluster_id is None:
+                    continue
                 for text in pattern_texts:
                     await merge_meta_pattern(
                         db, opt.cluster_id, text, self._embedding,
@@ -1178,7 +1182,7 @@ class TaxonomyEngine:
                 cluster.coherence = 1.0 if len(emb_rows) == 1 else 0.0
             else:
                 embs = [
-                    np.frombuffer(e, dtype=np.float32)
+                    np.frombuffer(e, dtype=np.float32)  # type: ignore[arg-type]
                     for e in emb_rows
                 ]
                 cluster.coherence = compute_pairwise_coherence(embs)
@@ -1194,7 +1198,7 @@ class TaxonomyEngine:
             .where(Optimization.cluster_id.isnot(None))
             .group_by(Optimization.cluster_id)
         )
-        mc_map = dict(mc_q.all())
+        mc_map: dict[str, int] = dict(mc_q.all())  # type: ignore[arg-type]
         mc_fixed = 0
         for cluster in active_clusters:
             expected = mc_map.get(cluster.id, 0)
@@ -1208,7 +1212,7 @@ class TaxonomyEngine:
         # PromptCluster (state='project') and fix them via the cluster
         # ancestry chain: cluster → domain (parent_id) → project (parent_id).
         valid_project_ids = {
-            c.id for c in active_clusters if c.state == "project"  # type: ignore[attr-defined]
+            c.id for c in active_clusters if c.state == "project"
         }
         # Also include domain-state nodes for the ancestry walk
         all_nodes_q = await db.execute(
@@ -1441,7 +1445,7 @@ class TaxonomyEngine:
         valid: list[tuple[int, np.ndarray]] = []
         for i, n in enumerate(nodes):
             try:
-                c = np.frombuffer(n.centroid_embedding, dtype=np.float32).copy()
+                c = np.frombuffer(n.centroid_embedding, dtype=np.float32).copy()  # type: ignore[arg-type]
                 valid.append((i, c))
             except (ValueError, TypeError) as _sep_exc:
                 logger.warning(
@@ -1474,7 +1478,7 @@ class TaxonomyEngine:
         self,
         db: AsyncSession,
         families: list[PromptCluster],
-        batch_cluster_fn: object,
+        batch_cluster_fn: Callable[..., Any],
         max_clusters: int | None = None,
     ) -> list[dict]:
         """Cluster unassigned families via HDBSCAN and attempt emerge for each.
@@ -1502,7 +1506,7 @@ class TaxonomyEngine:
         ids: list[str] = []
         for f in families:
             try:
-                emb = np.frombuffer(f.centroid_embedding, dtype=np.float32)
+                emb = np.frombuffer(f.centroid_embedding, dtype=np.float32)  # type: ignore[arg-type]
                 embeddings.append(emb)
                 ids.append(f.id)
             except (ValueError, TypeError) as _emg_exc:
@@ -1833,13 +1837,13 @@ class TaxonomyEngine:
 
         from app.services.pipeline_constants import DOMAIN_COUNT_CEILING
         from app.services.taxonomy._constants import (
+            SUB_DOMAIN_MIN_CLUSTER_BREADTH,
             SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH,
             SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
-            SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS,
             SUB_DOMAIN_QUALIFIER_MIN_MEMBERS,
             SUB_DOMAIN_QUALIFIER_SCALE_RATE,
         )
-        from app.utils.text_cleanup import parse_domain
+        from app.utils.text_cleanup import parse_domain  # used by vocab-gen block
 
         created: list[str] = []
 
@@ -1956,9 +1960,7 @@ class TaxonomyEngine:
                             mat = np.vstack(centroid_vecs)
                             sim = (mat @ mat.T).tolist()
                             n = len(cluster_rows)
-                            similarity_matrix = [
-                                [None] * n for _ in range(n)  # type: ignore[list-item]
-                            ]
+                            similarity_matrix = [[None] * n for _ in range(n)]
                             for si, ri in enumerate(centroid_indices):
                                 for sj, rj in enumerate(centroid_indices):
                                     similarity_matrix[ri][rj] = sim[si][sj]
@@ -2254,65 +2256,19 @@ class TaxonomyEngine:
                     )
                     existing_sub_count = existing_sub_q2.scalar() or 0
 
-            # Get active child cluster IDs — include clusters under
-            # existing sub-domains so the qualifier scan sees ALL
-            # optimizations in the domain hierarchy.
-            scan_parent_ids = [domain_node.id]
-            if existing_sub_count > 0:
-                sub_ids_q = await db.execute(
-                    select(PromptCluster.id).where(
-                        PromptCluster.parent_id == domain_node.id,
-                        PromptCluster.state == "domain",
-                    )
-                )
-                scan_parent_ids.extend(r[0] for r in sub_ids_q.all())
-
-            children_q = await db.execute(
-                select(PromptCluster.id).where(
-                    PromptCluster.parent_id.in_(scan_parent_ids),
-                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
-                )
-            )
-            child_ids = [r[0] for r in children_q.all()]
-            if not child_ids:
-                continue
-
-            # Collect qualifier signals from linked optimizations
-            opt_q = await db.execute(
-                select(
-                    Optimization.domain_raw,
-                    Optimization.intent_label,
-                    Optimization.cluster_id,
-                    Optimization.raw_prompt,
-                ).where(
-                    Optimization.cluster_id.in_(child_ids),
-                )
-            )
-            opt_rows = opt_q.all()
-            total_opts = len(opt_rows)
+            # --- Run shared three-source qualifier cascade ---
+            # Single source of truth: the same primitive powers the readiness
+            # analytics service.  Scans all optimizations under the domain
+            # hierarchy (direct children + under existing sub-domains).
+            cascade = await compute_qualifier_cascade(db, domain_node)
+            total_opts = cascade.total_opts
             if total_opts < SUB_DOMAIN_QUALIFIER_MIN_MEMBERS:
                 continue
 
-            # Read qualifier vocabulary — already generated in the vocab pass above.
-            # Falls back to cached metadata if available.
-            meta = read_meta(domain_node.cluster_metadata)
-            domain_qualifiers: dict[str, list[str]] = {}
-            cached_vocab = meta.get("generated_qualifiers")
-            if cached_vocab and isinstance(cached_vocab, dict):
-                domain_qualifiers = cached_vocab
-
-            # Load dynamic signal_keywords from domain node metadata.
-            # These are TF-IDF-extracted keywords already on every domain node,
-            # providing qualifier coverage as a final fallback.
-            dynamic_keywords: list[tuple[str, float]] = []
-            for item in meta.get("signal_keywords", []):
-                try:
-                    kw, weight = item[0], float(item[1])
-                    if isinstance(kw, str) and len(kw) >= 3 and weight >= 0.5:
-                        dynamic_keywords.append((kw, weight))
-                except (IndexError, TypeError, ValueError):
-                    continue
-
+            # Diagnostic "vocab present?" log — cascade already computed the
+            # keyword set and organic-vocab presence; consume those fields
+            # directly instead of re-reading metadata.
+            dynamic_keywords = cascade.dynamic_keywords
             if dynamic_keywords:
                 try:
                     get_event_logger().log_decision(
@@ -2322,94 +2278,26 @@ class TaxonomyEngine:
                             "domain": domain_node.label,
                             "dynamic_keyword_count": len(dynamic_keywords),
                             "top_keywords": [kw for kw, _ in dynamic_keywords[:5]],
-                            "has_organic_vocab": bool(domain_qualifiers),
+                            "has_organic_vocab": cascade.generated_qualifiers_present,
                         },
                     )
                 except RuntimeError:
                     pass
 
-            # Extract qualifier per optimization (three-source merge)
-            qualifier_counts: Counter[str] = Counter()
-            qualifier_to_cluster_ids: dict[str, set[str]] = {}
-            intent_qualifier_counts: Counter[str] = Counter()
-            source_from_raw = 0
-            source_from_intent = 0
-            source_from_dynamic = 0
+            # Unpack cascade into engine-local tallies (preserves downstream logic).
+            qualifier_counts: Counter[str] = Counter(cascade.qualifier_counts)
+            qualifier_to_cluster_ids = cascade.qualifier_to_cluster_ids
+            source_from_raw = cascade.source_breakdown.get("domain_raw", 0)
+            source_from_intent = cascade.source_breakdown.get("intent_label", 0)
+            source_from_tfidf = cascade.source_breakdown.get("tf_idf", 0)
+            intent_qualifier_counts: Counter[str] = Counter({
+                q: srcs.get("intent_label", 0)
+                for q, srcs in cascade.per_qualifier_sources.items()
+                if srcs.get("intent_label", 0) > 0
+            })
 
-            # Build a set of known qualifier names for Source 1 validation.
-            # LLM-generated qualifiers like "backend auth middleware" are noise
-            # unless they match a known organic qualifier name or a dynamic keyword.
-            # Normalize all entries with space→dash replacement so multi-word
-            # dynamic keywords (e.g. "api gateway") match parsed qualifiers
-            # that are normalized the same way (e.g. "api-gateway").
-            known_qualifiers: set[str] = set(domain_qualifiers.keys())
-            for kw, _ in dynamic_keywords:
-                kw_lower = kw.lower()
-                known_qualifiers.add(kw_lower)
-                known_qualifiers.add(kw_lower.replace(" ", "-"))
-
-            for domain_raw, intent_label, cluster_id, raw_prompt in opt_rows:
-                qualifier: str | None = None
-
-                # Source 1: parse qualifier from domain_raw
-                if domain_raw:
-                    _, q = parse_domain(domain_raw)
-                    if q:
-                        # Only accept qualifiers that match a known vocabulary
-                        # term.  LLM-generated qualifiers like "backend auth
-                        # middleware" are long, unique strings that fragment
-                        # counts and never aggregate into sub-domains.
-                        q_normalized = q.lower().replace(" ", "-")
-                        if q in known_qualifiers or q_normalized in known_qualifiers:
-                            qualifier = q
-                            source_from_raw += 1
-
-                # Source 2: fallback to intent_label keyword match (organic vocab)
-                if not qualifier and intent_label and domain_qualifiers:
-                    from app.services.domain_signal_loader import DomainSignalLoader
-
-                    intent_lower = intent_label.lower()
-                    best_q, best_hits = DomainSignalLoader.find_best_qualifier(
-                        intent_lower, domain_qualifiers,
-                    )
-                    if best_q and best_hits >= SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS:
-                        qualifier = best_q
-                        source_from_intent += 1
-                        intent_qualifier_counts[best_q] += 1
-
-                # Source 3: fallback to raw_prompt match against dynamic keywords
-                if not qualifier and raw_prompt and dynamic_keywords:
-                    prompt_lower = raw_prompt.lower()
-                    intent_lower_s3 = (intent_label or "").lower()
-                    best_dyn: str | None = None
-                    best_dyn_weight = 0.0
-                    dyn_hits = 0
-                    for kw, weight in dynamic_keywords:
-                        kw_lower = kw.lower()
-                        if kw_lower in prompt_lower:
-                            dyn_hits += 1
-                            # Boost keywords that appear in the intent_label —
-                            # the intent is the most concentrated topic signal.
-                            # A keyword in both prompt and intent is more likely
-                            # the core topic than one only in the prompt body.
-                            effective_weight = weight + (0.5 if kw_lower in intent_lower_s3 else 0.0)
-                            if effective_weight > best_dyn_weight:
-                                best_dyn_weight = effective_weight
-                                best_dyn = kw
-                    # Accept with 1 hit if the keyword has high TF-IDF weight
-                    # (≥0.8 = strongly discriminative for this domain).
-                    # Otherwise require 2+ hits to avoid noise.
-                    raw_weight = best_dyn_weight - (0.5 if best_dyn and best_dyn.lower() in intent_lower_s3 else 0.0)
-                    min_hits = 1 if raw_weight >= 0.8 else 2
-                    if best_dyn and dyn_hits >= min_hits:
-                        qualifier = best_dyn.lower().replace(" ", "-")
-                        source_from_dynamic += 1
-
-                if qualifier:
-                    qualifier_counts[qualifier] += 1
-                    qualifier_to_cluster_ids.setdefault(qualifier, set()).add(cluster_id)
-
-            # Log signal scan
+            # Log signal scan (source key "tf_idf" standardized per ROADMAP
+            # engine-cascade-extraction naming reconciliation — was "dynamic").
             try:
                 get_event_logger().log_decision(
                     path="warm", op="discover",
@@ -2421,7 +2309,7 @@ class TaxonomyEngine:
                         "source_breakdown": {
                             "domain_raw": source_from_raw,
                             "intent_label": source_from_intent,
-                            "dynamic": source_from_dynamic,
+                            "tf_idf": source_from_tfidf,
                         },
                         "qualifier_counts": dict(qualifier_counts.most_common(10)),
                         "vocab_source": "organic",
@@ -2513,7 +2401,7 @@ class TaxonomyEngine:
                 matching_cluster_count = len(
                     qualifier_to_cluster_ids.get(qualifier, set())
                 )
-                if matching_cluster_count < 2:
+                if matching_cluster_count < SUB_DOMAIN_MIN_CLUSTER_BREADTH:
                     try:
                         get_event_logger().log_decision(
                             path="warm", op="discover",
@@ -2654,7 +2542,7 @@ class TaxonomyEngine:
             .where(MetaPattern.cluster_id == node.id)
             .values(cluster_id=dissolution_target_id)
         )
-        patterns_merged = mp_result.rowcount
+        patterns_merged = mp_result.rowcount  # type: ignore[attr-defined]
 
         # --- Archive the node ---
         node.state = "archived"
@@ -2928,8 +2816,12 @@ class TaxonomyEngine:
         For each sub-domain under ``domain_node``:
         1. Skip if younger than ``SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS``
         2. Gather all optimizations under its child clusters
-        3. Re-check qualifier consistency (Source 1 only — domain_raw is the
-           most reliable signal for existing sub-domains)
+        3. Re-check qualifier consistency using the same three-source cascade
+           as ``_propose_sub_domains`` — Source 1 (``domain_raw`` qualifier
+           parse), Source 2 (``intent_label`` vs organic vocab), Source 3
+           (``raw_prompt`` × dynamic ``signal_keywords``). Matching-path
+           parity with the create path is required: any asymmetry produces
+           dissolve/recreate flip-flop cycles.
         4. If consistency < ``SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR``:
            a. Reparent all child clusters to the top-level domain
            b. Merge meta-patterns from sub-domain into parent domain (UPDATE,
@@ -2981,6 +2873,21 @@ class TaxonomyEngine:
                 continue  # too young — skip
 
             # --- Gather all child clusters ---
+            # Re-evaluation uses a narrow, sub-qualifier-targeted matcher (not
+            # the shared ``compute_qualifier_cascade`` primitive):
+            #   * Source 1 accepts ANY ``domain_raw`` parse equal to
+            #     ``sub_qualifier`` — no known-vocabulary gate (the discovery
+            #     primitive's gate would drop valid matches in domains whose
+            #     vocab has not yet been generated).
+            #   * Source 2 checks only THIS sub-domain's keywords (not the
+            #     best-qualifier-wins cascade) so an opt matching multiple
+            #     sub-qualifiers still counts toward each.
+            #   * Source 3 only counts dynamic-keyword hits that normalise to
+            #     ``sub_qualifier``, ignoring hits for other qualifiers.
+            # These targeted semantics are orthogonal to the cascade (which
+            # answers "which qualifiers exist in this domain?"), so they stay
+            # inlined here. Drift risk is minimal: the engine's *discovery*
+            # path is the one that must agree with ``/readiness`` responses.
             child_q = await db.execute(
                 select(PromptCluster.id).where(
                     PromptCluster.parent_id == sub.id,
@@ -2991,15 +2898,11 @@ class TaxonomyEngine:
             if not child_ids:
                 continue  # empty sub-domain — handled by phase_archive_empty_sub_domains
 
-            # --- Collect optimizations from child clusters ---
-            # Use ALL three sources (not just Source 1) to match the creation
-            # logic.  Source 1 alone causes false dissolutions when domain_raw
-            # was written under old vocabulary names that don't match the
-            # organic qualifier label.
             opt_q = await db.execute(
                 select(
                     Optimization.domain_raw,
                     Optimization.intent_label,
+                    Optimization.raw_prompt,
                 ).where(
                     Optimization.cluster_id.in_(child_ids),
                 )
@@ -3009,32 +2912,66 @@ class TaxonomyEngine:
             if total_opts == 0:
                 continue
 
-            # Sub-domain label is the qualifier name — normalise for comparison
             sub_qualifier = sub.label.lower()
 
-            # Load organic vocabulary for this domain (Source 2 matching)
             from app.services.domain_signal_loader import get_signal_loader as _get_loader
 
             _loader = _get_loader()
             domain_qualifiers = _loader.get_qualifiers(domain_node.label) if _loader else {}
             sub_keywords = domain_qualifiers.get(sub_qualifier, [])
 
-            # Count optimizations matching this sub-domain via three sources
+            _domain_meta = read_meta(domain_node.cluster_metadata)
+            dynamic_keywords: list[tuple[str, float]] = []
+            for _item in _domain_meta.get("signal_keywords", []):
+                try:
+                    _kw, _weight = _item[0], float(_item[1])
+                    if isinstance(_kw, str) and len(_kw) >= 3 and _weight >= 0.5:
+                        dynamic_keywords.append((_kw, _weight))
+                except (IndexError, TypeError, ValueError):
+                    continue
+
             matching = 0
-            for domain_raw, intent_label in opt_rows:
+            for domain_raw, intent_label, raw_prompt in opt_rows:
                 matched = False
 
-                # Source 1: domain_raw qualifier parse
                 if domain_raw and not matched:
                     _, q = _parse_domain(domain_raw)
                     if q and q.lower().replace(" ", "-") == sub_qualifier:
                         matched = True
 
-                # Source 2: intent_label keyword match against organic vocab
                 if not matched and intent_label and sub_keywords:
                     intent_lower = intent_label.lower()
                     hits = sum(1 for kw in sub_keywords if kw in intent_lower)
                     if hits >= 1:
+                        matched = True
+
+                if not matched and raw_prompt and dynamic_keywords:
+                    prompt_lower = raw_prompt.lower()
+                    intent_lower_s3 = (intent_label or "").lower()
+                    best_dyn: str | None = None
+                    best_dyn_weight = 0.0
+                    dyn_hits = 0
+                    for _kw, _weight in dynamic_keywords:
+                        _kw_lower = _kw.lower()
+                        if _kw_lower in prompt_lower:
+                            dyn_hits += 1
+                            _effective_weight = _weight + (
+                                0.5 if _kw_lower in intent_lower_s3 else 0.0
+                            )
+                            if _effective_weight > best_dyn_weight:
+                                best_dyn_weight = _effective_weight
+                                best_dyn = _kw
+                    _raw_weight = best_dyn_weight - (
+                        0.5
+                        if best_dyn and best_dyn.lower() in intent_lower_s3
+                        else 0.0
+                    )
+                    _min_hits = 1 if _raw_weight >= 0.8 else 2
+                    if (
+                        best_dyn
+                        and dyn_hits >= _min_hits
+                        and best_dyn.lower().replace(" ", "-") == sub_qualifier
+                    ):
                         matched = True
 
                 if matched:
@@ -3195,7 +3132,7 @@ class TaxonomyEngine:
         seed_cluster: PromptCluster | None = None,
         general_node_id: str | None = None,
         parent_domain_id: str | None = None,
-    ) -> PromptCluster:
+    ) -> tuple[PromptCluster, int]:
         """Create a new domain node with a maximally distant color.
 
         Args:
@@ -3366,12 +3303,12 @@ class TaxonomyEngine:
             )
             .values(domain=domain_node.label)
         )
-        if result.rowcount:
+        if result.rowcount:  # type: ignore[attr-defined]
             logger.info(
                 "Backfilled %d optimizations from 'general' to '%s'",
-                result.rowcount, domain_node.label,
+                result.rowcount, domain_node.label,  # type: ignore[attr-defined]
             )
-        return result.rowcount
+        return result.rowcount  # type: ignore[attr-defined]
 
     async def _set_domain_umap_from_children(
         self, db: AsyncSession, domain_node: PromptCluster,
@@ -3706,7 +3643,7 @@ class TaxonomyEngine:
             select(MetaPattern.cluster_id, func.count().label("cnt"))
             .group_by(MetaPattern.cluster_id)
         )
-        pattern_counts = dict(pattern_count_q.all())
+        pattern_counts: dict[str, int] = dict(pattern_count_q.all())  # type: ignore[arg-type]
 
         tree = []
         for n in nodes:
@@ -3757,7 +3694,7 @@ class TaxonomyEngine:
         centroids: list[np.ndarray] = []
         for n in active_nodes:
             try:
-                c = np.frombuffer(n.centroid_embedding, dtype=np.float32)
+                c = np.frombuffer(n.centroid_embedding, dtype=np.float32)  # type: ignore[arg-type]
                 centroids.append(c)
             except (ValueError, TypeError) as _sm_exc:
                 logger.warning(
@@ -3784,7 +3721,7 @@ class TaxonomyEngine:
                 PromptCluster.state
             )
         )
-        state_counts = dict(state_result.all())
+        state_counts: dict[str, int] = dict(state_result.all())  # type: ignore[arg-type]
         active = state_counts.get("active", 0)
         candidate = state_counts.get("candidate", 0)
         mature = state_counts.get("mature", 0)
@@ -4155,11 +4092,11 @@ class TaxonomyEngine:
             .where(PromptCluster.state == "domain", PromptCluster.persistence < 1.0)
             .values(persistence=1.0)
         )
-        if result.rowcount > 0:
+        if result.rowcount > 0:  # type: ignore[attr-defined]
             logger.info(
-                "Auto-repaired %d domain nodes with weak persistence", result.rowcount
+                "Auto-repaired %d domain nodes with weak persistence", result.rowcount  # type: ignore[attr-defined]
             )
-            repaired += result.rowcount
+            repaired += result.rowcount  # type: ignore[attr-defined]
 
         # Repair orphaned clusters → re-parent under "general"
         general_result = await db.execute(
@@ -4179,12 +4116,12 @@ class TaxonomyEngine:
                 """),
                 {"general_id": general_row[0]},
             )
-            if orphan_result.rowcount > 0:
+            if orphan_result.rowcount > 0:  # type: ignore[attr-defined]
                 logger.info(
                     "Auto-repaired %d orphaned clusters → 'general'",
-                    orphan_result.rowcount,
+                    orphan_result.rowcount,  # type: ignore[attr-defined]
                 )
-                repaired += orphan_result.rowcount
+                repaired += orphan_result.rowcount  # type: ignore[attr-defined]
 
         # Repair domain mismatches → reset to "general" (case-insensitive)
         mismatch_result = await db.execute(text("""
@@ -4194,12 +4131,12 @@ class TaxonomyEngine:
               AND LOWER(domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
               AND domain IS NOT NULL
         """))
-        if mismatch_result.rowcount > 0:
+        if mismatch_result.rowcount > 0:  # type: ignore[attr-defined]
             logger.info(
                 "Auto-repaired %d domain mismatches → 'general'",
-                mismatch_result.rowcount,
+                mismatch_result.rowcount,  # type: ignore[attr-defined]
             )
-            repaired += mismatch_result.rowcount
+            repaired += mismatch_result.rowcount  # type: ignore[attr-defined]
 
         # Repair self-referencing parents → re-parent under matching domain node
         self_ref_q = await db.execute(

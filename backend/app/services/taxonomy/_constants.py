@@ -116,6 +116,11 @@ SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH = 0.60  # threshold for small domains
 SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW = 0.40   # threshold floor for large domains
 SUB_DOMAIN_QUALIFIER_SCALE_RATE = 0.004       # per-member threshold reduction
 SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS = 1       # minimum keyword hits to accept a qualifier
+# Minimum distinct clusters a qualifier must span before it can promote to a
+# sub-domain.  A single-cluster qualifier adds hierarchy depth without
+# navigational value — the sub-domain would be a 1:1 wrapper.  Consumed by
+# both engine._propose_sub_domains and the readiness emergence primitive.
+SUB_DOMAIN_MIN_CLUSTER_BREADTH = 2
 
 # Sub-domain archival — much shorter than the 90-day top-level domain threshold.
 # Sub-domains are created and reparented within a single Phase 5 call, so one

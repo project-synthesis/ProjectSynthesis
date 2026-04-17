@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import PromptCluster
 from app.schemas.domains import DomainInfo
+from app.schemas.sub_domain_readiness import DomainReadinessReport
+from app.services.taxonomy import sub_domain_readiness as readiness_service
 from app.services.taxonomy.coloring import compute_max_distance_color
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,54 @@ async def list_domains(db: AsyncSession = Depends(get_db)) -> list[DomainInfo]:
     except Exception as exc:
         logger.error("GET /api/domains failed: %s", exc, exc_info=True)
         raise HTTPException(500, "Failed to load domains") from exc
+
+
+@router.get("/readiness", response_model=list[DomainReadinessReport])
+async def list_domain_readiness(
+    fresh: bool = False,
+    db: AsyncSession = Depends(get_db),
+) -> list[DomainReadinessReport]:
+    """Batch domain + sub-domain readiness for every top-level domain.
+
+    Returns reports sorted critical → healthy (stability tier), then by
+    emergence gap ascending. Pass ``fresh=true`` to bypass the 30s TTL
+    cache and force live recomputation.
+    """
+    try:
+        return await readiness_service.compute_all_domain_readiness(db, fresh=fresh)
+    except OperationalError as exc:
+        logger.warning("GET /api/domains/readiness DB contention: %s", exc)
+        raise HTTPException(503, "Database busy — retry in a moment") from exc
+    except Exception as exc:
+        logger.error("GET /api/domains/readiness failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Failed to compute readiness") from exc
+
+
+@router.get("/{domain_id}/readiness", response_model=DomainReadinessReport)
+async def get_domain_readiness(
+    domain_id: str,
+    fresh: bool = False,
+    db: AsyncSession = Depends(get_db),
+) -> DomainReadinessReport:
+    """Readiness report for a single top-level domain.
+
+    Combines the dissolution stability view with the sub-domain emergence
+    cascade. ``fresh=true`` bypasses the 30s TTL cache.
+    """
+    domain = await db.get(PromptCluster, domain_id)
+    if domain is None:
+        raise HTTPException(404, "Domain not found")
+    if domain.state != "domain":
+        raise HTTPException(422, f"Cluster {domain_id} is not a domain node (state='{domain.state}')")
+
+    try:
+        return await readiness_service.compute_domain_readiness(db, domain, fresh=fresh)
+    except OperationalError as exc:
+        logger.warning("GET /api/domains/%s/readiness DB contention: %s", domain_id, exc)
+        raise HTTPException(503, "Database busy — retry in a moment") from exc
+    except Exception as exc:
+        logger.error("GET /api/domains/%s/readiness failed: %s", domain_id, exc, exc_info=True)
+        raise HTTPException(500, "Failed to compute readiness") from exc
 
 
 @router.post("/{domain_id}/promote", response_model=DomainInfo)

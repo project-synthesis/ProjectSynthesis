@@ -982,6 +982,77 @@ class TestSubDomainDissolution:
         assert sub.state == "domain"
 
     @pytest.mark.asyncio
+    async def test_source3_dynamic_keyword_parity_prevents_drift(
+        self, db, mock_provider
+    ):
+        """Reeval must match Source 3 (raw_prompt × dynamic keywords) like create does.
+
+        Reproduces the measurement-drift flip-flop: a sub-domain created via the
+        Source 3 path (TF-IDF dynamic keyword like "fastapi") must survive
+        re-evaluation when its opts still carry that keyword in ``raw_prompt``,
+        even when ``domain_raw`` and ``intent_label`` do not contain it.
+
+        Prior behaviour: reeval selects only ``domain_raw`` + ``intent_label`` —
+        Source 3 is missing entirely, so all opts score 0% consistency and the
+        sub-domain is dissolved despite being a perfectly good cluster. The
+        warm-path ``_propose_sub_domains`` re-creates it the next cycle
+        (because Source 3 *is* available there), producing the flip-flop
+        observed in taxonomy events (token-ops, query).
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        domain.cluster_metadata = write_meta(
+            domain.cluster_metadata,
+            signal_keywords=[("fastapi", 1.0)],
+        )
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain("fastapi", parent_id=domain.id, age_hours=24)
+        db.add(sub)
+        await db.flush()
+
+        cluster_ids = []
+        for i in range(2):
+            c = _make_cluster(
+                f"fastapi-cluster-{i}", domain="backend", parent_id=sub.id
+            )
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+
+        # 6 opts whose qualifier signal is ONLY in raw_prompt (Source 3).
+        # - domain_raw="backend": no qualifier parse → Source 1 miss
+        # - intent_label="add rest endpoint": "fastapi" absent → Source 2 miss
+        # - raw_prompt contains "fastapi": Source 3 hit (weight 1.0 ≥ 0.8 floor)
+        for i in range(6):
+            db.add(
+                Optimization(
+                    raw_prompt=f"build a fastapi endpoint for route {i}",
+                    intent_label="add rest endpoint",
+                    domain_raw="backend",
+                    cluster_id=cluster_ids[i % 2],
+                    embedding=_random_embedding(200 + i),
+                )
+            )
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels
+        )
+
+        assert dissolved == [], (
+            "Sub-domain created via Source 3 (dynamic keyword) must survive "
+            "re-evaluation when opts still carry that keyword in raw_prompt. "
+            "If this fails, reeval is using stricter matching than create "
+            "and will produce flip-flop dissolve/recreate cycles."
+        )
+        await db.refresh(sub)
+        assert sub.state == "domain"
+
+    @pytest.mark.asyncio
     async def test_seed_sub_domain_can_dissolve(self, db, mock_provider):
         """Seed sub-domains are NOT protected — dissolve when they fail consistency."""
         from unittest.mock import AsyncMock
