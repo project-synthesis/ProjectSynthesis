@@ -236,7 +236,23 @@ vi.mock('three', () => {
   class IcosahedronGeometry extends _GeomBase {}
   class DodecahedronGeometry extends _GeomBase {}
   class EdgesGeometry extends _GeomBase {}
-  class RingGeometry extends _GeomBase {}
+  // RingGeometry captures its constructor args so tests can observe ring
+  // geometry dimensions. Production code builds the ring as
+  // `new THREE.RingGeometry(radius, radius + thickness, segments)` where
+  // `radius = node.size * READINESS_RING_RADIUS_FACTOR`. The size-drift
+  // regression test reads `innerRadius` / `outerRadius` after rebuild to
+  // assert geometry tracks `node.size`.
+  class RingGeometry extends _GeomBase {
+    innerRadius: number;
+    outerRadius: number;
+    segments: number;
+    constructor(inner = 0, outer = 0, segments = 0) {
+      super();
+      this.innerRadius = inner;
+      this.outerRadius = outer;
+      this.segments = segments;
+    }
+  }
   class MeshBasicMaterial {
     color = new Color();
     opacity = 1;
@@ -1412,5 +1428,129 @@ describe('SemanticTopology — readiness ring overlay', () => {
       cancelSpy.mockRestore();
       perfSpy.mockRestore();
     }
+  });
+
+  it('rebuilds ring geometry when domain size changes', async () => {
+    // Bug (I2): the Cycle 4 "smarter ring merge" reuse branch in
+    // `rebuildScene` (around lines 548-563) keeps the existing ring mesh
+    // when a domain's id is unchanged, and updates `lastTier` / position /
+    // lookAt — but it never recreates the RingGeometry when `node.size`
+    // changes. `node.size` reflects cluster size and evolves when
+    // `member_count` grows (clusterPhysics reconciles base scale around
+    // line ~750). Pre-refactor (Cycle 3) the ring was disposed and
+    // rebuilt every rebuild, so radius always tracked size. The Cycle 4
+    // reuse branch broke that invariant.
+    //
+    // Contract: after a rebuild where `node.size` changes for the same
+    // domain id, the ring's geometry inner/outer radius MUST reflect the
+    // new `size * READINESS_RING_RADIUS_FACTOR`. Under the fix, the reuse
+    // branch tracks `lastSize` on `ReadinessRingEntry` and disposes +
+    // recreates the geometry when `lastSize !== node.size`. Under the bug,
+    // the mesh keeps its first-build geometry and the ring is visibly
+    // drifted (undersized for grown clusters, oversized for shrunk).
+    const THREE = await import('three');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const RingGeometryClass = (THREE as any).RingGeometry;
+
+    const READINESS_RING_RADIUS_FACTOR = 1.25; // must match component constant
+
+    const domainNode = (size: number) => ({
+      id: 'd1',
+      position: [0, 0, 0] as [number, number, number],
+      color: '#b44aff',
+      size,
+      opacity: 1,
+      persistence: 1,
+      state: 'domain' as const,
+      label: 'backend',
+      visible: true,
+      coherence: 0.5,
+      avgScore: 7,
+      domain: 'backend',
+      memberCount: 10,
+      isSubDomain: false,
+      readinessTier: 'guarded' as const,
+    });
+
+    // First build at size=1.0 → expected outerRadius ≈ 1.25
+    _sceneOverride.value = { nodes: [domainNode(1.0)], edges: [] };
+
+    const { clustersStore } = await import('$lib/stores/clusters.svelte');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    clustersStore.taxonomyTree = [
+      {
+        id: 'd1',
+        label: 'backend',
+        state: 'domain',
+        domain: 'backend',
+        member_count: 10,
+        parent_id: null,
+      } as any,
+    ];
+
+    const { container } = render(SemanticTopology);
+    await new Promise((r) => setTimeout(r, 50));
+    clustersStore.taxonomyTree = [...clustersStore.taxonomyTree];
+
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('[data-readiness-ring="d1"]').length).toBe(1);
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lastScene = (globalThis as any).__semTopLastScene as
+      | { children: unknown[] }
+      | undefined;
+    expect(lastScene).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ringGroup = lastScene!.children.find((c: any) =>
+      c?.userData?.isReadinessRingGroup === true,
+    ) as { children: unknown[] } | undefined;
+    expect(ringGroup).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const findRing = () =>
+      ringGroup!.children.find((c: any) =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        c instanceof (THREE as any).Mesh && c.geometry instanceof RingGeometryClass,
+      ) as { geometry: { innerRadius: number; outerRadius: number } } | undefined;
+
+    const ringBefore = findRing();
+    expect(ringBefore).toBeDefined();
+    // Sanity: initial geometry matches size=1.0 — inner = radius,
+    // outer = radius + thickness (per RingGeometry ctor in rebuildScene).
+    const READINESS_RING_THICKNESS = 0.05;
+    expect(ringBefore!.geometry.innerRadius).toBeCloseTo(
+      1.0 * READINESS_RING_RADIUS_FACTOR,
+      5,
+    );
+    expect(ringBefore!.geometry.outerRadius).toBeCloseTo(
+      1.0 * READINESS_RING_RADIUS_FACTOR + READINESS_RING_THICKNESS,
+      5,
+    );
+
+    // Now mutate size to 2.0 and trigger a rebuild. Same domain id, so
+    // the reuse branch fires (existing = _readinessRings.get('d1')).
+    _sceneOverride.value = { nodes: [domainNode(2.0)], edges: [] };
+    clustersStore.taxonomyTree = [...clustersStore.taxonomyTree];
+
+    // Give the reactive rebuild a tick to land — the mesh remains in the
+    // ring group (reuse branch doesn't re-parent), but under the fix its
+    // `.geometry` is a freshly constructed RingGeometry.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const ringAfter = findRing();
+    expect(ringAfter).toBeDefined();
+    // Under the fix: geometry was disposed + recreated with the new
+    // radius (inner = 2.0 * 1.25 = 2.5, outer = 2.5 + 0.05 = 2.55).
+    // Under the bug (I2): geometry is the original RingGeometry from
+    // the first build, so innerRadius still equals 1.25 (the size=1.0
+    // value) instead of 2.5.
+    expect(ringAfter!.geometry.innerRadius).toBeCloseTo(
+      2.0 * READINESS_RING_RADIUS_FACTOR,
+      5,
+    );
+    expect(ringAfter!.geometry.outerRadius).toBeCloseTo(
+      2.0 * READINESS_RING_RADIUS_FACTOR + READINESS_RING_THICKNESS,
+      5,
+    );
   });
 });
