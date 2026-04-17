@@ -951,8 +951,8 @@ def _publish_crossings(
         except Exception:
             logger.debug(
                 "event_bus.publish failed for domain_readiness_changed "
-                "(domain_id=%s axis=%s): %s",
-                report.domain_id, crossing["axis"], "suppressed",
+                "(domain_id=%s axis=%s)",
+                report.domain_id, crossing["axis"],
                 exc_info=True,
             )
         try:
@@ -985,7 +985,11 @@ def _maybe_emit_events(
     try:
         _publish_crossings(report, now=now)
     except Exception:
-        pass
+        logger.debug(
+            "_publish_crossings failed unexpectedly (domain_id=%s)",
+            domain_node.id,
+            exc_info=True,
+        )
 
     # 2. Routine readiness log — debounced.
     last = _event_debounce.get(domain_node.id, 0.0)
@@ -994,12 +998,12 @@ def _maybe_emit_events(
     _event_debounce[domain_node.id] = now
 
     try:
-        logger = get_event_logger()
+        event_logger = get_event_logger()
     except RuntimeError:
         return
 
     try:
-        logger.log_decision(
+        event_logger.log_decision(
             path="api",
             op="readiness",
             decision="sub_domain_readiness_computed",
@@ -1023,7 +1027,7 @@ def _maybe_emit_events(
                 "blocked_reason": report.emergence.blocked_reason,
             },
         )
-        logger.log_decision(
+        event_logger.log_decision(
             path="api",
             op="readiness",
             decision="domain_stability_computed",
