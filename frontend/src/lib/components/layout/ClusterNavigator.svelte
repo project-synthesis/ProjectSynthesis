@@ -10,6 +10,18 @@
   import { getOptimization } from '$lib/api/client';
   import { tooltip } from '$lib/actions/tooltip';
   import { CLUSTER_NAV_TOOLTIPS } from '$lib/utils/ui-tooltips';
+  import DomainReadinessPanel from '$lib/components/taxonomy/DomainReadinessPanel.svelte';
+  import { readinessStore } from '$lib/stores/readiness.svelte';
+  import CollapsibleSectionHeader from '$lib/components/shared/CollapsibleSectionHeader.svelte';
+  import { navCollapse } from '$lib/stores/nav_collapse.svelte';
+
+  function handleReadinessSelect(domainId: string): void {
+    clustersStore.selectCluster(domainId);
+  }
+  function handleReadinessRefresh(e: MouseEvent): void {
+    e.stopPropagation();
+    void readinessStore.loadAll(true);
+  }
 
   const PAGE_SIZE = 500;
 
@@ -247,13 +259,10 @@
     clustersStore.setStateFilter(f);
   }
 
-  let collapsedSubDomains = $state(new Set<string>());
-
+  // Sub-domain collapse state migrated to navCollapse (key: `subdomain:<id>`)
+  // so persistence is inherited from the shared store.
   function toggleSubDomain(subDomainId: string) {
-    const next = new Set(collapsedSubDomains);
-    if (next.has(subDomainId)) next.delete(subDomainId);
-    else next.add(subDomainId);
-    collapsedSubDomains = next;
+    navCollapse.toggle(`subdomain:${subDomainId}`);
   }
 
   const OPT_DISPLAY_LIMIT = 8;
@@ -407,10 +416,40 @@
     {:else if totalFamilies === 0 && templateClusters.length === 0}
       <p class="empty-note">Optimize your first prompt to start building your pattern library.</p>
     {:else}
+      <!-- Domain readiness overview — lifecycle proximity across all domains -->
+      <div class="section-wrapper">
+        <CollapsibleSectionHeader
+          open={navCollapse.isOpen('readiness')}
+          onToggle={() => navCollapse.toggle('readiness')}
+          label="DOMAIN READINESS"
+          count={readinessStore.reports.length}
+        >
+          {#snippet actions()}
+            <button
+              type="button"
+              class="section-action"
+              onclick={handleReadinessRefresh}
+              disabled={readinessStore.loading}
+              use:tooltip={'Force a fresh recomputation (bypasses 30s backend cache).'}
+              aria-label="Refresh readiness"
+            >{readinessStore.loading ? '···' : 'SYNC'}</button>
+          {/snippet}
+        </CollapsibleSectionHeader>
+        {#if navCollapse.isOpen('readiness')}
+          <DomainReadinessPanel onSelect={handleReadinessSelect} hideHeader={true} />
+        {/if}
+      </div>
+
       <!-- Proven Templates section -->
       {#if templateClusters.length > 0}
-        <div class="templates-section">
-          <div class="templates-heading">PROVEN TEMPLATES <span class="badge-neon">{templateClusters.length}</span></div>
+        <div class="section-wrapper">
+          <CollapsibleSectionHeader
+            open={navCollapse.isOpen('templates')}
+            onToggle={() => navCollapse.toggle('templates')}
+            label="PROVEN TEMPLATES"
+            count={templateClusters.length}
+          />
+          {#if navCollapse.isOpen('templates')}
           {#each templateClusters as cluster (cluster.id)}
             <div class="template-row">
               <div class="template-info">
@@ -474,6 +513,7 @@
               </div>
             {/if}
           {/each}
+          {/if}
         </div>
       {/if}
 
@@ -487,185 +527,149 @@
         </div>
       {/if}
 
+      <!--
+        Shared cluster-row snippet — rendered identically for direct clusters
+        under a domain AND clusters under a nested sub-domain. Only the
+        indent class differs (family-row--subdomain adds 24px left padding).
+        Keeps the selection/detail/linked-opts contract in one place.
+      -->
+      {#snippet clusterRow(family: ClusterNode, nested: boolean)}
+        <button
+          class="family-row"
+          class:family-row--subdomain={nested}
+          class:family-row--expanded={expandedId === family.id}
+          data-cluster-id={family.id}
+          onclick={() => toggleExpand(family)}
+          style="--state-color: {stateColor(family.state)};"
+        >
+          <span class="family-label">{family.label}</span>
+          <span class="family-badges">
+            <span class="member-count font-mono" use:tooltip={`${family.member_count} ${family.member_count === 1 ? 'member' : 'members'}`}>{family.member_count}m</span>
+            <span
+              class="badge-usage font-mono"
+              class:badge-usage--active={family.usage_count > 0}
+              use:tooltip={CLUSTER_NAV_TOOLTIPS.usage_count}
+            >{family.usage_count}</span>
+            <span
+              class="badge-score font-mono"
+              style="color: {scoreColor(family.avg_score)};"
+              use:tooltip={CLUSTER_NAV_TOOLTIPS.avg_score}
+            >
+              {formatScore(family.avg_score)}
+            </span>
+          </span>
+        </button>
+        {#if expandedId === family.id}
+          <div class="family-detail">
+            {#if clustersStore.clusterDetailLoading}
+              <p class="detail-note">Loading...</p>
+            {:else if clustersStore.clusterDetail}
+              <div class="detail-stats">
+                <span style="color: {stateColor(clustersStore.clusterDetail.state)}">{clustersStore.clusterDetail.state}</span>
+                <span>{clustersStore.clusterDetail.member_count} members</span>
+                {#if clustersStore.clusterDetail.preferred_strategy}
+                  <span>{clustersStore.clusterDetail.preferred_strategy}</span>
+                {/if}
+              </div>
+              {#if clustersStore.clusterDetail.optimizations.length > 0}
+                {@const allOpts = clustersStore.clusterDetail.optimizations}
+                {@const visibleOpts = allOpts.slice(0, OPT_DISPLAY_LIMIT)}
+                <div class="linked-opts">
+                  {#each visibleOpts as opt (opt.id)}
+                    <button
+                      class="linked-opt-row"
+                      onclick={() => openLinkedOpt(opt.trace_id, opt.id)}
+                      use:tooltip={opt.raw_prompt}
+                    >
+                      <span class="linked-opt-label">{opt.intent_label || (opt.raw_prompt ? opt.raw_prompt.slice(0, 40) + '..' : 'Untitled')}</span>
+                      {#if opt.created_at}
+                        <span class="linked-opt-time font-mono">{formatRelativeTime(opt.created_at)}</span>
+                      {/if}
+                      <span
+                        class="linked-opt-score font-mono"
+                        style="color: {scoreColor(opt.overall_score)};"
+                      >{formatScore(opt.overall_score)}</span>
+                    </button>
+                  {/each}
+                  {#if allOpts.length > OPT_DISPLAY_LIMIT}
+                    <p class="detail-note">{allOpts.length - OPT_DISPLAY_LIMIT} more in Inspector</p>
+                  {/if}
+                </div>
+              {:else}
+                <p class="detail-note">No linked optimizations yet.</p>
+              {/if}
+            {:else if clustersStore.clusterDetailError}
+              <p class="detail-note">Failed to load detail.</p>
+            {:else}
+              <div class="skeleton-row">
+                <div class="skeleton-bar skeleton-wide"></div>
+                <div class="skeleton-bar skeleton-narrow"></div>
+              </div>
+            {/if}
+          </div>
+        {/if}
+      {/snippet}
+
       <!-- Domain groups (filtered) — hierarchical with nested sub-domains -->
       {#each domains as domain (domain)}
         {@const group = hierarchicalGrouped[domain]}
+        {@const domainDisplay = domain.startsWith('project:') ? domain.slice(8) : domain}
+        {@const domainKey = `domain:${domain}`}
+        {@const domainOpen = navCollapse.isOpen(domainKey)}
         <div class="domain-group">
-          <button
-            class="domain-header"
-            class:domain-header--highlighted={clustersStore.highlightedDomain === domain}
-            onclick={() => clustersStore.toggleHighlightDomain(domain)}
-            use:tooltip={CLUSTER_NAV_TOOLTIPS.highlight_graph}
+          <CollapsibleSectionHeader
+            open={domainOpen}
+            onToggle={() => navCollapse.toggle(domainKey)}
+            ariaLabel={`Toggle ${domainDisplay} domain`}
           >
-            <span class="domain-dot" style="background: {taxonomyColor(domain.startsWith('project:') ? 'general' : domain)};"></span>
-            <span class="domain-label">{domain.startsWith('project:') ? domain.slice(8) : domain}</span>
-            <span class="domain-count">{group.totalCount}</span>
-          </button>
+            {#snippet header()}
+              <button
+                type="button"
+                class="domain-label-btn"
+                class:domain-label-btn--highlighted={clustersStore.highlightedDomain === domain}
+                onclick={(e) => {
+                  e.stopPropagation();
+                  clustersStore.toggleHighlightDomain(domain);
+                }}
+                use:tooltip={CLUSTER_NAV_TOOLTIPS.highlight_graph}
+              >
+                <span class="domain-dot" style="background: {taxonomyColor(domain.startsWith('project:') ? 'general' : domain)};"></span>
+                <span class="domain-label">{domainDisplay}</span>
+                <span class="domain-count">{group.totalCount}</span>
+              </button>
+            {/snippet}
+          </CollapsibleSectionHeader>
+          {#if domainOpen}
           <!-- Direct clusters (not in any sub-domain) -->
           {#each group.directClusters as family (family.id)}
-            <button
-              class="family-row"
-              class:family-row--expanded={expandedId === family.id}
-              data-cluster-id={family.id}
-              onclick={() => toggleExpand(family)}
-              style="--state-color: {stateColor(family.state)};"
-            >
-              <span class="family-label">{family.label}</span>
-              <span class="family-badges">
-                <span class="member-count font-mono" use:tooltip={`${family.member_count} ${family.member_count === 1 ? 'member' : 'members'}`}>{family.member_count}m</span>
-                <span
-                  class="badge-usage font-mono"
-                  class:badge-usage--active={family.usage_count > 0}
-                  use:tooltip={CLUSTER_NAV_TOOLTIPS.usage_count}
-                >{family.usage_count}</span>
-                <span
-                  class="badge-score font-mono"
-                  style="color: {scoreColor(family.avg_score)};"
-                  use:tooltip={CLUSTER_NAV_TOOLTIPS.avg_score}
-                >
-                  {formatScore(family.avg_score)}
-                </span>
-              </span>
-            </button>
-            {#if expandedId === family.id}
-              <div class="family-detail">
-                {#if clustersStore.clusterDetailLoading}
-                  <p class="detail-note">Loading...</p>
-                {:else if clustersStore.clusterDetail}
-                  <div class="detail-stats">
-                    <span style="color: {stateColor(clustersStore.clusterDetail.state)}">{clustersStore.clusterDetail.state}</span>
-                    <span>{clustersStore.clusterDetail.member_count} members</span>
-                    {#if clustersStore.clusterDetail.preferred_strategy}
-                      <span>{clustersStore.clusterDetail.preferred_strategy}</span>
-                    {/if}
-                  </div>
-                  {#if clustersStore.clusterDetail.optimizations.length > 0}
-                    {@const allOpts = clustersStore.clusterDetail.optimizations}
-                    {@const visibleOpts = allOpts.slice(0, OPT_DISPLAY_LIMIT)}
-                    <div class="linked-opts">
-                      {#each visibleOpts as opt (opt.id)}
-                        <button
-                          class="linked-opt-row"
-                          onclick={() => openLinkedOpt(opt.trace_id, opt.id)}
-                          use:tooltip={opt.raw_prompt}
-                        >
-                          <span class="linked-opt-label">{opt.intent_label || (opt.raw_prompt ? opt.raw_prompt.slice(0, 40) + '..' : 'Untitled')}</span>
-                          {#if opt.created_at}
-                            <span class="linked-opt-time font-mono">{formatRelativeTime(opt.created_at)}</span>
-                          {/if}
-                          <span
-                            class="linked-opt-score font-mono"
-                            style="color: {scoreColor(opt.overall_score)};"
-                          >{formatScore(opt.overall_score)}</span>
-                        </button>
-                      {/each}
-                      {#if allOpts.length > OPT_DISPLAY_LIMIT}
-                        <p class="detail-note">{allOpts.length - OPT_DISPLAY_LIMIT} more in Inspector</p>
-                      {/if}
-                    </div>
-                  {:else}
-                    <p class="detail-note">No linked optimizations yet.</p>
-                  {/if}
-                {:else if clustersStore.clusterDetailError}
-                  <p class="detail-note">Failed to load detail.</p>
-                {:else}
-                  <div class="skeleton-row">
-                    <div class="skeleton-bar skeleton-wide"></div>
-                    <div class="skeleton-bar skeleton-narrow"></div>
-                  </div>
-                {/if}
-              </div>
-            {/if}
+            {@render clusterRow(family, false)}
           {/each}
           <!-- Sub-domain groups (nested under parent domain) -->
           {#each group.subDomains as sub (sub.id)}
-            <button
-              class="subdomain-header"
-              class:subdomain-header--collapsed={collapsedSubDomains.has(sub.id)}
-              onclick={() => toggleSubDomain(sub.id)}
-            >
-              <span class="domain-dot" style="background: {taxonomyColor(sub.label)};"></span>
-              <span class="subdomain-label">{sub.displayLabel}</span>
-              <span class="subdomain-count">{sub.clusters.length}</span>
-            </button>
-            {#if !collapsedSubDomains.has(sub.id)}
-              {#each sub.clusters as family (family.id)}
-                <button
-                  class="family-row family-row--subdomain"
-                  class:family-row--expanded={expandedId === family.id}
-                  data-cluster-id={family.id}
-                  onclick={() => toggleExpand(family)}
-                  style="--state-color: {stateColor(family.state)};"
-                >
-                  <span class="family-label">{family.label}</span>
-                  <span class="family-badges">
-                    <span class="member-count font-mono" use:tooltip={`${family.member_count} ${family.member_count === 1 ? 'member' : 'members'}`}>{family.member_count}m</span>
-                    <span
-                      class="badge-usage font-mono"
-                      class:badge-usage--active={family.usage_count > 0}
-                      use:tooltip={CLUSTER_NAV_TOOLTIPS.usage_count}
-                    >{family.usage_count}</span>
-                    <span
-                      class="badge-score font-mono"
-                      style="color: {scoreColor(family.avg_score)};"
-                      use:tooltip={CLUSTER_NAV_TOOLTIPS.avg_score}
-                    >
-                      {formatScore(family.avg_score)}
-                    </span>
-                  </span>
-                </button>
-                {#if expandedId === family.id}
-                  <div class="family-detail">
-                    {#if clustersStore.clusterDetailLoading}
-                      <p class="detail-note">Loading...</p>
-                    {:else if clustersStore.clusterDetail}
-                      <div class="detail-stats">
-                        <span style="color: {stateColor(clustersStore.clusterDetail.state)}">{clustersStore.clusterDetail.state}</span>
-                        <span>{clustersStore.clusterDetail.member_count} members</span>
-                        {#if clustersStore.clusterDetail.preferred_strategy}
-                          <span>{clustersStore.clusterDetail.preferred_strategy}</span>
-                        {/if}
-                      </div>
-                      {#if clustersStore.clusterDetail.optimizations.length > 0}
-                        {@const allOpts = clustersStore.clusterDetail.optimizations}
-                        {@const visibleOpts = allOpts.slice(0, OPT_DISPLAY_LIMIT)}
-                        <div class="linked-opts">
-                          {#each visibleOpts as opt (opt.id)}
-                            <button
-                              class="linked-opt-row"
-                              onclick={() => openLinkedOpt(opt.trace_id, opt.id)}
-                              use:tooltip={opt.raw_prompt}
-                            >
-                              <span class="linked-opt-label">{opt.intent_label || (opt.raw_prompt ? opt.raw_prompt.slice(0, 40) + '..' : 'Untitled')}</span>
-                              {#if opt.created_at}
-                                <span class="linked-opt-time font-mono">{formatRelativeTime(opt.created_at)}</span>
-                              {/if}
-                              <span
-                                class="linked-opt-score font-mono"
-                                style="color: {scoreColor(opt.overall_score)};"
-                              >{formatScore(opt.overall_score)}</span>
-                            </button>
-                          {/each}
-                          {#if allOpts.length > OPT_DISPLAY_LIMIT}
-                            <p class="detail-note">{allOpts.length - OPT_DISPLAY_LIMIT} more in Inspector</p>
-                          {/if}
-                        </div>
-                      {:else}
-                        <p class="detail-note">No linked optimizations yet.</p>
-                      {/if}
-                    {:else if clustersStore.clusterDetailError}
-                      <p class="detail-note">Failed to load detail.</p>
-                    {:else}
-                      <div class="skeleton-row">
-                        <div class="skeleton-bar skeleton-wide"></div>
-                        <div class="skeleton-bar skeleton-narrow"></div>
-                      </div>
-                    {/if}
+            {@const subKey = `subdomain:${sub.id}`}
+            {@const subOpen = !navCollapse.isCollapsed(subKey)}
+            <div class="subdomain-wrapper" class:subdomain-wrapper--collapsed={!subOpen}>
+              <CollapsibleSectionHeader
+                open={subOpen}
+                onToggle={() => toggleSubDomain(sub.id)}
+                ariaLabel={`Toggle ${sub.displayLabel} sub-domain`}
+              >
+                {#snippet header()}
+                  <div class="subdomain-label-row">
+                    <span class="domain-dot" style="background: {taxonomyColor(sub.label)};"></span>
+                    <span class="subdomain-label">{sub.displayLabel}</span>
+                    <span class="subdomain-count">{sub.clusters.length}</span>
                   </div>
-                {/if}
+                {/snippet}
+              </CollapsibleSectionHeader>
+            </div>
+            {#if subOpen}
+              {#each sub.clusters as family (family.id)}
+                {@render clusterRow(family, true)}
               {/each}
             {/if}
           {/each}
+          {/if}
         </div>
       {/each}
       {#if hasMore}
@@ -854,23 +858,41 @@
     transform: scale(0.92);
   }
 
-  /* ---- Proven Templates ---- */
-  .templates-section {
-    padding: 4px 0;
-    border-bottom: 1px solid var(--color-border-subtle);
+  /* ---- Shared section wrapper (readiness + templates) ---- */
+  .section-wrapper {
+    padding: 0 0 4px;
     margin-bottom: 4px;
   }
 
-  .templates-heading {
-    font-size: 11px;
-    font-family: var(--font-display, var(--font-sans));
-    font-weight: 700;
-    color: var(--color-text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    padding: 2px 6px 4px;
+  /* Trailing action button inside a CollapsibleSectionHeader (e.g., SYNC). */
+  .section-action {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    padding: 0 6px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    box-sizing: border-box;
+    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  .section-action:hover:not(:disabled) {
+    color: var(--color-neon-cyan);
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+  }
+
+  .section-action:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* ---- Proven Templates ---- */
   .template-row {
     display: flex;
     align-items: center;
@@ -1121,32 +1143,31 @@
     margin-bottom: 4px;
   }
 
-  .domain-header {
+  .domain-label-btn {
+    all: unset;
     display: flex;
     align-items: center;
     gap: 4px;
-    height: 20px;
-    padding: 0 6px;
     width: 100%;
-    border: none;
-    background: transparent;
+    height: 100%;
     cursor: pointer;
-    text-align: left;
+    box-sizing: border-box;
     transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
                 box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .domain-header:hover {
+  .domain-label-btn:hover {
     background: var(--color-bg-hover);
   }
 
-  .domain-header:active {
-    background: var(--color-bg-hover);
-  }
-
-  .domain-header--highlighted {
+  .domain-label-btn--highlighted {
     box-shadow: inset 0 0 0 1px var(--color-border-accent);
     background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
+  }
+
+  .domain-label-btn:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
+    outline-offset: -1px;
   }
 
   .domain-dot {
@@ -1174,30 +1195,26 @@
   }
 
   /* ---- Sub-domain headers ---- */
-  .subdomain-header {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    width: 100%;
-    height: 20px;
-    padding: 0 6px 0 12px;
-    background: transparent;
-    border: none;
-    border-left: 2px solid color-mix(in srgb, var(--color-text-dim) 30%, transparent);
-    cursor: pointer;
+  .subdomain-wrapper {
+    border-left: 1px solid color-mix(in srgb, var(--color-text-dim) 30%, transparent);
     margin-top: 2px;
   }
 
-  .subdomain-header:hover {
-    background: var(--color-bg-hover);
-  }
-
-  .subdomain-header--collapsed {
+  .subdomain-wrapper--collapsed {
     opacity: 0.6;
   }
 
-  .subdomain-header--collapsed:hover {
+  .subdomain-wrapper--collapsed:hover {
     opacity: 1;
+  }
+
+  .subdomain-label-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+    padding-left: 4px;
   }
 
   .subdomain-label {
