@@ -984,4 +984,77 @@ describe('SemanticTopology — readiness ring overlay', () => {
     // d2 (highlighted) keeps its base opacity.
     expect(ringD2.material.opacity).toBeCloseTo(BASE, 5);
   });
+
+  it('updates ring tier marker when sceneData tier changes', async () => {
+    // Contract: the `{#each sceneData?.nodes.filter(hasReadinessRing) ...}`
+    // block in SemanticTopology must reactively re-render when a domain
+    // node's `readinessTier` changes between scene rebuilds. If the each
+    // block were changed to a non-reactive snapshot (e.g. captured into a
+    // plain `let` outside the template), the marker's `data-readiness-tier`
+    // attribute would stay pinned to the initial value after a rebuild.
+    //
+    // This locks in the reactive contract that Task 8 (cubic-bezier tween
+    // on tier transition) depends on — the tween needs a reliable "tier
+    // changed" signal from the DOM-linked ring entry, which only works if
+    // the attribute tracks sceneData on every rebuild.
+    const domainNode = (tier: 'guarded' | 'ready' | 'healthy' | 'critical') => ({
+      id: 'd1',
+      position: [0, 0, 0] as [number, number, number],
+      color: '#b44aff',
+      size: 2,
+      opacity: 1,
+      persistence: 1,
+      state: 'domain' as const,
+      label: 'backend',
+      visible: true,
+      coherence: 0.5,
+      avgScore: 7,
+      domain: 'backend',
+      memberCount: 30,
+      isSubDomain: false,
+      readinessTier: tier,
+    });
+
+    _sceneOverride.value = { nodes: [domainNode('guarded')], edges: [] };
+
+    const { clustersStore } = await import('$lib/stores/clusters.svelte');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    clustersStore.taxonomyTree = [
+      {
+        id: 'd1',
+        label: 'backend',
+        state: 'domain',
+        domain: 'backend',
+        member_count: 30,
+        parent_id: null,
+      } as any,
+    ];
+
+    const { container } = render(SemanticTopology);
+    await new Promise((r) => setTimeout(r, 50));
+    clustersStore.taxonomyTree = [...clustersStore.taxonomyTree];
+
+    await vi.waitFor(() => {
+      const marker = container.querySelector('[data-readiness-ring="d1"]');
+      expect(marker).toBeTruthy();
+      expect(marker?.getAttribute('data-readiness-tier')).toBe('guarded');
+    });
+
+    // Swap in a new sceneData result with a different tier. Reassigning
+    // `taxonomyTree` nudges the `$effect` that calls `buildSceneData` (our
+    // mock returns the updated `_sceneOverride.value`), which updates the
+    // `sceneData` $state. The reactive each-block must propagate the new
+    // tier to `data-readiness-tier`.
+    _sceneOverride.value = { nodes: [domainNode('ready')], edges: [] };
+    clustersStore.taxonomyTree = [...clustersStore.taxonomyTree];
+
+    await vi.waitFor(
+      () => {
+        const marker = container.querySelector('[data-readiness-ring="d1"]');
+        expect(marker).toBeTruthy();
+        expect(marker?.getAttribute('data-readiness-tier')).toBe('ready');
+      },
+      { timeout: 500 },
+    );
+  });
 });
