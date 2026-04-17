@@ -6,6 +6,9 @@
   import { TAXONOMY_TOOLTIPS, TOPOLOGY_PANEL_TOOLTIPS } from '$lib/utils/metric-tooltips';
   import { tooltip } from '$lib/actions/tooltip';
   import ScoreSparkline from '$lib/components/shared/ScoreSparkline.svelte';
+  import DomainStabilityMeter from './DomainStabilityMeter.svelte';
+  import SubDomainEmergenceList from './SubDomainEmergenceList.svelte';
+  import { readinessStore } from '$lib/stores/readiness.svelte';
 
   interface Props {
     hideInsight?: boolean;
@@ -66,6 +69,22 @@
   const domainBelowFloor = $derived(
     domainChildren.filter(c => c.coherence != null && c.coherence < 0.5).length
   );
+
+  // Domain-mode readiness — fetched on selection, cached in readinessStore.
+  const domainReadiness = $derived(
+    mode === 'domain' && selectedId ? readinessStore.byDomain(selectedId) : null,
+  );
+
+  $effect(() => {
+    if (mode === 'domain' && selectedId) {
+      if (!readinessStore.isFresh) {
+        void readinessStore.loadAll();
+      }
+      if (!readinessStore.byDomain(selectedId)) {
+        void readinessStore.loadOne(selectedId);
+      }
+    }
+  });
 
   // Project-mode computed values
   const projectDomains = $derived(
@@ -270,6 +289,15 @@
       <div class="ip-bar-empty"></div>
     {/if}
   </div>
+
+  <!-- ROW 3.5: Readiness (domain mode only) -->
+  {#if mode === 'domain' && domainReadiness}
+    <div class="ip-row ip-readiness">
+      <DomainStabilityMeter report={domainReadiness.stability} />
+      <div class="ip-readiness-sep"></div>
+      <SubDomainEmergenceList report={domainReadiness.emergence} />
+    </div>
+  {/if}
 
   <!-- ROW 4: Insight (hidden when parent renders it separately) -->
   {#if !hideInsight}
@@ -538,6 +566,21 @@
   .ip-task-seg:nth-child(3) {
     border-color: color-mix(in srgb, var(--color-neon-green) 20%, transparent);
     background: color-mix(in srgb, var(--color-neon-green) 8%, transparent);
+  }
+
+  /* -- Row 3.5: Readiness -- */
+
+  .ip-readiness {
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ip-readiness-sep {
+    height: 1px;
+    width: 100%;
+    background: var(--color-border-subtle);
   }
 
   /* -- Row 4: Insight -- */

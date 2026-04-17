@@ -3,6 +3,7 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { domainStore } from '$lib/stores/domains.svelte';
+  import { readinessStore } from '$lib/stores/readiness.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import type { Preferences } from '$lib/stores/preferences.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
@@ -112,6 +113,7 @@
         if (type === 'taxonomy_changed') {
           clustersStore.invalidateClusters();
           domainStore.invalidate();
+          readinessStore.invalidate();
           addToast('created', 'Taxonomy updated');
         }
         if (type === 'taxonomy_activity') {
@@ -157,6 +159,7 @@
         }
         if (type === 'domain_created') {
           domainStore.invalidate();
+          readinessStore.invalidate();
         }
         if (type === 'routing_state_changed') {
           const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
@@ -210,6 +213,7 @@
         healthPoll();
         clustersStore.invalidateClusters();
         domainStore.invalidate();
+        readinessStore.invalidate();
         window.dispatchEvent(new CustomEvent('strategy-changed'));
       },
     );

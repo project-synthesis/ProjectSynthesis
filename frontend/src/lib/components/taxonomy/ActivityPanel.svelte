@@ -61,7 +61,8 @@
         || d === 'seed_persist_complete' || d === 'seed_taxonomy_complete'
         || d === 'seed_prompt_scored'
         || d === 'q_computed' || d === 'repaired'
-        || d === 'domains_created' || d === 'sub_domains_created')
+        || d === 'domains_created' || d === 'sub_domains_created'
+        || d === 'sub_domain_readiness_computed' || d === 'domain_stability_computed')
       return 'var(--color-text-secondary)';
     return 'var(--color-text-dim)';
   }
@@ -242,6 +243,23 @@
         return fixes || 'repaired';
       }
       return typeof c.count === 'number' ? `${c.count} zombies` : '';
+    }
+    if (e.op === 'readiness') {
+      const domain = typeof c.domain === 'string' ? c.domain : '';
+      const tier = typeof c.tier === 'string' ? c.tier : '';
+      if (e.decision === 'sub_domain_readiness_computed') {
+        const top = typeof c.top_qualifier === 'string' ? ` top="${c.top_qualifier}"` : '';
+        const gap = typeof c.gap_to_threshold === 'number'
+          ? ` gap=${(c.gap_to_threshold as number).toFixed(3)}` : '';
+        return `${domain} [${tier}]${top}${gap}`.trim();
+      }
+      if (e.decision === 'domain_stability_computed') {
+        const cons = typeof c.consistency === 'number' ? `cons=${(c.consistency as number).toFixed(2)}` : '';
+        const risk = typeof c.dissolution_risk === 'number'
+          ? `risk=${(c.dissolution_risk as number).toFixed(2)}` : '';
+        return `${domain} [${tier}] ${cons} ${risk}`.trim();
+      }
+      return domain;
     }
     if (e.op === 'seed') {
       if (e.decision === 'seed_agents_complete') {
