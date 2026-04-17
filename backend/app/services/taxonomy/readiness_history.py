@@ -18,8 +18,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from app.config import DATA_DIR
 from app.schemas.sub_domain_readiness import (
@@ -42,11 +43,17 @@ def _resolve_dir(base_dir: Path | None = None) -> Path:
 
 
 def _file_for_day(day: datetime, target_dir: Path) -> Path:
-    """Return the JSONL path inside ``target_dir`` for ``day``.
+    """Return the JSONL path inside ``target_dir`` for ``day`` (UTC date).
 
     ``target_dir`` is the already-resolved directory — pass the result of
     ``_resolve_dir()`` once per call rather than re-resolving here.
+
+    Naive datetimes are assumed-UTC; aware datetimes are converted to UTC
+    before the date is extracted so daily rotation never drifts with the
+    caller's local timezone.
     """
+    if day.tzinfo is not None:
+        day = day.astimezone(timezone.utc)
     return target_dir / f"snapshots-{day.strftime('%Y-%m-%d')}.jsonl"
 
 
@@ -65,7 +72,7 @@ def _snapshot_from_report(report: DomainReadinessReport) -> ReadinessSnapshot:
     )
 
 
-def _write_jsonl_row_sync(path: Path, payload: dict) -> None:
+def _write_jsonl_row_sync(path: Path, payload: dict[str, Any]) -> None:
     """Sync append writer — mirrors ``TaxonomyEventLogger._daily_file`` usage."""
     with path.open("a", encoding="utf-8") as fp:
         fp.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
