@@ -8,6 +8,7 @@
   import ScoreSparkline from '$lib/components/shared/ScoreSparkline.svelte';
   import DomainStabilityMeter from './DomainStabilityMeter.svelte';
   import SubDomainEmergenceList from './SubDomainEmergenceList.svelte';
+  import DomainReadinessSparkline from './DomainReadinessSparkline.svelte';
   import { readinessStore } from '$lib/stores/readiness.svelte';
 
   interface Props {
@@ -294,8 +295,20 @@
   {#if mode === 'domain' && domainReadiness}
     <div class="ip-row ip-readiness">
       <DomainStabilityMeter report={domainReadiness.stability} />
+      <DomainReadinessSparkline
+        domainId={domainReadiness.domain_id}
+        domainLabel={domainReadiness.domain_label}
+        metric="consistency"
+        baseline={domainReadiness.stability.dissolution_floor}
+      />
       <div class="ip-readiness-sep"></div>
       <SubDomainEmergenceList report={domainReadiness.emergence} />
+      <DomainReadinessSparkline
+        domainId={domainReadiness.domain_id}
+        domainLabel={domainReadiness.domain_label}
+        metric="gap"
+        baseline={0}
+      />
     </div>
   {/if}
 
