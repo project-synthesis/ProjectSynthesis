@@ -8,9 +8,60 @@
 
   let { content, class: className = '' }: Props = $props();
 
+  // Real HTML5 element whitelist. Tags outside this set are treated as
+  // pseudo-XML artifacts from prompt-structuring LLMs (e.g. <context>,
+  // <requirements>, <instructions>) and either stripped (when block-
+  // level, i.e. alone on a line) or escaped (when inline). This prevents
+  // two CommonMark failure modes:
+  //   1. An unknown opening tag on its own line starts an HTML block
+  //      (type 7), which suppresses markdown parsing on the very next
+  //      line until the following blank line — the reason a wrapped
+  //      **Bold**: renders as literal ** instead of <strong>.
+  //   2. An unknown inline tag like <seconds> becomes an empty element
+  //      with no visible text, erasing prompt placeholders from view.
+  const HTML_TAG_WHITELIST: ReadonlySet<string> = new Set([
+    'a','abbr','address','area','article','aside','audio',
+    'b','base','bdi','bdo','blockquote','body','br','button',
+    'canvas','caption','cite','code','col','colgroup',
+    'data','datalist','dd','del','details','dfn','dialog','div','dl','dt',
+    'em','embed','fieldset','figcaption','figure','footer','form',
+    'h1','h2','h3','h4','h5','h6','head','header','hgroup','hr','html',
+    'i','iframe','img','input','ins',
+    'kbd','label','legend','li','link',
+    'main','map','mark','menu','meta','meter',
+    'nav','noscript',
+    'object','ol','optgroup','option','output',
+    'p','param','picture','pre','progress',
+    'q','rp','rt','ruby',
+    's','samp','script','section','select','slot','small','source','span','strong','style','sub','summary','sup','svg',
+    'table','tbody','td','template','textarea','tfoot','th','thead','time','title','tr','track',
+    'u','ul','var','video','wbr',
+  ]);
+
+  function sanitizePseudoXml(raw: string): string {
+    // 1. Strip block-level pseudo-XML wrappers (tag alone on its line).
+    //    Consumes the trailing newline so markdown structure below is
+    //    unaffected (lists, headings, bold-colon lines all parse cleanly).
+    const blockRe = /^[ \t]*<(\/?)([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^<>]*)?>[ \t]*\r?\n?/gm;
+    let out = raw.replace(blockRe, (match, _slash, name) =>
+      HTML_TAG_WHITELIST.has(name.toLowerCase()) ? match : ''
+    );
+    // 2. Escape remaining inline pseudo-XML tags so they render as
+    //    literal text (e.g. placeholders like <seconds>) instead of
+    //    empty unknown elements.
+    const inlineRe = /<(\/?)([a-zA-Z][a-zA-Z0-9_-]*)((?:\s[^<>]*)?)>/g;
+    out = out.replace(inlineRe, (match, slash, name, attrs) =>
+      HTML_TAG_WHITELIST.has(name.toLowerCase())
+        ? match
+        : `&lt;${slash}${name}${attrs}&gt;`
+    );
+    return out;
+  }
+
   const rendered = $derived.by(() => {
     if (!content) return '';
-    return marked.parse(content, { breaks: true, gfm: true, async: false }) as string;
+    const safe = sanitizePseudoXml(content);
+    return marked.parse(safe, { breaks: true, gfm: true, async: false }) as string;
   });
 </script>
 

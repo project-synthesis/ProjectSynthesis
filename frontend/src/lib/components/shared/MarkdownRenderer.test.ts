@@ -94,4 +94,49 @@ describe('MarkdownRenderer', () => {
     const { container } = render(MarkdownRenderer, { props: { content: 'hello', class: 'extra-class' } });
     expect(container.querySelector('.md-render.extra-class')).toBeInTheDocument();
   });
+
+  // ---- Prompt-structuring pseudo-XML wrappers -----------------------
+  // Optimizer outputs often wrap sections in <context>, <requirements>,
+  // <constraints>, <instructions>, <deliverables>, <verification>, etc.
+  // CommonMark treats an unknown opening tag on its own line as an HTML
+  // block (type 7), suppressing markdown on the immediately following
+  // line until the next blank line.  The line right after the wrapper
+  // thus renders as literal `**text**` instead of <strong>text</strong>.
+
+  it('renders bold-with-colon on the line right after <context>', () => {
+    const content = '<context>\n**Singleton architecture**: detail text.';
+    const { container } = render(MarkdownRenderer, { props: { content } });
+    const strong = container.querySelector('strong');
+    expect(strong).toBeInTheDocument();
+    expect(strong).toHaveTextContent('Singleton architecture');
+  });
+
+  it('renders bullet list on the line right after <requirements>', () => {
+    const content = '<requirements>\n- First requirement\n- Second requirement';
+    const { container } = render(MarkdownRenderer, { props: { content } });
+    const items = container.querySelectorAll('li');
+    expect(items.length).toBe(2);
+    expect(items[0]).toHaveTextContent('First requirement');
+  });
+
+  it('renders headings on the line right after <instructions>', () => {
+    const content = '<instructions>\n## Phase One';
+    const { container } = render(MarkdownRenderer, { props: { content } });
+    const h2 = container.querySelector('h2');
+    expect(h2).toBeInTheDocument();
+    expect(h2).toHaveTextContent('Phase One');
+  });
+
+  it('preserves inline placeholder tags like <seconds> in paragraph text', () => {
+    const content = 'Retry after <seconds> seconds have elapsed.';
+    const { container } = render(MarkdownRenderer, { props: { content } });
+    expect(container.textContent).toContain('<seconds>');
+  });
+
+  it('does not leak the literal wrapper tag as visible text', () => {
+    const content = '<context>\n**Bold**: value\n</context>';
+    const { container } = render(MarkdownRenderer, { props: { content } });
+    expect(container.textContent).not.toContain('<context>');
+    expect(container.textContent).not.toContain('</context>');
+  });
 });
