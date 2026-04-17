@@ -105,24 +105,23 @@ class PreferencesStore {
    * `domain_readiness_notifications.muted_domain_ids`, then persist via PATCH.
    *
    * Contract:
-   *   - Guard: bails out as a no-op while `this.loading === true` so we never
-   *     race an in-flight `init()` PATCH response that would clobber the
-   *     optimistic mutation.
-   *   - Snapshot: captures the muted list by value (`[...arr]`) so the
-   *     rollback branch cannot alias the optimistic reference.
    *   - Optimistic: mutates local state *before* awaiting PATCH — UI updates
    *     immediately.
-   *   - Rollback: on PATCH rejection, restores the pre-toggle list and
-   *     surfaces a `'deleted'` toast. Swallows the error (matches the
+   *   - Rollback: on PATCH rejection, re-reads the CURRENT muted list and
+   *     toggles `domainId` membership again. This inverse-toggle revert is
+   *     scoped to the failed domain only, so concurrent toggles of other
+   *     domains (which may have succeeded in the meantime) are preserved.
+   *     Surfaces a `'deleted'` toast. Swallows the error (matches the
    *     rest-of-store pattern where `update()` also never re-throws).
+   *   - No loading guard: toggling during an in-flight `init()` reload is
+   *     harmless — the post-init `this.prefs = ...` assignment wins, which
+   *     matches user intent ("server truth is most recent").
    */
   async toggleDomainMute(domainId: string): Promise<void> {
-    if (this.loading) return;
     const current = this.prefs.domain_readiness_notifications;
-    const snapshot = [...current.muted_domain_ids];
-    const next = snapshot.includes(domainId)
-      ? snapshot.filter((id) => id !== domainId)
-      : [...snapshot, domainId];
+    const next = current.muted_domain_ids.includes(domainId)
+      ? current.muted_domain_ids.filter((id) => id !== domainId)
+      : [...current.muted_domain_ids, domainId];
     this.prefs.domain_readiness_notifications = {
       ...current,
       muted_domain_ids: next,
@@ -132,9 +131,13 @@ class PreferencesStore {
         domain_readiness_notifications: { muted_domain_ids: next },
       });
     } catch {
+      const live = this.prefs.domain_readiness_notifications;
+      const reverted = live.muted_domain_ids.includes(domainId)
+        ? live.muted_domain_ids.filter((id) => id !== domainId)
+        : [...live.muted_domain_ids, domainId];
       this.prefs.domain_readiness_notifications = {
-        ...this.prefs.domain_readiness_notifications,
-        muted_domain_ids: snapshot,
+        ...live,
+        muted_domain_ids: reverted,
       };
       toastStore.add('deleted', MUTE_TOGGLE_ERROR_MESSAGE);
     }
