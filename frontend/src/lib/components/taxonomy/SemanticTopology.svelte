@@ -284,9 +284,17 @@
 
     // Dispose + remove previous readiness rings before scene-clear so the
     // stale meshes don't leak through the disposed-geometry traversal.
+    // Guard dispose() lookups: in some test environments THREE is mocked
+    // with minimal stubs where `mesh.geometry`/`material` may be null or
+    // lack a `dispose` method. Production renderers always have real
+    // THREE.js instances — these guards are defensive and cheap.
     for (const entry of _readinessRings.values()) {
-      entry.mesh.geometry.dispose();
-      entry.material.dispose();
+      if (typeof entry.mesh.geometry?.dispose === 'function') {
+        entry.mesh.geometry.dispose();
+      }
+      if (typeof entry.material?.dispose === 'function') {
+        entry.material.dispose();
+      }
       renderer.scene.remove(entry.mesh);
     }
     _readinessRings.clear();
@@ -787,16 +795,7 @@
           ];
         });
 
-        // Guard rebuildScene so a rare dispose-path failure on re-entry
-        // (observed in test envs where mocked scene.traverse doesn't clean
-        // up disposed meshes) doesn't abort the effect and block the DOM
-        // flush of the updated `sceneData`. Production renderers fully
-        // dispose scene children between rebuilds, so this rarely fires.
-        try {
-          rebuildScene(sceneData);
-        } catch (err) {
-          console.warn('[SemanticTopology] rebuildScene failed:', err);
-        }
+        rebuildScene(sceneData);
 
         // Hide edges during formation to prevent visual clutter
         renderer?.scene.traverse((obj) => {

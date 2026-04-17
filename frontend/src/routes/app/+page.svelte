@@ -169,6 +169,13 @@
           // Toast dispatcher is gated internally by preferences
           // (enabled + muted-domain list); safe to call unconditionally.
           dispatchReadinessCrossing(data as unknown as ReadinessCrossingPayload);
+          // Refetch reports so consumers (topology rings, readiness panel)
+          // reflect the new tier without waiting for the next taxonomy_changed
+          // event or manual refresh. `invalidate()` is a fire-and-forget
+          // refetch guarded by a generation counter — no infinite-loop risk
+          // because the backend emits this event on tier crossings, not on
+          // every report fetch.
+          readinessStore.invalidate();
         }
         if (type === 'routing_state_changed') {
           const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
