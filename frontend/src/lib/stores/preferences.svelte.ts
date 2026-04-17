@@ -17,11 +17,17 @@ export interface PipelinePrefs {
   scorer_effort: string;
 }
 
+export interface ReadinessNotificationsPrefs {
+  enabled: boolean;
+  muted_domain_ids: string[];
+}
+
 export interface Preferences {
   schema_version: number;
   models: ModelPrefs;
   pipeline: PipelinePrefs;
   defaults: { strategy: string };
+  domain_readiness_notifications: ReadinessNotificationsPrefs;
 }
 
 const DEFAULTS: Preferences = {
@@ -29,6 +35,7 @@ const DEFAULTS: Preferences = {
   models: { analyzer: 'sonnet', optimizer: 'opus', scorer: 'sonnet' },
   pipeline: { enable_explore: true, enable_scoring: true, enable_adaptation: true, force_sampling: false, force_passthrough: false, optimizer_effort: 'high', analyzer_effort: 'low', scorer_effort: 'low' },
   defaults: { strategy: 'auto' },
+  domain_readiness_notifications: { enabled: false, muted_domain_ids: [] },
 };
 
 class PreferencesStore {
