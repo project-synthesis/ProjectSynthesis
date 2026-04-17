@@ -386,4 +386,45 @@ describe('DomainReadinessSparkline', () => {
     const sparkline = await findByLabelText(/consistency 24h sparkline/i);
     expect(sparkline).toBeTruthy();
   });
+
+  it('renders gap trendline when metric="gap"', async () => {
+    vi.spyOn(readinessApi, 'getDomainReadinessHistory').mockResolvedValue({
+      domain_id: 'd1', domain_label: 'backend', window: '24h', bucketed: false,
+      points: [
+        { ts: '2026-04-17T11:00:00Z', consistency: 0.4, dissolution_risk: 0.5,
+          top_candidate_gap: 0.12, stability_tier: 'guarded',
+          emergence_tier: 'warming', is_bucket_mean: false },
+        { ts: '2026-04-17T12:00:00Z', consistency: 0.42, dissolution_risk: 0.5,
+          top_candidate_gap: 0.08, stability_tier: 'guarded',
+          emergence_tier: 'warming', is_bucket_mean: false },
+      ],
+    });
+    const { findByLabelText } = render(DomainReadinessSparkline, {
+      props: { domainId: 'd1', domainLabel: 'backend', metric: 'gap', baseline: 0 },
+    });
+    const gapline = await findByLabelText(/gap to threshold 24h trendline/i);
+    expect(gapline).toBeTruthy();
+  });
+
+  it('drops null gap points before passing scores to sparkline', async () => {
+    vi.spyOn(readinessApi, 'getDomainReadinessHistory').mockResolvedValue({
+      domain_id: 'd1', domain_label: 'backend', window: '24h', bucketed: false,
+      points: [
+        { ts: '2026-04-17T11:00:00Z', consistency: 0.4, dissolution_risk: 0.5,
+          top_candidate_gap: null, stability_tier: 'guarded',
+          emergence_tier: 'inert', is_bucket_mean: false },
+        { ts: '2026-04-17T12:00:00Z', consistency: 0.42, dissolution_risk: 0.5,
+          top_candidate_gap: 0.08, stability_tier: 'guarded',
+          emergence_tier: 'warming', is_bucket_mean: false },
+      ],
+    });
+    // With only 1 non-null gap point, the sparkline should not render
+    // (ScoreSparkline requires scores.length >= 2).
+    const { queryByLabelText } = render(DomainReadinessSparkline, {
+      props: { domainId: 'd1', domainLabel: 'backend', metric: 'gap', baseline: 0 },
+    });
+    // Give the $effect a tick to resolve the mocked fetch
+    await Promise.resolve();
+    expect(queryByLabelText(/gap to threshold 24h trendline/i)).toBeNull();
+  });
 });
