@@ -200,6 +200,12 @@
      *  branch (`existing.lastTier !== tier`); it is NOT the tween's `from`
      *  color — that is always `material.color` at the moment of supersede. */
     lastTier: ReadinessTier;
+    /** The `node.size` used to build the current `RingGeometry`. Tracked so
+     *  the reuse branch in `rebuildScene` can detect size drift (cluster
+     *  physics reconciles base scale as `member_count` evolves) and dispose
+     *  + recreate the geometry. Without this, the ring keeps its first-build
+     *  radius and visibly drifts from its parent domain. */
+    lastSize: number;
     tween: TweenHandle | null;
   }
   const _readinessRings: Map<string, ReadinessRingEntry> = new Map();
@@ -558,6 +564,19 @@
           );
           existing.lastTier = tier;
         }
+        if (existing.lastSize !== node.size) {
+          // Size drift: dispose old geometry and swap in a fresh RingGeometry
+          // sized to the current `node.size`. Keep the mesh (and thus its
+          // parent link + material + tween state) intact.
+          existing.mesh.geometry?.dispose?.();
+          const radius = node.size * READINESS_RING_RADIUS_FACTOR;
+          existing.mesh.geometry = new THREE.RingGeometry(
+            radius,
+            radius + READINESS_RING_THICKNESS,
+            READINESS_RING_SEGMENTS,
+          );
+          existing.lastSize = node.size;
+        }
         existing.mesh.position.set(...node.position);
         if (camera?.position) existing.mesh.lookAt(camera.position);
         continue;
@@ -584,7 +603,13 @@
       // the next animation tick otherwise.
       if (camera?.position) mesh.lookAt(camera.position);
       _readinessRingGroup.add(mesh);
-      _readinessRings.set(node.id, { mesh, material: mat, lastTier: tier, tween: null });
+      _readinessRings.set(node.id, {
+        mesh,
+        material: mat,
+        lastTier: tier,
+        lastSize: node.size,
+        tween: null,
+      });
     }
     // Re-attach the ring group (protected from the scene-clear traverse above).
     if (_readinessRings.size > 0) {
