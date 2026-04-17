@@ -1,4 +1,5 @@
 import { getPreferences, patchPreferences } from '$lib/api/client';
+import { toastStore } from './toast.svelte';
 
 export interface ModelPrefs {
   analyzer: string;
@@ -94,6 +95,35 @@ class PreferencesStore {
 
   async setEffort(key: string, value: string): Promise<void> {
     await this.update({ pipeline: { [key]: value } });
+  }
+
+  /**
+   * Optimistically toggle a domain's mute membership then persist via PATCH.
+   * Bails out when the store is still loading. On failure, restores the
+   * snapshot and surfaces a deleted-action toast.
+   */
+  async toggleDomainMute(domainId: string): Promise<void> {
+    if (this.loading) return;
+    const current = this.prefs.domain_readiness_notifications;
+    const snapshot = [...current.muted_domain_ids];
+    const next = snapshot.includes(domainId)
+      ? snapshot.filter((id) => id !== domainId)
+      : [...snapshot, domainId];
+    this.prefs.domain_readiness_notifications = {
+      ...current,
+      muted_domain_ids: next,
+    };
+    try {
+      await patchPreferences({
+        domain_readiness_notifications: { muted_domain_ids: next },
+      });
+    } catch {
+      this.prefs.domain_readiness_notifications = {
+        ...this.prefs.domain_readiness_notifications,
+        muted_domain_ids: snapshot,
+      };
+      toastStore.add('deleted', 'Failed to update mute preference');
+    }
   }
 
   /** @internal Test-only: restore initial state */
