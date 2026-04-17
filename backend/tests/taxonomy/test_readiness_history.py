@@ -122,10 +122,15 @@ async def test_query_history_24h_returns_raw_points(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_query_history_7d_buckets_to_hourly_means(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
-    # Three snapshots within the same hour bucket → one mean point
-    for delta_min, cons in [(0, 0.40), (15, 0.50), (45, 0.60)]:
-        ts = now - timedelta(minutes=delta_min)
+    # Anchor to the top of the current hour and add small positive offsets
+    # so all three timestamps fall in the SAME hour bucket regardless of
+    # when the test runs (previously used negative offsets from now(), which
+    # crossed the hour boundary whenever now().minute < 45 → flaky).
+    hour_start = datetime.now(timezone.utc).replace(
+        minute=0, second=0, microsecond=0,
+    )
+    for delta_min, cons in [(5, 0.40), (20, 0.50), (50, 0.60)]:
+        ts = hour_start + timedelta(minutes=delta_min)
         snap = _build_report(consistency=cons).model_copy(update={"computed_at": ts})
         await record_snapshot(snap, base_dir=tmp_path)
 
