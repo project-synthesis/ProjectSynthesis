@@ -196,6 +196,22 @@
   let _readinessRingGroup: THREE.Group | null = null;
   let _removeReadinessBillboard: (() => void) | null = null;
 
+  /** Per-entry teardown for a readiness ring: cancel any in-flight tween
+   *  BEFORE disposing GPU resources so the RAF step can't write to a
+   *  disposed material. Scene-graph removal stays at the call site — the
+   *  per-rebuild pruning loop removes individual meshes, while unmount
+   *  drops the whole group. Dispose lookups are null-safe because test
+   *  environments mock THREE with minimal stubs lacking `dispose`. */
+  function disposeRingEntry(entry: ReadinessRingEntry): void {
+    entry.tween?.cancel();
+    if (typeof entry.mesh.geometry?.dispose === 'function') {
+      entry.mesh.geometry.dispose();
+    }
+    if (typeof entry.material?.dispose === 'function') {
+      entry.material.dispose();
+    }
+  }
+
   // Flat node lookup for mid-LOD label logic and domain highlight
   let flatNodeMap: Map<string, ClusterNode> = new Map();
 
@@ -370,14 +386,7 @@
     );
     for (const [id, entry] of _readinessRings) {
       if (!currentDomainIds.has(id)) {
-        // Cancel any in-flight tween before disposing the material it writes to.
-        entry.tween?.cancel();
-        if (typeof entry.mesh.geometry?.dispose === 'function') {
-          entry.mesh.geometry.dispose();
-        }
-        if (typeof entry.material?.dispose === 'function') {
-          entry.material.dispose();
-        }
+        disposeRingEntry(entry);
         _readinessRingGroup?.remove(entry.mesh);
         _readinessRings.delete(id);
       }
@@ -1333,13 +1342,7 @@
       _removeReadinessBillboard = null;
       // Cancel in-flight tier tweens before disposing materials (use-after-free guard).
       for (const entry of _readinessRings.values()) {
-        entry.tween?.cancel();
-        if (typeof entry.mesh.geometry?.dispose === 'function') {
-          entry.mesh.geometry.dispose();
-        }
-        if (typeof entry.material?.dispose === 'function') {
-          entry.material.dispose();
-        }
+        disposeRingEntry(entry);
       }
       _readinessRings.clear();
       if (_readinessRingGroup) {
