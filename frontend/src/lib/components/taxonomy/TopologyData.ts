@@ -8,6 +8,9 @@ import type { ClusterNode, SimilarityEdge, InjectionEdge } from '$lib/api/cluste
 import type { LODTier } from './TopologyRenderer';
 import { taxonomyColor, stateColor } from '$lib/utils/colors';
 import { parsePrimaryDomain } from '$lib/utils/formatting';
+import type { ReadinessTier } from './readiness-tier';
+import { composeReadinessTier } from './readiness-tier';
+import { readinessStore } from '$lib/stores/readiness.svelte';
 
 export interface SceneNode {
   id: string;
@@ -25,6 +28,7 @@ export interface SceneNode {
   domain: string;          // primary domain (e.g. "backend", "general")
   memberCount: number;     // member_count from API
   isSubDomain: boolean;    // true for domain nodes whose parent is also a domain
+  readinessTier?: ReadinessTier; // composite readiness tier, only set on domain nodes with a matching report
 }
 
 /** Opacity by lifecycle state and active filter.
@@ -183,7 +187,7 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
     const finalSize = Math.min(MAX_NODE_SIZE, size * stateSizeMultiplier(node.state, isSubDomain));
     const nodeOpacity = stateOpacity(node.state, effectiveFilter, hasFilterMatches);
 
-    nodes.push({
+    const sceneNode: SceneNode = {
       id: node.id,
       position: [x, y, z],
       color: stateNodeColor(node.state, node.domain ?? node.color_hex),
@@ -199,7 +203,17 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
       domain: parsePrimaryDomain(node.domain),
       memberCount: node.member_count,
       isSubDomain: subDomainIds.has(node.id),
-    });
+    };
+
+    // Decorate domain nodes with composite readiness tier when a report exists.
+    if (node.state === 'domain') {
+      const report = readinessStore.byDomain(node.id);
+      if (report) {
+        sceneNode.readinessTier = composeReadinessTier(report);
+      }
+    }
+
+    nodes.push(sceneNode);
 
     // Hierarchical edges from parent_id
     if (node.parent_id) {
