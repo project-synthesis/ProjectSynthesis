@@ -41,8 +41,13 @@ def _resolve_dir(base_dir: Path | None = None) -> Path:
     return DATA_DIR / READINESS_HISTORY_DIR_NAME
 
 
-def _file_for_day(day: datetime, base_dir: Path | None = None) -> Path:
-    return _resolve_dir(base_dir) / f"snapshots-{day.strftime('%Y-%m-%d')}.jsonl"
+def _file_for_day(day: datetime, target_dir: Path) -> Path:
+    """Return the JSONL path inside ``target_dir`` for ``day``.
+
+    ``target_dir`` is the already-resolved directory — pass the result of
+    ``_resolve_dir()`` once per call rather than re-resolving here.
+    """
+    return target_dir / f"snapshots-{day.strftime('%Y-%m-%d')}.jsonl"
 
 
 def _snapshot_from_report(report: DomainReadinessReport) -> ReadinessSnapshot:
@@ -84,7 +89,7 @@ async def record_snapshot(
     target_dir = _resolve_dir(base_dir)
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        path = _file_for_day(snap.ts, base_dir=base_dir)
+        path = _file_for_day(snap.ts, target_dir)
         await asyncio.to_thread(
             _write_jsonl_row_sync, path, snap.model_dump(mode="json"),
         )
