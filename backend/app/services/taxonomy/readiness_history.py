@@ -34,9 +34,10 @@ from app.schemas.sub_domain_readiness import (
 from app.services.taxonomy._constants import (
     READINESS_HISTORY_BUCKET_THRESHOLD_DAYS,
     READINESS_HISTORY_DIR_NAME,
+    READINESS_HISTORY_RETENTION_DAYS,
 )
 
-__all__ = ["record_snapshot", "query_history"]
+__all__ = ["record_snapshot", "query_history", "prune_old_snapshots"]
 
 logger = logging.getLogger(__name__)
 
@@ -246,3 +247,29 @@ async def query_history(
         bucketed=bucket,
         points=points,
     )
+
+
+def prune_old_snapshots(*, base_dir: Path | None = None) -> int:
+    """Delete snapshot files older than RETENTION_DAYS. Returns count removed."""
+    target_dir = _resolve_dir(base_dir)
+    if not target_dir.exists():
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=READINESS_HISTORY_RETENTION_DAYS,
+    )
+    removed = 0
+    for path in target_dir.glob("snapshots-*.jsonl"):
+        try:
+            date_part = path.stem.replace("snapshots-", "")
+            file_day = datetime.strptime(date_part, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            continue
+        if file_day < cutoff:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as exc:
+                logger.warning("prune failed for %s: %s", path, exc)
+    return removed
