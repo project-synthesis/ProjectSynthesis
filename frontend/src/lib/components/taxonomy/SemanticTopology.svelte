@@ -16,7 +16,6 @@
   import { triggerRecluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
   import { stateColor } from '$lib/utils/colors';
-  import { parsePrimaryDomain } from '$lib/utils/formatting';
   import type { ClusterNode } from '$lib/api/clusters';
   import { BeamPool } from './BeamPool';
   import { ClusterPhysics } from './ClusterPhysics';
@@ -39,6 +38,13 @@
   const READINESS_RING_THICKNESS = 0.05;
   const READINESS_RING_SEGMENTS = 64;
   const READINESS_RING_OPACITY_FACTOR = 0.9;
+
+  /** Multiplicative opacity applied to nodes that do NOT match the currently
+   *  highlighted domain (see `clustersStore.highlightedDomain`). Consumed by
+   *  two sweeps in the same `$effect`: the per-domain-group dodecahedron
+   *  materials loop, and the scene-root readiness-ring loop. Kept at module
+   *  scope so the two sweeps cannot drift apart. */
+  const DOMAIN_DIM_FACTOR = 0.15;
 
   /** Predicate — shared between scene-build loop and DOM marker `{#each}`.
    *  Centralizes the "this node gets a readiness ring" rule so the two
@@ -1047,10 +1053,10 @@
       const group = mesh.parent as THREE.Group | null;
       if (!group) continue;
 
-      const flatNode = flatNodeMap.get(node.id);
-      const nodeDomain = parsePrimaryDomain(flatNode?.domain);
-      const dimmed = highlightDomain != null && nodeDomain !== highlightDomain;
-      const dimFactor = dimmed ? 0.15 : 1.0;
+      // `node.domain` on `SceneNode` is already `parsePrimaryDomain`-normalized
+      // at build time (see TopologyData.ts) — no need to re-parse per sweep.
+      const dimmed = highlightDomain != null && node.domain !== highlightDomain;
+      const dimFactor = dimmed ? DOMAIN_DIM_FACTOR : 1.0;
 
       // Apply dim factor to all materials in the group.
       // Cluster: fill (0.9) + wire (coherence-based). Domain: fill (0.9) + edges (0.9) + points (0.95).
@@ -1078,16 +1084,23 @@
     }
 
     // Readiness rings are parented to the SCENE ROOT, not the domain group,
-    // so the per-group sweep above misses them. Mirror the dim factor here
-    // keyed by node id: the highlighted domain stays bright (1.0), all
-    // others dim to 0.15 — matching the dodecahedron factor on line 1053.
-    for (const [id, entry] of _readinessRings) {
-      const ringNode = sceneData.nodes.find((n) => n.id === id);
-      if (!ringNode) continue;
-      const ringDimFactor =
-        highlightDomain == null || id === highlightDomain ? 1.0 : 0.15;
-      entry.material.opacity =
-        ringNode.opacity * READINESS_RING_OPACITY_FACTOR * ringDimFactor;
+    // so the per-group sweep above misses them. Mirror the dim semantics here
+    // using the SAME match predicate as the dodecahedron sweep — comparing
+    // the ring's owning node's primary domain to `highlightDomain`, not its
+    // node id. `highlightedDomain` is set to a primary-domain string (e.g.
+    // 'backend') by ClusterNavigator; id-matching would leave every ring
+    // dimmed whenever any domain is highlighted, including its own. Iterating
+    // `sceneData.nodes` with an O(1) `_readinessRings.get(id)` lookup mirrors
+    // the dodecahedron sweep's structure and keeps the shared
+    // `DOMAIN_DIM_FACTOR` as the single source of truth.
+    for (const node of sceneData.nodes) {
+      const ring = _readinessRings.get(node.id);
+      if (!ring) continue;
+      const dimmed =
+        highlightDomain != null && node.domain !== highlightDomain;
+      const ringDimFactor = dimmed ? DOMAIN_DIM_FACTOR : 1.0;
+      ring.material.opacity =
+        node.opacity * READINESS_RING_OPACITY_FACTOR * ringDimFactor;
     }
 
     // Dim all edge types (preserve domain node EdgesGeometry outlines)

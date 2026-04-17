@@ -959,8 +959,12 @@ describe('SemanticTopology — readiness ring overlay', () => {
     const d1Fill = d1Group.children[0];
     const fillBaseOpacity = d1Fill.material.opacity; // = 1 * 0.9 = 0.9
 
-    // Highlight d2 → the dim sweep MUST dim d1's ring to BASE*0.15.
-    clustersStore.highlightedDomain = 'd2';
+    // Highlight the 'frontend' primary domain (d2's domain) → the dim sweep
+    // MUST dim d1's ring (domain 'backend', non-match) to BASE*0.15.
+    // `highlightedDomain` is a primary-domain string in production flow
+    // (set by ClusterNavigator), not a node id — using the id here would
+    // incorrectly dim every ring including the highlighted domain's own.
+    clustersStore.highlightedDomain = 'frontend';
 
     // Wait for the existing dim sweep to dim d1's dodecahedron fill.
     // This proves the effect runs; if the ring material ALSO dims we'd
