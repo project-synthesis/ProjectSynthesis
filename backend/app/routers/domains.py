@@ -124,11 +124,24 @@ async def get_domain_readiness_history(
 ) -> ReadinessHistoryResponse:
     """Time-series readiness history for one domain.
 
-    ``window`` selects 24h (raw points), 7d, or 30d (hourly bucket means).
-    Reads snapshots written by warm-path Phase 5 — empty list when no
-    snapshots exist yet (e.g. fresh install < 5min old).
+    ``window`` selects ``24h`` (raw points), ``7d``, or ``30d``. Windows at or
+    above ``READINESS_HISTORY_BUCKET_THRESHOLD_DAYS`` (7d) are aggregated into
+    hourly bucket means so payload size stays bounded (see
+    ``services/taxonomy/readiness_history.py``). Reads snapshots written by
+    warm-path Phase 5 — returns ``points=[]`` when no snapshots exist yet
+    (e.g. a fresh install less than one warm cycle old).
+
+    Errors: ``404`` unknown domain id, ``422`` non-domain cluster or invalid
+    window, ``503`` database contention, ``500`` unexpected failure.
     """
-    domain = await db.get(PromptCluster, domain_id)
+    try:
+        domain = await db.get(PromptCluster, domain_id)
+    except OperationalError as exc:
+        logger.warning(
+            "GET /api/domains/%s/readiness/history DB contention: %s",
+            domain_id, exc,
+        )
+        raise HTTPException(503, "Database busy — retry in a moment") from exc
     if domain is None:
         raise HTTPException(404, "Domain not found")
     if domain.state != "domain":
