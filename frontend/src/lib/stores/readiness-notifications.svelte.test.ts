@@ -38,11 +38,12 @@ describe('dispatchReadinessCrossing', () => {
     expect(toastStore.toasts.length).toBe(0);
   });
 
-  it('fires exactly one info-styled toast when enabled and domain not muted', () => {
+  it('fires exactly one info-styled toast when enabled and domain not muted (neutral transition)', () => {
     preferencesStore.prefs.domain_readiness_notifications = {
       enabled: true,
       muted_domain_ids: [],
     };
+    // inert -> warming is a neutral (non-guarded, non-critical) transition.
     dispatchReadinessCrossing(makePayload());
     expect(toastStore.toasts.length).toBe(1);
     expect(toastStore.toasts[0].symbol).toBe('i');
@@ -96,10 +97,83 @@ describe('dispatchReadinessCrossing', () => {
     expect(() => dispatchReadinessCrossing(bad)).not.toThrow();
     expect(toastStore.toasts.length).toBe(0);
   });
+
+  // --- Severity-aware dispatch (Cycle 5 followup #1) ------------------------
+
+  it('uses deleted (red) severity when to_tier is critical', () => {
+    preferencesStore.prefs.domain_readiness_notifications = {
+      enabled: true,
+      muted_domain_ids: [],
+    };
+    dispatchReadinessCrossing(
+      makePayload({
+        axis: 'stability',
+        from_tier: 'guarded',
+        to_tier: 'critical',
+      }),
+    );
+    expect(toastStore.toasts.length).toBe(1);
+    expect(toastStore.toasts[0].symbol).toBe('-');
+    expect(toastStore.toasts[0].color).toBe('var(--color-neon-red)');
+  });
+
+  it('uses deleted (red) severity when would_dissolve is true, even if to_tier is not critical', () => {
+    preferencesStore.prefs.domain_readiness_notifications = {
+      enabled: true,
+      muted_domain_ids: [],
+    };
+    dispatchReadinessCrossing(
+      makePayload({
+        axis: 'stability',
+        from_tier: 'guarded',
+        to_tier: 'healthy', // not critical
+        would_dissolve: true,
+      }),
+    );
+    expect(toastStore.toasts.length).toBe(1);
+    expect(toastStore.toasts[0].symbol).toBe('-');
+    expect(toastStore.toasts[0].color).toBe('var(--color-neon-red)');
+  });
+
+  it('uses modified (yellow) severity when to_tier is guarded', () => {
+    preferencesStore.prefs.domain_readiness_notifications = {
+      enabled: true,
+      muted_domain_ids: [],
+    };
+    dispatchReadinessCrossing(
+      makePayload({
+        axis: 'stability',
+        from_tier: 'healthy',
+        to_tier: 'guarded',
+      }),
+    );
+    expect(toastStore.toasts.length).toBe(1);
+    expect(toastStore.toasts[0].symbol).toBe('~');
+    expect(toastStore.toasts[0].color).toBe('var(--color-neon-yellow)');
+  });
+
+  it.each(['healthy', 'ready', 'warming', 'inert'])(
+    'falls back to info (cyan) severity for neutral to_tier=%s',
+    (tier) => {
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: [],
+      };
+      dispatchReadinessCrossing(
+        makePayload({
+          from_tier: 'inert',
+          to_tier: tier,
+        }),
+      );
+      expect(toastStore.toasts.length).toBe(1);
+      expect(toastStore.toasts[0].symbol).toBe('i');
+      expect(toastStore.toasts[0].color).toBe('var(--color-neon-cyan)');
+    },
+  );
 });
 
 describe('formatCrossingMessage', () => {
-  it('emergence inert->warming on backend mentions both label and target tier', () => {
+  it('emergence inert->warming on backend includes both tiers and the arrow', () => {
     const msg = formatCrossingMessage(
       makePayload({
         domain_label: 'backend',
@@ -108,11 +182,10 @@ describe('formatCrossingMessage', () => {
         to_tier: 'warming',
       }),
     );
-    expect(msg.toLowerCase()).toContain('backend');
-    expect(msg.toLowerCase()).toContain('warming');
+    expect(msg).toBe('backend: emergence inert \u2192 warming');
   });
 
-  it('stability healthy->guarded on security mentions both label and target tier', () => {
+  it('stability healthy->guarded on security includes both tiers and the arrow', () => {
     const msg = formatCrossingMessage(
       makePayload({
         domain_label: 'security',
@@ -121,11 +194,10 @@ describe('formatCrossingMessage', () => {
         to_tier: 'guarded',
       }),
     );
-    expect(msg.toLowerCase()).toContain('security');
-    expect(msg.toLowerCase()).toContain('guarded');
+    expect(msg).toBe('security: stability healthy \u2192 guarded');
   });
 
-  it('would_dissolve=true message references dissolution', () => {
+  it('would_dissolve=true appends the dissolution suffix after the target tier', () => {
     const msg = formatCrossingMessage(
       makePayload({
         domain_label: 'frontend',
@@ -135,6 +207,19 @@ describe('formatCrossingMessage', () => {
         would_dissolve: true,
       }),
     );
-    expect(msg).toMatch(/dissolv/i);
+    expect(msg).toBe('frontend: stability guarded \u2192 critical (will dissolve)');
+  });
+
+  it('lowercases all payload strings in the rendered message', () => {
+    const msg = formatCrossingMessage(
+      makePayload({
+        domain_label: 'Backend',
+        axis: 'emergence',
+        from_tier: 'Inert',
+        to_tier: 'Warming',
+      }),
+    );
+    expect(msg).toBe('backend: emergence inert \u2192 warming');
+    expect(msg).toBe(msg.toLowerCase());
   });
 });

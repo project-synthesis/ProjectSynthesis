@@ -16,8 +16,9 @@ export interface ReadinessCrossingPayload {
 export function formatCrossingMessage(payload: ReadinessCrossingPayload): string {
   const label = String(payload.domain_label).toLowerCase();
   const axis = String(payload.axis).toLowerCase();
+  const fromTier = String(payload.from_tier).toLowerCase();
   const toTier = String(payload.to_tier).toLowerCase();
-  const base = `${label} — ${axis} ${toTier}`;
+  const base = `${label}: ${axis} ${fromTier} \u2192 ${toTier}`;
   return payload.would_dissolve ? `${base} (will dissolve)` : base;
 }
 
@@ -30,5 +31,15 @@ export function dispatchReadinessCrossing(payload: ReadinessCrossingPayload): vo
   if (Array.isArray(prefs.muted_domain_ids) && prefs.muted_domain_ids.includes(payload.domain_id)) {
     return;
   }
-  toastStore.info(formatCrossingMessage(payload));
+  const msg = formatCrossingMessage(payload);
+  const toTier = String(payload.to_tier).toLowerCase();
+  // Severity mapping: critical or dissolution -> red (deleted);
+  // guarded -> yellow (modified); anything else -> cyan info.
+  if (toTier === 'critical' || payload.would_dissolve === true) {
+    toastStore.add('deleted', msg);
+  } else if (toTier === 'guarded') {
+    toastStore.add('modified', msg);
+  } else {
+    toastStore.info(msg);
+  }
 }
