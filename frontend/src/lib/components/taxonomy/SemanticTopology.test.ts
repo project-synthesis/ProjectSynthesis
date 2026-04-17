@@ -153,6 +153,9 @@ vi.mock('$lib/api/clusters', () => ({
   getClusterTemplates: vi.fn().mockResolvedValue({ total: 0, count: 0, offset: 0, has_more: false, next_offset: null, items: [] }),
 }));
 
+// THREE.js test mocks — modeled: Color (set/copy/clone/lerp on rgb floats),
+// RingGeometry (captures inner/outer/segments), MeshBasicMaterial (passes color through).
+// Not modeled: world-space transforms, camera math, GPU disposal side effects.
 vi.mock('three', () => {
   class Vector3 {
     x = 0; y = 0; z = 0;

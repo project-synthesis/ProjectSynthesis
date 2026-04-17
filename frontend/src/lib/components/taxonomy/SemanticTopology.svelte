@@ -24,7 +24,7 @@
   import { readinessTierColor } from './readiness-tier';
   import type { ReadinessTier } from './readiness-tier';
 
-  /** Ease-out cubic — cubic-bezier(0.16, 1, 0.3, 1). Matches brand motion system. */
+  /** ease-out cubic: 1 - (1-t)^3 — matches brand motion system. */
   const _CUBIC = (t: number): number => 1 - Math.pow(1 - t, 3);
 
   const prefersReducedMotion = (): boolean =>
@@ -599,7 +599,7 @@
       if (!hasReadinessRing(node)) continue;
       // `hasReadinessRing` guarantees `readinessTier` is defined — the
       // non-null assertion is safe and narrower than a type cast.
-      const tier = node.readinessTier as ReadinessTier;
+      const tier = node.readinessTier!;
       const existing = _readinessRings.get(node.id);
       if (existing) {
         updateExistingRing(existing, node, tier, camera);
@@ -1258,6 +1258,7 @@
       const dimmed =
         highlightDomain != null && node.domain !== highlightDomain;
       const ringDimFactor = dimmed ? DOMAIN_DIM_FACTOR : 1.0;
+      // Also serves as the opacity refresh path for newly-built / reused rings.
       ring.material.opacity =
         node.opacity * READINESS_RING_OPACITY_FACTOR * ringDimFactor;
     }
