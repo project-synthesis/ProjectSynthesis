@@ -335,6 +335,57 @@ describe('SemanticTopology — readiness ring overlay', () => {
     });
   });
 
+  it('does not render a marker on a domain node without a resolved readinessTier', async () => {
+    // Domain node is present but `readinessTier` is undefined (no report or
+    // report not yet loaded). The `hasReadinessRing` predicate should gate
+    // the marker out — no `[data-readiness-ring]` span should appear.
+    _sceneOverride.value = {
+      nodes: [
+        {
+          id: 'd1',
+          position: [0, 0, 0] as [number, number, number],
+          color: '#b44aff',
+          size: 2,
+          opacity: 1,
+          persistence: 1,
+          state: 'domain',
+          label: 'backend',
+          visible: true,
+          coherence: 0.5,
+          avgScore: 7,
+          domain: 'backend',
+          memberCount: 10,
+          isSubDomain: false,
+          // readinessTier intentionally omitted
+        },
+      ],
+      edges: [],
+    };
+
+    const { clustersStore } = await import('$lib/stores/clusters.svelte');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    clustersStore.taxonomyTree = [
+      {
+        id: 'd1',
+        label: 'backend',
+        state: 'domain',
+        domain: 'backend',
+        member_count: 10,
+        parent_id: null,
+      } as any,
+    ];
+
+    const { container } = render(SemanticTopology);
+
+    await new Promise((r) => setTimeout(r, 50));
+    clustersStore.taxonomyTree = [...clustersStore.taxonomyTree];
+
+    // Give the reactive effect a tick to run
+    await new Promise((r) => setTimeout(r, 50));
+    const markers = container.querySelectorAll('[data-readiness-ring]');
+    expect(markers.length).toBe(0);
+  });
+
   it('does not render a marker on non-domain nodes', async () => {
     _sceneOverride.value = {
       nodes: [

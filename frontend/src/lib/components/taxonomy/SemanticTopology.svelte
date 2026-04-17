@@ -3,7 +3,7 @@
   import { clustersStore } from '$lib/stores/clusters.svelte';
 
   import { TopologyRenderer, type LODTier } from './TopologyRenderer';
-  import { buildSceneData, assignLodVisibility, computeHierarchicalOpacity, type SceneData } from './TopologyData';
+  import { buildSceneData, assignLodVisibility, buildNodeMap, computeHierarchicalOpacity, type SceneData, type SceneNode } from './TopologyData';
   import { TopologyInteraction } from './TopologyInteraction';
   import { TopologyLabels } from './TopologyLabels';
   import { settleForces } from './TopologyWorker';
@@ -21,20 +21,30 @@
   import { ClusterPhysics } from './ClusterPhysics';
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
   import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
-  import { buildNodeMap } from './TopologyData';
-  import { readinessTierColor, type ReadinessTier } from './readiness-tier';
-
-  // Per-domain readiness ring registry — disposed + cleared on each rebuildScene.
-  const _readinessRings = new Map<
-    string,
-    { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial; lastTier: ReadinessTier }
-  >();
+  import { readinessTierColor } from './readiness-tier';
 
   // Resolved at module level to avoid per-frame allocations
   const HIGHLIGHT_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
   const EDGE_COLOR = parseInt(stateColor('archived').replace('#', ''), 16);
   const SIMILARITY_EDGE_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
   const INJECTION_EDGE_COLOR = 0xff9500; // warm gold/amber
+
+  /** Readiness-ring geometry + material constants.
+   *  Ring sits just outside the domain node's silhouette (`RADIUS_FACTOR`),
+   *  1px-thin to match brand 1px-contour spec (`THICKNESS`), sampled finely
+   *  for a smooth contour (`SEGMENTS`), and slightly transparent so it
+   *  reads as an outline, not a fill (`OPACITY_FACTOR`). */
+  const READINESS_RING_RADIUS_FACTOR = 1.25;
+  const READINESS_RING_THICKNESS = 0.05;
+  const READINESS_RING_SEGMENTS = 64;
+  const READINESS_RING_OPACITY_FACTOR = 0.9;
+
+  /** Predicate — shared between scene-build loop and DOM marker `{#each}`.
+   *  Centralizes the "this node gets a readiness ring" rule so the two
+   *  surfaces can never drift. */
+  function hasReadinessRing(node: SceneNode): boolean {
+    return node.state === 'domain' && node.readinessTier != null;
+  }
 
   /** Suppress hierarchical edges shorter than this (scene units).
    *  Spatial proximity already communicates the parent-child relationship.
@@ -114,6 +124,10 @@
 
   // Node meshes for raycasting
   let nodeMeshes: Map<string, THREE.Mesh> = new Map();
+
+  // Per-domain readiness ring registry — disposed + cleared on each rebuildScene.
+  // Sits alongside other scene-registry state so the lifecycle is obvious.
+  const _readinessRings: Map<string, { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial }> = new Map();
 
   // Flat node lookup for mid-LOD label logic and domain highlight
   let flatNodeMap: Map<string, ClusterNode> = new Map();
@@ -404,28 +418,38 @@
     }
 
     // Readiness rings — per-domain contour ring colored by composite tier.
-    // Only for visible domain nodes with a resolved readinessTier.
+    // Only for visible domain nodes with a resolved readinessTier (see
+    // `hasReadinessRing`). Brand spec: 1px contour, no glow, no emissive —
+    // MeshBasicMaterial with depthWrite:false is sufficient to sit over the
+    // dodecahedron silhouette without z-fighting.
     for (const node of data.nodes) {
       if (!node.visible) continue;
-      if (node.state !== 'domain') continue;
-      if (!node.readinessTier) continue;
-      const radius = node.size * 1.25;
-      const geom = new THREE.RingGeometry(radius, radius + 0.05, 64);
-      const color = readinessTierColor(node.readinessTier);
+      if (!hasReadinessRing(node)) continue;
+      const radius = node.size * READINESS_RING_RADIUS_FACTOR;
+      const geom = new THREE.RingGeometry(
+        radius,
+        radius + READINESS_RING_THICKNESS,
+        READINESS_RING_SEGMENTS,
+      );
+      // `hasReadinessRing` guarantees `readinessTier` is defined — the
+      // non-null assertion is safe and narrower than a type cast.
+      const color = readinessTierColor(node.readinessTier!);
       const mat = new THREE.MeshBasicMaterial({
         color: new THREE.Color(color),
         transparent: true,
-        opacity: node.opacity * 0.9,
+        opacity: node.opacity * READINESS_RING_OPACITY_FACTOR,
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(geom, mat);
       mesh.position.set(...node.position);
-      // Billboard toward camera when available; lookAt is a no-op in test mocks
+      // Billboard toward camera once at build time — avoids per-frame work.
+      // Camera may not orbit dramatically during a single scene; subsequent
+      // rebuildScene calls re-orient. `lookAt` is a no-op in test mocks.
       if (renderer.camera?.position) {
         mesh.lookAt(renderer.camera.position as unknown as THREE.Vector3);
       }
       renderer.scene.add(mesh);
-      _readinessRings.set(node.id, { mesh, material: mat, lastTier: node.readinessTier });
+      _readinessRings.set(node.id, { mesh, material: mat });
     }
 
     // Domain rotation: ~1 revolution per 50s at 60fps
@@ -1162,7 +1186,15 @@
     aria-label="Taxonomy topology visualization"
     tabindex="0"
   ></canvas>
-  {#each sceneData?.nodes.filter((n) => n.state === 'domain' && n.readinessTier) ?? [] as node (node.id)}
+  <!--
+    Readiness-ring DOM markers — one hidden `<span>` per domain node that
+    owns a readiness ring in the Three.js scene. The WebGL ring itself
+    isn't queryable from jsdom, so these markers provide a parallel DOM
+    surface for tests (and a11y probes) to assert on. They mirror the
+    scene-build predicate via the shared `hasReadinessRing` helper so the
+    two surfaces cannot drift.
+  -->
+  {#each sceneData?.nodes.filter(hasReadinessRing) ?? [] as node (node.id)}
     <span
       data-readiness-ring={node.id}
       data-readiness-tier={node.readinessTier}
