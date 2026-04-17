@@ -59,7 +59,7 @@ class TestPromptCaching:
             provider = AnthropicAPIProvider.__new__(AnthropicAPIProvider)
             provider._client = client
 
-            for model in ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]:
+            for model in ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"]:
                 await provider.complete_parsed(
                     model=model,
                     system_prompt="System prompt here.",

@@ -487,7 +487,7 @@ def resolve_effective_strategy(
 def compute_optimize_max_tokens(prompt_len: int) -> int:
     """Dynamic output budget: scale with input length, cap at 131072 (128K).
 
-    Opus 4.6 supports 128K output tokens.  The optimize/refine phases use
+    Opus 4.7 supports 128K output tokens.  The optimize/refine phases use
     streaming (``complete_parsed_streaming``) which prevents HTTP timeouts,
     so the full 128K capacity is safely available.
     """

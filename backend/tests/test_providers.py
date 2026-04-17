@@ -17,7 +17,7 @@ class TestThinkingConfig:
     def test_opus_returns_adaptive(self):
         from app.providers.base import LLMProvider
 
-        assert LLMProvider.thinking_config("claude-opus-4-6") == {"type": "adaptive"}
+        assert LLMProvider.thinking_config("claude-opus-4-7") == {"type": "adaptive"}
 
     def test_sonnet_returns_adaptive(self):
         from app.providers.base import LLMProvider
@@ -90,7 +90,7 @@ class TestAnthropicAPIProvider:
 
         provider = self._make_provider(mock_client)
         result = await provider.complete_parsed(
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             system_prompt="You are an analyzer.",
             user_message="Analyze this prompt.",
             output_format=AnalysisResult,
@@ -100,7 +100,7 @@ class TestAnthropicAPIProvider:
         assert result is analysis
         mock_messages.parse.assert_called_once()
         call_kwargs = mock_messages.parse.call_args.kwargs
-        assert call_kwargs["model"] == "claude-opus-4-6"
+        assert call_kwargs["model"] == "claude-opus-4-7"
         assert call_kwargs["max_tokens"] == 1024
         assert call_kwargs["output_format"] is AnalysisResult
         assert call_kwargs["messages"] == [{"role": "user", "content": "Analyze this prompt."}]
@@ -154,7 +154,7 @@ class TestAnthropicAPIProvider:
 
         provider = self._make_provider(mock_client)
         result = await provider.complete_parsed_streaming(
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             system_prompt="You are an optimizer.",
             user_message="Optimize this prompt.",
             output_format=AnalysisResult,
@@ -164,7 +164,7 @@ class TestAnthropicAPIProvider:
         assert result is analysis
         mock_messages.stream.assert_called_once()
         call_kwargs = mock_messages.stream.call_args.kwargs
-        assert call_kwargs["model"] == "claude-opus-4-6"
+        assert call_kwargs["model"] == "claude-opus-4-7"
         assert call_kwargs["max_tokens"] == 131072
         assert call_kwargs["output_format"] is AnalysisResult
 
@@ -213,7 +213,7 @@ class TestCallProviderWithRetryStreaming:
 
         result = await call_provider_with_retry(
             provider,
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             system_prompt="sys",
             user_message="msg",
             output_format=AnalysisResult,
@@ -236,7 +236,7 @@ class TestCallProviderWithRetryStreaming:
 
         result = await call_provider_with_retry(
             provider,
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             system_prompt="sys",
             user_message="msg",
             output_format=AnalysisResult,

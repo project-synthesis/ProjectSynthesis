@@ -136,7 +136,7 @@ async def test_sampling_request_structured_sends_no_model_preferences():
 async def test_sampling_structured_tool_use():
     """Structured request parses tool_use content from response."""
     tool_input = {"name": "parsed", "value": 99}
-    mock_result = _make_tool_use_result(tool_input, model="claude-opus-4-6")
+    mock_result = _make_tool_use_result(tool_input, model="claude-opus-4-7")
     ctx = _make_ctx(create_message_return=mock_result)
 
     parsed, model_id = await _sampling_request_structured(
@@ -145,7 +145,7 @@ async def test_sampling_structured_tool_use():
 
     assert parsed.name == "parsed"
     assert parsed.value == 99
-    assert model_id == "claude-opus-4-6"
+    assert model_id == "claude-opus-4-7"
 
 
 async def test_sampling_structured_text_fallback():
@@ -244,7 +244,7 @@ async def test_run_sampling_pipeline_full():
     call_count = 0
     responses = [
         _make_text_result(analysis_json, model="claude-sonnet-4-6"),
-        _make_text_result(optimize_json, model="claude-opus-4-6"),
+        _make_text_result(optimize_json, model="claude-opus-4-7"),
         _make_text_result(score_json, model="claude-sonnet-4-6"),
     ]
 
@@ -282,7 +282,7 @@ async def test_run_sampling_pipeline_full():
     assert result["optimized_prompt"] == "Improved prompt text"
     assert result["task_type"] == "coding"
     assert result["strategy_used"] == "chain-of-thought"
-    assert result["model_used"] == "claude-opus-4-6"
+    assert result["model_used"] == "claude-opus-4-7"
     assert result["intent_label"] == "code review"
     assert result["domain"] == "backend"
 

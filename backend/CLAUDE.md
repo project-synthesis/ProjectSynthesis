@@ -30,7 +30,7 @@ Everything backend developers need. For project overview, see root `CLAUDE.md`. 
 
 ## Model configuration
 
-Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MODEL_OPUS` (`claude-opus-4-6`), `MODEL_HAIKU` (`claude-haiku-4-5`). Never hardcode — use `PreferencesService.resolve_model(phase, snapshot)`.
+Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MODEL_OPUS` (`claude-opus-4-7`), `MODEL_HAIKU` (`claude-haiku-4-5`). Never hardcode — use `PreferencesService.resolve_model(phase, snapshot)`.
 
 ## Providers (`app/providers/`)
 
