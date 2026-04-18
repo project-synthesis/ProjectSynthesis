@@ -229,6 +229,7 @@ async def handle_seed(
             session_factory=async_session_factory,
             taxonomy_engine=_taxonomy_engine,
             domain_resolver=_domain_resolver,
+            tier=tier,
         )
     except Exception as exc:
         logger.error("Seed batch execution failed: %s", exc, exc_info=True)

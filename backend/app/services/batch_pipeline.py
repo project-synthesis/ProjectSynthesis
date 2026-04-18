@@ -80,12 +80,18 @@ async def run_single_prompt(
     session_factory: Any | None = None,
     taxonomy_engine: Any | None = None,
     domain_resolver: Any | None = None,
+    tier: str = "internal",
 ) -> PendingOptimization:
     """Run one prompt through analyze → optimize → score → embed in memory.
 
     IMPORTANT: This function does NOT use PipelineOrchestrator. It makes
     direct provider calls following the same phase logic but without DB
     dependencies.
+
+    ``tier`` is the routing tier resolved upstream (typically via
+    ``RoutingManager.resolve()``). It is persisted on the resulting
+    ``PendingOptimization.routing_tier`` so downstream analytics and
+    cost attribution see the real tier instead of a hardcoded default.
 
     Returns a PendingOptimization with all fields populated.
     On any phase failure, returns a PendingOptimization with error set
@@ -448,7 +454,7 @@ async def run_single_prompt(
             status="completed",
             provider=provider.name,
             model_used=optimizer_model,
-            routing_tier="internal",
+            routing_tier=tier,
             heuristic_flags=_heuristic_flags,
             suggestions=suggestions_list,
             repo_full_name=repo_full_name,
@@ -473,6 +479,7 @@ async def run_single_prompt(
             status="failed",
             error=str(exc)[:500],
             duration_ms=duration_ms,
+            routing_tier=tier,
         )
 
 
@@ -490,6 +497,7 @@ async def run_batch(
     session_factory: Any | None = None,
     taxonomy_engine: Any | None = None,
     domain_resolver: Any | None = None,
+    tier: str = "internal",
 ) -> list[PendingOptimization]:
     """Run N prompts through the pipeline in parallel.
 
@@ -529,6 +537,7 @@ async def run_batch(
                 session_factory=session_factory,
                 taxonomy_engine=taxonomy_engine,
                 domain_resolver=domain_resolver,
+                tier=tier,
             )
             # Check for rate limit error in result
             if (
@@ -558,6 +567,7 @@ async def run_batch(
                         session_factory=session_factory,
                         taxonomy_engine=taxonomy_engine,
                         domain_resolver=domain_resolver,
+                        tier=tier,
                     )
                     return retry
                 finally:
