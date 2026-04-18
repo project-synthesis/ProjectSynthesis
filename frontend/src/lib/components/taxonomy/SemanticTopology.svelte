@@ -15,7 +15,7 @@
   import * as THREE from 'three';
   import { triggerRecluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
-  import { stateColor } from '$lib/utils/colors';
+  import { stateColor, HIGHLIGHT_COLOR_HEX, SIMILARITY_EDGE_COLOR_HEX } from '$lib/utils/colors';
   import type { ClusterNode } from '$lib/api/clusters';
   import { BeamPool } from './BeamPool';
   import { ClusterPhysics } from './ClusterPhysics';
@@ -76,9 +76,9 @@
   }
 
   // Resolved at module level to avoid per-frame allocations
-  const HIGHLIGHT_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
+  const HIGHLIGHT_COLOR = parseInt(HIGHLIGHT_COLOR_HEX.replace('#', ''), 16);
   const EDGE_COLOR = parseInt(stateColor('archived').replace('#', ''), 16);
-  const SIMILARITY_EDGE_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
+  const SIMILARITY_EDGE_COLOR = parseInt(SIMILARITY_EDGE_COLOR_HEX.replace('#', ''), 16);
   const INJECTION_EDGE_COLOR = 0xff9500; // warm gold/amber
 
   /** Readiness-ring geometry + material constants.

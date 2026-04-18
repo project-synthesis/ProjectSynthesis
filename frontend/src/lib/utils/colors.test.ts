@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { scoreColor, taxonomyColor, qHealthColor, stateColor } from './colors';
+import { scoreColor, taxonomyColor, qHealthColor, stateColor, HIGHLIGHT_COLOR_HEX, SIMILARITY_EDGE_COLOR_HEX } from './colors';
 import { domainStore } from '$lib/stores/domains.svelte';
 
 describe('scoreColor', () => {
@@ -132,7 +132,6 @@ describe('stateColor', () => {
     expect(stateColor('candidate')).toBe('#7a7a9e');
     expect(stateColor('active')).toBe('#4d8eff');
     expect(stateColor('mature')).toBe('#a855f7');
-    expect(stateColor('template')).toBe('#00e5ff');
     expect(stateColor('archived')).toBe('#3a3a52');
   });
 
@@ -142,5 +141,22 @@ describe('stateColor', () => {
 
   it('returns fallback gray for empty string', () => {
     expect(stateColor('')).toBe('#7a7a9e');
+  });
+});
+
+describe('highlight color constants', () => {
+  it('exports explicit HIGHLIGHT_COLOR_HEX', () => {
+    expect(HIGHLIGHT_COLOR_HEX).toBe('#00e5ff');
+  });
+
+  it('exports explicit SIMILARITY_EDGE_COLOR_HEX', () => {
+    expect(SIMILARITY_EDGE_COLOR_HEX).toBe('#00e5ff');
+  });
+});
+
+describe('stateColor — template state removed', () => {
+  it('no longer recognizes template state (falls back to default gray)', () => {
+    // After the refactor, 'template' is unknown and gets the fallback.
+    expect(stateColor('template')).toBe('#7a7a9e');
   });
 });

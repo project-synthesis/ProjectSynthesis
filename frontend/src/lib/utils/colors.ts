@@ -9,6 +9,12 @@
 
 import { domainStore } from '$lib/stores/domains.svelte';
 
+/** Highlight color for selected/hovered topology nodes. */
+export const HIGHLIGHT_COLOR_HEX = '#00e5ff';
+
+/** Similarity edge color for topology graph. */
+export const SIMILARITY_EDGE_COLOR_HEX = '#00e5ff';
+
 /** Score-to-color mapping using design system tokens. */
 export function scoreColor(score: number | null): string {
   if (score == null || score <= 0) return 'var(--color-text-dim)';
@@ -45,7 +51,6 @@ export function stateColor(state: string): string {
     candidate: '#7a7a9e',
     active: '#4d8eff',
     mature: '#a855f7',
-    template: '#00e5ff',
     archived: '#3a3a52',
     domain: '#c0a060',  // warm platinum — structural foundation (distinct from neon-yellow/passthrough #fbbf24)
   };
