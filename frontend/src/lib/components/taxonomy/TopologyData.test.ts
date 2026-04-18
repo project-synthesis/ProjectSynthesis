@@ -432,4 +432,101 @@ describe('buildSceneData — readiness tier decoration', () => {
     const { nodes } = buildSceneData(tree);
     expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
   });
+
+  it('updates SceneNode readinessTier when readinessStore reports change', () => {
+    // SSE-driven re-decoration contract: when the readiness store mutates
+    // between calls (e.g. a taxonomy_changed SSE event triggers a refresh
+    // that upgrades a domain from guarded→ready), a subsequent buildSceneData
+    // call must reflect the new tier without any extra wiring. The reactive
+    // chain flows through readinessStore.reports → byId derived lookup →
+    // buildSceneData decoration on each invocation.
+    readinessStore.reports = [
+      makeReadinessReport({
+        domain_id: 'd1',
+        stability: {
+          consistency: 0.3,
+          dissolution_floor: 0.15,
+          hysteresis_creation_threshold: 0.6,
+          age_hours: 72,
+          min_age_hours: 48,
+          member_count: 20,
+          member_ceiling: 5,
+          sub_domain_count: 0,
+          total_opts: 20,
+          guards: {
+            general_protected: false,
+            has_sub_domain_anchor: false,
+            age_eligible: true,
+            above_member_ceiling: true,
+            consistency_above_floor: true,
+          },
+          tier: 'guarded',
+          dissolution_risk: 0.4,
+          would_dissolve: false,
+        },
+        emergence: {
+          threshold: 0.6,
+          threshold_formula: 'max(0.40, 0.60 - 0.004 * members)',
+          min_member_count: 5,
+          total_opts: 20,
+          top_candidate: null,
+          gap_to_threshold: null,
+          ready: false,
+          blocked_reason: 'no_candidates',
+          runner_ups: [],
+          tier: 'inert',
+        },
+      }),
+    ];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    let { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBe('guarded');
+
+    // Mutate the store — simulates an SSE-driven refresh where the emergence
+    // tier has flipped from inert → ready. A fresh buildSceneData call must
+    // pick up the new tier.
+    readinessStore.reports = [
+      makeReadinessReport({
+        domain_id: 'd1',
+        stability: {
+          consistency: 0.3,
+          dissolution_floor: 0.15,
+          hysteresis_creation_threshold: 0.6,
+          age_hours: 72,
+          min_age_hours: 48,
+          member_count: 20,
+          member_ceiling: 5,
+          sub_domain_count: 0,
+          total_opts: 20,
+          guards: {
+            general_protected: false,
+            has_sub_domain_anchor: false,
+            age_eligible: true,
+            above_member_ceiling: true,
+            consistency_above_floor: true,
+          },
+          tier: 'guarded',
+          dissolution_risk: 0.4,
+          would_dissolve: false,
+        },
+        emergence: {
+          threshold: 0.6,
+          threshold_formula: 'max(0.40, 0.60 - 0.004 * members)',
+          min_member_count: 5,
+          total_opts: 20,
+          top_candidate: null,
+          gap_to_threshold: null,
+          ready: true,
+          blocked_reason: null,
+          runner_ups: [],
+          tier: 'ready',
+        },
+      }),
+    ];
+
+    ({ nodes } = buildSceneData(tree));
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBe('ready');
+  });
 });
