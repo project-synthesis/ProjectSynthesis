@@ -10,10 +10,8 @@ from app.schemas.pipeline_contracts import (
     AnalyzerInput,
     DimensionScores,
     OptimizationResult,
-    OptimizerInput,
     PipelineEvent,
     PipelineResult,
-    ResolvedContext,
     ScoreResult,
     ScorerInput,
 )
@@ -248,56 +246,6 @@ class TestAnalyzerInput:
 
 
 # ---------------------------------------------------------------------------
-# OptimizerInput
-# ---------------------------------------------------------------------------
-
-
-class TestOptimizerInput:
-    def _make_analysis(self) -> AnalysisResult:
-        return AnalysisResult(
-            task_type="writing",
-            weaknesses=[],
-            strengths=["concise"],
-            selected_strategy="few-shot",
-            strategy_rationale="Examples help.",
-            confidence=0.9,
-        )
-
-    def test_valid_minimal(self):
-        inp = OptimizerInput(
-            raw_prompt="Do something.",
-            analysis=self._make_analysis(),
-            analysis_summary="Short summary.",
-            strategy_instructions="Use few-shot.",
-        )
-        assert inp.codebase_guidance is None
-        assert inp.codebase_context is None
-        assert inp.adaptation_state is None
-
-    def test_valid_with_optionals(self):
-        inp = OptimizerInput(
-            raw_prompt="Do something.",
-            analysis=self._make_analysis(),
-            analysis_summary="Short summary.",
-            strategy_instructions="Use few-shot.",
-            codebase_guidance="Focus on X.",
-            codebase_context="Context here.",
-            adaptation_state="state blob",
-        )
-        assert inp.codebase_guidance == "Focus on X."
-
-    def test_extra_fields_forbidden(self):
-        with pytest.raises(ValidationError):
-            OptimizerInput(
-                raw_prompt="x",
-                analysis=self._make_analysis(),
-                analysis_summary="x",
-                strategy_instructions="x",
-                unknown="nope",
-            )
-
-
-# ---------------------------------------------------------------------------
 # ScorerInput
 # ---------------------------------------------------------------------------
 
@@ -319,33 +267,6 @@ class TestScorerInput:
                 presentation_order="ab",
                 extra_data="bad",
             )
-
-
-# ---------------------------------------------------------------------------
-# ResolvedContext
-# ---------------------------------------------------------------------------
-
-
-class TestResolvedContext:
-    def test_minimal(self):
-        ctx = ResolvedContext(
-            raw_prompt="Hello world.",
-            trace_id="trace-123",
-        )
-        assert ctx.strategy_override is None
-        assert ctx.codebase_guidance is None
-        assert ctx.codebase_context is None
-        assert ctx.adaptation_state is None
-        assert ctx.context_sources == {}
-
-    def test_extra_fields_accepted(self):
-        # ResolvedContext does NOT use extra="forbid"
-        ctx = ResolvedContext(
-            raw_prompt="Hello.",
-            trace_id="t1",
-            future_field="allowed",
-        )
-        assert ctx.raw_prompt == "Hello."
 
 
 # ---------------------------------------------------------------------------

@@ -3,10 +3,9 @@
 LLM output models use ``extra="forbid"`` so that JSON schema output enforcement
 works correctly and unexpected fields are rejected immediately.
 
-Orchestrator-assembled models (ResolvedContext, PipelineResult, PipelineEvent)
-do NOT use ``extra="forbid"`` because they are constructed by Python code, not
-parsed from LLM JSON output, and may grow new fields without a strict schema
-bump.
+Orchestrator-assembled models (PipelineResult, PipelineEvent) do NOT use
+``extra="forbid"`` because they are constructed by Python code, not parsed
+from LLM JSON output, and may grow new fields without a strict schema bump.
 
 Every field includes a ``Field(description=...)`` so that schemas derived via
 ``_pydantic_to_mcp_tool()`` for MCP sampling give the IDE model full context.
@@ -206,41 +205,6 @@ class AnalyzerInput(BaseModel):
     )
 
 
-class OptimizerInput(BaseModel):
-    """Input assembled by the orchestrator for the Optimize stage."""
-
-    model_config = {"extra": "forbid"}
-
-    raw_prompt: str = Field(
-        description="The original prompt text.",
-    )
-    analysis: AnalysisResult = Field(
-        description="Analysis result from the Analyze stage.",
-    )
-    analysis_summary: str = Field(
-        description="Formatted summary of the analysis for template injection.",
-    )
-    strategy_instructions: str = Field(
-        description="Strategy-specific optimization instructions from the strategy file.",
-    )
-    codebase_guidance: str | None = Field(
-        default=None,
-        description="Workspace guidance context from agent guidance files.",
-    )
-    codebase_context: str | None = Field(
-        default=None,
-        description="Semantic codebase context from explore phase.",
-    )
-    adaptation_state: str | None = Field(
-        default=None,
-        description="Formatted feedback adaptation state for strategy tuning.",
-    )
-    applied_patterns: str | None = Field(
-        default=None,
-        description="Meta-patterns to inject into the optimization context.",
-    )
-
-
 class ScorerInput(BaseModel):
     """Input assembled by the orchestrator for the Score stage."""
 
@@ -260,39 +224,6 @@ class ScorerInput(BaseModel):
 # ---------------------------------------------------------------------------
 # Orchestrator-assembled models — no extra="forbid"
 # ---------------------------------------------------------------------------
-
-
-class ResolvedContext(BaseModel):
-    """Fully resolved context object passed into the pipeline."""
-
-    raw_prompt: str = Field(
-        description="The original prompt text.",
-    )
-    strategy_override: str | None = Field(
-        default=None,
-        description="User override for strategy selection.",
-    )
-    codebase_guidance: str | None = Field(
-        default=None,
-        description="Resolved workspace guidance context.",
-    )
-    codebase_context: str | None = Field(
-        default=None,
-        description="Semantic codebase context from explore phase.",
-    )
-    adaptation_state: str | None = Field(
-        default=None,
-        description="Formatted adaptation state from feedback tracker.",
-    )
-    context_sources: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Context source flags and optional enrichment_meta block.",
-    )
-    trace_id: str = Field(
-        description="Trace ID for this pipeline run.",
-    )
-
-    model_config = {"extra": "allow"}
 
 
 class PipelineEvent(BaseModel):
@@ -397,11 +328,9 @@ __all__ = [
     "AnalysisResult",
     "AnalyzerInput",
     "DimensionScores",
-    "OptimizerInput",
     "OptimizationResult",
     "PipelineEvent",
     "PipelineResult",
-    "ResolvedContext",
     "ScoreResult",
     "ScorerInput",
     "SuggestionsOutput",
