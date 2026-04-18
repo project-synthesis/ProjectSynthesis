@@ -1,6 +1,5 @@
 """Adaptation tracker — counter-based strategy affinity tracking from user feedback."""
 
-import json
 import logging
 from pathlib import Path
 
@@ -113,19 +112,6 @@ class AdaptationTracker:
                     strategy, task_type, data["approval_rate"], total,
                 )
         return blocked
-
-    async def render_adaptation_state(self, task_type: str) -> str | None:
-        """Render the adaptation.md template with affinities for the given task_type.
-
-        Returns:
-            Rendered template string, or None if no affinity data exists for task_type.
-        """
-        affinities = await self.get_affinities(task_type)
-        if not affinities:
-            return None
-
-        affinities_json = json.dumps({task_type: affinities}, indent=2)
-        return self._loader.render("adaptation.md", {"task_type_affinities": affinities_json})
 
     async def check_degenerate(self, task_type: str, strategy: str) -> bool:
         """Return True if 10+ feedbacks exist and >90% are the same rating.

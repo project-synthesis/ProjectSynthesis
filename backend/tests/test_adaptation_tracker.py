@@ -63,28 +63,6 @@ async def test_get_affinities_empty(db_session: AsyncSession) -> None:
     assert result == {}
 
 
-async def test_render_adaptation_state(db_session: AsyncSession) -> None:
-    """render_adaptation_state returns a non-empty string containing the strategy name."""
-    tracker = AdaptationTracker(db_session)
-    await tracker.update_affinity("generation", "chain-of-thought", "thumbs_up")
-
-    rendered = await tracker.render_adaptation_state("generation")
-
-    assert rendered is not None
-    assert isinstance(rendered, str)
-    assert len(rendered) > 0
-    assert "chain-of-thought" in rendered
-
-
-async def test_render_returns_none_when_no_data(db_session: AsyncSession) -> None:
-    """render_adaptation_state returns None when there is no data for the task_type."""
-    tracker = AdaptationTracker(db_session)
-
-    rendered = await tracker.render_adaptation_state("unknown_task_type")
-
-    assert rendered is None
-
-
 async def test_degenerate_detection(db_session: AsyncSession) -> None:
     """check_degenerate returns True when 11 feedbacks are all the same rating."""
     tracker = AdaptationTracker(db_session)
