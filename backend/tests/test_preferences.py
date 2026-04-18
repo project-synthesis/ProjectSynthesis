@@ -590,3 +590,101 @@ class TestDomainReadinessNotifications:
             ValueError, match="domain_readiness_notifications.*expected dict"
         ):
             svc.save(prefs)
+
+
+# ── TestPreferencesUpdateSchema ──────────────────────────────────────
+#
+# Regression tests for the PATCH /api/preferences Pydantic schema.
+#
+# PR #27 added the `domain_readiness_notifications` section to the service
+# layer (DEFAULTS, _sanitize, _validate) but never wired the key into the
+# router's `PreferencesUpdate` model. Because that model sets
+# `extra="forbid"`, every frontend PATCH for the per-row mute / master
+# bell returned 422 before the service ever saw it.
+#
+# These tests pin the accepted shapes: partial toggle-only, partial
+# muted-list-only, both together, and empty object. The extra="forbid"
+# rejection for truly-unknown top-level keys must still hold.
+
+
+class TestPreferencesUpdateSchema:
+    """Pydantic-level tests for the PATCH /api/preferences body model."""
+
+    def test_accepts_domain_readiness_notifications_enabled_only(self) -> None:
+        from app.routers.preferences import PreferencesUpdate
+
+        model = PreferencesUpdate.model_validate(
+            {"domain_readiness_notifications": {"enabled": False}}
+        )
+        dumped = model.model_dump(exclude_none=True)
+        assert dumped == {"domain_readiness_notifications": {"enabled": False}}
+
+    def test_accepts_domain_readiness_notifications_muted_list_only(self) -> None:
+        from app.routers.preferences import PreferencesUpdate
+
+        model = PreferencesUpdate.model_validate(
+            {"domain_readiness_notifications": {"muted_domain_ids": ["dom-a", "dom-b"]}}
+        )
+        dumped = model.model_dump(exclude_none=True)
+        assert dumped == {
+            "domain_readiness_notifications": {"muted_domain_ids": ["dom-a", "dom-b"]}
+        }
+
+    def test_accepts_both_enabled_and_muted_together(self) -> None:
+        from app.routers.preferences import PreferencesUpdate
+
+        model = PreferencesUpdate.model_validate(
+            {
+                "domain_readiness_notifications": {
+                    "enabled": True,
+                    "muted_domain_ids": ["dom-x"],
+                }
+            }
+        )
+        dumped = model.model_dump(exclude_none=True)
+        assert dumped == {
+            "domain_readiness_notifications": {
+                "enabled": True,
+                "muted_domain_ids": ["dom-x"],
+            }
+        }
+
+    def test_rejects_unknown_field_under_domain_readiness_notifications(self) -> None:
+        """Sub-model must also use extra='forbid' to match top-level contract."""
+        from pydantic import ValidationError
+
+        from app.routers.preferences import PreferencesUpdate
+
+        with pytest.raises(ValidationError):
+            PreferencesUpdate.model_validate(
+                {"domain_readiness_notifications": {"bogus": True}}
+            )
+
+    def test_rejects_non_bool_enabled(self) -> None:
+        from pydantic import ValidationError
+
+        from app.routers.preferences import PreferencesUpdate
+
+        with pytest.raises(ValidationError):
+            PreferencesUpdate.model_validate(
+                {"domain_readiness_notifications": {"enabled": "yes"}}
+            )
+
+    def test_rejects_non_string_entries_in_muted_list(self) -> None:
+        from pydantic import ValidationError
+
+        from app.routers.preferences import PreferencesUpdate
+
+        with pytest.raises(ValidationError):
+            PreferencesUpdate.model_validate(
+                {"domain_readiness_notifications": {"muted_domain_ids": [1, 2]}}
+            )
+
+    def test_top_level_extra_forbid_still_holds(self) -> None:
+        """Guard the fix doesn't accidentally relax top-level strictness."""
+        from pydantic import ValidationError
+
+        from app.routers.preferences import PreferencesUpdate
+
+        with pytest.raises(ValidationError):
+            PreferencesUpdate.model_validate({"totally_unknown_section": {}})
