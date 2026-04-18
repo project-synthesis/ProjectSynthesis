@@ -13,6 +13,11 @@
   import { readinessStore } from '$lib/stores/readiness.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { tooltip } from '$lib/actions/tooltip';
+  import {
+    stabilityTierVar,
+    emergenceTierVar,
+    emergenceTierBadge,
+  } from './readiness-tier';
 
   interface Props {
     /** When provided, notifies parent of domain selection. */
@@ -74,39 +79,6 @@
     const count = labelCounts.get(r.domain_label) ?? 1;
     if (count <= 1) return r.domain_label;
     return `${r.domain_label} · ${r.domain_id.slice(0, 4)}`;
-  }
-
-  function stabilityColor(tier: DomainReadinessReport['stability']['tier']): string {
-    switch (tier) {
-      case 'healthy':
-        return 'var(--color-neon-green)';
-      case 'guarded':
-        return 'var(--color-neon-yellow)';
-      case 'critical':
-        return 'var(--color-neon-red)';
-    }
-  }
-
-  function emergenceColor(tier: DomainReadinessReport['emergence']['tier']): string {
-    switch (tier) {
-      case 'ready':
-        return 'var(--color-neon-green)';
-      case 'warming':
-        return 'var(--color-neon-cyan)';
-      case 'inert':
-        return 'var(--color-text-dim)';
-    }
-  }
-
-  function emergenceBadge(tier: DomainReadinessReport['emergence']['tier']): string {
-    switch (tier) {
-      case 'ready':
-        return 'RDY';
-      case 'warming':
-        return 'WRM';
-      case 'inert':
-        return '—';
-    }
   }
 
   /**
@@ -179,22 +151,73 @@
   function onRefresh() {
     void readinessStore.loadAll(true);
   }
+
+  /**
+   * Master mute state mirrors `domain_readiness_notifications.enabled`.
+   * When `enabled=false`, SSE tier-crossing toasts are suppressed globally;
+   * per-row mutes still carry their own opt-outs. Separate from per-row so
+   * an operator can silence everything briefly (e.g. during a bulk split)
+   * without losing their curated per-domain mute list.
+   */
+  const globalMuted = $derived(
+    !preferencesStore.prefs.domain_readiness_notifications.enabled,
+  );
+
+  function onToggleGlobalMute() {
+    void preferencesStore.update({
+      domain_readiness_notifications: { enabled: globalMuted ? true : false },
+    });
+  }
 </script>
 
 <div class="drp" bind:this={rootEl}>
   {#if !hideHeader}
     <div class="drp-header">
       <span class="drp-title">DOMAIN READINESS</span>
-      <button
-        type="button"
-        class="drp-refresh"
-        onclick={onRefresh}
-        disabled={readinessStore.loading}
-        use:tooltip={'Force a fresh recomputation (bypasses 30s backend cache).'}
-        aria-label="Refresh readiness"
-      >
-        {readinessStore.loading ? '···' : 'SYNC'}
-      </button>
+      <div class="drp-header-actions">
+        <button
+          type="button"
+          class="drp-master-mute"
+          class:drp-master-mute--active={globalMuted}
+          aria-pressed={globalMuted ? 'true' : 'false'}
+          aria-label={globalMuted
+            ? 'Unmute all readiness notifications'
+            : 'Mute all readiness notifications'}
+          use:tooltip={globalMuted
+            ? 'Readiness toasts suppressed globally. Click to re-enable.'
+            : 'Mute every readiness tier-crossing toast (per-row mutes preserved).'}
+          onclick={onToggleGlobalMute}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 16 16"
+            width="11"
+            height="11"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M4 6a4 4 0 0 1 8 0v3l1 2H3l1-2V6z" />
+            <path d="M6.5 13a1.5 1.5 0 0 0 3 0" />
+            {#if globalMuted}
+              <line x1="2.5" y1="2.5" x2="13.5" y2="13.5" />
+            {/if}
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="drp-refresh"
+          onclick={onRefresh}
+          disabled={readinessStore.loading}
+          use:tooltip={'Force a fresh recomputation (bypasses 30s backend cache).'}
+          aria-label="Refresh readiness"
+        >
+          {readinessStore.loading ? '···' : 'SYNC'}
+        </button>
+      </div>
     </div>
   {/if}
 
@@ -232,24 +255,24 @@
           <span class="drp-cell drp-name">
             <span
               class="drp-name-rail"
-              style="background: {stabilityColor(r.stability.tier)}"
+              style="background: {stabilityTierVar(r.stability.tier)}"
               aria-hidden="true"
             ></span>
             <span class="drp-name-text">{displayLabel(r)}</span>
           </span>
           <span
             class="drp-cell drp-num"
-            style="color: {stabilityColor(r.stability.tier)}"
+            style="color: {stabilityTierVar(r.stability.tier)}"
             aria-label="Consistency {consistencyPct}%"
           >{consistencyPct}%</span>
           <span
             class="drp-cell drp-badge"
-            style="color: {emergenceColor(r.emergence.tier)}; border-color: color-mix(in srgb, {emergenceColor(r.emergence.tier)} 40%, transparent);"
+            style="color: {emergenceTierVar(r.emergence.tier)}; border-color: color-mix(in srgb, {emergenceTierVar(r.emergence.tier)} 40%, transparent);"
             aria-label="Emergence {r.emergence.tier}"
-          >{emergenceBadge(r.emergence.tier)}</span>
+          >{emergenceTierBadge(r.emergence.tier)}</span>
           <span
             class="drp-cell drp-num drp-gap"
-            style="color: {emergenceColor(r.emergence.tier)}"
+            style="color: {emergenceTierVar(r.emergence.tier)}"
           >{formatGap(r.emergence.gap_to_threshold)}</span>
           <span class="drp-cell drp-num drp-members">{r.member_count}</span>
           <button
@@ -261,7 +284,33 @@
               ? `Unmute notifications for ${r.domain_label}`
               : `Mute notifications for ${r.domain_label}`}
             onclick={(e) => onToggleMute(e, r)}
-          ><span aria-hidden="true">{muted ? '\u{1F515}' : '\u{1F514}'}</span></button>
+          >
+            <!--
+              Inline 1px-stroke bell. `stroke="currentColor"` means the glyph
+              inherits the button's text color — so the muted-active yellow
+              and the hover cyan come free without duplicating a color table.
+              When muted we overlay a diagonal slash (bell-off), matching the
+              lucide bell/bell-off convention used elsewhere in the app.
+            -->
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 16 16"
+              width="10"
+              height="10"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 6a4 4 0 0 1 8 0v3l1 2H3l1-2V6z" />
+              <path d="M6.5 13a1.5 1.5 0 0 0 3 0" />
+              {#if muted}
+                <line x1="2.5" y1="2.5" x2="13.5" y2="13.5" />
+              {/if}
+            </svg>
+          </button>
         </div>
       {/each}
     </div>
@@ -291,6 +340,42 @@
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--color-text-primary);
+  }
+
+  .drp-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .drp-master-mute {
+    all: unset;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 16px;
+    color: var(--color-text-dim);
+    cursor: pointer;
+    border: 1px solid var(--color-border-subtle);
+    box-sizing: border-box;
+    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .drp-master-mute:hover {
+    color: var(--color-neon-cyan);
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+  }
+
+  .drp-master-mute--active {
+    color: var(--color-neon-yellow);
+    border-color: color-mix(in srgb, var(--color-neon-yellow) 40%, transparent);
+  }
+
+  .drp-master-mute:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+    outline-offset: -1px;
   }
 
   .drp-refresh {
@@ -457,7 +542,8 @@
   @media (prefers-reduced-motion: reduce) {
     .drp-refresh,
     .drp-row,
-    .drp-mute {
+    .drp-mute,
+    .drp-master-mute {
       transition: none;
     }
   }

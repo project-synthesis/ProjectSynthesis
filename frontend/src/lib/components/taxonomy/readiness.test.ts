@@ -360,6 +360,49 @@ describe('DomainReadinessPanel', () => {
     const { container } = render(DomainReadinessPanel);
     assertNoGlowShadow(container);
   });
+
+  it('renders a master mute toggle in the header reflecting enabled state', async () => {
+    const { preferencesStore } = await import('$lib/stores/preferences.svelte');
+    preferencesStore._reset();
+    // Defaults to enabled=true after the PR #27 follow-up flip.
+    const { container } = render(DomainReadinessPanel);
+    const master = container.querySelector('.drp-master-mute') as HTMLButtonElement;
+    expect(master).toBeTruthy();
+    // Icon-only button: aria-label conveys state; aria-pressed reflects muted.
+    expect(master.getAttribute('aria-pressed')).toBe('false');
+    expect(master.getAttribute('aria-label')).toMatch(/mute all readiness/i);
+    // Renders an SVG bell, not an emoji.
+    const svg = master.querySelector('svg');
+    expect(svg).toBeTruthy();
+    expect(master.textContent ?? '').not.toMatch(/[\u{1F514}\u{1F515}]/u);
+  });
+
+  it('master toggle calls preferencesStore.update with enabled flipped', async () => {
+    const { preferencesStore } = await import('$lib/stores/preferences.svelte');
+    preferencesStore._reset();
+    const updateSpy = vi
+      .spyOn(preferencesStore, 'update')
+      .mockResolvedValue(undefined);
+    const { container } = render(DomainReadinessPanel);
+    const master = container.querySelector('.drp-master-mute') as HTMLButtonElement;
+    await fireEvent.click(master);
+    expect(updateSpy).toHaveBeenCalledWith({
+      domain_readiness_notifications: { enabled: false },
+    });
+  });
+
+  it('master toggle reflects muted (aria-pressed=true) when enabled=false', async () => {
+    const { preferencesStore } = await import('$lib/stores/preferences.svelte');
+    preferencesStore._reset();
+    preferencesStore.prefs.domain_readiness_notifications = {
+      enabled: false,
+      muted_domain_ids: [],
+    };
+    const { container } = render(DomainReadinessPanel);
+    const master = container.querySelector('.drp-master-mute') as HTMLButtonElement;
+    expect(master.getAttribute('aria-pressed')).toBe('true');
+    expect(master.getAttribute('aria-label')).toMatch(/unmute all readiness/i);
+  });
 });
 
 describe('DomainReadinessSparkline', () => {
@@ -404,6 +447,104 @@ describe('DomainReadinessSparkline', () => {
     });
     const gapline = await findByLabelText(/gap to threshold 24h trendline/i);
     expect(gapline).toBeTruthy();
+  });
+
+  it('forwards window="7d" to the API and labels the sparkline with "7d"', async () => {
+    const historySpy = vi
+      .spyOn(readinessApi, 'getDomainReadinessHistory')
+      .mockResolvedValue({
+        domain_id: 'd1', domain_label: 'backend', window: '7d', bucketed: true,
+        points: [
+          { ts: '2026-04-10T00:00:00Z', consistency: 0.40, dissolution_risk: 0.5,
+            top_candidate_gap: 0.10, stability_tier: 'guarded',
+            emergence_tier: 'warming', is_bucket_mean: true },
+          { ts: '2026-04-17T00:00:00Z', consistency: 0.48, dissolution_risk: 0.4,
+            top_candidate_gap: 0.02, stability_tier: 'healthy',
+            emergence_tier: 'warming', is_bucket_mean: true },
+        ],
+      });
+    const { findByLabelText } = render(DomainReadinessSparkline, {
+      props: { domainId: 'd1', domainLabel: 'backend', metric: 'consistency', window: '7d' },
+    });
+    const sparkline = await findByLabelText(/consistency 7d sparkline/i);
+    expect(sparkline).toBeTruthy();
+    expect(historySpy).toHaveBeenCalledWith('d1', '7d');
+  });
+
+  it('forwards window="30d" for the gap metric', async () => {
+    const historySpy = vi
+      .spyOn(readinessApi, 'getDomainReadinessHistory')
+      .mockResolvedValue({
+        domain_id: 'd1', domain_label: 'backend', window: '30d', bucketed: true,
+        points: [
+          { ts: '2026-03-17T00:00:00Z', consistency: 0.40, dissolution_risk: 0.5,
+            top_candidate_gap: 0.20, stability_tier: 'guarded',
+            emergence_tier: 'warming', is_bucket_mean: true },
+          { ts: '2026-04-17T00:00:00Z', consistency: 0.52, dissolution_risk: 0.4,
+            top_candidate_gap: 0.05, stability_tier: 'healthy',
+            emergence_tier: 'warming', is_bucket_mean: true },
+        ],
+      });
+    const { findByLabelText } = render(DomainReadinessSparkline, {
+      props: { domainId: 'd1', domainLabel: 'backend', metric: 'gap', baseline: 0, window: '30d' },
+    });
+    const trendline = await findByLabelText(/gap to threshold 30d trendline/i);
+    expect(trendline).toBeTruthy();
+    expect(historySpy).toHaveBeenCalledWith('d1', '30d');
+  });
+
+  it('defaults to window="24h" when prop is omitted', async () => {
+    const historySpy = vi
+      .spyOn(readinessApi, 'getDomainReadinessHistory')
+      .mockResolvedValue({
+        domain_id: 'd1', domain_label: 'backend', window: '24h', bucketed: false,
+        points: [
+          { ts: '2026-04-17T11:00:00Z', consistency: 0.40, dissolution_risk: 0.5,
+            top_candidate_gap: 0.10, stability_tier: 'guarded',
+            emergence_tier: 'warming', is_bucket_mean: false },
+          { ts: '2026-04-17T12:00:00Z', consistency: 0.42, dissolution_risk: 0.5,
+            top_candidate_gap: 0.08, stability_tier: 'guarded',
+            emergence_tier: 'warming', is_bucket_mean: false },
+        ],
+      });
+    render(DomainReadinessSparkline, {
+      props: { domainId: 'd1', domainLabel: 'backend', metric: 'consistency' },
+    });
+    await Promise.resolve();
+    expect(historySpy).toHaveBeenCalledWith('d1', '24h');
+  });
+
+  it('re-fetches history when readinessStore.invalidate() fires', async () => {
+    // Prevent the invalidate() → loadAll(force=true) call from hitting the
+    // network — we only care that the sparkline's own effect re-runs.
+    vi.spyOn(readinessApi, 'getAllDomainReadiness').mockResolvedValue([]);
+    const historySpy = vi
+      .spyOn(readinessApi, 'getDomainReadinessHistory')
+      .mockResolvedValue({
+        domain_id: 'd1', domain_label: 'backend', window: '24h', bucketed: false,
+        points: [
+          { ts: '2026-04-17T11:00:00Z', consistency: 0.4, dissolution_risk: 0.5,
+            top_candidate_gap: 0.10, stability_tier: 'guarded',
+            emergence_tier: 'warming', is_bucket_mean: false },
+          { ts: '2026-04-17T12:00:00Z', consistency: 0.42, dissolution_risk: 0.5,
+            top_candidate_gap: 0.08, stability_tier: 'guarded',
+            emergence_tier: 'warming', is_bucket_mean: false },
+        ],
+      });
+
+    const { findByLabelText } = render(DomainReadinessSparkline, {
+      props: { domainId: 'd1', domainLabel: 'backend', metric: 'consistency' },
+    });
+    await findByLabelText(/consistency 24h sparkline/i);
+    expect(historySpy).toHaveBeenCalledTimes(1);
+
+    // Tier-crossing SSE invalidates the store; the sparkline must refresh.
+    readinessStore.invalidate();
+    // Allow the $effect to re-run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(historySpy).toHaveBeenCalledTimes(2);
+
+    readinessStore._reset();
   });
 
   it('drops null gap points before passing scores to sparkline', async () => {

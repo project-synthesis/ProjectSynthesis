@@ -62,7 +62,10 @@ DEFAULTS: dict[str, Any] = {
         "scoring": {"w_topic": 0.15, "w_transform": 0.20, "w_output": 0.45, "w_pattern": 0.20},
     },
     "domain_readiness_notifications": {
-        "enabled": False,
+        # Default ON: PR #27 follow-up. Feature was unreachable when False
+        # because no global UI toggle shipped. Users opt out via the master
+        # bell in DomainReadinessPanel or per-row mutes.
+        "enabled": True,
         "muted_domain_ids": [],
     },
 }

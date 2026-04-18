@@ -166,15 +166,22 @@
           readinessStore.invalidate();
         }
         if (type === 'domain_readiness_changed') {
-          // Toast dispatcher is gated internally by preferences
-          // (enabled + muted-domain list); safe to call unconditionally.
+          // `dispatchReadinessCrossing` checks two independent opt-outs (see
+          // `readiness-notifications.svelte.ts`):
+          //   1. `domain_readiness_notifications.enabled` — master toggle,
+          //      flipped via the bell in DomainReadinessPanel header.
+          //      Defaults to `true` (backend preferences.py DEFAULTS).
+          //   2. `muted_domain_ids` — per-row opt-outs set by the per-domain
+          //      bells. Survive master-mute toggles intentionally.
+          // Both gates are read from the live preferences snapshot, so a
+          // toggle flipped mid-session takes effect on the NEXT crossing.
           dispatchReadinessCrossing(data as unknown as ReadinessCrossingPayload);
-          // Refetch reports so consumers (topology rings, readiness panel)
-          // reflect the new tier without waiting for the next taxonomy_changed
-          // event or manual refresh. `invalidate()` is a fire-and-forget
-          // refetch guarded by a generation counter — no infinite-loop risk
-          // because the backend emits this event on tier crossings, not on
-          // every report fetch.
+          // Refetch reports so consumers (topology rings, readiness panel,
+          // sparklines via invalidationEpoch) reflect the new tier without
+          // waiting for the next taxonomy_changed event or manual refresh.
+          // `invalidate()` is a fire-and-forget refetch guarded by a
+          // generation counter — no infinite-loop risk because the backend
+          // emits this event on tier crossings, not on every report fetch.
           readinessStore.invalidate();
         }
         if (type === 'routing_state_changed') {

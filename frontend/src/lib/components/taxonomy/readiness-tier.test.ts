@@ -2,9 +2,16 @@ import { describe, it, expect } from 'vitest';
 import {
   composeReadinessTier,
   readinessTierColor,
+  stabilityTierVar,
+  emergenceTierVar,
+  emergenceTierBadge,
   type ReadinessTier,
 } from './readiness-tier';
-import type { DomainReadinessReport } from '$lib/api/readiness';
+import type {
+  DomainReadinessReport,
+  StabilityTier,
+  EmergenceTier,
+} from '$lib/api/readiness';
 
 function build(
   stability: 'healthy' | 'guarded' | 'critical',
@@ -66,6 +73,59 @@ describe('composeReadinessTier', () => {
 
   it('emergence ready + guarded stability → ready (emergence dominates)', () => {
     expect(composeReadinessTier(build('guarded', 'ready'))).toBe('ready');
+  });
+});
+
+describe('stabilityTierVar', () => {
+  // Centralizes the panel-side CSS-var color table that previously lived in
+  // DomainReadinessPanel.svelte. Kept next to `TIER_COLORS` (hex palette for
+  // topology rings) so semantic-brand changes touch one file.
+  it('healthy → neon-green', () => {
+    expect(stabilityTierVar('healthy')).toBe('var(--color-neon-green)');
+  });
+  it('guarded → neon-yellow', () => {
+    expect(stabilityTierVar('guarded')).toBe('var(--color-neon-yellow)');
+  });
+  it('critical → neon-red', () => {
+    expect(stabilityTierVar('critical')).toBe('var(--color-neon-red)');
+  });
+
+  it('is total over the StabilityTier union', () => {
+    const all: StabilityTier[] = ['healthy', 'guarded', 'critical'];
+    for (const t of all) {
+      expect(stabilityTierVar(t)).toMatch(/^var\(--color-neon-/);
+    }
+  });
+});
+
+describe('emergenceTierVar', () => {
+  it('ready → neon-green', () => {
+    expect(emergenceTierVar('ready')).toBe('var(--color-neon-green)');
+  });
+  it('warming → neon-cyan', () => {
+    expect(emergenceTierVar('warming')).toBe('var(--color-neon-cyan)');
+  });
+  it('inert → text-dim', () => {
+    expect(emergenceTierVar('inert')).toBe('var(--color-text-dim)');
+  });
+
+  it('is total over the EmergenceTier union', () => {
+    const all: EmergenceTier[] = ['ready', 'warming', 'inert'];
+    for (const t of all) {
+      expect(emergenceTierVar(t)).toMatch(/^var\(--/);
+    }
+  });
+});
+
+describe('emergenceTierBadge', () => {
+  it('ready → RDY', () => {
+    expect(emergenceTierBadge('ready')).toBe('RDY');
+  });
+  it('warming → WRM', () => {
+    expect(emergenceTierBadge('warming')).toBe('WRM');
+  });
+  it('inert → em-dash', () => {
+    expect(emergenceTierBadge('inert')).toBe('—');
   });
 });
 

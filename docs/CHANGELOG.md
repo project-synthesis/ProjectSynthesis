@@ -4,6 +4,17 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- **Readiness sparkline window selector** — `DomainReadinessSparkline` accepts `window: '24h' | '7d' | '30d'` (default `24h`). `TopologyInfoPanel` renders a shared 3-button radiogroup above the `ip-readiness` row that drives BOTH the consistency and gap-to-threshold trendlines so they share an x-axis scale. Wires through to `GET /api/domains/{id}/readiness/history?window=...` so the 7d/30d hourly-bucketed backend bucketing is no longer dead code. ARIA label and query param both dynamic (`${domainLabel} consistency ${window} sparkline` / `... gap to threshold ${window} trendline`). 3 new Vitest cases
+- **Master readiness mute toggle** — `DomainReadinessPanel` header now hosts a bell / bell-off button that flips `domain_readiness_notifications.enabled` globally. Distinct from the per-row bells: per-row `muted_domain_ids` survive master-mute toggles intentionally, so an operator can silence every tier-crossing toast briefly (e.g. during a bulk split) without losing their curated per-domain mute list. Accessible: `aria-pressed`, state-specific `aria-label`, tooltip explains semantics. 1px-stroke SVG bell matching the per-row icon; yellow-active when muted. 3 new Vitest cases
+- **Sparkline SSE refresh** — `readinessStore` exposes a new `invalidationEpoch` reactive counter bumped on every `invalidate()` call. `DomainReadinessSparkline` reads the epoch inside its fetch `$effect` so tier-crossing SSE events now refresh the trendline endpoint (previously the summary reports refreshed but `/history` went stale until remount). 1 new Vitest case
+
+### Changed
+- **`domain_readiness_notifications.enabled` default flipped to `true`** — PR #27 shipped the feature gated off-by-default with no UI toggle, which rendered the entire tier-crossing toast pipeline unreachable in a fresh install. Defaults now mirror the new master mute button semantics: on by default, opt-out via the header bell or per-row bells. Backend `DEFAULTS` and frontend store aligned; 6 test assertions updated
+- **Shared tier color tables extracted** — `stabilityTierVar` / `emergenceTierVar` / `emergenceTierBadge` moved out of `DomainReadinessPanel.svelte` into `readiness-tier.ts` next to `TIER_COLORS` so semantic-brand changes now touch a single file. 11 new Vitest cases lock totality over the `StabilityTier` / `EmergenceTier` unions
+- **`DomainReadinessPanel` per-row mute** now renders a 1px-stroke inline SVG bell (overlay diagonal slash when muted) instead of the 🔔/🔕 emoji pair. Matches the brand spec's `currentColor`-inheriting, zero-glow SVG contour convention and removes Unicode-font-dependent rendering. Brand-guard test added
+- `+page.svelte` SSE comment on `domain_readiness_changed` clarified: now documents both opt-out gates (`enabled` master + `muted_domain_ids[]` per-row) and notes the new default (`true` per backend `preferences.py`)
+
 ## v0.3.38 — 2026-04-17
 
 ### Added

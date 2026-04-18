@@ -23,6 +23,16 @@ class ReadinessStore {
   loading = $state(false);
   lastError = $state<string | null>(null);
 
+  /**
+   * Monotonic epoch bumped on every `invalidate()` call. Downstream
+   * components that fetch their OWN endpoint (e.g. `DomainReadinessSparkline`
+   * hitting `/readiness/history`) read this in a `$effect` to re-trigger
+   * their fetch when a tier-crossing SSE arrives. Without this, the store
+   * refreshes the summary reports but auxiliary time-series endpoints keep
+   * stale points until next mount.
+   */
+  invalidationEpoch = $state(0);
+
   /** Last successful batch fetch timestamp (ms since epoch). */
   private _lastLoadedAt = 0;
 
@@ -123,6 +133,7 @@ class ReadinessStore {
    */
   invalidate(): void {
     this._lastLoadedAt = 0;
+    this.invalidationEpoch += 1;
     // Fire-and-forget refetch. The generation counter handles races.
     void this.loadAll(true);
   }
@@ -136,6 +147,7 @@ class ReadinessStore {
     this._lastLoadedAt = 0;
     this._loadGeneration = 0;
     this._perDomainGenerations.clear();
+    this.invalidationEpoch = 0;
   }
 }
 

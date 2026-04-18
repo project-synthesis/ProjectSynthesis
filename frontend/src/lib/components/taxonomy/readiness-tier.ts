@@ -11,9 +11,56 @@
  * Palette is conflict-free vs domain palette (domains.svelte.ts) and state
  * palette (utils/colors.ts) — see plan "Color Palette" section.
  */
-import type { DomainReadinessReport } from '$lib/api/readiness';
+import type {
+  DomainReadinessReport,
+  EmergenceTier,
+  StabilityTier,
+} from '$lib/api/readiness';
 
 export type ReadinessTier = 'healthy' | 'warming' | 'guarded' | 'critical' | 'ready';
+
+/**
+ * Panel-side CSS-var color table for axis tiers. Kept next to `TIER_COLORS`
+ * (topology ring hex palette) so any semantic brand change touches a single
+ * file. Previously duplicated as private helpers in
+ * `DomainReadinessPanel.svelte` → drift risk.
+ *
+ * NB: these map onto the app-wide neon CSS variables (`--color-neon-*`) so
+ * the panel composes with hover/focus states; the topology overlay uses the
+ * hex palette in `TIER_COLORS` because Three.js materials need literal hex.
+ */
+const STABILITY_TIER_VAR = {
+  healthy: 'var(--color-neon-green)',
+  guarded: 'var(--color-neon-yellow)',
+  critical: 'var(--color-neon-red)',
+} as const satisfies Record<StabilityTier, string>;
+
+const EMERGENCE_TIER_VAR = {
+  ready: 'var(--color-neon-green)',
+  warming: 'var(--color-neon-cyan)',
+  inert: 'var(--color-text-dim)',
+} as const satisfies Record<EmergenceTier, string>;
+
+const EMERGENCE_TIER_BADGE = {
+  ready: 'RDY',
+  warming: 'WRM',
+  inert: '—',
+} as const satisfies Record<EmergenceTier, string>;
+
+/** Resolve the panel CSS var for a stability tier (text + rail colour). */
+export function stabilityTierVar(tier: StabilityTier): string {
+  return STABILITY_TIER_VAR[tier];
+}
+
+/** Resolve the panel CSS var for an emergence tier (badge + gap colour). */
+export function emergenceTierVar(tier: EmergenceTier): string {
+  return EMERGENCE_TIER_VAR[tier];
+}
+
+/** Resolve the 3-char badge string for an emergence tier (RDY/WRM/—). */
+export function emergenceTierBadge(tier: EmergenceTier): string {
+  return EMERGENCE_TIER_BADGE[tier];
+}
 
 /**
  * Brand-defined hex palette per composite tier. Conflict-free against the

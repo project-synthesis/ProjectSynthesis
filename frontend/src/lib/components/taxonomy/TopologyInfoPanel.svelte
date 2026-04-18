@@ -10,6 +10,14 @@
   import SubDomainEmergenceList from './SubDomainEmergenceList.svelte';
   import DomainReadinessSparkline from './DomainReadinessSparkline.svelte';
   import { readinessStore } from '$lib/stores/readiness.svelte';
+  import type { ReadinessWindow } from '$lib/api/readiness';
+
+  // Shared window state drives BOTH sparklines below — keeps consistency +
+  // gap trendlines on the same x-axis so the operator can compare them.
+  // Persisted across domain selections within a session but defaults back to
+  // 24h on reload (matches backend bucketing default).
+  let readinessWindow = $state<ReadinessWindow>('24h');
+  const READINESS_WINDOWS: readonly ReadinessWindow[] = ['24h', '7d', '30d'];
 
   interface Props {
     hideInsight?: boolean;
@@ -293,6 +301,18 @@
 
   <!-- ROW 3.5: Readiness (domain mode only) -->
   {#if mode === 'domain' && domainReadiness}
+    <div class="ip-row ip-readiness-window" role="radiogroup" aria-label="Readiness time window">
+      {#each READINESS_WINDOWS as w}
+        <button
+          type="button"
+          class="ip-rw-btn"
+          class:ip-rw-active={readinessWindow === w}
+          role="radio"
+          aria-checked={readinessWindow === w}
+          onclick={() => (readinessWindow = w)}
+        >{w.toUpperCase()}</button>
+      {/each}
+    </div>
     <div class="ip-row ip-readiness">
       <DomainStabilityMeter report={domainReadiness.stability} />
       <DomainReadinessSparkline
@@ -300,6 +320,7 @@
         domainLabel={domainReadiness.domain_label}
         metric="consistency"
         baseline={domainReadiness.stability.dissolution_floor}
+        window={readinessWindow}
       />
       <div class="ip-readiness-sep"></div>
       <SubDomainEmergenceList report={domainReadiness.emergence} />
@@ -308,6 +329,7 @@
         domainLabel={domainReadiness.domain_label}
         metric="gap"
         baseline={0}
+        window={readinessWindow}
       />
     </div>
   {/if}
@@ -582,6 +604,37 @@
   }
 
   /* -- Row 3.5: Readiness -- */
+
+  .ip-readiness-window {
+    padding: 4px 6px 0;
+    display: flex;
+    gap: 4px;
+    justify-content: flex-end;
+  }
+
+  .ip-rw-btn {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-dim);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    cursor: pointer;
+    border-radius: 0;
+    line-height: 1;
+  }
+
+  .ip-rw-btn:hover {
+    color: var(--color-text);
+    border-color: var(--color-border);
+  }
+
+  .ip-rw-active {
+    color: var(--color-neon-cyan);
+    border-color: var(--color-neon-cyan);
+  }
 
   .ip-readiness {
     padding: 6px;

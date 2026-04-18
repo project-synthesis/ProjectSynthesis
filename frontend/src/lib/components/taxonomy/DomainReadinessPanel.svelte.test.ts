@@ -313,7 +313,31 @@ describe('DomainReadinessPanel — mute toggle (Cycle 6)', () => {
     const { container } = render(DomainReadinessPanel);
     const btn = container.querySelector<HTMLButtonElement>('button.drp-mute');
     expect(btn).not.toBeNull();
-    const glyph = btn!.querySelector('span[aria-hidden="true"]');
+    // Glyph container is aria-hidden whether the glyph is an emoji span or
+    // an inline SVG — locking the contract, not the rendering.
+    const glyph = btn!.querySelector('[aria-hidden="true"]');
     expect(glyph).not.toBeNull();
+  });
+
+  it('mute button renders a 1px-stroke SVG bell, not an emoji (brand spec)', () => {
+    // PR #27 follow-up: the raw \u{1F515}/\u{1F514} emoji violates the
+    // "no glyph noise" brand rule and renders inconsistently across OSes.
+    // The bell must be an inline SVG styled with `currentColor` so it
+    // inherits the active/hover color tokens and matches the 1px-contour
+    // visual language of the rest of the app.
+    const { container } = render(DomainReadinessPanel);
+    const btn = container.querySelector<HTMLButtonElement>('button.drp-mute');
+    expect(btn).not.toBeNull();
+
+    const svg = btn!.querySelector('svg');
+    expect(svg, 'mute button should render an <svg> glyph').not.toBeNull();
+    expect(svg!.getAttribute('aria-hidden')).toBe('true');
+    expect(svg!.getAttribute('stroke')).toBe('currentColor');
+
+    // Belt-and-braces: neither emoji codepoint may leak into the rendered
+    // output. This is what actually protects against drift.
+    const text = btn!.textContent ?? '';
+    expect(text).not.toContain('\u{1F514}');
+    expect(text).not.toContain('\u{1F515}');
   });
 });

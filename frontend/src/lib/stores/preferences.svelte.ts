@@ -36,7 +36,9 @@ const DEFAULTS: Preferences = {
   models: { analyzer: 'sonnet', optimizer: 'opus', scorer: 'sonnet' },
   pipeline: { enable_explore: true, enable_scoring: true, enable_adaptation: true, force_sampling: false, force_passthrough: false, optimizer_effort: 'high', analyzer_effort: 'low', scorer_effort: 'low' },
   defaults: { strategy: 'auto' },
-  domain_readiness_notifications: { enabled: false, muted_domain_ids: [] },
+  // Default ON — see backend preferences.py for rationale. Users opt out via
+  // the master bell in DomainReadinessPanel or per-row mutes.
+  domain_readiness_notifications: { enabled: true, muted_domain_ids: [] },
 };
 
 /** User-visible toast surfaced when `toggleDomainMute()` rolls back. */

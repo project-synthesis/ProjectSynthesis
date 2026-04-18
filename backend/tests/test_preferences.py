@@ -452,7 +452,11 @@ class TestDomainReadinessNotifications:
         self, svc: PreferencesService
     ) -> None:
         prefs = svc.load()
-        assert prefs["domain_readiness_notifications"]["enabled"] is False
+        # Default ON — PR #27 follow-up: feature was unreachable when default
+        # was False because no global UI toggle shipped. Flipping the default
+        # makes the SSE→toast pipeline live out-of-the-box; users opt out via
+        # the master bell in DomainReadinessPanel or per-row mutes.
+        assert prefs["domain_readiness_notifications"]["enabled"] is True
         assert prefs["domain_readiness_notifications"]["muted_domain_ids"] == []
 
     def test_existing_file_gains_new_notifications_defaults(
@@ -468,7 +472,7 @@ class TestDomainReadinessNotifications:
             "defaults": {"strategy": "auto"},
         }))
         prefs = svc.load()
-        assert prefs["domain_readiness_notifications"]["enabled"] is False
+        assert prefs["domain_readiness_notifications"]["enabled"] is True
         assert prefs["domain_readiness_notifications"]["muted_domain_ids"] == []
 
     def test_patch_can_enable_notifications_and_mute_domain(
@@ -478,7 +482,7 @@ class TestDomainReadinessNotifications:
         # rely on its presence without patching (mirrors other top-level sections).
         from app.services.preferences import DEFAULTS
         assert "domain_readiness_notifications" in DEFAULTS
-        assert DEFAULTS["domain_readiness_notifications"]["enabled"] is False
+        assert DEFAULTS["domain_readiness_notifications"]["enabled"] is True
         assert DEFAULTS["domain_readiness_notifications"]["muted_domain_ids"] == []
 
         result = svc.patch({
@@ -530,7 +534,9 @@ class TestDomainReadinessNotifications:
             },
         }))
         prefs = svc.load()
-        assert prefs["domain_readiness_notifications"]["enabled"] is False
+        # Sanitize falls back to DEFAULTS["domain_readiness_notifications"]["enabled"],
+        # which is True post-follow-up (feature shipped live by default).
+        assert prefs["domain_readiness_notifications"]["enabled"] is True
 
     def test_sanitize_replaces_corrupt_muted_domain_ids_with_default(
         self, svc: PreferencesService, prefs_file: Path

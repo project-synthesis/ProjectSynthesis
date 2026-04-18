@@ -15,7 +15,9 @@
   import {
     getDomainReadinessHistory,
     type ReadinessHistoryPoint,
+    type ReadinessWindow,
   } from '$lib/api/readiness';
+  import { readinessStore } from '$lib/stores/readiness.svelte';
 
   type Metric = 'consistency' | 'gap';
 
@@ -25,15 +27,32 @@
     metric: Metric;
     /** Dissolution floor (consistency) or 0 (gap). Drawn as a dashed line. */
     baseline?: number | null;
+    /**
+     * Time window passed through to `/readiness/history?window=...`. Mirrors
+     * the backend bucketing contract (24h raw, 7d/30d bucketed). Parent
+     * `TopologyInfoPanel` drives both sparklines via a shared selector so the
+     * consistency + gap trendlines always share an x-axis scale.
+     */
+    window?: ReadinessWindow;
   }
 
-  let { domainId, domainLabel, metric, baseline = null }: Props = $props();
+  let {
+    domainId,
+    domainLabel,
+    metric,
+    baseline = null,
+    window = '24h',
+  }: Props = $props();
 
   let historyPoints = $state<ReadinessHistoryPoint[]>([]);
 
   $effect(() => {
+    // Read the store epoch so tier-crossing SSE → `readinessStore.invalidate()`
+    // re-triggers this fetch. Without the read, the history endpoint is only
+    // hit on mount/prop change and goes stale while the panel is mounted.
+    readinessStore.invalidationEpoch;
     let cancelled = false;
-    getDomainReadinessHistory(domainId, '24h')
+    getDomainReadinessHistory(domainId, window)
       .then((res) => {
         if (!cancelled) historyPoints = res.points;
       })
@@ -57,8 +76,8 @@
 
   const ariaLabel = $derived(
     metric === 'consistency'
-      ? `${domainLabel} consistency 24h sparkline`
-      : `${domainLabel} gap to threshold 24h trendline`,
+      ? `${domainLabel} consistency ${window} sparkline`
+      : `${domainLabel} gap to threshold ${window} trendline`,
   );
 </script>
 
