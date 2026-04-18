@@ -1372,6 +1372,19 @@
       });
     });
 
+    // Task 9: LOD attenuation. The LOD callback is the FINAL opacity writer
+    // per frame for readiness rings. The dim-sweep `$effect` still runs on
+    // rebuild and sets an initial opacity, but this callback overrides it
+    // each tick based on `renderer.lodTier`. Single opacity concern per
+    // callback — the existing billboard callback handles `lookAt`.
+    const _removeRingLodUpdate = renderer!.addAnimationCallback(() => {
+      const tier = renderer!.lodTier;
+      const opacity = tier === 'far' ? 0.4 : tier === 'mid' ? 0.7 : 1.0;
+      for (const entry of _readinessRings.values()) {
+        entry.material.opacity = opacity;
+      }
+    });
+
     // Taxonomy data loaded by +layout.svelte on app mount — no need to re-fetch here.
     // The $effect watching filteredTaxonomyTree (line 432) rebuilds the scene reactively.
 
@@ -1390,6 +1403,7 @@
       clusterPhysics?.clear();
       clusterPhysics = null;
       removeBeamUpdate();
+      _removeRingLodUpdate();
       _removeFormationAnim?.();
       _removeFormationAnim = null;
       _removeDomainRotation?.();
