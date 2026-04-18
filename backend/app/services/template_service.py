@@ -5,8 +5,9 @@ See docs/superpowers/specs/2026-04-18-template-architecture-design.md.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,6 +77,16 @@ async def _load_ancestor_chain(
             break
         current_id = row.parent_id
     return lookup
+
+
+@dataclass
+class PaginatedTemplates:
+    total: int
+    count: int
+    offset: int
+    items: list[PromptTemplate] = field(default_factory=list)
+    has_more: bool = False
+    next_offset: int | None = None
 
 
 class TemplateService:
@@ -219,6 +230,18 @@ class TemplateService:
 
         return tpl
 
+    async def get(self, template_id: str, db: AsyncSession) -> PromptTemplate | None:
+        """Return a single template by ID, or ``None`` if not found.
+
+        Does not filter on ``retired_at`` — callers that need only live
+        templates must check the return value themselves.
+        """
+        return (
+            await db.execute(
+                select(PromptTemplate).where(PromptTemplate.id == template_id)
+            )
+        ).scalar_one_or_none()
+
     async def retire(
         self,
         template_id: str,
@@ -237,11 +260,7 @@ class TemplateService:
         before dispatching. ``reason`` is free-form but prefer the
         ``RETIRE_REASON_*`` module constants for observability.
         """
-        tpl = (
-            await db.execute(
-                select(PromptTemplate).where(PromptTemplate.id == template_id)
-            )
-        ).scalar_one_or_none()
+        tpl = await self.get(template_id, db)
         if tpl is None:
             logger.warning("retire: template %s not found", template_id)
             return False
@@ -285,3 +304,55 @@ class TemplateService:
             )
         )
         await db.flush()
+
+    async def list_for_project(
+        self,
+        project_id: str | None,
+        db: AsyncSession,
+        *,
+        include_retired: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> PaginatedTemplates:
+        """Return a paginated slice of templates scoped to a project.
+
+        ``project_id=None`` selects global templates only (those with no
+        associated project), not templates from all projects. Pass an
+        explicit project UUID to scope to that project's templates.
+
+        The returned ``PaginatedTemplates`` carries the standard pagination
+        envelope fields: ``total``, ``count``, ``offset``, ``items``,
+        ``has_more``, ``next_offset`` — compatible with all other list
+        endpoints in this API.
+        """
+        stmt = select(PromptTemplate)
+        if project_id is not None:
+            stmt = stmt.where(PromptTemplate.project_id == project_id)
+        else:
+            stmt = stmt.where(PromptTemplate.project_id.is_(None))
+        if not include_retired:
+            stmt = stmt.where(PromptTemplate.retired_at.is_(None))
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await db.execute(count_stmt)).scalar_one()
+
+        page = (
+            await db.execute(
+                stmt.order_by(
+                    PromptTemplate.domain_label, PromptTemplate.promoted_at.desc()
+                )
+                .limit(limit)
+                .offset(offset)
+            )
+        ).scalars().all()
+
+        count = len(page)
+        has_more = (offset + count) < total
+        return PaginatedTemplates(
+            total=total,
+            count=count,
+            offset=offset,
+            items=list(page),
+            has_more=has_more,
+            next_offset=(offset + count) if has_more else None,
+        )

@@ -368,3 +368,37 @@ async def test_increment_usage_missing_template_is_silent_noop(db_session):
     svc = TemplateService()
     # Must not raise; returns None.
     await svc.increment_usage("does_not_exist", db_session)
+
+
+@pytest.mark.asyncio
+async def test_list_for_project_excludes_other_projects(db_session):
+    cid1, _ = await _seed_cluster_with_opt(db_session)
+    cid2, _ = await _seed_cluster_with_opt(db_session)
+    from sqlalchemy import update as sa_update
+    await db_session.execute(sa_update(Optimization).where(Optimization.cluster_id == cid1).values(project_id="projA"))
+    await db_session.execute(sa_update(Optimization).where(Optimization.cluster_id == cid2).values(project_id="projB"))
+    await db_session.flush()
+    svc = TemplateService()
+    await svc.fork_from_cluster(cid1, db_session)
+    await svc.fork_from_cluster(cid2, db_session)
+    result = await svc.list_for_project("projA", db_session)
+    assert result.total == 1
+    assert result.items[0].project_id == "projA"
+
+
+@pytest.mark.asyncio
+async def test_list_excludes_retired_by_default(db_session):
+    cid, _ = await _seed_cluster_with_opt(db_session)
+    svc = TemplateService()
+    tpl = await svc.fork_from_cluster(cid, db_session)
+    await svc.retire(tpl.id, db_session, reason="manual")
+    result = await svc.list_for_project(None, db_session)
+    assert result.total == 0
+    result_with_retired = await svc.list_for_project(None, db_session, include_retired=True)
+    assert result_with_retired.total == 1
+
+
+@pytest.mark.asyncio
+async def test_get_returns_none_for_missing(db_session):
+    svc = TemplateService()
+    assert (await svc.get("does_not_exist", db_session)) is None
