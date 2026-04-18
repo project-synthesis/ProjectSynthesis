@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   dispatchReadinessCrossing,
   formatCrossingMessage,
@@ -96,6 +96,30 @@ describe('dispatchReadinessCrossing', () => {
     } as unknown as ReadinessCrossingPayload;
     expect(() => dispatchReadinessCrossing(bad)).not.toThrow();
     expect(toastStore.toasts.length).toBe(0);
+  });
+
+  it('logs a console.debug telemetry line when a malformed payload is dropped', () => {
+    // Observability follow-up: silent swallowing of malformed payloads
+    // hides upstream bugs. We must at least leave a debug crumb so
+    // DevTools reveals the drop without surfacing a user-facing error.
+    preferencesStore.prefs.domain_readiness_notifications = {
+      enabled: true,
+      muted_domain_ids: [],
+    };
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    try {
+      const bad = {
+        // missing domain_id, domain_label, axis, to_tier
+      } as unknown as ReadinessCrossingPayload;
+      dispatchReadinessCrossing(bad);
+      expect(debugSpy).toHaveBeenCalledTimes(1);
+      // First arg should be a string tag identifying the event source.
+      const firstArg = debugSpy.mock.calls[0][0];
+      expect(typeof firstArg).toBe('string');
+      expect(String(firstArg)).toMatch(/readiness/i);
+    } finally {
+      debugSpy.mockRestore();
+    }
   });
 
   // --- Severity-aware dispatch (Cycle 5 followup #1) ------------------------

@@ -24,6 +24,11 @@ export function formatCrossingMessage(payload: ReadinessCrossingPayload): string
 
 export function dispatchReadinessCrossing(payload: ReadinessCrossingPayload): void {
   if (!payload || !payload.domain_id || !payload.domain_label || !payload.axis || !payload.to_tier) {
+    // Observability: malformed SSE event bodies are silently dropped for
+    // user-facing resilience, but we still leave a debug crumb so the drop
+    // is visible in DevTools without polluting the console at info/warn.
+    // Intentionally non-fatal — readiness notifications are advisory.
+    console.debug('[readiness-notifications] dropped malformed crossing payload', payload);
     return;
   }
   const prefs = preferencesStore.prefs.domain_readiness_notifications;
@@ -35,6 +40,12 @@ export function dispatchReadinessCrossing(payload: ReadinessCrossingPayload): vo
   const toTier = String(payload.to_tier).toLowerCase();
   // Severity mapping: critical or dissolution -> red (deleted);
   // guarded -> yellow (modified); anything else -> cyan info.
+  //
+  // Note: there is intentionally no "positive-news" severity variant
+  // (e.g. green for recoveries like guarded->healthy). Tier-recovery
+  // transitions still route to cyan info — the toast system has no
+  // dedicated positive color and we prefer neutral info over overloading
+  // `modified` (which semantically signals degradation).
   if (toTier === 'critical' || payload.would_dissolve === true) {
     toastStore.add('deleted', msg);
   } else if (toTier === 'guarded') {

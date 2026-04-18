@@ -171,3 +171,49 @@ async def test_publish_crossings_emits_event_bus_event():
     assert body["axis"] == "emergence"
     assert body["from_tier"] == "inert"
     assert body["to_tier"] == "warming"
+
+
+def test_cooldown_suppression_emits_observability_event(monkeypatch):
+    """A crossing gated by the 10-minute cooldown must still leave a
+    structured observability breadcrumb (``readiness_crossing_suppressed``),
+    otherwise spurious-but-real transitions are silently lost from the
+    event log and can't be diagnosed later.
+    """
+    from app.services.taxonomy import event_logger as ev
+    from app.services.taxonomy import sub_domain_readiness as r
+
+    # Install a throwaway event logger (no disk I/O) to capture decisions.
+    captured: list[dict] = []
+
+    class _Capture:
+        def log_decision(self, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr(ev, "_instance", _Capture())
+
+    # First full firing: inert → warming with hysteresis.
+    r._detect_crossings(_report(emergence="inert"), now=0.0)
+    r._detect_crossings(_report(emergence="warming"), now=10.0)
+    fired = r._detect_crossings(_report(emergence="warming"), now=20.0)
+    assert len(fired) == 1
+
+    # Second transition within cooldown window: warming → ready with
+    # hysteresis satisfied. The inner `_process_axis_crossing` must take
+    # the cooldown branch (line 867-874) — it must emit the structured
+    # suppressed event.
+    r._detect_crossings(_report(emergence="ready"), now=25.0)
+    r._detect_crossings(_report(emergence="ready"), now=35.0)
+
+    suppressed = [
+        entry for entry in captured
+        if entry.get("op") == "readiness_crossing_suppressed"
+    ]
+    assert len(suppressed) >= 1, (
+        "cooldown suppression must log a `readiness_crossing_suppressed` "
+        "event so the drop is visible in observability"
+    )
+    ctx = suppressed[0]["context"]
+    assert ctx["axis"] == "emergence"
+    assert ctx["from_tier"] == "warming"
+    assert ctx["to_tier"] == "ready"
+    assert ctx["domain_id"] == "d1"

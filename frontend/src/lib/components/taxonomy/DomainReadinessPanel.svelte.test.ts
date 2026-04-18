@@ -210,6 +210,50 @@ describe('DomainReadinessPanel — mute toggle (Cycle 6)', () => {
     expect(unmutedBtn.classList.contains('drp-mute--active')).toBe(false);
   });
 
+  it('pressing Space on the mute button does NOT activate the row (a11y)', async () => {
+    // When a keyboard user tabs to the mute button and presses Space, the
+    // browser synthesises a click on the button, but the keydown also
+    // bubbles to the row handler (`onRowKey`). Without a propagation guard,
+    // `select(report)` would fire on top of `toggleDomainMute`. Lock the
+    // row-level handler to no-op when the keydown originated on a nested
+    // control.
+    const toggleSpy = vi
+      .spyOn(preferencesStore, 'toggleDomainMute')
+      .mockImplementation(async () => {});
+    const onSelect = vi.fn();
+    const { container } = render(DomainReadinessPanel, { props: { onSelect } });
+    const selectHandler = vi.fn();
+    container.addEventListener('domain:select', selectHandler as EventListener);
+
+    const muteBtn = container.querySelector(
+      'button.drp-mute[aria-label="Mute notifications for backend"]',
+    ) as HTMLButtonElement;
+    expect(muteBtn).not.toBeNull();
+
+    await fireEvent.keyDown(muteBtn, { key: ' ' });
+    await fireEvent.keyDown(muteBtn, { key: 'Enter' });
+
+    // Row-level handler must NOT promote the keydown into a selection —
+    // the event originated inside the nested mute control.
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(selectHandler).not.toHaveBeenCalled();
+    // Sanity: spy exists so we don't mask true negatives.
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it('pressing Space on the row (not a nested control) DOES activate selection', async () => {
+    // Regression guard: the propagation fix must NOT break the main-path
+    // keyboard activation on the row itself. Space on the row still selects.
+    const onSelect = vi.fn();
+    const { container } = render(DomainReadinessPanel, { props: { onSelect } });
+    const row = container.querySelector(
+      'div.drp-row[role="button"]',
+    ) as HTMLDivElement;
+    expect(row).not.toBeNull();
+    await fireEvent.keyDown(row, { key: ' ' });
+    expect(onSelect).toHaveBeenCalled();
+  });
+
   it('row exposes an aria-label combining domain, stability, and emergence state', () => {
     // Without an accessible name, a div[role="button"] reads only its inner
     // text — which on this panel is a grid of numbers. Lock the label format

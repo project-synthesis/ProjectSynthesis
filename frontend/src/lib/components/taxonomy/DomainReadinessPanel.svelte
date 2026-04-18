@@ -136,6 +136,13 @@
     // Space scrolls the page by default on a div[role="button"]; suppress it
     // so activation matches <button> semantics. Enter has no scroll side
     // effect, so leave it alone per WAI-ARIA authoring guidance.
+    //
+    // A11y: skip when the keydown originated inside a nested interactive
+    // control (e.g. the mute toggle button). Otherwise Space/Enter on the
+    // nested button would bubble here and activate the row's `select()` in
+    // addition to (or instead of) the button's own handler — two activations
+    // from one keypress.
+    if (event.target !== event.currentTarget) return;
     if (event.key === ' ') {
       event.preventDefault();
       select(report);

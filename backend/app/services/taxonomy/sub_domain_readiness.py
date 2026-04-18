@@ -826,8 +826,15 @@ def _process_axis_crossing(
     axis: Literal["emergence", "stability"],
     new_tier: str,
     now: float,
+    domain_id: str = "",
 ) -> TierCrossing | None:
-    """Update entry for one axis; return a ``TierCrossing`` if one fires."""
+    """Update entry for one axis; return a ``TierCrossing`` if one fires.
+
+    When a transition satisfies hysteresis but is gated by the 10-minute
+    cooldown, a ``readiness_crossing_suppressed`` observability event is
+    emitted (best-effort) so suppressed crossings remain diagnosable.
+    ``domain_id`` is optional for callers that do not need that trace.
+    """
     if axis == "emergence":
         stable_attr = "stable_emergence_tier"
         pending_attr = "pending_emergence_tier"
@@ -868,9 +875,32 @@ def _process_axis_crossing(
     # and clear pending so the cooldown still covers any future re-cross.
     last_fire = getattr(entry, last_attr)
     if last_fire > 0.0 and now - last_fire < READINESS_CROSSING_COOLDOWN_SECONDS:
+        suppressed_from = stable_tier
         setattr(entry, stable_attr, new_tier)
         setattr(entry, pending_attr, None)
         setattr(entry, count_attr, 0)
+        # Observability: the cooldown gate is real and load-bearing, but
+        # silent suppression makes spurious-but-real transitions invisible
+        # in the event log.  Emit a structured breadcrumb so operators can
+        # diagnose "why didn't that crossing fire?" later.  Best-effort —
+        # readiness events never fail the caller.
+        try:
+            get_event_logger().log_decision(
+                path="api",
+                op="readiness_crossing_suppressed",
+                decision="cooldown_gated",
+                cluster_id=domain_id or None,
+                context={
+                    "domain_id": domain_id,
+                    "axis": axis,
+                    "from_tier": suppressed_from,
+                    "to_tier": new_tier,
+                    "seconds_since_last_fire": round(now - last_fire, 2),
+                    "cooldown_seconds": READINESS_CROSSING_COOLDOWN_SECONDS,
+                },
+            )
+        except RuntimeError:
+            pass
         return None
 
     crossing = TierCrossing(axis=axis, from_tier=stable_tier, to_tier=new_tier)
@@ -900,10 +930,12 @@ def _detect_crossings(
         _process_axis_crossing(
             entry=entry, axis="emergence",
             new_tier=report.emergence.tier, now=now,
+            domain_id=report.domain_id,
         ),
         _process_axis_crossing(
             entry=entry, axis="stability",
             new_tier=report.stability.tier, now=now,
+            domain_id=report.domain_id,
         ),
     ):
         if crossing is not None:
