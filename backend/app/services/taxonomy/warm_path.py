@@ -30,6 +30,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -489,8 +490,21 @@ async def execute_maintenance_phases(
                     reports = await _r.compute_all_domain_readiness(
                         snap_db, fresh=True,
                     )
-                for report in reports:
-                    await record_snapshot(report)
+                # Concurrent fire-and-forget: record_snapshot internally
+                # offloads to a thread pool, so gather lets per-report
+                # disk I/O overlap.  return_exceptions=True ensures one
+                # bad report never poisons a siblings write.
+                if reports:
+                    results = await asyncio.gather(
+                        *[record_snapshot(r) for r in reports],
+                        return_exceptions=True,
+                    )
+                    for r, outcome in zip(reports, results):
+                        if isinstance(outcome, Exception):
+                            logger.warning(
+                                "readiness snapshot failed for domain %s: %s",
+                                r.domain_id, outcome,
+                            )
             except Exception as snap_exc:
                 logger.warning(
                     "readiness snapshot batch failed (non-fatal): %s",

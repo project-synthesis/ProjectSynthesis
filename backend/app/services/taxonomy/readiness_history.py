@@ -98,15 +98,19 @@ async def record_snapshot(
     the pattern in ``app.services.taxonomy.event_logger.TaxonomyEventLogger.
     log_decision`` (see that module's ``_daily_file().open("a", ...)`` call).
     """
-    snap = _snapshot_from_report(report)
-    target_dir = _resolve_dir(base_dir)
     try:
+        snap = _snapshot_from_report(report)
+        target_dir = _resolve_dir(base_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
         path = _file_for_day(snap.ts, target_dir)
         await asyncio.to_thread(
             _write_jsonl_row_sync, path, snap.model_dump(mode="json"),
         )
-    except OSError as exc:
+    except (OSError, ValidationError) as exc:
+        # Swallow per the fire-and-forget contract — observability must
+        # never block warm-path Phase 5.  ValidationError guards against
+        # future schema tightening where a DomainReadinessReport field
+        # might not round-trip into ReadinessSnapshot.
         logger.warning("readiness snapshot write failed: %s", exc)
 
 
@@ -118,7 +122,16 @@ _WINDOW_DAYS: dict[HistoryWindow, int] = {"24h": 1, "7d": 7, "30d": 30}
 def _iter_files_for_window(
     *, days: int, base_dir: Path | None = None,
 ) -> list[Path]:
-    """Return existing snapshot files spanning the last N days (inclusive)."""
+    """Return existing snapshot files spanning the last N days (inclusive).
+
+    Intentionally a *superset* of the exact time window — row-level
+    filtering in ``query_history`` (``snap.ts < cutoff``) is what actually
+    enforces the moving wall-clock boundary.  File enumeration only needs
+    to guarantee that every file which *could* contain in-window rows is
+    read; the ``+1`` catches the midnight rollover case where the cutoff
+    falls inside today's file but the oldest in-window snapshot lives in
+    yesterday's file.
+    """
     target_dir = _resolve_dir(base_dir)
     if not target_dir.exists():
         return []
@@ -274,9 +287,15 @@ def prune_old_snapshots(*, base_dir: Path | None = None) -> int:
     target_dir = _resolve_dir(base_dir)
     if not target_dir.exists():
         return 0
-    cutoff = datetime.now(timezone.utc) - timedelta(
+    # Day-aligned cutoff: filename days are already truncated to midnight
+    # UTC, so comparing against a wall-clock cutoff (``now - 30d``) would
+    # drop today's N-day-old file whenever now() is past midnight.  Align
+    # the cutoff to the start of its UTC day so a file whose day equals
+    # the cutoff is kept (boundary-inclusive, matches the docstring).
+    cutoff_date = datetime.now(timezone.utc).date() - timedelta(
         days=READINESS_HISTORY_RETENTION_DAYS,
     )
+    cutoff = datetime.combine(cutoff_date, datetime.min.time(), tzinfo=timezone.utc)
     removed = 0
     for path in target_dir.glob("snapshots-*.jsonl"):
         try:

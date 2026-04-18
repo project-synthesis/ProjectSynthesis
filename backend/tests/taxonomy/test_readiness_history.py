@@ -164,3 +164,55 @@ def test_prune_old_snapshots_drops_files_past_retention(tmp_path: Path) -> None:
     assert removed == 1
     assert keep.exists()
     assert not drop.exists()
+
+
+def test_prune_old_snapshots_keeps_file_at_exact_boundary(tmp_path: Path) -> None:
+    """File whose day equals the N-day cutoff must be kept (boundary-inclusive).
+
+    Matches the docstring contract: "A file whose day equals the cutoff is
+    kept."  Without a day-aligned cutoff, the exact-boundary file is dropped
+    whenever the current wall-clock is past midnight UTC (off-by-hours bug).
+    """
+    from app.services.taxonomy._constants import READINESS_HISTORY_RETENTION_DAYS
+
+    today_utc = datetime.now(timezone.utc).date()
+    boundary_day = today_utc - timedelta(days=READINESS_HISTORY_RETENTION_DAYS)
+    boundary_file = tmp_path / f"snapshots-{boundary_day.isoformat()}.jsonl"
+    boundary_file.write_text("{}\n")
+
+    removed = prune_old_snapshots(base_dir=tmp_path)
+    assert removed == 0
+    assert boundary_file.exists(), (
+        "file at exact retention boundary must be preserved"
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_snapshot_swallows_validation_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """record_snapshot is fire-and-forget — must not raise on ValidationError.
+
+    Contract (from docstring): "Errors are logged and swallowed — readiness
+    history is observability, never load-bearing."  A ValidationError from
+    _snapshot_from_report (e.g., future schema tightening that rejects a
+    report field) must not propagate to warm-path Phase 5.
+    """
+    from pydantic import ValidationError
+
+    from app.services.taxonomy import readiness_history as rh
+
+    def _raise_validation(_report: object) -> object:
+        # Construct a real ValidationError via Pydantic to match production.
+        try:
+            from app.schemas.sub_domain_readiness import ReadinessSnapshot
+
+            ReadinessSnapshot()  # type: ignore[call-arg]  # intentional — missing required fields
+        except ValidationError as exc:
+            raise exc
+        raise AssertionError("expected ValidationError")
+
+    monkeypatch.setattr(rh, "_snapshot_from_report", _raise_validation)
+
+    # Must NOT raise — observability paths never fail the caller.
+    await rh.record_snapshot(_build_report(), base_dir=tmp_path)
