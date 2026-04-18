@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import type { ClusterNode } from '$lib/api/clusters';
-  import { clustersStore, isOrphanNode, type StateFilter } from '$lib/stores/clusters.svelte';
+  import { clustersStore, type StateFilter } from '$lib/stores/clusters.svelte';
   import { editorStore, PROMPT_TAB_ID } from '$lib/stores/editor.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
@@ -14,6 +14,7 @@
   import { readinessStore } from '$lib/stores/readiness.svelte';
   import CollapsibleSectionHeader from '$lib/components/shared/CollapsibleSectionHeader.svelte';
   import { navCollapse } from '$lib/stores/nav_collapse.svelte';
+  import { templatesStore } from '$lib/stores/templates.svelte';
 
   function handleReadinessSelect(domainId: string): void {
     clustersStore.selectCluster(domainId);
@@ -37,7 +38,6 @@
     { filter: 'active',    label: 'act', ariaLabel: 'active' },
     { filter: 'candidate', label: 'can', ariaLabel: 'candidate' },
     { filter: 'mature',    label: 'mat', ariaLabel: 'mature' },
-    { filter: 'template',  label: 'tpl', ariaLabel: 'template' },
     { filter: 'archived',  label: 'arc', ariaLabel: 'archived' },
   ];
 
@@ -111,17 +111,28 @@
     }
   });
 
-  // Proven Templates section — pinned regardless of state filter.
-  // Templates are a curated showcase, always visible when they exist.
-  // Source from raw taxonomyTree so templates appear even when state filter is 'active'.
-  let showTemplates = $derived(stateFilter === null || stateFilter === 'active' || stateFilter === 'template');
-  let templateClusters = $derived(
-    showTemplates
-      ? clustersStore.taxonomyTree
-          .filter(f => f.state === 'template' && !isOrphanNode(f))
-          .sort((a, b) => (b.avg_score ?? 0) - (a.avg_score ?? 0))
-      : []
-  );
+  // Proven Templates — read from templatesStore, group by frozen domain_label
+  // (not the source cluster's current domain — templates remember their origin).
+  // Templates are always visible regardless of the cluster state filter.
+  interface TemplateGroup {
+    domain: string;
+    items: typeof templatesStore.templates;
+  }
+  const templateGroups = $derived.by<TemplateGroup[]>(() => {
+    const by: Record<string, typeof templatesStore.templates> = {};
+    for (const t of templatesStore.templates) {
+      if (t.retired_at) continue;
+      (by[t.domain_label] ||= []).push(t);
+    }
+    // Sort items within each group by score descending; sort groups alphabetically
+    return Object.entries(by)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([domain, items]) => ({
+        domain,
+        items: [...items].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
+      }));
+  });
+  const hasVisibleTemplates = $derived(templateGroups.some((g) => g.items.length > 0));
 
   // Filter families for display.
   // - Domain nodes excluded: they serve as group headers, not child items
@@ -220,6 +231,8 @@
       if (clustersStore.taxonomyTree.length === 0) {
         clustersStore.loadTree();
       }
+      // Load templates on mount — retired hidden at derivation layer
+      templatesStore.load(null);
     }
   });
 
@@ -279,66 +292,29 @@
     }
   }
 
-  // Template preview card state
-  let expandedTemplateId = $state<string | null>(null);
-  let templatePreview = $state<{ prompt: string; strategy: string | null; label: string; patternIds: string[]; patterns: { text: string; source_count: number }[] } | null>(null);
-  let templatePreviewLoading = $state(false);
-
-  async function toggleTemplatePreview(clusterId: string) {
-    if (expandedTemplateId === clusterId) {
-      expandedTemplateId = null;
-      templatePreview = null;
+  async function handleSpawn(tpl: typeof templatesStore.templates[number]): Promise<void> {
+    const result = await templatesStore.spawn(tpl.id);
+    if (!result) {
+      addToast('deleted', 'Failed to spawn template');
       return;
     }
-    expandedTemplateId = clusterId;
-    templatePreviewLoading = true;
-    try {
-      const { getClusterDetail } = await import('$lib/api/clusters');
-      const detail = await getClusterDetail(clusterId);
-      if (!detail?.optimizations?.length) {
-        addToast('deleted', 'Template has no optimizations');
-        expandedTemplateId = null;
-        templatePreviewLoading = false;
-        return;
-      }
-      const best = detail.optimizations.reduce((a, b) =>
-        (b.overall_score ?? 0) > (a.overall_score ?? 0) ? b : a
-      );
-      templatePreview = {
-        prompt: best.raw_prompt ?? '',
-        strategy: detail.preferred_strategy ?? null,
-        label: detail.label,
-        patternIds: (detail.meta_patterns ?? []).map((p) => p.id),
-        patterns: (detail.meta_patterns ?? []).map((p) => ({ text: p.pattern_text, source_count: p.source_count })),
-      };
-    } catch {
-      addToast('deleted', 'Failed to load template preview');
-      expandedTemplateId = null;
-    }
-    templatePreviewLoading = false;
-  }
-
-  function loadTemplatePromptAndPatterns() {
-    if (!templatePreview) return;
-    forgeStore.prompt = templatePreview.prompt;
-    if (templatePreview.strategy) forgeStore.strategy = templatePreview.strategy;
-    if (templatePreview.patternIds.length > 0) {
-      forgeStore.appliedPatternIds = templatePreview.patternIds;
-      forgeStore.appliedPatternLabel = templatePreview.label;
+    forgeStore.prompt = result.prompt;
+    if (tpl.strategy) forgeStore.strategy = tpl.strategy;
+    if (tpl.pattern_ids.length > 0) {
+      forgeStore.appliedPatternIds = tpl.pattern_ids;
+      forgeStore.appliedPatternLabel = tpl.label;
     }
     editorStore.activeTabId = PROMPT_TAB_ID;
-    addToast('created', `Template loaded: ${templatePreview.label}`);
-    expandedTemplateId = null;
-    templatePreview = null;
+    addToast('created', `Template loaded: ${tpl.label}`);
   }
 
-  function applyTemplatePatternsOnly() {
-    if (!templatePreview || templatePreview.patternIds.length === 0) return;
-    forgeStore.appliedPatternIds = templatePreview.patternIds;
-    forgeStore.appliedPatternLabel = templatePreview.label;
-    addToast('created', `${templatePreview.patternIds.length} patterns from "${templatePreview.label}" will be applied`);
-    expandedTemplateId = null;
-    templatePreview = null;
+  async function handleRetire(tpl: typeof templatesStore.templates[number]): Promise<void> {
+    const ok = await templatesStore.retire(tpl.id);
+    if (!ok) {
+      addToast('deleted', 'Failed to retire template');
+      return;
+    }
+    addToast('created', `Retired: ${tpl.label}`);
   }
 </script>
 
@@ -415,7 +391,7 @@
       <p class="empty-note" style="color: var(--color-neon-red);">{error}</p>
     {:else if !loaded}
       <p class="empty-note">Loading...</p>
-    {:else if totalFamilies === 0 && templateClusters.length === 0}
+    {:else if totalFamilies === 0 && !hasVisibleTemplates}
       <p class="empty-note">Optimize your first prompt to start building your pattern library.</p>
     {:else}
       <!-- Domain readiness overview — lifecycle proximity across all domains -->
@@ -442,79 +418,60 @@
         {/if}
       </div>
 
-      <!-- Proven Templates section -->
-      {#if templateClusters.length > 0}
+      <!-- Proven Templates section — reads from templatesStore -->
+      {#if hasVisibleTemplates}
         <div class="section-wrapper">
           <CollapsibleSectionHeader
             open={navCollapse.isOpen('templates')}
             onToggle={() => navCollapse.toggle('templates')}
             label="PROVEN TEMPLATES"
-            count={templateClusters.length}
+            count={templateGroups.reduce((n, g) => n + g.items.length, 0)}
           />
           {#if navCollapse.isOpen('templates')}
-          {#each templateClusters as cluster (cluster.id)}
-            <div class="template-row">
-              <div class="template-info">
-                <span class="template-label">{cluster.label}</span>
-                <span class="template-meta">
-                  <span class="domain-dot" style="background: {taxonomyColor(cluster.domain)};"></span>
-                  <span class="template-domain">{cluster.domain}</span>
-                  {#if cluster.avg_score != null}
-                    <span class="badge-score font-mono" style="color: {scoreColor(cluster.avg_score)};">{formatScore(cluster.avg_score)}</span>
-                  {/if}
-                  <span class="badge-neon" use:tooltip={CLUSTER_NAV_TOOLTIPS.members_badge}>{cluster.member_count}</span>
-                  {#if cluster.meta_pattern_count}
-                    <span class="badge-dim" use:tooltip={'Proven patterns extracted from this template'}>{cluster.meta_pattern_count} patterns</span>
-                  {/if}
-                  {#if cluster.usage_count}
-                    <span class="badge-dim" use:tooltip={'Times this template\'s patterns were applied'}>{cluster.usage_count}× used</span>
-                  {/if}
-                  {#if cluster.preferred_strategy}
-                    <span class="template-strategy">{cluster.preferred_strategy}</span>
-                  {/if}
-                </span>
+            {#each templateGroups as group (group.domain)}
+              <div class="template-group" data-group-header={group.domain}>
+                <span
+                  class="domain-dot"
+                  data-group-dot={group.domain}
+                  style="background: {taxonomyColor(group.domain)};"
+                ></span>
+                <span class="template-group-label">{group.domain}</span>
+                <span class="template-group-count">{group.items.length}</span>
               </div>
-              <button
-                class="use-template-btn"
-                onclick={() => toggleTemplatePreview(cluster.id)}
-                use:tooltip={CLUSTER_NAV_TOOLTIPS.use_template}
-                aria-label="Preview this template"
-              >{expandedTemplateId === cluster.id ? '×' : 'Use'}</button>
-            </div>
-            {#if expandedTemplateId === cluster.id}
-              <div class="template-preview">
-                {#if templatePreviewLoading}
-                  <p class="preview-loading">Loading preview...</p>
-                {:else if templatePreview}
-                  {#if templatePreview.patterns.length > 0}
-                    <div class="preview-section">
-                      <span class="preview-heading">PATTERNS</span>
-                      <ul class="preview-patterns">
-                        {#each templatePreview.patterns as p}
-                          <li>
-                            <span class="pattern-text">{p.text}</span>
-                            <span class="pattern-count">{p.source_count}×</span>
-                          </li>
-                        {/each}
-                      </ul>
-                    </div>
-                  {/if}
-                  {#if templatePreview.prompt}
-                    <div class="preview-section">
-                      <span class="preview-heading">BEST PROMPT</span>
-                      <p class="preview-prompt">{templatePreview.prompt.length > 200 ? templatePreview.prompt.slice(0, 200) + '...' : templatePreview.prompt}</p>
-                    </div>
-                  {/if}
-                  <div class="preview-actions">
-                    <button class="action-btn action-btn--primary" onclick={loadTemplatePromptAndPatterns}>Load Prompt + Patterns</button>
-                    {#if templatePreview.patternIds.length > 0}
-                      <button class="action-btn" onclick={applyTemplatePatternsOnly}>Apply Patterns Only</button>
-                    {/if}
+              {#each group.items as tpl (tpl.id)}
+                <div class="template-row">
+                  <div class="template-info">
+                    <span class="template-label">{tpl.label}</span>
+                    <span class="template-meta">
+                      {#if tpl.score != null}
+                        <span class="badge-score font-mono" style="color: {scoreColor(tpl.score)};">{formatScore(tpl.score)}</span>
+                      {/if}
+                      {#if tpl.pattern_ids.length}
+                        <span class="badge-dim">{tpl.pattern_ids.length} patterns</span>
+                      {/if}
+                      {#if tpl.usage_count > 0}
+                        <span class="badge-dim">{tpl.usage_count}× used</span>
+                      {/if}
+                      {#if tpl.strategy}
+                        <span class="template-strategy">{tpl.strategy}</span>
+                      {/if}
+                    </span>
                   </div>
-                {/if}
-              </div>
-            {/if}
-          {/each}
+                  <button
+                    class="use-template-btn"
+                    onclick={() => handleSpawn(tpl)}
+                    use:tooltip={CLUSTER_NAV_TOOLTIPS.use_template}
+                    aria-label={`Use template ${tpl.label}`}
+                  >Use</button>
+                  <button
+                    class="retire-template-btn"
+                    onclick={() => handleRetire(tpl)}
+                    use:tooltip={'Retire this template'}
+                    aria-label={`Retire template ${tpl.label}`}
+                  >⋯</button>
+                </div>
+              {/each}
+            {/each}
           {/if}
         </div>
       {/if}
@@ -931,14 +888,6 @@
     flex-wrap: wrap;
   }
 
-  .template-domain {
-    font-size: 9px;
-    font-family: var(--font-mono);
-    color: var(--color-text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-
   .template-strategy {
     font-size: 9px;
     font-family: var(--font-mono);
@@ -979,107 +928,57 @@
     border-color: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 20%, transparent);
   }
 
-  /* ---- Template preview card ---- */
-  .template-preview {
-    padding: 6px 8px;
-    margin: 0 4px 4px 4px;
-    border: 1px solid var(--color-border-subtle);
-    background: color-mix(in srgb, var(--color-bg-surface) 60%, transparent);
-  }
-
-  .preview-loading {
-    font-size: 10px;
-    color: var(--color-text-muted);
-    font-style: italic;
-  }
-
-  .preview-section {
-    margin-bottom: 6px;
-  }
-
-  .preview-heading {
-    display: block;
-    font-size: 9px;
-    font-weight: 700;
-    color: var(--color-text-muted);
-    letter-spacing: 0.08em;
-    margin-bottom: 3px;
-  }
-
-  .preview-patterns {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-  }
-
-  .preview-patterns li {
+  /* ---- Template group header ---- */
+  .template-group {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 4px;
-    font-size: 10px;
-    color: var(--color-text-secondary);
-    padding: 1px 0;
-  }
-
-  .pattern-text {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .pattern-count {
-    font-size: 9px;
-    color: var(--color-text-muted);
-    font-family: var(--font-mono);
-    flex-shrink: 0;
-  }
-
-  .preview-prompt {
-    font-size: 10px;
-    color: var(--color-text-secondary);
-    line-height: 1.4;
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 80px;
-    overflow: hidden;
-  }
-
-  .preview-actions {
-    display: flex;
-    flex-direction: column;
-    margin: 6px -8px -6px;  /* flush to preview card edges */
+    padding: 4px 6px 2px;
     border-top: 1px solid var(--color-border-subtle);
+    margin-top: 2px;
   }
 
-  .preview-actions .action-btn {
-    width: 100%;
-    height: 26px;
-    font-size: 10px;
-    font-weight: 600;
-    text-align: center;
-    border: none;
-    border-bottom: 1px solid var(--color-border-subtle);
+  .template-group:first-child {
+    border-top: none;
+    margin-top: 0;
+  }
+
+  .template-group-label {
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    flex: 1;
+  }
+
+  .template-group-count {
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+  }
+
+  .retire-template-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 20px;
+    width: 20px;
+    padding: 0;
+    border: 1px solid var(--color-border-subtle);
     background: transparent;
-    color: var(--color-text-secondary);
+    color: var(--color-text-dim);
+    font-size: 12px;
+    font-family: var(--font-sans);
     cursor: pointer;
-    transition: color 150ms, background 150ms;
+    flex-shrink: 0;
+    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .preview-actions .action-btn:last-child {
-    border-bottom: none;
-  }
-
-  .preview-actions .action-btn:hover {
-    color: var(--color-text-primary);
-    background: var(--color-bg-hover);
-  }
-
-  .preview-actions .action-btn--primary {
-    color: var(--color-neon-cyan);
-  }
-
-  .preview-actions .action-btn--primary:hover {
-    background: color-mix(in srgb, var(--color-neon-cyan) 10%, transparent);
+  .retire-template-btn:hover {
+    color: var(--color-neon-red);
+    border-color: color-mix(in srgb, var(--color-neon-red) 40%, transparent);
   }
 
   .badge-dim {

@@ -6,12 +6,35 @@ import { mockFetch, mockPatternFamily, mockMetaPattern } from '$lib/test-utils';
 import ClusterNavigator from './ClusterNavigator.svelte';
 import { clustersStore } from '$lib/stores/clusters.svelte';
 import { editorStore } from '$lib/stores/editor.svelte';
+import { templatesStore, type Template } from '$lib/stores/templates.svelte';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Build a tree response for /api/clusters/tree. */
 function treeResponse(items: ReturnType<typeof mockClusterNode>[]) {
   return { nodes: items };
+}
+
+/** Build a mock Template for templatesStore. */
+function mockTemplate(overrides: Partial<Template> = {}): Template {
+  return {
+    id: 't-1',
+    source_cluster_id: 'c-1',
+    source_optimization_id: 'o-1',
+    project_id: null,
+    label: 'Mock template',
+    prompt: 'Mock prompt text',
+    strategy: 'chain-of-thought',
+    score: 8.2,
+    pattern_ids: [],
+    domain_label: 'backend',
+    promoted_at: '2026-04-15T00:00:00Z',
+    retired_at: null,
+    retired_reason: null,
+    usage_count: 0,
+    last_used_at: null,
+    ...overrides,
+  };
 }
 
 /** Build a mock ClusterNode for tree responses. */
@@ -641,16 +664,14 @@ describe('ClusterNavigator', () => {
 
   // ── 13. State filter tabs ─────────────────────────────────────────────────
 
-  it('renders all state filter tabs (All, active, mature, template, archived)', async () => {
+  it('renders state filter tabs (All, active, candidate, mature, archived) — no template tab', async () => {
     defaultHandlers([]);
     render(ClusterNavigator);
-
-    // All tabs should be visible immediately (they're always rendered)
     expect(screen.getByRole('tab', { name: 'All' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'active' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'mature' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'template' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'archived' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'template' })).not.toBeInTheDocument();
   });
 
   it('"active" tab is selected by default (aria-selected=true)', async () => {
@@ -723,106 +744,103 @@ describe('ClusterNavigator', () => {
     expect(screen.getByText('Mature cluster')).toBeInTheDocument();
   });
 
-  // ── 14. Proven Templates section ─────────────────────────────────────────
+  // ── 14. Proven Templates section (reads from templatesStore) ───────────────
 
-  it('renders PROVEN TEMPLATES section when template-state clusters exist', async () => {
-    const nodes = [
-      mockClusterNode({ id: 'tmpl-1', label: 'Chain-of-thought template', state: 'template', domain: 'general', avg_score: 8.5 }),
-    ];
-    mockFetch([
-      { match: '/api/clusters/tree', response: { nodes } },
-      { match: '/api/clusters/stats', response: defaultStats },
-      { match: '/api/clusters/', response: clusterDetail() },
-    ]);
-    render(ClusterNavigator);
-
-    await waitFor(() => {
-      expect(screen.getByText('PROVEN TEMPLATES')).toBeInTheDocument();
-    });
-    // Template appears in both PROVEN TEMPLATES section and domain group
-    expect(screen.getAllByText('Chain-of-thought template').length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('does not render PROVEN TEMPLATES section when no template clusters exist', async () => {
-    const nodes = [
-      mockClusterNode({ id: 'fam-1', label: 'Regular cluster', state: 'active', domain: 'backend' }),
-    ];
-    mockFetch([
-      { match: '/api/clusters/tree', response: { nodes } },
-      { match: '/api/clusters/stats', response: defaultStats },
-      { match: '/api/clusters/', response: clusterDetail() },
-    ]);
-    render(ClusterNavigator);
-
-    await waitFor(() => {
-      expect(screen.getByText('Regular cluster')).toBeInTheDocument();
-    });
-    expect(screen.queryByText('PROVEN TEMPLATES')).not.toBeInTheDocument();
-  });
-
-  it('template clusters appear in both PROVEN TEMPLATES section and domain group', async () => {
-    const nodes = [
-      mockClusterNode({ id: 'tmpl-1', label: 'Template cluster', state: 'template', domain: 'general' }),
-      mockClusterNode({ id: 'fam-1', label: 'Regular cluster', state: 'active', domain: 'backend' }),
-    ];
-    mockFetch([
-      { match: '/api/clusters/tree', response: { nodes } },
-      { match: '/api/clusters/stats', response: defaultStats },
-      { match: '/api/clusters/', response: clusterDetail() },
-    ]);
-    render(ClusterNavigator);
-
-    await waitFor(() => {
-      // Template appears in the Proven Templates section
-      expect(screen.getByText('PROVEN TEMPLATES')).toBeInTheDocument();
+  describe('PROVEN TEMPLATES reads from templatesStore', () => {
+    beforeEach(() => {
+      templatesStore.templates = [];
+      templatesStore.loading = false;
     });
 
-    // Template cluster appears in both PROVEN TEMPLATES and its domain group
-    expect(screen.getAllByText('Template cluster').length).toBe(2);
-  });
+    it('renders PROVEN TEMPLATES section when templates exist in store', async () => {
+      templatesStore.templates = [mockTemplate({ id: 't1', label: 'Auth flow', domain_label: 'backend' })];
+      defaultHandlers([]);
+      render(ClusterNavigator);
 
-  it('renders "Use" button for each template cluster', async () => {
-    const nodes = [
-      mockClusterNode({ id: 'tmpl-1', label: 'Template A', state: 'template', domain: 'general' }),
-      mockClusterNode({ id: 'tmpl-2', label: 'Template B', state: 'template', domain: 'backend' }),
-    ];
-    mockFetch([
-      { match: '/api/clusters/tree', response: { nodes } },
-      { match: '/api/clusters/stats', response: defaultStats },
-      { match: '/api/clusters/', response: clusterDetail() },
-    ]);
-    render(ClusterNavigator);
-
-    await waitFor(() => {
-      expect(screen.getByText('PROVEN TEMPLATES')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText('PROVEN TEMPLATES')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Auth flow')).toBeInTheDocument();
     });
 
-    const useButtons = screen.getAllByRole('button', { name: 'Preview this template' });
-    expect(useButtons.length).toBe(2);
-  });
-
-  it('clicking "Use" button triggers template preview toggle', async () => {
-    const user = userEvent.setup();
-
-    const nodes = [
-      mockClusterNode({ id: 'tmpl-42', label: 'My template', state: 'template', domain: 'general' }),
-    ];
-    mockFetch([
-      { match: '/api/clusters/tree', response: { nodes } },
-      { match: '/api/clusters/stats', response: defaultStats },
-      { match: '/api/clusters/', response: clusterDetail() },
-    ]);
-    render(ClusterNavigator);
-
-    await waitFor(() => {
-      expect(screen.getByText('PROVEN TEMPLATES')).toBeInTheDocument();
+    it('does not render PROVEN TEMPLATES section when store is empty', async () => {
+      defaultHandlers([]);
+      render(ClusterNavigator);
+      // Wait for something else to settle
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'All' })).toBeInTheDocument();
+      });
+      expect(screen.queryByText('PROVEN TEMPLATES')).not.toBeInTheDocument();
     });
 
-    const btn = screen.getByRole('button', { name: 'Preview this template' });
-    expect(btn).toBeInTheDocument();
-    // Click triggers preview toggle (async detail load)
-    await user.click(btn);
-    // Button is still in DOM after click (preview expanded or loading)
-    expect(btn).toBeInTheDocument();
+    it('retired templates are hidden from the list', async () => {
+      templatesStore.templates = [
+        mockTemplate({ id: 't1', label: 'Alive', retired_at: null }),
+        mockTemplate({ id: 't2', label: 'Gone', retired_at: '2026-04-18T00:00:00Z' }),
+      ];
+      defaultHandlers([]);
+      render(ClusterNavigator);
+      await waitFor(() => expect(screen.getByText('Alive')).toBeInTheDocument());
+      expect(screen.queryByText('Gone')).not.toBeInTheDocument();
+    });
+
+    it('groups templates by frozen domain_label (not cluster domain)', async () => {
+      templatesStore.templates = [
+        mockTemplate({ id: 't1', label: 'T-back', domain_label: 'backend' }),
+        mockTemplate({ id: 't2', label: 'T-data', domain_label: 'data' }),
+      ];
+      defaultHandlers([]);
+      render(ClusterNavigator);
+      await waitFor(() => expect(screen.getByText('PROVEN TEMPLATES')).toBeInTheDocument());
+      // Group headers appear for both domains
+      expect(screen.getByText('T-back')).toBeInTheDocument();
+      expect(screen.getByText('T-data')).toBeInTheDocument();
+    });
+
+    it('clicking spawn button calls templatesStore.spawn() and copies prompt to forge', async () => {
+      const user = userEvent.setup();
+      templatesStore.templates = [
+        mockTemplate({ id: 't-42', label: 'Auth', prompt: 'Sampled prompt', strategy: 'chain-of-thought', pattern_ids: ['p1'] }),
+      ];
+      // Mock /templates/t-42/use endpoint
+      mockFetch([
+        { match: '/api/clusters/tree', response: { nodes: [] } },
+        { match: '/api/clusters/stats', response: defaultStats },
+        { match: '/templates/t-42/use', response: { id: 't-42', prompt: 'Sampled prompt', usage_count: 1 } },
+      ]);
+      render(ClusterNavigator);
+      await waitFor(() => expect(screen.getByText('Auth')).toBeInTheDocument());
+
+      const spawnBtn = screen.getByRole('button', { name: /use template auth/i });
+      await user.click(spawnBtn);
+
+      // Spawn updates usage_count in the store
+      await waitFor(() => {
+        const updated = templatesStore.templates.find((t) => t.id === 't-42');
+        expect(updated?.usage_count).toBe(1);
+      });
+    });
+
+    it('clicking retire button calls templatesStore.retire()', async () => {
+      const user = userEvent.setup();
+      templatesStore.templates = [
+        mockTemplate({ id: 't-99', label: 'Old template', domain_label: 'backend', retired_at: null }),
+      ];
+      mockFetch([
+        { match: '/api/clusters/tree', response: { nodes: [] } },
+        { match: '/api/clusters/stats', response: defaultStats },
+        { match: '/templates/t-99/retire', response: { id: 't-99', retired_at: '2026-04-18T12:00:00Z' } },
+      ]);
+      render(ClusterNavigator);
+      await waitFor(() => expect(screen.getByText('Old template')).toBeInTheDocument());
+
+      const retireBtn = screen.getByRole('button', { name: /retire template old template/i });
+      await user.click(retireBtn);
+
+      await waitFor(() => {
+        const updated = templatesStore.templates.find((t) => t.id === 't-99');
+        expect(updated?.retired_at).toBe('2026-04-18T12:00:00Z');
+      });
+    });
   });
 });
