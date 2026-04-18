@@ -28,8 +28,9 @@ ACTIVE_TO_MATURE_MEMBER_COUNT = 5
 ACTIVE_TO_MATURE_COHERENCE = 0.7
 ACTIVE_TO_MATURE_AVG_SCORE = 7.0
 
-MATURE_TO_TEMPLATE_USAGE_COUNT = 3
-MATURE_TO_TEMPLATE_AVG_SCORE = 7.5
+FORK_TEMPLATE_USAGE_COUNT = 3  # was MATURE_TO_TEMPLATE_USAGE_COUNT
+FORK_TEMPLATE_AVG_SCORE = 7.5  # was MATURE_TO_TEMPLATE_AVG_SCORE
+AUTO_RETIRE_SOURCE_FLOOR = 6.0  # 1.5-pt hysteresis below FORK_TEMPLATE_AVG_SCORE
 
 # ---------------------------------------------------------------------------
 # Curation thresholds
@@ -108,8 +109,8 @@ class PromptLifecycleService:
 
         elif cluster.state == "mature":
             if (
-                (cluster.usage_count or 0) >= MATURE_TO_TEMPLATE_USAGE_COUNT
-                and (cluster.avg_score or 0) >= MATURE_TO_TEMPLATE_AVG_SCORE
+                (cluster.usage_count or 0) >= FORK_TEMPLATE_USAGE_COUNT
+                and (cluster.avg_score or 0) >= FORK_TEMPLATE_AVG_SCORE
             ):
                 new_state = "template"
 
