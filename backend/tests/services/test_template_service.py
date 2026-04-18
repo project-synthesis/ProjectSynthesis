@@ -269,3 +269,102 @@ async def test_fork_race_recovery_returns_winner_deterministically(tmp_path):
         )
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retire_sets_retired_at_and_decrements_count(db_session):
+    cluster_id, _ = await _seed_cluster_with_opt(db_session)
+    svc = TemplateService()
+    tpl = await svc.fork_from_cluster(cluster_id, db_session)
+    ok = await svc.retire(tpl.id, db_session, reason="manual")
+    assert ok is True
+    reloaded = (await db_session.execute(
+        select(PromptTemplate).where(PromptTemplate.id == tpl.id)
+    )).scalar_one()
+    assert reloaded.retired_at is not None
+    assert reloaded.retired_reason == "manual"
+    cluster = (await db_session.execute(
+        select(PromptCluster).where(PromptCluster.id == cluster_id)
+    )).scalar_one()
+    assert cluster.template_count == 0
+
+
+@pytest.mark.asyncio
+async def test_retire_idempotent(db_session):
+    cluster_id, _ = await _seed_cluster_with_opt(db_session)
+    svc = TemplateService()
+    tpl = await svc.fork_from_cluster(cluster_id, db_session)
+    await svc.retire(tpl.id, db_session, reason="manual")
+    ok = await svc.retire(tpl.id, db_session, reason="manual")
+    assert ok is False  # already retired
+
+
+@pytest.mark.asyncio
+async def test_retire_with_null_source_cluster_does_not_skew_count(db_session):
+    # Simulate post-cascade: template with null source_cluster_id.
+    tpl = PromptTemplate(
+        id=uuid.uuid4().hex,
+        source_cluster_id=None,
+        source_optimization_id=None,
+        project_id=None,
+        label="orphan", prompt="x", strategy="auto",
+        score=7.0, pattern_ids=[], domain_label="general",
+    )
+    # Seed an unrelated cluster with template_count=5. The orphan-retire
+    # path must NOT touch this row: source_cluster_id is None so there is
+    # no cluster to decrement, and the UPDATE must be skipped entirely
+    # (not broadcast to all clusters).
+    unrelated = PromptCluster(
+        id=uuid.uuid4().hex,
+        label="unrelated",
+        state="mature",
+        template_count=5,
+    )
+    db_session.add_all([tpl, unrelated])
+    await db_session.flush()
+    svc = TemplateService()
+    ok = await svc.retire(tpl.id, db_session, reason="manual")
+    assert ok is True
+    reloaded_unrelated = (await db_session.execute(
+        select(PromptCluster).where(PromptCluster.id == unrelated.id)
+    )).scalar_one()
+    assert reloaded_unrelated.template_count == 5, (
+        "orphan retire decremented an unrelated cluster — the null-source "
+        "branch must skip the UPDATE entirely"
+    )
+
+
+@pytest.mark.asyncio
+async def test_increment_usage_updates_count_and_timestamp(db_session):
+    """Verifies SQL-side additivity across sequential calls.
+
+    Each ``increment_usage`` call issues an ``UPDATE ... SET usage_count =
+    usage_count + 1`` — two sequential calls must land a final count of 2
+    and stamp ``last_used_at``. This does NOT prove concurrent atomicity
+    (which would require multiple engines/connections racing); it proves
+    the SQL expression is additive and the timestamp is written.
+    """
+    cluster_id, _ = await _seed_cluster_with_opt(db_session)
+    svc = TemplateService()
+    tpl = await svc.fork_from_cluster(cluster_id, db_session)
+    # Two sequential calls: SQL-side additivity, not concurrent atomicity.
+    await svc.increment_usage(tpl.id, db_session)
+    await svc.increment_usage(tpl.id, db_session)
+    reloaded = (await db_session.execute(
+        select(PromptTemplate).where(PromptTemplate.id == tpl.id)
+    )).scalar_one()
+    assert reloaded.usage_count == 2
+    assert reloaded.last_used_at is not None
+
+
+@pytest.mark.asyncio
+async def test_retire_missing_template_returns_false(db_session):
+    svc = TemplateService()
+    assert await svc.retire("does_not_exist", db_session) is False
+
+
+@pytest.mark.asyncio
+async def test_increment_usage_missing_template_is_silent_noop(db_session):
+    svc = TemplateService()
+    # Must not raise; returns None.
+    await svc.increment_usage("does_not_exist", db_session)

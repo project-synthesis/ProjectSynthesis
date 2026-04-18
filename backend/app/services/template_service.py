@@ -17,15 +17,32 @@ from app.models import (
     PromptTemplate,
 )
 from app.services.event_bus import event_bus
+from app.services.taxonomy._constants import _utcnow
 from app.services.taxonomy.domain_walk import root_domain_label
 
 logger = logging.getLogger(__name__)
+
+
+# Note: ``_utcnow`` is imported from ``taxonomy._constants`` above — it returns
+# *naive* UTC to match SQLAlchemy ``DateTime()`` round-trip on SQLite.
+# ``app.models._utcnow`` is tz-*aware* and therefore NOT a suitable substitute
+# for DateTime columns (would raise on naive/aware comparison). ``warm_phases``
+# follows the same precedent.
+
 
 # Maximum parent hops when collecting the ancestor chain for root_domain_label.
 # 2× safety margin over taxonomy.domain_walk._DOMAIN_WALK_HOP_CAP (8) — we need
 # to collect at least as many nodes as that walker will consume, with headroom
 # for any future intermediate grouping levels.
 _ANCESTOR_WALK_HOP_CAP = 16
+
+
+# Documented retire reasons per spec §Data model (Immutability / Soft delete
+# row). Callers are free to pass arbitrary strings, but prefer these for
+# observability consistency.
+RETIRE_REASON_MANUAL = "manual"
+RETIRE_REASON_SOURCE_DEGRADED = "source_degraded"
+RETIRE_REASON_SOURCE_DISSOLVED = "source_dissolved"
 
 
 async def _load_ancestor_chain(
@@ -201,3 +218,70 @@ class TemplateService:
             logger.warning("template_forked event publish failed for %s", tpl.id)
 
         return tpl
+
+    async def retire(
+        self,
+        template_id: str,
+        db: AsyncSession,
+        *,
+        reason: str = RETIRE_REASON_MANUAL,
+    ) -> bool:
+        """Retire a live template.
+
+        Sets ``retired_at`` and ``retired_reason``, then decrements the
+        source cluster's ``template_count`` (guarded against underflow).
+
+        Returns ``True`` on successful retirement. Returns ``False`` for
+        both "template not found" and "already retired" — callers that
+        need to distinguish these cases should do the lookup themselves
+        before dispatching. ``reason`` is free-form but prefer the
+        ``RETIRE_REASON_*`` module constants for observability.
+        """
+        tpl = (
+            await db.execute(
+                select(PromptTemplate).where(PromptTemplate.id == template_id)
+            )
+        ).scalar_one_or_none()
+        if tpl is None:
+            logger.warning("retire: template %s not found", template_id)
+            return False
+        if tpl.retired_at is not None:
+            logger.debug("retire: template %s already retired", template_id)
+            return False
+
+        tpl.retired_at = _utcnow()
+        tpl.retired_reason = reason
+
+        if tpl.source_cluster_id is not None:
+            await db.execute(
+                update(PromptCluster)
+                .where(
+                    PromptCluster.id == tpl.source_cluster_id,
+                    PromptCluster.template_count > 0,
+                )
+                .values(template_count=PromptCluster.template_count - 1)
+            )
+
+        await db.flush()
+        logger.info("retire: template %s retired (reason=%s)", template_id, reason)
+        return True
+
+    async def increment_usage(
+        self,
+        template_id: str,
+        db: AsyncSession,
+    ) -> None:
+        """Atomically bump ``usage_count`` and ``last_used_at`` for a template.
+
+        No-op if the template does not exist; callers should pre-check with
+        ``get()`` if 404 semantics are required.
+        """
+        await db.execute(
+            update(PromptTemplate)
+            .where(PromptTemplate.id == template_id)
+            .values(
+                usage_count=PromptTemplate.usage_count + 1,
+                last_used_at=_utcnow(),
+            )
+        )
+        await db.flush()
