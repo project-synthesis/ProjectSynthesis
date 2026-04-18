@@ -131,13 +131,14 @@ def upgrade() -> None:
     # via `alembic upgrade` from scratch do not. This migration's data step
     # (section 5) reads `optimizations.project_id`, so defensively add it
     # here if missing. Idempotent via `_column_exists`.
+    #
+    # Note: no inline ForeignKey here. The referential-integrity intent is
+    # declared ORM-side in `app/models.py` (FK to `prompt_cluster.id`,
+    # `ondelete="SET NULL"`) — matching what `Base.metadata.create_all()`
+    # produces for a fresh database.
     if not _column_exists(bind, "optimizations", "project_id"):
         with op.batch_alter_table("optimizations") as batch:
-            batch.add_column(sa.Column(
-                "project_id", sa.String,
-                sa.ForeignKey("prompt_cluster.id", ondelete="SET NULL"),
-                nullable=True,
-            ))
+            batch.add_column(sa.Column("project_id", sa.String, nullable=True))
 
     # 4. Build parent-chain lookup for root_domain_label
     domain_rows = bind.execute(sa.text(

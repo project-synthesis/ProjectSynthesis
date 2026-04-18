@@ -84,7 +84,12 @@ class Optimization(Base):
     qualifier_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     phase_weights_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     cluster_id: Mapped[str | None] = mapped_column(String, ForeignKey("prompt_cluster.id"), nullable=True)
-    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("prompt_cluster.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     domain_raw: Mapped[str | None] = mapped_column(String, nullable=True)
     heuristic_flags: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     improvement_score: Mapped[float | None] = mapped_column(Float, nullable=True)
