@@ -16,11 +16,31 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - **Sparkline SSE refresh** — `readinessStore` exposes a new `invalidationEpoch` reactive counter bumped on every `invalidate()` call. `DomainReadinessSparkline` reads the epoch inside its fetch `$effect` so tier-crossing SSE events now refresh the trendline endpoint (previously the summary reports refreshed but `/history` went stale until remount). 1 new Vitest case
 - **Readiness window persistence** — new `readinessWindowStore` (`stores/readiness-window.svelte.ts`) persists the `TopologyInfoPanel` time-window selection (24h/7d/30d) to `localStorage['synthesis:readiness_window']`, following the `nav_collapse` store convention. Invalid/missing values fall back to `'24h'`. Survives reloads and domain-selection changes so the operator doesn't re-select 7d every time they switch domains. 6 new Vitest cases lock load/set/reset/default-fallback semantics
 
+### Added
+- `prompt_templates` table — immutable frozen snapshots with provenance (source cluster/optimization/project), usage counters, and soft-deletion via `retired_at` + `retired_reason`.
+- `GET /api/templates`, `GET /api/templates/{id}`, `POST /api/clusters/{id}/fork-template`, `POST /api/templates/{id}/retire`, `POST /api/templates/{id}/use` (rate-limited 30/min).
+- Halo ring mesh on 3D topology for clusters with `template_count > 0`; growable mesh pool (50→500).
+- `ActivityPanel` renders legacy `state='template'` context values verbatim.
+
 ### Changed
 - **`domain_readiness_notifications.enabled` default flipped to `true`** — PR #27 shipped the feature gated off-by-default with no UI toggle, which rendered the entire tier-crossing toast pipeline unreachable in a fresh install. Defaults now mirror the new master mute button semantics: on by default, opt-out via the header bell or per-row bells. Backend `DEFAULTS` and frontend store aligned; 6 test assertions updated
 - **Shared tier color tables extracted** — `stabilityTierVar` / `emergenceTierVar` / `emergenceTierBadge` moved out of `DomainReadinessPanel.svelte` into `readiness-tier.ts` next to `TIER_COLORS` so semantic-brand changes now touch a single file. 11 new Vitest cases lock totality over the `StabilityTier` / `EmergenceTier` unions
 - **`DomainReadinessPanel` per-row mute** now renders a 1px-stroke inline SVG bell (overlay diagonal slash when muted) instead of the 🔔/🔕 emoji pair. Matches the brand spec's `currentColor`-inheriting, zero-glow SVG contour convention and removes Unicode-font-dependent rendering. Brand-guard test added
 - `+page.svelte` SSE comment on `domain_readiness_changed` clarified: now documents both opt-out gates (`enabled` master + `muted_domain_ids[]` per-row) and notes the new default (`true` per backend `preferences.py`)
+- Templates decoupled from `PromptCluster` lifecycle (fork-on-promotion). Source clusters stay at `state='mature'` and keep learning.
+- Warm Phase 0 now reconciles `template_count` and auto-retires templates whose source cluster degrades (`avg_score < 6.0`) or is archived.
+- `warm_phases.py` `preferred_strategy` recomputation filter changed from `state='template'` to `template_count > 0`.
+- Constants renamed: `MATURE_TO_TEMPLATE_USAGE_COUNT` → `FORK_TEMPLATE_USAGE_COUNT`, `MATURE_TO_TEMPLATE_AVG_SCORE` → `FORK_TEMPLATE_AVG_SCORE`. Added `AUTO_RETIRE_SOURCE_FLOOR` (6.0).
+- `frontend` halo highlight color sourced from explicit `HIGHLIGHT_COLOR_HEX` (was derived from `stateColor('template')`).
+
+### Removed
+- `state='template'` from the cluster lifecycle state enum.
+- `GET /api/clusters/templates` endpoint (returns 410 Gone).
+- `PATCH /api/clusters/{id}/state` with `state='template'` (returns 400).
+- `clustersStore.spawnTemplate()` method.
+
+### Migration
+Forward-only migration `a1b2c3d4e5f6_template_entity.py`. Downgrade raises `NotImplementedError` — restore from pre-migration DB backup if revert needed. The migration is idempotent and re-runnable. See `docs/superpowers/specs/2026-04-18-template-architecture-design.md`.
 
 ## v0.3.38 — 2026-04-17
 

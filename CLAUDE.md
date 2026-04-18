@@ -134,6 +134,7 @@ Auto-loads the Project Synthesis MCP server (`http://127.0.0.1:8001/mcp`) when t
 |------|---------|---------|
 | `pre-pr-ruff.sh` | Python lint via Ruff on `backend/app/` and `backend/tests/` | 60s |
 | `pre-pr-svelte.sh` | Svelte type check via `npx svelte-check` on `frontend/` | 120s |
+| `pre-pr-template-guard.sh` | Grep guard: blocks residual `state='template'` literals in source files | 30s |
 
 Exit codes: `0` = allow, `2` = block (fix errors first).
 
