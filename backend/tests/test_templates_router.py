@@ -72,3 +72,28 @@ async def test_use_increments_usage(app_client, seeded_template_id):
     r = await app_client.post(f"/api/templates/{seeded_template_id}/use")
     assert r.status_code == 200, r.text
     assert r.json()["usage_count"] == 1
+
+
+@pytest.fixture
+async def reset_rate_limits():
+    """Reset the module-level MemoryStorage singleton before/after this test.
+
+    Opt-in only — do NOT mark autouse=True.  Other tests must not be affected.
+    """
+    from app.dependencies.rate_limit import _storage
+
+    _storage.reset()
+    yield
+    _storage.reset()
+
+
+@pytest.mark.asyncio
+async def test_use_rate_limit_returns_429_on_31st_call(
+    app_client, seeded_template_id, reset_rate_limits
+):
+    """30 rapid calls must all return 200; the 31st must be rejected with 429."""
+    for _ in range(30):
+        r = await app_client.post(f"/api/templates/{seeded_template_id}/use")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    r = await app_client.post(f"/api/templates/{seeded_template_id}/use")
+    assert r.status_code == 429, f"Expected 429 on 31st call, got {r.status_code}"
