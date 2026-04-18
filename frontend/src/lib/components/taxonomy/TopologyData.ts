@@ -6,7 +6,7 @@
  */
 import type { ClusterNode, SimilarityEdge, InjectionEdge } from '$lib/api/clusters';
 import type { LODTier } from './TopologyRenderer';
-import { taxonomyColor, stateColor } from '$lib/utils/colors';
+import { taxonomyColor } from '$lib/utils/colors';
 import { parsePrimaryDomain } from '$lib/utils/formatting';
 import type { ReadinessTier } from './readiness-tier';
 import { composeReadinessTier } from './readiness-tier';
@@ -95,9 +95,18 @@ function stateSizeMultiplier(state: string, isSubDomain: boolean = false): numbe
  * differences visually extreme). */
 const MAX_NODE_SIZE = 3.0;
 
-/** Color by lifecycle state — templates use neon-cyan override. */
-function stateNodeColor(state: string, oklabColor: string | null): string {
-  if (state === 'template') return stateColor('template');
+/** Color by lifecycle state.
+ *
+ * Templates used to override to neon cyan via `stateColor('template')`, which
+ * hid their domain membership — a security-domain template and a backend-domain
+ * template rendered identically. Template identification is now carried by:
+ * (a) the shader-based starfield decoration on the sphere, (b) the cyan
+ * TEMPLATE badge in the inspector, and (c) the dedicated TPL state-filter tab.
+ * Templates therefore inherit their domain color like any other cluster via
+ * `taxonomyColor()`, which respects the sub-domain→parent walk done upstream
+ * in `buildSceneData`.
+ */
+function stateNodeColor(_state: string, oklabColor: string | null): string {
   return taxonomyColor(oklabColor); // existing logic handles hex/domain/null
 }
 
@@ -267,10 +276,20 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
     const finalSize = Math.min(MAX_NODE_SIZE, size * stateSizeMultiplier(node.state, isSubDomain));
     const nodeOpacity = stateOpacity(node.state, effectiveFilter, hasFilterMatches);
 
-    // Sub-domain color inheritance: resolve to the TOP-LEVEL domain's label
-    // so brand colors match the navbar. Top-level domains, clusters, and
-    // non-domain-chain nodes use their own `node.domain` as before.
-    const colorKey = isSubDomain
+    // Domain-chain color inheritance: any node parented directly to a domain
+    // node walks up to the TOP-LEVEL domain's label so brand colors match the
+    // navbar. Covers three cases:
+    //   (1) sub-domain nodes (state=domain parented to a top-level domain),
+    //   (2) clusters parented to a sub-domain (should render in the top-level
+    //       brand color, not a sub-domain OKLab variant),
+    //   (3) templates parented to a sub-domain (e.g. security > token-ops >
+    //       JWT Token Lifecycle → render in security red, not token-ops variant).
+    // Nodes whose parent is not a domain (or whose parent is missing) fall back
+    // to their own `node.domain` as before — the previous behavior for regular
+    // clusters under a top-level domain is unchanged by construction because
+    // `rootDomainLabel` returns the top-level domain's label either way.
+    const parentIsDomain = node.parent_id != null && domainNodesById.has(node.parent_id);
+    const colorKey = parentIsDomain
       ? (rootDomainLabel(node, domainNodesById) ?? node.domain ?? node.color_hex)
       : (node.domain ?? node.color_hex);
 

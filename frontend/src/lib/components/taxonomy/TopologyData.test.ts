@@ -294,13 +294,38 @@ describe('buildSceneData — state-based visual encoding', () => {
     expect(nodes[0].label).toBe('JWT');
   });
 
-  it('template state nodes get color #00e5ff regardless of color_hex', () => {
-    const withHex = makeNode({ id: 'a', state: 'template', color_hex: '#b44aff' });
-    const withNull = makeNode({ id: 'b', state: 'template', color_hex: null });
+  it('template state nodes inherit their domain color (starfield decoration carries the template affordance)', () => {
+    // Previous behavior overrode templates to neon cyan (#00e5ff) via
+    // stateColor('template'), which hid the template's domain membership
+    // entirely — a security-domain template and a backend-domain template
+    // rendered identically. The shader-based starfield decoration on the
+    // sphere (visible in SemanticTopology) already flags a node as a template,
+    // and the cyan TEMPLATE badge in the inspector and the TPL tab handle
+    // text-level identification. The color should therefore inherit the
+    // domain the template belongs to so the pattern graph stays visually
+    // partitioned by domain.
+    const backendTemplate = makeNode({ id: 'a', state: 'template', domain: 'backend', color_hex: null });
+    const frontendTemplate = makeNode({ id: 'b', state: 'template', domain: 'frontend', color_hex: null });
 
-    const { nodes } = buildSceneData([withHex, withNull]);
-    expect(nodes.find(n => n.id === 'a')!.color).toBe('#00e5ff');
-    expect(nodes.find(n => n.id === 'b')!.color).toBe('#00e5ff');
+    const { nodes } = buildSceneData([backendTemplate, frontendTemplate]);
+    expect(nodes.find(n => n.id === 'a')!.color).toBe('#b44aff'); // backend violet
+    expect(nodes.find(n => n.id === 'b')!.color).toBe('#ff4895'); // frontend hot pink
+  });
+
+  it('template parented to a sub-domain inherits the TOP-LEVEL domain color', () => {
+    // JWT Token Lifecycle lives under security > token-ops and should render
+    // in security red, not token-ops variant red and not template cyan.
+    domainStore.domains = [
+      { id: 'sec', label: 'security', color_hex: '#ff2255', member_count: 0, avg_score: null, source: 'seed' },
+      { id: 'sub', label: 'token-ops', color_hex: '#d20033', member_count: 0, avg_score: null, source: 'seed' },
+    ];
+    const tree = [
+      makeNode({ id: 'sec', state: 'domain', domain: 'security', label: 'security' }),
+      makeNode({ id: 'sub', state: 'domain', domain: 'token-ops', label: 'token-ops', parent_id: 'sec' }),
+      makeNode({ id: 'tmpl', state: 'template', domain: 'token-ops', label: 'JWT Token Lifecycle', parent_id: 'sub', color_hex: null }),
+    ];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find(n => n.id === 'tmpl')!.color).toBe('#ff2255');
   });
 
   it('SceneNode always has an opacity field', () => {
