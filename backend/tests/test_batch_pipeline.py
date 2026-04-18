@@ -12,6 +12,7 @@ that the seed-alignment plan fixes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -19,6 +20,7 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
+import pytest_asyncio
 
 from app.providers.base import LLMProvider
 from app.schemas.pipeline_contracts import (
@@ -28,7 +30,11 @@ from app.schemas.pipeline_contracts import (
     ScoreResult,
     SuggestionsOutput,
 )
-from app.services.batch_pipeline import PendingOptimization, run_single_prompt
+from app.services.batch_pipeline import (
+    PendingOptimization,
+    bulk_persist,
+    run_single_prompt,
+)
 from app.services.context_enrichment import EnrichedContext
 from app.services.heuristic_analyzer import HeuristicAnalysis
 from app.services.prompt_loader import PromptLoader
@@ -467,4 +473,231 @@ class TestContextEnrichmentIntegration:
         assert (
             result.context_sources.get("enrichment_meta", {}).get("enrichment_profile")
             == "code_aware"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests — Fix 4: per-prompt optimization_created emission from bulk_persist
+# ---------------------------------------------------------------------------
+
+
+def _pending(
+    *,
+    pid: str = "opt-1",
+    trace_id: str = "trace-1",
+    batch_id: str = "batch-1",
+    overall_score: float = 7.5,
+    routing_tier: str = "internal",
+    task_type: str = "coding",
+    intent_label: str = "sort list",
+    domain: str = "backend",
+    domain_raw: str = "backend",
+    strategy_used: str = "chain-of-thought",
+    provider: str = "mock",
+) -> PendingOptimization:
+    """Build a minimal completed PendingOptimization suitable for bulk_persist."""
+    return PendingOptimization(
+        id=pid,
+        trace_id=trace_id,
+        raw_prompt="Write a function that sorts a list",
+        batch_id=batch_id,
+        optimized_prompt="Write a Python function...",
+        task_type=task_type,
+        strategy_used=strategy_used,
+        changes_summary="Added specificity.",
+        score_clarity=7.0,
+        score_specificity=8.0,
+        score_structure=7.0,
+        score_faithfulness=8.0,
+        score_conciseness=7.0,
+        overall_score=overall_score,
+        improvement_score=2.0,
+        scoring_mode="hybrid",
+        intent_label=intent_label,
+        domain=domain,
+        domain_raw=domain_raw,
+        embedding=None,
+        models_by_phase={"analyze": "haiku", "optimize": "sonnet", "score": "haiku"},
+        original_scores={"clarity": 5.0},
+        score_deltas={"clarity": 2.0},
+        duration_ms=1200,
+        status="completed",
+        provider=provider,
+        model_used="sonnet",
+        routing_tier=routing_tier,
+        heuristic_flags=[],
+        suggestions=[],
+        context_sources={"batch_id": batch_id, "source": "batch_seed"},
+    )
+
+
+@pytest_asyncio.fixture
+async def real_session_factory() -> AsyncGenerator[Any, None]:
+    """In-memory sqlite factory that creates a fresh session per call.
+
+    bulk_persist() uses `async with session_factory() as db:` — the factory
+    must return a fresh session each invocation so transaction boundaries
+    match production behavior.
+    """
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    from app.models import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
+
+
+class TestBulkPersistEvents:
+    """bulk_persist must emit an `optimization_created` event for every row
+    it actually inserts — matching the regular pipeline's contract so the
+    frontend history refresh and cross-process MCP bridge fire reliably."""
+
+    async def test_emits_one_event_per_inserted_row(
+        self, real_session_factory: Any,
+    ) -> None:
+        """Subscribe a queue to the event bus and assert N events fire for
+        N completed + quality-passing rows.
+        """
+        from app.services.event_bus import event_bus
+
+        pendings = [
+            _pending(pid="opt-a", trace_id="trace-a", batch_id="batch-1"),
+            _pending(pid="opt-b", trace_id="trace-b", batch_id="batch-1"),
+            _pending(pid="opt-c", trace_id="trace-c", batch_id="batch-1"),
+        ]
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        event_bus._subscribers.add(queue)
+        try:
+            inserted = await bulk_persist(
+                results=pendings,
+                session_factory=real_session_factory,
+                batch_id="batch-1",
+            )
+        finally:
+            event_bus._subscribers.discard(queue)
+
+        assert inserted == 3
+
+        # Drain captured events
+        captured: list[dict] = []
+        while not queue.empty():
+            captured.append(queue.get_nowait())
+
+        opt_events = [e for e in captured if e["event"] == "optimization_created"]
+        assert len(opt_events) == 3, (
+            f"Expected 3 optimization_created events, got {len(opt_events)}: "
+            f"{[e['event'] for e in captured]}"
+        )
+
+        # Event data must carry the key fields consumers rely on
+        ids = {e["data"]["id"] for e in opt_events}
+        assert ids == {"opt-a", "opt-b", "opt-c"}
+
+        for evt in opt_events:
+            data = evt["data"]
+            assert data["batch_id"] == "batch-1"
+            assert data["source"] == "batch_seed"
+            assert data["routing_tier"] == "internal"
+            assert data["task_type"] == "coding"
+            assert data["status"] == "completed"
+            assert data["strategy_used"] == "chain-of-thought"
+            assert data["provider"] == "mock"
+            assert data["intent_label"] == "sort list"
+            assert data["domain"] == "backend"
+            assert data["overall_score"] == 7.5
+
+    async def test_no_event_for_quality_rejected_rows(
+        self, real_session_factory: Any,
+    ) -> None:
+        """Rows rejected by the quality gate (score < 5.0) must NOT emit
+        an optimization_created event — they never reach the DB."""
+        from app.services.event_bus import event_bus
+
+        # Two rejected, one accepted
+        pendings = [
+            _pending(
+                pid="opt-low1", trace_id="trace-1",
+                batch_id="batch-2", overall_score=3.0,
+            ),
+            _pending(
+                pid="opt-low2", trace_id="trace-2",
+                batch_id="batch-2", overall_score=4.9,
+            ),
+            _pending(
+                pid="opt-ok", trace_id="trace-3",
+                batch_id="batch-2", overall_score=7.5,
+            ),
+        ]
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        event_bus._subscribers.add(queue)
+        try:
+            inserted = await bulk_persist(
+                results=pendings,
+                session_factory=real_session_factory,
+                batch_id="batch-2",
+            )
+        finally:
+            event_bus._subscribers.discard(queue)
+
+        assert inserted == 1
+
+        captured: list[dict] = []
+        while not queue.empty():
+            captured.append(queue.get_nowait())
+        opt_events = [e for e in captured if e["event"] == "optimization_created"]
+        assert len(opt_events) == 1
+        assert opt_events[0]["data"]["id"] == "opt-ok"
+
+    async def test_idempotency_skips_re_emission(
+        self, real_session_factory: Any,
+    ) -> None:
+        """A second bulk_persist call for the same batch_id must skip
+        already-persisted rows — no duplicate events."""
+        from app.services.event_bus import event_bus
+
+        pendings = [
+            _pending(pid="opt-dup", trace_id="trace-dup", batch_id="batch-3"),
+        ]
+
+        # First insert
+        inserted_1 = await bulk_persist(
+            results=pendings,
+            session_factory=real_session_factory,
+            batch_id="batch-3",
+        )
+        assert inserted_1 == 1
+
+        # Second call — should be idempotent
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        event_bus._subscribers.add(queue)
+        try:
+            inserted_2 = await bulk_persist(
+                results=pendings,
+                session_factory=real_session_factory,
+                batch_id="batch-3",
+            )
+        finally:
+            event_bus._subscribers.discard(queue)
+
+        assert inserted_2 == 0
+
+        captured: list[dict] = []
+        while not queue.empty():
+            captured.append(queue.get_nowait())
+        opt_events = [e for e in captured if e["event"] == "optimization_created"]
+        assert len(opt_events) == 0, (
+            "Idempotent second run must not re-emit optimization_created"
         )

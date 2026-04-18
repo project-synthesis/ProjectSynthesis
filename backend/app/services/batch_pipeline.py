@@ -739,6 +739,7 @@ async def bulk_persist(
         return 0
 
     inserted = 0
+    inserted_pendings: list[PendingOptimization] = []
     for attempt in range(2):
         try:
             async with session_factory() as db:
@@ -756,6 +757,7 @@ async def bulk_persist(
                 )
                 existing_ids: set[str] = {row[0] for row in existing_ids_result}
                 inserted = 0  # Reset for retry
+                inserted_pendings = []  # Reset for retry
                 for pending in completed:
                     if pending.id in existing_ids:
                         logger.debug(
@@ -802,6 +804,7 @@ async def bulk_persist(
                     )
                     db.add(db_opt)
                     inserted += 1
+                    inserted_pendings.append(pending)
 
                 await db.commit()
             break  # success
@@ -811,6 +814,33 @@ async def bulk_persist(
                 await asyncio.sleep(5)
             else:
                 raise
+
+    # Per-prompt event emission — parallels the regular pipeline contract so
+    # frontend history refresh and cross-process MCP bridge fire reliably.
+    # `source="batch_seed"` lets consumers distinguish seed-originated rows
+    # from text-editor optimizations while batch-level `seed_*` events still
+    # stream the coarser batch progress view.
+    if inserted_pendings:
+        try:
+            from app.services.event_bus import event_bus
+            for pending in inserted_pendings:
+                event_bus.publish("optimization_created", {
+                    "id": pending.id,
+                    "trace_id": pending.trace_id,
+                    "task_type": pending.task_type,
+                    "intent_label": pending.intent_label or "general",
+                    "domain": pending.domain,
+                    "domain_raw": pending.domain_raw,
+                    "strategy_used": pending.strategy_used,
+                    "overall_score": pending.overall_score,
+                    "provider": pending.provider,
+                    "status": pending.status,
+                    "routing_tier": pending.routing_tier,
+                    "source": "batch_seed",
+                    "batch_id": batch_id,
+                })
+        except Exception:
+            logger.debug("Event bus publish failed", exc_info=True)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 
