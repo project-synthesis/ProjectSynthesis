@@ -132,9 +132,8 @@ Auto-loads the Project Synthesis MCP server (`http://127.0.0.1:8001/mcp`) when t
 
 | Hook | Purpose | Timeout |
 |------|---------|---------|
-| `pre-pr-ruff.sh` | Python lint via Ruff on `backend/app/` and `backend/tests/` | 60s |
-| `pre-pr-svelte.sh` | Svelte type check via `npx svelte-check` on `frontend/` | 120s |
-| `pre-pr-template-guard.sh` | Grep guard: blocks residual `state='template'` literals in source files | 30s |
+| `pre-pr-checks.sh` | Unified PreToolUse gate — runs Ruff + svelte-check + template-guard before real `git push` / `gh pr create` invocations. Uses shlex-based tokenisation to avoid false positives on commands that merely *mention* the gate keywords (e.g. `grep -r "git push" docs/`). Fast path exits in <5 ms for non-matching commands. | 180s |
+| `pre-pr-template-guard.sh` | Grep guard: blocks residual `state='template'` literals in source files. Called by `pre-pr-checks.sh`; CWD-safe. | 30s |
 
 Exit codes: `0` = allow, `2` = block (fix errors first).
 

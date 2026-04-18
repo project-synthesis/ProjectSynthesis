@@ -6,13 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/pre-pr-ruff.sh",
-            "timeout": 60000
-          },
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/pre-pr-svelte.sh",
-            "timeout": 120000
+            "command": "bash .claude/hooks/pre-pr-checks.sh",
+            "timeout": 180000
           }
         ]
       }
