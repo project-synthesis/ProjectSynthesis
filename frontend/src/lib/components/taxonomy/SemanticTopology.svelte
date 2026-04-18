@@ -111,6 +111,135 @@
    *  scope so the two sweeps cannot drift apart. */
   const DOMAIN_DIM_FACTOR = 0.15;
 
+  // ---------------------------------------------------------------------------
+  // Halo pool — growable mesh pool for templated clusters (Task 19)
+  //
+  // Halos are cyan RingGeometry meshes rendered around cluster nodes whose
+  // `template_count > 0`.  The pool starts at HALO_POOL_INITIAL capacity and
+  // grows in HALO_POOL_GROW_CHUNK increments up to HALO_POOL_MAX.  After the
+  // pool reaches HALO_POOL_MAX, excess requests fall through to one-frame
+  // allocation (spill) and a console.warn is emitted once per rebuild.
+  //
+  // Design notes:
+  //  • `_haloPool`  — all ever-allocated Mesh objects (high-water mark).
+  //  • `_freeHalos` — currently unused halos available for reuse.
+  //  • `_haloById`  — active halo per cluster id.
+  //  • `_haloGroup` — THREE.Group re-attached to the scene after the
+  //                   scene-clear traverse (mirrors readiness ring group).
+  // ---------------------------------------------------------------------------
+  const HALO_POOL_INITIAL = 50;
+  const HALO_POOL_GROW_CHUNK = 50;
+  const HALO_POOL_MAX = 500;
+
+  const _haloPool: THREE.Mesh[] = [];
+  const _haloPoolSet: Set<THREE.Mesh> = new Set(); // O(1) membership check
+  const _freeHalos: THREE.Mesh[] = [];
+  const _haloById: Map<string, THREE.Mesh> = new Map();
+  let _haloGroup: THREE.Group | null = null;
+  // Per-rebuild warn-once flag: prevent spamming console.warn every frame
+  // when the cluster count stays above HALO_POOL_MAX.
+  let _haloWarnedThisRebuild = false;
+
+  function _createHaloMesh(): THREE.Mesh {
+    const geom = new THREE.RingGeometry(1.25, 1.35, 32);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x00e5ff,
+      transparent: true,
+      opacity: 0.35,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.visible = false;
+    mesh.userData = { kind: 'halo' };
+    return mesh;
+  }
+
+  /** Ensure `_freeHalos` has enough entries for `extraNeeded` new attachments.
+   *  On the very first call the pool is empty — seed it with HALO_POOL_INITIAL
+   *  meshes so early small renders don't re-enter the grow loop each time.
+   *  Subsequent shortfalls grow in HALO_POOL_GROW_CHUNK increments.  Emits a
+   *  once-per-rebuild warning when the cap is hit and excess halos spill to
+   *  one-frame allocation (not pooled). */
+  function _ensureHaloPool(extraNeeded: number): void {
+    while (_freeHalos.length < extraNeeded && _haloPool.length < HALO_POOL_MAX) {
+      // First-time seeding uses HALO_POOL_INITIAL; subsequent growth uses the
+      // standard chunk size.  Both are capped so we never exceed HALO_POOL_MAX.
+      const seed = _haloPool.length === 0 ? HALO_POOL_INITIAL : HALO_POOL_GROW_CHUNK;
+      const grow = Math.min(seed, HALO_POOL_MAX - _haloPool.length);
+      for (let i = 0; i < grow; i++) {
+        const m = _createHaloMesh();
+        _haloPool.push(m);
+        _haloPoolSet.add(m);
+        _freeHalos.push(m);
+      }
+    }
+    if (!_haloWarnedThisRebuild && extraNeeded > _freeHalos.length && _haloPool.length >= HALO_POOL_MAX) {
+      console.warn(
+        `[SemanticTopology] halo pool at cap ${HALO_POOL_MAX}; ${extraNeeded - _freeHalos.length} clusters spill to one-frame allocation`,
+      );
+      _haloWarnedThisRebuild = true;
+    }
+  }
+
+  function _acquireHalo(): THREE.Mesh {
+    return _freeHalos.pop() ?? _createHaloMesh();
+  }
+
+  function _releaseHalo(cid: string, mesh: THREE.Mesh): void {
+    mesh.visible = false;
+    if (mesh.parent) mesh.parent.remove(mesh);
+    _haloById.delete(cid);
+    // Only recycle meshes that belong to the pool (not spill-allocated ones).
+    if (_haloPoolSet.has(mesh)) _freeHalos.push(mesh);
+  }
+
+  /** Sync halo meshes to the current cluster set.  Called from within
+   *  `rebuildScene` immediately after the node-mesh loop so that halo
+   *  and node color are written in the same render pass. */
+  function _syncHalos(nodes: SceneNode[]): void {
+    if (!_haloGroup) {
+      _haloGroup = new THREE.Group();
+      _haloGroup.userData = { isHaloGroup: true };
+    }
+    _haloWarnedThisRebuild = false;
+
+    const templated = nodes.filter((n) => ((n as any).template_count ?? 0) > 0 && n.visible);
+
+    // Release halos for clusters that are no longer templated or no longer visible
+    for (const [cid, mesh] of [..._haloById]) {
+      if (!templated.find((c) => c.id === cid)) _releaseHalo(cid, mesh);
+    }
+
+    const newAttachments = templated.filter((c) => !_haloById.has(c.id)).length;
+    _ensureHaloPool(newAttachments);
+
+    for (const c of templated) {
+      let mesh = _haloById.get(c.id);
+      if (!mesh) {
+        mesh = _acquireHalo();
+        _haloById.set(c.id, mesh);
+        mesh.userData = { kind: 'halo', clusterId: c.id };
+        _haloGroup.add(mesh);
+      } else {
+        // Update clusterId tag in case the halo was reused
+        mesh.userData.clusterId = c.id;
+      }
+      mesh.visible = true;
+      mesh.position.set(...c.position);
+      // Color follows the cluster's live color — same source as the node wireframe.
+      const colorHex = parseInt(c.color.replace('#', ''), 16);
+      (mesh.material as THREE.MeshBasicMaterial).color.setHex(colorHex);
+    }
+  }
+
+  // Test-only: expose halo pool length via a global so tests can observe
+  // the high-water mark and growth behaviour without coupling to internals.
+  if (import.meta.env.MODE === 'test') {
+    // `_haloPool` is the array; expose the reference so the length reflects
+    // every allocation.  Tests read `.length` on the array directly.
+    (globalThis as any).__semTopHaloPool = _haloPool;
+  }
+
   /** Predicate — shared between scene-build loop and DOM marker `{#each}`.
    *  Centralizes the "this node gets a readiness ring" rule so the two
    *  surfaces can never drift. */
@@ -492,6 +621,12 @@
     if (_readinessRingGroup) {
       renderer.scene.remove(_readinessRingGroup);
     }
+
+    // Detach the halo group from the scene BEFORE the scene-clear traverse
+    // so pooled meshes survive across rebuilds without re-allocation.
+    if (_haloGroup) {
+      renderer.scene.remove(_haloGroup);
+    }
     // Ring survives only if the domain is still visible AND still carries a
     // readiness tier — matches the ring-build pass gate below, so LOD hides
     // rings implicitly (disposal preferred over hidden-mesh accumulation).
@@ -631,6 +766,13 @@
       renderer.scene.add(group);
       nodeMeshes.set(node.id, fill);
       interaction?.registerNode(node.id, fill, node);
+    }
+
+    // Halo rings — sync after node-mesh loop so halo and node color are
+    // written in the same rebuildScene pass (satisfies same-frame sync).
+    _syncHalos(data.nodes);
+    if (_haloGroup && _haloById.size > 0) {
+      renderer.scene.add(_haloGroup);
     }
 
     // Readiness rings — per-domain contour ring colored by composite tier.
@@ -1501,6 +1643,19 @@
         // scene is a no-op since all its children are already disposed.
         renderer?.scene.remove(_readinessRingGroup);
         _readinessRingGroup = null;
+      }
+      // Clear active-halo state on unmount. The pool arrays themselves are
+      // retained (high-water mark) so a quick remount doesn't re-allocate.
+      _haloById.clear();
+      _freeHalos.length = 0;
+      // Return all pool meshes to the free list for potential reuse on remount.
+      for (const m of _haloPool) {
+        m.visible = false;
+        _freeHalos.push(m);
+      }
+      if (_haloGroup) {
+        renderer?.scene.remove(_haloGroup);
+        _haloGroup = null;
       }
       ro.disconnect();
       interaction?.dispose();
