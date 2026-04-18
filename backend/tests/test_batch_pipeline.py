@@ -185,6 +185,21 @@ def isolate_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_cfg, "DATA_DIR", tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def reset_classification_agreement() -> Any:
+    """Reset the ClassificationAgreement singleton between tests.
+
+    Without this, batch_pipeline's E1 recording (added in Commit D)
+    leaks counter state into `test_classification_agreement.py` which
+    asserts `agr.total == 0` on module singleton access.
+    """
+    from app.services.classification_agreement import _reset_agreement
+
+    _reset_agreement()
+    yield
+    _reset_agreement()
+
+
 # ---------------------------------------------------------------------------
 # Tests — Fix 1: tier propagation
 # ---------------------------------------------------------------------------
@@ -701,3 +716,156 @@ class TestBulkPersistEvents:
         assert len(opt_events) == 0, (
             "Idempotent second run must not re-emit optimization_created"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests — Fix 5: ClassificationAgreement recording
+# ---------------------------------------------------------------------------
+
+
+class TestClassificationAgreement:
+    """run_single_prompt must record heuristic-vs-LLM classification pairs
+    into the ClassificationAgreement singleton so the health endpoint's
+    agreement + strategy-intel-hit-rate telemetry reflects seed activity
+    too, not just text-editor traffic."""
+
+    async def test_records_agreement_on_classification(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+        mock_context_service: AsyncMock,
+        mock_session_factory: Any,
+    ) -> None:
+        """A single seeded prompt must produce exactly one record() call
+        with heuristic labels (from enrichment.analysis) + LLM labels
+        (from the analyze phase result)."""
+        from app.services.classification_agreement import (
+            ClassificationAgreement,
+            get_classification_agreement,
+        )
+
+        # Swap in a fresh singleton so counts start at 0 and tests are
+        # order-independent.
+        import app.services.classification_agreement as ca_module
+        original = ca_module._agreement
+        ca_module._agreement = ClassificationAgreement()
+        try:
+            mock_provider.complete_parsed.side_effect = [
+                _analysis(task_type="coding", domain="backend"),
+                _optimization(),
+                _scores(),
+                _suggestions(),
+            ]
+
+            await run_single_prompt(
+                raw_prompt="Write a function that sorts a list",
+                provider=mock_provider,
+                prompt_loader=prompt_loader,
+                embedding_service=mock_embedding_service,
+                tier="internal",
+                context_service=mock_context_service,
+                session_factory=mock_session_factory,
+            )
+
+            agreement = get_classification_agreement()
+            assert agreement.total == 1, (
+                f"Expected 1 recorded classification, got {agreement.total}"
+            )
+            # Heuristic is "coding"+"backend" (from _heuristic()),
+            # LLM is "coding"+"backend" — full agreement.
+            assert agreement.task_type_agree == 1
+            assert agreement.domain_agree == 1
+            assert agreement.both_agree == 1
+        finally:
+            ca_module._agreement = original
+
+    async def test_records_disagreement_when_labels_differ(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+        mock_session_factory: Any,
+    ) -> None:
+        """Heuristic and LLM labels diverging must still record — the
+        agreement counters expose the mismatch rate, not suppress it."""
+        from app.services.classification_agreement import (
+            ClassificationAgreement,
+            get_classification_agreement,
+        )
+
+        import app.services.classification_agreement as ca_module
+        original = ca_module._agreement
+        ca_module._agreement = ClassificationAgreement()
+        try:
+            # Heuristic (enrichment.analysis) says writing+general,
+            # LLM (analyze phase) returns coding+backend → full disagreement.
+            ctx_svc = AsyncMock()
+            ctx_svc.enrich = AsyncMock(return_value=_enriched(
+                analysis=HeuristicAnalysis(
+                    task_type="writing",
+                    domain="general",
+                    intent_label="edit document",
+                    confidence=0.7,
+                ),
+            ))
+
+            mock_provider.complete_parsed.side_effect = [
+                _analysis(task_type="coding", domain="backend"),
+                _optimization(),
+                _scores(),
+                _suggestions(),
+            ]
+
+            await run_single_prompt(
+                raw_prompt="Write a function that sorts a list",
+                provider=mock_provider,
+                prompt_loader=prompt_loader,
+                embedding_service=mock_embedding_service,
+                tier="internal",
+                context_service=ctx_svc,
+                session_factory=mock_session_factory,
+            )
+
+            agreement = get_classification_agreement()
+            assert agreement.total == 1
+            assert agreement.task_type_agree == 0
+            assert agreement.domain_agree == 0
+            assert agreement.both_agree == 0
+        finally:
+            ca_module._agreement = original
+
+    async def test_no_record_when_enrichment_has_no_heuristic(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+    ) -> None:
+        """Without a context_service (legacy callers), heuristic analysis
+        isn't computed by the batch itself — no record() fires, keeping
+        the legacy path behavior-preserving."""
+        from app.services.classification_agreement import (
+            ClassificationAgreement,
+            get_classification_agreement,
+        )
+
+        import app.services.classification_agreement as ca_module
+        original = ca_module._agreement
+        ca_module._agreement = ClassificationAgreement()
+        try:
+            mock_provider.complete_parsed.side_effect = [
+                _analysis(), _optimization(), _scores(), _suggestions(),
+            ]
+
+            await run_single_prompt(
+                raw_prompt="Write a function that sorts a list",
+                provider=mock_provider,
+                prompt_loader=prompt_loader,
+                embedding_service=mock_embedding_service,
+                tier="internal",
+            )
+
+            agreement = get_classification_agreement()
+            assert agreement.total == 0
+        finally:
+            ca_module._agreement = original

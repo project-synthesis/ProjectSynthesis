@@ -255,6 +255,30 @@ async def run_single_prompt(
                     context_flags["cluster_injection"] = True
                 if adaptation_text:
                     context_flags["strategy_intelligence"] = True
+
+                # E1: record heuristic-vs-LLM classification agreement.
+                # Mirrors pipeline.py so the health endpoint's agreement +
+                # strategy-intel-hit-rate counters reflect seed traffic too.
+                heuristic = enrichment.analysis
+                if heuristic is not None:
+                    try:
+                        from app.services.classification_agreement import (
+                            get_classification_agreement,
+                        )
+                        ca = get_classification_agreement()
+                        ca.record(
+                            heuristic_task_type=heuristic.task_type,
+                            heuristic_domain=heuristic.domain or "general",
+                            llm_task_type=analysis.task_type,
+                            llm_domain=effective_domain,
+                            prompt_snippet=raw_prompt[:80],
+                        )
+                        ca.record_strategy_intel(had_intel=bool(adaptation_text))
+                    except Exception:
+                        logger.debug(
+                            "Classification agreement tracking failed",
+                            exc_info=True,
+                        )
             except Exception as _enrich_exc:
                 logger.warning(
                     "ContextEnrichmentService.enrich() failed for prompt %d: %s — "
