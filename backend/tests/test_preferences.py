@@ -485,6 +485,35 @@ class TestDomainReadinessNotifications:
         assert DEFAULTS["domain_readiness_notifications"]["enabled"] is True
         assert DEFAULTS["domain_readiness_notifications"]["muted_domain_ids"] == []
 
+    def test_existing_file_with_explicit_false_is_preserved(
+        self, svc: PreferencesService, prefs_file: Path
+    ) -> None:
+        """Rollout-safety invariant for the default-flip (PR #28 follow-up).
+
+        The default for `domain_readiness_notifications.enabled` flipped from
+        False → True in this PR. A user who previously persisted `False`
+        (via explicit PATCH, or a prior session where the default was False)
+        MUST keep their `False` across load — otherwise we'd silently
+        re-enable notifications for anyone who had opted out.
+
+        The invariant rides on `_deep_merge` applying disk values over
+        defaults and `_sanitize` only overwriting `enabled` when it's not a
+        bool. This test pins both together so a future refactor of either
+        path can't silently regress the opt-out.
+        """
+        prefs_file.write_text(json.dumps({
+            "schema_version": 1,
+            "domain_readiness_notifications": {
+                "enabled": False,
+                "muted_domain_ids": ["dom-backend"],
+            },
+        }))
+        prefs = svc.load()
+        assert prefs["domain_readiness_notifications"]["enabled"] is False
+        assert prefs["domain_readiness_notifications"]["muted_domain_ids"] == [
+            "dom-backend"
+        ]
+
         result = svc.patch({
             "domain_readiness_notifications": {
                 "enabled": True,
