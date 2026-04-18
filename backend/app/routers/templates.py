@@ -1,6 +1,8 @@
 """Template library + lifecycle endpoints."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,6 +10,8 @@ from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.schemas.templates import RetireRequest, TemplateListResponse, TemplateRead
 from app.services.template_service import TemplateService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["templates"])
 
@@ -22,6 +26,7 @@ async def list_templates(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> TemplateListResponse:
+    """List templates scoped to a project, with optional retired inclusion."""
     page = await _svc.list_for_project(
         project_id,
         db,
@@ -44,6 +49,7 @@ async def get_template(
     template_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> TemplateRead:
+    """Fetch a single template by ID (includes retired templates)."""
     tpl = await _svc.get(template_id, db)
     if tpl is None:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -59,8 +65,14 @@ async def fork_template(
     cluster_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> TemplateRead:
+    """Fork an immutable template snapshot from a cluster's top optimization.
+
+    Idempotent — returns the existing live template when one already exists
+    for the (cluster, top_optimization) pair.
+    """
     tpl = await _svc.fork_from_cluster(cluster_id, db, auto=False)
     if tpl is None:
+        logger.warning("fork_template: cluster %s has no optimizations to fork", cluster_id)
         raise HTTPException(
             status_code=400,
             detail="Cluster has no optimizations to fork from",
@@ -75,6 +87,7 @@ async def retire_template(
     body: RetireRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> TemplateRead:
+    """Soft-retire a live template. Returns the updated record."""
     reason = body.reason if body else "manual"
     ok = await _svc.retire(template_id, db, reason=reason)
     if not ok:
@@ -95,6 +108,7 @@ async def use_template(
     template_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> TemplateRead:
+    """Record a template usage event and return the updated record."""
     tpl = await _svc.get(template_id, db)
     if tpl is None or tpl.retired_at is not None:
         raise HTTPException(status_code=404, detail="Template not found or retired")
