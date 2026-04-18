@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.3.38 — 2026-04-17
+
 ### Added
 - **Readiness snapshot writer (observability infra)** — new `services/taxonomy/readiness_history.py` with fire-and-forget `record_snapshot(report)` that appends one JSON row per warm-cycle observation to `data/readiness_history/snapshots-YYYY-MM-DD.jsonl`. Daily UTC rotation, sync `Path.open("a")` + `asyncio.to_thread` (mirrors `event_logger.py` pattern, no `aiofiles` dependency). OSError swallowed and logged so warm-path Phase 5 never blocks on disk I/O. New Pydantic models `ReadinessSnapshot`, `ReadinessHistoryPoint`, `ReadinessHistoryResponse` in `schemas/sub_domain_readiness.py`; `ReadinessSnapshot.ts` has a `field_validator` that normalizes naive → UTC and converts aware datetimes so rotation never drifts across timezones. Retention/bucket constants (`READINESS_HISTORY_RETENTION_DAYS=30`, `READINESS_HISTORY_BUCKET_THRESHOLD_DAYS=7`) added to `_constants.py` for the upcoming history endpoint
 - Readiness time-series: per-domain JSONL snapshots written every warm-path Phase 5, retained 30 days.
