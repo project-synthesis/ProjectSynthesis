@@ -31,6 +31,7 @@ async def handle_seed(
     prompts: list[str] | None = None,
     ctx: Any | None = None,  # MCP Context — reserved for future sampling-tier support
     routing: Any | None = None,  # Injected by REST endpoint from request.app.state.routing
+    context_service: Any | None = None,  # Injected by REST/MCP: ContextEnrichmentService
 ) -> SeedOutput:
     """Full batch seeding flow: explore → generate → optimize → persist → taxonomy.
 
@@ -38,6 +39,13 @@ async def handle_seed(
     - REST context: caller passes routing=request.app.state.routing directly.
     - MCP context: falls back to get_routing() from tools/_shared.py.
     This avoids the _shared.py singleton being uninitialized in the backend process.
+
+    Enrichment:
+    - REST context: caller passes context_service=request.app.state.context_service.
+    - MCP context: caller passes explicitly (mcp_server.py reads from app.state).
+    When provided, batch prompts go through the same unified enrichment as the
+    regular pipeline (pattern injection, strategy intelligence, B0 repo
+    relevance gate, B1/B2 divergence detection).
     """
     batch_id = str(uuid.uuid4())
     t0 = time.monotonic()
@@ -230,6 +238,7 @@ async def handle_seed(
             taxonomy_engine=_taxonomy_engine,
             domain_resolver=_domain_resolver,
             tier=tier,
+            context_service=context_service,
         )
     except Exception as exc:
         logger.error("Seed batch execution failed: %s", exc, exc_info=True)

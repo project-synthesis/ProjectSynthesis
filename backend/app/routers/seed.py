@@ -22,9 +22,13 @@ async def seed_taxonomy(body: SeedRequest, request: Request) -> SeedOutput:
     """
     try:
         from app.tools.seed import handle_seed
-        # REST context: inject routing directly from app.state to bypass
-        # the MCP-only _shared.py singleton
+        # REST context: inject routing + context_service directly from app.state.
+        # context_service drives unified enrichment (pattern injection, strategy
+        # intelligence, codebase context, divergence alerts) so seed prompts go
+        # through the same B0 gate and B1/B2 divergence detection as the
+        # regular /api/optimize pipeline.
         routing = getattr(request.app.state, "routing", None)
+        context_service = getattr(request.app.state, "context_service", None)
         return await handle_seed(
             project_description=body.project_description,
             workspace_path=body.workspace_path,
@@ -33,6 +37,7 @@ async def seed_taxonomy(body: SeedRequest, request: Request) -> SeedOutput:
             agents=body.agents,
             prompts=body.prompts,
             routing=routing,
+            context_service=context_service,
         )
     except Exception as exc:
         logger.error("POST /api/seed failed: %s", exc, exc_info=True)

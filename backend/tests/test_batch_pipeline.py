@@ -29,6 +29,8 @@ from app.schemas.pipeline_contracts import (
     SuggestionsOutput,
 )
 from app.services.batch_pipeline import PendingOptimization, run_single_prompt
+from app.services.context_enrichment import EnrichedContext
+from app.services.heuristic_analyzer import HeuristicAnalysis
 from app.services.prompt_loader import PromptLoader
 
 
@@ -248,3 +250,221 @@ class TestTierPropagation:
 
         assert result.status == "completed", f"run failed: {result.error}"
         assert result.routing_tier == "internal"
+
+
+# ---------------------------------------------------------------------------
+# Tests — Fix 2/3: ContextEnrichmentService integration + divergence alerts
+# ---------------------------------------------------------------------------
+
+
+def _heuristic() -> HeuristicAnalysis:
+    return HeuristicAnalysis(
+        task_type="coding",
+        domain="backend",
+        intent_label="sort integers",
+        confidence=0.85,
+    )
+
+
+def _enriched(**overrides: Any) -> EnrichedContext:
+    """Build an EnrichedContext with sentinel text in each layer.
+
+    Tests assert the sentinel strings reach the optimize render call.
+    """
+    defaults: dict[str, Any] = dict(
+        raw_prompt="Write a function that sorts a list",
+        codebase_context="CODEBASE_SENTINEL",
+        strategy_intelligence="STRATEGY_SENTINEL",
+        applied_patterns="PATTERNS_SENTINEL",
+        analysis=_heuristic(),
+        context_sources=MappingProxyType({
+            "codebase_context": True,
+            "strategy_intelligence": True,
+            "applied_patterns": True,
+            "heuristic_analysis": True,
+        }),
+        enrichment_meta=MappingProxyType({
+            "enrichment_profile": "code_aware",
+        }),
+    )
+    defaults.update(overrides)
+    return EnrichedContext(**defaults)
+
+
+def _enriched_with_divergences() -> EnrichedContext:
+    """EnrichedContext whose `divergence_alerts` property renders alert text."""
+    return _enriched(
+        enrichment_meta=MappingProxyType({
+            "enrichment_profile": "code_aware",
+            "divergences": [
+                {
+                    "prompt_tech": "FastAPI",
+                    "codebase_tech": "Flask",
+                    "category": "web framework",
+                },
+            ],
+        }),
+    )
+
+
+@pytest.fixture
+def mock_context_service() -> AsyncMock:
+    """Context service whose `enrich()` returns a sentinel-rich EnrichedContext."""
+    svc = AsyncMock()
+    svc.enrich = AsyncMock(return_value=_enriched())
+    return svc
+
+
+@pytest.fixture
+def mock_session_factory() -> Any:
+    """Minimal async context-manager factory that yields an AsyncMock session.
+
+    The mocked context service ignores the db, so a no-op session is fine.
+    """
+    class _MockSession:
+        async def __aenter__(self) -> AsyncMock:
+            return AsyncMock()
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+    def _factory() -> _MockSession:
+        return _MockSession()
+
+    return _factory
+
+
+class TestContextEnrichmentIntegration:
+    """run_single_prompt must call ContextEnrichmentService.enrich() exactly
+    once per prompt and thread its outputs into the optimize render."""
+
+    async def test_enrich_called_once_per_prompt(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+        mock_context_service: AsyncMock,
+        mock_session_factory: Any,
+    ) -> None:
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(), _optimization(), _scores(), _suggestions(),
+        ]
+
+        result: PendingOptimization = await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            tier="internal",
+            context_service=mock_context_service,
+            session_factory=mock_session_factory,
+        )
+
+        assert result.status == "completed", f"run failed: {result.error}"
+        assert mock_context_service.enrich.await_count == 1
+        # Verify enrichment was invoked with the resolved tier
+        _, kwargs = mock_context_service.enrich.call_args
+        assert kwargs["tier"] == "internal"
+        assert kwargs["raw_prompt"] == "Write a function that sorts a list"
+
+    async def test_enrichment_layers_reach_optimize_render(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+        mock_context_service: AsyncMock,
+        mock_session_factory: Any,
+    ) -> None:
+        """Codebase, strategy intel, and applied patterns from enrich() must
+        end up in the rendered optimize.md payload sent to the provider."""
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(), _optimization(), _scores(), _suggestions(),
+        ]
+
+        await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            tier="internal",
+            context_service=mock_context_service,
+            session_factory=mock_session_factory,
+        )
+
+        # Phase 2 (optimize) is the 2nd provider call (idx 1)
+        optimize_call = mock_provider.complete_parsed.call_args_list[1]
+        user_message = optimize_call.kwargs["user_message"]
+        assert "CODEBASE_SENTINEL" in user_message
+        assert "STRATEGY_SENTINEL" in user_message
+        assert "PATTERNS_SENTINEL" in user_message
+
+    async def test_divergence_alerts_reach_optimize_render(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+        mock_session_factory: Any,
+    ) -> None:
+        """The EnrichedContext.divergence_alerts property must be injected
+        into the optimize template so the optimizer LLM sees tech conflicts.
+
+        This is the fix for Divergence #3 (hardcoded None at batch_pipeline.py:281).
+        """
+        ctx_svc = AsyncMock()
+        ctx_svc.enrich = AsyncMock(return_value=_enriched_with_divergences())
+
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(), _optimization(), _scores(), _suggestions(),
+        ]
+
+        await run_single_prompt(
+            raw_prompt="Rewrite this FastAPI endpoint",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            tier="internal",
+            context_service=ctx_svc,
+            session_factory=mock_session_factory,
+        )
+
+        optimize_call = mock_provider.complete_parsed.call_args_list[1]
+        user_message = optimize_call.kwargs["user_message"]
+        # The divergence_alerts property emits this header as its first line
+        assert "TECHNOLOGY DIVERGENCE DETECTED" in user_message
+        assert "FastAPI" in user_message
+        assert "Flask" in user_message
+
+    async def test_context_sources_persisted_on_pending(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+        mock_context_service: AsyncMock,
+        mock_session_factory: Any,
+    ) -> None:
+        """enrichment.context_sources must be merged into PendingOptimization
+        so bulk_persist writes the full context_sources dict (enrichment profile,
+        divergences, layer flags) to the Optimization row."""
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(), _optimization(), _scores(), _suggestions(),
+        ]
+
+        result: PendingOptimization = await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            tier="internal",
+            context_service=mock_context_service,
+            session_factory=mock_session_factory,
+        )
+
+        assert result.status == "completed", f"run failed: {result.error}"
+        assert result.context_sources is not None
+        # Layer flags from enrichment are present
+        assert result.context_sources.get("codebase_context") is True
+        assert result.context_sources.get("strategy_intelligence") is True
+        # Enrichment profile from enrichment_meta is preserved
+        assert (
+            result.context_sources.get("enrichment_meta", {}).get("enrichment_profile")
+            == "code_aware"
+        )

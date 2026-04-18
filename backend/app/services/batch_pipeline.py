@@ -81,6 +81,7 @@ async def run_single_prompt(
     taxonomy_engine: Any | None = None,
     domain_resolver: Any | None = None,
     tier: str = "internal",
+    context_service: Any | None = None,
 ) -> PendingOptimization:
     """Run one prompt through analyze → optimize → score → embed in memory.
 
@@ -92,6 +93,14 @@ async def run_single_prompt(
     ``RoutingManager.resolve()``). It is persisted on the resulting
     ``PendingOptimization.routing_tier`` so downstream analytics and
     cost attribution see the real tier instead of a hardcoded default.
+
+    ``context_service`` — when provided, ``ContextEnrichmentService.enrich()``
+    is the single entry for pattern injection, strategy intelligence,
+    codebase context, and divergence alerts. This aligns the batch with
+    the regular pipeline so seeded prompts go through the same B0 repo
+    relevance gate, B1/B2 divergence detection, and enrichment-profile
+    selection (code_aware / knowledge_work / cold_start). When ``None``,
+    falls back to inline enrichment for backward compatibility.
 
     Returns a PendingOptimization with all fields populated.
     On any phase failure, returns a PendingOptimization with error set
@@ -209,30 +218,90 @@ async def run_single_prompt(
         except Exception as exc:
             logger.warning("Raw embedding failed for prompt %d: %s", prompt_index, exc)
 
-        # Auto-inject meta-patterns from taxonomy knowledge graph
+        # Unified enrichment via ContextEnrichmentService — delivers pattern
+        # injection, strategy intelligence, codebase context, and divergence
+        # alerts through the same entry point as the regular pipeline. Also
+        # gives the seed path the B0 repo relevance gate and B1/B2 tech-stack
+        # divergence detection, plus enrichment-profile selection
+        # (code_aware / knowledge_work / cold_start).
         applied_patterns_text: str | None = None
+        adaptation_text: str | None = None
+        enriched_codebase_context: str | None = None
+        divergence_alerts_text: str | None = None
+        enrichment_sources: dict[str, Any] = {}
         context_flags: dict[str, bool] = {}
-        if taxonomy_engine is not None and session_factory is not None and prompt_embedding is not None:
-            try:
-                from app.services.pattern_injection import (
-                    auto_inject_patterns,
-                    format_injected_patterns,
-                )
-                async with session_factory() as _enrich_db:
-                    injected, _cluster_ids = await auto_inject_patterns(
-                        raw_prompt=raw_prompt,
-                        taxonomy_engine=taxonomy_engine,
-                        db=_enrich_db,
-                        trace_id=trace_id,
-                        optimization_id=opt_id,
-                    )
-                if injected:
-                    applied_patterns_text = format_injected_patterns(injected)
-                    context_flags["cluster_injection"] = True
-            except Exception as _pi_exc:
-                logger.debug("Pattern injection failed for prompt %d: %s", prompt_index, _pi_exc)
 
-        # Retrieve few-shot examples from high-scoring past optimizations
+        if context_service is not None and session_factory is not None:
+            try:
+                async with session_factory() as _enrich_db:
+                    enrichment = await context_service.enrich(
+                        raw_prompt=raw_prompt,
+                        tier=tier,
+                        db=_enrich_db,
+                        workspace_path=None,
+                        repo_full_name=repo_full_name,
+                        applied_pattern_ids=None,
+                        preferences_snapshot=prefs_snapshot,
+                    )
+                applied_patterns_text = enrichment.applied_patterns
+                adaptation_text = enrichment.strategy_intelligence
+                enriched_codebase_context = enrichment.codebase_context
+                divergence_alerts_text = enrichment.divergence_alerts
+                # Merge enrichment's layer flags + enrichment_meta for persistence
+                enrichment_sources = dict(enrichment.context_sources)
+                if enrichment.enrichment_meta:
+                    enrichment_sources["enrichment_meta"] = dict(enrichment.enrichment_meta)
+                if applied_patterns_text:
+                    context_flags["cluster_injection"] = True
+                if adaptation_text:
+                    context_flags["strategy_intelligence"] = True
+            except Exception as _enrich_exc:
+                logger.warning(
+                    "ContextEnrichmentService.enrich() failed for prompt %d: %s — "
+                    "falling back to empty enrichment",
+                    prompt_index, _enrich_exc,
+                )
+        else:
+            # Legacy inline enrichment path (kept for callers that haven't been
+            # migrated to pass a context_service). Matches pre-Fix-2 behavior.
+            if taxonomy_engine is not None and session_factory is not None and prompt_embedding is not None:
+                try:
+                    from app.services.pattern_injection import (
+                        auto_inject_patterns,
+                        format_injected_patterns,
+                    )
+                    async with session_factory() as _enrich_db:
+                        injected, _cluster_ids = await auto_inject_patterns(
+                            raw_prompt=raw_prompt,
+                            taxonomy_engine=taxonomy_engine,
+                            db=_enrich_db,
+                            trace_id=trace_id,
+                            optimization_id=opt_id,
+                        )
+                    if injected:
+                        applied_patterns_text = format_injected_patterns(injected)
+                        context_flags["cluster_injection"] = True
+                except Exception as _pi_exc:
+                    logger.debug("Pattern injection failed for prompt %d: %s", prompt_index, _pi_exc)
+
+            if session_factory is not None:
+                try:
+                    from app.services.context_enrichment import resolve_strategy_intelligence
+                    async with session_factory() as _si_db:
+                        adaptation_text, _ = await resolve_strategy_intelligence(
+                            _si_db,
+                            analysis.task_type or "general",
+                            analysis.domain or "general",
+                        )
+                    if adaptation_text:
+                        context_flags["strategy_intelligence"] = True
+                except Exception as _si_exc:
+                    logger.debug("Strategy intelligence failed for prompt %d: %s", prompt_index, _si_exc)
+
+        # Retrieve few-shot examples (input-similar past optimizations).
+        # EnrichedContext does not include few-shot, so this runs in both the
+        # unified-enrichment path and the legacy path — matching pipeline.py
+        # which also retrieves few-shot outside ContextEnrichmentService.
         few_shot_text: str | None = None
         if session_factory is not None and prompt_embedding is not None:
             try:
@@ -253,32 +322,19 @@ async def run_single_prompt(
             except Exception as _fs_exc:
                 logger.debug("Few-shot retrieval failed for prompt %d: %s", prompt_index, _fs_exc)
 
-        # Strategy intelligence (unified adaptation + performance signals)
-        adaptation_text: str | None = None
-        if session_factory is not None:
-            try:
-                from app.services.context_enrichment import resolve_strategy_intelligence
-                async with session_factory() as _si_db:
-                    adaptation_text, _ = await resolve_strategy_intelligence(
-                        _si_db,
-                        analysis.task_type or "general",
-                        analysis.domain or "general",
-                    )
-                if adaptation_text:
-                    context_flags["strategy_intelligence"] = True
-            except Exception as _si_exc:
-                logger.debug("Strategy intelligence failed for prompt %d: %s", prompt_index, _si_exc)
-
         # --- Phase 2: Optimize ---
+        # Prefer codebase context from enrichment (B0-gated + workspace fallback);
+        # explicit `codebase_context` param acts as a caller-supplied override.
+        _effective_codebase = codebase_context or enriched_codebase_context
         optimize_msg = prompt_loader.render("optimize.md", {
             "raw_prompt": raw_prompt,
             "analysis_summary": analysis_summary,
             "strategy_instructions": strategy_instructions,
-            "codebase_context": codebase_context,
+            "codebase_context": _effective_codebase,
             "strategy_intelligence": adaptation_text,
             "applied_patterns": applied_patterns_text,
             "few_shot_examples": few_shot_text,
-            "divergence_alerts": None,  # batch pipeline doesn't detect divergences
+            "divergence_alerts": divergence_alerts_text,
         })
         dynamic_max_tokens = compute_optimize_max_tokens(len(raw_prompt))
         optimization: OptimizationResult = await call_provider_with_retry(
@@ -462,6 +518,7 @@ async def run_single_prompt(
                 "source": "batch_seed",
                 "batch_id": batch_id,
                 "agent": agent_name,
+                **enrichment_sources,
                 **context_flags,
             },
         )
@@ -498,6 +555,7 @@ async def run_batch(
     taxonomy_engine: Any | None = None,
     domain_resolver: Any | None = None,
     tier: str = "internal",
+    context_service: Any | None = None,
 ) -> list[PendingOptimization]:
     """Run N prompts through the pipeline in parallel.
 
@@ -538,6 +596,7 @@ async def run_batch(
                 taxonomy_engine=taxonomy_engine,
                 domain_resolver=domain_resolver,
                 tier=tier,
+                context_service=context_service,
             )
             # Check for rate limit error in result
             if (
@@ -568,6 +627,7 @@ async def run_batch(
                         taxonomy_engine=taxonomy_engine,
                         domain_resolver=domain_resolver,
                         tier=tier,
+                        context_service=context_service,
                     )
                     return retry
                 finally:

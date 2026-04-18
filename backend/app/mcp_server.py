@@ -1222,7 +1222,16 @@ async def synthesis_seed(
     and taxonomy engine handle everything.
     """
     from app.tools.seed import handle_seed
-    # MCP context: routing resolved via get_routing() inside handle_seed fallback
+    # MCP context: routing resolved via get_routing() inside handle_seed fallback.
+    # Resolve context_service via the MCP-process singleton so batch seeding goes
+    # through unified enrichment (B0 gate, B1/B2 divergence, pattern injection,
+    # strategy intelligence) — parity with the REST /api/seed path.
+    _ctx_svc = None
+    try:
+        from app.tools._shared import get_context_service
+        _ctx_svc = get_context_service()
+    except Exception:
+        _ctx_svc = None
     return await handle_seed(
         project_description=project_description,
         workspace_path=workspace_path,
@@ -1232,6 +1241,7 @@ async def synthesis_seed(
         prompts=prompts,
         ctx=ctx,
         routing=None,  # MCP path: handle_seed falls back to get_routing()
+        context_service=_ctx_svc,
     )
 
 
