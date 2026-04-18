@@ -38,11 +38,12 @@ export interface SceneNode {
   label: string;
   visible: boolean;
   parentId?: string;
-  coherence: number;      // [0, 1] → wireframe brightness
-  avgScore: number | null; // [1, 10] → color saturation
-  domain: string;          // primary domain (e.g. "backend", "general")
-  memberCount: number;     // member_count from API
-  isSubDomain: boolean;    // true for domain nodes whose parent is also a domain
+  coherence: number;        // [0, 1] → wireframe brightness
+  avgScore: number | null;  // [1, 10] → color saturation
+  domain: string;           // primary domain (e.g. "backend", "general")
+  memberCount: number;      // member_count from API
+  isSubDomain: boolean;     // true for domain nodes whose parent is also a domain
+  template_count: number;   // number of proven templates forked from this cluster
   readinessTier?: ReadinessTier; // composite readiness tier, only set on domain nodes with a matching report
 }
 
@@ -62,14 +63,8 @@ function stateOpacity(state: string, stateFilter: string | null, hasMatches: boo
     return state === 'candidate' ? 0.4 : 1.0;
   }
   // Filtered tab with matches — matching nodes glow, structural nodes semi-visible, rest ghosted.
-  // `template` joins `domain`/`project` as structural because templates are architecturally
-  // cross-cutting (spawned from mature clusters, referenced across state filters) and their
-  // sprite labels are force-visible via the template-sprite pass in `SemanticTopology.svelte`.
-  // Leaving templates at 0.25 triggered the `nodeOpacity < 0.5` blank-label branch below,
-  // which made the 3D scene sprite render empty text and the hover chip fall back to the
-  // domain name instead of the cluster label.
   if (state === stateFilter) return 1.0;
-  if (state === 'domain' || state === 'project' || state === 'template') return 0.5;
+  if (state === 'domain' || state === 'project') return 0.5;
   return 0.25;
 }
 
@@ -83,7 +78,6 @@ function stateOpacity(state: string, stateFilter: string | null, hasMatches: boo
 function stateSizeMultiplier(state: string, isSubDomain: boolean = false): number {
   if (state === 'project') return 1.3;
   if (state === 'domain') return isSubDomain ? 1.0 : 1.3;
-  if (state === 'template') return 1.3;
   if (state === 'mature') return 1.15;
   return 1.0;
 }
@@ -96,15 +90,9 @@ function stateSizeMultiplier(state: string, isSubDomain: boolean = false): numbe
 const MAX_NODE_SIZE = 3.0;
 
 /** Color by lifecycle state.
- *
- * Templates used to override to neon cyan via `stateColor('template')`, which
- * hid their domain membership — a security-domain template and a backend-domain
- * template rendered identically. Template identification is now carried by:
- * (a) the shader-based starfield decoration on the sphere, (b) the cyan
- * TEMPLATE badge in the inspector, and (c) the dedicated TPL state-filter tab.
- * Templates therefore inherit their domain color like any other cluster via
- * `taxonomyColor()`, which respects the sub-domain→parent walk done upstream
- * in `buildSceneData`.
+ * All nodes (including templates) inherit their domain color via `taxonomyColor()`.
+ * Template identification is carried by the halo ring decoration in SemanticTopology,
+ * the cyan TEMPLATE badge in the inspector, and the `template_count` field on SceneNode.
  */
 function stateNodeColor(_state: string, oklabColor: string | null): string {
   return taxonomyColor(oklabColor); // existing logic handles hex/domain/null
@@ -278,12 +266,10 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
 
     // Domain-chain color inheritance: any node parented directly to a domain
     // node walks up to the TOP-LEVEL domain's label so brand colors match the
-    // navbar. Covers three cases:
+    // navbar. Covers two cases:
     //   (1) sub-domain nodes (state=domain parented to a top-level domain),
     //   (2) clusters parented to a sub-domain (should render in the top-level
-    //       brand color, not a sub-domain OKLab variant),
-    //   (3) templates parented to a sub-domain (e.g. security > token-ops >
-    //       JWT Token Lifecycle → render in security red, not token-ops variant).
+    //       brand color, not a sub-domain OKLab variant).
     // Nodes whose parent is not a domain (or whose parent is missing) fall back
     // to their own `node.domain` as before — the previous behavior for regular
     // clusters under a top-level domain is unchanged by construction because
@@ -309,6 +295,7 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
       domain: parsePrimaryDomain(node.domain),
       memberCount: node.member_count,
       isSubDomain: subDomainIds.has(node.id),
+      template_count: node.template_count ?? 0,
     };
 
     // Decorate domain nodes (top-level and sub-domain) with composite

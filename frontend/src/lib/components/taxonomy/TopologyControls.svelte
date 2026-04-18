@@ -31,8 +31,7 @@
     if (f === null) return `${clustersStore.liveClusterCount} clusters`;
     if (f === 'active') return `${filteredCounts.active} active`;
     if (f === 'candidate') return `${filteredCounts.candidate} candidates`;
-    if (f === 'template') return `${filteredCounts.template} templates`;
-    // mature/archived: count from filteredTaxonomyTree directly
+    // mature/archived (and any future state): count from filteredTaxonomyTree directly
     const count = clustersStore.filteredTaxonomyTree.filter(n => n.state === f).length;
     return `${count} ${f}`;
   });

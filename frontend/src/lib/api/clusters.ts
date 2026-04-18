@@ -33,6 +33,7 @@ export interface ClusterNode {
   blend_w_transform: number | null;
   split_failures: number;
   meta_pattern_count: number;
+  template_count: number;   // count of proven templates forked from this cluster
   created_at: string | null;
   // Only populated by getClusterDetail
   children?: ClusterNode[];

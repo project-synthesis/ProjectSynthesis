@@ -26,7 +26,7 @@ function makeNode(overrides: Partial<ClusterNode> = {}): ClusterNode {
     umap_z: 3.0,
     preferred_strategy: null,
     output_coherence: null, blend_w_raw: null, blend_w_optimized: null,
-    blend_w_transform: null, split_failures: 0, meta_pattern_count: 0,
+    blend_w_transform: null, split_failures: 0, meta_pattern_count: 0, template_count: 0,
     created_at: null,
     children: [],
     ...overrides,
@@ -211,8 +211,8 @@ describe('buildSceneData', () => {
 describe('assignLodVisibility', () => {
   it('hides low-persistence nodes at far LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.9, state: 'active', label: 'A', visible: true, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false },
-      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.2, state: 'active', label: 'B', visible: true, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.9, state: 'active', label: 'A', visible: true, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false, template_count: 0 },
+      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.2, state: 'active', label: 'B', visible: true, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false, template_count: 0 },
     ];
     assignLodVisibility(nodes, 'far');
     expect(nodes[0].visible).toBe(true);
@@ -221,7 +221,7 @@ describe('assignLodVisibility', () => {
 
   it('shows all nodes at near LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'A', visible: false, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'A', visible: false, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false, template_count: 0 },
     ];
     assignLodVisibility(nodes, 'near');
     expect(nodes[0].visible).toBe(true);
@@ -229,8 +229,8 @@ describe('assignLodVisibility', () => {
 
   it('shows nodes with threshold-level persistence at mid LOD', () => {
     const nodes: SceneNode[] = [
-      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.3, state: 'active', label: 'A', visible: false, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false },
-      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'B', visible: false, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false },
+      { id: 'a', position: [0,0,0], color: '#fff', size: 1, opacity: 1, persistence: 0.3, state: 'active', label: 'A', visible: false, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false, template_count: 0 },
+      { id: 'b', position: [1,1,1], color: '#fff', size: 1, opacity: 1, persistence: 0.1, state: 'active', label: 'B', visible: false, coherence: 0.5, avgScore: null, domain: 'general', memberCount: 0, isSubDomain: false, template_count: 0 },
     ];
     assignLodVisibility(nodes, 'mid');
     expect(nodes[0].visible).toBe(true);   // 0.3 >= 0.2
@@ -239,15 +239,18 @@ describe('assignLodVisibility', () => {
 });
 
 describe('buildSceneData — state-based visual encoding', () => {
-  it('template state nodes get size multiplied by 1.3', () => {
-    const baseNode = makeNode({ id: 'base', state: 'active', member_count: 4, usage_count: 2 });
-    const templateNode = makeNode({ id: 'tmpl', state: 'template', member_count: 4, usage_count: 2 });
+  it('surfaces template_count through SceneNode', () => {
+    const cluster = makeNode({ id: 'c1', state: 'mature', template_count: 3 });
+    const { nodes } = buildSceneData([cluster], undefined, undefined, null);
+    const node = nodes.find(n => n.id === 'c1');
+    expect(node?.template_count).toBe(3);
+  });
 
-    const { nodes } = buildSceneData([baseNode, templateNode]);
-    const base = nodes.find(n => n.id === 'base')!;
-    const template = nodes.find(n => n.id === 'tmpl')!;
-
-    expect(template.size).toBeCloseTo(base.size * 1.3, 5);
+  it('template_count defaults to 0 when absent from input node', () => {
+    // makeNode does not set template_count — it should default to 0, not undefined
+    const cluster = makeNode({ id: 'c1', state: 'active' });
+    const { nodes } = buildSceneData([cluster]);
+    expect(nodes[0].template_count).toBe(0);
   });
 
   it('mature state nodes get size multiplied by 1.15', () => {
@@ -269,63 +272,6 @@ describe('buildSceneData — state-based visual encoding', () => {
   it('active state nodes get opacity 1.0', () => {
     const { nodes } = buildSceneData([makeNode({ state: 'active' })]);
     expect(nodes[0].opacity).toBe(1.0);
-  });
-
-  it('template nodes keep structural opacity (>= 0.5) and label in a non-template state filter', () => {
-    // Regression: in the "active" tab, template clusters used to be ghosted
-    // to 0.25 alongside every other non-matching state, which triggered the
-    // `nodeOpacity < 0.5` branch that blanks SceneNode.label. The 3D scene
-    // force-shows template sprites, but the sprite text was empty so the
-    // cyan sphere floated anonymously and the hover chip fell back to the
-    // domain name ("SECURITY"). Templates are architecturally structural
-    // (like domain/project nodes) so they deserve the same 0.5 floor.
-    const active = makeNode({ id: 'act', state: 'active', domain: 'security' });
-    const template = makeNode({ id: 'tmpl', state: 'template', label: 'JWT Token Lifestyle', domain: 'security' });
-    const { nodes } = buildSceneData([active, template], undefined, undefined, 'active');
-    const t = nodes.find((n) => n.id === 'tmpl')!;
-    expect(t.opacity).toBeGreaterThanOrEqual(0.5);
-    expect(t.label).toBe('JWT Token Lifestyle');
-  });
-
-  it('template nodes in their matching filter remain at full opacity', () => {
-    const template = makeNode({ id: 'tmpl', state: 'template', label: 'JWT' });
-    const { nodes } = buildSceneData([template], undefined, undefined, 'template');
-    expect(nodes[0].opacity).toBe(1.0);
-    expect(nodes[0].label).toBe('JWT');
-  });
-
-  it('template state nodes inherit their domain color (starfield decoration carries the template affordance)', () => {
-    // Previous behavior overrode templates to neon cyan (#00e5ff) via
-    // stateColor('template'), which hid the template's domain membership
-    // entirely — a security-domain template and a backend-domain template
-    // rendered identically. The shader-based starfield decoration on the
-    // sphere (visible in SemanticTopology) already flags a node as a template,
-    // and the cyan TEMPLATE badge in the inspector and the TPL tab handle
-    // text-level identification. The color should therefore inherit the
-    // domain the template belongs to so the pattern graph stays visually
-    // partitioned by domain.
-    const backendTemplate = makeNode({ id: 'a', state: 'template', domain: 'backend', color_hex: null });
-    const frontendTemplate = makeNode({ id: 'b', state: 'template', domain: 'frontend', color_hex: null });
-
-    const { nodes } = buildSceneData([backendTemplate, frontendTemplate]);
-    expect(nodes.find(n => n.id === 'a')!.color).toBe('#b44aff'); // backend violet
-    expect(nodes.find(n => n.id === 'b')!.color).toBe('#ff4895'); // frontend hot pink
-  });
-
-  it('template parented to a sub-domain inherits the TOP-LEVEL domain color', () => {
-    // JWT Token Lifecycle lives under security > token-ops and should render
-    // in security red, not token-ops variant red and not template cyan.
-    domainStore.domains = [
-      { id: 'sec', label: 'security', color_hex: '#ff2255', member_count: 0, avg_score: null, source: 'seed' },
-      { id: 'sub', label: 'token-ops', color_hex: '#d20033', member_count: 0, avg_score: null, source: 'seed' },
-    ];
-    const tree = [
-      makeNode({ id: 'sec', state: 'domain', domain: 'security', label: 'security' }),
-      makeNode({ id: 'sub', state: 'domain', domain: 'token-ops', label: 'token-ops', parent_id: 'sec' }),
-      makeNode({ id: 'tmpl', state: 'template', domain: 'token-ops', label: 'JWT Token Lifecycle', parent_id: 'sub', color_hex: null }),
-    ];
-    const { nodes } = buildSceneData(tree);
-    expect(nodes.find(n => n.id === 'tmpl')!.color).toBe('#ff2255');
   });
 
   it('SceneNode always has an opacity field', () => {

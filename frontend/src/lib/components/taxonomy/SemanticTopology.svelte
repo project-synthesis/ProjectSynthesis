@@ -203,7 +203,7 @@
     }
     _haloWarnedThisRebuild = false;
 
-    const templated = nodes.filter((n) => ((n as any).template_count ?? 0) > 0 && n.visible);
+    const templated = nodes.filter((n) => (n.template_count ?? 0) > 0 && n.visible);
 
     // Release halos for clusters that are no longer templated or no longer visible
     for (const [cid, mesh] of [..._haloById]) {

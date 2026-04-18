@@ -19,7 +19,7 @@ function mockClusterNode(id: string, overrides: Partial<ClusterNode> = {}): Clus
     color_hex: null, umap_x: null, umap_y: null, umap_z: null,
     preferred_strategy: null,
     output_coherence: null, blend_w_raw: null, blend_w_optimized: null,
-    blend_w_transform: null, split_failures: 0, meta_pattern_count: 0,
+    blend_w_transform: null, split_failures: 0, meta_pattern_count: 0, template_count: 0,
     created_at: null,
     ...overrides,
   };
