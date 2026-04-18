@@ -246,66 +246,12 @@ async def get_injection_edges(
 
 
 @router.get("/api/clusters/templates")
-async def get_cluster_templates(
-    request: Request,
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-    _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
-) -> ClusterListResponse:
-    """List clusters with state=template, sorted by avg_score descending."""
-    try:
-        query = (
-            select(PromptCluster)
-            .where(PromptCluster.state == "template")
-            .order_by(PromptCluster.avg_score.desc())
-        )
-        count_query = select(func.count(PromptCluster.id)).where(
-            PromptCluster.state == "template"
-        )
-        total = (await db.execute(count_query)).scalar() or 0
-        result = await db.execute(query.offset(offset).limit(limit))
-        clusters = result.scalars().all()
-
-        items = [
-            ClusterNode(
-                id=c.id,
-                parent_id=c.parent_id,
-                label=c.label,
-                state=c.state,
-                domain=c.domain,
-                task_type=c.task_type,
-                persistence=c.persistence,
-                coherence=c.coherence,
-                separation=c.separation,
-                stability=c.stability,
-                member_count=c.member_count or 0,
-                usage_count=c.usage_count or 0,
-                avg_score=c.avg_score,
-                color_hex=c.color_hex,
-                umap_x=c.umap_x,
-                umap_y=c.umap_y,
-                umap_z=c.umap_z,
-                preferred_strategy=c.preferred_strategy,
-                created_at=c.created_at,
-            )
-            for c in clusters
-        ]
-
-        return ClusterListResponse(
-            total=total,
-            count=len(items),
-            offset=offset,
-            has_more=offset + len(items) < total,
-            next_offset=offset + len(items) if offset + len(items) < total else None,
-            items=items,
-        )
-    except OperationalError as exc:
-        logger.warning("GET /api/clusters/templates DB contention: %s", exc)
-        raise HTTPException(503, "Database busy — retry in a moment") from exc
-    except Exception as exc:
-        logger.error("GET /api/clusters/templates failed: %s", exc, exc_info=True)
-        raise HTTPException(500, "Failed to load cluster templates") from exc
+async def get_cluster_templates_gone():
+    """Legacy endpoint — removed. Use GET /api/templates instead."""
+    raise HTTPException(
+        status_code=410,
+        detail={"detail": "Endpoint removed. Use GET /api/templates."},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +479,20 @@ async def update_cluster(
     if body.state is not None:
         old_state = cluster.state
 
+        # Templates are a separate entity now (ADR: template-architecture).
+        # Reject state=template with a redirect hint to the new endpoint.
+        # NOTE: Do NOT narrow the Literal on ClusterUpdateRequest.state to exclude
+        # "template" — that would cause FastAPI to return 422 before this handler
+        # runs, preventing the informative 400 message from reaching the caller.
+        if body.state == "template":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Template state no longer exists. "
+                    "Use POST /api/clusters/{id}/fork-template."
+                ),
+            )
+
         # Quality gate: template promotion requires proven quality + usage
         if body.state == "template" and old_state != "template":
             _score = cluster.avg_score or 0
@@ -757,7 +717,7 @@ async def backfill_scores(
 
         cluster_q = await db.execute(
             select(PromptCluster).where(
-                PromptCluster.state.in_(["active", "candidate", "mature", "template"])
+                PromptCluster.state.in_(["active", "candidate", "mature"])
             )
         )
         updated = 0

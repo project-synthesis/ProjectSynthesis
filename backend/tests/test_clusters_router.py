@@ -160,8 +160,8 @@ class TestClusterUpdate:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_update_cluster_state(self, app_client, db_session):
-        """PATCH /api/clusters/{id} updates state when quality gates met."""
+    async def test_update_cluster_state_template_returns_400(self, app_client, db_session):
+        """PATCH /api/clusters/{id} with state=template returns 400 (use fork-template)."""
         cluster = PromptCluster(
             id="c3-promote-ok", label="test", state="active", domain="backend",
             task_type="coding", centroid_embedding=b'\x00' * 384,
@@ -171,12 +171,12 @@ class TestClusterUpdate:
         await db_session.commit()
 
         resp = await app_client.patch("/api/clusters/c3-promote-ok", json={"state": "template"})
-        assert resp.status_code == 200
-        assert resp.json()["state"] == "template"
+        assert resp.status_code == 400
+        assert "fork-template" in resp.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_template_promotion_blocked_low_score(self, app_client, db_session):
-        """PATCH /api/clusters/{id} rejects template promotion when score too low."""
+        """PATCH /api/clusters/{id} with state=template returns 400 regardless of score."""
         cluster = PromptCluster(
             id="c4-low-score", label="low-score", state="active", domain="backend",
             task_type="coding", centroid_embedding=b'\x00' * 384,
@@ -186,12 +186,12 @@ class TestClusterUpdate:
         await db_session.commit()
 
         resp = await app_client.patch("/api/clusters/c4-low-score", json={"state": "template"})
-        assert resp.status_code == 422
-        assert "avg_score" in resp.json()["detail"]
+        assert resp.status_code == 400
+        assert "fork-template" in resp.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_template_promotion_blocked_no_members(self, app_client, db_session):
-        """PATCH /api/clusters/{id} rejects template promotion without members or usage."""
+        """PATCH /api/clusters/{id} with state=template returns 400 regardless of members."""
         cluster = PromptCluster(
             id="c5-no-members", label="empty", state="active", domain="backend",
             task_type="coding", centroid_embedding=b'\x00' * 384,
@@ -201,8 +201,8 @@ class TestClusterUpdate:
         await db_session.commit()
 
         resp = await app_client.patch("/api/clusters/c5-no-members", json={"state": "template"})
-        assert resp.status_code == 422
-        assert "members" in resp.json()["detail"]
+        assert resp.status_code == 400
+        assert "fork-template" in resp.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_update_cluster_not_found(self, app_client, db_session):
@@ -328,32 +328,27 @@ class TestClusterRecluster:
 
 class TestClusterTemplates:
     @pytest.mark.asyncio
-    async def test_get_templates_empty(self, app_client, db_session):
-        """GET /api/clusters/templates returns empty list when no templates."""
+    async def test_get_templates_returns_410(self, app_client, db_session):
+        """GET /api/clusters/templates returns 410 Gone — use GET /api/templates."""
         resp = await app_client.get("/api/clusters/templates")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["items"] == []
+        assert resp.status_code == 410
+        detail = resp.json()["detail"]
+        if isinstance(detail, dict):
+            detail = detail.get("detail", "")
+        assert "GET /api/templates" in detail
 
     @pytest.mark.asyncio
-    async def test_get_templates_filters_state(self, app_client, db_session):
-        """GET /api/clusters/templates only returns state=template clusters."""
+    async def test_get_templates_410_regardless_of_data(self, app_client, db_session):
+        """GET /api/clusters/templates always returns 410 regardless of DB state."""
         c1 = PromptCluster(
             id="t1", label="Template", state="template", domain="backend",
             task_type="coding", avg_score=8.5, centroid_embedding=b'\x00' * 384,
         )
-        c2 = PromptCluster(
-            id="a1", label="Active", state="active", domain="backend",
-            task_type="coding", avg_score=7.0, centroid_embedding=b'\x00' * 384,
-        )
-        db_session.add_all([c1, c2])
+        db_session.add(c1)
         await db_session.commit()
 
         resp = await app_client.get("/api/clusters/templates")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["items"]) == 1
-        assert data["items"][0]["id"] == "t1"
+        assert resp.status_code == 410
 
 
 class TestLegacyRedirects:

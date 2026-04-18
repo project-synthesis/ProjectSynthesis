@@ -97,3 +97,29 @@ async def test_use_rate_limit_returns_429_on_31st_call(
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
     r = await app_client.post(f"/api/templates/{seeded_template_id}/use")
     assert r.status_code == 429, f"Expected 429 on 31st call, got {r.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_get_clusters_templates_returns_410(app_client):
+    r = await app_client.get("/api/clusters/templates")
+    assert r.status_code == 410
+    body = r.json()
+    # FastAPI wraps string details under {"detail": "..."}; dict details
+    # come through as-is. Accept either shape.
+    detail = body["detail"]
+    if isinstance(detail, dict):
+        detail = detail.get("detail", "")
+    assert "GET /api/templates" in detail
+
+
+@pytest.mark.asyncio
+async def test_patch_cluster_state_template_returns_400(app_client, seeded_mature_cluster):
+    r = await app_client.patch(
+        f"/api/clusters/{seeded_mature_cluster}",
+        json={"state": "template"},
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    if isinstance(detail, dict):
+        detail = detail.get("detail", "")
+    assert "fork-template" in detail
