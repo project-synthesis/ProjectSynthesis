@@ -402,3 +402,51 @@ async def test_list_excludes_retired_by_default(db_session):
 async def test_get_returns_none_for_missing(db_session):
     svc = TemplateService()
     assert (await svc.get("does_not_exist", db_session)) is None
+
+
+@pytest.mark.asyncio
+async def test_auto_retire_retires_all_live_templates_for_cluster(db_session):
+    cid, _ = await _seed_cluster_with_opt(db_session)
+    # Create a second optimization to get a second live template
+    opt2 = Optimization(
+        id=uuid.uuid4().hex, cluster_id=cid,
+        raw_prompt="r2", optimized_prompt="o2",
+        strategy_used="auto", overall_score=8.0,
+    )
+    db_session.add(opt2)
+    await db_session.flush()
+    svc = TemplateService()
+    # Fork current top (opt2, higher score) then delete opt2, then fork again → opt1
+    await svc.fork_from_cluster(cid, db_session)
+    await db_session.delete(opt2)
+    await db_session.flush()
+    await svc.fork_from_cluster(cid, db_session)
+
+    count = await svc.auto_retire_for_degraded_source(cid, db_session, reason="source_degraded")
+    assert count == 2
+    cluster = (await db_session.execute(
+        select(PromptCluster).where(PromptCluster.id == cid)
+    )).scalar_one()
+    assert cluster.template_count == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_retire_idempotent_second_call_returns_zero(db_session):
+    cid, _ = await _seed_cluster_with_opt(db_session)
+    svc = TemplateService()
+    await svc.fork_from_cluster(cid, db_session)
+    await svc.auto_retire_for_degraded_source(cid, db_session, reason="source_dissolved")
+    second = await svc.auto_retire_for_degraded_source(cid, db_session, reason="source_dissolved")
+    assert second == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_retire_sets_retired_reason(db_session):
+    cid, _ = await _seed_cluster_with_opt(db_session)
+    svc = TemplateService()
+    await svc.fork_from_cluster(cid, db_session)
+    await svc.auto_retire_for_degraded_source(cid, db_session, reason="source_dissolved")
+    result = (await db_session.execute(
+        select(PromptTemplate).where(PromptTemplate.source_cluster_id == cid)
+    )).scalars().all()
+    assert all(t.retired_reason == "source_dissolved" for t in result)

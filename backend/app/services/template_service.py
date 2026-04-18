@@ -285,6 +285,57 @@ class TemplateService:
         logger.info("retire: template %s retired (reason=%s)", template_id, reason)
         return True
 
+    async def auto_retire_for_degraded_source(
+        self,
+        cluster_id: str,
+        db: AsyncSession,
+        *,
+        reason: str,
+    ) -> int:
+        """Retire every live template whose source_cluster_id matches.
+
+        Returns the count retired.  Sets template_count to 0 on the source
+        cluster as a single UPDATE — idempotent under re-invocation (a second
+        call finds no live templates and returns 0).
+
+        Callers should use the ``RETIRE_REASON_*`` module constants for
+        ``reason`` to ensure observability consistency.
+        """
+        # Fetch IDs only — we need the count for the return value and the
+        # WHERE clause for the bulk UPDATE. No ORM dirty-tracking needed since
+        # PromptTemplate has no SQLAlchemy event listeners.
+        live_ids: list[str] = (
+            await db.execute(
+                select(PromptTemplate.id).where(
+                    PromptTemplate.source_cluster_id == cluster_id,
+                    PromptTemplate.retired_at.is_(None),
+                )
+            )
+        ).scalars().all()
+        if not live_ids:
+            return 0
+
+        now = _utcnow()
+        await db.execute(
+            update(PromptTemplate)
+            .where(PromptTemplate.id.in_(live_ids))
+            .values(retired_at=now, retired_reason=reason)
+        )
+        await db.execute(
+            update(PromptCluster)
+            .where(PromptCluster.id == cluster_id)
+            .values(template_count=0)
+        )
+        await db.flush()
+        count = len(live_ids)
+        logger.info(
+            "auto_retire_for_degraded_source: cluster=%s retired=%d reason=%s",
+            cluster_id,
+            count,
+            reason,
+        )
+        return count
+
     async def increment_usage(
         self,
         template_id: str,
