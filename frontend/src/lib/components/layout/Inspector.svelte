@@ -2,6 +2,7 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { templatesStore } from '$lib/stores/templates.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { taxonomyColor, scoreColor, qHealthColor, stateColor, DIMENSION_COLORS } from '$lib/utils/colors';
   import { TAXONOMY_TOOLTIPS, CLUSTER_TOOLTIPS, STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
@@ -94,11 +95,18 @@
     }).catch(() => {});
   });
 
+  let _templatesLoaded = $state(false);
+  $effect(() => {
+    if (_templatesLoaded) return;
+    _templatesLoaded = true;
+    templatesStore.load(null);
+  });
+
   let showDimensions = $state(false);
 
   let promoteSaving = $state(false);
 
-  async function promoteCluster(newState: string): Promise<void> {
+  async function promoteCluster(newState: 'active'): Promise<void> {
     const id = clustersStore.selectedClusterId;
     if (!id || promoteSaving) return;
     promoteSaving = true;
@@ -296,23 +304,6 @@
           </div>
 
           <!-- State transition actions -->
-          {#if family.state === 'active' || family.state === 'mature'}
-            {@const canPromote = (family.avg_score ?? 0) >= 6.0 && (family.member_count >= 3 || family.usage_count >= 1)}
-            <button
-              class="action-btn action-btn--primary"
-              onclick={() => promoteCluster('template')}
-              disabled={promoteSaving || !canPromote}
-              use:tooltip={canPromote ? INSPECTOR_TOOLTIPS.promote : INSPECTOR_TOOLTIPS.promote_blocked}
-            >Promote to template</button>
-          {/if}
-          {#if family.state === 'template'}
-            <button
-              class="action-btn"
-              onclick={() => promoteCluster('active')}
-              disabled={promoteSaving}
-              use:tooltip={INSPECTOR_TOOLTIPS.demote}
-            >Demote to active</button>
-          {/if}
           {#if family.state === 'archived' && family.member_count > 0}
             <button
               class="action-btn"
@@ -320,19 +311,6 @@
               disabled={promoteSaving}
               use:tooltip={INSPECTOR_TOOLTIPS.unarchive}
             >Unarchive</button>
-          {/if}
-
-          <!-- Template usage stats -->
-          {#if family.state === 'template' && family.usage_count > 0}
-            <div class="family-section">
-              <div class="section-heading" style="margin-bottom: 4px;">Template Stats</div>
-              <div class="template-stats-row">
-                <span class="stat-item">Applied to <strong>{family.usage_count}</strong> optimizations</span>
-                {#if family.meta_patterns.length > 0}
-                  <span class="stat-item"><strong>{family.meta_patterns.length}</strong> proven patterns</span>
-                {/if}
-              </div>
-            </div>
           {/if}
 
           <!-- Meta-patterns (context-aware by node state) -->
@@ -343,8 +321,6 @@
                   Top Patterns ({family.member_count} {family.member_count === 1 ? 'cluster' : 'clusters'})
                 {:else if family.state === 'archived'}
                   Meta-patterns (archived)
-                {:else if family.state === 'template'}
-                  Proven Patterns
                 {:else}
                   Meta-patterns
                 {/if}
@@ -353,7 +329,7 @@
                 {#each dedupe(family.meta_patterns) as mp (mp.id)}
                   <div class="pattern-item">
                     <span class="pattern-text">{mp.pattern_text}</span>
-                    <span class="source-badge" use:tooltip={CLUSTER_TOOLTIPS.source_count}>{mp.source_count}{#if family.state === 'template' && family.member_count > 0} ({Math.round(mp.source_count / family.member_count * 100)}%){/if}</span>
+                    <span class="source-badge" use:tooltip={CLUSTER_TOOLTIPS.source_count}>{mp.source_count}</span>
                   </div>
                 {/each}
               </div>
@@ -373,6 +349,31 @@
           {:else if family.state === 'archived'}
             <div class="family-section">
               <p class="empty-note">No meta-patterns were extracted</p>
+            </div>
+          {/if}
+
+          <!-- Templates forked from this cluster — shows reparent annotation when
+               the cluster's current domain drifted away from the template's frozen
+               domain_label (templates preserve their origin domain even across reparents). -->
+          {@const clusterTemplates = (templatesStore.templates ?? []).filter((t) => t.source_cluster_id === family.id && !t.retired_at)}
+          {#if clusterTemplates.length > 0}
+            <div class="family-section">
+              <div class="section-heading" style="margin-bottom: 4px;">
+                Templates ({clusterTemplates.length})
+              </div>
+              <div class="template-list">
+                {#each clusterTemplates as tpl (tpl.id)}
+                  <div class="template-row-compact">
+                    <span class="template-label-compact">{tpl.label}</span>
+                    <span class="template-origin-compact">
+                      {tpl.domain_label}
+                      {#if tpl.domain_label !== family.domain}
+                        <em class="template-reparented">(reparented)</em>
+                      {/if}
+                    </span>
+                  </div>
+                {/each}
+              </div>
             </div>
           {/if}
 
@@ -413,8 +414,6 @@
             <span use:tooltip={TAXONOMY_TOOLTIPS.active}>{clustersStore.clusterCounts.active} active</span>
             <span class="dot-sep">·</span>
             <span use:tooltip={TAXONOMY_TOOLTIPS.candidate}>{clustersStore.clusterCounts.candidate} candidate</span>
-            <span class="dot-sep">·</span>
-            <span use:tooltip={TAXONOMY_TOOLTIPS.template}>{clustersStore.clusterCounts.template} template</span>
           </div>
         </div>
       {:else}
@@ -1154,19 +1153,6 @@
   }
 
   /* Meta-patterns list */
-  .template-stats-row {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    font-size: 10px;
-    color: var(--color-text-secondary);
-  }
-
-  .stat-item strong {
-    color: var(--color-neon-cyan);
-    font-weight: 600;
-  }
-
   .pattern-list {
     display: flex;
     flex-direction: column;
@@ -1288,16 +1274,6 @@
     color: var(--color-text-primary);
   }
 
-  .action-btn--primary {
-    color: var(--tier-accent, var(--color-neon-cyan));
-    border-color: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 30%, transparent);
-  }
-
-  .action-btn--primary:hover {
-    border-color: var(--tier-accent, var(--color-neon-cyan));
-    background: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 8%, transparent);
-  }
-
   /* Sub-domain breadcrumb */
   .subdomain-breadcrumb {
     display: flex;
@@ -1328,5 +1304,38 @@
 
   .breadcrumb-current {
     color: var(--color-text-secondary);
+  }
+
+  .template-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .template-row-compact {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 3px 4px;
+    font-size: 10px;
+    border-left: 1px solid var(--color-border-subtle);
+  }
+  .template-label-compact {
+    flex: 1;
+    min-width: 0;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .template-origin-compact {
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    flex-shrink: 0;
+  }
+  .template-reparented {
+    font-style: italic;
+    color: var(--color-neon-amber, var(--color-text-muted));
+    margin-left: 4px;
   }
 </style>

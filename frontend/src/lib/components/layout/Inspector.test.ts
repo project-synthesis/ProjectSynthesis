@@ -19,6 +19,7 @@ import { forgeStore } from '$lib/stores/forge.svelte';
 import { clustersStore } from '$lib/stores/clusters.svelte';
 import { domainStore } from '$lib/stores/domains.svelte';
 import { editorStore } from '$lib/stores/editor.svelte';
+import { templatesStore } from '$lib/stores/templates.svelte';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,7 @@ describe('Inspector', () => {
       { id: 'd7', label: 'general', color_hex: '#7a7a9e', member_count: 0, avg_score: null, source: 'seed' },
     ];
     editorStore._reset();
+    templatesStore.templates = [];
     vi.clearAllMocks();
   });
 
@@ -627,9 +629,9 @@ describe('Inspector', () => {
     });
   });
 
-  // ── 16. Promote to template button ──────────────────────────────────────────
+  // ── 16. Promote to template button (removed) ────────────────────────────────
 
-  it('renders "Promote to template" button when state is active', async () => {
+  it('no longer renders Promote to template button on active clusters', async () => {
     clustersStore.selectedClusterId = 'fam-1';
     clustersStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
     clustersStore.clusterDetailLoading = false;
@@ -638,21 +640,9 @@ describe('Inspector', () => {
     render(Inspector);
 
     await waitFor(() => {
-      expect(screen.getByText('Promote to template')).toBeInTheDocument();
+      expect(screen.getByText('API patterns')).toBeInTheDocument();
     });
-  });
-
-  it('renders "Promote to template" button when state is mature', async () => {
-    clustersStore.selectedClusterId = 'fam-1';
-    clustersStore.clusterDetail = makeFamilyDetail({ state: 'mature' }) as any;
-    clustersStore.clusterDetailLoading = false;
-    mockFetch([]);
-
-    render(Inspector);
-
-    await waitFor(() => {
-      expect(screen.getByText('Promote to template')).toBeInTheDocument();
-    });
+    expect(screen.queryByText('Promote to template')).not.toBeInTheDocument();
   });
 
   // ── 17. Unarchive button ─────────────────────────────────────────────────────
@@ -672,21 +662,6 @@ describe('Inspector', () => {
 
   // ── 18. Buttons NOT shown for other states ───────────────────────────────────
 
-  it('does not render action buttons when state is template', async () => {
-    clustersStore.selectedClusterId = 'fam-1';
-    clustersStore.clusterDetail = makeFamilyDetail({ state: 'template' }) as any;
-    clustersStore.clusterDetailLoading = false;
-    mockFetch([]);
-
-    render(Inspector);
-
-    await waitFor(() => {
-      expect(screen.getByText('API patterns')).toBeInTheDocument();
-    });
-    expect(screen.queryByText('Promote to template')).not.toBeInTheDocument();
-    expect(screen.queryByText('Unarchive')).not.toBeInTheDocument();
-  });
-
   it('does not render promote/unarchive when state is candidate', async () => {
     clustersStore.selectedClusterId = 'fam-1';
     clustersStore.clusterDetail = makeFamilyDetail({ state: 'candidate' }) as any;
@@ -702,7 +677,7 @@ describe('Inspector', () => {
     expect(screen.queryByText('Unarchive')).not.toBeInTheDocument();
   });
 
-  it('renders promote button when state is active', async () => {
+  it('no longer renders Promote to template button on active clusters (section 18 variant)', async () => {
     clustersStore.selectedClusterId = 'fam-1';
     clustersStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
     clustersStore.clusterDetailLoading = false;
@@ -711,8 +686,9 @@ describe('Inspector', () => {
     render(Inspector);
 
     await waitFor(() => {
-      expect(screen.getByText('Promote to template')).toBeInTheDocument();
+      expect(screen.getByText('API patterns')).toBeInTheDocument();
     });
+    expect(screen.queryByText('Promote to template')).not.toBeInTheDocument();
     expect(screen.queryByText('Unarchive')).not.toBeInTheDocument();
   });
 
@@ -748,53 +724,6 @@ describe('Inspector', () => {
   });
 
   // ── 20. Promote / Unarchive click calls updateCluster ───────────────────────
-
-  it('clicking "Promote to template" calls updateCluster with state: template', async () => {
-    const user = userEvent.setup();
-
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/api/clusters/fam-1') && init?.method === 'PATCH') {
-        return new Response(JSON.stringify({ id: 'fam-1' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      // Handle loadTree API calls triggered by invalidateClusters
-      if (url.includes('/clusters/tree')) return new Response(JSON.stringify({ nodes: [{ id: 'fam-1', label: 'test', state: 'template', domain: 'general', member_count: 1, usage_count: 1 }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url.includes('/clusters/stats')) return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url.includes('/clusters/similarity-edges')) return new Response(JSON.stringify({ edges: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url.includes('/clusters/injection-edges')) return new Response(JSON.stringify({ edges: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      return new Response(JSON.stringify(makeFamilyDetail({ state: 'template' })), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }));
-
-    clustersStore.selectedClusterId = 'fam-1';
-    clustersStore.clusterDetail = makeFamilyDetail({ state: 'active' }) as any;
-    clustersStore.clusterDetailLoading = false;
-
-    render(Inspector);
-
-    await waitFor(() => {
-      expect(screen.getByText('Promote to template')).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByText('Promote to template'));
-
-    await waitFor(() => {
-      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-      const patchCall = calls.find((c: unknown[]) => {
-        const [, init] = c as [RequestInfo | URL, RequestInit?];
-        return init?.method === 'PATCH';
-      });
-      expect(patchCall).toBeDefined();
-      const [, patchInit] = patchCall as [RequestInfo | URL, RequestInit];
-      const body = JSON.parse(patchInit.body as string);
-      expect(body.state).toBe('template');
-    });
-  });
 
   it('clicking "Unarchive" calls updateCluster with state: active', async () => {
     const user = userEvent.setup();
@@ -840,6 +769,108 @@ describe('Inspector', () => {
       const [, patchInit] = patchCall as [RequestInfo | URL, RequestInit];
       const body = JSON.parse(patchInit.body as string);
       expect(body.state).toBe('active');
+    });
+  });
+
+  // ── 21. Template surface (cluster-view Templates collapsible) ───────────────
+
+  describe('Templates collapsible in cluster detail view', () => {
+    beforeEach(() => {
+      templatesStore.templates = [];
+    });
+
+    it('does not render Templates section when no templates forked from this cluster', async () => {
+      clustersStore.selectedClusterId = 'fam-1';
+      clustersStore.clusterDetail = makeFamilyDetail({ id: 'fam-1', state: 'mature' }) as any;
+      clustersStore.clusterDetailLoading = false;
+      mockFetch([]);
+      render(Inspector);
+      await waitFor(() => expect(screen.getByText('API patterns')).toBeInTheDocument());
+      expect(screen.queryByText(/^Templates \(/)).not.toBeInTheDocument();
+    });
+
+    it('renders Templates section when templates reference this cluster', async () => {
+      templatesStore.templates = [
+        {
+          id: 't1', source_cluster_id: 'fam-1', source_optimization_id: 'o1',
+          project_id: null, label: 'Auth checklist', prompt: 'Stub prompt',
+          strategy: 'chain-of-thought', score: 8.2, pattern_ids: [],
+          domain_label: 'backend', promoted_at: '2026-04-15T00:00:00Z',
+          retired_at: null, retired_reason: null, usage_count: 3, last_used_at: null,
+        },
+      ];
+      clustersStore.selectedClusterId = 'fam-1';
+      clustersStore.clusterDetail = makeFamilyDetail({ id: 'fam-1', state: 'mature', domain: 'backend' }) as any;
+      clustersStore.clusterDetailLoading = false;
+      mockFetch([]);
+      render(Inspector);
+      await waitFor(() => expect(screen.getByText(/Templates \(1\)/)).toBeInTheDocument());
+      expect(screen.getByText('Auth checklist')).toBeInTheDocument();
+    });
+
+    it('reparented template shows annotation when source cluster now in different domain', async () => {
+      templatesStore.templates = [
+        {
+          id: 't1', source_cluster_id: 'fam-1', source_optimization_id: 'o1',
+          project_id: null, label: 'Migrated template', prompt: 'p',
+          strategy: null, score: 7.5, pattern_ids: [],
+          domain_label: 'backend', // frozen origin
+          promoted_at: '2026-04-15T00:00:00Z', retired_at: null, retired_reason: null,
+          usage_count: 0, last_used_at: null,
+        },
+      ];
+      clustersStore.selectedClusterId = 'fam-1';
+      clustersStore.clusterDetail = makeFamilyDetail({ id: 'fam-1', state: 'mature', domain: 'data' }) as any; // different from domain_label
+      clustersStore.clusterDetailLoading = false;
+      mockFetch([]);
+      render(Inspector);
+      await waitFor(() => expect(screen.getByText('Migrated template')).toBeInTheDocument());
+      expect(screen.getByText(/reparented/i)).toBeInTheDocument();
+    });
+
+    it('non-reparented template does not show annotation', async () => {
+      templatesStore.templates = [
+        {
+          id: 't1', source_cluster_id: 'fam-1', source_optimization_id: 'o1',
+          project_id: null, label: 'Stable template', prompt: 'p',
+          strategy: null, score: 7.5, pattern_ids: [],
+          domain_label: 'backend',
+          promoted_at: '2026-04-15T00:00:00Z', retired_at: null, retired_reason: null,
+          usage_count: 0, last_used_at: null,
+        },
+      ];
+      clustersStore.selectedClusterId = 'fam-1';
+      clustersStore.clusterDetail = makeFamilyDetail({ id: 'fam-1', state: 'mature', domain: 'backend' }) as any; // matches
+      clustersStore.clusterDetailLoading = false;
+      mockFetch([]);
+      render(Inspector);
+      await waitFor(() => expect(screen.getByText('Stable template')).toBeInTheDocument());
+      expect(screen.queryByText(/reparented/i)).not.toBeInTheDocument();
+    });
+
+    it('retired templates are hidden from the list', async () => {
+      templatesStore.templates = [
+        {
+          id: 't1', source_cluster_id: 'fam-1', source_optimization_id: 'o1',
+          project_id: null, label: 'Alive', prompt: 'p', strategy: null, score: 7,
+          pattern_ids: [], domain_label: 'backend', promoted_at: '2026-04-15T00:00:00Z',
+          retired_at: null, retired_reason: null, usage_count: 0, last_used_at: null,
+        },
+        {
+          id: 't2', source_cluster_id: 'fam-1', source_optimization_id: 'o2',
+          project_id: null, label: 'Retired', prompt: 'p', strategy: null, score: 7,
+          pattern_ids: [], domain_label: 'backend', promoted_at: '2026-04-15T00:00:00Z',
+          retired_at: '2026-04-16T00:00:00Z', retired_reason: 'manual', usage_count: 0, last_used_at: null,
+        },
+      ];
+      clustersStore.selectedClusterId = 'fam-1';
+      clustersStore.clusterDetail = makeFamilyDetail({ id: 'fam-1', state: 'mature', domain: 'backend' }) as any;
+      clustersStore.clusterDetailLoading = false;
+      mockFetch([]);
+      render(Inspector);
+      await waitFor(() => expect(screen.getByText(/Templates \(1\)/)).toBeInTheDocument());
+      expect(screen.getByText('Alive')).toBeInTheDocument();
+      expect(screen.queryByText('Retired')).not.toBeInTheDocument();
     });
   });
 });
