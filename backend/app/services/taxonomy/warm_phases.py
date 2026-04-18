@@ -40,10 +40,12 @@ from app.models import (
     PromptCluster,
     PromptTemplate,
 )
-from app.services.prompt_lifecycle import (
-    AUTO_RETIRE_SOURCE_FLOOR,
-    PromptLifecycleService,
-)
+from app.services.prompt_lifecycle import AUTO_RETIRE_SOURCE_FLOOR
+
+# NOTE: ``PromptLifecycleService`` is imported lazily inside
+# ``recompute_preferred_strategies`` below. A top-level import here re-enters
+# the circular chain ``warm_phases → prompt_lifecycle → template_service →
+# taxonomy._constants → warm_phases`` on cold-start from test_template_service.
 from app.services.taxonomy._constants import (
     CANDIDATE_COHERENCE_FLOOR,
     DISSOLVE_COHERENCE_CEILING,
@@ -77,11 +79,15 @@ from app.services.taxonomy.family_ops import (
     merge_meta_pattern,
     score_to_centroid_weight,
 )
-from app.services.template_service import TemplateService
 from app.utils.text_cleanup import parse_domain
 
 if TYPE_CHECKING:
     from app.services.taxonomy.engine import TaxonomyEngine
+    from app.services.template_service import TemplateService as _TemplateServiceType  # noqa: F401
+
+# NOTE: ``TemplateService`` is imported lazily inside ``auto_retire_templates``
+# below to avoid a circular import (``template_service`` imports from
+# ``app.services.taxonomy._constants`` which eagerly loads this module).
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +315,9 @@ async def auto_retire_templates(db: AsyncSession, result) -> None:
     1-cycle lag is acceptable: templates remain live for ~60 seconds after
     cluster archival, which is within the documented hysteresis window.
     """
+    # Lazy import — see module-level note on circular dependency.
+    from app.services.template_service import TemplateService
+
     svc = TemplateService()
 
     # 1. Degraded sources: mature, has live templates, avg_score below floor
@@ -404,6 +413,9 @@ async def recompute_preferred_strategies(db: AsyncSession) -> None:
     recomputation failure is logged at WARNING because stale strategy
     metadata is a data-staleness signal operators care about.
     """
+    # Lazy import — see module-level note on circular dependency.
+    from app.services.prompt_lifecycle import PromptLifecycleService
+
     lifecycle = PromptLifecycleService()
     q = await db.execute(
         select(PromptCluster.id).where(PromptCluster.template_count > 0)

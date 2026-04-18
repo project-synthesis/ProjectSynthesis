@@ -18,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization, OptimizationPattern, PromptCluster
 from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
-from app.services.template_service import TemplateService
+
+# NOTE: ``TemplateService`` is imported lazily inside ``check_promotion`` below
+# to avoid a circular import (``template_service`` imports from
+# ``app.services.taxonomy._constants``, which eagerly loads
+# ``taxonomy/__init__.py`` → ``warm_phases`` → back here).
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +124,10 @@ class PromptLifecycleService:
                 (cluster.usage_count or 0) >= FORK_TEMPLATE_USAGE_COUNT
                 and (cluster.avg_score or 0) >= FORK_TEMPLATE_AVG_SCORE
             ):
-                # Fork-on-promotion: cluster stays at state='mature', template row created
+                # Fork-on-promotion: cluster stays at state='mature', template row created.
+                # Lazy import — see module-level note on circular dependency.
+                from app.services.template_service import TemplateService
+
                 tpl = await TemplateService().fork_from_cluster(cluster.id, db, auto=True)
                 if tpl is not None:
                     logger.info(
