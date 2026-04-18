@@ -57,6 +57,7 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `update.svelte.ts` | Auto-update state: available version, changelog, dialog, restart progress, health polling. SSE-driven via `update_available`/`update_complete` events. `localStorage` persistence for detached HEAD warning dismissal |
 | `sse-health.svelte.ts` | SSE connection health: owns EventSource lifecycle, latency tracking (rolling 100-event window, p50/p95/p99), 3-state degradation detection (healthy/degraded/disconnected), exponential backoff reconnection (1s-16s cap, 10 attempts, ±20% jitter), 90s staleness detection. StatusBar indicator reads `connectionState` and `tooltipText` |
 | `readiness.svelte.ts` | Domain readiness cache with 30s stale window matching backend TTL. Invalidated on `taxonomy_changed`/`domain_created` SSE. Exposes `reports`, `byDomain(id)`, `refresh()`, `fresh()` (bypass server cache) |
+| `readiness-window.svelte.ts` | Persistent time-window selector (24h/7d/30d) for DomainReadinessSparkline. Stored under `synthesis:readiness_window`; invalid/missing values fall back to `'24h'` |
 | `nav_collapse.svelte.ts` | Persisted collapse state for sidebar sections. `isOpen(key)`, `toggle(key)`, `collapseAll(prefix?)`. Keys: `readiness`, `templates`, `domain:${name}`, `subdomain:${id}`. Persisted to `localStorage['synthesis:navigator_collapsed']` as JSON array; default-open policy |
 
 ## Component layout
