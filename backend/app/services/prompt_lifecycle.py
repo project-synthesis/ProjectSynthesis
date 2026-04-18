@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization, OptimizationPattern, PromptCluster
 from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
+from app.services.template_service import TemplateService
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +80,17 @@ class PromptLifecycleService:
 
         Promotion rules:
         - active -> mature: member_count >= 5, coherence >= 0.7, avg_score >= 7.0
-        - mature -> template: usage_count >= 3, avg_score >= 7.5
+        - mature (fork threshold met): usage_count >= 3, avg_score >= 7.5
+          → calls TemplateService.fork_from_cluster(auto=True); cluster stays
+          at state='mature', a new PromptTemplate row is created.
+          Returns "template_forked" on success, None if no optimizations to fork.
 
         Returns new state string if promoted, None otherwise.
         Sets promoted_at timestamp on promotion.
+
+        Callers may discard the return value — it is a diagnostic sentinel only.
+        The only meaningful distinction is whether a state transition occurred
+        (any non-None value) vs nothing changed (None).
         """
         result = await db.execute(
             select(PromptCluster).where(PromptCluster.id == cluster_id)
@@ -112,7 +120,15 @@ class PromptLifecycleService:
                 (cluster.usage_count or 0) >= FORK_TEMPLATE_USAGE_COUNT
                 and (cluster.avg_score or 0) >= FORK_TEMPLATE_AVG_SCORE
             ):
-                new_state = "template"
+                # Fork-on-promotion: cluster stays at state='mature', template row created
+                tpl = await TemplateService().fork_from_cluster(cluster.id, db, auto=True)
+                if tpl is not None:
+                    logger.info(
+                        "Cluster %s auto-forked template %s (members=%d, score=%.1f)",
+                        cluster.id, tpl.id, cluster.member_count or 0, cluster.avg_score or 0,
+                    )
+                    return "template_forked"
+                return None
 
         if new_state is not None:
             cluster.state = new_state
@@ -313,7 +329,7 @@ class PromptLifecycleService:
         # may still reference archived clusters from cold-path splits or
         # warm-path retirements that didn't reassign.
         active_cluster_ids = select(PromptCluster.id).where(
-            PromptCluster.state.in_(["active", "candidate", "mature", "template"])
+            PromptCluster.state.in_(["active", "candidate", "mature"])
         )
         result = await db.execute(
             select(Optimization).where(
@@ -352,7 +368,7 @@ class PromptLifecycleService:
                 domain = orphan.domain or "general"
                 domain_clusters = await db.execute(
                     select(PromptCluster).where(
-                        PromptCluster.state.in_(["active", "candidate", "mature", "template"]),
+                        PromptCluster.state.in_(["active", "candidate", "mature"]),
                         PromptCluster.domain == domain,
                     )
                 )

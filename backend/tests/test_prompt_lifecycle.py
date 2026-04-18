@@ -12,7 +12,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models import Base, Optimization, OptimizationPattern, PromptCluster
+from app.models import Base, Optimization, OptimizationPattern, PromptCluster, PromptTemplate
 from app.services.prompt_lifecycle import PromptLifecycleService
 
 EMBEDDING_DIM = 384
@@ -142,7 +142,8 @@ class TestCheckPromotion:
         assert result is None
 
     async def test_mature_to_template_meets_thresholds(self, db: AsyncSession, svc: PromptLifecycleService):
-        """Mature cluster meeting usage and score should promote to template."""
+        """Mature cluster meeting usage and score should fork a template (not transition state)."""
+        import uuid
         cluster = _make_cluster(
             state="mature",
             member_count=10,
@@ -152,13 +153,24 @@ class TestCheckPromotion:
         )
         db.add(cluster)
         await db.flush()
+        # Seed a top optimization so fork_from_cluster has something to work with
+        opt = Optimization(
+            id=uuid.uuid4().hex,
+            cluster_id=cluster.id,
+            raw_prompt="r",
+            optimized_prompt="o",
+            strategy_used="auto",
+            overall_score=8.0,
+        )
+        db.add(opt)
+        await db.flush()
 
         result = await svc.check_promotion(db, cluster.id)
 
-        assert result == "template"
+        assert result == "template_forked"
         await db.refresh(cluster)
-        assert cluster.state == "template"
-        assert cluster.promoted_at is not None
+        # Cluster stays mature — fork does NOT mutate cluster.state
+        assert cluster.state == "mature"
 
     async def test_mature_to_template_below_usage(self, db: AsyncSession, svc: PromptLifecycleService):
         """Mature cluster with low usage should not promote."""
@@ -726,3 +738,72 @@ class TestStrategyAffinity:
         await svc.update_strategy_affinity(db, cluster.id)
         await db.refresh(cluster)
         assert cluster.preferred_strategy == "meta-prompting"
+
+
+# =========================================================================
+# Task 10 RED-phase tests — fork instead of state transition
+# =========================================================================
+
+@pytest.mark.asyncio
+async def test_mature_cluster_meeting_thresholds_forks_instead_of_transitioning(db: AsyncSession, svc: PromptLifecycleService):
+    """Mature cluster meeting thresholds must FORK (create PromptTemplate row),
+    NOT mutate cluster.state to 'template'. Returns 'template_forked'."""
+    from sqlalchemy import select
+    import uuid
+
+    cluster = PromptCluster(
+        id="c_mature", label="tpl", state="mature",
+        member_count=5, coherence=0.8, avg_score=7.6, usage_count=3,
+    )
+    db.add(cluster)
+    opt = Optimization(
+        id=uuid.uuid4().hex, cluster_id="c_mature",
+        raw_prompt="r", optimized_prompt="o",
+        strategy_used="auto", overall_score=7.6,
+    )
+    db.add(opt)
+    await db.flush()
+
+    result = await svc.check_promotion(db, "c_mature")
+
+    # Cluster state must NOT change to 'template'
+    reloaded = (await db.execute(
+        select(PromptCluster).where(PromptCluster.id == "c_mature")
+    )).scalar_one()
+    assert reloaded.state == "mature"
+    assert reloaded.template_count == 1
+
+    # A PromptTemplate row must exist
+    tpl_rows = (await db.execute(
+        select(PromptTemplate).where(PromptTemplate.source_cluster_id == "c_mature")
+    )).scalars().all()
+    assert len(tpl_rows) == 1
+    assert result == "template_forked"
+
+
+@pytest.mark.asyncio
+async def test_re_fork_suppressed_until_new_top_optimization(db: AsyncSession, svc: PromptLifecycleService):
+    """Calling check_promotion twice on the same mature cluster must only produce
+    one PromptTemplate row (idempotent fork guard)."""
+    from sqlalchemy import select
+    import uuid
+
+    cluster = PromptCluster(
+        id="c_mature2", label="tpl", state="mature",
+        member_count=5, coherence=0.8, avg_score=7.6, usage_count=3,
+    )
+    db.add(cluster)
+    db.add(Optimization(
+        id=uuid.uuid4().hex, cluster_id="c_mature2",
+        raw_prompt="r", optimized_prompt="o",
+        strategy_used="auto", overall_score=7.6,
+    ))
+    await db.flush()
+
+    await svc.check_promotion(db, "c_mature2")
+    await svc.check_promotion(db, "c_mature2")  # second call: no new fork
+
+    reloaded = (await db.execute(
+        select(PromptCluster).where(PromptCluster.id == "c_mature2")
+    )).scalar_one()
+    assert reloaded.template_count == 1
