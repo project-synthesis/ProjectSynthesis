@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -745,12 +747,11 @@ class TestStrategyAffinity:
 # =========================================================================
 
 @pytest.mark.asyncio
-async def test_mature_cluster_meeting_thresholds_forks_instead_of_transitioning(db: AsyncSession, svc: PromptLifecycleService):
+async def test_mature_cluster_meeting_thresholds_forks_instead_of_transitioning(
+    db: AsyncSession, svc: PromptLifecycleService
+):
     """Mature cluster meeting thresholds must FORK (create PromptTemplate row),
     NOT mutate cluster.state to 'template'. Returns 'template_forked'."""
-    from sqlalchemy import select
-    import uuid
-
     cluster = PromptCluster(
         id="c_mature", label="tpl", state="mature",
         member_count=5, coherence=0.8, avg_score=7.6, usage_count=3,
@@ -782,12 +783,11 @@ async def test_mature_cluster_meeting_thresholds_forks_instead_of_transitioning(
 
 
 @pytest.mark.asyncio
-async def test_re_fork_suppressed_until_new_top_optimization(db: AsyncSession, svc: PromptLifecycleService):
+async def test_re_fork_suppressed_until_new_top_optimization(
+    db: AsyncSession, svc: PromptLifecycleService
+):
     """Calling check_promotion twice on the same mature cluster must only produce
     one PromptTemplate row (idempotent fork guard)."""
-    from sqlalchemy import select
-    import uuid
-
     cluster = PromptCluster(
         id="c_mature2", label="tpl", state="mature",
         member_count=5, coherence=0.8, avg_score=7.6, usage_count=3,

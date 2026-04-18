@@ -110,9 +110,9 @@ class TestRateLimitCoverage:
         assert "RateLimit" in source
 
     def test_cluster_templates_has_rate_limit(self):
-        """GET /api/clusters/templates must have RateLimit dependency."""
+        """GET /api/clusters/templates (legacy 410 Gone handler) must retain RateLimit dependency."""
         from app.routers import clusters
-        source = inspect.getsource(clusters.get_cluster_templates)
+        source = inspect.getsource(clusters.get_cluster_templates_gone)
         assert "RateLimit" in source
 
     def test_strategies_list_has_rate_limit(self):

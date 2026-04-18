@@ -17,12 +17,14 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization, OptimizationPattern, PromptCluster
-from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
 
-# NOTE: ``TemplateService`` is imported lazily inside ``check_promotion`` below
-# to avoid a circular import (``template_service`` imports from
-# ``app.services.taxonomy._constants``, which eagerly loads
-# ``taxonomy/__init__.py`` → ``warm_phases`` → back here).
+# NOTE: ``EXCLUDED_STRUCTURAL_STATES`` and ``TemplateService`` are imported
+# lazily inside the functions that need them.  A top-level
+# ``from app.services.taxonomy._constants import ...`` forces
+# ``taxonomy/__init__.py`` to initialize, which eagerly loads
+# ``warm_phases`` → back here and breaks with a partially-initialized
+# module on cold-start (the ``AUTO_RETIRE_SOURCE_FLOOR`` constant
+# defined below is needed by ``warm_phases``).
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +214,8 @@ class PromptLifecycleService:
         Returns dict with summary:
             {"archived": [cluster_ids], "flagged": [cluster_ids], "unflagged": [cluster_ids]}
         """
+        from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
+
         now = _utcnow()
         stale_cutoff = now - timedelta(days=STALE_DAYS)
 
@@ -434,6 +438,8 @@ class PromptLifecycleService:
 
         Returns count of decayed clusters.
         """
+        from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
+
         now = _utcnow()
         decay_cutoff = now - timedelta(days=DECAY_AFTER_DAYS)
 

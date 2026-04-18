@@ -1,8 +1,6 @@
 # backend/tests/services/test_domain_walk.py
 from types import SimpleNamespace
 
-import pytest
-
 from app.services.taxonomy.domain_walk import root_domain_label
 
 

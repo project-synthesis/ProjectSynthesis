@@ -246,7 +246,9 @@ async def get_injection_edges(
 
 
 @router.get("/api/clusters/templates")
-async def get_cluster_templates_gone():
+async def get_cluster_templates_gone(
+    _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
+):
     """Legacy endpoint — removed. Use GET /api/templates instead."""
     raise HTTPException(
         status_code=410,
