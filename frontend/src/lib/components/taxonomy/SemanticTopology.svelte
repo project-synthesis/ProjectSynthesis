@@ -91,6 +91,19 @@
   const READINESS_RING_SEGMENTS = 64;
   const READINESS_RING_OPACITY_FACTOR = 0.9;
 
+  /** LOD-tier → absolute ring opacity. At far camera distances the ring is a
+   *  ghost (0.4), at mid it is half-weight (0.7), at near it is fully lit (1.0).
+   *  Written each frame by the LOD animation callback registered in `onMount`,
+   *  which is the final per-frame authority on ring opacity (supersedes the
+   *  dim-sweep `$effect` that runs on rebuild / highlight change). Hoisted
+   *  to module scope so the tier map and `READINESS_RING_OPACITY_FACTOR`
+   *  sit side-by-side for future readers. */
+  const READINESS_LOD_OPACITY: Record<LODTier, number> = {
+    far: 0.4,
+    mid: 0.7,
+    near: 1.0,
+  };
+
   /** Multiplicative opacity applied to nodes that do NOT match the currently
    *  highlighted domain (see `clustersStore.highlightedDomain`). Consumed by
    *  two sweeps in the same `$effect`: the per-domain-group dodecahedron
@@ -1258,7 +1271,11 @@
       const dimmed =
         highlightDomain != null && node.domain !== highlightDomain;
       const ringDimFactor = dimmed ? DOMAIN_DIM_FACTOR : 1.0;
-      // Also serves as the opacity refresh path for newly-built / reused rings.
+      // Rebuild-initial + highlight-change opacity value. Overridden each
+      // frame by the LOD animation callback (registered in `onMount`) once
+      // ticks resume — this write is what paints the first frame after
+      // rebuild and what encodes the dim factor for test assertions that
+      // don't advance the animation clock.
       ring.material.opacity =
         node.opacity * READINESS_RING_OPACITY_FACTOR * ringDimFactor;
     }
@@ -1373,13 +1390,15 @@
     });
 
     // Task 9: LOD attenuation. The LOD callback is the FINAL opacity writer
-    // per frame for readiness rings. The dim-sweep `$effect` still runs on
-    // rebuild and sets an initial opacity, but this callback overrides it
-    // each tick based on `renderer.lodTier`. Single opacity concern per
-    // callback — the existing billboard callback handles `lookAt`.
+    // per frame for readiness rings — it supersedes the dim-sweep `$effect`
+    // on every tick based on `renderer.lodTier`. Kept separate from the
+    // rebuild-scoped billboard callback because the two have different
+    // lifecycles: billboard registers per rebuild and unregisters when the
+    // ring set goes empty (stale-closure guard), while LOD runs for the
+    // component lifetime and no-ops on an empty map. Iterating an empty
+    // `_readinessRings` is O(0) — safe when no rings exist.
     const _removeRingLodUpdate = renderer!.addAnimationCallback(() => {
-      const tier = renderer!.lodTier;
-      const opacity = tier === 'far' ? 0.4 : tier === 'mid' ? 0.7 : 1.0;
+      const opacity = READINESS_LOD_OPACITY[renderer!.lodTier];
       for (const entry of _readinessRings.values()) {
         entry.material.opacity = opacity;
       }
