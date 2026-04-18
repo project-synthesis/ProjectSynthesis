@@ -47,6 +47,19 @@ class _DefaultsUpdate(BaseModel):
     strategy: str | None = None
 
 
+class _DomainReadinessNotificationsUpdate(BaseModel):
+    """Validated domain-readiness notification toggles.
+
+    `enabled` is the master SSE→toast gate. `muted_domain_ids` is the
+    per-row bell list in `DomainReadinessPanel`. Both optional so the
+    frontend can PATCH either axis independently.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool | None = None
+    muted_domain_ids: list[str] | None = None
+
+
 class PreferencesUpdate(BaseModel):
     """Strict schema for PATCH /api/preferences. Unknown keys are rejected."""
     model_config = ConfigDict(extra="forbid")
@@ -54,6 +67,7 @@ class PreferencesUpdate(BaseModel):
     models: _ModelsUpdate | None = None
     pipeline: _PipelineUpdate | None = None
     defaults: _DefaultsUpdate | None = None
+    domain_readiness_notifications: _DomainReadinessNotificationsUpdate | None = None
 
 
 @router.get("/preferences")
