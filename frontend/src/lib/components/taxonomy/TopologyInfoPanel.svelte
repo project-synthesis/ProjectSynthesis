@@ -10,13 +10,12 @@
   import SubDomainEmergenceList from './SubDomainEmergenceList.svelte';
   import DomainReadinessSparkline from './DomainReadinessSparkline.svelte';
   import { readinessStore } from '$lib/stores/readiness.svelte';
+  import { readinessWindowStore } from '$lib/stores/readiness-window.svelte';
   import type { ReadinessWindow } from '$lib/api/readiness';
 
   // Shared window state drives BOTH sparklines below — keeps consistency +
   // gap trendlines on the same x-axis so the operator can compare them.
-  // Persisted across domain selections within a session but defaults back to
-  // 24h on reload (matches backend bucketing default).
-  let readinessWindow = $state<ReadinessWindow>('24h');
+  // Persisted across reloads via `readinessWindowStore` (localStorage-backed).
   const READINESS_WINDOWS: readonly ReadinessWindow[] = ['24h', '7d', '30d'];
 
   interface Props {
@@ -306,10 +305,10 @@
         <button
           type="button"
           class="ip-rw-btn"
-          class:ip-rw-active={readinessWindow === w}
+          class:ip-rw-active={readinessWindowStore.window === w}
           role="radio"
-          aria-checked={readinessWindow === w}
-          onclick={() => (readinessWindow = w)}
+          aria-checked={readinessWindowStore.window === w}
+          onclick={() => readinessWindowStore.set(w)}
         >{w.toUpperCase()}</button>
       {/each}
     </div>
@@ -320,7 +319,7 @@
         domainLabel={domainReadiness.domain_label}
         metric="consistency"
         baseline={domainReadiness.stability.dissolution_floor}
-        window={readinessWindow}
+        window={readinessWindowStore.window}
       />
       <div class="ip-readiness-sep"></div>
       <SubDomainEmergenceList report={domainReadiness.emergence} />
@@ -329,7 +328,7 @@
         domainLabel={domainReadiness.domain_label}
         metric="gap"
         baseline={0}
-        window={readinessWindow}
+        window={readinessWindowStore.window}
       />
     </div>
   {/if}

@@ -164,8 +164,14 @@
   );
 
   function onToggleGlobalMute() {
+    // Read current truth, flip, write. Avoid deriving the new value from
+    // `globalMuted` (which is itself a negation of `enabled`) — the extra
+    // hop makes intent harder to audit and hid a redundant `? true : false`
+    // ternary in the original. See PR #28 review M3.
+    const currentlyEnabled =
+      preferencesStore.prefs.domain_readiness_notifications.enabled;
     void preferencesStore.update({
-      domain_readiness_notifications: { enabled: globalMuted ? true : false },
+      domain_readiness_notifications: { enabled: !currentlyEnabled },
     });
   }
 </script>
