@@ -27,6 +27,7 @@ from app.services.taxonomy.warm_phases import (
     phase_reconcile,
     phase_retire,
     phase_split_emerge,
+    recompute_preferred_strategies,
     reconcile_template_counts,
 )
 from app.services.template_service import TemplateService
@@ -897,3 +898,39 @@ async def test_template_count_reconciled_in_phase_0(db):
         select(PromptCluster).where(PromptCluster.id == "c_skew")
     )).scalar_one()
     assert cluster.template_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 12 — recompute_preferred_strategies filters by template_count > 0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recompute_preferred_strategies_filters_by_template_count(db, monkeypatch):
+    """Spec Q4 — filter flips from state=='template' to template_count>0."""
+    called_with: list[str] = []
+
+    from app.services.prompt_lifecycle import PromptLifecycleService
+
+    async def _spy(self, db, cluster_id):
+        called_with.append(cluster_id)
+
+    monkeypatch.setattr(
+        PromptLifecycleService, "update_strategy_affinity", _spy, raising=True,
+    )
+
+    # Should be processed: has live template (template_count > 0)
+    c_has = PromptCluster(
+        id="c_has", label="has", state="mature", template_count=1,
+    )
+    # Should be skipped: no live templates
+    c_empty = PromptCluster(
+        id="c_empty", label="empty", state="mature", template_count=0,
+    )
+    db.add_all([c_has, c_empty])
+    await db.flush()
+
+    await recompute_preferred_strategies(db)
+
+    assert "c_has" in called_with
+    assert "c_empty" not in called_with
