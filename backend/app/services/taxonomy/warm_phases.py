@@ -40,7 +40,10 @@ from app.models import (
     PromptCluster,
     PromptTemplate,
 )
-from app.services.prompt_lifecycle import AUTO_RETIRE_SOURCE_FLOOR
+from app.services.prompt_lifecycle import (
+    AUTO_RETIRE_SOURCE_FLOOR,
+    PromptLifecycleService,
+)
 from app.services.taxonomy._constants import (
     CANDIDATE_COHERENCE_FLOOR,
     DISSOLVE_COHERENCE_CEILING,
@@ -379,6 +382,47 @@ async def reconcile_template_counts(db: AsyncSession) -> None:
 
     if rows:
         await db.flush()
+
+
+async def recompute_preferred_strategies(db: AsyncSession) -> None:
+    """Recompute ``preferred_strategy`` for clusters with live templates.
+
+    Spec §Q4. Clusters with live templates need fresh strategy metadata
+    because hot-path strategy-affinity updates stop firing once a cluster
+    graduates: new optimizations flow to the forked template, not back to
+    the source cluster, so the cluster's ``preferred_strategy`` is frozen
+    at graduation time unless we refresh it here. After merges, splits, or
+    retires that frozen value can be stale for days, silently degrading
+    navigator UI rows and any strategy intelligence consumers.
+
+    Filter: ``PromptCluster.template_count > 0`` selects by the signal that
+    actually matters — "has graduated template artifacts" — rather than the
+    legacy ``state == "template"`` marker which no longer exists as a
+    first-class cluster state under the template-architecture refactor.
+
+    Per-cluster failures are swallowed to keep the sweep resilient; a whole
+    recomputation failure is logged at WARNING because stale strategy
+    metadata is a data-staleness signal operators care about.
+    """
+    lifecycle = PromptLifecycleService()
+    q = await db.execute(
+        select(PromptCluster.id).where(PromptCluster.template_count > 0)
+    )
+    cluster_ids = [r[0] for r in q.all()]
+    failures = 0
+    for cid in cluster_ids:
+        try:
+            await lifecycle.update_strategy_affinity(db, cid)
+        except Exception:
+            failures += 1  # non-fatal per-cluster
+    if cluster_ids:
+        await db.flush()
+        logger.debug(
+            "Recomputed preferred_strategy for %d clusters with live templates "
+            "(per-cluster failures=%d)",
+            len(cluster_ids),
+            failures,
+        )
 
 
 @dataclass
@@ -3525,28 +3569,15 @@ async def phase_refresh(
     except Exception as eff_exc:
         logger.debug("Injection effectiveness computation failed (non-fatal): %s", eff_exc)
 
-    # --- Recompute preferred_strategy for template-state clusters ---
-    # Strategy affinity is only updated on hot path (per-optimization), so
-    # after merges/splits/retires it can be stale for days.  Recompute here
-    # for templates so navigator rows always show current best strategy.
+    # --- Recompute preferred_strategy for clusters with live templates (spec §Q4) ---
     try:
-        from app.services.prompt_lifecycle import PromptLifecycleService
-
-        _lifecycle = PromptLifecycleService()
-        tpl_q = await db.execute(
-            select(PromptCluster.id).where(PromptCluster.state == "template")
-        )
-        tpl_ids = [r[0] for r in tpl_q.all()]
-        for tid in tpl_ids:
-            try:
-                await _lifecycle.update_strategy_affinity(db, tid)
-            except Exception:
-                pass  # non-fatal per-cluster
-        if tpl_ids:
-            await db.flush()
-            logger.debug("Recomputed preferred_strategy for %d templates", len(tpl_ids))
+        await recompute_preferred_strategies(db)
     except Exception as strat_exc:
-        logger.debug("Template strategy recomputation failed (non-fatal): %s", strat_exc)
+        # Stale strategy metadata is a data-staleness signal operators care about;
+        # surface at WARNING rather than silently debug-swallowing.
+        logger.warning(
+            "recompute_preferred_strategies failed (non-fatal): %s", strat_exc,
+        )
 
     # --- Phase 4 qualifier embedding backfill ---
     # Optimizations that were created before the qualifier_embedding column
