@@ -1676,4 +1676,164 @@ describe('SemanticTopology — readiness ring overlay', () => {
     _tickFrame();
     expect(ring!.material.opacity).toBeCloseTo(1.0, 5);
   });
+
+  it('composes dim factor with LOD opacity each frame', async () => {
+    // Bug Cycle 6 (RED): the per-frame LOD callback (added in Cycle 5) writes
+    // `entry.material.opacity = READINESS_LOD_OPACITY[tier]` for every ring,
+    // overwriting the dim-sweep `$effect` (Bug Cycle C) that applied
+    // `DOMAIN_DIM_FACTOR` to non-highlighted domains. The dim-sweep only runs
+    // on rebuild / highlight-change, so after the very next frame tick the
+    // non-highlighted ring is back to full LOD opacity — the dim is lost.
+    //
+    // Correct contract (RED locks it; GREEN picks the cleanest implementation):
+    // the LOD callback must be the FINAL per-frame writer AND must compose
+    // with both `node.opacity`, `READINESS_RING_OPACITY_FACTOR`, and
+    // `DOMAIN_DIM_FACTOR`. i.e. per frame:
+    //   opacity = LOD_OPACITY[tier] * node.opacity * RING_OPACITY_FACTOR * dimFactor
+    // where `dimFactor = (highlighted && node.domain !== highlighted) ? 0.15 : 1.0`.
+    //
+    // This test differs from the existing dim-sweep-in-lockstep test in that
+    // it ticks a frame AFTER highlighting — proving that the LOD callback
+    // does not clobber the dim. It also differs from the existing LOD test
+    // in that it renders TWO domains and checks dim composition, not just
+    // bare tier attenuation.
+    const THREE = await import('three');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const RingGeometryClass = (THREE as any).RingGeometry;
+
+    _sceneOverride.value = {
+      nodes: [
+        {
+          id: 'd1',
+          position: [0, 0, 0] as [number, number, number],
+          color: '#b44aff',
+          size: 2,
+          opacity: 1,
+          persistence: 1,
+          state: 'domain',
+          label: 'backend',
+          visible: true,
+          coherence: 0.5,
+          avgScore: 7,
+          domain: 'backend',
+          memberCount: 10,
+          isSubDomain: false,
+          readinessTier: 'guarded' as const,
+        },
+        {
+          id: 'd2',
+          position: [5, 0, 0] as [number, number, number],
+          color: '#ff4895',
+          size: 2,
+          opacity: 1,
+          persistence: 1,
+          state: 'domain',
+          label: 'frontend',
+          visible: true,
+          coherence: 0.5,
+          avgScore: 8,
+          domain: 'frontend',
+          memberCount: 12,
+          isSubDomain: false,
+          readinessTier: 'healthy' as const,
+        },
+      ],
+      edges: [],
+    };
+
+    const { clustersStore } = await import('$lib/stores/clusters.svelte');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    clustersStore.taxonomyTree = [
+      {
+        id: 'd1',
+        label: 'backend',
+        state: 'domain',
+        domain: 'backend',
+        member_count: 10,
+        parent_id: null,
+      } as any,
+      {
+        id: 'd2',
+        label: 'frontend',
+        state: 'domain',
+        domain: 'frontend',
+        member_count: 12,
+        parent_id: null,
+      } as any,
+    ];
+
+    const { container } = render(SemanticTopology);
+    await new Promise((r) => setTimeout(r, 50));
+    clustersStore.taxonomyTree = [...clustersStore.taxonomyTree];
+
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('[data-readiness-ring]').length).toBe(2);
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lastScene = (globalThis as any).__semTopLastScene as
+      | { children: unknown[] }
+      | undefined;
+    expect(lastScene).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ringGroup = lastScene!.children.find((c: any) =>
+      c?.userData?.isReadinessRingGroup === true,
+    ) as { children: unknown[] } | undefined;
+    expect(ringGroup).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rings = ringGroup!.children.filter((c: any) =>
+      c instanceof (THREE as any).Mesh && c.geometry instanceof RingGeometryClass,
+    ) as Array<{ material: { opacity: number } }>;
+    expect(rings.length).toBe(2);
+    // Ring index follows `data.nodes` iteration order (group.add pushes).
+    const ringBackend = rings[0];
+    const ringFrontend = rings[1];
+
+    // Highlight 'backend' (d1). d2 ('frontend') is non-highlighted and MUST
+    // be dimmed by DOMAIN_DIM_FACTOR (= 0.15) on top of LOD + base factor.
+    clustersStore.highlightedDomain = 'backend';
+
+    // Wait for the dim-sweep $effect to apply the initial dim on rebuild /
+    // highlight change. This proves the effect ran before we tick a frame.
+    const RING_OPACITY_FACTOR = 0.9;
+    const DIM = 0.15;
+    await vi.waitFor(
+      () => {
+        // Immediately after the $effect runs (before any frame tick):
+        //   d1 (highlighted): 1 * 0.9 = 0.9
+        //   d2 (non-highlighted): 1 * 0.9 * 0.15 ≈ 0.135
+        expect(ringFrontend.material.opacity).toBeCloseTo(RING_OPACITY_FACTOR * DIM, 5);
+      },
+      { timeout: 500 },
+    );
+
+    // --- THE BUG: tick one frame. Under current HEAD, the LOD callback
+    // overwrites opacity to READINESS_LOD_OPACITY['near'] = 1.0 for BOTH
+    // rings — the dim is lost. Under the fix, the LOD callback composes
+    // with node.opacity, RING_OPACITY_FACTOR, and DOMAIN_DIM_FACTOR.
+    _lodTierOverride.value = 'near';
+    _tickFrame();
+
+    // Highlighted ring ('backend'): LOD_near (1.0) * node.opacity (1) *
+    // RING_OPACITY_FACTOR (0.9) * dimFactor (1.0) = 0.9.
+    expect(ringBackend.material.opacity).toBeCloseTo(1.0 * 1 * RING_OPACITY_FACTOR * 1.0, 5);
+    // Non-highlighted ring ('frontend'): must stay DIMMED after the frame.
+    // LOD_near (1.0) * node.opacity (1) * RING_OPACITY_FACTOR (0.9) * DIM (0.15)
+    // = 0.135. Under current HEAD opacity is 1.0 instead — the dim is gone.
+    expect(ringFrontend.material.opacity).toBeCloseTo(
+      1.0 * 1 * RING_OPACITY_FACTOR * DIM,
+      5,
+    );
+
+    // --- LOD tier still attenuates under dim composition. Flip to 'far'
+    // and tick: LOD_far = 0.4. Highlighted: 0.4 * 0.9 = 0.36. Dimmed:
+    // 0.4 * 0.9 * 0.15 = 0.054.
+    _lodTierOverride.value = 'far';
+    _tickFrame();
+    expect(ringBackend.material.opacity).toBeCloseTo(0.4 * RING_OPACITY_FACTOR, 5);
+    expect(ringFrontend.material.opacity).toBeCloseTo(
+      0.4 * RING_OPACITY_FACTOR * DIM,
+      5,
+    );
+  });
 });
