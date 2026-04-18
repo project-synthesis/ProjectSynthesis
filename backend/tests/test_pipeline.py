@@ -75,13 +75,13 @@ def orchestrator(tmp_path):
     (prompts / "optimize.md").write_text(
         "{{raw_prompt}}\n{{analysis_summary}}\n{{strategy_instructions}}\n"
         "<codebase-context>\n{{codebase_guidance}}\n{{codebase_context}}\n</codebase-context>\n"
-        "<adaptation>\n{{adaptation_state}}\n</adaptation>"
+        "<strategy-intelligence>\n{{strategy_intelligence}}\n</strategy-intelligence>"
     )
     (prompts / "scoring.md").write_text("Score these prompts.")
     (prompts / "manifest.json").write_text(
         '{"analyze.md": {"required": ["raw_prompt", "available_strategies"], "optional": []},'
         '"optimize.md": {"required": ["raw_prompt", "strategy_instructions", "analysis_summary"], '
-        '"optional": ["codebase_guidance", "codebase_context", "adaptation_state"]},'
+        '"optional": ["codebase_guidance", "codebase_context", "strategy_intelligence"]},'
         '"scoring.md": {"required": [], "optional": []}}'
     )
     (strategies / "chain-of-thought.md").write_text("Think step by step.")

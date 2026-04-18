@@ -33,7 +33,7 @@ def prompts_dir(tmp_path):
     )
     (d / "manifest.json").write_text(
         '{"analyze.md":{"required":["raw_prompt","available_strategies"],"optional":[]},'
-        '"refine.md":{"required":["current_prompt","refinement_request","original_prompt","strategy_instructions"],"optional":["codebase_guidance","codebase_context","adaptation_state"]},'
+        '"refine.md":{"required":["current_prompt","refinement_request","original_prompt","strategy_instructions"],"optional":["codebase_guidance","codebase_context","strategy_intelligence"]},'
         '"suggest.md":{"required":["optimized_prompt","scores","weaknesses","strategy_used"],"optional":[]},'
         '"scoring.md":{"required":[],"optional":[]}}'
     )

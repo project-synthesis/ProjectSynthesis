@@ -228,7 +228,7 @@ class TestPipelineAutoInjectionIntegration:
         (prompts / "manifest.json").write_text(
             '{"analyze.md": {"required": ["raw_prompt", "available_strategies"], "optional": []},'
             '"optimize.md": {"required": ["raw_prompt", "strategy_instructions", "analysis_summary"],'
-            '"optional": ["codebase_guidance", "codebase_context", "adaptation_state", "applied_patterns"]},'
+            '"optional": ["codebase_guidance", "codebase_context", "strategy_intelligence", "applied_patterns"]},'
             '"scoring.md": {"required": [], "optional": []}}'
         )
         (strategies / "auto.md").write_text("Auto-select.")
