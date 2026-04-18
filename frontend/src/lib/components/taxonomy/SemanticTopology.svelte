@@ -221,11 +221,16 @@
     lastSize: number;
     /** Owning node's primary domain, captured at build/update time. The
      *  per-frame LOD callback composes `DOMAIN_DIM_FACTOR` against this value
-     *  without having to traverse `sceneData.nodes` each tick. */
-    domain: string | null | undefined;
+     *  without having to traverse `sceneData.nodes` each tick.
+     *  Typed as `string` because `SceneNode.domain` is always defined
+     *  (TopologyData.ts sets it via `parsePrimaryDomain`). */
+    domain: string;
     /** Owning node's `opacity` (from sceneData), captured at build/update
      *  time. Composed into the per-frame opacity write so LOD attenuation
-     *  does not clobber per-node opacity. */
+     *  does not clobber per-node opacity.
+     *  Future per-frame node opacity animations (e.g. seed-pulse, stability
+     *  pulse) should route through this field — update it in the animation
+     *  callback and the LOD composition picks it up next tick. */
     nodeOpacity: number;
     tween: TweenHandle | null;
   }
@@ -1285,11 +1290,19 @@
       const dimmed =
         highlightDomain != null && node.domain !== highlightDomain;
       const ringDimFactor = dimmed ? DOMAIN_DIM_FACTOR : 1.0;
-      // Rebuild-initial + highlight-change opacity value. Overridden each
-      // frame by the LOD animation callback (registered in `onMount`) once
-      // ticks resume — this write is what paints the first frame after
-      // rebuild and what encodes the dim factor for test assertions that
-      // don't advance the animation clock.
+      // First-frame paint: set opacity so the ring looks correct immediately
+      // after rebuild/highlight-change, without waiting for the next animation
+      // tick (~<16ms gap). The LOD animation callback registered in `onMount`
+      // is the per-frame authority and uses the full composition formula:
+      //   opacity = LOD_OPACITY[tier] * node.opacity
+      //           * READINESS_RING_OPACITY_FACTOR * dimFactor
+      // This $effect omits the LOD factor (treated as 1.0) because the
+      // rebuild/highlight path doesn't know the current tier — the LOD tick
+      // corrects it on the very next frame. Keep `entry.domain` and
+      // `entry.nodeOpacity` fresh so the LOD callback sees the latest inputs
+      // when a highlight change lands between rebuild and the next tick.
+      ring.domain = node.domain;
+      ring.nodeOpacity = node.opacity;
       ring.material.opacity =
         node.opacity * READINESS_RING_OPACITY_FACTOR * ringDimFactor;
     }

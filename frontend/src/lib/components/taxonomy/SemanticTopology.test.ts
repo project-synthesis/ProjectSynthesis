@@ -1570,21 +1570,26 @@ describe('SemanticTopology — readiness ring overlay', () => {
   });
 
   it('attenuates ring opacity by renderer.lodTier each frame', async () => {
-    // Task 9: LOD attenuation. At far-camera distances the ring is a ghost
-    // (0.4), at mid distance it's half-weight (0.7), and at near distance
-    // it's fully lit (1.0). The contract is that a per-frame callback
-    // registered via `renderer.addAnimationCallback()` reads the public
-    // `renderer.lodTier` getter and writes `material.opacity` accordingly —
-    // making the LOD callback the FINAL opacity writer per frame (it runs
-    // after the dim-sweep `$effect` has already set opacity based on the
-    // domain highlight state).
-    //
-    // Under current HEAD: no LOD callback is registered. The dim-sweep
-    // `$effect` sets opacity to `node.opacity * READINESS_RING_OPACITY_FACTOR`
-    // = 1 * 0.9 = 0.9 at build time and leaves it there. Ticking an animation
-    // frame flips `lodTier` → 'far' in our mock but nothing consumes the tier,
-    // so opacity stays at 0.9 instead of dropping to 0.4. That's the RED
-    // failure this test locks in.
+    // Task 9: LOD attenuation. The per-frame callback registered via
+    // `renderer.addAnimationCallback()` reads the public `renderer.lodTier`
+    // getter and composes opacity from four multiplicands:
+    //   opacity = LOD_OPACITY[tier]
+    //           * READINESS_RING_OPACITY_FACTOR
+    //           * node.opacity
+    //           * dimFactor
+    // This test exercises the single-domain (no-highlight) case, where
+    // `dimFactor = 1.0` and `node.opacity = 1.0`, so the composed opacity
+    // collapses to `LOD_OPACITY[tier] * READINESS_RING_OPACITY_FACTOR`:
+    //   far  → 0.4 * 0.9 = 0.36
+    //   mid  → 0.7 * 0.9 = 0.63
+    //   near → 1.0 * 0.9 = 0.9
+    // The LOD callback is the FINAL opacity writer per frame — it runs
+    // after the dim-sweep `$effect` and supersedes it on every tick.
+    // Cycle 5 originally asserted the raw LOD tier values (0.4 / 0.7 / 1.0);
+    // Bug Cycle G's GREEN composed the remaining factors into the same
+    // callback (so dim stops being clobbered), which updated the expected
+    // values here. Expressed via constants (mirroring the dim×LOD test
+    // below) so future opacity-factor tweaks propagate.
     //
     // Note on scope: this test asserts ONLY the opacity contract. It does
     // NOT assert anything about `lookAt` call counts — the GREEN agent is
@@ -1592,6 +1597,8 @@ describe('SemanticTopology — readiness ring overlay', () => {
     // callback or keep them separate. The pre-existing billboard test
     // (`re-orients ring meshes per animation frame, not just at build`)
     // already covers the lookAt invariant.
+    const READINESS_LOD_OPACITY = { far: 0.4, mid: 0.7, near: 1.0 } as const;
+    const READINESS_RING_OPACITY_FACTOR = 0.9;
     const THREE = await import('three');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const RingGeometryClass = (THREE as any).RingGeometry;
@@ -1661,20 +1668,31 @@ describe('SemanticTopology — readiness ring overlay', () => {
     expect(ring).toBeDefined();
 
     // Flip to 'far' and tick. After the LOD callback fires, opacity must
-    // be 0.4 regardless of what the dim-sweep $effect wrote earlier.
+    // be LOD_far * RING_FACTOR = 0.4 * 0.9 = 0.36, regardless of what the
+    // dim-sweep $effect wrote earlier.
     _lodTierOverride.value = 'far';
     _tickFrame();
-    expect(ring!.material.opacity).toBeCloseTo(0.4, 5);
+    expect(ring!.material.opacity).toBeCloseTo(
+      READINESS_LOD_OPACITY.far * READINESS_RING_OPACITY_FACTOR,
+      5,
+    );
 
-    // Flip to 'mid' and tick. opacity → 0.7.
+    // Flip to 'mid' and tick. opacity → 0.7 * 0.9 = 0.63.
     _lodTierOverride.value = 'mid';
     _tickFrame();
-    expect(ring!.material.opacity).toBeCloseTo(0.7, 5);
+    expect(ring!.material.opacity).toBeCloseTo(
+      READINESS_LOD_OPACITY.mid * READINESS_RING_OPACITY_FACTOR,
+      5,
+    );
 
-    // Flip to 'near' and tick. opacity → 1.0 (fully lit).
+    // Flip to 'near' and tick. opacity → 1.0 * 0.9 = 0.9 (fully lit, scaled
+    // by the base ring factor).
     _lodTierOverride.value = 'near';
     _tickFrame();
-    expect(ring!.material.opacity).toBeCloseTo(1.0, 5);
+    expect(ring!.material.opacity).toBeCloseTo(
+      READINESS_LOD_OPACITY.near * READINESS_RING_OPACITY_FACTOR,
+      5,
+    );
   });
 
   it('composes dim factor with LOD opacity each frame', async () => {
