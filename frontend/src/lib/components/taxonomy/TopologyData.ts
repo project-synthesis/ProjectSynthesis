@@ -12,6 +12,21 @@ import type { ReadinessTier } from './readiness-tier';
 import { composeReadinessTier } from './readiness-tier';
 import { readinessStore } from '$lib/stores/readiness.svelte';
 
+/**
+ * Exhaustive set of valid `ReadinessTier` enum values. Used as a runtime
+ * guard in `buildSceneData()` to drop unknown tier strings produced by
+ * schema drift (e.g. a future backend adds a new stability tier the
+ * frontend enum doesn't know yet). `Set` gives O(1) membership checking;
+ * the cast is safe because the array is exhaustive over the literal
+ * union (compile error if a member is removed). Re-declared here instead
+ * of exported from `readiness-tier.ts` to keep that module a pure type +
+ * palette utility, matching how `parsePrimaryDomain` and
+ * `stateSizeMultiplier` keep their validators local.
+ */
+const _KNOWN_READINESS_TIERS: ReadonlySet<ReadinessTier> = new Set<ReadinessTier>([
+  'healthy', 'warming', 'guarded', 'critical', 'ready',
+]);
+
 export interface SceneNode {
   id: string;
   position: [number, number, number];
@@ -236,7 +251,14 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
     if (node.state === 'domain') {
       const report = readinessStore.byDomain(node.id);
       if (report) {
-        sceneNode.readinessTier = composeReadinessTier(report);
+        // Schema-drift guard: if composeReadinessTier passes through an
+        // unknown stability tier (backend adds a new enum value the
+        // frontend hasn't adopted), drop it — the ring renderer looks up
+        // color by key and would silently paint an invalid `undefined`.
+        const composed = composeReadinessTier(report);
+        if (_KNOWN_READINESS_TIERS.has(composed)) {
+          sceneNode.readinessTier = composed;
+        }
       }
     }
 

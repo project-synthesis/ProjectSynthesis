@@ -529,4 +529,45 @@ describe('buildSceneData — readiness tier decoration', () => {
     ({ nodes } = buildSceneData(tree));
     expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBe('ready');
   });
+
+  it('drops readinessTier when the composed tier is not a known enum value (schema drift guard)', () => {
+    // Defense against backend schema drift: if a future backend version
+    // returns an unknown stability tier (e.g. a newly-added "unstable"
+    // state), `composeReadinessTier()` passes it through unchanged. Without
+    // a runtime guard, the topology ring renderer calls
+    // `readinessTierColor(tier)` which returns `undefined` and Three.js
+    // fails silently. The build step must drop the tier (leave undefined)
+    // so the ring is omitted rather than drawn with a broken color.
+    const malformed = makeReadinessReport({
+      domain_id: 'd1',
+      stability: {
+        consistency: 0.3,
+        dissolution_floor: 0.15,
+        hysteresis_creation_threshold: 0.6,
+        age_hours: 72,
+        min_age_hours: 48,
+        member_count: 20,
+        member_ceiling: 5,
+        sub_domain_count: 0,
+        total_opts: 20,
+        guards: {
+          general_protected: false,
+          has_sub_domain_anchor: false,
+          age_eligible: true,
+          above_member_ceiling: true,
+          consistency_above_floor: true,
+        },
+        // Simulate schema drift: new tier the frontend enum doesn't know.
+        tier: 'unstable' as unknown as 'healthy',
+        dissolution_risk: 0.4,
+        would_dissolve: false,
+      },
+    });
+    readinessStore.reports = [malformed];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
+  });
 });

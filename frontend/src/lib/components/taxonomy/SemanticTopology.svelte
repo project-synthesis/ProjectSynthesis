@@ -240,7 +240,15 @@
 
   /** Single source of truth for readiness ring geometry. Used by both the
    *  initial-build path and the size-drift rebuild path in `rebuildScene`
-   *  so radius/thickness/segments never diverge between the two. */
+   *  so radius/thickness/segments never diverge between the two.
+   *
+   *  Asymmetry note: `updateExistingRing` takes a `camera` parameter for
+   *  billboard `lookAt`, but this function deliberately does NOT — it
+   *  returns pure geometry, which is camera-independent. The caller
+   *  performs `mesh.lookAt(camera.position)` once, either in the new-ring
+   *  branch of `rebuildScene` or inside `updateExistingRing` for reuse.
+   *  Keeping geometry construction camera-free means tests that mock
+   *  THREE without a real camera can still exercise this helper. */
   function buildRingGeometry(size: number): THREE.RingGeometry {
     const radius = size * READINESS_RING_RADIUS_FACTOR;
     return new THREE.RingGeometry(
@@ -248,6 +256,18 @@
       radius + READINESS_RING_THICKNESS,
       READINESS_RING_SEGMENTS,
     );
+  }
+
+  /** Refresh per-frame LOD callback inputs on a readiness ring entry.
+   *  Both the rebuild path (`updateExistingRing`) and the dim-sweep
+   *  `$effect` need to keep `entry.domain` and `entry.nodeOpacity` in
+   *  sync with the latest `SceneNode` so the LOD animation callback
+   *  composes the current opacity formula on the next tick. Extracted
+   *  to a single helper so the two sites can't drift apart — if a third
+   *  input ever joins (e.g. `entry.state`), it is added here once. */
+  function updateRingFrameInputs(entry: ReadinessRingEntry, node: SceneNode): void {
+    entry.domain = node.domain;
+    entry.nodeOpacity = node.opacity;
   }
 
   /** Reconcile an existing readiness ring with the latest scene node: tween
@@ -287,8 +307,7 @@
     if (camera?.position) existing.mesh.lookAt(camera.position);
     // Keep per-frame LOD callback inputs in sync with the latest sceneData
     // so dim + node-opacity composition doesn't lag behind rebuilds.
-    existing.domain = node.domain;
-    existing.nodeOpacity = node.opacity;
+    updateRingFrameInputs(existing, node);
   }
 
   /** Per-entry teardown for a readiness ring: cancel any in-flight tween
@@ -1301,8 +1320,7 @@
       // corrects it on the very next frame. Keep `entry.domain` and
       // `entry.nodeOpacity` fresh so the LOD callback sees the latest inputs
       // when a highlight change lands between rebuild and the next tick.
-      ring.domain = node.domain;
-      ring.nodeOpacity = node.opacity;
+      updateRingFrameInputs(ring, node);
       ring.material.opacity =
         node.opacity * READINESS_RING_OPACITY_FACTOR * ringDimFactor;
     }
@@ -1426,6 +1444,13 @@
     // `_readinessRings` is O(0) — safe when no rings exist.
     const _removeRingLodUpdate = renderer!.addAnimationCallback(() => {
       const lodFactor = READINESS_LOD_OPACITY[renderer!.lodTier];
+      // NOT a reactive read: this callback runs inside requestAnimationFrame
+      // via `renderer.addAnimationCallback`, OUTSIDE any Svelte `$effect`
+      // or `$derived` tracking scope. Reading `clustersStore.highlightedDomain`
+      // here is a plain getter — no subscription is installed and no
+      // effect re-runs when it changes. The per-frame tick is what keeps
+      // the visual in sync; the dim-sweep `$effect` above handles the
+      // same-frame first-paint case when a highlight toggles.
       const highlighted = clustersStore.highlightedDomain;
       for (const entry of _readinessRings.values()) {
         const dimFactor =
@@ -1467,6 +1492,13 @@
       }
       _readinessRings.clear();
       if (_readinessRingGroup) {
+        // `renderer?.` is the null-renderer guard: if `onMount` aborted
+        // after `_readinessRingGroup` was created but before the
+        // renderer was fully initialized (rare but possible in test
+        // environments), `renderer` may be null here and `.scene.remove`
+        // would throw. The group itself still gets cleared below so
+        // it's GC-eligible; leaking a THREE.Group detached from any
+        // scene is a no-op since all its children are already disposed.
         renderer?.scene.remove(_readinessRingGroup);
         _readinessRingGroup = null;
       }
