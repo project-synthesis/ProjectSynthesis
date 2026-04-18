@@ -95,6 +95,43 @@ function stateNodeColor(state: string, oklabColor: string | null): string {
   return taxonomyColor(oklabColor); // existing logic handles hex/domain/null
 }
 
+/**
+ * Walk up the `state="domain"` parent chain to the TOP-LEVEL domain node and
+ * return its label (for `taxonomyColor()` lookup). Returns `null` if the node
+ * is not a domain-chain node or the chain is malformed.
+ *
+ * Used to make sub-domain nodes (and their descendant clusters) inherit the
+ * parent domain's canonical brand color instead of their own backend-generated
+ * OKLab variant. Without this, `security > token-ops` would render in a dark
+ * red variant (`#d20033`) instead of the canonical security red (`#ff2255`),
+ * breaking parity with `ClusterNavigator`'s per-domain color dots.
+ *
+ * The walk is bounded by `domainNodesById` — it stops as soon as the parent
+ * is not a domain node, which is also the correct termination for clusters
+ * parented to a sub-domain (they already carry `node.domain="<top-level>"`,
+ * but if future backend changes allow sub-domain-scoped domain labels, this
+ * walk keeps the frontend robust).
+ */
+function rootDomainLabel(
+  node: { id: string; parent_id?: string | null; label?: string | null },
+  domainNodesById: Map<string, { id: string; parent_id?: string | null; label?: string | null }>,
+): string | null {
+  let current = node;
+  const seen = new Set<string>();
+  // Cap at 8 hops to short-circuit any pathological cycle (defensive —
+  // backend invariants forbid cycles, but a malformed tree shouldn't hang).
+  for (let i = 0; i < 8; i++) {
+    if (seen.has(current.id)) return null;
+    seen.add(current.id);
+    const parentId = current.parent_id ?? null;
+    if (!parentId) return current.label ?? null;
+    const parent = domainNodesById.get(parentId);
+    if (!parent) return current.label ?? null;
+    current = parent;
+  }
+  return current.label ?? null;
+}
+
 export interface SceneEdge {
   from: string;
   to: string;
@@ -224,10 +261,17 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
     const finalSize = Math.min(MAX_NODE_SIZE, size * stateSizeMultiplier(node.state, isSubDomain));
     const nodeOpacity = stateOpacity(node.state, effectiveFilter, hasFilterMatches);
 
+    // Sub-domain color inheritance: resolve to the TOP-LEVEL domain's label
+    // so brand colors match the navbar. Top-level domains, clusters, and
+    // non-domain-chain nodes use their own `node.domain` as before.
+    const colorKey = isSubDomain
+      ? (rootDomainLabel(node, domainNodesById) ?? node.domain ?? node.color_hex)
+      : (node.domain ?? node.color_hex);
+
     const sceneNode: SceneNode = {
       id: node.id,
       position: [x, y, z],
-      color: stateNodeColor(node.state, node.domain ?? node.color_hex),
+      color: stateNodeColor(node.state, colorKey),
       size: finalSize,
       opacity: nodeOpacity,
       persistence: node.persistence ?? 0.5,

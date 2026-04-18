@@ -154,6 +154,53 @@ describe('buildSceneData', () => {
     expect(result.nodes[0].color).toBe('#7a7a9e'); // FALLBACK_COLOR
   });
 
+  it('sub-domain node inherits parent domain canonical color, not its own OKLab variant', () => {
+    // Regression: a sub-domain like `security > token-ops` used to resolve to
+    // its own backend-generated OKLab variant (e.g. #d20033 dark red) instead
+    // of the parent's canonical brand color (#ff2255 bright red). Pattern
+    // graph color parity with ClusterNavigator requires parent inheritance.
+    domainStore.domains = [
+      { id: 'sec', label: 'security', color_hex: '#ff2255', member_count: 0, avg_score: null, source: 'seed' },
+      { id: 'sub', label: 'token-ops', color_hex: '#d20033', member_count: 0, avg_score: null, source: 'seed' },
+    ];
+    const tree = [
+      makeNode({ id: 'sec', state: 'domain', domain: 'security', label: 'security' }),
+      makeNode({ id: 'sub', state: 'domain', domain: 'token-ops', label: 'token-ops', parent_id: 'sec' }),
+    ];
+    const { nodes } = buildSceneData(tree);
+    const sub = nodes.find((n) => n.id === 'sub')!;
+    expect(sub.isSubDomain).toBe(true);
+    expect(sub.color).toBe('#ff2255');
+  });
+
+  it('top-level domain node keeps its own canonical color', () => {
+    // Guard that the parent-inheritance rule doesn't accidentally rewrite
+    // top-level domain colors (they have no domain parent to walk to).
+    domainStore.domains = [
+      { id: 'sec', label: 'security', color_hex: '#ff2255', member_count: 0, avg_score: null, source: 'seed' },
+    ];
+    const tree = [makeNode({ id: 'sec', state: 'domain', domain: 'security', label: 'security' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes[0].color).toBe('#ff2255');
+  });
+
+  it('cluster parented to a sub-domain inherits the TOP-LEVEL domain color', () => {
+    // A cluster under `security > token-ops` must render in security-red,
+    // not token-ops variant red. We walk all the way to the root domain.
+    domainStore.domains = [
+      { id: 'sec', label: 'security', color_hex: '#ff2255', member_count: 0, avg_score: null, source: 'seed' },
+      { id: 'sub', label: 'token-ops', color_hex: '#d20033', member_count: 0, avg_score: null, source: 'seed' },
+    ];
+    const tree = [
+      makeNode({ id: 'sec', state: 'domain', domain: 'security', label: 'security' }),
+      makeNode({ id: 'sub', state: 'domain', domain: 'token-ops', label: 'token-ops', parent_id: 'sec' }),
+      makeNode({ id: 'c1', state: 'active', domain: 'security', label: 'c1', parent_id: 'sub', color_hex: null }),
+    ];
+    const { nodes } = buildSceneData(tree);
+    const cluster = nodes.find((n) => n.id === 'c1')!;
+    expect(cluster.color).toBe('#ff2255');
+  });
+
   it('handles empty input array', () => {
     const result = buildSceneData([]);
     expect(result.nodes).toHaveLength(0);

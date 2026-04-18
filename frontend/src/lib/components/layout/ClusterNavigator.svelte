@@ -148,6 +148,7 @@
     id: string;
     label: string;
     displayLabel: string;
+    parentLabel: string; // top-level domain label — used for color inheritance (pattern graph parity)
     clusters: ClusterNode[];
   }
   interface DomainGroup {
@@ -184,6 +185,7 @@
             id: clusterParentId,
             label: subLabel,
             displayLabel: subLabel,
+            parentLabel: subInfo.parentLabel,
             clusters: [],
           };
           result[topDomain].subDomains.push(subGroup);
@@ -656,7 +658,7 @@
               >
                 {#snippet header()}
                   <div class="subdomain-label-row">
-                    <span class="domain-dot" style="background: {taxonomyColor(sub.label)};"></span>
+                    <span class="domain-dot" style="background: {taxonomyColor(sub.parentLabel)};"></span>
                     <span class="subdomain-label">{sub.displayLabel}</span>
                     <span class="subdomain-count">{sub.clusters.length}</span>
                   </div>
