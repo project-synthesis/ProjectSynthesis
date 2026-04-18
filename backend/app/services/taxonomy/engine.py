@@ -21,7 +21,7 @@ import traceback
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -385,6 +385,10 @@ class TaxonomyEngine:
         # with a transient error.  Causes the next idle warm cycle to run
         # maintenance phases regardless of the periodic cadence gate.
         self._maintenance_pending: bool = False
+        # Date of last readiness-history prune (UTC).  Guards the daily
+        # idempotent prune inside warm-path Phase 5 so it runs at most
+        # once per process per UTC day.  ``None`` = never pruned.
+        self._readiness_pruned_on: date | None = None
         # Injection effectiveness — cached by warm path Phase 4, read by health endpoint.
         self._injection_effectiveness: dict | None = None
         # Domain lifecycle stats — read by health endpoint

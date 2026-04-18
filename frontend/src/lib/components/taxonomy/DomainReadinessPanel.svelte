@@ -11,6 +11,7 @@
   import { onMount } from 'svelte';
   import type { DomainReadinessReport } from '$lib/api/readiness';
   import { readinessStore } from '$lib/stores/readiness.svelte';
+  import { preferencesStore } from '$lib/stores/preferences.svelte';
   import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
@@ -131,6 +132,50 @@
     );
   }
 
+  function onRowKey(event: KeyboardEvent, report: DomainReadinessReport) {
+    // Space scrolls the page by default on a div[role="button"]; suppress it
+    // so activation matches <button> semantics. Enter has no scroll side
+    // effect, so leave it alone per WAI-ARIA authoring guidance.
+    //
+    // A11y: skip when the keydown originated inside a nested interactive
+    // control (e.g. the mute toggle button). Otherwise Space/Enter on the
+    // nested button would bubble here and activate the row's `select()` in
+    // addition to (or instead of) the button's own handler — two activations
+    // from one keypress.
+    if (event.target !== event.currentTarget) return;
+    if (event.key === ' ') {
+      event.preventDefault();
+      select(report);
+    } else if (event.key === 'Enter') {
+      select(report);
+    }
+  }
+
+  /**
+   * O(1) mute lookup. Recomputes reactively whenever the backing array is
+   * replaced (optimistic toggles) or mutated in place (external updates via
+   * `preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids =
+   * [...]`). Reading `.length` inside the derivation ensures the derived
+   * remains subscribed even if the reference is reused across writes.
+   */
+  const mutedSet = $derived.by(() => {
+    const ids = preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids;
+    void ids.length;
+    return new Set(ids);
+  });
+
+  function onToggleMute(event: MouseEvent, report: DomainReadinessReport) {
+    event.stopPropagation();
+    void preferencesStore.toggleDomainMute(report.domain_id);
+  }
+
+  /** Accessible name for the row as a whole (the role="button" container). */
+  function rowAriaLabel(r: DomainReadinessReport, muted: boolean): string {
+    const cons = Math.round(r.stability.consistency * 100);
+    const mute = muted ? ', notifications muted' : '';
+    return `${r.domain_label} — stability ${r.stability.tier} ${cons}%, emergence ${r.emergence.tier}${mute}`;
+  }
+
   function onRefresh() {
     void readinessStore.loadAll(true);
   }
@@ -166,17 +211,22 @@
       <span class="drp-col-num">EMRG</span>
       <span class="drp-col-num">GAP</span>
       <span class="drp-col-num">M</span>
+      <span></span>
     </div>
     <div class="drp-list">
       {#each sorted as r (r.domain_id)}
         {@const consistencyPct = Math.round(r.stability.consistency * 100)}
         {@const thresholdPct = Math.round(r.emergence.threshold * 100)}
         {@const isEmpty = r.emergence.total_opts === 0}
-        <button
-          type="button"
+        {@const muted = mutedSet.has(r.domain_id)}
+        <div
+          role="button"
+          tabindex="0"
           class="drp-row"
           class:drp-row--empty={isEmpty}
+          aria-label={rowAriaLabel(r, muted)}
           onclick={() => select(r)}
+          onkeydown={(e) => onRowKey(e, r)}
           use:tooltip={`${r.domain_label} — stability ${r.stability.tier} (${consistencyPct}%), emergence ${r.emergence.tier} (threshold ${thresholdPct}%)`}
         >
           <span class="drp-cell drp-name">
@@ -202,7 +252,17 @@
             style="color: {emergenceColor(r.emergence.tier)}"
           >{formatGap(r.emergence.gap_to_threshold)}</span>
           <span class="drp-cell drp-num drp-members">{r.member_count}</span>
-        </button>
+          <button
+            type="button"
+            class="drp-mute"
+            class:drp-mute--active={muted}
+            aria-pressed={muted ? 'true' : 'false'}
+            aria-label={muted
+              ? `Unmute notifications for ${r.domain_label}`
+              : `Mute notifications for ${r.domain_label}`}
+            onclick={(e) => onToggleMute(e, r)}
+          ><span aria-hidden="true">{muted ? '\u{1F515}' : '\u{1F514}'}</span></button>
+        </div>
       {/each}
     </div>
   {/if}
@@ -266,7 +326,7 @@
 
   .drp-columns {
     display: grid;
-    grid-template-columns: 1fr 36px 28px 40px 22px;
+    grid-template-columns: 1fr 36px 28px 40px 22px 16px;
     gap: 6px;
     align-items: baseline;
     font-family: var(--font-mono);
@@ -289,7 +349,7 @@
   .drp-row {
     all: unset;
     display: grid;
-    grid-template-columns: 1fr 36px 28px 40px 22px;
+    grid-template-columns: 1fr 36px 28px 40px 22px 16px;
     gap: 6px;
     align-items: center;
     height: 20px;
@@ -363,9 +423,41 @@
     font-size: 9px;
   }
 
+  .drp-mute {
+    all: unset;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    font-size: 9px;
+    line-height: 1;
+    color: var(--color-text-dim);
+    cursor: pointer;
+    border: 1px solid transparent;
+    box-sizing: border-box;
+    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .drp-mute:hover {
+    color: var(--color-neon-cyan);
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+  }
+
+  .drp-mute--active {
+    color: var(--color-neon-yellow);
+  }
+
+  .drp-mute:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+    outline-offset: -1px;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .drp-refresh,
-    .drp-row {
+    .drp-row,
+    .drp-mute {
       transition: none;
     }
   }

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { readinessStore } from '$lib/stores/readiness.svelte';
 
   import { TopologyRenderer, type LODTier } from './TopologyRenderer';
-  import { buildSceneData, assignLodVisibility, computeHierarchicalOpacity, type SceneData } from './TopologyData';
+  import { buildSceneData, assignLodVisibility, buildNodeMap, computeHierarchicalOpacity, type SceneData, type SceneNode } from './TopologyData';
   import { TopologyInteraction } from './TopologyInteraction';
   import { TopologyLabels } from './TopologyLabels';
   import { settleForces } from './TopologyWorker';
@@ -15,19 +16,107 @@
   import { triggerRecluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
   import { stateColor } from '$lib/utils/colors';
-  import { parsePrimaryDomain } from '$lib/utils/formatting';
   import type { ClusterNode } from '$lib/api/clusters';
   import { BeamPool } from './BeamPool';
   import { ClusterPhysics } from './ClusterPhysics';
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
   import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
-  import { buildNodeMap } from './TopologyData';
+  import { readinessTierColor } from './readiness-tier';
+  import type { ReadinessTier } from './readiness-tier';
+
+  /** ease-out cubic: 1 - (1-t)^3 — matches brand motion system. */
+  const _CUBIC = (t: number): number => 1 - Math.pow(1 - t, 3);
+
+  const prefersReducedMotion = (): boolean =>
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  /** Handle for an in-flight color tween. `cancel()` stops the RAF chain;
+   *  safe to call after natural completion. */
+  interface TweenHandle { cancel(): void }
+
+  /** Tween `material.color` from `fromColor` → `toHex` over `durationMs`.
+   *  `fromColor` is a live `THREE.Color` — typically `material.color` at the
+   *  moment of call — so superseding an in-flight tween starts from the
+   *  actual rendered color rather than a stale tier hex (prevents snap-back).
+   *  The source color is cloned so subsequent mutation of `material.color`
+   *  by the RAF step doesn't feed back into the interpolation baseline.
+   *  Returns a handle whose `cancel()` stops the RAF chain at the next
+   *  frame boundary. Caller must cancel on ring disposal and when
+   *  superseding an in-flight tween on the same material — RAF callbacks
+   *  can otherwise outlive the ring they animate (use-after-free). */
+  function tweenRingColor(
+    material: THREE.MeshBasicMaterial,
+    fromColor: THREE.Color,
+    toHex: string,
+    durationMs = 320,
+  ): TweenHandle {
+    if (prefersReducedMotion()) {
+      material.color.set(toHex);
+      return { cancel: () => {} };
+    }
+    const from = fromColor.clone();
+    const to = new THREE.Color(toHex);
+    const start = performance.now();
+    let rafId = 0;
+    let cancelled = false;
+    const step = (now: number) => {
+      if (cancelled) return;
+      const t = Math.min(1, (now - start) / durationMs);
+      material.color.copy(from).lerp(to, _CUBIC(t));
+      if (t < 1) rafId = requestAnimationFrame(step);
+    };
+    rafId = requestAnimationFrame(step);
+    return {
+      cancel: () => {
+        cancelled = true;
+        if (rafId) cancelAnimationFrame(rafId);
+      },
+    };
+  }
 
   // Resolved at module level to avoid per-frame allocations
   const HIGHLIGHT_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
   const EDGE_COLOR = parseInt(stateColor('archived').replace('#', ''), 16);
   const SIMILARITY_EDGE_COLOR = parseInt(stateColor('template').replace('#', ''), 16);
   const INJECTION_EDGE_COLOR = 0xff9500; // warm gold/amber
+
+  /** Readiness-ring geometry + material constants.
+   *  Ring sits just outside the domain node's silhouette (`RADIUS_FACTOR`),
+   *  1px-thin to match brand 1px-contour spec (`THICKNESS`), sampled finely
+   *  for a smooth contour (`SEGMENTS`), and slightly transparent so it
+   *  reads as an outline, not a fill (`OPACITY_FACTOR`). */
+  const READINESS_RING_RADIUS_FACTOR = 1.25;
+  const READINESS_RING_THICKNESS = 0.05;
+  const READINESS_RING_SEGMENTS = 64;
+  const READINESS_RING_OPACITY_FACTOR = 0.9;
+
+  /** LOD-tier → absolute ring opacity. At far camera distances the ring is a
+   *  ghost (0.4), at mid it is half-weight (0.7), at near it is fully lit (1.0).
+   *  Written each frame by the LOD animation callback registered in `onMount`,
+   *  which is the final per-frame authority on ring opacity (supersedes the
+   *  dim-sweep `$effect` that runs on rebuild / highlight change). Hoisted
+   *  to module scope so the tier map and `READINESS_RING_OPACITY_FACTOR`
+   *  sit side-by-side for future readers. */
+  const READINESS_LOD_OPACITY: Record<LODTier, number> = {
+    far: 0.4,
+    mid: 0.7,
+    near: 1.0,
+  };
+
+  /** Multiplicative opacity applied to nodes that do NOT match the currently
+   *  highlighted domain (see `clustersStore.highlightedDomain`). Consumed by
+   *  two sweeps in the same `$effect`: the per-domain-group dodecahedron
+   *  materials loop, and the scene-root readiness-ring loop. Kept at module
+   *  scope so the two sweeps cannot drift apart. */
+  const DOMAIN_DIM_FACTOR = 0.15;
+
+  /** Predicate — shared between scene-build loop and DOM marker `{#each}`.
+   *  Centralizes the "this node gets a readiness ring" rule so the two
+   *  surfaces can never drift. */
+  function hasReadinessRing(node: SceneNode): boolean {
+    return node.state === 'domain' && node.readinessTier != null;
+  }
 
   /** Suppress hierarchical edges shorter than this (scene units).
    *  Spatial proximity already communicates the parent-child relationship.
@@ -107,6 +196,135 @@
 
   // Node meshes for raycasting
   let nodeMeshes: Map<string, THREE.Mesh> = new Map();
+
+  // Per-domain readiness ring registry. Rings live inside `_readinessRingGroup`
+  // so `rebuildScene` can detach the whole group before the scene-clear traverse
+  // and re-attach it after — mirrors the beam-pool protection pattern.
+  // Billboarding is driven by a single animation callback (`_removeReadinessBillboard`)
+  // that iterates this map each frame, mirroring `_removeDomainRotation`.
+  // `tween` is the in-flight color tween handle (if any); cancelled on disposal
+  // or when superseded so RAF callbacks cannot outlive the material they write to.
+  interface ReadinessRingEntry {
+    mesh: THREE.Mesh;
+    material: THREE.MeshBasicMaterial;
+    /** The tier this ring is currently displaying or tweening toward — i.e.
+     *  the target of the most recent `tweenRingColor` call (or the initial
+     *  tier on first build). Used only for change-detection in the supersede
+     *  branch (`existing.lastTier !== tier`); it is NOT the tween's `from`
+     *  color — that is always `material.color` at the moment of supersede. */
+    lastTier: ReadinessTier;
+    /** The `node.size` used to build the current `RingGeometry`. Tracked so
+     *  the reuse branch in `rebuildScene` can detect size drift (cluster
+     *  physics reconciles base scale as `member_count` evolves) and dispose
+     *  + recreate the geometry. Without this, the ring keeps its first-build
+     *  radius and visibly drifts from its parent domain. */
+    lastSize: number;
+    /** Owning node's primary domain, captured at build/update time. The
+     *  per-frame LOD callback composes `DOMAIN_DIM_FACTOR` against this value
+     *  without having to traverse `sceneData.nodes` each tick.
+     *  Typed as `string` because `SceneNode.domain` is always defined
+     *  (TopologyData.ts sets it via `parsePrimaryDomain`). */
+    domain: string;
+    /** Owning node's `opacity` (from sceneData), captured at build/update
+     *  time. Composed into the per-frame opacity write so LOD attenuation
+     *  does not clobber per-node opacity.
+     *  Future per-frame node opacity animations (e.g. seed-pulse, stability
+     *  pulse) should route through this field — update it in the animation
+     *  callback and the LOD composition picks it up next tick. */
+    nodeOpacity: number;
+    tween: TweenHandle | null;
+  }
+  const _readinessRings: Map<string, ReadinessRingEntry> = new Map();
+  let _readinessRingGroup: THREE.Group | null = null;
+  let _removeReadinessBillboard: (() => void) | null = null;
+
+  /** Single source of truth for readiness ring geometry. Used by both the
+   *  initial-build path and the size-drift rebuild path in `rebuildScene`
+   *  so radius/thickness/segments never diverge between the two.
+   *
+   *  Asymmetry note: `updateExistingRing` takes a `camera` parameter for
+   *  billboard `lookAt`, but this function deliberately does NOT — it
+   *  returns pure geometry, which is camera-independent. The caller
+   *  performs `mesh.lookAt(camera.position)` once, either in the new-ring
+   *  branch of `rebuildScene` or inside `updateExistingRing` for reuse.
+   *  Keeping geometry construction camera-free means tests that mock
+   *  THREE without a real camera can still exercise this helper. */
+  function buildRingGeometry(size: number): THREE.RingGeometry {
+    const radius = size * READINESS_RING_RADIUS_FACTOR;
+    return new THREE.RingGeometry(
+      radius,
+      radius + READINESS_RING_THICKNESS,
+      READINESS_RING_SEGMENTS,
+    );
+  }
+
+  /** Refresh per-frame LOD callback inputs on a readiness ring entry.
+   *  Both the rebuild path (`updateExistingRing`) and the dim-sweep
+   *  `$effect` need to keep `entry.domain` and `entry.nodeOpacity` in
+   *  sync with the latest `SceneNode` so the LOD animation callback
+   *  composes the current opacity formula on the next tick. Extracted
+   *  to a single helper so the two sites can't drift apart — if a third
+   *  input ever joins (e.g. `entry.state`), it is added here once. */
+  function updateRingFrameInputs(entry: ReadinessRingEntry, node: SceneNode): void {
+    entry.domain = node.domain;
+    entry.nodeOpacity = node.opacity;
+  }
+
+  /** Reconcile an existing readiness ring with the latest scene node: tween
+   *  color on tier change, rebuild geometry on size drift, then update
+   *  position + billboard. Keeps the `rebuildScene` reuse branch readable
+   *  by grouping the four distinct concerns behind one call. Camera is
+   *  passed in because it comes from the renderer and may be undefined in
+   *  test environments. */
+  function updateExistingRing(
+    existing: ReadinessRingEntry,
+    node: SceneNode,
+    tier: ReadinessTier,
+    camera: THREE.Camera | undefined,
+  ): void {
+    if (existing.lastTier !== tier) {
+      // Supersede any in-flight tween so two RAF chains don't race on the
+      // same material. Tween from the currently rendered color (not the
+      // last target) to preserve continuity across rapid tier changes.
+      existing.tween?.cancel();
+      existing.tween = tweenRingColor(
+        existing.material,
+        existing.material.color,
+        readinessTierColor(tier),
+      );
+      existing.lastTier = tier;
+    }
+    if (existing.lastSize !== node.size) {
+      // Size drift: dispose old geometry BEFORE assigning the new one
+      // (GPU resource leak otherwise) and swap in a fresh RingGeometry
+      // sized to the current `node.size`. Keep the mesh (and thus its
+      // parent link + material + tween state) intact.
+      existing.mesh.geometry?.dispose?.();
+      existing.mesh.geometry = buildRingGeometry(node.size);
+      existing.lastSize = node.size;
+    }
+    existing.mesh.position.set(...node.position);
+    if (camera?.position) existing.mesh.lookAt(camera.position);
+    // Keep per-frame LOD callback inputs in sync with the latest sceneData
+    // so dim + node-opacity composition doesn't lag behind rebuilds.
+    updateRingFrameInputs(existing, node);
+  }
+
+  /** Per-entry teardown for a readiness ring: cancel any in-flight tween
+   *  BEFORE disposing GPU resources so the RAF step can't write to a
+   *  disposed material. Scene-graph removal stays at the call site — the
+   *  per-rebuild pruning loop removes individual meshes, while unmount
+   *  drops the whole group. Dispose lookups are null-safe because test
+   *  environments mock THREE with minimal stubs lacking `dispose`. */
+  function disposeRingEntry(entry: ReadinessRingEntry): void {
+    entry.tween?.cancel();
+    if (typeof entry.mesh.geometry?.dispose === 'function') {
+      entry.mesh.geometry.dispose();
+    }
+    if (typeof entry.material?.dispose === 'function') {
+      entry.material.dispose();
+    }
+  }
 
   // Flat node lookup for mid-LOD label logic and domain highlight
   let flatNodeMap: Map<string, ClusterNode> = new Map();
@@ -260,6 +478,34 @@
     _simScoreCache = null;
     _injWeightCache = null;
 
+    // Detach the readiness ring group from the scene BEFORE the scene-clear
+    // traverse so its meshes (which persist across rebuilds to keep tween
+    // state continuous) aren't disposed. Re-added in the ring-build pass.
+    // Unsubscribe the billboard callback FIRST so it cannot fire against a
+    // half-disposed mesh (use-after-free guard).
+    // Guard dispose() lookups: in some test environments THREE is mocked
+    // with minimal stubs where `mesh.geometry`/`material` may be null or
+    // lack a `dispose` method. Production renderers always have real
+    // THREE.js instances — these guards are defensive and cheap.
+    _removeReadinessBillboard?.();
+    _removeReadinessBillboard = null;
+    if (_readinessRingGroup) {
+      renderer.scene.remove(_readinessRingGroup);
+    }
+    // Ring survives only if the domain is still visible AND still carries a
+    // readiness tier — matches the ring-build pass gate below, so LOD hides
+    // rings implicitly (disposal preferred over hidden-mesh accumulation).
+    const currentDomainIds = new Set(
+      data.nodes.filter((n) => n.visible && hasReadinessRing(n)).map((n) => n.id),
+    );
+    for (const [id, entry] of _readinessRings) {
+      if (!currentDomainIds.has(id)) {
+        disposeRingEntry(entry);
+        _readinessRingGroup?.remove(entry.mesh);
+        _readinessRings.delete(id);
+      }
+    }
+
     // Dispose GPU resources before clearing scene.
     // Track disposed geometries to avoid duplicate dispose on shared instances.
     const disposedGeometries = new Set<THREE.BufferGeometry>();
@@ -385,6 +631,73 @@
       renderer.scene.add(group);
       nodeMeshes.set(node.id, fill);
       interaction?.registerNode(node.id, fill, node);
+    }
+
+    // Readiness rings — per-domain contour ring colored by composite tier.
+    // Only for visible domain nodes with a resolved readinessTier (see
+    // `hasReadinessRing`). Brand spec: 1px contour, no glow, no emissive —
+    // MeshBasicMaterial with depthWrite:false is sufficient to sit over the
+    // dodecahedron silhouette without z-fighting.
+    const camera = renderer.camera;
+    if (!_readinessRingGroup) {
+      _readinessRingGroup = new THREE.Group();
+      _readinessRingGroup.userData = { isReadinessRingGroup: true };
+    }
+    for (const node of data.nodes) {
+      if (!node.visible) continue;
+      if (!hasReadinessRing(node)) continue;
+      // `hasReadinessRing` guarantees `readinessTier` is defined — the
+      // non-null assertion is safe and narrower than a type cast.
+      const tier = node.readinessTier!;
+      const existing = _readinessRings.get(node.id);
+      if (existing) {
+        updateExistingRing(existing, node, tier, camera);
+        continue;
+      }
+      const geom = buildRingGeometry(node.size);
+      const color = readinessTierColor(tier);
+      const mat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color),
+        transparent: true,
+        opacity: node.opacity * READINESS_RING_OPACITY_FACTOR,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.set(...node.position);
+      // Billboard toward camera at build time so the first frame after
+      // rebuildScene paints correctly — the per-frame callback below runs
+      // between `controls.update()` and `renderer.render()` on subsequent
+      // frames, but the first render after a rebuild could paint before
+      // the next animation tick otherwise.
+      if (camera?.position) mesh.lookAt(camera.position);
+      _readinessRingGroup.add(mesh);
+      _readinessRings.set(node.id, {
+        mesh,
+        material: mat,
+        lastTier: tier,
+        lastSize: node.size,
+        domain: node.domain,
+        nodeOpacity: node.opacity,
+        tween: null,
+      });
+    }
+    // Re-attach the ring group (protected from the scene-clear traverse above).
+    if (_readinessRings.size > 0) {
+      renderer.scene.add(_readinessRingGroup);
+    }
+
+    // Per-frame billboard — one callback iterates all rings, mirroring the
+    // `_removeDomainRotation` pattern. OrbitControls rotates the camera
+    // around the scene, so a one-time lookAt goes stale; re-orient each
+    // frame. Unsubscribe at rebuildScene entry (above) prevents accumulation
+    // and prevents use-after-free on freshly disposed meshes.
+    if (_readinessRings.size > 0) {
+      _removeReadinessBillboard = renderer.addAnimationCallback(() => {
+        if (!camera?.position) return;
+        for (const entry of _readinessRings.values()) {
+          entry.mesh.lookAt(camera.position);
+        }
+      });
     }
 
     // Domain rotation: ~1 revolution per 50s at 60fps
@@ -633,6 +946,11 @@
   $effect(() => {
     const tree = clustersStore.taxonomyTree;
     const filter = clustersStore.stateFilter;
+    // Touch readiness state so this effect re-runs when reports mutate.
+    // `buildSceneData` reads `readinessStore.byDomain(...)` inside `untrack`
+    // below, which hides the dependency from Svelte's tracker.
+    void readinessStore.reports;
+    void readinessStore.loaded;
     if (tree.length > 0 && renderer) {
       untrack(() => {
         flatNodeMap = new Map(tree.map(n => [n.id, n]));
@@ -945,10 +1263,10 @@
       const group = mesh.parent as THREE.Group | null;
       if (!group) continue;
 
-      const flatNode = flatNodeMap.get(node.id);
-      const nodeDomain = parsePrimaryDomain(flatNode?.domain);
-      const dimmed = highlightDomain != null && nodeDomain !== highlightDomain;
-      const dimFactor = dimmed ? 0.15 : 1.0;
+      // `node.domain` on `SceneNode` is already `parsePrimaryDomain`-normalized
+      // at build time (see TopologyData.ts) — no need to re-parse per sweep.
+      const dimmed = highlightDomain != null && node.domain !== highlightDomain;
+      const dimFactor = dimmed ? DOMAIN_DIM_FACTOR : 1.0;
 
       // Apply dim factor to all materials in the group.
       // Cluster: fill (0.9) + wire (coherence-based). Domain: fill (0.9) + edges (0.9) + points (0.95).
@@ -973,6 +1291,38 @@
         }
         mat.opacity = baseOpacity * dimFactor;
       }
+    }
+
+    // Readiness rings are parented to the SCENE ROOT, not the domain group,
+    // so the per-group sweep above misses them. Mirror the dim semantics here
+    // using the SAME match predicate as the dodecahedron sweep — comparing
+    // the ring's owning node's primary domain to `highlightDomain`, not its
+    // node id. `highlightedDomain` is set to a primary-domain string (e.g.
+    // 'backend') by ClusterNavigator; id-matching would leave every ring
+    // dimmed whenever any domain is highlighted, including its own. Iterating
+    // `sceneData.nodes` with an O(1) `_readinessRings.get(id)` lookup mirrors
+    // the dodecahedron sweep's structure and keeps the shared
+    // `DOMAIN_DIM_FACTOR` as the single source of truth.
+    for (const node of sceneData.nodes) {
+      const ring = _readinessRings.get(node.id);
+      if (!ring) continue;
+      const dimmed =
+        highlightDomain != null && node.domain !== highlightDomain;
+      const ringDimFactor = dimmed ? DOMAIN_DIM_FACTOR : 1.0;
+      // First-frame paint: set opacity so the ring looks correct immediately
+      // after rebuild/highlight-change, without waiting for the next animation
+      // tick (~<16ms gap). The LOD animation callback registered in `onMount`
+      // is the per-frame authority and uses the full composition formula:
+      //   opacity = LOD_OPACITY[tier] * node.opacity
+      //           * READINESS_RING_OPACITY_FACTOR * dimFactor
+      // This $effect omits the LOD factor (treated as 1.0) because the
+      // rebuild/highlight path doesn't know the current tier — the LOD tick
+      // corrects it on the very next frame. Keep `entry.domain` and
+      // `entry.nodeOpacity` fresh so the LOD callback sees the latest inputs
+      // when a highlight change lands between rebuild and the next tick.
+      updateRingFrameInputs(ring, node);
+      ring.material.opacity =
+        node.opacity * READINESS_RING_OPACITY_FACTOR * ringDimFactor;
     }
 
     // Dim all edge types (preserve domain node EdgesGeometry outlines)
@@ -1084,6 +1434,34 @@
       });
     });
 
+    // Task 9: LOD attenuation. The LOD callback is the FINAL opacity writer
+    // per frame for readiness rings — it supersedes the dim-sweep `$effect`
+    // on every tick based on `renderer.lodTier`. Kept separate from the
+    // rebuild-scoped billboard callback because the two have different
+    // lifecycles: billboard registers per rebuild and unregisters when the
+    // ring set goes empty (stale-closure guard), while LOD runs for the
+    // component lifetime and no-ops on an empty map. Iterating an empty
+    // `_readinessRings` is O(0) — safe when no rings exist.
+    const _removeRingLodUpdate = renderer!.addAnimationCallback(() => {
+      const lodFactor = READINESS_LOD_OPACITY[renderer!.lodTier];
+      // NOT a reactive read: this callback runs inside requestAnimationFrame
+      // via `renderer.addAnimationCallback`, OUTSIDE any Svelte `$effect`
+      // or `$derived` tracking scope. Reading `clustersStore.highlightedDomain`
+      // here is a plain getter — no subscription is installed and no
+      // effect re-runs when it changes. The per-frame tick is what keeps
+      // the visual in sync; the dim-sweep `$effect` above handles the
+      // same-frame first-paint case when a highlight toggles.
+      const highlighted = clustersStore.highlightedDomain;
+      for (const entry of _readinessRings.values()) {
+        const dimFactor =
+          highlighted != null && entry.domain !== highlighted
+            ? DOMAIN_DIM_FACTOR
+            : 1.0;
+        entry.material.opacity =
+          lodFactor * READINESS_RING_OPACITY_FACTOR * entry.nodeOpacity * dimFactor;
+      }
+    });
+
     // Taxonomy data loaded by +layout.svelte on app mount — no need to re-fetch here.
     // The $effect watching filteredTaxonomyTree (line 432) rebuilds the scene reactively.
 
@@ -1102,9 +1480,28 @@
       clusterPhysics?.clear();
       clusterPhysics = null;
       removeBeamUpdate();
+      _removeRingLodUpdate();
       _removeFormationAnim?.();
       _removeFormationAnim = null;
       _removeDomainRotation?.();
+      _removeReadinessBillboard?.();
+      _removeReadinessBillboard = null;
+      // Cancel in-flight tier tweens before disposing materials (use-after-free guard).
+      for (const entry of _readinessRings.values()) {
+        disposeRingEntry(entry);
+      }
+      _readinessRings.clear();
+      if (_readinessRingGroup) {
+        // `renderer?.` is the null-renderer guard: if `onMount` aborted
+        // after `_readinessRingGroup` was created but before the
+        // renderer was fully initialized (rare but possible in test
+        // environments), `renderer` may be null here and `.scene.remove`
+        // would throw. The group itself still gets cleared below so
+        // it's GC-eligible; leaking a THREE.Group detached from any
+        // scene is a no-op since all its children are already disposed.
+        renderer?.scene.remove(_readinessRingGroup);
+        _readinessRingGroup = null;
+      }
       ro.disconnect();
       interaction?.dispose();
       labels?.dispose();
@@ -1121,6 +1518,22 @@
     aria-label="Taxonomy topology visualization"
     tabindex="0"
   ></canvas>
+  <!--
+    Readiness-ring DOM markers — one hidden `<span>` per domain node that
+    owns a readiness ring in the Three.js scene. The WebGL ring itself
+    isn't queryable from jsdom, so these markers provide a parallel DOM
+    surface for tests (and a11y probes) to assert on. They mirror the
+    scene-build predicate via the shared `hasReadinessRing` helper so the
+    two surfaces cannot drift.
+  -->
+  {#each sceneData?.nodes.filter(hasReadinessRing) ?? [] as node (node.id)}
+    <span
+      data-readiness-ring={node.id}
+      data-readiness-tier={node.readinessTier}
+      aria-hidden="true"
+      style="display:none"
+    ></span>
+  {/each}
   <TopologyControls
     {lodTier}
     showActivity={clustersStore.activityOpen}

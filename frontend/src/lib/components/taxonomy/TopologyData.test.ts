@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { buildSceneData, assignLodVisibility, computeHierarchicalOpacity, type SceneNode } from './TopologyData';
 import type { ClusterNode } from '$lib/api/clusters';
 import { domainStore } from '$lib/stores/domains.svelte';
+import { readinessStore } from '$lib/stores/readiness.svelte';
+import type { DomainReadinessReport } from '$lib/api/readiness';
 
 function makeNode(overrides: Partial<ClusterNode> = {}): ClusterNode {
   return {
@@ -306,5 +308,266 @@ describe('computeHierarchicalOpacity', () => {
   it('handles zero/negative gracefully', () => {
     expect(computeHierarchicalOpacity(0)).toBeCloseTo(1.0);
     expect(computeHierarchicalOpacity(-1)).toBeCloseTo(1.0);
+  });
+});
+
+describe('buildSceneData — readiness tier decoration', () => {
+  function makeReadinessReport(overrides: Partial<DomainReadinessReport> = {}): DomainReadinessReport {
+    return {
+      domain_id: 'd1',
+      domain_label: 'backend',
+      member_count: 20,
+      stability: {
+        consistency: 0.3,
+        dissolution_floor: 0.15,
+        hysteresis_creation_threshold: 0.6,
+        age_hours: 72,
+        min_age_hours: 48,
+        member_count: 20,
+        member_ceiling: 5,
+        sub_domain_count: 0,
+        total_opts: 20,
+        guards: {
+          general_protected: false,
+          has_sub_domain_anchor: false,
+          age_eligible: true,
+          above_member_ceiling: true,
+          consistency_above_floor: true,
+        },
+        tier: 'guarded',
+        dissolution_risk: 0.4,
+        would_dissolve: false,
+      },
+      emergence: {
+        threshold: 0.6,
+        threshold_formula: 'max(0.40, 0.60 - 0.004 * members)',
+        min_member_count: 5,
+        total_opts: 20,
+        top_candidate: null,
+        gap_to_threshold: null,
+        ready: false,
+        blocked_reason: 'no_candidates',
+        runner_ups: [],
+        tier: 'inert',
+      },
+      computed_at: '2026-04-17T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    readinessStore._reset();
+    domainStore._reset();
+    domainStore.domains = [
+      { id: 'd1', label: 'backend', color_hex: '#b44aff', member_count: 0, avg_score: null, source: 'seed' },
+    ];
+  });
+
+  it('sets readinessTier on domain SceneNode when a matching report exists', () => {
+    readinessStore.reports = [makeReadinessReport({ domain_id: 'd1' })];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    const domainNode = nodes.find((n) => n.id === 'd1');
+    expect(domainNode?.readinessTier).toBe('guarded');
+  });
+
+  it('leaves readinessTier undefined on non-domain nodes', () => {
+    readinessStore.reports = [makeReadinessReport({ domain_id: 'd1' })];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'active', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
+  });
+
+  it('leaves readinessTier undefined when no matching readiness report exists', () => {
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
+  });
+
+  it('decorates sub-domain nodes (state=domain parented to another domain) when a report exists', () => {
+    // Sub-domains are `state="domain"` nodes whose parent is also a domain.
+    // The decoration gate is `state === 'domain'`, so sub-domains receive
+    // a tier when the readiness store has a matching report — the ring
+    // consumer in SemanticTopology applies the same gate.
+    readinessStore.reports = [
+      makeReadinessReport({ domain_id: 'd1' }),
+      makeReadinessReport({ domain_id: 'sub1', domain_label: 'backend: auth' }),
+    ];
+    readinessStore.loaded = true;
+
+    const tree = [
+      makeNode({ id: 'd1', state: 'domain', domain: 'backend' }),
+      makeNode({ id: 'sub1', state: 'domain', domain: 'backend', parent_id: 'd1' }),
+    ];
+    const { nodes } = buildSceneData(tree);
+    const subDomain = nodes.find((n) => n.id === 'sub1');
+    expect(subDomain?.isSubDomain).toBe(true);
+    expect(subDomain?.readinessTier).toBe('guarded');
+  });
+
+  it('keys reports by domain node id, not by label or position', () => {
+    // Guards against a regression where an unrelated report leaks onto a
+    // different domain node. Only the node whose id matches report.domain_id
+    // should receive the decoration.
+    readinessStore.reports = [makeReadinessReport({ domain_id: 'other' })];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
+  });
+
+  it('leaves readinessTier undefined when the readiness store is unloaded', () => {
+    // Explicit invariant: an unloaded store (loaded=false, reports=[]) must
+    // not crash and must leave the tier absent — the UI degrades to the
+    // pre-readiness visualization until the first snapshot arrives.
+    expect(readinessStore.loaded).toBe(false);
+    expect(readinessStore.reports).toHaveLength(0);
+
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
+  });
+
+  it('updates SceneNode readinessTier when readinessStore reports change', () => {
+    // SSE-driven re-decoration contract: when the readiness store mutates
+    // between calls (e.g. a taxonomy_changed SSE event triggers a refresh
+    // that upgrades a domain from guarded→ready), a subsequent buildSceneData
+    // call must reflect the new tier without any extra wiring. The reactive
+    // chain flows through readinessStore.reports → byId derived lookup →
+    // buildSceneData decoration on each invocation.
+    readinessStore.reports = [
+      makeReadinessReport({
+        domain_id: 'd1',
+        stability: {
+          consistency: 0.3,
+          dissolution_floor: 0.15,
+          hysteresis_creation_threshold: 0.6,
+          age_hours: 72,
+          min_age_hours: 48,
+          member_count: 20,
+          member_ceiling: 5,
+          sub_domain_count: 0,
+          total_opts: 20,
+          guards: {
+            general_protected: false,
+            has_sub_domain_anchor: false,
+            age_eligible: true,
+            above_member_ceiling: true,
+            consistency_above_floor: true,
+          },
+          tier: 'guarded',
+          dissolution_risk: 0.4,
+          would_dissolve: false,
+        },
+        emergence: {
+          threshold: 0.6,
+          threshold_formula: 'max(0.40, 0.60 - 0.004 * members)',
+          min_member_count: 5,
+          total_opts: 20,
+          top_candidate: null,
+          gap_to_threshold: null,
+          ready: false,
+          blocked_reason: 'no_candidates',
+          runner_ups: [],
+          tier: 'inert',
+        },
+      }),
+    ];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    let { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBe('guarded');
+
+    // Mutate the store — simulates an SSE-driven refresh where the emergence
+    // tier has flipped from inert → ready. A fresh buildSceneData call must
+    // pick up the new tier.
+    readinessStore.reports = [
+      makeReadinessReport({
+        domain_id: 'd1',
+        stability: {
+          consistency: 0.3,
+          dissolution_floor: 0.15,
+          hysteresis_creation_threshold: 0.6,
+          age_hours: 72,
+          min_age_hours: 48,
+          member_count: 20,
+          member_ceiling: 5,
+          sub_domain_count: 0,
+          total_opts: 20,
+          guards: {
+            general_protected: false,
+            has_sub_domain_anchor: false,
+            age_eligible: true,
+            above_member_ceiling: true,
+            consistency_above_floor: true,
+          },
+          tier: 'guarded',
+          dissolution_risk: 0.4,
+          would_dissolve: false,
+        },
+        emergence: {
+          threshold: 0.6,
+          threshold_formula: 'max(0.40, 0.60 - 0.004 * members)',
+          min_member_count: 5,
+          total_opts: 20,
+          top_candidate: null,
+          gap_to_threshold: null,
+          ready: true,
+          blocked_reason: null,
+          runner_ups: [],
+          tier: 'ready',
+        },
+      }),
+    ];
+
+    ({ nodes } = buildSceneData(tree));
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBe('ready');
+  });
+
+  it('drops readinessTier when the composed tier is not a known enum value (schema drift guard)', () => {
+    // Defense against backend schema drift: if a future backend version
+    // returns an unknown stability tier (e.g. a newly-added "unstable"
+    // state), `composeReadinessTier()` passes it through unchanged. Without
+    // a runtime guard, the topology ring renderer calls
+    // `readinessTierColor(tier)` which returns `undefined` and Three.js
+    // fails silently. The build step must drop the tier (leave undefined)
+    // so the ring is omitted rather than drawn with a broken color.
+    const malformed = makeReadinessReport({
+      domain_id: 'd1',
+      stability: {
+        consistency: 0.3,
+        dissolution_floor: 0.15,
+        hysteresis_creation_threshold: 0.6,
+        age_hours: 72,
+        min_age_hours: 48,
+        member_count: 20,
+        member_ceiling: 5,
+        sub_domain_count: 0,
+        total_opts: 20,
+        guards: {
+          general_protected: false,
+          has_sub_domain_anchor: false,
+          age_eligible: true,
+          above_member_ceiling: true,
+          consistency_above_floor: true,
+        },
+        // Simulate schema drift: new tier the frontend enum doesn't know.
+        tier: 'unstable' as unknown as 'healthy',
+        dissolution_risk: 0.4,
+        would_dissolve: false,
+      },
+    });
+    readinessStore.reports = [malformed];
+    readinessStore.loaded = true;
+
+    const tree = [makeNode({ id: 'd1', state: 'domain', domain: 'backend' })];
+    const { nodes } = buildSceneData(tree);
+    expect(nodes.find((n) => n.id === 'd1')?.readinessTier).toBeUndefined();
   });
 });

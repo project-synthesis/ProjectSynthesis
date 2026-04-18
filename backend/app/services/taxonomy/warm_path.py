@@ -30,6 +30,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -475,6 +476,62 @@ async def execute_maintenance_phases(
             )
             # Success — clear retry flag
             engine._maintenance_pending = False
+
+            # Persist readiness snapshots for trajectory visualization
+            # (deferred item 1). Failures are non-fatal — history is
+            # observability, never load-bearing.
+            try:
+                from app.services.taxonomy import sub_domain_readiness as _r
+                from app.services.taxonomy.readiness_history import (
+                    record_snapshot,
+                )
+
+                async with session_factory() as snap_db:
+                    reports = await _r.compute_all_domain_readiness(
+                        snap_db, fresh=True,
+                    )
+                # Concurrent fire-and-forget: record_snapshot internally
+                # offloads to a thread pool, so gather lets per-report
+                # disk I/O overlap.  return_exceptions=True ensures one
+                # bad report never poisons a siblings write.
+                if reports:
+                    results = await asyncio.gather(
+                        *[record_snapshot(r) for r in reports],
+                        return_exceptions=True,
+                    )
+                    for r, outcome in zip(reports, results):
+                        if isinstance(outcome, Exception):
+                            logger.warning(
+                                "readiness snapshot failed for domain %s: %s",
+                                r.domain_id, outcome,
+                            )
+            except Exception as snap_exc:
+                logger.warning(
+                    "readiness snapshot batch failed (non-fatal): %s",
+                    snap_exc,
+                )
+
+            # Daily retention prune — runs at most once per UTC day per
+            # process. Idempotent — guarded by date.
+            try:
+                from datetime import datetime, timezone
+
+                from app.services.taxonomy.readiness_history import (
+                    prune_old_snapshots,
+                )
+                today = datetime.now(timezone.utc).date()
+                last_prune = getattr(engine, "_readiness_pruned_on", None)
+                if last_prune != today:
+                    removed = prune_old_snapshots()
+                    engine._readiness_pruned_on = today
+                    if removed:
+                        logger.info(
+                            "readiness history pruned: %d files", removed,
+                        )
+            except Exception as prune_exc:
+                logger.warning(
+                    "readiness prune failed: %s", prune_exc,
+                )
     except Exception as discover_exc:
         logger.warning(
             "Phase 5 (discover) failed — will retry next cycle: %s",

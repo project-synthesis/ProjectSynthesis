@@ -7,6 +7,7 @@ POST /api/domains/{id}/promote — promote a cluster to domain status.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -16,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import PromptCluster
 from app.schemas.domains import DomainInfo
-from app.schemas.sub_domain_readiness import DomainReadinessReport
+from app.schemas.sub_domain_readiness import (
+    DomainReadinessReport,
+    ReadinessHistoryResponse,
+)
+from app.services.taxonomy import readiness_history as readiness_history_service
 from app.services.taxonomy import sub_domain_readiness as readiness_service
 from app.services.taxonomy.coloring import compute_max_distance_color
 
@@ -106,6 +111,58 @@ async def get_domain_readiness(
     except Exception as exc:
         logger.error("GET /api/domains/%s/readiness failed: %s", domain_id, exc, exc_info=True)
         raise HTTPException(500, "Failed to compute readiness") from exc
+
+
+@router.get(
+    "/{domain_id}/readiness/history",
+    response_model=ReadinessHistoryResponse,
+)
+async def get_domain_readiness_history(
+    domain_id: str,
+    window: Literal["24h", "7d", "30d"] = "24h",
+    db: AsyncSession = Depends(get_db),
+) -> ReadinessHistoryResponse:
+    """Time-series readiness history for one domain.
+
+    ``window`` selects ``24h`` (raw points), ``7d``, or ``30d``. Windows at or
+    above ``READINESS_HISTORY_BUCKET_THRESHOLD_DAYS`` (7d) are aggregated into
+    hourly bucket means so payload size stays bounded (see
+    ``services/taxonomy/readiness_history.py``). Reads snapshots written by
+    warm-path Phase 5 — returns ``points=[]`` when no snapshots exist yet
+    (e.g. a fresh install less than one warm cycle old).
+
+    Errors: ``404`` unknown domain id, ``422`` non-domain cluster or invalid
+    window, ``503`` database contention, ``500`` unexpected failure.
+    """
+    try:
+        domain = await db.get(PromptCluster, domain_id)
+    except OperationalError as exc:
+        logger.warning(
+            "GET /api/domains/%s/readiness/history DB contention: %s",
+            domain_id, exc,
+        )
+        raise HTTPException(503, "Database busy — retry in a moment") from exc
+    if domain is None:
+        raise HTTPException(404, "Domain not found")
+    if domain.state != "domain":
+        raise HTTPException(
+            422,
+            f"Cluster {domain_id} is not a domain node (state='{domain.state}')",
+        )
+    try:
+        return await readiness_history_service.query_history(
+            domain_id=domain.id,
+            domain_label=domain.label,
+            window=window,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        logger.error(
+            "GET /api/domains/%s/readiness/history failed: %s",
+            domain_id, exc, exc_info=True,
+        )
+        raise HTTPException(500, "Failed to load readiness history") from exc
 
 
 @router.post("/{domain_id}/promote", response_model=DomainInfo)

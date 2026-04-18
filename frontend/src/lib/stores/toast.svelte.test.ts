@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { toastStore, addToast } from './toast.svelte';
+import { toastStore, addToast, addInfoToast } from './toast.svelte';
 
 describe('ToastStore', () => {
   beforeEach(() => {
@@ -58,5 +58,60 @@ describe('ToastStore', () => {
   it('addToast convenience function works', () => {
     addToast('created', 'Via helper');
     expect(toastStore.toasts).toHaveLength(1);
+  });
+
+  describe('info', () => {
+    it('info adds a toast with cyan color and i symbol', () => {
+      toastStore.info('System info');
+      expect(toastStore.toasts).toHaveLength(1);
+      expect(toastStore.toasts[0].symbol).toBe('i');
+      expect(toastStore.toasts[0].color).toBe('var(--color-neon-cyan)');
+      expect(toastStore.toasts[0].message).toBe('System info');
+    });
+
+    it('info auto-dismisses with default 3000ms when no opts', () => {
+      toastStore.info('Ephemeral');
+      expect(toastStore.toasts).toHaveLength(1);
+      vi.advanceTimersByTime(4000);
+      expect(toastStore.toasts).toHaveLength(0);
+    });
+
+    it('info respects opts.dismissMs override', () => {
+      toastStore.info('Long lived', { dismissMs: 10000 });
+      expect(toastStore.toasts).toHaveLength(1);
+      vi.advanceTimersByTime(4000);
+      expect(toastStore.toasts).toHaveLength(1);
+      vi.advanceTimersByTime(7000);
+      expect(toastStore.toasts).toHaveLength(0);
+    });
+
+    it('info ignores non-positive / non-finite dismissMs and uses default', () => {
+      toastStore.info('Negative', { dismissMs: -5 });
+      expect(toastStore.toasts).toHaveLength(1);
+      vi.advanceTimersByTime(4000);
+      expect(toastStore.toasts).toHaveLength(0);
+
+      toastStore.info('NaN', { dismissMs: NaN });
+      expect(toastStore.toasts).toHaveLength(1);
+      vi.advanceTimersByTime(4000);
+      expect(toastStore.toasts).toHaveLength(0);
+    });
+
+    it('addInfoToast helper produces identical result', () => {
+      addInfoToast('Via helper');
+      expect(toastStore.toasts).toHaveLength(1);
+      expect(toastStore.toasts[0].symbol).toBe('i');
+      expect(toastStore.toasts[0].color).toBe('var(--color-neon-cyan)');
+    });
+
+    it('info participates in MAX_VISIBLE eviction', () => {
+      toastStore.add('created', 'First');
+      toastStore.add('created', 'Second');
+      toastStore.add('created', 'Third');
+      toastStore.info('fourth');
+      expect(toastStore.toasts).toHaveLength(3);
+      expect(toastStore.toasts.find(t => t.message === 'First')).toBeUndefined();
+      expect(toastStore.toasts[toastStore.toasts.length - 1].message).toBe('fourth');
+    });
   });
 });

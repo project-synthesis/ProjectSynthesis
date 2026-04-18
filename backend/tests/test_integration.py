@@ -209,7 +209,11 @@ class TestEndToEndFlow:
         assert len(versions["versions"]) >= 2
 
         # --- Step 7: Health check includes metrics ---
-        resp = await app_client.get("/api/health")
+        # ``probes=false`` skips cross-service probes (backend:8000,
+        # frontend:5199).  In CI those services aren't running, so the
+        # default probe path returns 503; we're verifying the payload
+        # shape, not live cross-service connectivity.
+        resp = await app_client.get("/api/health?probes=false")
         assert resp.status_code == 200
         health = resp.json()
         assert "score_health" in health
@@ -253,7 +257,8 @@ class TestPassthroughEndToEnd:
         # ── Zero-provider baseline ──────────────────────────────────────
         app_client._transport.app.state.routing.set_provider(None)
 
-        resp = await app_client.get("/api/health")
+        # ``probes=false`` — see test_optimize_refine_feedback_history above.
+        resp = await app_client.get("/api/health?probes=false")
         assert resp.status_code == 200
         health = resp.json()
         assert health["provider"] is None
@@ -436,7 +441,8 @@ class TestPassthroughEndToEnd:
         assert len(fb_data["items"]) == 2
 
         # ── Step 13: Health metrics reflect the passthrough record ──────
-        resp = await app_client.get("/api/health")
+        # ``probes=false`` — skip cross-service probes (not running in CI).
+        resp = await app_client.get("/api/health?probes=false")
         assert resp.status_code == 200
         health = resp.json()
         # Provider is still None but score_health should include our optimization
@@ -607,7 +613,8 @@ class TestPassthroughEndToEnd:
             assert resp.status_code == 200
 
         # ── Health metrics include both ─────────────────────────────────
-        resp = await app_client.get("/api/health")
+        # ``probes=false`` — skip cross-service probes (not running in CI).
+        resp = await app_client.get("/api/health?probes=false")
         assert resp.status_code == 200
         health = resp.json()
         if health["score_health"]:

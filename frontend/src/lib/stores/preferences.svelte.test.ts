@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { preferencesStore } from './preferences.svelte';
+import { toastStore } from './toast.svelte';
 import { mockFetch } from '../test-utils';
 
 describe('PreferencesStore', () => {
@@ -156,6 +157,200 @@ describe('PreferencesStore', () => {
       preferencesStore.prefs.pipeline.enable_explore = true;
       preferencesStore.prefs.pipeline.enable_scoring = true;
       expect(preferencesStore.isLeanMode).toBe(false);
+    });
+  });
+
+  describe('domain readiness notifications', () => {
+    it('DEFAULTS.domain_readiness_notifications is { enabled: false, muted_domain_ids: [] }', () => {
+      // After _reset() the store mirrors DEFAULTS; shape must match the
+      // new backend preferences section added in Cycle 3.
+      preferencesStore._reset();
+      expect(preferencesStore.prefs.domain_readiness_notifications).toEqual({
+        enabled: false,
+        muted_domain_ids: [],
+      });
+    });
+
+    it('preferencesStore.prefs.domain_readiness_notifications returns that shape after _reset()', () => {
+      // Mutate then reset to prove DEFAULTS are actually restored.
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: ['backend'],
+      };
+      preferencesStore._reset();
+      expect(preferencesStore.prefs.domain_readiness_notifications.enabled).toBe(false);
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids).toEqual([]);
+    });
+  });
+
+  describe('toggleDomainMute', () => {
+    beforeEach(() => {
+      toastStore._reset();
+      // Simulate a "loaded" store so toggle is not a no-op.
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: [],
+      };
+    });
+
+    function respondWith(muted: string[]) {
+      return mockFetch([{
+        match: '/api/preferences',
+        response: {
+          schema_version: 1,
+          models: { analyzer: 'sonnet', optimizer: 'opus', scorer: 'sonnet' },
+          pipeline: {
+            enable_explore: true, enable_scoring: true, enable_adaptation: true,
+            force_sampling: false, force_passthrough: false,
+            optimizer_effort: 'high', analyzer_effort: 'low', scorer_effort: 'low',
+          },
+          defaults: { strategy: 'auto' },
+          domain_readiness_notifications: { enabled: true, muted_domain_ids: muted },
+        },
+      }]);
+    }
+
+    it('adds domain_id to muted_domain_ids when absent (optimistic)', async () => {
+      respondWith(['dom-1']);
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: [],
+      };
+      const p = preferencesStore.toggleDomainMute('dom-1');
+      // Optimistic: local state must reflect the new id BEFORE the PATCH resolves.
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual(['dom-1']);
+      await p;
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual(['dom-1']);
+    });
+
+    it('removes domain_id from muted_domain_ids when present (optimistic)', async () => {
+      respondWith([]);
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: ['dom-1', 'dom-2'],
+      };
+      const p = preferencesStore.toggleDomainMute('dom-1');
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual(['dom-2']);
+      await p;
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual(['dom-2']);
+    });
+
+    it('allows toggle during an in-flight init() reload (no false no-op)', async () => {
+      // The previous `this.loading` guard was semantically wrong: it only
+      // covered the initial `init()` window yet silently blocked legitimate
+      // toggles during SSE-triggered preferences reloads. Toggling while
+      // `loading === true` must now PATCH and optimistically update.
+      const fetchMock = respondWith(['dom-1']);
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: [],
+      };
+      preferencesStore.loading = true;
+      await preferencesStore.toggleDomainMute('dom-1');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual(['dom-1']);
+      preferencesStore.loading = false;
+    });
+
+    it('persists via PATCH with a domain_readiness_notifications payload', async () => {
+      const fetchMock = respondWith(['dom-1']);
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: [],
+      };
+      await preferencesStore.toggleDomainMute('dom-1');
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/preferences'),
+        expect.objectContaining({ method: 'PATCH' }),
+      );
+      const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+      expect(body).toEqual({
+        domain_readiness_notifications: { muted_domain_ids: ['dom-1'] },
+      });
+    });
+
+    it('rolls back local state and shows a toast on PATCH failure', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('boom')));
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: [],
+      };
+      await preferencesStore.toggleDomainMute('dom-1');
+      // Rolled back.
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual([]);
+      // Toast surfaced.
+      expect(toastStore.toasts.length).toBeGreaterThan(0);
+    });
+
+    it('rollback of one failed toggle does not clobber a concurrent toggle of another domain', async () => {
+      // Regression guard: snapshot-based rollback silently dropped concurrent
+      // toggles on other domains. The inverse-toggle rollback must scope
+      // the revert to the failed domain only.
+      preferencesStore.prefs.domain_readiness_notifications = {
+        enabled: true,
+        muted_domain_ids: [],
+      };
+
+      // Build a fetch mock whose first call (domain_a) hangs on a controllable
+      // promise, and whose second call (domain_b) succeeds immediately.
+      let rejectA: ((err: Error) => void) | null = null;
+      const pendingA = new Promise<Response>((_resolve, reject) => {
+        rejectA = reject;
+      });
+      const successResponse = {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          schema_version: 1,
+          models: { analyzer: 'sonnet', optimizer: 'opus', scorer: 'sonnet' },
+          pipeline: {
+            enable_explore: true, enable_scoring: true, enable_adaptation: true,
+            force_sampling: false, force_passthrough: false,
+            optimizer_effort: 'high', analyzer_effort: 'low', scorer_effort: 'low',
+          },
+          defaults: { strategy: 'auto' },
+          domain_readiness_notifications: {
+            enabled: true,
+            muted_domain_ids: ['domain_a', 'domain_b'],
+          },
+        }),
+        text: async () => '',
+      } as unknown as Response;
+
+      const fetchMock = vi.fn()
+        .mockImplementationOnce(() => pendingA)
+        .mockImplementationOnce(async () => successResponse);
+      vi.stubGlobal('fetch', fetchMock);
+
+      // 1. Toggle domain_a — PATCH pending.
+      const pA = preferencesStore.toggleDomainMute('domain_a');
+      // Optimistic: domain_a added immediately.
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual(['domain_a']);
+
+      // 2. Toggle domain_b — PATCH succeeds.
+      await preferencesStore.toggleDomainMute('domain_b');
+
+      // 3. Both present before domain_a's rejection.
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual(['domain_a', 'domain_b']);
+
+      // 4. Reject domain_a's PATCH.
+      rejectA!(new Error('boom'));
+      await pA;
+
+      // 5. domain_a removed; domain_b preserved.
+      expect(preferencesStore.prefs.domain_readiness_notifications.muted_domain_ids)
+        .toEqual(['domain_b']);
+
+      // 6. Exactly one error toast fired.
+      expect(toastStore.toasts.length).toBe(1);
     });
   });
 

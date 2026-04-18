@@ -20,7 +20,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          # Pin to 3.12 to match backend/CLAUDE.md target and local dev.
+          # 3.14 wheels for hnswlib (and other SIMD-heavy deps) crash with
+          # "Illegal instruction" on some GH runner VMs — wheel uses CPU
+          # features not universally available across the ubuntu-latest pool.
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -37,7 +41,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version: "3.12"
       - run: pip install ruff
       - run: ruff check app/ tests/
 

@@ -116,6 +116,16 @@ SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH = 0.60  # threshold for small domains
 SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW = 0.40   # threshold floor for large domains
 SUB_DOMAIN_QUALIFIER_SCALE_RATE = 0.004       # per-member threshold reduction
 SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS = 1       # minimum keyword hits to accept a qualifier
+
+# ---------------------------------------------------------------------------
+# Readiness history — persisted snapshots for trajectory visualization.
+# Stored as JSONL under data/readiness_history/snapshots-YYYY-MM-DD.jsonl.
+# Sampled every warm-cycle Phase 5 (~5min) per top-level domain.
+# Volume: 30 domains × 288/day = ~8.6k rows/day → ~260k rows in a 30d window.
+READINESS_HISTORY_DIR_NAME: str = "readiness_history"
+READINESS_HISTORY_RETENTION_DAYS: int = 30
+# Windows ≥ this threshold get hourly bucket means to keep payload < 2KB.
+READINESS_HISTORY_BUCKET_THRESHOLD_DAYS: int = 7
 # Minimum distinct clusters a qualifier must span before it can promote to a
 # sub-domain.  A single-cluster qualifier adds hierarchy depth without
 # navigational value — the sub-domain would be a 1:1 wrapper.  Consumed by
@@ -214,6 +224,16 @@ DOMAIN_SPLIT_HASH_TTL_HOURS = 6
 # Grace period after merge_protected_until expires. If a cluster merges
 # back within this window of its protection expiry, it's a futile split.
 MERGE_BACK_GRACE_MINUTES = 30
+
+
+# ---------------------------------------------------------------------------
+# Readiness crossing notifications — proactive tier transitions.
+# A crossing fires only after the new tier has been observed at least
+# READINESS_CROSSING_HYSTERESIS_CYCLES consecutive times (suppresses 1-cycle
+# spikes around the warming/ready boundary).  Same-axis re-fires are
+# suppressed for READINESS_CROSSING_COOLDOWN_SECONDS per domain.
+READINESS_CROSSING_HYSTERESIS_CYCLES: int = 2
+READINESS_CROSSING_COOLDOWN_SECONDS: float = 600.0  # 10 minutes
 
 
 def _utcnow() -> datetime:

@@ -14,6 +14,10 @@
   import { updateStore } from '$lib/stores/update.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import { sseHealthStore } from '$lib/stores/sse-health.svelte';
+  import {
+    dispatchReadinessCrossing,
+    type ReadinessCrossingPayload,
+  } from '$lib/stores/readiness-notifications.svelte';
 
   let backendError = $state<string | null>(null);
   let firstHealthReceived = false;
@@ -159,6 +163,18 @@
         }
         if (type === 'domain_created') {
           domainStore.invalidate();
+          readinessStore.invalidate();
+        }
+        if (type === 'domain_readiness_changed') {
+          // Toast dispatcher is gated internally by preferences
+          // (enabled + muted-domain list); safe to call unconditionally.
+          dispatchReadinessCrossing(data as unknown as ReadinessCrossingPayload);
+          // Refetch reports so consumers (topology rings, readiness panel)
+          // reflect the new tier without waiting for the next taxonomy_changed
+          // event or manual refresh. `invalidate()` is a fire-and-forget
+          // refetch guarded by a generation counter — no infinite-loop risk
+          // because the backend emits this event on tier crossings, not on
+          // every report fetch.
           readinessStore.invalidate();
         }
         if (type === 'routing_state_changed') {

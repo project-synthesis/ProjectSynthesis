@@ -24,11 +24,12 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, TypedDict
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,11 +42,14 @@ from app.schemas.sub_domain_readiness import (
     QualifierCandidate,
     SubDomainEmergenceReport,
 )
+from app.services.event_bus import event_bus
 from app.services.taxonomy._constants import (
     DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
     DOMAIN_DISSOLUTION_MEMBER_CEILING,
     DOMAIN_DISSOLUTION_MIN_AGE_HOURS,
     EXCLUDED_STRUCTURAL_STATES,
+    READINESS_CROSSING_COOLDOWN_SECONDS,
+    READINESS_CROSSING_HYSTERESIS_CYCLES,
     SUB_DOMAIN_MIN_CLUSTER_BREADTH,
     SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH,
     SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
@@ -57,14 +61,19 @@ from app.services.taxonomy.cluster_meta import read_meta
 from app.services.taxonomy.event_logger import get_event_logger
 from app.utils.text_cleanup import parse_domain
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "CascadeResult",
+    "TierCrossing",
+    "DomainReadinessChangedEvent",
     "compute_qualifier_cascade",
     "compute_sub_domain_emergence",
     "compute_domain_stability",
     "compute_domain_readiness",
     "compute_all_domain_readiness",
     "clear_cache",
+    "clear_tier_history",
 ]
 
 
@@ -749,24 +758,284 @@ _event_debounce: dict[str, float] = {}
 _EVENT_DEBOUNCE_SECONDS = 5.0
 
 
+class TierCrossing(TypedDict):
+    """Stable payload shape for a single tier-axis crossing.
+
+    Produced by ``_detect_crossings``; consumed (in a follow-up cycle) by
+    ``_publish_crossings`` to populate the ``domain_readiness_changed`` event.
+    """
+
+    axis: Literal["emergence", "stability"]
+    from_tier: str
+    to_tier: str
+
+
+class DomainReadinessChangedEvent(TypedDict):
+    """Stable wire shape for the ``domain_readiness_changed`` event-bus event.
+
+    Published by ``_publish_crossings`` on every confirmed tier transition.
+    The next Plan C cycle wires a frontend SSE listener to this shape — keep it
+    stable once shipped.  All float fields are rounded to 3 decimal places before
+    publish so JSON comparison in tests is deterministic.
+    """
+
+    domain_id: str
+    domain_label: str
+    axis: Literal["emergence", "stability"]
+    from_tier: str
+    to_tier: str
+    consistency: float
+    gap_to_threshold: float | None
+    would_dissolve: bool
+    ts: str  # ISO-8601 UTC, e.g. "2026-04-17T12:00:00+00:00"
+
+
+@dataclass
+class _TierHistoryEntry:
+    """Per-domain rolling state for crossing detection.
+
+    ``stable_*_tier`` is the last tier we considered "settled" (i.e., observed
+    at least HYSTERESIS_CYCLES times in a row).  ``pending_*_tier`` and
+    ``pending_*_count`` track the streak of a candidate new tier.  A crossing
+    fires when ``pending_count`` reaches HYSTERESIS_CYCLES *and* the cooldown
+    window has elapsed since the last fire for that axis.
+    """
+
+    stable_emergence_tier: str | None = None
+    pending_emergence_tier: str | None = None
+    pending_emergence_count: int = 0
+    last_emergence_fire_at: float = 0.0
+
+    stable_stability_tier: str | None = None
+    pending_stability_tier: str | None = None
+    pending_stability_count: int = 0
+    last_stability_fire_at: float = 0.0
+
+
+_tier_history: dict[str, _TierHistoryEntry] = {}
+
+
+def clear_tier_history() -> None:
+    """Drop all per-domain crossing history (test hook + manual reset)."""
+    _tier_history.clear()
+
+
+def _process_axis_crossing(
+    *,
+    entry: _TierHistoryEntry,
+    axis: Literal["emergence", "stability"],
+    new_tier: str,
+    now: float,
+    domain_id: str = "",
+) -> TierCrossing | None:
+    """Update entry for one axis; return a ``TierCrossing`` if one fires.
+
+    When a transition satisfies hysteresis but is gated by the 10-minute
+    cooldown, a ``readiness_crossing_suppressed`` observability event is
+    emitted (best-effort) so suppressed crossings remain diagnosable.
+    ``domain_id`` is optional for callers that do not need that trace.
+    """
+    if axis == "emergence":
+        stable_attr = "stable_emergence_tier"
+        pending_attr = "pending_emergence_tier"
+        count_attr = "pending_emergence_count"
+        last_attr = "last_emergence_fire_at"
+    else:
+        stable_attr = "stable_stability_tier"
+        pending_attr = "pending_stability_tier"
+        count_attr = "pending_stability_count"
+        last_attr = "last_stability_fire_at"
+
+    stable_tier = getattr(entry, stable_attr)
+    if stable_tier is None:
+        # First observation — record baseline, no crossing.
+        setattr(entry, stable_attr, new_tier)
+        setattr(entry, pending_attr, None)
+        setattr(entry, count_attr, 0)
+        return None
+
+    if new_tier == stable_tier:
+        # No transition; clear any in-flight pending state.
+        setattr(entry, pending_attr, None)
+        setattr(entry, count_attr, 0)
+        return None
+
+    # Different from stable tier — accumulate pending streak.
+    pending = getattr(entry, pending_attr)
+    if pending == new_tier:
+        setattr(entry, count_attr, getattr(entry, count_attr) + 1)
+    else:
+        setattr(entry, pending_attr, new_tier)
+        setattr(entry, count_attr, 1)
+
+    if getattr(entry, count_attr) < READINESS_CROSSING_HYSTERESIS_CYCLES:
+        return None
+
+    # Cooldown: skip if we fired for this axis recently.  Promote stable
+    # and clear pending so the cooldown still covers any future re-cross.
+    last_fire = getattr(entry, last_attr)
+    if last_fire > 0.0 and now - last_fire < READINESS_CROSSING_COOLDOWN_SECONDS:
+        suppressed_from = stable_tier
+        setattr(entry, stable_attr, new_tier)
+        setattr(entry, pending_attr, None)
+        setattr(entry, count_attr, 0)
+        # Observability: the cooldown gate is real and load-bearing, but
+        # silent suppression makes spurious-but-real transitions invisible
+        # in the event log.  Emit a structured breadcrumb so operators can
+        # diagnose "why didn't that crossing fire?" later.  Best-effort —
+        # readiness events never fail the caller.
+        try:
+            get_event_logger().log_decision(
+                path="api",
+                op="readiness_crossing_suppressed",
+                decision="cooldown_gated",
+                cluster_id=domain_id or None,
+                context={
+                    "domain_id": domain_id,
+                    "axis": axis,
+                    "from_tier": suppressed_from,
+                    "to_tier": new_tier,
+                    "seconds_since_last_fire": round(now - last_fire, 2),
+                    "cooldown_seconds": READINESS_CROSSING_COOLDOWN_SECONDS,
+                },
+            )
+        except RuntimeError:
+            pass
+        return None
+
+    crossing = TierCrossing(axis=axis, from_tier=stable_tier, to_tier=new_tier)
+    setattr(entry, stable_attr, new_tier)
+    setattr(entry, pending_attr, None)
+    setattr(entry, count_attr, 0)
+    setattr(entry, last_attr, now)
+    return crossing
+
+
+def _detect_crossings(
+    report: DomainReadinessReport,
+    *,
+    now: float,
+) -> list[TierCrossing]:
+    """Compare report tiers against history; return crossings that fired.
+
+    Each ``TierCrossing`` has keys ``axis``, ``from_tier``, ``to_tier``.
+    The two axes (emergence and stability) are evaluated independently —
+    a spike on one axis never resets the hysteresis counter of the other.
+
+    Side effect: mutates ``_tier_history`` for the report's domain.
+    """
+    entry = _tier_history.setdefault(report.domain_id, _TierHistoryEntry())
+    crossings: list[TierCrossing] = []
+    for crossing in (
+        _process_axis_crossing(
+            entry=entry, axis="emergence",
+            new_tier=report.emergence.tier, now=now,
+            domain_id=report.domain_id,
+        ),
+        _process_axis_crossing(
+            entry=entry, axis="stability",
+            new_tier=report.stability.tier, now=now,
+            domain_id=report.domain_id,
+        ),
+    ):
+        if crossing is not None:
+            crossings.append(crossing)
+    return crossings
+
+
+def _publish_crossings(
+    report: DomainReadinessReport,
+    *,
+    now: float,
+) -> None:
+    """Detect tier crossings; publish event_bus event + JSONL log per crossing.
+
+    Synchronous by design: ``event_bus.publish()`` is sync (it just enqueues
+    onto subscriber asyncio.Queues).  Called from both async and sync code
+    paths — no loop required.
+
+    The event is ALWAYS emitted when a crossing fires (machine-readable for
+    automation/logs).  Frontend toast is gated by the user's notifications
+    preference and per-domain mute list — those gates live in the frontend.
+    """
+    crossings = _detect_crossings(report, now=now)
+    if not crossings:
+        return
+
+    for crossing in crossings:
+        payload: DomainReadinessChangedEvent = {
+            "domain_id": report.domain_id,
+            "domain_label": report.domain_label,
+            "axis": crossing["axis"],
+            "from_tier": crossing["from_tier"],
+            "to_tier": crossing["to_tier"],
+            "consistency": round(report.stability.consistency, 3),
+            "gap_to_threshold": (
+                round(report.emergence.gap_to_threshold, 3)
+                if report.emergence.gap_to_threshold is not None
+                else None
+            ),
+            "would_dissolve": report.stability.would_dissolve,
+            "ts": report.computed_at.isoformat(),
+        }
+        try:
+            event_bus.publish("domain_readiness_changed", payload)
+        except Exception:
+            logger.debug(
+                "event_bus.publish failed for domain_readiness_changed "
+                "(domain_id=%s axis=%s)",
+                report.domain_id, crossing["axis"],
+                exc_info=True,
+            )
+        try:
+            get_event_logger().log_decision(
+                path="api",
+                op="readiness",
+                decision="domain_readiness_changed",
+                cluster_id=report.domain_id,
+                context=payload,
+            )
+        except RuntimeError:
+            pass
+
+
 def _maybe_emit_events(
     domain_node: PromptCluster,
     report: DomainReadinessReport,
     now: float,
 ) -> None:
-    """Emit observability events at most once every 5 seconds per domain."""
+    """Emit observability events.
+
+    - Tier crossings run on EVERY computation (hysteresis + cooldown guard
+      against spam) — must not be suppressed by the 5s debounce applied to
+      routine readiness logs.
+    - The per-computation `sub_domain_readiness_computed` /
+      `domain_stability_computed` decisions are debounced (one entry per 5s
+      per domain).
+    """
+    # 1. Crossing detection — always runs, never debounced.
+    try:
+        _publish_crossings(report, now=now)
+    except Exception:
+        logger.debug(
+            "_publish_crossings failed unexpectedly (domain_id=%s)",
+            domain_node.id,
+            exc_info=True,
+        )
+
+    # 2. Routine readiness log — debounced.
     last = _event_debounce.get(domain_node.id, 0.0)
     if now - last < _EVENT_DEBOUNCE_SECONDS:
         return
     _event_debounce[domain_node.id] = now
 
     try:
-        logger = get_event_logger()
+        event_logger = get_event_logger()
     except RuntimeError:
         return
 
     try:
-        logger.log_decision(
+        event_logger.log_decision(
             path="api",
             op="readiness",
             decision="sub_domain_readiness_computed",
@@ -790,7 +1059,7 @@ def _maybe_emit_events(
                 "blocked_reason": report.emergence.blocked_reason,
             },
         )
-        logger.log_decision(
+        event_logger.log_decision(
             path="api",
             op="readiness",
             decision="domain_stability_computed",

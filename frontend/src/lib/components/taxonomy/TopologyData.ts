@@ -8,6 +8,24 @@ import type { ClusterNode, SimilarityEdge, InjectionEdge } from '$lib/api/cluste
 import type { LODTier } from './TopologyRenderer';
 import { taxonomyColor, stateColor } from '$lib/utils/colors';
 import { parsePrimaryDomain } from '$lib/utils/formatting';
+import type { ReadinessTier } from './readiness-tier';
+import { composeReadinessTier } from './readiness-tier';
+import { readinessStore } from '$lib/stores/readiness.svelte';
+
+/**
+ * Exhaustive set of valid `ReadinessTier` enum values. Used as a runtime
+ * guard in `buildSceneData()` to drop unknown tier strings produced by
+ * schema drift (e.g. a future backend adds a new stability tier the
+ * frontend enum doesn't know yet). `Set` gives O(1) membership checking;
+ * the cast is safe because the array is exhaustive over the literal
+ * union (compile error if a member is removed). Re-declared here instead
+ * of exported from `readiness-tier.ts` to keep that module a pure type +
+ * palette utility, matching how `parsePrimaryDomain` and
+ * `stateSizeMultiplier` keep their validators local.
+ */
+const _KNOWN_READINESS_TIERS: ReadonlySet<ReadinessTier> = new Set<ReadinessTier>([
+  'healthy', 'warming', 'guarded', 'critical', 'ready',
+]);
 
 export interface SceneNode {
   id: string;
@@ -25,6 +43,7 @@ export interface SceneNode {
   domain: string;          // primary domain (e.g. "backend", "general")
   memberCount: number;     // member_count from API
   isSubDomain: boolean;    // true for domain nodes whose parent is also a domain
+  readinessTier?: ReadinessTier; // composite readiness tier, only set on domain nodes with a matching report
 }
 
 /** Opacity by lifecycle state and active filter.
@@ -100,6 +119,28 @@ const LOD_THRESHOLDS: Record<LODTier, number> = {
 /**
  * Convert flat taxonomy node list into scene-ready nodes and edges.
  * Backend `get_tree` returns a flat list — we build edges from `parent_id`.
+ *
+ * Domain nodes (including sub-domains) are additionally decorated with an
+ * optional `readinessTier` sourced from `readinessStore`. The store read is a
+ * synchronous derived-map lookup (no IO, no side effects) so the function
+ * remains a pure transform of `(flatNodes, edges, filter, readinessSnapshot)`
+ * at call time. When the store is unloaded or lacks a matching report, the
+ * field stays undefined and the consumer (`SemanticTopology`) simply omits
+ * the contour ring — decoration is purely additive.
+ *
+ * **Hidden reactive dependency (not visible from signature):** this function
+ * reads `readinessStore.byDomain(id)` internally. The read itself is pure
+ * given a fixed store snapshot, but callers that need the rendered scene to
+ * *react* to readiness changes MUST touch `readinessStore.reports` (or
+ * another tracked rune on the store) inside the same `$effect` that invokes
+ * `buildSceneData`. Without an explicit read, Svelte's reactivity tracker
+ * cannot see the dependency and tier decoration will stop updating on SSE
+ * `taxonomy_changed` / `domain_created` events. See `SemanticTopology.svelte`
+ * for the canonical caller pattern: an `$effect` that reads
+ * `readinessStore.reports` alongside `flatNodes` before calling this
+ * function. Intentionally not surfaced as a parameter — threading the
+ * snapshot through would be a breaking refactor, and the store is already
+ * a singleton-scoped reactive source that every caller shares.
  */
 export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: SimilarityEdge[], injectionEdges?: InjectionEdge[], stateFilter?: string | null): SceneData {
   const nodes: SceneNode[] = [];
@@ -183,7 +224,7 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
     const finalSize = Math.min(MAX_NODE_SIZE, size * stateSizeMultiplier(node.state, isSubDomain));
     const nodeOpacity = stateOpacity(node.state, effectiveFilter, hasFilterMatches);
 
-    nodes.push({
+    const sceneNode: SceneNode = {
       id: node.id,
       position: [x, y, z],
       color: stateNodeColor(node.state, node.domain ?? node.color_hex),
@@ -199,7 +240,29 @@ export function buildSceneData(flatNodes: ClusterNode[], similarityEdges?: Simil
       domain: parsePrimaryDomain(node.domain),
       memberCount: node.member_count,
       isSubDomain: subDomainIds.has(node.id),
-    });
+    };
+
+    // Decorate domain nodes (top-level and sub-domain) with composite
+    // readiness tier when a matching report exists. `readinessStore.byDomain`
+    // is a derived O(1) map lookup — no IO — so the surrounding function
+    // stays pure relative to `(flatNodes, readinessSnapshot)`. When the store
+    // is unloaded (empty `reports`) or the domain has no report yet, the
+    // field stays undefined and the ring is omitted by `SemanticTopology`.
+    if (node.state === 'domain') {
+      const report = readinessStore.byDomain(node.id);
+      if (report) {
+        // Schema-drift guard: if composeReadinessTier passes through an
+        // unknown stability tier (backend adds a new enum value the
+        // frontend hasn't adopted), drop it — the ring renderer looks up
+        // color by key and would silently paint an invalid `undefined`.
+        const composed = composeReadinessTier(report);
+        if (_KNOWN_READINESS_TIERS.has(composed)) {
+          sceneNode.readinessTier = composed;
+        }
+      }
+    }
+
+    nodes.push(sceneNode);
 
     // Hierarchical edges from parent_id
     if (node.parent_id) {

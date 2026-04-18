@@ -1,8 +1,10 @@
 """Tests for the /api/domains router."""
 
 import pytest
+from sqlalchemy import select
 
 from app.models import PromptCluster
+from app.schemas.sub_domain_readiness import ReadinessHistoryResponse
 
 
 class TestListDomains:
@@ -243,3 +245,66 @@ class TestPromoteToDomain:
         color = resp.json()["color_hex"]
         assert color.startswith("#")
         assert len(color) == 7  # #rrggbb format
+
+
+async def _get_seed_domain(db_session) -> PromptCluster:
+    """The ``app_client`` fixture in ``conftest.py`` pre-seeds 8 domain nodes
+    (backend, frontend, database, data, devops, security, fullstack, general).
+    Grab the "backend" node — any domain-state node works for these tests.
+    """
+    result = await db_session.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            PromptCluster.label == "backend",
+        )
+    )
+    node = result.scalar_one()
+    return node
+
+
+@pytest.mark.asyncio
+async def test_get_domain_readiness_history_returns_payload(
+    app_client,
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    """GET /api/domains/{id}/readiness/history?window=24h returns response model."""
+    # Redirect history dir to tmp_path
+    from app.services.taxonomy import readiness_history
+    monkeypatch.setattr(
+        readiness_history, "_resolve_dir", lambda base_dir=None: tmp_path,
+    )
+    seeded_domain = await _get_seed_domain(db_session)
+
+    resp = await app_client.get(
+        f"/api/domains/{seeded_domain.id}/readiness/history?window=24h",
+    )
+    assert resp.status_code == 200
+    body = ReadinessHistoryResponse.model_validate(resp.json())
+    assert body.domain_id == seeded_domain.id
+    assert body.window == "24h"
+    assert body.bucketed is False
+    assert isinstance(body.points, list)
+
+
+@pytest.mark.asyncio
+async def test_get_domain_readiness_history_rejects_bad_window(
+    app_client,
+    db_session,
+):
+    seeded_domain = await _get_seed_domain(db_session)
+    resp = await app_client.get(
+        f"/api/domains/{seeded_domain.id}/readiness/history?window=99h",
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_get_domain_readiness_history_404s_unknown_domain(
+    app_client,
+):
+    resp = await app_client.get(
+        "/api/domains/does-not-exist/readiness/history?window=24h",
+    )
+    assert resp.status_code == 404

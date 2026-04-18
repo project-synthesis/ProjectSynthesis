@@ -1,4 +1,5 @@
 import { getPreferences, patchPreferences } from '$lib/api/client';
+import { toastStore } from './toast.svelte';
 
 export interface ModelPrefs {
   analyzer: string;
@@ -17,11 +18,17 @@ export interface PipelinePrefs {
   scorer_effort: string;
 }
 
+export interface ReadinessNotificationsPrefs {
+  enabled: boolean;
+  muted_domain_ids: string[];
+}
+
 export interface Preferences {
   schema_version: number;
   models: ModelPrefs;
   pipeline: PipelinePrefs;
   defaults: { strategy: string };
+  domain_readiness_notifications: ReadinessNotificationsPrefs;
 }
 
 const DEFAULTS: Preferences = {
@@ -29,7 +36,11 @@ const DEFAULTS: Preferences = {
   models: { analyzer: 'sonnet', optimizer: 'opus', scorer: 'sonnet' },
   pipeline: { enable_explore: true, enable_scoring: true, enable_adaptation: true, force_sampling: false, force_passthrough: false, optimizer_effort: 'high', analyzer_effort: 'low', scorer_effort: 'low' },
   defaults: { strategy: 'auto' },
+  domain_readiness_notifications: { enabled: false, muted_domain_ids: [] },
 };
+
+/** User-visible toast surfaced when `toggleDomainMute()` rolls back. */
+const MUTE_TOGGLE_ERROR_MESSAGE = 'Failed to update mute preference';
 
 class PreferencesStore {
   prefs = $state<Preferences>(structuredClone(DEFAULTS));
@@ -87,6 +98,49 @@ class PreferencesStore {
 
   async setEffort(key: string, value: string): Promise<void> {
     await this.update({ pipeline: { [key]: value } });
+  }
+
+  /**
+   * Optimistically toggle a domain's membership in
+   * `domain_readiness_notifications.muted_domain_ids`, then persist via PATCH.
+   *
+   * Contract:
+   *   - Optimistic: mutates local state *before* awaiting PATCH — UI updates
+   *     immediately.
+   *   - Rollback: on PATCH rejection, re-reads the CURRENT muted list and
+   *     toggles `domainId` membership again. This inverse-toggle revert is
+   *     scoped to the failed domain only, so concurrent toggles of other
+   *     domains (which may have succeeded in the meantime) are preserved.
+   *     Surfaces a `'deleted'` toast. Swallows the error (matches the
+   *     rest-of-store pattern where `update()` also never re-throws).
+   *   - No loading guard: toggling during an in-flight `init()` reload is
+   *     harmless — the post-init `this.prefs = ...` assignment wins, which
+   *     matches user intent ("server truth is most recent").
+   */
+  async toggleDomainMute(domainId: string): Promise<void> {
+    const current = this.prefs.domain_readiness_notifications;
+    const next = current.muted_domain_ids.includes(domainId)
+      ? current.muted_domain_ids.filter((id) => id !== domainId)
+      : [...current.muted_domain_ids, domainId];
+    this.prefs.domain_readiness_notifications = {
+      ...current,
+      muted_domain_ids: next,
+    };
+    try {
+      await patchPreferences({
+        domain_readiness_notifications: { muted_domain_ids: next },
+      });
+    } catch {
+      const live = this.prefs.domain_readiness_notifications;
+      const reverted = live.muted_domain_ids.includes(domainId)
+        ? live.muted_domain_ids.filter((id) => id !== domainId)
+        : [...live.muted_domain_ids, domainId];
+      this.prefs.domain_readiness_notifications = {
+        ...live,
+        muted_domain_ids: reverted,
+      };
+      toastStore.add('deleted', MUTE_TOGGLE_ERROR_MESSAGE);
+    }
   }
 
   /** @internal Test-only: restore initial state */
