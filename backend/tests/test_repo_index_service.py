@@ -11,6 +11,7 @@ from app.config import settings
 from app.models import RepoFileIndex, RepoIndexMeta
 from app.services.github_client import GitHubApiError
 from app.services.repo_index_service import (
+    FileOutline,
     RepoIndexService,
     _classify_github_error,
     _classify_source_type,
@@ -1947,17 +1948,14 @@ async def test_embedding_reuses_cached_content_sha(db_session):
     RED: without content-hash dedup, ``aembed_texts`` is called for every
     file on every rebuild.
     """
-    import hashlib
-
-    from app.services.repo_index_service import _build_embedding_text
+    from app.services.repo_index_service import _build_content_sha
 
     # Pre-seed: a file with known content + its embedding, content_sha set.
     cached_vec = np.ones(384, dtype=np.float32) * 0.5  # distinctive fingerprint
     content = "def cached(): return 42\n"
     path = "src/cached.py"
     outline = _extract_structured_outline(path, content)
-    embed_text = _build_embedding_text(path, outline)
-    content_sha = hashlib.sha256(embed_text.encode("utf-8")).hexdigest()
+    content_sha = _build_content_sha(path, outline)
 
     db_session.add(RepoFileIndex(
         repo_full_name="other/repo", branch="main",
@@ -2004,16 +2002,13 @@ async def test_embedding_reuses_cached_content_sha(db_session):
 @pytest.mark.asyncio
 async def test_embedding_partial_cache_hit(db_session):
     """Mixed batch: cached files reuse vectors; only misses go to the embedder."""
-    import hashlib
-
-    from app.services.repo_index_service import _build_embedding_text
+    from app.services.repo_index_service import _build_content_sha
 
     cached_vec = np.ones(384, dtype=np.float32) * 0.3
     content_cached = "def cached(): return 1\n"
     path_cached = "src/cached.py"
     outline_cached = _extract_structured_outline(path_cached, content_cached)
-    embed_text_cached = _build_embedding_text(path_cached, outline_cached)
-    sha_cached = hashlib.sha256(embed_text_cached.encode("utf-8")).hexdigest()
+    sha_cached = _build_content_sha(path_cached, outline_cached)
 
     db_session.add(RepoFileIndex(
         repo_full_name="other/repo", branch="main",
@@ -2076,8 +2071,6 @@ async def test_embedding_partial_cache_hit(db_session):
 @pytest.mark.asyncio
 async def test_embedding_persists_content_sha_on_fresh_build(db_session):
     """build_index must persist content_sha so future builds can dedup."""
-    import hashlib
-
     content = "def main():\n    pass\n"
     path = "src/main.py"
     gc = AsyncMock()
@@ -2097,23 +2090,23 @@ async def test_embedding_persists_content_sha_on_fresh_build(db_session):
         select(RepoFileIndex).where(RepoFileIndex.repo_full_name == "o/r")
     )).scalar_one()
     assert row.content_sha is not None
-    # Derivable from the same embed_text formula — verifies our key formula.
+    # Canonical formula lives in ``_build_content_sha`` — includes the
+    # embedding-model identifier as a fence so model upgrades don't
+    # silently reuse stale vectors.
     outline = _extract_structured_outline(path, content)
-    from app.services.repo_index_service import _build_embedding_text
-    expected_sha = hashlib.sha256(
-        _build_embedding_text(path, outline).encode("utf-8")
-    ).hexdigest()
-    assert row.content_sha == expected_sha
+    from app.services.repo_index_service import _build_content_sha
+    assert row.content_sha == _build_content_sha(path, outline)
 
 
 # ---------------------------------------------------------------------------
 # File-content TTL cache (Fix #4)
 # ---------------------------------------------------------------------------
-# Keyed by (repo, branch, path, file_sha). File SHAs identify content exactly
-# (git blob hash), so entries are safe to reuse indefinitely — we only cap
-# via TTL + LRU to bound memory. The cache trims GitHub API calls when the
-# same blob SHA appears in multiple branches, revisions of the same index
-# run that touch a file twice, or repeat reindex cycles within the window.
+# Keyed by (repo, path, file_sha) — NOT by branch, because a git blob SHA
+# identifies content exactly across branches within the same repo. Cap
+# via TTL + FIFO eviction (strict insertion order; ``get`` does not touch
+# the timestamp). The cache trims GitHub API calls when the same blob SHA
+# appears in multiple branches, revisions of the same index run that touch
+# a file twice, or repeat reindex cycles within the window.
 # ---------------------------------------------------------------------------
 
 
@@ -2207,3 +2200,196 @@ async def test_read_file_skips_cache_without_sha(db_session):
     await svc._read_file(sem, "tok", "o/r", "main", item)
 
     assert gc.get_file_content.await_count == 2  # not cached
+
+
+# ---------------------------------------------------------------------------
+# REFACTOR-phase hardening — locks in invariants flagged by code review
+# ---------------------------------------------------------------------------
+
+
+def test_invalidate_curated_cache_has_no_repo_argument():
+    """The public signature must not accept a lying scope argument.
+
+    A previous iteration accepted ``repo_full_name=`` but silently ignored
+    it and evicted everything. The parameter was removed; this test keeps
+    it out.
+    """
+    import inspect
+
+    from app.services.repo_index_service import invalidate_curated_cache
+
+    params = inspect.signature(invalidate_curated_cache).parameters
+    assert params == {}, (
+        f"invalidate_curated_cache must take zero args; got {list(params)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_shared_content_sha_embeddings_are_independent(db_session):
+    """Two files sharing a content_sha must not share a numpy buffer.
+
+    Mutating one ``ProcessedFile.embedding`` must not bleed into the
+    other — locks down against a future 'optimization' that drops the
+    ``.copy()`` / ``.astype()`` copy-on-assign behaviour.
+    """
+    # Seed cached embedding rows so both files can dedup against them.
+    from app.services.repo_index_service import _build_content_sha
+
+    path_a = "src/a.py"
+    path_b = "src/b.py"
+    content = "shared body"
+    outline_a = _extract_structured_outline(path_a, content)
+    outline_b = _extract_structured_outline(path_b, content)
+    cached_vec = np.ones(384, dtype=np.float32) * 0.42
+    sha_a = _build_content_sha(path_a, outline_a)
+    sha_b = _build_content_sha(path_b, outline_b)
+
+    import uuid as _uuid
+    db_session.add(RepoFileIndex(
+        id=str(_uuid.uuid4()),
+        repo_full_name="other/repo", branch="main",
+        file_path=path_a, file_sha="seed_a", file_size_bytes=len(content),
+        content=content, outline="{}",
+        content_sha=sha_a, embedding=cached_vec.tobytes(),
+    ))
+    db_session.add(RepoFileIndex(
+        id=str(_uuid.uuid4()),
+        repo_full_name="other/repo", branch="main",
+        file_path=path_b, file_sha="seed_b", file_size_bytes=len(content),
+        content=content, outline="{}",
+        content_sha=sha_b, embedding=cached_vec.tobytes(),
+    ))
+    await db_session.commit()
+
+    gc = AsyncMock()
+    gc.get_branch_head_sha.return_value = "head_new"
+    tree_items = [
+        {"path": path_a, "sha": "fs_a", "size": len(content)},
+        {"path": path_b, "sha": "fs_b", "size": len(content)},
+    ]
+    gc.get_tree.return_value = tree_items
+    gc.get_tree_with_cache = AsyncMock(return_value=(tree_items, None))
+    gc.get_file_content = AsyncMock(return_value=content)
+    es = MagicMock()
+    es.aembed_texts = AsyncMock(return_value=[])  # must not be called
+
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+    processed, _reads, _embs = await svc._read_and_embed_files(
+        tree_items, "tok", "new/repo", "main",
+    )
+
+    # Both files should have embeddings (copied from the cache).
+    assert len(processed) == 2
+    emb_a = processed[0].embedding
+    emb_b = processed[1].embedding
+    # Values match the cached vector.
+    np.testing.assert_array_equal(emb_a, cached_vec)
+    np.testing.assert_array_equal(emb_b, cached_vec)
+    # Independence: mutating one must NOT affect the other or the seed.
+    emb_a[0] = 99.0
+    assert emb_b[0] != 99.0, "embeddings must not share a buffer"
+
+
+@pytest.mark.asyncio
+async def test_stale_null_embedding_row_does_not_poison_dedup(db_session):
+    """A row with content_sha=X and embedding=NULL must not short-circuit.
+
+    Legacy rows can exist with embedding=NULL (pre-dedup column backfill).
+    The dedup query's ``embedding.isnot(None)`` guard prevents them from
+    becoming cache hits — this test locks that in.
+    """
+    from app.services.repo_index_service import _build_content_sha
+
+    path = "src/legacy.py"
+    content = "def x(): pass"
+    outline = _extract_structured_outline(path, content)
+    sha = _build_content_sha(path, outline)
+
+    # Legacy row: content_sha set, embedding NULL.
+    import uuid as _uuid
+    db_session.add(RepoFileIndex(
+        id=str(_uuid.uuid4()),
+        repo_full_name="other/repo", branch="main",
+        file_path=path, file_sha="seed", file_size_bytes=len(content),
+        content=content, outline="{}",
+        content_sha=sha, embedding=None,
+    ))
+    await db_session.commit()
+
+    gc = AsyncMock()
+    tree_items = [{"path": path, "sha": "fs", "size": len(content)}]
+    gc.get_tree_with_cache = AsyncMock(return_value=(tree_items, None))
+    gc.get_file_content = AsyncMock(return_value=content)
+
+    fresh_vec = np.ones(384, dtype=np.float32) * 0.77
+    es = MagicMock()
+    es.aembed_texts = AsyncMock(return_value=[fresh_vec])
+
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+    processed, _r, _e = await svc._read_and_embed_files(
+        tree_items, "tok", "new/repo", "main",
+    )
+
+    # Embedder ran (because the NULL row didn't count as a cache hit).
+    es.aembed_texts.assert_awaited_once()
+    assert len(processed) == 1
+    np.testing.assert_array_equal(processed[0].embedding, fresh_vec)
+
+
+@pytest.mark.asyncio
+async def test_file_content_cache_evicts_oldest_on_overflow(monkeypatch):
+    """Cap-and-evict behaviour: oldest 10% drop when the cache overflows."""
+    from app.services import repo_index_service as m
+
+    # Shrink the cap so the test runs fast + the math is obvious.
+    monkeypatch.setattr(m, "_FILE_CACHE_MAX_ENTRIES", 10)
+    m.invalidate_file_cache()
+
+    # Fill to capacity with strictly increasing timestamps so order is
+    # deterministic — real ``time.time()`` would also increase, but we
+    # pin it to keep the test hermetic.
+    fake_now = [1_000_000.0]
+    monkeypatch.setattr(m.time, "time", lambda: fake_now[0])
+
+    for i in range(10):
+        m._file_cache_put(("repo", f"p{i}", f"sha{i}"), f"body{i}")
+        fake_now[0] += 1.0
+
+    assert len(m._file_content_cache) == 10
+
+    # Overflow by one — triggers eviction of oldest max(1, 10//10) = 1.
+    m._file_cache_put(("repo", "p10", "sha10"), "body10")
+    fake_now[0] += 1.0
+
+    assert len(m._file_content_cache) == 10  # 10 - 1 + 1
+    # Oldest key gone.
+    assert ("repo", "p0", "sha0") not in m._file_content_cache
+    # Newest present.
+    assert ("repo", "p10", "sha10") in m._file_content_cache
+
+
+def test_content_sha_includes_embedding_model_version(monkeypatch):
+    """Model upgrade must invalidate existing content_sha values.
+
+    If ``settings.EMBEDDING_MODEL`` changes, vectors from the old model
+    must NOT be reused via SHA match. Including the model name in the
+    hashed input makes the cache key self-invalidating on model swaps.
+    """
+    from app.services.repo_index_service import _build_content_sha
+
+    outline = FileOutline(
+        file_path="src/a.py",
+        file_type="python",
+        structural_summary="def f()",
+        doc_summary="module",
+    )
+    sha_model_a = _build_content_sha("src/a.py", outline, model="model-a")
+    sha_model_b = _build_content_sha("src/a.py", outline, model="model-b")
+
+    assert sha_model_a != sha_model_b, (
+        "content_sha must depend on the embedding model — "
+        "otherwise a model upgrade silently reuses stale vectors"
+    )
+
+    # And it's still deterministic for the same inputs.
+    assert _build_content_sha("src/a.py", outline, model="model-a") == sha_model_a

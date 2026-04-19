@@ -72,27 +72,29 @@ async def _publish_phase_change(
         logger.debug("index_phase_changed publish failed", exc_info=True)
 
 
-def invalidate_curated_cache(repo_full_name: str | None = None) -> int:
-    """Evict curated cache entries.
+def invalidate_curated_cache() -> int:
+    """Evict all curated cache entries and return the count evicted.
 
-    If ``repo_full_name`` is given, only entries whose cache key was built
-    from that repo are evicted.  Since cache keys are SHA-256 hashes we
-    can't reverse them, so we brute-force evict ALL entries — the TTL is
-    short (5 min) and a full-evict after an incremental update is cheap.
-
-    Returns the number of entries evicted.
+    Scope is process-wide. Keys are SHA-256 of ``(repo, branch, prompt,
+    cap)`` tuples — we can't reverse them to scope by repo, and the TTL
+    is short (5 min) so a full-evict after any meaningful index change
+    is cheap and correct.
     """
     count = len(_curated_cache)
     _curated_cache.clear()
     return count
 
 
-# Module-level TTL+LRU cache for GitHub file-content fetches, keyed by
-# ``(repo_full_name, path, file_sha)``. Git blob SHAs identify content
-# exactly, so a cache hit is safe to reuse across branches within the
-# same repo. Without a sha we can't verify equivalence, so we skip the
-# cache entirely for those calls. Primary win: repeat reindex cycles,
-# same-blob files across branches, and vendored-file churn.
+# Module-level TTL + FIFO cache for GitHub file-content fetches, keyed
+# by ``(repo_full_name, path, file_sha)``. Git blob SHAs identify
+# content exactly, so a cache hit is safe to reuse across branches
+# within the same repo. Without a sha we can't verify equivalence, so
+# we skip the cache entirely for those calls. Primary win: repeat
+# reindex cycles, same-blob files across branches, and vendored-file
+# churn. Eviction is strict insertion-order (not LRU — ``get()`` does
+# not refresh the timestamp); simpler and equally correct for this
+# workload because entries are either reused quickly (same reindex
+# run) or drop via TTL.
 _file_content_cache: dict[tuple[str, str, str], tuple[float, str]] = {}
 _FILE_CACHE_TTL = 900  # 15 minutes — bounds staleness for poll-based reindex
 _FILE_CACHE_MAX_ENTRIES = 2048  # hard cap; oldest 10% evicted on overflow
@@ -381,6 +383,25 @@ def _build_embedding_text(path: str, outline: FileOutline) -> str:
     if outline.structural_summary:
         parts.append(outline.structural_summary)
     return " | ".join(parts)[:1000]
+
+
+def _build_content_sha(
+    path: str, outline: FileOutline, model: str | None = None,
+) -> str:
+    """Return a stable dedup key for the embedding of ``path`` + ``outline``.
+
+    The hash input includes the embedding-model identifier so that a
+    model upgrade automatically invalidates every persisted vector: an
+    old row's ``content_sha`` won't match the new formula, so the dedup
+    query misses, we re-embed under the new model, and the refreshed
+    row gets a fresh SHA. Without this fence a model change would
+    silently reuse stale vectors forever.
+    """
+    model_id = model if model is not None else settings.EMBEDDING_MODEL
+    embed_text = _build_embedding_text(path, outline)
+    return hashlib.sha256(
+        f"{model_id}|{embed_text}".encode("utf-8"),
+    ).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -725,7 +746,7 @@ class RepoIndexService:
             # any cached curated retrieval keyed on (repo, branch, query, …) is
             # now stale. Flush the TTL cache unconditionally. TTL is 5 minutes
             # so warm-up cost is trivial; correctness over caching.
-            invalidate_curated_cache(repo_full_name)
+            invalidate_curated_cache()
             await _publish_phase_change(
                 repo_full_name, branch,
                 phase="embedding", status="ready",
@@ -1449,7 +1470,7 @@ class RepoIndexService:
         # retrievals keyed on (repo, branch, query, …). The head_unchanged
         # short-circuit above and the no-diff early-return (line ~1253) both
         # skip this path, so this flush only fires when state actually moved.
-        invalidate_curated_cache(repo_full_name)
+        invalidate_curated_cache()
 
         total_ms = (time.monotonic() - t_start) * 1000
         logger.info(
@@ -1512,7 +1533,8 @@ class RepoIndexService:
                 continue
             outline = _extract_structured_outline(item["path"], content)
             embed_text = _build_embedding_text(item["path"], outline)
-            content_sha = hashlib.sha256(embed_text.encode("utf-8")).hexdigest()
+            # Hash fences on the embedding model — see ``_build_content_sha``.
+            content_sha = _build_content_sha(item["path"], outline)
             valid.append((item, content, outline, embed_text, content_sha))
 
         if not valid:
