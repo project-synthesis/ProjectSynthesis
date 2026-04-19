@@ -560,6 +560,7 @@ class HeuristicAnalyzer:
             from pydantic import BaseModel as _BaseModel
 
             from app.config import settings
+            from app.providers.base import call_provider_with_retry
             from app.providers.detector import detect_provider
 
             provider = detect_provider()
@@ -589,8 +590,14 @@ class HeuristicAnalyzer:
                 task_type: str
                 domain: str
 
-            result = await provider.complete_parsed(
-                model=getattr(settings, "MODEL_HAIKU", "claude-haiku-4-5-20251001"),
+            # Wrap in call_provider_with_retry for parity with every other
+            # Haiku call site. Transient rate-limit / overload errors retry
+            # once; non-retryable errors (auth, bad request) and final-attempt
+            # failures propagate out to the outer try/except and we degrade
+            # gracefully to the heuristic result (returning None).
+            result = await call_provider_with_retry(
+                provider,
+                model=getattr(settings, "MODEL_HAIKU", "claude-haiku-4-5"),
                 system_prompt="You are a prompt classifier.",
                 user_message=prompt_text,
                 output_format=_ClassificationResult,

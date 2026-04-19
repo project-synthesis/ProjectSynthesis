@@ -732,6 +732,75 @@ class TestLLMFallbackGating:
         assert "coding" in summary
         assert "backend" in summary
 
+    @pytest.mark.asyncio
+    async def test_a4_llm_classification_uses_retry_wrapper(self, db):
+        """A4 LLM fallback must route through call_provider_with_retry like
+        every other Haiku call site. Bug fix: previously called
+        provider.complete_parsed directly, bypassing the shared retry logic.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from pydantic import BaseModel
+
+        from app.services.heuristic_analyzer import HeuristicAnalyzer
+
+        class _MockResult(BaseModel):
+            task_type: str = "analysis"
+            domain: str = "general"
+
+        mock_provider = MagicMock()
+        mock_provider.complete_parsed = AsyncMock(return_value=_MockResult())
+
+        with patch(
+            "app.providers.detector.detect_provider", return_value=mock_provider
+        ), patch(
+            "app.providers.base.call_provider_with_retry",
+            new=AsyncMock(return_value=_MockResult()),
+        ) as mock_retry:
+            await HeuristicAnalyzer._classify_with_llm(
+                "ambiguous prompt needing classification", db,
+            )
+
+        # The retry wrapper must have been awaited. The direct call must NOT.
+        mock_retry.assert_awaited_once()
+        mock_provider.complete_parsed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a4_llm_classification_retries_on_rate_limit(self, db):
+        """A rate-limit error on first attempt should retry and succeed."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from pydantic import BaseModel
+
+        from app.providers.base import ProviderRateLimitError
+        from app.services.heuristic_analyzer import HeuristicAnalyzer
+
+        class _MockResult(BaseModel):
+            task_type: str = "coding"
+            domain: str = "backend"
+
+        call_count = {"n": 0}
+
+        async def _flaky(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise ProviderRateLimitError("rate limited", retry_after=0)
+            return _MockResult()
+
+        mock_provider = MagicMock()
+        mock_provider.complete_parsed = AsyncMock(side_effect=_flaky)
+
+        with patch(
+            "app.providers.detector.detect_provider", return_value=mock_provider
+        ), patch("app.providers.base.asyncio.sleep", new=AsyncMock()):
+            result = await HeuristicAnalyzer._classify_with_llm(
+                "ambiguous prompt needing classification", db,
+            )
+
+        # Retried and succeeded
+        assert result == ("coding", "backend")
+        assert call_count["n"] == 2
+
 
 # ---------------------------------------------------------------------------
 # Organic qualifier vocabulary tests (Task 3)
