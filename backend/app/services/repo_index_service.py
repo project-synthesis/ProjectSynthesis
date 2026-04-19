@@ -18,6 +18,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import RepoFileIndex, RepoIndexMeta
 from app.services.embedding_service import EmbeddingService
+from app.services.file_filters import (
+    INDEXABLE_EXTENSIONS as _INDEXABLE_EXTENSIONS,
+)
+from app.services.file_filters import (
+    MAX_FILE_SIZE as _MAX_FILE_SIZE,
+)
+from app.services.file_filters import (
+    is_indexable as _is_indexable,
+)
+from app.services.file_filters import (
+    is_test_file as _is_test_file,
+)
 from app.services.github_client import GitHubApiError, GitHubClient
 
 logger = logging.getLogger(__name__)
@@ -41,16 +53,9 @@ def invalidate_curated_cache(repo_full_name: str | None = None) -> int:
     _curated_cache.clear()
     return count
 
-# File extensions that are worth indexing (text/code files)
-_INDEXABLE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".rb",
-    ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt", ".scala",
-    ".md", ".txt", ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini",
-    ".html", ".css", ".scss", ".svelte", ".vue",
-    ".sh", ".bash", ".zsh", ".fish",
-    ".sql", ".graphql",
-}
-_MAX_FILE_SIZE = 100_000  # bytes — skip files larger than 100 KB
+# Extensions, size cap, and test-exclusion primitives are imported from
+# ``file_filters`` (re-exported above) so this module + ``codebase_explorer``
+# share a single source of truth for what's indexable.
 
 
 # ---------------------------------------------------------------------------
@@ -452,30 +457,6 @@ def _extract_markdown_references(content: str) -> list[str]:
 _MAX_BUDGET_SKIPS = 5
 
 
-# Module-level constants for test file detection (avoid per-call reconstruction)
-_TEST_DIRS = frozenset({
-    "tests", "test", "__tests__", "spec", "specs",
-    "cypress", "playwright", "e2e", "e2e-tests",
-    "fixtures", "testdata", "test-data", "test_data",
-    "__fixtures__", "__mocks__", "__snapshots__",
-})
-_TEST_SUFFIXES = (
-    "_test", ".test", ".spec", ".stories",
-    "_spec", "_bench", "_benchmark",
-    ".bench", ".benchmark",
-)
-_TEST_INFRA = frozenset({
-    "conftest.py", "testconfig.py", "test_helpers.py",
-    "jest.config.js", "jest.config.ts", "jest.setup.js", "jest.setup.ts",
-    "vitest.config.ts", "vitest.config.js", "vitest.setup.ts",
-    "playwright.config.ts", "playwright.config.js",
-    "cypress.config.ts", "cypress.config.js",
-    ".coveragerc", "coverage.config.js",
-    "pytest.ini", "setup.cfg", "tox.ini", "noxfile.py",
-    "test-setup.ts", "test-setup.js",
-})
-
-
 def _classify_github_error(exc: GitHubApiError) -> str:
     """Map a GitHub API error to a human-readable skip reason."""
     if exc.status_code == 401:
@@ -485,43 +466,6 @@ def _classify_github_error(exc: GitHubApiError) -> str:
     if exc.status_code == 404:
         return "repo_not_found"
     return f"github_{exc.status_code}"
-
-
-def _is_test_file(path: str) -> bool:
-    """Detect test, spec, benchmark, and test-infrastructure files.
-
-    Tests don't inform prompt optimization context — they duplicate
-    information already captured in the source files they test, while
-    consuming embedding compute and retrieval budget.
-    """
-    lower = path.lower()
-    segments = lower.split("/")
-    basename = segments[-1]
-
-    if any(seg in _TEST_DIRS for seg in segments[:-1]):
-        return True
-    if basename.startswith("test_") or basename.startswith("tests_"):
-        return True
-    name_no_ext = basename.rsplit(".", 1)[0] if "." in basename else basename
-    if any(name_no_ext.endswith(s) or basename.endswith(s) for s in _TEST_SUFFIXES):
-        return True
-    if basename in _TEST_INFRA:
-        return True
-    return False
-
-
-def _is_indexable(path: str, size: int | None) -> bool:
-    """Return True if the file is worth indexing."""
-    if size is not None and size > _MAX_FILE_SIZE:
-        return False
-    dot = path.rfind(".")
-    if dot == -1:
-        return False
-    if path[dot:].lower() not in _INDEXABLE_EXTENSIONS:
-        return False
-    if _is_test_file(path):
-        return False
-    return True
 
 
 class RepoIndexService:

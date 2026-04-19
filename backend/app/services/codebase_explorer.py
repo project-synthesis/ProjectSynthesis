@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -20,6 +19,7 @@ from app.config import settings
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.services.embedding_service import EmbeddingService
 from app.services.explore_cache import ExploreCache
+from app.services.file_filters import is_indexable
 from app.services.github_client import GitHubClient
 from app.services.prompt_loader import PromptLoader
 
@@ -27,16 +27,6 @@ if TYPE_CHECKING:
     from app.services.repo_index_service import RepoIndexService
 
 logger = logging.getLogger(__name__)
-
-# File extensions worth reading (code and config)
-_CODE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".rb",
-    ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt", ".scala",
-    ".md", ".txt", ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini",
-    ".html", ".css", ".scss", ".svelte", ".vue",
-    ".sh", ".bash", ".zsh", ".fish",
-    ".sql", ".graphql",
-}
 
 # Module-level cache singleton — shared across explorer instances
 _explore_cache = ExploreCache(ttl_seconds=settings.EXPLORE_RESULT_CACHE_TTL)
@@ -124,10 +114,11 @@ class CodebaseExplorer:
             logger.info("Explore cache hit for %s@%s (SHA=%s)", repo_full_name, branch, head_sha[:8])
             return cached
 
-        # 2. Filter to indexable files
+        # 2. Filter to indexable files — shared filter with repo_index_service
+        # so explore + embedded corpus exclude the same test/CI/lock files.
         indexable = [
             item for item in tree
-            if _is_code_file(item["path"])
+            if is_indexable(item["path"], item.get("size"))
         ]
 
         # 3. Rank files: semantic search or keyword fallback
@@ -341,7 +332,3 @@ class CodebaseExplorer:
                 return path, None
 
 
-def _is_code_file(path: str) -> bool:
-    """Return True if the file extension is worth reading."""
-    suffix = PurePosixPath(path).suffix.lower()
-    return suffix in _CODE_EXTENSIONS

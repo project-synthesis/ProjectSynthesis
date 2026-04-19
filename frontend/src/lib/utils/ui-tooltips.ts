@@ -136,17 +136,26 @@ export const GITHUB_TOOLTIPS = {
     'Files embedded for semantic retrieval.\n' +
     '\n' +
     'EXCLUDED FROM INDEX\n' +
-    ' \u2022 Test dirs: test/ __tests__/ spec/ cypress/ e2e/\n' +
-    ' \u2022 Test files: *.test.* *.spec.* test_* *.stories.*\n' +
+    ' \u2022 Test dirs: tests/ test/ __tests__/ spec/ specs/\n' +
+    '   cypress/ playwright/ e2e/ fixtures/ testdata/\n' +
+    '   __mocks__/ __snapshots__/\n' +
+    ' \u2022 Test files: *.test.* *.spec.* *.stories.*\n' +
+    '   test_* tests_* *_test.* *_spec.* *_bench.*\n' +
     ' \u2022 Test infra: conftest.py jest.config.* vitest.config.*\n' +
+    '   playwright.config.* cypress.config.* pytest.ini\n' +
+    '   tox.ini noxfile.py .coveragerc\n' +
+    ' \u2022 CI/editor: .github/workflows/ .github/ISSUE_TEMPLATE/\n' +
+    '   .vscode/ .idea/\n' +
+    ' \u2022 Lock files: package-lock.json pnpm-lock.yaml\n' +
+    '   npm-shrinkwrap.json composer.lock\n' +
     ' \u2022 Large files: > 100 KB\n' +
-    ' \u2022 Non-source: binaries, images, lock files\n' +
+    ' \u2022 Non-source: binaries, images, unlisted extensions\n' +
     '\n' +
     'INDEXED EXTENSIONS\n' +
     ' .py .js .ts .jsx .tsx .svelte .vue .go .rs\n' +
-    ' .java .rb .c .cpp .cs .swift .kt .scala\n' +
-    ' .md .yaml .json .toml .html .css .scss\n' +
-    ' .sh .sql .graphql',
+    ' .java .rb .c .cpp .h .hpp .cs .swift .kt .scala\n' +
+    ' .md .txt .yaml .yml .json .toml .cfg .ini\n' +
+    ' .html .css .scss .sh .bash .zsh .fish .sql .graphql',
 };
 
 export const PASSTHROUGH_TOOLTIPS = {
