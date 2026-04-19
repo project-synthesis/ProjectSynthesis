@@ -2,7 +2,13 @@
 
 Fetches relevant files from a GitHub repo, ranks them by semantic
 similarity to the user prompt, and synthesizes a structured context
-summary via a Haiku LLM call.
+summary via a Sonnet LLM call. Sonnet is the right tier for this
+workload: 30-80K token input reading comprehension into a compressed
+architectural summary. Haiku 4.5 (previously used) struggles with
+long-context synthesis at this scale.
+
+The result is cached per repo/branch/SHA in `RepoIndexMeta.explore_synthesis`,
+so Sonnet runs ~once per repo link, not per request.
 """
 
 from __future__ import annotations
@@ -15,13 +21,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import settings
+from app.config import DATA_DIR, settings
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.services.embedding_service import EmbeddingService
 from app.services.explore_cache import ExploreCache
 from app.services.file_filters import is_indexable
 from app.services.github_client import GitHubClient
 from app.services.prompt_loader import PromptLoader
+from app.services.trace_logger import TraceLogger
 
 if TYPE_CHECKING:
     from app.services.repo_index_service import RepoIndexService
@@ -30,6 +37,19 @@ logger = logging.getLogger(__name__)
 
 # Module-level cache singleton — shared across explorer instances
 _explore_cache = ExploreCache(ttl_seconds=settings.EXPLORE_RESULT_CACHE_TTL)
+
+
+def _get_trace_logger() -> TraceLogger | None:
+    """Best-effort TraceLogger instance for explore synthesis observability.
+
+    Returns None if the traces directory cannot be created — callers must
+    null-check before emitting. Trace failure must never break synthesis.
+    """
+    try:
+        return TraceLogger(DATA_DIR / "traces")
+    except OSError:
+        logger.debug("Could not create traces directory; explore traces disabled")
+        return None
 
 
 
@@ -48,7 +68,7 @@ class CodebaseExplorer:
     2. Rank files by semantic similarity (embedding) or keyword fallback
     3. Parallel-read top files with line-budget allocation
     4. Render explore.md template
-    5. Single-shot LLM synthesis (Haiku, no thinking)
+    5. Single-shot LLM synthesis (Sonnet, no thinking)
     6. Return context string or None on error
     """
 
@@ -96,6 +116,9 @@ class CodebaseExplorer:
         token: str,
     ) -> str:
         """Inner explore logic (exceptions propagate to caller)."""
+        # t0 for trace duration_ms (emitted after synthesis completes).
+        t0 = time.monotonic()
+
         # 1. Get HEAD SHA + file tree
         head_sha, tree = await asyncio.gather(
             self._gc.get_branch_head_sha(token, repo_full_name, branch),
@@ -210,10 +233,12 @@ class CodebaseExplorer:
             payload_chars, file_contents_chars, cap, utilization,
         )
 
-        # 9. Single-shot synthesis via provider (with retry for transient errors)
+        # 9. Single-shot synthesis via provider (with retry for transient errors).
+        # Routed to Sonnet (not Haiku): long-context reading comprehension
+        # is Sonnet's strength. Cached per repo/branch/SHA, so cost amortizes.
         result: ExploreOutput = await call_provider_with_retry(
             self._provider,
-            model=settings.MODEL_HAIKU,
+            model=settings.MODEL_SONNET,
             system_prompt=self._loader.load("explore-guidance.md"),
             user_message=rendered,
             output_format=ExploreOutput,
@@ -226,12 +251,40 @@ class CodebaseExplorer:
         usage = getattr(self._provider, "last_usage", None)
         cache_read_tokens = getattr(usage, "cache_read_tokens", 0) or 0
         input_tokens = getattr(usage, "input_tokens", 0) or 0
+        output_tokens = getattr(usage, "output_tokens", 0) or 0
         logger.info(
             "explore_synthesis: repo=%s branch=%s files_read=%d "
             "synthesis_chars=%d input_tokens=%d cache_read_tokens=%d",
             repo_full_name, branch, len(file_paths_list), len(result.context),
             input_tokens, cache_read_tokens,
         )
+
+        # Emit per-call JSONL trace so each Sonnet/Haiku explore run is
+        # auditable in data/traces/ alongside pipeline phases. Best-effort —
+        # trace failures never break synthesis.
+        tl = _get_trace_logger()
+        if tl is not None:
+            try:
+                tl.log_phase(
+                    trace_id=f"explore:{repo_full_name}@{branch}@{head_sha[:8]}",
+                    phase="explore_synthesis",
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    tokens_in=input_tokens,
+                    tokens_out=output_tokens,
+                    model=settings.MODEL_SONNET,
+                    provider=type(self._provider).__name__,
+                    result={
+                        "repo": repo_full_name,
+                        "branch": branch,
+                        "head_sha": head_sha[:8],
+                        "files_read": len(file_paths_list),
+                        "synthesis_chars": len(result.context),
+                        "payload_chars": payload_chars,
+                        "cache_read_tokens": cache_read_tokens,
+                    },
+                )
+            except Exception:
+                logger.debug("explore trace emit failed", exc_info=True)
 
         # Cache the result
         _explore_cache.set(cache_key, result.context)

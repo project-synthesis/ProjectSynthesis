@@ -128,10 +128,11 @@ async def _run_explore_synthesis(
     token: str,
     provider: object | None,
 ) -> None:
-    """Run Haiku explore synthesis and persist result to RepoIndexMeta.
+    """Run explore synthesis and persist result to RepoIndexMeta.
 
-    Handles all status transitions (running/ready/error/skipped) and never
-    raises — all failures are logged and persisted as ``synthesis_status="error"``.
+    Synthesis runs on Sonnet (long-context reading comprehension). Handles
+    all status transitions (running/ready/error/skipped) and never raises —
+    all failures are logged and persisted as ``synthesis_status="error"``.
     """
     try:
         if provider:

@@ -104,10 +104,13 @@ async def test_explore_returns_context(tmp_path):
     assert isinstance(result, str)
     assert "FastAPI" in result
 
-    # Verify provider was called with Haiku model
+    # Verify provider was called with Sonnet model (explore synthesis is
+    # long-context reading comprehension — Sonnet's strength, not Haiku's).
     provider.complete_parsed.assert_awaited_once()
     call_kwargs = provider.complete_parsed.call_args
-    assert "haiku" in call_kwargs.kwargs.get("model", call_kwargs.args[0] if call_kwargs.args else "").lower()
+    model_value = call_kwargs.kwargs.get("model", call_kwargs.args[0] if call_kwargs.args else "").lower()
+    assert "sonnet" in model_value
+    assert "haiku" not in model_value
 
 
 # ---------------------------------------------------------------------------
@@ -332,3 +335,118 @@ async def test_explore_logs_budget_utilization(tmp_path, caplog):
     )
     assert synth_line is not None
     assert "cache_read_tokens=140000" in synth_line
+
+
+# ---------------------------------------------------------------------------
+# Test 6: explore emits a JSONL trace entry after synthesis
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_explore_emits_trace_entry(tmp_path):
+    """Each explore run writes one trace_id='explore:repo@branch@sha' entry.
+
+    Lets operators audit per-call Haiku/Sonnet cost + latency + synthesis
+    output size from `data/traces/traces-*.jsonl` instead of log scraping.
+    """
+    from app.providers.base import TokenUsage
+    from app.services.codebase_explorer import _explore_cache
+    from app.services.trace_logger import TraceLogger
+
+    _explore_cache._store.clear()
+    traces_dir = tmp_path / "traces"
+
+    loader = _make_prompt_loader(tmp_path)
+    gc = _make_github_client(
+        tree_items=[
+            {"type": "blob", "path": "src/main.py", "sha": "f1", "size": 100},
+            {"type": "blob", "path": "src/utils.py", "sha": "f2", "size": 200},
+        ]
+    )
+    es = _make_embedding_service()
+    es.aembed_single = AsyncMock(return_value=np.zeros(384, dtype=np.float32))
+    es.aembed_texts = AsyncMock(
+        return_value=[np.zeros(384, dtype=np.float32) for _ in range(2)]
+    )
+    provider = _make_provider(context_text="Synthesized overview")
+    provider.last_usage = TokenUsage(
+        input_tokens=1_500, output_tokens=300,
+        cache_read_tokens=120_000, cache_creation_tokens=0,
+    )
+
+    explorer = CodebaseExplorer(
+        prompt_loader=loader,
+        github_client=gc,
+        embedding_service=es,
+        provider=provider,
+    )
+
+    with patch(
+        "app.services.codebase_explorer._get_trace_logger",
+        return_value=TraceLogger(traces_dir),
+    ):
+        result = await explorer.explore(
+            raw_prompt="Describe architecture",
+            repo_full_name="owner/repo",
+            branch="main",
+            token="ghp_test",
+        )
+
+    assert result is not None
+
+    entries = TraceLogger(traces_dir).read_trace("explore:owner/repo@main@sha_abc1")
+    assert len(entries) == 1, f"expected 1 explore trace, got {len(entries)}"
+    entry = entries[0]
+    assert entry["phase"] == "explore_synthesis"
+    assert entry["status"] == "ok"
+    assert "sonnet" in entry["model"].lower()
+    assert entry["tokens_in"] == 1_500
+    assert entry["tokens_out"] == 300
+    assert entry["result"]["repo"] == "owner/repo"
+    assert entry["result"]["branch"] == "main"
+    assert entry["result"]["files_read"] == 2
+    assert entry["result"]["synthesis_chars"] > 0
+    assert entry["result"]["cache_read_tokens"] == 120_000
+
+
+@pytest.mark.asyncio
+async def test_explore_trace_failure_does_not_break_synthesis(tmp_path):
+    """A failing TraceLogger.log_phase must not break the synthesis result."""
+    from unittest.mock import MagicMock
+
+    from app.services.codebase_explorer import _explore_cache
+
+    _explore_cache._store.clear()
+
+    loader = _make_prompt_loader(tmp_path)
+    gc = _make_github_client()
+    es = _make_embedding_service()
+    es.aembed_single = AsyncMock(return_value=np.zeros(384, dtype=np.float32))
+    es.aembed_texts = AsyncMock(
+        return_value=[np.zeros(384, dtype=np.float32) for _ in range(2)]
+    )
+    provider = _make_provider()
+
+    explorer = CodebaseExplorer(
+        prompt_loader=loader,
+        github_client=gc,
+        embedding_service=es,
+        provider=provider,
+    )
+
+    broken_logger = MagicMock()
+    broken_logger.log_phase.side_effect = RuntimeError("disk full")
+
+    with patch(
+        "app.services.codebase_explorer._get_trace_logger",
+        return_value=broken_logger,
+    ):
+        result = await explorer.explore(
+            raw_prompt="Describe architecture",
+            repo_full_name="owner/repo",
+            branch="main",
+            token="ghp_test",
+        )
+
+    # Synthesis succeeded despite trace failure.
+    assert result is not None
+    assert isinstance(result, str)
