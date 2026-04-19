@@ -123,10 +123,18 @@ class DomainSignalLoader:
                 "DomainSignalLoader loaded %d domains with %d total keywords",
                 len(self._signals), total_keywords,
             )
-            if not self._signals and clusters:
+            # Only warn when there are *actual* non-general domain nodes with
+            # no signals — the seed 'general' domain legitimately has no
+            # signal_keywords because it's the fallback classification, and
+            # shipping that warning at every startup with only seed data was
+            # misleading noise.
+            non_general_clusters = [c for c in clusters if c.label != "general"]
+            if not self._signals and non_general_clusters:
                 logger.warning(
-                    "DomainSignalLoader: no domain signals loaded — "
-                    "classifier will default to 'general'"
+                    "DomainSignalLoader: %d non-general domain node(s) present "
+                    "but no signal_keywords extracted — classifier will default "
+                    "to 'general' for them",
+                    len(non_general_clusters),
                 )
         except Exception:
             logger.exception("DomainSignalLoader.load failed — using empty signals")
