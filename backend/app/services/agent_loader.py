@@ -20,7 +20,12 @@ _MAX_FILE_SIZE = 50_000
 
 @dataclass
 class SeedAgent:
-    """Parsed seed agent definition."""
+    """Parsed seed agent definition.
+
+    ``model`` lets an individual agent opt into a specific tier
+    (``sonnet|opus|haiku``). ``None`` means "use the orchestrator default"
+    (currently Haiku). Resolved by ``seed_orchestrator._resolve_agent_model``.
+    """
     name: str
     description: str
     task_types: list[str]
@@ -28,6 +33,7 @@ class SeedAgent:
     body: str
     prompts_per_run: int = 6
     enabled: bool = True
+    model: str | None = None
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
@@ -77,6 +83,8 @@ class AgentLoader:
                 logger.warning("Agent file too large: %s (%d bytes)", name, len(content))
                 return None
             meta, body = _parse_frontmatter(content)
+            raw_model = meta.get("model", "").strip().lower()
+            model_override = raw_model if raw_model in {"sonnet", "opus", "haiku"} else None
             return SeedAgent(
                 name=meta.get("name", name),
                 description=meta.get("description", ""),
@@ -85,6 +93,7 @@ class AgentLoader:
                 body=body,
                 prompts_per_run=int(meta.get("prompts_per_run", "6")),
                 enabled=meta.get("enabled", "true").lower() != "false",
+                model=model_override,
             )
         except Exception as exc:
             logger.warning("Failed to load agent '%s': %s", name, exc)

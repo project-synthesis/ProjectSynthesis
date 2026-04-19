@@ -91,3 +91,55 @@ class TestAgentLoader:
         assert agent is not None
         assert agent.prompts_per_run == 6  # default
         assert agent.enabled is True  # default
+        assert agent.model is None  # default — orchestrator picks MODEL_HAIKU
+
+    def test_model_override_sonnet(self, agents_dir: Path) -> None:
+        """Frontmatter ``model: sonnet`` routes this agent to Sonnet."""
+        f = agents_dir / "sonnet-agent.md"
+        f.write_text(
+            "---\n"
+            "name: sonnet-agent\n"
+            "description: Diversity test agent\n"
+            "task_types: creative\n"
+            "phase_context: build\n"
+            "model: sonnet\n"
+            "---\n\nBody.\n"
+        )
+        loader = AgentLoader(agents_dir)
+        agent = loader.load("sonnet-agent")
+        assert agent is not None
+        assert agent.model == "sonnet"
+
+    def test_model_override_invalid_falls_back_to_default(self, agents_dir: Path) -> None:
+        """Unknown model values fall back to None (orchestrator default)."""
+        f = agents_dir / "bogus.md"
+        f.write_text(
+            "---\n"
+            "name: bogus\n"
+            "description: Bogus agent\n"
+            "task_types: coding\n"
+            "phase_context: build\n"
+            "model: gpt-4\n"
+            "---\n\nBody.\n"
+        )
+        loader = AgentLoader(agents_dir)
+        agent = loader.load("bogus")
+        assert agent is not None
+        assert agent.model is None
+
+    def test_model_override_case_insensitive(self, agents_dir: Path) -> None:
+        """Frontmatter model values are normalized to lowercase."""
+        f = agents_dir / "opus.md"
+        f.write_text(
+            "---\n"
+            "name: opus\n"
+            "description: Opus agent\n"
+            "task_types: analysis\n"
+            "phase_context: build\n"
+            "model: OPUS\n"
+            "---\n\nBody.\n"
+        )
+        loader = AgentLoader(agents_dir)
+        agent = loader.load("opus")
+        assert agent is not None
+        assert agent.model == "opus"
