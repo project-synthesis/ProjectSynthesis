@@ -153,83 +153,69 @@ async def compute_repo_relevance(
     raw_prompt: str,
     explore_synthesis: str,
     embedding_service: Any,
+    repo_full_name: str | None = None,
 ) -> tuple[float, dict[str, Any]]:
-    """Hybrid relevance between a prompt and the linked repo's architecture.
+    """Single-threshold relevance between a prompt and the linked repo.
 
-    Two-stage gate:
+    The synthesis is embedded with a repo-identity prefix
+    (``"Project: {repo_full_name}\\n{synthesis}"``) so the vector captures
+    *which project this is* in addition to its tech-stack signature.  A
+    prompt must clear ``REPO_RELEVANCE_FLOOR`` cosine against that anchor
+    to pass — one well-calibrated embedding threshold, no secondary
+    vocabulary overlap gate.
 
-    1. **Cosine floor** — if cosine similarity between prompt and synthesis
-       embeddings is below ``REPO_RELEVANCE_FLOOR`` (0.20), skip immediately.
-    2. **Domain entity overlap** — extract domain vocabulary from the synthesis
-       and check how many domain-specific terms appear in the prompt.  At least
-       ``REPO_DOMAIN_MIN_OVERLAP`` (1) matches are required to pass.
-
-    Returns a ``(cosine, info)`` tuple where *info* contains diagnostic keys:
-    ``cosine``, ``domain_overlap``, ``domain_matches`` (max 10),
-    ``domain_vocab_size``, ``decision`` (``"pass"`` / ``"skip"``), and
-    ``reason`` (``"below_floor"`` / ``"domain_match"`` / ``"no_domain_overlap"``).
+    Returns ``(cosine, info)`` where *info* contains diagnostic keys:
+    ``cosine``, ``decision`` (``"pass"``/``"skip"``), ``reason``
+    (``"above_floor"``/``"below_floor"``), plus ``domain_overlap`` +
+    ``domain_matches`` + ``domain_vocab_size`` retained as diagnostics
+    only (they no longer gate the decision).
 
     Used by :func:`ContextEnrichmentService.enrich` to gate codebase context
-    injection, preventing unrelated projects from inheriting the linked repo's
-    internal patterns.
+    injection, preventing unrelated projects from inheriting the linked
+    repo's internal patterns.
     """
     import numpy as np
 
-    from app.services.pipeline_constants import (
-        REPO_DOMAIN_MIN_OVERLAP,
-        REPO_RELEVANCE_FLOOR,
-    )
+    from app.services.pipeline_constants import REPO_RELEVANCE_FLOOR
+
+    # Repo-identity prefix makes the synthesis embedding carry the project
+    # identity alongside its tech-stack signature.  Without this, two
+    # FastAPI+SQLAlchemy projects with similar architecture synthesis can
+    # collide on cosine even when their domain focus is very different.
+    anchor = explore_synthesis
+    if repo_full_name:
+        anchor = f"Project: {repo_full_name}\n{explore_synthesis}"
 
     prompt_vec = await embedding_service.aembed_single(raw_prompt)
-    synth_vec = await embedding_service.aembed_single(explore_synthesis)
+    synth_vec = await embedding_service.aembed_single(anchor)
     cosine = float(
         np.dot(prompt_vec, synth_vec)
         / (np.linalg.norm(prompt_vec) * np.linalg.norm(synth_vec) + 1e-9)
     )
 
-    # Compute domain overlap up-front so a strong vocabulary signal can
-    # override a low cosine.  Focused prompts about one subsystem of a
-    # broad repo routinely score below the cosine floor even when their
-    # core terms appear repeatedly in the repo's synthesis — for those,
-    # keyword match is a more reliable relevance signal than embedding
-    # cosine.  Cosine floor remains the tie-breaker when overlap is zero.
+    # Diagnostic-only: vocabulary overlap no longer gates the decision but
+    # remains in the info dict for observability/debugging.
     domain_vocab = extract_domain_vocab(explore_synthesis)
     prompt_lower = raw_prompt.lower()
     matches = [w for w in domain_vocab if w in prompt_lower]
-    overlap = len(matches)
 
-    # Decision 1: strong vocabulary overlap → pass regardless of cosine.
-    if overlap >= REPO_DOMAIN_MIN_OVERLAP:
+    if cosine >= REPO_RELEVANCE_FLOOR:
         return cosine, {
             "cosine": round(cosine, 4),
-            "domain_overlap": overlap,
+            "domain_overlap": len(matches),
             "domain_matches": sorted(matches)[:10],
             "domain_vocab_size": len(domain_vocab),
             "decision": "pass",
-            "reason": "domain_match",
+            "reason": "above_floor",
         }
 
-    # Decision 2: no vocab overlap AND cosine below floor → clearly off-topic.
-    if cosine < REPO_RELEVANCE_FLOOR:
-        return cosine, {
-            "cosine": round(cosine, 4),
-            "domain_overlap": 0,
-            "domain_matches": [],
-            "domain_vocab_size": len(domain_vocab),
-            "decision": "skip",
-            "reason": "below_floor",
-        }
-
-    # Decision 3: cosine above floor but no vocabulary match — synthesis may
-    # be noise (e.g. sparse repo) or prompt genuinely disjoint.  Skip to
-    # avoid injecting misleading context.
     return cosine, {
         "cosine": round(cosine, 4),
-        "domain_overlap": 0,
-        "domain_matches": [],
+        "domain_overlap": len(matches),
+        "domain_matches": sorted(matches)[:10],
         "domain_vocab_size": len(domain_vocab),
         "decision": "skip",
-        "reason": "no_domain_overlap",
+        "reason": "below_floor",
     }
 
 
@@ -852,26 +838,26 @@ class ContextEnrichmentService:
                 "char_count": len(explore_synthesis) if explore_synthesis else 0,
             }
 
-            # 2a-gate. Hybrid repo relevance gate — skip codebase context
-            # when the prompt is semantically unrelated to the linked repo
-            # (same tech stack but different project).  Two-stage: cosine
-            # floor + domain entity overlap.  Only fires when synthesis
-            # exists (can't compute relevance without it).
+            # 2a-gate. Repo relevance gate — skip codebase context when the
+            # prompt is clearly unrelated to the linked repo (different
+            # project, possibly same tech stack).  Single embedding
+            # threshold against a repo-anchored synthesis.  Only fires
+            # when synthesis exists (can't compute relevance without it).
             _repo_relevance_skipped = False
             if explore_synthesis:
                 try:
                     relevance, relevance_info = await compute_repo_relevance(
                         raw_prompt, explore_synthesis, self._embedding_service,
+                        repo_full_name=repo_full_name,
                     )
                     enrichment_meta_dict["repo_relevance_score"] = round(relevance, 3)
                     enrichment_meta_dict["repo_relevance_info"] = relevance_info
 
                     if relevance_info["decision"] == "skip":
                         logger.info(
-                            "repo_relevance_gate: cosine=%.3f domain_overlap=%d "
-                            "reason=%s, skipping codebase context (repo=%s)",
-                            relevance, relevance_info["domain_overlap"],
-                            relevance_info["reason"], repo_full_name,
+                            "repo_relevance_gate: cosine=%.3f reason=%s, "
+                            "skipping codebase context (repo=%s)",
+                            relevance, relevance_info["reason"], repo_full_name,
                         )
                         enrichment_meta_dict["repo_relevance_skipped"] = True
                         explore_synthesis = None

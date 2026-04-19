@@ -873,7 +873,7 @@ class TestRepoRelevanceGate:
 
     @pytest.mark.asyncio
     async def test_gate_fires(self, db, tmp_path):
-        """Synthesis has domain terms, prompt does NOT → gate fires (skip)."""
+        """Low cosine against repo-anchored synthesis → gate fires (skip)."""
         import numpy as np
 
         for _ in range(10):
@@ -881,14 +881,12 @@ class TestRepoRelevanceGate:
         await db.commit()
 
         mock_es = AsyncMock()
-        # Moderate cosine (above floor) but no domain overlap
-        rng = np.random.default_rng(42)
-        base = rng.random(384).astype(np.float32)
-        base /= np.linalg.norm(base)
-        noise = rng.random(384).astype(np.float32) * 0.5
-        vec2 = base + noise
-        vec2 /= np.linalg.norm(vec2)
-        mock_es.aembed_single = AsyncMock(side_effect=[base, vec2])
+        # Near-orthogonal vectors — cosine stays below 0.15 floor
+        prompt_vec = np.zeros(384, dtype=np.float32)
+        prompt_vec[0] = 1.0
+        synth_vec = np.zeros(384, dtype=np.float32)
+        synth_vec[1] = 1.0
+        mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
 
         service = ContextEnrichmentService(
             prompts_dir=tmp_path,
@@ -1090,10 +1088,16 @@ class TestDomainVocabExtraction:
 
 
 class TestHybridRelevance:
-    """Verify hybrid compute_repo_relevance (cosine + domain entity overlap)."""
+    """Verify single-threshold compute_repo_relevance against a repo-anchored synthesis.
+
+    The gate is ``cosine >= REPO_RELEVANCE_FLOOR`` (0.15) computed against a
+    synthesis prefixed with ``"Project: {repo_full_name}\\n"`` when supplied.
+    Domain vocabulary overlap is preserved in the info dict as a diagnostic
+    only — it does not affect the decision.
+    """
 
     @pytest.mark.asyncio
-    async def test_low_cosine_zero_entities_skips(self):
+    async def test_orthogonal_vectors_skip(self):
         """Orthogonal vectors → skip with reason 'below_floor'."""
         import numpy as np
 
@@ -1114,12 +1118,12 @@ class TestHybridRelevance:
         assert info["reason"] == "below_floor"
 
     @pytest.mark.asyncio
-    async def test_mid_cosine_with_entities_passes(self):
-        """Moderate cosine + domain term in prompt → pass."""
+    async def test_moderate_cosine_passes(self):
+        """Cosine above floor → pass with reason 'above_floor'."""
         import numpy as np
 
         mock_es = AsyncMock()
-        # Create vectors with moderate similarity (~0.5)
+        # Create vectors with moderate similarity (~0.5), well above the 0.15 floor
         rng = np.random.default_rng(42)
         base = rng.random(384).astype(np.float32)
         base /= np.linalg.norm(base)
@@ -1134,14 +1138,22 @@ class TestHybridRelevance:
             "enrichment enrichment enrichment",
             mock_es,
         )
-        assert score >= 0.20  # above floor
+        assert score >= 0.15
         assert info["decision"] == "pass"
-        assert info["reason"] == "domain_match"
+        assert info["reason"] == "above_floor"
+        # Overlap is diagnostic-only but should still be reported
         assert info["domain_overlap"] >= 1
 
     @pytest.mark.asyncio
-    async def test_high_cosine_zero_entities_skips(self):
-        """High cosine but no domain terms in prompt → skip, no_domain_overlap."""
+    async def test_high_cosine_passes_regardless_of_vocab(self):
+        """High cosine → pass even when no domain vocabulary overlaps.
+
+        Under the old two-stage gate this case was rejected as
+        'no_domain_overlap'.  The root-fix simplification trusts the
+        embedding: if two texts are semantically close enough to clear
+        the floor, they're relevant.  Vocabulary overlap was a brittle
+        secondary signal that over-rejected focused prompts.
+        """
         import numpy as np
 
         mock_es = AsyncMock()
@@ -1159,12 +1171,12 @@ class TestHybridRelevance:
             mock_es,
         )
         assert score > 0.8
-        assert info["decision"] == "skip"
-        assert info["reason"] == "no_domain_overlap"
+        assert info["decision"] == "pass"
+        assert info["reason"] == "above_floor"
 
     @pytest.mark.asyncio
     async def test_returns_domain_matches_in_info(self):
-        """Matched domain terms appear in info['domain_matches']."""
+        """Matched domain terms appear in info['domain_matches'] as diagnostic."""
         import numpy as np
 
         mock_es = AsyncMock()
@@ -1187,41 +1199,53 @@ class TestHybridRelevance:
         assert "enrichment" in info["domain_matches"]
 
     @pytest.mark.asyncio
-    async def test_low_cosine_with_domain_overlap_passes(self):
-        """Low cosine + domain term in prompt → PASS via domain_match.
+    async def test_repo_full_name_prefixes_anchor(self):
+        """``repo_full_name`` prepends a ``"Project: ..."`` prefix to the anchor.
 
-        Regression test for a real production miss: an audit prompt asking
-        'Is the MCP sampling method properly implemented?' against a linked
-        repo whose synthesis covers broad Project Synthesis architecture
-        produced cosine=0.147 (below the 0.20 floor) — but the prompt
-        contains 'mcp', 'sampling', and 'pipeline', which appear multiple
-        times in the synthesis.  Vocabulary overlap is a stronger signal
-        than embedding similarity for focused subsystem questions, and
-        must be able to override a low cosine.  Otherwise focused prompts
-        about one subsystem of a broad repo lose ALL codebase context.
+        Guards the embedding-side root fix: we embed the repo identity
+        alongside its tech-stack signature so two projects with similar
+        architectures don't collide on cosine.
         """
         import numpy as np
 
         mock_es = AsyncMock()
-        # Force a low cosine by using near-orthogonal vectors.
         prompt_vec = np.zeros(384, dtype=np.float32)
         prompt_vec[0] = 1.0
         synth_vec = np.zeros(384, dtype=np.float32)
-        synth_vec[1] = 0.95
-        synth_vec[0] = 0.1
-        synth_vec /= np.linalg.norm(synth_vec)
+        synth_vec[0] = 1.0  # match for a pass
         mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
 
-        score, info = await compute_repo_relevance(
-            "Audit the MCP sampling method in the pipeline",
-            "mcp mcp mcp sampling sampling sampling pipeline pipeline pipeline "
-            "taxonomy taxonomy taxonomy enrichment enrichment enrichment",
+        await compute_repo_relevance(
+            "Audit the MCP sampling pipeline",
+            "synthesis synthesis synthesis",
+            mock_es,
+            repo_full_name="project-synthesis/ProjectSynthesis",
+        )
+
+        # Second call is the anchor — must be prefixed with "Project: ..."
+        second_call = mock_es.aembed_single.call_args_list[1]
+        anchor_text = second_call.args[0]
+        assert anchor_text.startswith("Project: project-synthesis/ProjectSynthesis\n")
+        assert "synthesis synthesis synthesis" in anchor_text
+
+    @pytest.mark.asyncio
+    async def test_no_repo_name_omits_prefix(self):
+        """When ``repo_full_name`` is None, the anchor is the raw synthesis."""
+        import numpy as np
+
+        mock_es = AsyncMock()
+        prompt_vec = np.zeros(384, dtype=np.float32)
+        prompt_vec[0] = 1.0
+        synth_vec = np.zeros(384, dtype=np.float32)
+        synth_vec[0] = 1.0
+        mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
+
+        await compute_repo_relevance(
+            "Audit the pipeline",
+            "plain synthesis text",
             mock_es,
         )
-        assert score < 0.20, f"test setup: cosine must be below floor, got {score}"
-        assert info["decision"] == "pass", (
-            f"low cosine with domain overlap should pass via vocab match, "
-            f"got decision={info['decision']} reason={info['reason']}"
-        )
-        assert info["reason"] == "domain_match"
-        assert info["domain_overlap"] >= 1
+
+        second_call = mock_es.aembed_single.call_args_list[1]
+        anchor_text = second_call.args[0]
+        assert anchor_text == "plain synthesis text"
