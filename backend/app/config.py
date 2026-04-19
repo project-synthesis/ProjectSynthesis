@@ -175,7 +175,8 @@ class Settings(BaseSettings):
         default="claude-opus-4-7", description="Default Opus model ID for optimize phase.",
     )
     MODEL_HAIKU: str = Field(
-        default="claude-haiku-4-5", description="Default Haiku model ID for suggest/extract phases and cluster labeling.",
+        default="claude-haiku-4-5",
+        description="Default Haiku model ID for suggest/extract phases and cluster labeling.",
     )
 
     # --- Auto-Update ---
