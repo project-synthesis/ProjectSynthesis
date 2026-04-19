@@ -148,8 +148,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Classification agreement tracking** — heuristic vs LLM comparison after every analysis phase, exposed in health endpoint
 
 ### Developer Integration (First Vertical)
-- **GitHub integration** — zero-config Device Flow OAuth (no secrets, no callback URL). Link a repo, browse files, and get codebase-aware optimization. Background indexing with incremental refresh builds semantic file embeddings + Haiku architectural synthesis
-- **Three-layer codebase context** — cached explore synthesis (architectural overview, once per repo) + per-prompt curated retrieval (full source delivery, 80K char cap, import-graph + doc-ref expansion, source-type balanced, task-gated for non-coding skipping) + performance signals. **Repo relevance gate** prevents same-stack-different-project contamination via hybrid cosine + domain entity overlap scoring. Zero request-time LLM calls
+- **GitHub integration** — zero-config Device Flow OAuth (no secrets, no callback URL). Link a repo, browse files, and get codebase-aware optimization. Background indexing with incremental refresh builds semantic file embeddings + Haiku architectural synthesis. Live per-phase progress (`fetching_tree → embedding → synthesizing → ready`) streams via `index_phase_changed` SSE with dedicated error surfacing in Navigator and StatusBar
+- **Three-layer codebase context** — cached explore synthesis (architectural overview, once per repo) + per-prompt curated retrieval (full source delivery, 80K char cap, import-graph + doc-ref expansion, source-type balanced, task-gated for non-coding skipping) + performance signals. **Repo relevance gate** prevents same-stack-different-project contamination via hybrid cosine + domain entity overlap scoring. Four-layer indexing cache (curated retrieval invalidation, GitHub tree ETag, content-SHA embedding dedup, file-content TTL) minimizes GitHub API pressure and embedder cost across branches and reindex cycles. Zero request-time LLM calls
 - **MCP server** — use from any MCP-compatible IDE (VS Code, Claude Code, etc.)
 - **VS Code bridge extension** — MCP Copilot Bridge for sampling-based optimization through the IDE's own LLM
 - **Passthrough mode** — IDE's own LLM does the optimization; server provides context + heuristic analysis + hybrid scoring
@@ -210,13 +210,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2351 tests)
+# Backend tests (2379 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1189 tests)
+# Frontend tests (1204 tests)
 cd frontend && npm test
 
 # Frontend build

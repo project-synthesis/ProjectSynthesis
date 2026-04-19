@@ -40,7 +40,7 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 |-------|---------|
 | `forge.svelte.ts` | Pipeline state (prompt, strategy, SSE, result, feedback). `localStorage` persistence via `synthesis:last_trace_id` — refresh restores last optimization |
 | `editor.svelte.ts` | Tab management (prompt/result/diff/mindmap types) |
-| `github.svelte.ts` | GitHub Device Flow auth + token refresh, `connectionState` getter (5 states), `reconnect()`, repo picker, file browser (tree/content), branch list, index status, project selection. `_handleAuthError()` centralizes 401 detection across all methods |
+| `github.svelte.ts` | GitHub Device Flow auth + token refresh, `connectionState` getter (7 states: `disconnected | expired | authenticated | linked | indexing | error | ready`), `phaseLabel` + `indexErrorText` for per-phase progress/error surfacing, `reconnect()`, repo picker, file browser (tree/content), branch list, index status, project selection. `applyPhaseEvent()` consumes `index_phase_changed` SSE; `_handleAuthError()` centralizes 401 detection |
 | `refinement.svelte.ts` | Refinement sessions: turns, branches, suggestions, score progression |
 | `preferences.svelte.ts` | Persistent user preferences loaded from backend |
 | `toast.svelte.ts` | Toast notification queue with `addToast()` API. Severity helpers: `success()`, `info()`, `warning()`, `error()` |
@@ -146,6 +146,7 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | `domain_created` | Domain store invalidation |
 | `domain_readiness_changed` | `readinessNotificationsStore` dispatches severity-mapped toast (preference-gated, per-row mute respected); `readinessStore` invalidates cached report; SemanticTopology redraws the domain's readiness ring |
 | `seed_batch_progress` | `clustersStore.updateSeedProgress()` (persistent) + DOM CustomEvent for SeedModal. StatusBar shows progress when modal closed |
+| `index_phase_changed` | `githubStore.applyPhaseEvent()` — live per-phase index progress (`fetching_tree`/`embedding`/`synthesizing`/`ready`/`error`) drives Navigator badge pulse + error row + StatusBar state without waiting for the 2-minute poll |
 | `preferences_changed` | Preferences store reload |
 | `agent_changed` | Seed agent list refresh (hot-reload on file change) |
 | `update_available` | Update store populated, StatusBar UpdateBadge badge displayed |
@@ -163,7 +164,7 @@ Fixed 60s health polling for StatusBar display only — no routing decisions fro
 - **Pattern detection**: two-path — typing (800ms debounce, 30-char min) + paste (300ms, 30-char delta). AbortController cancels in-flight requests. No auto-dismiss. `applySuggestion()` returns `{ids, clusterLabel}` for persistent chip bar. `appliedPatternLabel` on forge store for UI confirmation
 - **Toggle safety**: disabled conditions prefixed with `!currentValue &&` — toggle already ON is always interactive
 - **Routing reactivity**: frontend is purely reactive — receives `routing_state_changed` SSE, never makes routing decisions
-- **GitHub connection state**: `githubStore.connectionState` getter (5 states) replaces ad-hoc null checks. `reconnect()` clears `linkedRepo` before Device Flow so template falls to auth branch. `_handleAuthError()` centralizes 401 detection. Tab selection persisted to `localStorage` key `synthesis:github_tab`
+- **GitHub connection state**: `githubStore.connectionState` getter (7 states: `disconnected | expired | authenticated | linked | indexing | error | ready`) replaces ad-hoc null checks. `ready` requires `index_phase === 'ready'` AND `status === 'ready'` AND synthesis complete — no premature transitions while synthesis is still running. `phaseLabel`/`indexErrorText` render per-phase copy + error rows. `reconnect()` clears `linkedRepo` before Device Flow so template falls to auth branch. `_handleAuthError()` centralizes 401 detection. Tab selection persisted to `localStorage` key `synthesis:github_tab`
 - **Cross-component SSE**: MCP pipeline events route through `forgeStore.handleExternalEvent()` (single code path). Refinement turns propagated to `refinementStore.reloadTurns()`. Seed batch progress persisted in `clustersStore` (survives modal close)
 - **Per-tab feedback caching**: `editorStore.cacheFeedback()`/`activeFeedback` getter prevents feedback state loss on tab switch
 - **Version**: `src/lib/version.ts` imports from root `version.json` — auto-synced by `scripts/sync-version.sh`, never edit manually
