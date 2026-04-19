@@ -142,7 +142,15 @@ class DomainResolver:
                 self._cache[primary] = resolved
                 return resolved
 
-            # Unknown domain: blend signal confidence for gate decision
+            # Unknown domain: blend signal confidence for gate decision.
+            # Root-fix rationale: previously both branches collapsed to
+            # "general", silently destroying high-confidence organic signals
+            # (e.g. "frontend" in a repo that hasn't promoted that label yet).
+            # The taxonomy grows organically by *preserving* those labels —
+            # they show up in cluster domain_raw distributions, feed
+            # DomainSignalLoader's vocabulary, and trigger domain promotion
+            # once enough coherent members accumulate.  Collapsing them
+            # pre-empts that evolution.
             blended = confidence
             if self._signal_loader and raw_prompt:
                 blended = self._blend_confidence(confidence, raw_prompt)
@@ -155,8 +163,15 @@ class DomainResolver:
                 self._cache[primary] = "general"
                 return "general"
 
-            self._cache[primary] = "general"
-            return "general"
+            # High-confidence unknown: preserve primary so organic growth can
+            # observe it.  Taxonomy cold/warm paths will decide whether to
+            # promote it to a formal domain label based on cluster coherence.
+            logger.debug(
+                "Domain confidence gate: preserving organic unknown '%s' blended=%.2f",
+                primary, blended,
+            )
+            self._cache[primary] = primary
+            return primary
         except Exception:
             logger.warning(
                 "DomainResolver.resolve() failed for '%s', defaulting to 'general'",

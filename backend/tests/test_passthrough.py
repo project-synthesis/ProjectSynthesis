@@ -1234,8 +1234,14 @@ class TestDomainValidation:
         opt = result.scalar_one()
         assert opt.domain == "backend"
 
-    async def test_save_invalid_domain_falls_back_to_general(self, app_client, db_session):
-        """Unknown domain values are replaced with 'general'."""
+    async def test_save_unknown_high_confidence_domain_is_preserved(self, app_client, db_session):
+        """Unknown domain labels are preserved (organic taxonomy growth).
+
+        Passthrough calls ``resolver.resolve(..., confidence=1.0)`` so
+        high-confidence unknowns pass the confidence gate and stay on the
+        row.  Collapsing them to 'general' used to destroy signals the
+        warm-path domain-discovery phase feeds on.
+        """
         prep = await self._prepare(app_client)
         resp = await app_client.post(
             "/api/optimize/passthrough/save",
@@ -1247,10 +1253,16 @@ class TestDomainValidation:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["domain"] == "general"
+        assert data["domain"] == "hacking"
 
-    async def test_save_invalid_domain_preserves_raw_in_domain_raw(self, app_client, db_session):
-        """Invalid domain is rejected for domain but preserved in domain_raw."""
+    async def test_save_unknown_domain_mirrored_into_domain_raw(self, app_client, db_session):
+        """Unknown label is kept in both ``domain`` and ``domain_raw``.
+
+        Primary domain (``domain``) reflects the resolver's decision.
+        ``domain_raw`` preserves the raw payload for qualified domains
+        (e.g. ``"backend: security"``) — when the payload has no
+        qualifier, both fields carry the same value.
+        """
         prep = await self._prepare(app_client)
         await app_client.post(
             "/api/optimize/passthrough/save",
@@ -1264,7 +1276,7 @@ class TestDomainValidation:
             select(Optimization).where(Optimization.trace_id == prep["trace_id"])
         )
         opt = result.scalar_one()
-        assert opt.domain == "general"
+        assert opt.domain == "custom_domain"
         assert opt.domain_raw == "custom_domain"
 
     async def test_save_qualified_domain_extracts_primary(self, app_client, db_session):
