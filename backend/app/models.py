@@ -345,6 +345,10 @@ class RepoFileIndex(Base):
     file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     outline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # SHA-256 of the embed_text (path + outline + doc_summary — what the
+    # model actually sees). Two rows with the same content_sha share the
+    # same embedding; we can skip the embedder call and copy the vector.
+    content_sha: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
 

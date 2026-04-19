@@ -1,5 +1,6 @@
 """Tests for RepoIndexService — background indexing and staleness detection."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -1926,3 +1927,283 @@ async def test_incremental_update_skips_on_304_and_updates_head(db_session):
         select(RepoFileIndex).where(RepoFileIndex.repo_full_name == "o/r")
     )).scalars().all()
     assert len(rows) == 1 and rows[0].file_path == "src/x.py"
+
+
+# ---------------------------------------------------------------------------
+# Content-hash embedding deduplication (Fix #3+#5)
+# ---------------------------------------------------------------------------
+# An embedding is a pure function of ``embed_text`` (built from path + outline
+# + doc_summary). Two files with the same ``embed_text`` MUST produce the same
+# vector — rerunning the embedder is pure waste. We key on SHA-256 of the
+# embed_text (the exact input the model sees) so dedup is precise and
+# transparent across branches and repos.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embedding_reuses_cached_content_sha(db_session):
+    """Rebuilding a file with identical content reuses the cached embedding.
+
+    RED: without content-hash dedup, ``aembed_texts`` is called for every
+    file on every rebuild.
+    """
+    import hashlib
+
+    from app.services.repo_index_service import _build_embedding_text
+
+    # Pre-seed: a file with known content + its embedding, content_sha set.
+    cached_vec = np.ones(384, dtype=np.float32) * 0.5  # distinctive fingerprint
+    content = "def cached(): return 42\n"
+    path = "src/cached.py"
+    outline = _extract_structured_outline(path, content)
+    embed_text = _build_embedding_text(path, outline)
+    content_sha = hashlib.sha256(embed_text.encode("utf-8")).hexdigest()
+
+    db_session.add(RepoFileIndex(
+        repo_full_name="other/repo", branch="main",
+        file_path=path, file_sha="old_sha",
+        content=content, outline=outline.structural_summary,
+        content_sha=content_sha,
+        embedding=cached_vec.tobytes(),
+    ))
+    db_session.add(RepoIndexMeta(
+        repo_full_name="o/r", branch="main",
+        status="ready", file_count=0, head_sha="old",
+    ))
+    await db_session.commit()
+
+    gc = AsyncMock()
+    gc.get_branch_head_sha.return_value = "new_sha"
+    tree_items = [{"path": path, "sha": "new_file_sha", "size": len(content)}]
+    gc.get_tree.return_value = tree_items
+    gc.get_tree_with_cache = AsyncMock(return_value=(tree_items, None))
+    gc.get_file_content = AsyncMock(return_value=content)
+
+    es = MagicMock()
+    zero_vec = np.zeros(384, dtype=np.float32)
+    es.aembed_texts = AsyncMock(return_value=[zero_vec])
+
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+    await svc.incremental_update("o/r", "main", "tok")
+
+    # The embedder was NOT called — cache hit on content_sha.
+    es.aembed_texts.assert_not_awaited()
+
+    # Newly-persisted row reuses the cached embedding exactly.
+    row = (await db_session.execute(
+        select(RepoFileIndex).where(
+            RepoFileIndex.repo_full_name == "o/r",
+            RepoFileIndex.file_path == path,
+        )
+    )).scalar_one()
+    persisted = np.frombuffer(row.embedding, dtype=np.float32)
+    np.testing.assert_array_equal(persisted, cached_vec)
+    assert row.content_sha == content_sha
+
+
+@pytest.mark.asyncio
+async def test_embedding_partial_cache_hit(db_session):
+    """Mixed batch: cached files reuse vectors; only misses go to the embedder."""
+    import hashlib
+
+    from app.services.repo_index_service import _build_embedding_text
+
+    cached_vec = np.ones(384, dtype=np.float32) * 0.3
+    content_cached = "def cached(): return 1\n"
+    path_cached = "src/cached.py"
+    outline_cached = _extract_structured_outline(path_cached, content_cached)
+    embed_text_cached = _build_embedding_text(path_cached, outline_cached)
+    sha_cached = hashlib.sha256(embed_text_cached.encode("utf-8")).hexdigest()
+
+    db_session.add(RepoFileIndex(
+        repo_full_name="other/repo", branch="main",
+        file_path=path_cached, file_sha="old",
+        content=content_cached, outline=outline_cached.structural_summary,
+        content_sha=sha_cached,
+        embedding=cached_vec.tobytes(),
+    ))
+    db_session.add(RepoIndexMeta(
+        repo_full_name="o/r", branch="main",
+        status="ready", file_count=0, head_sha="old",
+    ))
+    await db_session.commit()
+
+    content_new = "def new(): return 2\n"
+    path_new = "src/new.py"
+
+    gc = AsyncMock()
+    gc.get_branch_head_sha.return_value = "new_sha"
+    tree_items = [
+        {"path": path_cached, "sha": "fs_c", "size": len(content_cached)},
+        {"path": path_new, "sha": "fs_n", "size": len(content_new)},
+    ]
+    gc.get_tree.return_value = tree_items
+    gc.get_tree_with_cache = AsyncMock(return_value=(tree_items, None))
+
+    async def _read(_tok, _repo, path, _ref):
+        return content_cached if path == path_cached else content_new
+
+    gc.get_file_content = AsyncMock(side_effect=_read)
+
+    es = MagicMock()
+    new_vec = np.ones(384, dtype=np.float32) * 0.9
+    es.aembed_texts = AsyncMock(return_value=[new_vec])
+
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+    await svc.incremental_update("o/r", "main", "tok")
+
+    # Embedder called exactly once, and only for the cache-miss file.
+    es.aembed_texts.assert_awaited_once()
+    embed_args = es.aembed_texts.await_args.args[0]
+    assert len(embed_args) == 1
+    assert path_new in embed_args[0]
+
+    rows = {
+        r.file_path: r for r in (await db_session.execute(
+            select(RepoFileIndex).where(RepoFileIndex.repo_full_name == "o/r")
+        )).scalars().all()
+    }
+    np.testing.assert_array_equal(
+        np.frombuffer(rows[path_cached].embedding, dtype=np.float32),
+        cached_vec,
+    )
+    np.testing.assert_array_equal(
+        np.frombuffer(rows[path_new].embedding, dtype=np.float32),
+        new_vec,
+    )
+
+
+@pytest.mark.asyncio
+async def test_embedding_persists_content_sha_on_fresh_build(db_session):
+    """build_index must persist content_sha so future builds can dedup."""
+    import hashlib
+
+    content = "def main():\n    pass\n"
+    path = "src/main.py"
+    gc = AsyncMock()
+    gc.get_branch_head_sha.return_value = "sha1"
+    tree_items = [{"path": path, "sha": "fs", "size": 200}]
+    gc.get_tree.return_value = tree_items
+    gc.get_tree_with_cache = AsyncMock(return_value=(tree_items, None))
+    gc.get_file_content = AsyncMock(return_value=content)
+
+    es = MagicMock()
+    es.aembed_texts = AsyncMock(return_value=[np.zeros(384, dtype=np.float32)])
+
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+    await svc.build_index("o/r", "main", "tok")
+
+    row = (await db_session.execute(
+        select(RepoFileIndex).where(RepoFileIndex.repo_full_name == "o/r")
+    )).scalar_one()
+    assert row.content_sha is not None
+    # Derivable from the same embed_text formula — verifies our key formula.
+    outline = _extract_structured_outline(path, content)
+    from app.services.repo_index_service import _build_embedding_text
+    expected_sha = hashlib.sha256(
+        _build_embedding_text(path, outline).encode("utf-8")
+    ).hexdigest()
+    assert row.content_sha == expected_sha
+
+
+# ---------------------------------------------------------------------------
+# File-content TTL cache (Fix #4)
+# ---------------------------------------------------------------------------
+# Keyed by (repo, branch, path, file_sha). File SHAs identify content exactly
+# (git blob hash), so entries are safe to reuse indefinitely — we only cap
+# via TTL + LRU to bound memory. The cache trims GitHub API calls when the
+# same blob SHA appears in multiple branches, revisions of the same index
+# run that touch a file twice, or repeat reindex cycles within the window.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_file_caches_same_sha(db_session):
+    """Second _read_file call for the same (repo,branch,path,sha) hits cache."""
+    from app.services.repo_index_service import invalidate_file_cache
+
+    invalidate_file_cache()  # start from clean state
+
+    gc = AsyncMock()
+    gc.get_file_content = AsyncMock(return_value="def f(): pass")
+    es = MagicMock()
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+    sem = asyncio.Semaphore(1)
+    item = {"path": "src/f.py", "sha": "blob_sha_1"}
+
+    _, c1 = await svc._read_file(sem, "tok", "o/r", "main", item)
+    _, c2 = await svc._read_file(sem, "tok", "o/r", "main", item)
+
+    assert c1 == c2 == "def f(): pass"
+    # GitHub hit exactly once — second call served from cache.
+    assert gc.get_file_content.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_read_file_bypasses_cache_on_sha_change(db_session):
+    """A different sha for the same path must re-fetch — new content."""
+    from app.services.repo_index_service import invalidate_file_cache
+
+    invalidate_file_cache()
+
+    gc = AsyncMock()
+    gc.get_file_content = AsyncMock(
+        side_effect=["old body", "new body"],
+    )
+    es = MagicMock()
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+    sem = asyncio.Semaphore(1)
+    _, c_old = await svc._read_file(
+        sem, "tok", "o/r", "main", {"path": "src/f.py", "sha": "sha_old"},
+    )
+    _, c_new = await svc._read_file(
+        sem, "tok", "o/r", "main", {"path": "src/f.py", "sha": "sha_new"},
+    )
+
+    assert c_old == "old body"
+    assert c_new == "new body"
+    assert gc.get_file_content.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_read_file_cache_shared_across_branches(db_session):
+    """Same blob sha on a different branch reuses cache — vendored-file win."""
+    from app.services.repo_index_service import invalidate_file_cache
+
+    invalidate_file_cache()
+
+    gc = AsyncMock()
+    gc.get_file_content = AsyncMock(return_value="shared")
+    es = MagicMock()
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+    sem = asyncio.Semaphore(1)
+    item = {"path": "vendor/lib.py", "sha": "blob_abc"}
+    await svc._read_file(sem, "tok", "o/r", "main", item)
+    await svc._read_file(sem, "tok", "o/r", "feature/x", item)
+
+    # Same blob SHA = same content (git guarantees it) → one API call total.
+    assert gc.get_file_content.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_read_file_skips_cache_without_sha(db_session):
+    """No sha on the tree item → no cache key → always fetch."""
+    from app.services.repo_index_service import invalidate_file_cache
+
+    invalidate_file_cache()
+
+    gc = AsyncMock()
+    gc.get_file_content = AsyncMock(return_value="body")
+    es = MagicMock()
+    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
+
+    sem = asyncio.Semaphore(1)
+    item = {"path": "src/f.py"}  # no sha
+
+    await svc._read_file(sem, "tok", "o/r", "main", item)
+    await svc._read_file(sem, "tok", "o/r", "main", item)
+
+    assert gc.get_file_content.await_count == 2  # not cached
