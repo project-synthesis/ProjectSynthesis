@@ -341,13 +341,24 @@ def mock_context_service() -> AsyncMock:
 
 @pytest.fixture
 def mock_session_factory() -> Any:
-    """Minimal async context-manager factory that yields an AsyncMock session.
+    """Async context-manager factory yielding a session whose `execute()` raises.
 
-    The mocked context service ignores the db, so a no-op session is fine.
+    The mocked `context_service.enrich()` ignores the db, so a no-op session
+    is fine for enrichment. But batch_pipeline's historical-stats fetch (line
+    ~422) runs `OptimizationService(session).get_score_distribution(...)` —
+    real service code that calls `await session.execute(stmt)`. If the session
+    is `AsyncMock()`, each chained attribute access returns a new coroutine and
+    pytest emits `RuntimeWarning: coroutine '_execute_mock_call' was never
+    awaited`. Raising from `execute()` trips the try/except in batch_pipeline
+    immediately — no coroutines pile up.
     """
+    class _StubSession:
+        async def execute(self, *_a: Any, **_kw: Any) -> None:
+            raise RuntimeError("stub: historical stats disabled in this test")
+
     class _MockSession:
-        async def __aenter__(self) -> AsyncMock:
-            return AsyncMock()
+        async def __aenter__(self) -> _StubSession:
+            return _StubSession()
         async def __aexit__(self, *_: Any) -> None:
             return None
 
@@ -743,44 +754,36 @@ class TestClassificationAgreement:
         """A single seeded prompt must produce exactly one record() call
         with heuristic labels (from enrichment.analysis) + LLM labels
         (from the analyze phase result)."""
-        # Swap in a fresh singleton so counts start at 0 and tests are
-        # order-independent.
-        import app.services.classification_agreement as ca_module
-        from app.services.classification_agreement import (
-            ClassificationAgreement,
-            get_classification_agreement,
+        # Singleton isolation is handled by the autouse
+        # `reset_classification_agreement` fixture — no manual swap needed.
+        from app.services.classification_agreement import get_classification_agreement
+
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(task_type="coding", domain="backend"),
+            _optimization(),
+            _scores(),
+            _suggestions(),
+        ]
+
+        await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            tier="internal",
+            context_service=mock_context_service,
+            session_factory=mock_session_factory,
         )
-        original = ca_module._agreement
-        ca_module._agreement = ClassificationAgreement()
-        try:
-            mock_provider.complete_parsed.side_effect = [
-                _analysis(task_type="coding", domain="backend"),
-                _optimization(),
-                _scores(),
-                _suggestions(),
-            ]
 
-            await run_single_prompt(
-                raw_prompt="Write a function that sorts a list",
-                provider=mock_provider,
-                prompt_loader=prompt_loader,
-                embedding_service=mock_embedding_service,
-                tier="internal",
-                context_service=mock_context_service,
-                session_factory=mock_session_factory,
-            )
-
-            agreement = get_classification_agreement()
-            assert agreement.total == 1, (
-                f"Expected 1 recorded classification, got {agreement.total}"
-            )
-            # Heuristic is "coding"+"backend" (from _heuristic()),
-            # LLM is "coding"+"backend" — full agreement.
-            assert agreement.task_type_agree == 1
-            assert agreement.domain_agree == 1
-            assert agreement.both_agree == 1
-        finally:
-            ca_module._agreement = original
+        agreement = get_classification_agreement()
+        assert agreement.total == 1, (
+            f"Expected 1 recorded classification, got {agreement.total}"
+        )
+        # Heuristic is "coding"+"backend" (from _heuristic()),
+        # LLM is "coding"+"backend" — full agreement.
+        assert agreement.task_type_agree == 1
+        assert agreement.domain_agree == 1
+        assert agreement.both_agree == 1
 
     async def test_records_disagreement_when_labels_differ(
         self,
@@ -791,50 +794,42 @@ class TestClassificationAgreement:
     ) -> None:
         """Heuristic and LLM labels diverging must still record — the
         agreement counters expose the mismatch rate, not suppress it."""
-        import app.services.classification_agreement as ca_module
-        from app.services.classification_agreement import (
-            ClassificationAgreement,
-            get_classification_agreement,
+        from app.services.classification_agreement import get_classification_agreement
+
+        # Heuristic (enrichment.analysis) says writing+general,
+        # LLM (analyze phase) returns coding+backend → full disagreement.
+        ctx_svc = AsyncMock()
+        ctx_svc.enrich = AsyncMock(return_value=_enriched(
+            analysis=HeuristicAnalysis(
+                task_type="writing",
+                domain="general",
+                intent_label="edit document",
+                confidence=0.7,
+            ),
+        ))
+
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(task_type="coding", domain="backend"),
+            _optimization(),
+            _scores(),
+            _suggestions(),
+        ]
+
+        await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            tier="internal",
+            context_service=ctx_svc,
+            session_factory=mock_session_factory,
         )
-        original = ca_module._agreement
-        ca_module._agreement = ClassificationAgreement()
-        try:
-            # Heuristic (enrichment.analysis) says writing+general,
-            # LLM (analyze phase) returns coding+backend → full disagreement.
-            ctx_svc = AsyncMock()
-            ctx_svc.enrich = AsyncMock(return_value=_enriched(
-                analysis=HeuristicAnalysis(
-                    task_type="writing",
-                    domain="general",
-                    intent_label="edit document",
-                    confidence=0.7,
-                ),
-            ))
 
-            mock_provider.complete_parsed.side_effect = [
-                _analysis(task_type="coding", domain="backend"),
-                _optimization(),
-                _scores(),
-                _suggestions(),
-            ]
-
-            await run_single_prompt(
-                raw_prompt="Write a function that sorts a list",
-                provider=mock_provider,
-                prompt_loader=prompt_loader,
-                embedding_service=mock_embedding_service,
-                tier="internal",
-                context_service=ctx_svc,
-                session_factory=mock_session_factory,
-            )
-
-            agreement = get_classification_agreement()
-            assert agreement.total == 1
-            assert agreement.task_type_agree == 0
-            assert agreement.domain_agree == 0
-            assert agreement.both_agree == 0
-        finally:
-            ca_module._agreement = original
+        agreement = get_classification_agreement()
+        assert agreement.total == 1
+        assert agreement.task_type_agree == 0
+        assert agreement.domain_agree == 0
+        assert agreement.both_agree == 0
 
     async def test_no_record_when_enrichment_has_no_heuristic(
         self,
@@ -845,27 +840,19 @@ class TestClassificationAgreement:
         """Without a context_service (legacy callers), heuristic analysis
         isn't computed by the batch itself — no record() fires, keeping
         the legacy path behavior-preserving."""
-        import app.services.classification_agreement as ca_module
-        from app.services.classification_agreement import (
-            ClassificationAgreement,
-            get_classification_agreement,
+        from app.services.classification_agreement import get_classification_agreement
+
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(), _optimization(), _scores(), _suggestions(),
+        ]
+
+        await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            tier="internal",
         )
-        original = ca_module._agreement
-        ca_module._agreement = ClassificationAgreement()
-        try:
-            mock_provider.complete_parsed.side_effect = [
-                _analysis(), _optimization(), _scores(), _suggestions(),
-            ]
 
-            await run_single_prompt(
-                raw_prompt="Write a function that sorts a list",
-                provider=mock_provider,
-                prompt_loader=prompt_loader,
-                embedding_service=mock_embedding_service,
-                tier="internal",
-            )
-
-            agreement = get_classification_agreement()
-            assert agreement.total == 0
-        finally:
-            ca_module._agreement = original
+        agreement = get_classification_agreement()
+        assert agreement.total == 0
