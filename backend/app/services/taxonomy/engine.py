@@ -3151,7 +3151,10 @@ class TaxonomyEngine:
             The newly created PromptCluster domain node.
         """
 
-        from app.services.taxonomy.coloring import compute_max_distance_color
+        from app.services.taxonomy.coloring import (
+            compute_max_distance_color,
+            resolve_seed_palette_color,
+        )
 
         # Gather existing domain colors for max-distance computation
         color_q = await db.execute(
@@ -3187,8 +3190,20 @@ class TaxonomyEngine:
                 )
             color_hex = derive_sub_domain_color(parent_color)
         else:
-            # Top-level domain: maximally distinct from all existing
-            color_hex = compute_max_distance_color(existing_colors)
+            # Top-level domain: brand-anchored seed color when the label
+            # is canonical (backend/frontend/etc. — see SEED_PALETTE),
+            # otherwise maximally distinct from all existing domains.
+            # Preserves palette identity across dissolution/re-promotion
+            # cycles so "backend is always purple" stays true.
+            seed_color = resolve_seed_palette_color(label)
+            if seed_color and seed_color not in existing_colors:
+                color_hex = seed_color
+                logger.info(
+                    "Assigned seed palette color %s to domain '%s' (re-promotion)",
+                    color_hex, label,
+                )
+            else:
+                color_hex = compute_max_distance_color(existing_colors)
 
         # Extract TF-IDF keywords from seed cluster
         keywords: list = []

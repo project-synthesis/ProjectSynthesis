@@ -150,6 +150,95 @@ async def test_propose_domains_skips_existing_domain(db, mock_embedding):
 
 
 @pytest.mark.asyncio
+async def test_re_promoted_seed_label_reclaims_brand_color(db, mock_embedding):
+    """A re-promoted canonical seed label (e.g. 'backend') reclaims its
+    brand-anchored color from SEED_PALETTE — never the generic OKLab
+    max-distance result.  Verifies palette identity survives dissolution/
+    re-promotion cycles (ADR-006 dissolves empty seed domains, but their
+    visual identity must persist across cycles).
+    """
+    general = await _seed_general_domain(db)
+
+    # Cluster under 'general' with 8 members all consistently tagged 'backend'
+    cluster = PromptCluster(
+        label="api-middleware", state="active", domain="general",
+        parent_id=general.id, member_count=8, coherence=0.75,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(cluster)
+    await db.flush()
+    for i in range(8):
+        db.add(Optimization(
+            raw_prompt=f"build api endpoint {i}",
+            domain="general", domain_raw="backend",
+            cluster_id=cluster.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    created = await engine._propose_domains(db)
+    assert "backend" in created
+
+    result = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            PromptCluster.label == "backend",
+        )
+    )
+    backend_node = result.scalar_one()
+    assert backend_node.color_hex == "#b44aff", (
+        f"expected seed palette color for 'backend', got {backend_node.color_hex}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_novel_domain_still_uses_max_distance(db, mock_embedding):
+    """A non-seed label (e.g. 'marketing') still routes through
+    compute_max_distance_color — the seed palette lookup must not
+    accidentally suppress OKLab distribution for novel domains.
+    """
+    general = await _seed_general_domain(db)
+
+    cluster = PromptCluster(
+        label="campaign-copy", state="active", domain="general",
+        parent_id=general.id, member_count=8, coherence=0.75,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(cluster)
+    await db.flush()
+    for i in range(8):
+        db.add(Optimization(
+            raw_prompt=f"write launch email {i}",
+            domain="general", domain_raw="marketing",
+            cluster_id=cluster.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    created = await engine._propose_domains(db)
+    assert "marketing" in created
+
+    result = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            PromptCluster.label == "marketing",
+        )
+    )
+    marketing_node = result.scalar_one()
+    # Valid hex, not the generic grey fallback, not one of the seed values
+    from app.services.taxonomy.coloring import SEED_PALETTE
+    assert marketing_node.color_hex is not None
+    assert marketing_node.color_hex.startswith("#")
+    assert marketing_node.color_hex not in SEED_PALETTE.values()
+
+
+@pytest.mark.asyncio
 async def test_domain_ceiling_blocks_discovery(db, mock_embedding):
     """When DOMAIN_COUNT_CEILING is reached, no new domains are created."""
     general = await _seed_general_domain(db)

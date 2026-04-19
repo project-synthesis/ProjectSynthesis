@@ -3,14 +3,54 @@
 import re
 
 from app.services.taxonomy.coloring import (
+    SEED_PALETTE,
     enforce_minimum_delta_e,
     generate_color,
     oklab_to_hex,
+    resolve_seed_palette_color,
 )
 
 
 def _is_hex(s: str) -> bool:
     return bool(re.match(r"^#[0-9a-fA-F]{6}$", s))
+
+
+class TestSeedPalette:
+    """Brand-anchored seed colors survive dissolution/re-promotion cycles."""
+
+    def test_palette_covers_alembic_seeds(self):
+        """SEED_PALETTE must mirror the alembic migration's SEED_DOMAINS."""
+        expected = {
+            "backend", "frontend", "database", "devops",
+            "security", "fullstack", "data", "general",
+        }
+        assert set(SEED_PALETTE.keys()) == expected
+        # Every seed value must be a valid hex color
+        for label, hex_color in SEED_PALETTE.items():
+            assert _is_hex(hex_color), f"{label} has invalid hex: {hex_color}"
+
+    def test_resolve_canonical_labels(self):
+        assert resolve_seed_palette_color("backend") == "#b44aff"
+        assert resolve_seed_palette_color("frontend") == "#ff4895"
+        assert resolve_seed_palette_color("general") == "#7a7a9e"
+
+    def test_resolve_case_insensitive(self):
+        assert resolve_seed_palette_color("Backend") == "#b44aff"
+        assert resolve_seed_palette_color("FRONTEND") == "#ff4895"
+        assert resolve_seed_palette_color("  frontend  ") == "#ff4895"
+
+    def test_resolve_unknown_label_returns_none(self):
+        assert resolve_seed_palette_color("marketing") is None
+        assert resolve_seed_palette_color("saas-pricing") is None
+
+    def test_resolve_empty_label_returns_none(self):
+        assert resolve_seed_palette_color("") is None
+        assert resolve_seed_palette_color(None) is None  # type: ignore[arg-type]
+
+    def test_palette_colors_are_pairwise_distinct(self):
+        """Brand compliance: no two seed labels share a color."""
+        hex_values = list(SEED_PALETTE.values())
+        assert len(set(hex_values)) == len(hex_values)
 
 
 class TestGenerateColor:

@@ -229,6 +229,49 @@ def enforce_minimum_delta_e(
 
 
 # ---------------------------------------------------------------------------
+# Seed palette — brand-anchored colors for canonical domain labels
+# ---------------------------------------------------------------------------
+#
+# Mirrors the hex values in
+# ``alembic/versions/a1b2c3d4e5f6_add_domain_nodes.py`` (SEED_DOMAINS).
+# Keep the two in sync: the migration stamps these on first boot; this
+# dict lets the taxonomy engine *re-stamp* them when a dissolved seed
+# label emerges again through organic domain promotion.  Without this
+# memory, a re-promoted "backend" would be assigned whatever OKLab cell
+# the max-distance search produces — usually visually plausible but
+# brand-inconsistent across dissolution/re-promotion cycles.
+#
+# Rationale: seed domains are not special at dissolution time (ADR-006
+# — no permanence beyond "general"), but their *palette identity* IS
+# special.  Users build mental models around "backend is purple, frontend
+# is pink".  Breaking that across cycles is worse than picking a fresh
+# color for a genuinely new label.
+SEED_PALETTE: dict[str, str] = {
+    "backend": "#b44aff",
+    "frontend": "#ff4895",
+    "database": "#36b5ff",
+    "devops": "#6366f1",
+    "security": "#ff2255",
+    "fullstack": "#d946ef",
+    "data": "#b49982",
+    "general": "#7a7a9e",
+}
+
+
+def resolve_seed_palette_color(label: str) -> str | None:
+    """Return the seed-palette hex for ``label`` if one exists.
+
+    Lookup is case-insensitive and trims whitespace.  Returns ``None``
+    for any label not in the canonical seed set — callers should fall
+    back to :func:`compute_max_distance_color` in that case so novel
+    domains still get OKLab-distributed hues.
+    """
+    if not label:
+        return None
+    return SEED_PALETTE.get(label.strip().lower())
+
+
+# ---------------------------------------------------------------------------
 # Domain color pinning — max-distance selection
 # ---------------------------------------------------------------------------
 
