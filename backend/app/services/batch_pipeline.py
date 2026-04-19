@@ -12,13 +12,72 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from sqlalchemy import select as sa_select
 
-from app.providers.base import LLMProvider
+from app.config import DATA_DIR
+from app.models import Optimization, OptimizationPattern
+from app.providers.base import LLMProvider, call_provider_with_retry
+from app.schemas.pipeline_contracts import (
+    DIMENSION_WEIGHTS,
+    AnalysisResult,
+    DimensionScores,
+    OptimizationResult,
+    ScoreResult,
+    SuggestionsOutput,
+)
+from app.services.classification_agreement import get_classification_agreement
+from app.services.context_enrichment import resolve_strategy_intelligence
 from app.services.embedding_service import EmbeddingService
+from app.services.event_bus import event_bus
+from app.services.heuristic_scorer import HeuristicScorer
+from app.services.optimization_service import OptimizationService
+from app.services.pattern_injection import (
+    auto_inject_patterns,
+    format_few_shot_examples,
+    format_injected_patterns,
+    retrieve_few_shot_examples,
+)
+from app.services.pipeline_constants import (
+    ANALYZE_MAX_TOKENS,
+    SCORE_MAX_TOKENS,
+    VALID_TASK_TYPES,
+    compute_optimize_max_tokens,
+    resolve_effective_strategy,
+    semantic_upgrade_general,
+)
+from app.services.preferences import PreferencesService
+from app.services.project_service import resolve_repo_project
 from app.services.prompt_loader import PromptLoader
+from app.services.score_blender import blend_scores
+from app.services.strategy_loader import StrategyLoader
+from app.services.taxonomy import get_engine
+from app.services.taxonomy.cluster_meta import write_meta
+from app.services.taxonomy.event_logger import get_event_logger
+from app.services.taxonomy.family_ops import assign_cluster
+from app.utils.text_cleanup import (
+    sanitize_optimization_result,
+    title_case_label,
+    validate_intent_label,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncContextManager, Callable
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    # Production wires in `async_sessionmaker[AsyncSession]` from `app.database`;
+    # tests pass lightweight factories with an `async __aenter__/__aexit__`. Both
+    # satisfy `Callable[[], AsyncContextManager[AsyncSession]]` structurally.
+    SessionFactory = (
+        async_sessionmaker[AsyncSession]
+        | Callable[[], AsyncContextManager[AsyncSession]]
+    )
+
+# Z-score distribution shape: {dimension: {"count": int, "mean": float, "stddev": float}}
+ScoreDistribution = dict[str, dict[str, float | int]]
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +136,12 @@ async def run_single_prompt(
     agent_name: str = "",
     prompt_index: int = 0,
     total_prompts: int = 1,
-    session_factory: Any | None = None,
+    session_factory: SessionFactory | None = None,
     taxonomy_engine: Any | None = None,
     domain_resolver: Any | None = None,
     tier: str = "internal",
     context_service: Any | None = None,
+    historical_stats: ScoreDistribution | None = None,
 ) -> PendingOptimization:
     """Run one prompt through analyze → optimize → score → embed in memory.
 
@@ -102,6 +162,12 @@ async def run_single_prompt(
     selection (code_aware / knowledge_work / cold_start). When ``None``,
     falls back to inline enrichment for backward compatibility.
 
+    ``historical_stats`` — pre-fetched score distribution for z-score
+    normalization. ``run_batch`` fetches this once per batch and threads
+    it here to avoid the N+1 query pattern (one ``get_score_distribution``
+    round-trip per prompt). When ``None``, falls back to a per-prompt
+    fetch using ``session_factory`` for backward compat.
+
     Returns a PendingOptimization with all fields populated.
     On any phase failure, returns a PendingOptimization with error set
     and status="failed". Never raises — errors are captured in the result.
@@ -111,28 +177,6 @@ async def run_single_prompt(
     t0 = time.monotonic()
 
     try:
-        from app.config import DATA_DIR
-        from app.providers.base import call_provider_with_retry
-        from app.schemas.pipeline_contracts import (
-            AnalysisResult,
-            DimensionScores,
-            OptimizationResult,
-            ScoreResult,
-        )
-        from app.services.heuristic_scorer import HeuristicScorer
-        from app.services.pipeline_constants import (
-            ANALYZE_MAX_TOKENS,
-            SCORE_MAX_TOKENS,
-            VALID_TASK_TYPES,
-            compute_optimize_max_tokens,
-            resolve_effective_strategy,
-            semantic_upgrade_general,
-        )
-        from app.services.preferences import PreferencesService
-        from app.services.score_blender import blend_scores
-        from app.services.strategy_loader import StrategyLoader
-        from app.utils.text_cleanup import sanitize_optimization_result, title_case_label, validate_intent_label
-
         prefs = PreferencesService(DATA_DIR)
         prefs_snapshot = prefs.load()
         analyzer_model = prefs.resolve_model("analyzer", prefs_snapshot)
@@ -262,9 +306,6 @@ async def run_single_prompt(
                 heuristic = enrichment.analysis
                 if heuristic is not None:
                     try:
-                        from app.services.classification_agreement import (
-                            get_classification_agreement,
-                        )
                         ca = get_classification_agreement()
                         ca.record(
                             heuristic_task_type=heuristic.task_type,
@@ -290,10 +331,6 @@ async def run_single_prompt(
             # migrated to pass a context_service). Matches pre-Fix-2 behavior.
             if taxonomy_engine is not None and session_factory is not None and prompt_embedding is not None:
                 try:
-                    from app.services.pattern_injection import (
-                        auto_inject_patterns,
-                        format_injected_patterns,
-                    )
                     async with session_factory() as _enrich_db:
                         injected, _cluster_ids = await auto_inject_patterns(
                             raw_prompt=raw_prompt,
@@ -310,7 +347,6 @@ async def run_single_prompt(
 
             if session_factory is not None:
                 try:
-                    from app.services.context_enrichment import resolve_strategy_intelligence
                     async with session_factory() as _si_db:
                         adaptation_text, _ = await resolve_strategy_intelligence(
                             _si_db,
@@ -329,10 +365,6 @@ async def run_single_prompt(
         few_shot_text: str | None = None
         if session_factory is not None and prompt_embedding is not None:
             try:
-                from app.services.pattern_injection import (
-                    format_few_shot_examples,
-                    retrieve_few_shot_examples,
-                )
                 async with session_factory() as _fs_db:
                     examples = await retrieve_few_shot_examples(
                         raw_prompt=raw_prompt,
@@ -414,21 +446,23 @@ async def run_single_prompt(
                 optimization.optimized_prompt, original=raw_prompt,
             )
 
-            # Fetch historical stats for z-score normalization (matches pipeline.py)
-            historical_stats = None
-            if session_factory is not None:
+            # Historical stats for z-score normalization. Prefer the pre-fetched
+            # value threaded from run_batch (one DB round-trip per batch, shared
+            # across all prompts) and fall back to a per-prompt fetch only for
+            # legacy direct callers of run_single_prompt.
+            effective_stats = historical_stats
+            if effective_stats is None and session_factory is not None:
                 try:
-                    from app.services.optimization_service import OptimizationService
                     async with session_factory() as _stats_db:
                         svc = OptimizationService(_stats_db)
-                        historical_stats = await svc.get_score_distribution(
+                        effective_stats = await svc.get_score_distribution(
                             exclude_scoring_modes=["heuristic"],
                         )
                 except Exception as _hs_exc:
                     logger.debug("Historical stats fetch failed: %s", _hs_exc)
 
-            blended_original = blend_scores(llm_original, heur_original, historical_stats)
-            blended_optimized = blend_scores(llm_optimized, heur_optimized, historical_stats)
+            blended_original = blend_scores(llm_original, heur_original, effective_stats)
+            blended_optimized = blend_scores(llm_optimized, heur_optimized, effective_stats)
 
             original_scores = blended_original.to_dimension_scores()
             optimized_scores = blended_optimized.to_dimension_scores()
@@ -442,7 +476,6 @@ async def run_single_prompt(
         # Improvement score — weights from single source of truth
         improvement_score: float | None = None
         if deltas:
-            from app.schemas.pipeline_contracts import DIMENSION_WEIGHTS
             _imp = sum(
                 deltas.get(dim, 0) * w
                 for dim, w in DIMENSION_WEIGHTS.items()
@@ -456,8 +489,6 @@ async def run_single_prompt(
         if optimized_scores and analysis.weaknesses is not None:
             try:
                 import json as _json
-
-                from app.schemas.pipeline_contracts import SuggestionsOutput
                 suggest_msg = prompt_loader.render("suggest.md", {
                     "optimized_prompt": optimization.optimized_prompt,
                     "scores": _json.dumps(optimized_scores.model_dump(), indent=2),
@@ -575,7 +606,7 @@ async def run_batch(
     repo_full_name: str | None = None,
     batch_id: str | None = None,
     on_progress: Any | None = None,
-    session_factory: Any | None = None,
+    session_factory: SessionFactory | None = None,
     taxonomy_engine: Any | None = None,
     domain_resolver: Any | None = None,
     tier: str = "internal",
@@ -600,6 +631,21 @@ async def run_batch(
     semaphore = asyncio.Semaphore(max_parallel)
     results: list[PendingOptimization] = [None] * len(prompts)  # type: ignore
 
+    # Pre-fetch the score distribution once per batch so every prompt shares
+    # a single DB round-trip instead of N redundant aggregate queries
+    # (previously run inside run_single_prompt per prompt — N+1 pattern).
+    # Matches pipeline.py where z-score stats are resolved once at setup.
+    shared_stats: ScoreDistribution | None = None
+    if session_factory is not None:
+        try:
+            async with session_factory() as _stats_db:
+                svc = OptimizationService(_stats_db)
+                shared_stats = await svc.get_score_distribution(
+                    exclude_scoring_modes=["heuristic"],
+                )
+        except Exception as _hs_exc:
+            logger.debug("Batch-level historical stats fetch failed: %s", _hs_exc)
+
     async def _run_with_semaphore(index: int, prompt: str) -> None:
         # Rate limit (429) backoff: reduce semaphore by half on first 429, retry once
         _rate_limited = False
@@ -621,6 +667,7 @@ async def run_batch(
                 domain_resolver=domain_resolver,
                 tier=tier,
                 context_service=context_service,
+                historical_stats=shared_stats,
             )
             # Check for rate limit error in result
             if (
@@ -652,6 +699,7 @@ async def run_batch(
                         domain_resolver=domain_resolver,
                         tier=tier,
                         context_service=context_service,
+                        historical_stats=shared_stats,
                     )
                     return retry
                 finally:
@@ -664,7 +712,6 @@ async def run_batch(
 
             # Log per-prompt event
             try:
-                from app.services.taxonomy.event_logger import get_event_logger
                 decision = "seed_prompt_scored" if result.status == "completed" else "seed_prompt_failed"
                 ctx: dict[str, Any] = {
                     "batch_id": batch_id,
@@ -690,7 +737,6 @@ async def run_batch(
 
             # Publish seed_batch_progress to event bus for SSE frontend
             try:
-                from app.services.event_bus import event_bus
                 event_bus.publish("seed_batch_progress", {
                     "batch_id": batch_id,
                     "phase": "optimize",
@@ -717,7 +763,6 @@ async def run_batch(
     )
 
     # Stamp project_id on all completed results (resolve once, not per-prompt)
-    from app.services.project_service import resolve_repo_project
     _, _batch_project_id = await resolve_repo_project(repo_full_name)
     if _batch_project_id:
         for r in results:
@@ -729,7 +774,7 @@ async def run_batch(
 
 async def bulk_persist(
     results: list[PendingOptimization],
-    session_factory: Any,
+    session_factory: SessionFactory,
     batch_id: str,
 ) -> int:
     """Persist all completed optimizations in a single transaction.
@@ -767,10 +812,6 @@ async def bulk_persist(
     for attempt in range(2):
         try:
             async with session_factory() as db:
-                from sqlalchemy import select as sa_select
-
-                from app.models import Optimization
-
                 # Idempotency check: find already-persisted IDs for this batch
                 existing_ids_result = await db.execute(
                     sa_select(Optimization.id).where(
@@ -846,7 +887,6 @@ async def bulk_persist(
     # stream the coarser batch progress view.
     if inserted_pendings:
         try:
-            from app.services.event_bus import event_bus
             for pending in inserted_pendings:
                 event_bus.publish("optimization_created", {
                     "id": pending.id,
@@ -869,7 +909,6 @@ async def bulk_persist(
     duration_ms = int((time.monotonic() - t0) * 1000)
 
     try:
-        from app.services.taxonomy.event_logger import get_event_logger
         get_event_logger().log_decision(
             path="hot", op="seed", decision="seed_persist_complete",
             context={
@@ -888,7 +927,7 @@ async def bulk_persist(
 
 async def batch_taxonomy_assign(
     results: list[PendingOptimization],
-    session_factory: Any,
+    session_factory: SessionFactory,
     batch_id: str,
 ) -> dict[str, Any]:
     """Assign clusters for all persisted optimizations in one transaction.
@@ -905,13 +944,6 @@ async def batch_taxonomy_assign(
 
     if not completed:
         return {"clusters_assigned": 0, "clusters_created": 0, "domains_touched": []}
-
-    from sqlalchemy import select as sa_select
-
-    from app.models import Optimization, OptimizationPattern
-    from app.services.taxonomy import get_engine
-    from app.services.taxonomy.cluster_meta import write_meta
-    from app.services.taxonomy.family_ops import assign_cluster
 
     engine = get_engine()
     assigned = 0
@@ -970,7 +1002,6 @@ async def batch_taxonomy_assign(
     domains_list = sorted(domains_touched)
 
     try:
-        from app.services.taxonomy.event_logger import get_event_logger
         get_event_logger().log_decision(
             path="hot", op="seed", decision="seed_taxonomy_complete",
             context={
@@ -986,7 +1017,6 @@ async def batch_taxonomy_assign(
 
     # Trigger warm path (single event — debounce handles the rest)
     try:
-        from app.services.event_bus import event_bus
         event_bus.publish("taxonomy_changed", {
             "trigger": "batch_seed",
             "batch_id": batch_id,
