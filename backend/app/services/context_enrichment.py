@@ -43,6 +43,12 @@ _COLD_START_THRESHOLD = 10  # optimization count below which cold-start profile 
 # window on irrelevant source files.
 _CODEBASE_TASK_TYPES = frozenset({"coding", "system", "data"})
 
+# Cap for stride-sampled file paths appended to the repo-relevance anchor.
+# ~100 lines of paths keeps MiniLM's 512-token window under pressure while
+# still covering every major subtree of a medium-sized repo (370 files in
+# the reference index).
+_MAX_ANCHOR_PATHS = 100
+
 # Escape-hatch keywords: even for non-coding task types, if the prompt
 # mentions code-related concepts, curated retrieval is still valuable.
 _CODE_ESCAPE_KEYWORDS = frozenset({
@@ -237,7 +243,6 @@ async def compute_repo_relevance(
     # directories (e.g. take all `backend/...` and miss `frontend/...`) —
     # stride sampling walks the tree breadth-first in path-sorted order so
     # every major subtree contributes a roughly proportional share.
-    _MAX_ANCHOR_PATHS = 100
     if file_paths:
         if len(file_paths) > _MAX_ANCHOR_PATHS:
             stride = len(file_paths) / _MAX_ANCHOR_PATHS
