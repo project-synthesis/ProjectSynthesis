@@ -571,6 +571,86 @@ class TestAuditAndFirstSentenceBoundary:
 
 
 # ---------------------------------------------------------------------------
+# E.3: Meta-prompt classification (write-a-prompt-that-X)
+# ---------------------------------------------------------------------------
+
+
+class TestMetaPromptClassification:
+    """Regression tests for meta-work like 'Write a prompt that does X'.
+
+    Previous behaviour: the single-word 'write' signal (0.6) on the writing
+    task type was enough to classify 'Write a prompt that audits the
+    pipeline' as *writing*, which is wrong — it's prompt-engineering work
+    (system).  The fix adds compound signals ('write a prompt' 1.3,
+    'craft a prompt' 1.3, etc.) weighted above the inspection compound
+    'audits the' (0.9 analysis) so the system classification wins cleanly.
+    """
+
+    @pytest.mark.asyncio
+    async def test_write_a_prompt_classifies_as_system(self, db):
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Write a prompt that instructs Claude to summarise meeting notes",
+            db,
+            enable_llm_fallback=False,
+        )
+        assert result.task_type == "system", (
+            f"'Write a prompt ...' is prompt-engineering, got {result.task_type}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_a_prompt_with_nested_audit_verb_classifies_as_system(self, db):
+        """Outer 'write a prompt' (1.3 system) outranks inner 'audits the'
+        (0.9 analysis).  Direct regression for the prompt audited from the
+        logs: 'Write a prompt that audits the state management of a
+        dashboard'.
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Write a prompt that audits the state management of a dashboard",
+            db,
+            enable_llm_fallback=False,
+        )
+        assert result.task_type == "system"
+
+    @pytest.mark.asyncio
+    async def test_craft_a_prompt_classifies_as_system(self, db):
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Craft a prompt for analysing customer feedback trends over quarters",
+            db,
+            enable_llm_fallback=False,
+        )
+        assert result.task_type == "system"
+
+    @pytest.mark.asyncio
+    async def test_write_a_blog_still_classifies_as_writing(self, db):
+        """Non-meta 'write a blog' compound (1.2 writing) still wins — the
+        meta-prompt signals don't regress pure writing classification.
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Write a blog post about developer productivity for engineering leaders",
+            db,
+            enable_llm_fallback=False,
+        )
+        assert result.task_type == "writing"
+
+    @pytest.mark.asyncio
+    async def test_audit_of_noun_form_classifies_as_analysis(self, db):
+        """The noun-form 'audit of the X' (0.9 analysis) signal catches
+        prompts that don't lead with the verb.
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Produce an audit of the authentication middleware coverage",
+            db,
+            enable_llm_fallback=False,
+        )
+        assert result.task_type == "analysis"
+
+
+# ---------------------------------------------------------------------------
 # A2: Technical Verb Disambiguation
 # ---------------------------------------------------------------------------
 

@@ -159,6 +159,12 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
         ("quarterly report", 1.0), ("build a dashboard", 1.0),
         ("analyze the data", 1.1), ("evaluate the performance", 1.0),
         ("year-over-year", 0.9), ("compare revenue", 0.9),
+        # Inspection compound signals (E1 follow-up): disambiguate nested
+        # meta-prompts like "write a prompt that audits the X" — the inner
+        # "audits the" should pull the classification toward analysis, while
+        # the "write a prompt" outer wrapper (below, under system) still wins
+        # because its weight is higher.  "audit of" covers the noun form.
+        ("audits the", 0.9), ("audit the", 0.9), ("audit of", 0.9),
         # Single-word signals
         ("analyze", 1.0), ("compare", 0.9), ("evaluate", 0.9),
         ("review", 0.7), ("assess", 0.9), ("critique", 0.8),
@@ -181,6 +187,16 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
         ("csv", 0.8), ("dataframe", 0.9), ("pandas", 0.9),
     ],
     "system": [
+        # Meta-prompt compound signals (E1 root fix): "Write a prompt that X"
+        # is prompt-engineering work, not writing.  Weight above the
+        # inspection compound "audits the" (0.9) so nested prompts classify
+        # as system rather than analysis.  These override the single "write"
+        # signal (0.6) on writing.
+        ("write a prompt", 1.3), ("write a spec", 1.2),
+        ("write instructions", 1.1), ("write a system prompt", 1.4),
+        ("craft a prompt", 1.3), ("design a prompt", 1.3),
+        ("prompt that", 1.0),
+        # Single-word signals
         ("system prompt", 1.0), ("agent", 0.7), ("workflow", 0.6),
         ("automate", 0.8), ("orchestrate", 0.9), ("configure", 0.7),
         ("setup", 0.5), ("infrastructure", 0.7), ("prompt engineer", 0.9),
