@@ -74,8 +74,25 @@ def mock_provider():
 
 
 @pytest.fixture
-def service(db_session, mock_provider, prompts_dir):
-    return RefinementService(db=db_session, provider=mock_provider, prompts_dir=prompts_dir)
+def data_dir(tmp_path):
+    """Isolated data directory so preferences reads do not bleed into the
+    production ``data/preferences.json``.  The service creates
+    ``preferences.json`` inside it on first ``load()``, which means every
+    refinement test sees the canonical DEFAULTS (analyzer_effort='low',
+    optimizer_effort='high', scorer_effort='low') instead of whatever the
+    developer has configured locally.
+    """
+    d = tmp_path / "data"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def service(db_session, mock_provider, prompts_dir, data_dir):
+    return RefinementService(
+        db=db_session, provider=mock_provider,
+        prompts_dir=prompts_dir, data_dir=data_dir,
+    )
 
 
 def _make_analysis(**overrides):

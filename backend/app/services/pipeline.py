@@ -63,14 +63,21 @@ logger = logging.getLogger(__name__)
 class PipelineOrchestrator:
     """Runs the analyze -> optimize -> score pipeline as an async generator."""
 
-    def __init__(self, prompts_dir: Path) -> None:
+    def __init__(self, prompts_dir: Path, data_dir: Path | None = None) -> None:
         self.prompt_loader = PromptLoader(prompts_dir)
         self.strategy_loader = StrategyLoader(prompts_dir / "strategies")
         self._system_prompt: str | None = None
 
+        # data_dir overrides the global DATA_DIR for preferences + traces.
+        # Injecting it here (instead of reading DATA_DIR inline) lets tests
+        # isolate per-run state — each PipelineOrchestrator reads/writes
+        # against its own data directory instead of bleeding into the
+        # shared production preferences.json.
+        self._data_dir: Path = data_dir or DATA_DIR
+
         # Trace logger — optional; skip if directory cannot be created
         try:
-            self.trace_logger: TraceLogger | None = TraceLogger(DATA_DIR / "traces")
+            self.trace_logger: TraceLogger | None = TraceLogger(self._data_dir / "traces")
         except OSError:
             logger.warning("Could not create traces directory; trace logging disabled")
             self.trace_logger = None
@@ -178,7 +185,7 @@ class PipelineOrchestrator:
         opt_id = str(uuid.uuid4())
         start_time = time.monotonic()
 
-        prefs = PreferencesService(DATA_DIR)
+        prefs = PreferencesService(self._data_dir)
         prefs_snapshot = prefs.load()
         optimizer_model = prefs.resolve_model("optimizer", prefs_snapshot)
         analyzer_model = prefs.resolve_model("analyzer", prefs_snapshot)

@@ -65,9 +65,17 @@ def mock_provider():
 
 @pytest.fixture
 def orchestrator(tmp_path):
-    """Create orchestrator with minimal prompts dir."""
+    """Create orchestrator with minimal prompts dir.
+
+    The orchestrator is pointed at an isolated ``tmp_path/data`` so
+    preferences reads do not bleed in from the production
+    ``data/preferences.json`` — tests that assert effort/model values
+    depend on a known-default preferences state.
+    """
     prompts = tmp_path / "prompts"
     prompts.mkdir()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
     strategies = prompts / "strategies"
     strategies.mkdir()
     (prompts / "agent-guidance.md").write_text("System prompt.")
@@ -86,7 +94,7 @@ def orchestrator(tmp_path):
     )
     (strategies / "chain-of-thought.md").write_text("Think step by step.")
     (strategies / "auto.md").write_text("Auto-select.")
-    return PipelineOrchestrator(prompts_dir=prompts)
+    return PipelineOrchestrator(prompts_dir=prompts, data_dir=data_dir)
 
 
 class TestPipelineOrchestrator:
@@ -234,8 +242,10 @@ class TestPipelineOrchestrator:
         """When enable_scoring=False, pipeline skips Phase 3 and returns null scores."""
         import json
 
-        # Write preferences with scoring disabled
-        prefs_path = tmp_path / "preferences.json"
+        # Write preferences into the orchestrator's injected data_dir
+        # (tmp_path/"data") — no DATA_DIR monkeypatch needed now that
+        # PipelineOrchestrator accepts data_dir explicitly.
+        prefs_path = tmp_path / "data" / "preferences.json"
         prefs_path.write_text(json.dumps({
             "schema_version": 1,
             "models": {"analyzer": "sonnet", "optimizer": "opus", "scorer": "sonnet"},
@@ -248,13 +258,12 @@ class TestPipelineOrchestrator:
             # No third call — scoring is skipped
         ]
 
-        with patch("app.services.pipeline.DATA_DIR", tmp_path):
-            events = []
-            async for event in orchestrator.run(
-                raw_prompt="test prompt for scoring disabled",
-                provider=mock_provider, db=db_session,
-            ):
-                events.append(event)
+        events = []
+        async for event in orchestrator.run(
+            raw_prompt="test prompt for scoring disabled",
+            provider=mock_provider, db=db_session,
+        ):
+            events.append(event)
 
         event_types = [e.event for e in events]
         # score_card should NOT be emitted

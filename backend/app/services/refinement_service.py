@@ -53,11 +53,16 @@ class RefinementService:
         db: AsyncSession,
         provider: LLMProvider,
         prompts_dir: Path,
+        data_dir: Path | None = None,
     ) -> None:
         self.db = db
         self.provider = provider
         self.prompt_loader = PromptLoader(prompts_dir)
         self.strategy_loader = StrategyLoader(prompts_dir / "strategies")
+        # data_dir overrides the global DATA_DIR for preferences.  Same
+        # rationale as PipelineOrchestrator — tests isolate their own
+        # preferences file instead of reading production data/.
+        self._data_dir: Path = data_dir or DATA_DIR
 
     # ------------------------------------------------------------------
     # Provider call with retry
@@ -169,7 +174,7 @@ class RefinementService:
         Yields:
             PipelineEvent objects for each stage.
         """
-        _prefs = PreferencesService(DATA_DIR)
+        _prefs = PreferencesService(self._data_dir)
         _prefs_snapshot = _prefs.load()
 
         # Get the latest turn on this branch
