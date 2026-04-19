@@ -574,6 +574,45 @@ class OptimizationDetailOutput(BaseModel):
     )
 
 
+class LinkedRepoHealth(BaseModel):
+    """Linked-repo summary for synthesis_health.
+
+    Surfaces the repo that ``synthesis_optimize`` / ``synthesis_match`` /
+    ``synthesis_prepare_optimization`` will auto-resolve when ``repo_full_name``
+    is not supplied.  Matches the repo exposed on the web UI's GitHub panel.
+    """
+
+    full_name: str = Field(
+        description="GitHub repo in 'owner/repo' format.",
+    )
+    branch: str | None = Field(
+        default=None,
+        description="Active branch (or default_branch when unset).",
+    )
+    language: str | None = Field(
+        default=None,
+        description="Primary language reported by GitHub.",
+    )
+    index_status: str | None = Field(
+        default=None,
+        description="Index lifecycle: 'pending', 'fetching_tree', 'embedding', "
+        "'synthesizing', 'ready', 'error', or null when no index row exists.",
+    )
+    index_phase: str | None = Field(
+        default=None,
+        description="Granular phase label for UI progress.",
+    )
+    files_indexed: int = Field(
+        default=0,
+        description="Files with embeddings written to the index.",
+    )
+    synthesis_ready: bool = Field(
+        default=False,
+        description="True when explore_synthesis is present — codebase-aware "
+        "optimization will inject architectural context.",
+    )
+
+
 class HealthOutput(BaseModel):
     """Output for synthesis_health."""
 
@@ -616,6 +655,12 @@ class HealthOutput(BaseModel):
         default=30,
         description="Maximum allowed domain nodes (DOMAIN_COUNT_CEILING=30). "
         "When domain_count >= domain_ceiling, new domain creation is suppressed.",
+    )
+    linked_repo: LinkedRepoHealth | None = Field(
+        default=None,
+        description="Currently linked GitHub repo that optimize/match/prepare "
+        "will auto-resolve when called without explicit repo_full_name. Null "
+        "when no repo is linked.",
     )
 
 

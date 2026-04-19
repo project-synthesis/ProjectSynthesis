@@ -12,8 +12,8 @@ from sqlalchemy import func, select
 
 from app.config import PROMPTS_DIR
 from app.database import async_session_factory
-from app.models import Optimization, PromptCluster
-from app.schemas.mcp_models import HealthOutput
+from app.models import LinkedRepo, Optimization, PromptCluster, RepoFileIndex, RepoIndexMeta
+from app.schemas.mcp_models import HealthOutput, LinkedRepoHealth
 from app.services.optimization_service import OptimizationService
 from app.services.pipeline_constants import DOMAIN_COUNT_CEILING
 from app.services.strategy_loader import StrategyLoader
@@ -87,6 +87,50 @@ async def handle_health() -> HealthOutput:
     except Exception as exc:
         logger.warning("Could not fetch optimization stats for health: %s", exc)
 
+    # Linked-repo visibility — mirrors auto_resolve_repo() ordering so the
+    # reported repo matches what optimize/match/prepare will actually use.
+    linked_repo: LinkedRepoHealth | None = None
+    try:
+        async with async_session_factory() as db:
+            linked = (
+                await db.execute(
+                    select(LinkedRepo).order_by(LinkedRepo.linked_at.desc()).limit(1)
+                )
+            ).scalar_one_or_none()
+            if linked is not None:
+                branch = linked.branch or linked.default_branch
+                meta = (
+                    await db.execute(
+                        select(RepoIndexMeta)
+                        .where(
+                            RepoIndexMeta.repo_full_name == linked.full_name,
+                            RepoIndexMeta.branch == branch,
+                        )
+                        .order_by(RepoIndexMeta.indexed_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                files_indexed = 0
+                if meta is not None:
+                    files_indexed = await db.scalar(
+                        select(func.count()).where(
+                            RepoFileIndex.repo_full_name == linked.full_name,
+                            RepoFileIndex.branch == branch,
+                            RepoFileIndex.embedding.isnot(None),
+                        )
+                    ) or 0
+                linked_repo = LinkedRepoHealth(
+                    full_name=linked.full_name,
+                    branch=branch,
+                    language=linked.language,
+                    index_status=meta.status if meta else None,
+                    index_phase=meta.index_phase if meta else None,
+                    files_indexed=files_indexed,
+                    synthesis_ready=bool(meta and meta.explore_synthesis),
+                )
+    except Exception as exc:
+        logger.warning("Could not fetch linked-repo state for health: %s", exc)
+
     return HealthOutput(
         status=status,
         provider=provider_name,
@@ -98,4 +142,5 @@ async def handle_health() -> HealthOutput:
         available_strategies=strategies,
         domain_count=domain_count,
         domain_ceiling=DOMAIN_COUNT_CEILING,
+        linked_repo=linked_repo,
     )
