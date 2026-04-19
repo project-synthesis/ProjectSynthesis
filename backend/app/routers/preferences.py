@@ -36,9 +36,9 @@ class _PipelineUpdate(BaseModel):
     enable_llm_classification_fallback: StrictBool | None = None
     force_sampling: StrictBool | None = None
     force_passthrough: StrictBool | None = None
-    optimizer_effort: Literal["low", "medium", "high", "max"] | None = None
-    analyzer_effort: Literal["low", "medium", "high", "max"] | None = None
-    scorer_effort: Literal["low", "medium", "high", "max"] | None = None
+    optimizer_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    analyzer_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    scorer_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
 
 
 class _DefaultsUpdate(BaseModel):

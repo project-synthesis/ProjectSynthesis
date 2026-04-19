@@ -107,8 +107,20 @@ class LLMProvider(ABC):
         max_tokens: int = 16384,
         effort: str | None = None,
         cache_ttl: str | None = None,
+        task_budget: int | None = None,
+        compaction: bool = False,
     ) -> T:
         """Make an LLM call and return a parsed Pydantic model.
+
+        Args:
+            task_budget: Opt-in Task Budget (beta, Opus 4.7). Integer token
+                total for the agentic loop. Model sees a running countdown and
+                self-moderates. Minimum 20,000 — values below are clamped up
+                by the provider. Distinct from ``max_tokens`` (hard ceiling).
+            compaction: Opt-in server-side Compaction (beta, Opus 4.7/4.6 +
+                Sonnet 4.6). Automatic context summarization when approaching
+                the trigger threshold. Only useful for long-running
+                conversations; no-op for single-shot calls.
 
         Raises:
             ProviderRateLimitError: Rate limited — retryable.
@@ -128,6 +140,8 @@ class LLMProvider(ABC):
         max_tokens: int = 16384,
         effort: str | None = None,
         cache_ttl: str | None = None,
+        task_budget: int | None = None,
+        compaction: bool = False,
     ) -> T:
         """Streaming variant of ``complete_parsed``.
 
@@ -144,18 +158,39 @@ class LLMProvider(ABC):
             max_tokens=max_tokens,
             effort=effort,
             cache_ttl=cache_ttl,
+            task_budget=task_budget,
+            compaction=compaction,
         )
 
     @staticmethod
     def thinking_config(model: str) -> dict[str, str]:
         """Return thinking configuration for the given model.
 
-        Opus/Sonnet 4.6+: adaptive thinking (recommended, no budget_tokens).
-        Haiku: disabled (not supported).
+        - Haiku: disabled (not supported).
+        - Opus 4.7: adaptive with ``display="summarized"``. Without this,
+          4.7 defaults to ``display="omitted"``, which silently hides
+          thinking content — streams look like long pauses before output.
+        - Opus 4.6 / Sonnet 4.6: adaptive (default display).
         """
-        if "haiku" in model.lower():
+        # Local import to keep the ABC module free of eager imports.
+        from app.providers.capabilities import supports_thinking
+
+        if not supports_thinking(model):
             return {"type": "disabled"}
+        if "opus-4-7" in model.lower():
+            return {"type": "adaptive", "display": "summarized"}
         return {"type": "adaptive"}
+
+    @staticmethod
+    def supports_xhigh_effort(model: str) -> bool:
+        """Whether the given model accepts ``effort="xhigh"``.
+
+        Delegates to ``capabilities.effort_support`` — xhigh appears in the
+        support list only for Opus 4.7.
+        """
+        from app.providers.capabilities import effort_support
+
+        return "xhigh" in effort_support(model)
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +212,8 @@ async def call_provider_with_retry(
     max_tokens: int = 16384,
     effort: str | None = None,
     cache_ttl: str | None = None,
+    task_budget: int | None = None,
+    compaction: bool = False,
     streaming: bool = False,
     max_retries: int = _DEFAULT_MAX_RETRIES,
     retry_delay: float = _DEFAULT_RETRY_DELAY,
@@ -188,6 +225,10 @@ async def call_provider_with_retry(
 
     When ``streaming=True``, dispatches to ``complete_parsed_streaming()``
     which prevents HTTP timeouts on long outputs (e.g. Opus 128K).
+
+    ``task_budget`` and ``compaction`` are forwarded verbatim to the provider
+    (see ``LLMProvider.complete_parsed`` for semantics — they are no-ops on
+    providers that don't support them, e.g. the CLI).
 
     Used by both PipelineOrchestrator and RefinementService to avoid
     duplicating retry logic.
@@ -205,6 +246,8 @@ async def call_provider_with_retry(
                 max_tokens=max_tokens,
                 effort=effort,
                 cache_ttl=cache_ttl,
+                task_budget=task_budget,
+                compaction=compaction,
             )
         except ProviderError as exc:
             if not exc.retryable:

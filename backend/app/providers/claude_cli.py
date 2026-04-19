@@ -35,7 +35,13 @@ class ClaudeCLIProvider(LLMProvider):
     Uses native CLI features for structured output and effort control:
     - ``--json-schema``: CLI validates output against the schema and returns
       the parsed result in the ``structured_output`` field of the JSON envelope.
-    - ``--effort``: Controls thinking depth (low/medium/high/max).
+    - ``--effort``: Controls thinking depth
+      (low/medium/high/xhigh/max — xhigh is Opus 4.7 only).
+
+    Note: ``task_budget`` and ``compaction`` (Opus 4.7 betas) accept a value
+    but are currently no-ops in the CLI path — the CLI does not surface those
+    knobs.  They are accepted here so the abstract ABC stays uniform across
+    providers and callers don't need to branch.
     """
 
     name = "claude_cli"
@@ -49,6 +55,8 @@ class ClaudeCLIProvider(LLMProvider):
         max_tokens: int = 16384,
         effort: str | None = None,
         cache_ttl: str | None = None,
+        task_budget: int | None = None,  # accepted, currently a no-op (see class docstring)
+        compaction: bool = False,  # accepted, currently a no-op (see class docstring)
     ) -> T:
         """Run claude CLI and parse JSON output as a Pydantic model.
 
@@ -79,12 +87,20 @@ class ClaudeCLIProvider(LLMProvider):
         if system_prompt:
             cmd.extend(["--system-prompt", system_prompt])
 
-        # Pass effort level when specified (low/medium/high/max).
+        # Pass effort level when specified (low/medium/high/xhigh/max).
         # Haiku doesn't support the effort parameter — skip it to avoid errors.
-        if effort and "haiku" not in model.lower():
-            cmd.extend(["--effort", effort])
+        # xhigh is Opus 4.7 only; downgrade elsewhere so non-4.7 models don't 400.
+        effective_effort = effort
+        model_lower = model.lower()
+        if effective_effort == "xhigh" and "opus-4-7" not in model_lower:
+            logger.warning(
+                "effort='xhigh' requires Opus 4.7 (model=%s) — downgrading to 'high'", model,
+            )
+            effective_effort = "high"
+        if effective_effort and "haiku" not in model_lower:
+            cmd.extend(["--effort", effective_effort])
 
-        logger.debug("claude_cli executing model=%s effort=%s", model, effort)
+        logger.debug("claude_cli executing model=%s effort=%s", model, effective_effort)
 
         proc: asyncio.subprocess.Process | None = None
         try:
@@ -192,8 +208,8 @@ class ClaudeCLIProvider(LLMProvider):
         duration = raw.get("duration_ms", "?") if isinstance(raw, dict) else "?"
         cost = raw.get("total_cost_usd") if isinstance(raw, dict) else None
         parts = [f"model={model}", f"duration_ms={duration}"]
-        if effort:
-            parts.append(f"effort={effort}")
+        if effective_effort:
+            parts.append(f"effort={effective_effort}")
         if cost is not None:
             parts.append(f"cost=${cost:.4f}")
         if self.last_usage.cache_read_tokens:

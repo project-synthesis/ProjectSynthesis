@@ -14,10 +14,21 @@ from app.schemas.pipeline_contracts import AnalysisResult
 
 
 class TestThinkingConfig:
-    def test_opus_returns_adaptive(self):
+    def test_opus_4_7_returns_adaptive_with_summarized_display(self):
+        """Opus 4.7 defaults to display='omitted' (silent). We opt into
+        display='summarized' so streaming UIs show reasoning progress."""
         from app.providers.base import LLMProvider
 
-        assert LLMProvider.thinking_config("claude-opus-4-7") == {"type": "adaptive"}
+        assert LLMProvider.thinking_config("claude-opus-4-7") == {
+            "type": "adaptive",
+            "display": "summarized",
+        }
+
+    def test_opus_4_6_returns_adaptive_without_display(self):
+        """Opus 4.6 shows thinking by default — no display override needed."""
+        from app.providers.base import LLMProvider
+
+        assert LLMProvider.thinking_config("claude-opus-4-6") == {"type": "adaptive"}
 
     def test_sonnet_returns_adaptive(self):
         from app.providers.base import LLMProvider
@@ -28,6 +39,28 @@ class TestThinkingConfig:
         from app.providers.base import LLMProvider
 
         assert LLMProvider.thinking_config("claude-haiku-4-5") == {"type": "disabled"}
+
+
+class TestSupportsXhighEffort:
+    def test_opus_4_7_accepts_xhigh(self):
+        from app.providers.base import LLMProvider
+
+        assert LLMProvider.supports_xhigh_effort("claude-opus-4-7") is True
+
+    def test_opus_4_6_rejects_xhigh(self):
+        from app.providers.base import LLMProvider
+
+        assert LLMProvider.supports_xhigh_effort("claude-opus-4-6") is False
+
+    def test_sonnet_rejects_xhigh(self):
+        from app.providers.base import LLMProvider
+
+        assert LLMProvider.supports_xhigh_effort("claude-sonnet-4-6") is False
+
+    def test_haiku_rejects_xhigh(self):
+        from app.providers.base import LLMProvider
+
+        assert LLMProvider.supports_xhigh_effort("claude-haiku-4-5") is False
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +226,232 @@ class TestAnthropicAPIProvider:
         output_config = call_kwargs.get("output_config")
         if output_config is not None:
             assert "effort" not in output_config
+
+    @pytest.mark.asyncio
+    async def test_xhigh_downgraded_for_non_opus_4_7(self):
+        """xhigh is Opus 4.7 only — downgrade to 'high' on other models
+        so the API doesn't 400."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-sonnet-4-6",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            effort="xhigh",
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        assert call_kwargs["output_config"]["effort"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_xhigh_preserved_for_opus_4_7(self):
+        """Opus 4.7 receives xhigh verbatim."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-opus-4-7",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            effort="xhigh",
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        assert call_kwargs["output_config"]["effort"] == "xhigh"
+
+    @pytest.mark.asyncio
+    async def test_task_budget_wires_output_config_and_beta_header(self):
+        """task_budget on Opus 4.7 sets output_config.task_budget AND
+        attaches the task-budgets beta header."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-opus-4-7",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            task_budget=50_000,
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        assert call_kwargs["output_config"]["task_budget"] == {
+            "type": "tokens", "total": 50_000,
+        }
+        extra_headers = call_kwargs.get("extra_headers", {})
+        assert "task-budgets-2026-03-13" in extra_headers.get("anthropic-beta", "")
+
+    @pytest.mark.asyncio
+    async def test_task_budget_clamped_to_20k_minimum(self):
+        """Values below the 20k SDK minimum are clamped up — prevents 400s."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-opus-4-7",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            task_budget=5_000,
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        assert call_kwargs["output_config"]["task_budget"]["total"] == 20_000
+
+    @pytest.mark.asyncio
+    async def test_task_budget_ignored_on_non_opus_4_7(self):
+        """task_budget is Opus 4.7 only — silently dropped on other models."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-sonnet-4-6",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            task_budget=50_000,
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        output_config = call_kwargs.get("output_config") or {}
+        assert "task_budget" not in output_config
+        # No beta header attached either
+        extra_headers = call_kwargs.get("extra_headers", {}) or {}
+        assert "task-budgets" not in extra_headers.get("anthropic-beta", "")
+
+    @pytest.mark.asyncio
+    async def test_compaction_wires_context_management_and_beta_header(self):
+        """compaction=True sets context_management.edits AND attaches the
+        compact beta header on Opus 4.7."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-opus-4-7",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            compaction=True,
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        assert call_kwargs["context_management"] == {
+            "edits": [{"type": "compact_20260112"}],
+        }
+        extra_headers = call_kwargs.get("extra_headers", {})
+        assert "compact-2026-01-12" in extra_headers.get("anthropic-beta", "")
+
+    @pytest.mark.asyncio
+    async def test_compaction_allowed_on_sonnet_4_6(self):
+        """Sonnet 4.6 is compaction-capable — keep the wiring."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-sonnet-4-6",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            compaction=True,
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        assert "context_management" in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_compaction_ignored_on_haiku(self):
+        """Haiku doesn't support compaction — silently dropped."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-haiku-4-5",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            compaction=True,
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        assert "context_management" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_both_betas_share_single_beta_header(self):
+        """When both task_budget and compaction are enabled, both beta IDs
+        flow through in a single comma-joined anthropic-beta header."""
+        analysis = _make_analysis_result()
+        mock_resp = self._make_mock_response(analysis)
+
+        mock_messages = MagicMock()
+        mock_messages.parse = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        provider = self._make_provider(mock_client)
+        await provider.complete_parsed(
+            model="claude-opus-4-7",
+            system_prompt="sys",
+            user_message="msg",
+            output_format=AnalysisResult,
+            task_budget=30_000,
+            compaction=True,
+        )
+
+        call_kwargs = mock_messages.parse.call_args.kwargs
+        beta = call_kwargs["extra_headers"]["anthropic-beta"]
+        assert "task-budgets-2026-03-13" in beta
+        assert "compact-2026-01-12" in beta
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +626,76 @@ class TestClaudeCLIProvider:
 
         call_args = mock_exec.call_args[0]
         assert "--effort" in call_args
+        effort_idx = list(call_args).index("--effort")
+        assert call_args[effort_idx + 1] == "high"
+
+    @pytest.mark.asyncio
+    async def test_xhigh_preserved_for_opus_4_7_cli(self):
+        """Opus 4.7 CLI receives xhigh via --effort flag."""
+        import json
+
+        analysis = _make_analysis_result()
+        envelope = {
+            "type": "result",
+            "structured_output": analysis.model_dump(),
+            "usage": {},
+        }
+        stdout_json = json.dumps(envelope).encode()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(stdout_json, b""))
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = mock_proc
+
+            from app.providers.claude_cli import ClaudeCLIProvider
+
+            provider = ClaudeCLIProvider()
+            await provider.complete_parsed(
+                model="claude-opus-4-7",
+                system_prompt="sys",
+                user_message="msg",
+                output_format=AnalysisResult,
+                effort="xhigh",
+            )
+
+        call_args = mock_exec.call_args[0]
+        effort_idx = list(call_args).index("--effort")
+        assert call_args[effort_idx + 1] == "xhigh"
+
+    @pytest.mark.asyncio
+    async def test_xhigh_downgraded_for_non_opus_4_7_cli(self):
+        """xhigh on non-Opus-4.7 CLI downgrades to 'high' to avoid 400."""
+        import json
+
+        analysis = _make_analysis_result()
+        envelope = {
+            "type": "result",
+            "structured_output": analysis.model_dump(),
+            "usage": {},
+        }
+        stdout_json = json.dumps(envelope).encode()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(stdout_json, b""))
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = mock_proc
+
+            from app.providers.claude_cli import ClaudeCLIProvider
+
+            provider = ClaudeCLIProvider()
+            await provider.complete_parsed(
+                model="claude-sonnet-4-6",
+                system_prompt="sys",
+                user_message="msg",
+                output_format=AnalysisResult,
+                effort="xhigh",
+            )
+
+        call_args = mock_exec.call_args[0]
         effort_idx = list(call_args).index("--effort")
         assert call_args[effort_idx + 1] == "high"
 

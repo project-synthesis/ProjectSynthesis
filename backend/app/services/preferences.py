@@ -19,7 +19,13 @@ from app.config import PROMPTS_DIR, settings
 logger = logging.getLogger(__name__)
 
 VALID_MODELS: set[str] = {"sonnet", "opus", "haiku"}
-VALID_EFFORTS: set[str] = {"low", "medium", "high", "max"}
+# Effort levels:
+#   low/medium/high — supported by Opus 4.5+, Sonnet 4.6, Opus 4.7
+#   max            — Opus-tier only (Opus 4.6+, Opus 4.7)
+#   xhigh          — Opus 4.7 only (sits between high and max; default in Claude
+#                    Code).  Gated defensively by the provider layer for
+#                    non-Opus-4.7 models.
+VALID_EFFORTS: set[str] = {"low", "medium", "high", "xhigh", "max"}
 
 
 def _discover_strategies() -> set[str] | None:

@@ -405,16 +405,25 @@ class TestEffortPreferences:
     def test_valid_efforts_accepted_by_patch(
         self, svc: PreferencesService
     ) -> None:
-        for effort in ("low", "medium", "high", "max"):
+        # xhigh is Opus-4.7 only at the provider layer but is always accepted
+        # at the preferences layer so the UI can expose it uniformly.
+        for effort in ("low", "medium", "high", "xhigh", "max"):
             result = svc.patch({"pipeline": {"analyzer_effort": effort}})
             assert result["pipeline"]["analyzer_effort"] == effort
 
     def test_valid_efforts_accepted_for_scorer(
         self, svc: PreferencesService
     ) -> None:
-        for effort in ("low", "medium", "high", "max"):
+        for effort in ("low", "medium", "high", "xhigh", "max"):
             result = svc.patch({"pipeline": {"scorer_effort": effort}})
             assert result["pipeline"]["scorer_effort"] == effort
+
+    def test_xhigh_accepted_for_optimizer(
+        self, svc: PreferencesService
+    ) -> None:
+        """xhigh (Opus 4.7 effort tier) is a first-class preference value."""
+        result = svc.patch({"pipeline": {"optimizer_effort": "xhigh"}})
+        assert result["pipeline"]["optimizer_effort"] == "xhigh"
 
     def test_optimizer_effort_now_accepts_low_and_medium(
         self, svc: PreferencesService

@@ -245,6 +245,60 @@
     // preferencesStore.init() is called from +layout.svelte — no duplicate here
   });
 
+  // ---- Model catalog helpers ----
+  // Map phase name → tier → capability descriptor. When the catalog is
+  // unavailable (backend offline or still loading) we fall back to a
+  // conservative default so the UI is never stuck rendering an empty select.
+  const _FALLBACK_EFFORTS = ['low', 'medium', 'high'];
+  function tierFor(phase: 'analyzer' | 'optimizer' | 'scorer'): string {
+    return preferencesStore.models[phase];
+  }
+  function catalogEntry(tier: string) {
+    return settings?.model_catalog?.find(t => t.tier === tier) ?? null;
+  }
+  function supportedEffortsFor(phase: 'analyzer' | 'optimizer' | 'scorer'): string[] {
+    const entry = catalogEntry(tierFor(phase));
+    if (!entry) return _FALLBACK_EFFORTS;
+    return entry.supported_efforts;
+  }
+
+  // Auto-degrade effort when model tier no longer supports the current level
+  // (e.g. switching opus→sonnet while effort=xhigh). Picks the highest value
+  // the new tier supports that is still ≤ the user's previous choice — no
+  // silent upgrades, no invalid values reaching the provider.
+  const _PHASE_TO_EFFORT_KEY = {
+    analyzer: 'analyzer_effort',
+    optimizer: 'optimizer_effort',
+    scorer: 'scorer_effort',
+  } as const;
+  const _EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'];
+  function degradeEffort(current: string, supported: string[]): string {
+    if (supported.includes(current)) return current;
+    // Walk down the ordering from current to the nearest supported level.
+    const idx = _EFFORT_ORDER.indexOf(current);
+    for (let i = idx - 1; i >= 0; i--) {
+      if (supported.includes(_EFFORT_ORDER[i])) return _EFFORT_ORDER[i];
+    }
+    // No lower level supported — fall back to 'high' if present, else first.
+    if (supported.includes('high')) return 'high';
+    return supported[0] ?? 'high';
+  }
+  $effect(() => {
+    if (!settings?.model_catalog) return;
+    for (const phase of ['analyzer', 'optimizer', 'scorer'] as const) {
+      const supported = supportedEffortsFor(phase);
+      if (supported.length === 0) continue; // Haiku — no effort at all
+      const effortKey = _PHASE_TO_EFFORT_KEY[phase];
+      const current = preferencesStore.pipeline[effortKey];
+      if (!supported.includes(current)) {
+        const next = degradeEffort(current, supported);
+        if (next !== current) {
+          void preferencesStore.setEffort(effortKey, next);
+        }
+      }
+    }
+  });
+
   // Load project labels for history row badges (one-time, matches settingsLoaded pattern)
   let projectsLoaded = false;
   $effect(() => {
@@ -1059,20 +1113,29 @@
           <span class="sub-heading sub-heading--tier">Models</span>
           <div class="card-terminal">
             {#each [
-              { label: 'Analyzer', phase: 'analyzer' },
-              { label: 'Optimizer', phase: 'optimizer' },
-              { label: 'Scorer', phase: 'scorer' },
+              { label: 'Analyzer', phase: 'analyzer' as const },
+              { label: 'Optimizer', phase: 'optimizer' as const },
+              { label: 'Scorer', phase: 'scorer' as const },
             ] as { label, phase }}
               <div class="data-row">
                 <span class="data-label">{label}</span>
                 <select
                   class="pref-select"
-                  value={preferencesStore.models[phase as keyof typeof preferencesStore.models]}
+                  aria-label="{label} model"
+                  value={preferencesStore.models[phase]}
                   onchange={(e) => preferencesStore.setModel(phase, (e.target as HTMLSelectElement).value)}
                 >
-                  <option value="opus">opus</option>
-                  <option value="sonnet">sonnet</option>
-                  <option value="haiku">haiku</option>
+                  {#if settings?.model_catalog && settings.model_catalog.length > 0}
+                    {#each settings.model_catalog as tierInfo (tierInfo.tier)}
+                      <option value={tierInfo.tier}>{tierInfo.label}</option>
+                    {/each}
+                  {:else}
+                    <!-- Catalog not loaded yet — preserve bare tier options so
+                         the current value round-trips on refresh. -->
+                    <option value="opus">opus</option>
+                    <option value="sonnet">sonnet</option>
+                    <option value="haiku">haiku</option>
+                  {/if}
                 </select>
               </div>
             {/each}
@@ -1166,27 +1229,38 @@
           </div>
         </div>
 
-        <!-- Effort — internal tier only (passthrough + sampling handled by Routing/Connection + System) -->
+        <!-- Effort — internal tier only (passthrough + sampling handled by Routing/Connection + System).
+             Options are filtered per phase's selected model: Haiku (no effort
+             param), Sonnet 4.5 (no max/xhigh), Sonnet 4.6 (no xhigh), Opus
+             4.5/4.6 (no xhigh), Opus 4.7 (full list). -->
         {#if !routing.isPassthrough && !routing.isSampling}
         <div class="sub-section">
           <span class="sub-heading sub-heading--tier">Effort</span>
           <div class="card-terminal">
             {#each [
-              { label: 'Analyzer', key: 'analyzer_effort' },
-              { label: 'Optimizer', key: 'optimizer_effort' },
-              { label: 'Scorer', key: 'scorer_effort' },
-            ] as { label, key }}
+              { label: 'Analyzer', phase: 'analyzer' as const, key: 'analyzer_effort' as const },
+              { label: 'Optimizer', phase: 'optimizer' as const, key: 'optimizer_effort' as const },
+              { label: 'Scorer', phase: 'scorer' as const, key: 'scorer_effort' as const },
+            ] as { label, phase, key }}
+              {@const efforts = supportedEffortsFor(phase)}
+              {@const haikuBacked = efforts.length === 0}
               <div class="data-row">
                 <span class="data-label">{label}</span>
                 <select
                   class="pref-select"
-                  value={preferencesStore.pipeline[key as keyof typeof preferencesStore.pipeline] as string}
+                  aria-label="{label} effort"
+                  value={haikuBacked ? '' : (preferencesStore.pipeline[key] as string)}
+                  disabled={haikuBacked}
+                  title={haikuBacked ? 'Haiku ignores the effort parameter' : undefined}
                   onchange={(e) => preferencesStore.setEffort(key, (e.target as HTMLSelectElement).value)}
                 >
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                  <option value="max">max</option>
+                  {#if haikuBacked}
+                    <option value="">—</option>
+                  {:else}
+                    {#each efforts as level (level)}
+                      <option value={level}>{level}</option>
+                    {/each}
+                  {/if}
                 </select>
               </div>
             {/each}

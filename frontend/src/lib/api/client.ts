@@ -110,6 +110,22 @@ export interface ProvidersResponse {
   routing_tiers: string[];
 }
 
+/**
+ * Per-tier model capability descriptor — mirrors backend `ModelTierInfo`.
+ *
+ * `supported_efforts` drives the Navigator's effort dropdown filtering so
+ * users can't pick an effort the model will reject (e.g. `xhigh` on Sonnet,
+ * any effort on Haiku).
+ */
+export interface ModelTierInfo {
+  tier: 'opus' | 'sonnet' | 'haiku';
+  id: string;
+  label: string;
+  version: string;
+  supported_efforts: string[];
+  supports_thinking: boolean;
+}
+
 export interface SettingsResponse {
   max_raw_prompt_chars: number;
   max_context_tokens: number;
@@ -119,6 +135,7 @@ export interface SettingsResponse {
   embedding_model: string;
   trace_retention_days: number;
   database_engine: string;
+  model_catalog: ModelTierInfo[];
 }
 
 export interface GitHubUser {

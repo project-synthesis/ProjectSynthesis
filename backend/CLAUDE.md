@@ -27,7 +27,7 @@ Everything backend developers need. For project overview, see root `CLAUDE.md`. 
 **Infrastructure**: `event_bus.py` (in-process pub/sub), `event_notification.py` (cross-process HTTP POST), `trace_logger.py` (per-phase JSONL, daily rotation), `taxonomy/event_logger.py` (decision JSONL + ring buffer + SSE, singleton via `get_event_logger()`), `mcp_session_file.py` (read/write/staleness), `orphan_recovery.py` (orphan detection + recovery + exponential backoff, module-level `recovery_service` singleton, piggybacked on warm-path timer)
 **Feedback**: `feedback_service.py` (CRUD + adaptation update), `adaptation_tracker.py` (strategy affinity, degenerate detection)
 **GitHub**: `github_service.py` (Fernet encrypt/decrypt), `github_client.py` (raw API, explicit token param)
-**Preferences**: `preferences.py` (file-based JSON, frozen snapshot per pipeline run, effort levels: `low`|`medium`|`high`|`max`, `domain_readiness_notifications` toggle gates readiness-tier toast dispatch)
+**Preferences**: `preferences.py` (file-based JSON, frozen snapshot per pipeline run, effort levels: `low`|`medium`|`high`|`xhigh`|`max` — `xhigh` is Opus 4.7 only, downgraded to `high` at the provider layer on non-4.7 models; `domain_readiness_notifications` toggle gates readiness-tier toast dispatch)
 
 ## Model configuration
 
@@ -35,10 +35,10 @@ Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MOD
 
 ## Providers (`app/providers/`)
 
-- `base.py` — `LLMProvider` ABC: `complete_parsed()`, `complete_parsed_streaming()`, `thinking_config()`, `call_provider_with_retry()`
+- `base.py` — `LLMProvider` ABC: `complete_parsed()`, `complete_parsed_streaming()`, `thinking_config()`, `call_provider_with_retry()`, `supports_xhigh_effort()`. Completion methods accept `task_budget: int | None` + `compaction: bool` for Opus 4.7 features. `thinking_config()` returns `{"type": "adaptive", "display": "summarized"}` on Opus 4.7 (visible thinking); plain adaptive on 4.6/Sonnet
 - `detector.py` — auto-selects: Claude CLI → Anthropic API. Detected **once at startup**, stored on `app.state.routing`
-- `claude_cli.py` — CLI subprocess (zero marginal cost). Gates `--effort` for Haiku
-- `anthropic_api.py` — SDK with prompt caching (`cache_control: ephemeral`), streaming, `max_retries=0` (app-level retry only)
+- `claude_cli.py` — CLI subprocess (zero marginal cost). Gates `--effort` for Haiku. Downgrades `xhigh → high` on non-Opus-4.7 models. Accepts `task_budget` + `compaction` as documented no-ops (CLI does not surface those knobs) so the ABC stays uniform
+- `anthropic_api.py` — SDK with prompt caching (`cache_control: ephemeral`), streaming, `max_retries=0` (app-level retry only). Opus 4.7 wiring: `task_budget` → `output_config.task_budget = {"type": "tokens", "total": N}` + beta header `task-budgets-2026-03-13` (clamped to 20k minimum, Opus 4.7 only); `compaction` → `context_management.edits = [{"type": "compact_20260112"}]` + beta header `compact-2026-01-12` (Opus 4.7/4.6 + Sonnet 4.6); both beta headers comma-joined into a single `extra_headers["anthropic-beta"]` when combined; `xhigh → high` downgrade with warning log on non-Opus-4.7 models
 
 ## Routers (`app/routers/`)
 

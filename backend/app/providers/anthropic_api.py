@@ -57,8 +57,26 @@ class AnthropicAPIProvider(LLMProvider):
         max_tokens: int,
         effort: str | None,
         cache_ttl: str | None = None,
+        task_budget: int | None = None,
+        compaction: bool = False,
     ) -> dict[str, Any]:
-        """Assemble kwargs common to both parse() and stream() calls."""
+        """Assemble kwargs common to both parse() and stream() calls.
+
+        Opus 4.7 features (beta, opt-in per call):
+          - ``task_budget``: integer token total (min 20_000, clamped up).
+            Appears in ``output_config.task_budget`` and requires the
+            ``task-budgets-2026-03-13`` beta header. Opus 4.7 only — skipped
+            with a warning on other models.
+          - ``compaction``: server-side context summarization. Appears in
+            ``context_management.edits`` and requires the
+            ``compact-2026-01-12`` beta header. Opus 4.7 / 4.6 and
+            Sonnet 4.6 only.
+
+        Effort gating:
+          - Haiku: effort dropped entirely (not supported).
+          - ``xhigh``: Opus 4.7 only — downgraded to ``high`` with a warning
+            on other models to avoid 400s.
+        """
         cache_control: dict[str, str] = {"type": "ephemeral"}
         if cache_ttl is not None:
             cache_control["ttl"] = cache_ttl
@@ -72,10 +90,34 @@ class AnthropicAPIProvider(LLMProvider):
 
         thinking = LLMProvider.thinking_config(model)
 
-        is_haiku = "haiku" in model.lower()
-        output_config: dict | None = None
-        if effort is not None and not is_haiku:
-            output_config = {"effort": effort}
+        model_lower = model.lower()
+        is_haiku = "haiku" in model_lower
+        is_opus_47 = "opus-4-7" in model_lower
+        is_compaction_capable = is_opus_47 or "opus-4-6" in model_lower or "sonnet-4-6" in model_lower
+
+        # Effort gating — xhigh is Opus 4.7 only; downgrade silently-safe.
+        effective_effort = effort
+        if effective_effort == "xhigh" and not is_opus_47:
+            logger.warning(
+                "effort='xhigh' requires Opus 4.7 (model=%s) — downgrading to 'high'", model,
+            )
+            effective_effort = "high"
+
+        output_config: dict[str, Any] = {}
+        if effective_effort is not None and not is_haiku:
+            output_config["effort"] = effective_effort
+
+        # Task budget — Opus 4.7 only; clamp to SDK minimum of 20_000.
+        beta_headers: list[str] = []
+        if task_budget is not None:
+            if not is_opus_47:
+                logger.warning(
+                    "task_budget requires Opus 4.7 (model=%s) — ignoring", model,
+                )
+            else:
+                total = max(int(task_budget), 20_000)
+                output_config["task_budget"] = {"type": "tokens", "total": total}
+                beta_headers.append("task-budgets-2026-03-13")
 
         kwargs: dict[str, Any] = dict(
             model=model,
@@ -85,8 +127,24 @@ class AnthropicAPIProvider(LLMProvider):
             thinking=thinking,
             output_format=output_format,
         )
-        if output_config is not None:
+        if output_config:
             kwargs["output_config"] = output_config
+
+        # Compaction — server-managed context edits; requires beta header.
+        if compaction:
+            if not is_compaction_capable:
+                logger.warning(
+                    "compaction requires Opus 4.7/4.6 or Sonnet 4.6 (model=%s) — ignoring",
+                    model,
+                )
+            else:
+                kwargs["context_management"] = {
+                    "edits": [{"type": "compact_20260112"}]
+                }
+                beta_headers.append("compact-2026-01-12")
+
+        if beta_headers:
+            kwargs["extra_headers"] = {"anthropic-beta": ",".join(beta_headers)}
 
         return kwargs
 
@@ -134,16 +192,24 @@ class AnthropicAPIProvider(LLMProvider):
         max_tokens: int = 16384,
         effort: str | None = None,
         cache_ttl: str | None = None,
+        task_budget: int | None = None,
+        compaction: bool = False,
     ) -> T:
         """Make an LLM call and return a parsed Pydantic model.
 
         - System prompt cached via ``cache_control: ephemeral``
-        - Adaptive thinking for Opus/Sonnet, disabled for Haiku
-        - Effort parameter via ``output_config`` (non-Haiku only)
-        - Typed error handling mapped to ProviderError hierarchy
+        - Adaptive thinking for Opus/Sonnet (Opus 4.7 uses ``display=summarized``)
+        - Effort parameter via ``output_config`` (non-Haiku only).
+          ``xhigh`` is Opus 4.7 only and is downgraded to ``high`` elsewhere.
+        - ``task_budget``: Opus 4.7 Task Budgets beta (``output_config.task_budget``
+          + beta header ``task-budgets-2026-03-13``). Clamped to minimum 20_000.
+        - ``compaction``: Server-side Compaction beta (``context_management.edits``
+          + beta header ``compact-2026-01-12``) — Opus 4.7/4.6 + Sonnet 4.6 only.
+        - Typed error handling mapped to ProviderError hierarchy.
         """
         kwargs = self._build_kwargs(
             model, system_prompt, user_message, output_format, max_tokens, effort, cache_ttl,
+            task_budget=task_budget, compaction=compaction,
         )
 
         try:
@@ -163,6 +229,8 @@ class AnthropicAPIProvider(LLMProvider):
         max_tokens: int = 16384,
         effort: str | None = None,
         cache_ttl: str | None = None,
+        task_budget: int | None = None,
+        compaction: bool = False,
     ) -> T:
         """Streaming variant — prevents HTTP timeouts on long outputs.
 
@@ -170,10 +238,13 @@ class AnthropicAPIProvider(LLMProvider):
         the complete response. Recommended for high ``max_tokens`` calls
         (e.g. Opus optimize phase with up to 128K output tokens).
 
-        Same error handling, caching, and thinking config as ``complete_parsed``.
+        Same error handling, caching, thinking config, and beta-feature
+        wiring as ``complete_parsed`` — Task Budgets and Compaction flow
+        through identically.
         """
         kwargs = self._build_kwargs(
             model, system_prompt, user_message, output_format, max_tokens, effort, cache_ttl,
+            task_budget=task_budget, compaction=compaction,
         )
 
         try:

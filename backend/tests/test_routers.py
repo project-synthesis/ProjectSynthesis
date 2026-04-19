@@ -368,6 +368,56 @@ class TestSettingsRouter:
         assert "database_engine" in data
         assert data["database_engine"] == "sqlite"
 
+    async def test_settings_exposes_model_catalog(self, app_client):
+        """model_catalog lists each tier's id, label, and supported_efforts."""
+        resp = await app_client.get("/api/settings")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "model_catalog" in data
+        catalog = data["model_catalog"]
+        assert isinstance(catalog, list)
+        # Must include all three tiers
+        tiers = {entry["tier"]: entry for entry in catalog}
+        assert set(tiers.keys()) == {"opus", "sonnet", "haiku"}
+        # Each entry has the required shape
+        for entry in catalog:
+            assert "tier" in entry
+            assert "id" in entry
+            assert "label" in entry
+            assert "version" in entry
+            assert "supported_efforts" in entry
+            assert "supports_thinking" in entry
+            assert isinstance(entry["supported_efforts"], list)
+            assert isinstance(entry["supports_thinking"], bool)
+
+    async def test_opus_tier_has_xhigh_in_catalog(self, app_client):
+        """Opus tier (currently 4.7) exposes the full effort matrix including xhigh."""
+        resp = await app_client.get("/api/settings")
+        data = resp.json()
+        opus = next(e for e in data["model_catalog"] if e["tier"] == "opus")
+        assert "xhigh" in opus["supported_efforts"]
+        assert "max" in opus["supported_efforts"]
+        assert opus["supports_thinking"] is True
+        assert opus["label"].startswith("Opus ")
+
+    async def test_sonnet_tier_no_xhigh_in_catalog(self, app_client):
+        """Sonnet tier exposes effort matrix without xhigh (Opus-4.7-only)."""
+        resp = await app_client.get("/api/settings")
+        data = resp.json()
+        sonnet = next(e for e in data["model_catalog"] if e["tier"] == "sonnet")
+        assert "xhigh" not in sonnet["supported_efforts"]
+        assert sonnet["supports_thinking"] is True
+        assert sonnet["label"].startswith("Sonnet ")
+
+    async def test_haiku_tier_empty_efforts_in_catalog(self, app_client):
+        """Haiku tier exposes empty effort list + thinking disabled."""
+        resp = await app_client.get("/api/settings")
+        data = resp.json()
+        haiku = next(e for e in data["model_catalog"] if e["tier"] == "haiku")
+        assert haiku["supported_efforts"] == []
+        assert haiku["supports_thinking"] is False
+        assert haiku["label"].startswith("Haiku ")
+
 
 class TestGitHubAuth:
     async def test_github_login_returns_url(self, app_client):

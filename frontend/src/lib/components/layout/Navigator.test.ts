@@ -52,6 +52,32 @@ const DEFAULT_SETTINGS = {
   embedding_model: 'all-MiniLM-L6-v2',
   trace_retention_days: 7,
   database_engine: 'sqlite',
+  model_catalog: [
+    {
+      tier: 'opus',
+      id: 'claude-opus-4-7',
+      label: 'Opus 4.7',
+      version: '4.7',
+      supported_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supports_thinking: true,
+    },
+    {
+      tier: 'sonnet',
+      id: 'claude-sonnet-4-6',
+      label: 'Sonnet 4.6',
+      version: '4.6',
+      supported_efforts: ['low', 'medium', 'high', 'max'],
+      supports_thinking: true,
+    },
+    {
+      tier: 'haiku',
+      id: 'claude-haiku-4-5',
+      label: 'Haiku 4.5',
+      version: '4.5',
+      supported_efforts: [],
+      supports_thinking: false,
+    },
+  ],
 };
 
 function defaultFetchHandlers(overrides: Record<string, unknown> = {}) {
@@ -388,6 +414,88 @@ describe('Navigator', () => {
     const haikuSelect = selects.find(s => s.value === 'haiku');
     expect(analyzerSelect).toBeDefined();
     expect(haikuSelect).toBeDefined();
+  });
+
+  // ── Settings panel — Model catalog labels ─────────────────────────────────
+  // Labels must show the concrete version (Opus 4.7, Sonnet 4.6, Haiku 4.5)
+  // so users know which model backs each tier without cross-referencing docs.
+  it('model dropdowns render versioned labels from catalog', async () => {
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    await waitFor(() => {
+      // Each of Opus/Sonnet/Haiku appears once per phase select (3 phases).
+      expect(screen.getAllByText('Opus 4.7').length).toBeGreaterThanOrEqual(3);
+      expect(screen.getAllByText('Sonnet 4.6').length).toBeGreaterThanOrEqual(3);
+      expect(screen.getAllByText('Haiku 4.5').length).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  // ── Settings panel — Effort filtering per model ───────────────────────────
+  // xhigh must only appear in the effort dropdown for phases backed by Opus
+  // (4.7 is the only model that accepts it). Sonnet-backed phases must not
+  // show xhigh, or the API will 400 at request time.
+  it('effort dropdown for opus-backed phase includes xhigh', async () => {
+    preferencesStore.prefs.models.analyzer = 'opus';
+    preferencesStore.prefs.pipeline.analyzer_effort = 'high';
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    await waitFor(() => {
+      const effortSelect = screen.getByLabelText('Analyzer effort') as HTMLSelectElement;
+      const values = Array.from(effortSelect.options).map(o => o.value);
+      expect(values).toContain('xhigh');
+      expect(values).toContain('max');
+    });
+  });
+
+  it('effort dropdown for sonnet-backed phase excludes xhigh', async () => {
+    preferencesStore.prefs.models.analyzer = 'sonnet';
+    preferencesStore.prefs.pipeline.analyzer_effort = 'high';
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    await waitFor(() => {
+      const effortSelect = screen.getByLabelText('Analyzer effort') as HTMLSelectElement;
+      const values = Array.from(effortSelect.options).map(o => o.value);
+      expect(values).not.toContain('xhigh');
+      expect(values).toContain('max'); // Sonnet 4.6 supports max
+      expect(values).toContain('high');
+    });
+  });
+
+  it('effort row for haiku-backed phase is disabled with "ignored" placeholder', async () => {
+    preferencesStore.prefs.models.analyzer = 'haiku';
+    defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+    await waitFor(() => {
+      const effortSelect = screen.getByLabelText('Analyzer effort') as HTMLSelectElement;
+      expect(effortSelect.disabled).toBe(true);
+    });
+  });
+
+  // ── Settings panel — Auto-degrade on incompatible effort ──────────────────
+  // When the user lands on the settings panel with an effort level that the
+  // current model's catalog entry doesn't support (e.g. sonnet + xhigh after
+  // migrating from an opus-default config), the UI must PATCH an in-range
+  // level instead of leaving an invalid value to error at request time.
+  it('auto-degrades xhigh effort to high when model is sonnet', async () => {
+    preferencesStore.prefs.models.analyzer = 'sonnet';
+    preferencesStore.prefs.pipeline.analyzer_effort = 'xhigh';
+    const fetchMock = defaultFetchHandlers();
+    render(Navigator, { props: { active: 'settings' } });
+
+    await waitFor(() => {
+      const effortPatches = fetchMock.mock.calls.filter(call => {
+        const [url, init] = call;
+        const urlStr = typeof url === 'string' ? url : url.toString();
+        if (!urlStr.includes('/api/preferences')) return false;
+        if (!init || init.method !== 'PATCH') return false;
+        const body = JSON.parse(init.body as string);
+        return body.pipeline?.analyzer_effort !== undefined;
+      });
+      expect(effortPatches.length).toBeGreaterThan(0);
+      const lastEffortPatch = effortPatches[effortPatches.length - 1];
+      const body = JSON.parse(lastEffortPatch[1]!.body as string);
+      expect(body.pipeline.analyzer_effort).toBe('high');
+    });
   });
 
   it('renders pipeline toggle switches in settings panel', () => {
