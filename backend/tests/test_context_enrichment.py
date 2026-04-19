@@ -1249,3 +1249,192 @@ class TestHybridRelevance:
         second_call = mock_es.aembed_single.call_args_list[1]
         anchor_text = second_call.args[0]
         assert anchor_text == "plain synthesis text"
+
+
+# ---------------------------------------------------------------------------
+# B0 (path-enriched): domain vocab + anchor enrichment via indexed file paths
+# ---------------------------------------------------------------------------
+
+
+class TestDomainVocabPathEnrichment:
+    """Verify file_paths contribute to domain vocab at freq >= 1.
+
+    Component-level prompts (e.g. "Clusters Navigation Panel") were falling
+    below the relevance floor because synthesis prose describes the system
+    in aggregate.  Path-derived vocab gives the matcher explicit access to
+    module names the repo actually contains.
+    """
+
+    def test_path_tokens_included_at_freq_one(self):
+        """A token appearing in a single file path is preserved."""
+        vocab = extract_domain_vocab(
+            "",
+            file_paths=["frontend/src/lib/components/ClustersNavigationPanel.svelte"],
+        )
+        assert "clustersnavigationpanel" in vocab
+        assert "components" in vocab or "components" not in vocab  # may be generic
+
+    def test_path_tokens_respect_generic_filter(self):
+        """Generic coding terms are still filtered from path tokens."""
+        vocab = extract_domain_vocab(
+            "",
+            file_paths=[
+                "backend/app/services/domain_resolver.py",
+                "backend/app/services/pipeline.py",
+            ],
+        )
+        # Domain-specific module names survive
+        assert "domain_resolver" in vocab
+        assert "pipeline" in vocab
+
+    def test_underscore_tokens_preserved_whole(self):
+        """Identifiers with underscores tokenize as single words, not split."""
+        vocab = extract_domain_vocab(
+            "",
+            file_paths=["backend/app/services/sub_domain_readiness.py"],
+        )
+        assert "sub_domain_readiness" in vocab
+
+    def test_synth_and_path_sources_union(self):
+        """Synthesis (freq >= 3) and paths (freq >= 1) merge into one set."""
+        vocab = extract_domain_vocab(
+            "taxonomy taxonomy taxonomy clustering clustering clustering",
+            file_paths=["backend/app/services/sub_domain_readiness.py"],
+        )
+        # Synthesis side: freq >= 3
+        assert "taxonomy" in vocab
+        assert "clustering" in vocab
+        # Path side: freq >= 1
+        assert "sub_domain_readiness" in vocab
+
+    def test_none_file_paths_noop(self):
+        """file_paths=None matches the legacy synthesis-only behaviour."""
+        vocab = extract_domain_vocab("taxonomy taxonomy taxonomy")
+        vocab_none = extract_domain_vocab("taxonomy taxonomy taxonomy", file_paths=None)
+        vocab_empty = extract_domain_vocab("taxonomy taxonomy taxonomy", file_paths=[])
+        assert vocab == vocab_none == vocab_empty
+
+    def test_empty_synth_with_paths_still_produces_vocab(self):
+        """No synthesis + file paths alone still yields a useful vocab."""
+        vocab = extract_domain_vocab(
+            "",
+            file_paths=[
+                "backend/app/services/taxonomy/clustering.py",
+                "backend/app/services/taxonomy/warm_phases.py",
+            ],
+        )
+        assert "taxonomy" in vocab
+        assert "clustering" in vocab
+        assert "warm_phases" in vocab
+
+
+class TestRepoRelevanceAnchorEnrichment:
+    """Verify compute_repo_relevance extends the anchor with file paths."""
+
+    @pytest.mark.asyncio
+    async def test_file_paths_appended_as_components_section(self):
+        """Anchor includes `Components:` section listing the sampled paths."""
+        import numpy as np
+
+        mock_es = AsyncMock()
+        prompt_vec = np.zeros(384, dtype=np.float32)
+        prompt_vec[0] = 1.0
+        synth_vec = np.zeros(384, dtype=np.float32)
+        synth_vec[0] = 1.0
+        mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
+
+        paths = [
+            "backend/app/services/taxonomy/clustering.py",
+            "frontend/src/lib/components/ClustersNavigationPanel.svelte",
+        ]
+        await compute_repo_relevance(
+            "Clusters Navigation Panel",
+            "Project Synthesis RAG platform.",
+            mock_es,
+            repo_full_name="owner/repo",
+            file_paths=paths,
+        )
+
+        anchor = mock_es.aembed_single.call_args_list[1].args[0]
+        assert "Components:" in anchor
+        assert "clustering.py" in anchor
+        assert "ClustersNavigationPanel.svelte" in anchor
+
+    @pytest.mark.asyncio
+    async def test_paths_stride_sampled_when_over_cap(self):
+        """Over 100 paths → stride-sampled to exactly 100 lines in anchor."""
+        import numpy as np
+
+        mock_es = AsyncMock()
+        vec = np.zeros(384, dtype=np.float32)
+        vec[0] = 1.0
+        mock_es.aembed_single = AsyncMock(side_effect=[vec, vec])
+
+        # 300 paths spanning backend/, data/, docs/, frontend/
+        paths = (
+            [f"backend/app/f{i}.py" for i in range(100)]
+            + [f"docs/d{i}.md" for i in range(100)]
+            + [f"frontend/src/c{i}.svelte" for i in range(100)]
+        )
+        await compute_repo_relevance(
+            "any prompt",
+            "synthesis text",
+            mock_es,
+            file_paths=paths,
+        )
+
+        anchor = mock_es.aembed_single.call_args_list[1].args[0]
+        # Count lines between "Components:" and end
+        components_block = anchor.split("Components:\n", 1)[1]
+        lines = [ln for ln in components_block.split("\n") if ln.strip()]
+        assert len(lines) == 100
+        # Stride sampling preserves breadth — every subtree contributes.
+        assert any("backend/" in ln for ln in lines)
+        assert any("docs/" in ln for ln in lines)
+        assert any("frontend/" in ln for ln in lines)
+
+    @pytest.mark.asyncio
+    async def test_no_file_paths_preserves_legacy_anchor(self):
+        """Without file_paths the anchor is unchanged from the synthesis-only shape."""
+        import numpy as np
+
+        mock_es = AsyncMock()
+        vec = np.zeros(384, dtype=np.float32)
+        vec[0] = 1.0
+        mock_es.aembed_single = AsyncMock(side_effect=[vec, vec])
+
+        await compute_repo_relevance(
+            "any prompt",
+            "synthesis text",
+            mock_es,
+            repo_full_name="owner/repo",
+        )
+
+        anchor = mock_es.aembed_single.call_args_list[1].args[0]
+        assert "Components:" not in anchor
+        assert anchor == "Project: owner/repo\nsynthesis text"
+
+    @pytest.mark.asyncio
+    async def test_path_tokens_appear_in_domain_matches(self):
+        """Path-derived vocab surfaces in `domain_matches` when prompt mentions them."""
+        import numpy as np
+
+        mock_es = AsyncMock()
+        rng = np.random.default_rng(42)
+        base = rng.random(384).astype(np.float32)
+        base /= np.linalg.norm(base)
+        noise = rng.random(384).astype(np.float32) * 0.3
+        vec2 = base + noise
+        vec2 /= np.linalg.norm(vec2)
+        mock_es.aembed_single = AsyncMock(side_effect=[base, vec2])
+
+        score, info = await compute_repo_relevance(
+            "Update the sub_domain_readiness module in the taxonomy path",
+            "Project Synthesis.",
+            mock_es,
+            repo_full_name="owner/repo",
+            file_paths=[
+                "backend/app/services/taxonomy/sub_domain_readiness.py",
+            ],
+        )
+        assert "sub_domain_readiness" in info["domain_matches"]

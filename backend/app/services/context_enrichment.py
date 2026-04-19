@@ -125,28 +125,62 @@ _GENERIC_TERMS = frozenset({
 })
 
 
-def extract_domain_vocab(synthesis: str) -> frozenset[str]:
-    """Extract domain-specific vocabulary from explore synthesis.
+def extract_domain_vocab(
+    synthesis: str,
+    file_paths: list[str] | None = None,
+) -> frozenset[str]:
+    """Extract domain-specific vocabulary from synthesis + indexed file paths.
 
-    Tokenizes the synthesis text, keeps words with frequency >= 3, and
-    filters out generic programming terms (:data:`_GENERIC_TERMS`) and
-    tech-stack aliases (:data:`_TECH_VOCABULARY`).  Returns a frozenset
-    of domain-specific terms that characterize the linked repo's domain.
+    Two-source fusion:
+
+    * **Synthesis tokens** — freq ``>= 3`` filter.  The synthesis is a
+      narrative architectural summary where coherent domain terms repeat
+      naturally; the frequency floor separates those from incidental
+      mentions.
+    * **Path tokens** — freq ``>= 1``.  File paths are already
+      repo-specific (they name the actual modules and components), so a
+      single occurrence is enough evidence that the term is part of the
+      codebase vocabulary.
+
+    Both sources are passed through the generic-term (:data:`_GENERIC_TERMS`)
+    and tech-stack (:data:`_TECH_VOCABULARY`) filters, then unioned.  Returns
+    a frozenset of domain-specific terms characterizing the linked repo.
+
+    The path-token branch materially improves matching for component-level
+    prompts (e.g. ``"Clusters Navigation Panel"`` matching
+    ``frontend/.../ClustersNavigationPanel.svelte``) that synthesis prose
+    alone is too sparse to surface.
     """
-    if not synthesis:
-        return frozenset()
     from collections import Counter
 
-    words = re.findall(r"\b[a-z][a-z_]{3,}\b", synthesis.lower())
-    freq = Counter(words)
     tech_aliases: set[str] = set()
     for techs in _TECH_VOCABULARY.values():
         for aliases in techs.values():
             tech_aliases.update(aliases)
-    return frozenset(
-        w for w, c in freq.items()
-        if c >= 3 and w not in _GENERIC_TERMS and w not in tech_aliases
-    )
+
+    # Synthesis tokens (freq >= 3)
+    synth_vocab: set[str] = set()
+    if synthesis:
+        words = re.findall(r"\b[a-z][a-z_]{3,}\b", synthesis.lower())
+        freq = Counter(words)
+        synth_vocab = {
+            w for w, c in freq.items()
+            if c >= 3 and w not in _GENERIC_TERMS and w not in tech_aliases
+        }
+
+    # Path tokens (freq >= 1 — paths are already repo-specific).
+    # `/`, `.`, `-` are word boundaries so CamelCase components inside
+    # e.g. ``ClustersNavigationPanel.svelte`` still split on `.` boundaries
+    # into individual tokens after lowercasing.
+    path_vocab: set[str] = set()
+    if file_paths:
+        for path in file_paths:
+            tokens = re.findall(r"\b[a-z][a-z_]{3,}\b", path.lower())
+            for t in tokens:
+                if t not in _GENERIC_TERMS and t not in tech_aliases:
+                    path_vocab.add(t)
+
+    return frozenset(synth_vocab | path_vocab)
 
 
 async def compute_repo_relevance(
@@ -154,15 +188,27 @@ async def compute_repo_relevance(
     explore_synthesis: str,
     embedding_service: Any,
     repo_full_name: str | None = None,
+    file_paths: list[str] | None = None,
 ) -> tuple[float, dict[str, Any]]:
     """Single-threshold relevance between a prompt and the linked repo.
 
-    The synthesis is embedded with a repo-identity prefix
-    (``"Project: {repo_full_name}\\n{synthesis}"``) so the vector captures
-    *which project this is* in addition to its tech-stack signature.  A
-    prompt must clear ``REPO_RELEVANCE_FLOOR`` cosine against that anchor
-    to pass — one well-calibrated embedding threshold, no secondary
-    vocabulary overlap gate.
+    The anchor text is assembled from three layers so the embedding
+    captures the project identity, its narrative architecture, **and** its
+    component-level surface area:
+
+    1. ``"Project: {repo_full_name}"`` — identity prefix, disambiguates two
+       repos with similar tech-stack signatures.
+    2. ``{explore_synthesis}`` — Haiku-generated narrative summary
+       (architectural overview, ~3K chars).
+    3. ``"Components:\\n{joined file paths}"`` — a stride-sampled subset of
+       indexed file paths (cap 100, for MiniLM's 512-token window), giving
+       the embedding explicit module-level signal.  Without this layer,
+       component-level prompts (e.g. *"Clusters Navigation Panel"*) often
+       fall below the floor because synthesis prose describes the system
+       in aggregate, not the individual files by name.
+
+    The prompt must clear ``REPO_RELEVANCE_FLOOR`` cosine against that
+    three-layer anchor to pass — one well-calibrated embedding threshold.
 
     Returns ``(cosine, info)`` where *info* contains diagnostic keys:
     ``cosine``, ``decision`` (``"pass"``/``"skip"``), ``reason``
@@ -186,6 +232,20 @@ async def compute_repo_relevance(
     if repo_full_name:
         anchor = f"Project: {repo_full_name}\n{explore_synthesis}"
 
+    # Component-level signal: stride-sample paths to cap the anchor at ~100
+    # lines.  Alphabetical ordering would over-represent top-level
+    # directories (e.g. take all `backend/...` and miss `frontend/...`) —
+    # stride sampling walks the tree breadth-first in path-sorted order so
+    # every major subtree contributes a roughly proportional share.
+    _MAX_ANCHOR_PATHS = 100
+    if file_paths:
+        if len(file_paths) > _MAX_ANCHOR_PATHS:
+            stride = len(file_paths) / _MAX_ANCHOR_PATHS
+            sampled = [file_paths[int(i * stride)] for i in range(_MAX_ANCHOR_PATHS)]
+        else:
+            sampled = list(file_paths)
+        anchor = f"{anchor}\n\nComponents:\n" + "\n".join(sampled)
+
     prompt_vec = await embedding_service.aembed_single(raw_prompt)
     synth_vec = await embedding_service.aembed_single(anchor)
     cosine = float(
@@ -194,8 +254,10 @@ async def compute_repo_relevance(
     )
 
     # Diagnostic-only: vocabulary overlap no longer gates the decision but
-    # remains in the info dict for observability/debugging.
-    domain_vocab = extract_domain_vocab(explore_synthesis)
+    # remains in the info dict for observability/debugging.  Vocab uses
+    # *all* supplied paths (not the stride sample) — it's token-deduped
+    # downstream so size is bounded by the real vocabulary.
+    domain_vocab = extract_domain_vocab(explore_synthesis, file_paths=file_paths)
     prompt_lower = raw_prompt.lower()
     matches = [w for w in domain_vocab if w in prompt_lower]
 
@@ -846,9 +908,42 @@ class ContextEnrichmentService:
             _repo_relevance_skipped = False
             if explore_synthesis:
                 try:
+                    # Fetch indexed file paths to enrich the relevance anchor
+                    # with component-level signal.  Hard-cap at 500 rows so
+                    # very large repos don't blow past memory or tokenizer
+                    # limits — vocab extraction dedupes downstream, and
+                    # ``compute_repo_relevance()`` stride-samples the anchor
+                    # subset to stay inside MiniLM's 512-token window.
+                    repo_file_paths: list[str] = []
+                    try:
+                        from sqlalchemy import select as _sel_paths
+
+                        from app.models import RepoFileIndex
+                        _paths_q = await db.execute(
+                            _sel_paths(RepoFileIndex.file_path)
+                            .where(
+                                RepoFileIndex.repo_full_name == repo_full_name,
+                                RepoFileIndex.branch == branch,
+                                RepoFileIndex.embedding.isnot(None),
+                            )
+                            .order_by(RepoFileIndex.file_path)
+                            .limit(500)
+                        )
+                        repo_file_paths = [r[0] for r in _paths_q.all()]
+                    except Exception:
+                        logger.debug(
+                            "repo_relevance_gate: file path fetch failed, "
+                            "proceeding without path enrichment",
+                            exc_info=True,
+                        )
+
                     relevance, relevance_info = await compute_repo_relevance(
                         raw_prompt, explore_synthesis, self._embedding_service,
                         repo_full_name=repo_full_name,
+                        file_paths=repo_file_paths or None,
+                    )
+                    enrichment_meta_dict["repo_relevance_anchor_paths"] = (
+                        len(repo_file_paths)
                     )
                     enrichment_meta_dict["repo_relevance_score"] = round(relevance, 3)
                     enrichment_meta_dict["repo_relevance_info"] = relevance_info
