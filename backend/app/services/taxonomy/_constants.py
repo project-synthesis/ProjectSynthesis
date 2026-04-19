@@ -184,6 +184,12 @@ DISSOLVE_COHERENCE_CEILING = 0.30       # dissolve if coherence below this
 DISSOLVE_MAX_MEMBERS = 5                # only dissolve clusters with <= N members
 DISSOLVE_MIN_AGE_HOURS = 2              # cluster must be at least N hours old
 
+# Grace period before a structural node (domain / sub-domain) with 0 children
+# and 0 optimization refs is considered an orphan and archived by Phase 0.
+# Keeps newly-created domains from being swept during a brief empty window
+# before the first member lands.
+ORPHAN_STRUCTURAL_GRACE_HOURS = 24
+
 # Forced split for large incoherent clusters that exceed dissolution member cap
 # but have very low coherence. These clusters are too big to dissolve and too
 # small for the normal split path (SPLIT_MIN_MEMBERS=12) — the forced split

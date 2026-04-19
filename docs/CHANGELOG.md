@@ -4,6 +4,12 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- **Phase 0 orphan-structural-node sweep** — warm-path reconcile now archives empty domain / sub-domain nodes that have 0 active-cluster children AND 0 active sub-domain children AND 0 optimization references, once they cross a `ORPHAN_STRUCTURAL_GRACE_HOURS=24` age floor (new constant in `_constants.py`). Fixes the zero-prompt "ghost Legacy 1m 0 --" visibility bug where the ADR-005 migration created a Legacy project node + child `general` domain, which kept the project row inflated at `member_count=1` forever because nothing reaped the empty domain. Guards: `general` is never archived if it still has structural descendants or opt refs; young nodes are exempt via `created_at` cutoff; cluster OR sub-domain children both count as occupancy; direct optimization references (`Optimization.cluster_id`) count as occupancy. Best-effort cleanup on `EmbeddingIndex.remove()` + `QualifierIndex.remove()` + `DomainResolver.remove_label()` (wrapped in broad `except Exception:` so uninitialized resolvers in test contexts can't abort the sweep). Project ancestor `member_count` is re-reconciled in the same pass, so the UI surfaces the new reality on the next topology refresh. New `ReconcileResult.orphan_structural_nodes_archived` counter. 5 new RED→GREEN tests in `tests/taxonomy/test_warm_phases.py` lock all guard conditions + the positive archival path.
+
+### Fixed
+- **Cluster navigator MBR column semantic correctness** — the `clusterRow` snippet in `ClusterNavigator.svelte` rendered every `member_count` with an unconditional `m` suffix (short for "members"), which was a lie on project and domain rows because `member_count` is semantically overloaded: for clusters it counts optimizations, for domains it counts child clusters, for projects it counts child domains. Snippet now derives `mbrSuffix` + `mbrUnit` from `family.state`: `Nd` / "N domain(s)" for project rows, `Nc` / "N cluster(s)" for domain rows, `Nm` / "N member(s)" for cluster rows. Tooltip picks up the plural-aware unit. Two RED→GREEN tests in `ClusterNavigator.test.ts` lock the cluster ("5m") and project ("3d") suffixes.
+
 ## v0.3.40 — 2026-04-19
 
 ### Added

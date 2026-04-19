@@ -258,6 +258,53 @@ describe('ClusterNavigator', () => {
     });
   });
 
+  // ── MBR suffix — state-aware rendering (Fix C) ──────────────────────────────
+
+  it('cluster row renders member_count with "m" suffix (optimizations)', async () => {
+    defaultHandlers([
+      mockPatternFamily({
+        id: 'fam-1', domain: 'backend',
+        intent_label: 'API patterns', member_count: 5,
+      }),
+    ]);
+    render(ClusterNavigator);
+
+    await waitFor(() => {
+      expect(screen.getByText('API patterns')).toBeInTheDocument();
+    });
+    // Active cluster → member_count represents optimizations → "5m"
+    expect(screen.getByText('5m')).toBeInTheDocument();
+  });
+
+  it('project row renders member_count with "d" suffix (child domains)', async () => {
+    // Switch off state filter so project-state nodes render.
+    clustersStore.setStateFilter(null);
+
+    clustersStore.taxonomyTree = [
+      {
+        id: 'proj-1', parent_id: null, label: 'Legacy',
+        state: 'project', domain: 'general', task_type: 'general',
+        persistence: null, coherence: null, separation: null, stability: null,
+        member_count: 3, usage_count: 0, avg_score: null,
+        color_hex: '#444444', umap_x: null, umap_y: null, umap_z: null,
+        preferred_strategy: null, created_at: '2026-04-01T00:00:00Z',
+      },
+    ] as any;
+
+    defaultHandlers([]);
+    render(ClusterNavigator);
+
+    await waitFor(() => {
+      // Project nodes render "Legacy" twice: once as the domain-group header
+      // (project:Legacy key) and once as the cluster-row label. Use
+      // getAllByText so readiness is confirmed regardless of count.
+      expect(screen.getAllByText('Legacy').length).toBeGreaterThan(0);
+    });
+    // Project → member_count represents child domains → "3d" (not "3m")
+    expect(screen.getByText('3d')).toBeInTheDocument();
+    expect(screen.queryByText('3m')).not.toBeInTheDocument();
+  });
+
   // ── 2. Pagination ──────────────────────────────────────────────────────────
 
   it('shows "Load more" button when has_more is true', async () => {

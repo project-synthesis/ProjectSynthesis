@@ -493,6 +493,14 @@
         Keeps the selection/detail/linked-opts contract in one place.
       -->
       {#snippet clusterRow(family: ClusterNode, nested: boolean)}
+        {@const mbrSuffix = family.state === 'project' ? 'd'
+          : family.state === 'domain' ? 'c'
+          : 'm'}
+        {@const mbrUnit = family.state === 'project'
+          ? (family.member_count === 1 ? 'domain' : 'domains')
+          : family.state === 'domain'
+          ? (family.member_count === 1 ? 'cluster' : 'clusters')
+          : (family.member_count === 1 ? 'member' : 'members')}
         <button
           class="family-row"
           class:family-row--subdomain={nested}
@@ -503,7 +511,7 @@
         >
           <span class="family-label">{family.label}</span>
           <span class="family-badges">
-            <span class="member-count font-mono" use:tooltip={`${family.member_count} ${family.member_count === 1 ? 'member' : 'members'}`}>{family.member_count}m</span>
+            <span class="member-count font-mono" use:tooltip={`${family.member_count} ${mbrUnit}`}>{family.member_count}{mbrSuffix}</span>
             <span
               class="badge-usage font-mono"
               class:badge-usage--active={family.usage_count > 0}

@@ -58,6 +58,7 @@ from app.services.taxonomy._constants import (
     MAX_PATTERNS_PER_CLUSTER,
     MEGA_CLUSTER_MEMBER_FLOOR,
     MERGE_BACK_GRACE_MINUTES,
+    ORPHAN_STRUCTURAL_GRACE_HOURS,
     SPLIT_COHERENCE_EXEMPT,
     SPLIT_COHERENCE_FLOOR,
     SPLIT_CONTENT_HASH_MAX_RETRIES,
@@ -262,6 +263,7 @@ class ReconcileResult:
     coherence_updated: int = 0
     scores_reconciled: int = 0
     zombies_archived: int = 0
+    orphan_structural_nodes_archived: int = 0
     leaked_patterns_cleaned: int = 0
     outliers_ejected: int = 0
     templates_demoted: int = 0
@@ -1527,6 +1529,112 @@ async def phase_reconcile(
             await db.flush()
     except Exception as zombie_exc:
         logger.warning("Zombie cleanup failed (non-fatal): %s", zombie_exc)
+
+    # --- Orphan structural node sweep (Fix B) ---
+    # Archive domain nodes with 0 child clusters, 0 child sub-domains, and 0
+    # optimization references after a grace period. Prevents ghost domains
+    # (e.g. a 'general' left behind by a backup restore) from inflating a
+    # project's structural member_count and surfacing in the UI as "1m" on a
+    # zero-prompt system. Uses archived state (not DELETE) so existing
+    # "Prune stale archived clusters" logic can GC later. `general` is not
+    # specially protected — the system re-creates it on demand via
+    # `_resolve_or_create_domain()` when the next prompt lands.
+    try:
+        orphan_cutoff = _utcnow() - timedelta(
+            hours=ORPHAN_STRUCTURAL_GRACE_HOURS
+        )
+        orphan_candidates_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.member_count == 0,
+                PromptCluster.created_at.isnot(None),
+                PromptCluster.created_at < orphan_cutoff,
+            )
+        )
+        orphan_ids: list[str] = []
+        for node in orphan_candidates_q.scalars().all():
+            # Guard: any non-archived child (cluster OR sub-domain)?
+            child_refs = (await db.execute(
+                select(func.count()).where(
+                    PromptCluster.parent_id == node.id,
+                    PromptCluster.state != "archived",
+                )
+            )).scalar() or 0
+            if child_refs > 0:
+                continue
+
+            # Guard: any optimization still references this node directly?
+            opt_refs = (await db.execute(
+                select(func.count()).where(
+                    Optimization.cluster_id == node.id,
+                )
+            )).scalar() or 0
+            if opt_refs > 0:
+                continue
+
+            node.state = "archived"
+            node.archived_at = _utcnow()
+            orphan_ids.append(node.id)
+            result.orphan_structural_nodes_archived += 1
+
+            # Drop from all 4 embedding indices (best-effort).
+            for index_name in (
+                "_embedding_index",
+                "_transformation_index",
+                "_optimized_index",
+                "_qualifier_index",
+            ):
+                try:
+                    idx = getattr(engine, index_name, None)
+                    if idx is not None:
+                        await idx.remove(node.id)
+                except (KeyError, ValueError, AttributeError):
+                    pass
+
+            # Clear DomainResolver cache so re-creation is not blocked.
+            # Broad except: resolver may be uninitialized in some contexts
+            # (e.g. tests) and this cleanup must never abort the sweep.
+            try:
+                from app.services.domain_resolver import get_domain_resolver
+                get_domain_resolver().remove_label(node.label)
+            except Exception:
+                pass
+
+        if orphan_ids:
+            logger.info(
+                "Archived %d orphan structural node(s) >%dh old with 0 "
+                "children and 0 optimization refs",
+                len(orphan_ids), ORPHAN_STRUCTURAL_GRACE_HOURS,
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="reconcile",
+                    decision="orphan_structural_archived",
+                    context={"count": len(orphan_ids), "node_ids": orphan_ids},
+                )
+            except RuntimeError:
+                pass
+            await db.flush()
+
+            # Re-reconcile project member_count so the UI reflects reality
+            # next snapshot (project.member_count counts child domains).
+            project_q = await db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.state == "project"
+                )
+            )
+            for project_node in project_q.scalars().all():
+                live_domain_count = (await db.execute(
+                    select(func.count()).where(
+                        PromptCluster.parent_id == project_node.id,
+                        PromptCluster.state == "domain",
+                    )
+                )).scalar() or 0
+                if project_node.member_count != live_domain_count:
+                    project_node.member_count = live_domain_count
+            await db.flush()
+    except Exception as orphan_exc:
+        logger.warning("Orphan sweep failed (non-fatal): %s", orphan_exc)
 
     # --- Prune stale archived clusters ---
     try:

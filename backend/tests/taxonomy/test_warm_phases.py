@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, fields
+from datetime import timedelta
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -64,6 +65,7 @@ def test_reconcile_result_fields():
     assert "coherence_updated" in field_names
     assert "scores_reconciled" in field_names
     assert "zombies_archived" in field_names
+    assert "orphan_structural_nodes_archived" in field_names
 
 
 def test_refresh_result_fields():
@@ -231,6 +233,201 @@ async def test_phase_reconcile_queries_notin_domain_archived(db, mock_embedding,
 
     await db.refresh(domain_node)
     # Domain node should remain (not archived)
+    assert domain_node.state == "domain"
+
+
+# ---------------------------------------------------------------------------
+# phase_reconcile — orphan structural node sweep (Fix B)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_archives_orphan_domain_over_24h(
+    db, mock_embedding, mock_provider,
+):
+    """Old empty domain nodes (>24h, 0 children, 0 optimizations) archived.
+
+    Repro of the zero-prompt Legacy visibility bug: a ghost 'general' domain
+    left under a project after a backup restore inflates the project's
+    member_count (which counts child domains). Phase 0 must sweep orphans.
+    """
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    project = PromptCluster(
+        label="Legacy",
+        state="project",
+        domain="general",
+        task_type="general",
+        member_count=1,  # stale — will be reconciled down after sweep
+        color_hex="#444444",
+    )
+    db.add(project)
+    await db.flush()
+
+    old = _utcnow() - timedelta(hours=25)
+    orphan = PromptCluster(
+        label="general",
+        state="domain",
+        domain="general",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        parent_id=project.id,
+        color_hex="#6366f1",
+        created_at=old,
+    )
+    db.add(orphan)
+    await db.commit()
+
+    result = await phase_reconcile(engine, db)
+
+    assert result.orphan_structural_nodes_archived >= 1
+    await db.refresh(orphan)
+    assert orphan.state == "archived"
+    assert orphan.archived_at is not None
+
+    await db.refresh(project)
+    # Project member_count (child-domain count) should now be 0
+    assert project.member_count == 0
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_skips_young_orphan(
+    db, mock_embedding, mock_provider,
+):
+    """Domain nodes <24h old get a grace period — not swept even if empty."""
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    fresh = _utcnow() - timedelta(hours=1)
+    orphan = PromptCluster(
+        label="general",
+        state="domain",
+        domain="general",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#6366f1",
+        created_at=fresh,
+    )
+    db.add(orphan)
+    await db.commit()
+
+    result = await phase_reconcile(engine, db)
+
+    assert result.orphan_structural_nodes_archived == 0
+    await db.refresh(orphan)
+    assert orphan.state == "domain"
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_skips_domain_with_child_cluster(
+    db, mock_embedding, mock_provider,
+):
+    """Domains with at least one non-archived child cluster are not swept."""
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    old = _utcnow() - timedelta(hours=48)
+    domain_node = PromptCluster(
+        label="backend",
+        state="domain",
+        domain="backend",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=1,
+        color_hex="#6366f1",
+        created_at=old,
+    )
+    db.add(domain_node)
+    await db.flush()
+
+    child = PromptCluster(
+        label="Auth Stuff",
+        state="active",
+        domain="backend",
+        parent_id=domain_node.id,
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#a855f7",
+    )
+    db.add(child)
+    await db.commit()
+
+    result = await phase_reconcile(engine, db)
+
+    assert result.orphan_structural_nodes_archived == 0
+    await db.refresh(domain_node)
+    assert domain_node.state == "domain"
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_skips_domain_with_sub_domain_child(
+    db, mock_embedding, mock_provider,
+):
+    """Domains anchoring a sub-domain (structural child) are not swept."""
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    old = _utcnow() - timedelta(hours=48)
+    parent_domain = PromptCluster(
+        label="backend",
+        state="domain",
+        domain="backend",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#6366f1",
+        created_at=old,
+    )
+    db.add(parent_domain)
+    await db.flush()
+
+    sub_domain = PromptCluster(
+        label="backend: auth",
+        state="domain",
+        domain="backend",
+        parent_id=parent_domain.id,
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#8b5cf6",
+        created_at=old,
+    )
+    db.add(sub_domain)
+    await db.commit()
+
+    await phase_reconcile(engine, db)
+
+    # Parent must NOT be swept — it anchors a sub-domain
+    await db.refresh(parent_domain)
+    assert parent_domain.state == "domain"
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_skips_domain_with_direct_optimizations(
+    db, mock_embedding, mock_provider,
+):
+    """Domain still referenced by optimizations (defensive) is not swept."""
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    old = _utcnow() - timedelta(hours=48)
+    domain_node = PromptCluster(
+        label="coding",
+        state="domain",
+        domain="coding",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#6366f1",
+        created_at=old,
+    )
+    db.add(domain_node)
+    await db.flush()
+
+    # Direct reference — shouldn't happen in practice but must be guarded
+    opt = Optimization(
+        raw_prompt="dangling reference",
+        cluster_id=domain_node.id,
+    )
+    db.add(opt)
+    await db.commit()
+
+    result = await phase_reconcile(engine, db)
+
+    assert result.orphan_structural_nodes_archived == 0
+    await db.refresh(domain_node)
     assert domain_node.state == "domain"
 
 
