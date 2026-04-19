@@ -1,7 +1,9 @@
 """GitHub repo listing and linking endpoints."""
 
+import asyncio
 import logging
 import re
+from typing import Any, Coroutine
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -19,6 +21,29 @@ logger = logging.getLogger(__name__)
 _REPO_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9._-]+$")
 
 router = APIRouter(prefix="/api/github", tags=["github"])
+
+# Strong-reference set for fire-and-forget background tasks. asyncio's
+# event loop only keeps WEAK references to tasks, so a coroutine
+# spawned via bare `asyncio.create_task()` can be garbage-collected
+# mid-await — silently dropping work like the explore-synthesis Haiku
+# call that strands `synthesis_status='running'` in the DB and leaves
+# the UI stuck on "INDEXING" forever. Hold tasks here; the
+# `done_callback` discards them on completion (success or failure).
+_background_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _spawn_bg_task(coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+    """Launch a background task with a persistent strong reference.
+
+    Wraps ``asyncio.create_task(coro)`` and registers the task in the
+    module-level ``_background_tasks`` set so the event loop can't GC
+    it mid-flight. The ``add_done_callback`` removes the task after it
+    finishes, regardless of exception state, so the set doesn't leak.
+    """
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 def _github_error_to_http(exc: GitHubApiError) -> HTTPException:
@@ -291,8 +316,6 @@ async def link_repo(
 
     # Trigger background indexing for semantic search (explore phase)
     try:
-        import asyncio
-
         from app.database import async_session_factory
         from app.services.embedding_service import EmbeddingService
         from app.services.repo_index_service import RepoIndexService
@@ -316,7 +339,7 @@ async def link_repo(
                 _idx_repo, _idx_branch, _idx_token, _idx_provider,
             )
 
-        asyncio.create_task(_bg_index())
+        _spawn_bg_task(_bg_index())
         logger.info("Background indexing triggered for %s@%s", full_name, active_branch)
     except Exception as idx_exc:
         logger.warning("Failed to trigger background indexing: %s", idx_exc)
@@ -490,8 +513,6 @@ async def reindex_repo(
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger re-indexing of the linked repository."""
-    import asyncio
-
     session_id, token = await _get_session_token(request, db)
     linked_q = await db.execute(
         select(LinkedRepo).where(LinkedRepo.session_id == session_id)
@@ -525,5 +546,5 @@ async def reindex_repo(
             _reindex_repo, branch, token, _reindex_provider,
         )
 
-    asyncio.create_task(_bg_index())
+    _spawn_bg_task(_bg_index())
     return {"status": "indexing", "repo": linked.full_name, "branch": branch}
