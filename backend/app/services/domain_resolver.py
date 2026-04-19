@@ -163,12 +163,15 @@ class DomainResolver:
                 self._cache[primary] = "general"
                 return "general"
 
-            # High-confidence unknown: preserve primary so organic growth can
-            # observe it.  Taxonomy cold/warm paths will decide whether to
-            # promote it to a formal domain label based on cluster coherence.
-            logger.debug(
-                "Domain confidence gate: preserving organic unknown '%s' blended=%.2f",
-                primary, blended,
+            # Above the preservation gate: keep primary so organic growth
+            # can observe it.  Taxonomy cold/warm paths will decide whether
+            # to promote it to a formal domain label based on cluster
+            # coherence.  Logged at INFO level (not DEBUG) so preservation
+            # churn is observable in production — we want to see which
+            # organic labels the system is incubating toward promotion.
+            logger.info(
+                "Domain preservation: organic label '%s' preserved (blended=%.2f >= %.2f)",
+                primary, blended, DOMAIN_CONFIDENCE_GATE,
             )
             self._cache[primary] = primary
             return primary

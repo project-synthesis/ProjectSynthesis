@@ -83,9 +83,20 @@ CONFIDENCE_GATE = 0.7
 # threshold over a repo-anchored synthesis is both simpler and more reliable.
 REPO_RELEVANCE_FLOOR = 0.15
 
-# Lower threshold for domain override — wrong domain only affects clustering,
-# not optimization quality.
-DOMAIN_CONFIDENCE_GATE = 0.6
+# Organic-preservation gate for unknown domain labels in DomainResolver.
+# Below this threshold an unknown label collapses to ``"general"``; at/above
+# it the label is preserved so the warm-path taxonomy can observe the raw
+# signal and promote a new domain node once enough coherent members arrive.
+#
+# Root-fix rationale: the gate used to be 0.7 under the old "collapse to
+# general by default" semantics — a strict threshold made sense when
+# preservation was the exceptional path.  Now that organic preservation IS
+# the intended behavior, the gate should only filter truly garbage/empty
+# labels, not well-formed-but-under-confident ones (e.g. analyzer returning
+# "frontend" with 0.55 blended confidence because task-type ambiguity
+# dragged the overall score down).  0.5 is the natural midpoint — above it
+# the label is more likely right than wrong.
+DOMAIN_CONFIDENCE_GATE = 0.5
 
 # Preferred fallback strategy when confidence gate triggers or validation fails.
 FALLBACK_STRATEGY = "auto"

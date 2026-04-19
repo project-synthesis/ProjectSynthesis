@@ -80,6 +80,32 @@ async def test_resolve_unknown_domain_low_confidence_returns_general(db):
 
 
 @pytest.mark.asyncio
+async def test_resolve_unknown_domain_mid_confidence_preserves_label(db):
+    """Mid-band confidence (0.5–0.7) preserves the organic label.
+
+    The gate was historically set at 0.7 under a "collapse to general by
+    default" policy.  Under the new organic-preservation semantics the
+    gate sits at the natural 0.5 midpoint — so labels the analyzer
+    returned with modest-but-plausible confidence survive into the
+    taxonomy instead of being prematurely destroyed.
+    """
+    await _seed_domains(db)
+    resolver = DomainResolver()
+    await resolver.load(db)
+    assert await resolver.resolve("marketing", confidence=0.55) == "marketing"
+    assert await resolver.resolve("devops", confidence=0.50) == "devops"
+
+
+@pytest.mark.asyncio
+async def test_resolve_unknown_domain_just_below_gate_returns_general(db):
+    """Labels just below the preservation gate still collapse."""
+    await _seed_domains(db)
+    resolver = DomainResolver()
+    await resolver.load(db)
+    assert await resolver.resolve("marketing", confidence=0.49) == "general"
+
+
+@pytest.mark.asyncio
 async def test_resolve_none_returns_general(db):
     await _seed_domains(db)
     resolver = DomainResolver()
