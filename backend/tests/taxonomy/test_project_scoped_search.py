@@ -51,10 +51,10 @@ class TestGetCanonicalGeneral:
 
     @pytest.mark.asyncio
     async def test_returns_none_when_absent(self, db_session: AsyncSession):
-        from app.services.taxonomy.family_ops import get_canonical_general
-
         # Clear any seeded generals to start clean.
         from sqlalchemy import delete
+
+        from app.services.taxonomy.family_ops import get_canonical_general
         await db_session.execute(
             delete(PromptCluster).where(
                 PromptCluster.state == "domain",
