@@ -240,12 +240,27 @@ echo "  ✓ Changelog extracted ($(echo "$RELEASE_BODY" | wc -l) lines)"
 
 # ---------------------------------------------------------------------------
 # 7. Commit + tag
+#    Idempotent for the PR-merge-then-release flow: if version.json and the
+#    changelog already reflect the release (landed via a merged PR), tag
+#    whatever HEAD is — post-review fixes on HEAD are part of this release.
 # ---------------------------------------------------------------------------
 CURRENT_STEP="git commit (release)"
-git add -A
-git commit -m "release: $TAG
+if [[ -z "$(git status --porcelain)" ]]; then
+    # Confirm the release commit exists somewhere in the branch so we're not
+    # tagging a branch that just happens to have version.json at $RELEASE_VERSION
+    # by coincidence.
+    if git log --pretty=%s | grep -qxF "release: $TAG"; then
+        echo "  ✓ Release commit already on branch — tagging HEAD (idempotent)"
+    else
+        echo "  ✗ Nothing to commit and no 'release: $TAG' commit on branch"
+        exit 1
+    fi
+else
+    git add -A
+    git commit -m "release: $TAG
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+fi
 
 CURRENT_STEP="git tag"
 git tag "$TAG"
