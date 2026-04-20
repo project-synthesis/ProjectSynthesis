@@ -939,6 +939,7 @@ async def persist_failed_optimization(
     provider: LLMProvider,
     optimizer_model: str,
     model_ids: dict[str, str],
+    error_message: str,
 ) -> None:
     """Roll back + write a ``status='failed'`` Optimization row + publish event."""
     try:
@@ -963,6 +964,7 @@ async def persist_failed_optimization(
         from app.services.event_bus import event_bus
         event_bus.publish("optimization_failed", {
             "trace_id": trace_id,
+            "error": error_message,
         })
     except Exception:
         pass
