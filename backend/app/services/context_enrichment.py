@@ -1,4 +1,4 @@
-"""Unified context enrichment service for all routing tiers.
+"""Unified context enrichment orchestrator for all routing tiers.
 
 Single entry point replacing scattered context resolution sites.
 Each tier calls enrich() and receives an EnrichedContext with all
@@ -8,13 +8,18 @@ fallback), strategy intelligence, applied patterns, and heuristic analysis.
 Heuristic analysis runs for ALL tiers (not just passthrough) to provide
 domain detection for curated retrieval cross-domain filtering.
 
+Phase 3A split (2026-04-19): B0 relevance gate, B1/B2 divergence detection,
+and strategy intelligence were extracted into dedicated modules. This file
+now owns profile selection, the ``EnrichedContext`` dataclass, and the
+``ContextEnrichmentService`` orchestrator. Public API is preserved via
+re-exports below.
+
 Copyright 2025-2026 Project Synthesis contributors.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -23,7 +28,19 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.services.divergence_detector import (
+    Divergence,
+    detect_divergences,
+)
 from app.services.heuristic_analyzer import HeuristicAnalysis, HeuristicAnalyzer
+from app.services.repo_relevance import (
+    compute_repo_relevance,
+    extract_domain_vocab,
+)
+from app.services.strategy_intelligence import (
+    resolve_performance_signals,
+    resolve_strategy_intelligence,
+)
 from app.services.workspace_intelligence import WorkspaceIntelligence
 
 logger = logging.getLogger(__name__)
@@ -42,12 +59,6 @@ _COLD_START_THRESHOLD = 10  # optimization count below which cold-start profile 
 # Non-coding prompts (writing, creative, general) waste ~40% of the context
 # window on irrelevant source files.
 _CODEBASE_TASK_TYPES = frozenset({"coding", "system", "data"})
-
-# Cap for stride-sampled file paths appended to the repo-relevance anchor.
-# ~100 lines of paths keeps MiniLM's 512-token window under pressure while
-# still covering every major subtree of a medium-sized repo (370 files in
-# the reference index).
-_MAX_ANCHOR_PATHS = 100
 
 # Escape-hatch keywords: even for non-coding task types, if the prompt
 # mentions code-related concepts, curated retrieval is still valuable.
@@ -78,563 +89,6 @@ def select_enrichment_profile(
     if task_type in _CODEBASE_TASK_TYPES and repo_linked:
         return PROFILE_CODE_AWARE
     return PROFILE_KNOWLEDGE_WORK
-
-
-# ---------------------------------------------------------------------------
-# B0: Prompt-repo relevance gate
-# ---------------------------------------------------------------------------
-
-_GENERIC_TERMS = frozenset({
-    # Architecture / structure
-    "service", "services", "model", "models", "controller", "handler",
-    "module", "modules", "interface", "component", "components",
-    "factory", "provider", "middleware", "wrapper", "manager",
-    "backend", "frontend", "system", "systems", "application",
-    "project", "projects", "framework", "library", "package",
-    # CRUD / data
-    "create", "read", "update", "delete", "query", "filter",
-    "request", "response", "result", "results", "payload",
-    "field", "fields", "column", "columns", "table", "tables",
-    "record", "records", "entry", "entries", "item", "items",
-    "database", "migration", "migrations",
-    # Files / config
-    "file", "files", "directory", "path", "config", "configuration",
-    "setting", "settings", "option", "options", "parameter",
-    # Code constructs
-    "function", "method", "class", "instance", "object", "variable",
-    "value", "values", "return", "import", "export", "async", "await",
-    "callback", "promise", "decorator", "annotation",
-    # HTTP / API
-    "endpoint", "route", "router", "server", "client", "port", "host",
-    "header", "headers", "body", "status", "error", "errors",
-    "json", "yaml", "html", "text", "string", "number", "boolean",
-    # Common actions
-    "init", "start", "stop", "setup", "build", "test", "tests",
-    "check", "validate", "parse", "format", "convert", "process",
-    "load", "save", "send", "fetch", "push", "pull",
-    # Generic nouns
-    "name", "title", "description", "content", "type", "types",
-    "state", "data", "info", "meta", "context", "source",
-    "default", "optional", "required", "enabled", "disabled",
-    "base", "core", "utils", "helpers", "common", "shared",
-    "user", "users", "admin", "role", "session", "token",
-    "list", "page", "pagination", "offset", "limit", "total",
-    "schema", "schemas", "validator", "validators",
-    "level", "mode", "version", "index", "count",
-    "event", "events", "action", "actions", "task", "tasks",
-    "null", "none", "true", "false", "undefined",
-    "logging", "logger", "debug", "warning",
-    # Software lifecycle
-    "testing", "deploy", "deployment", "release", "staging",
-    "template", "templates", "phase", "only", "first", "never",
-    "tracking", "active", "calls", "from", "with", "turn",
-})
-
-
-def extract_domain_vocab(
-    synthesis: str,
-    file_paths: list[str] | None = None,
-) -> frozenset[str]:
-    """Extract domain-specific vocabulary from synthesis + indexed file paths.
-
-    Two-source fusion:
-
-    * **Synthesis tokens** — freq ``>= 3`` filter.  The synthesis is a
-      narrative architectural summary where coherent domain terms repeat
-      naturally; the frequency floor separates those from incidental
-      mentions.
-    * **Path tokens** — freq ``>= 1``.  File paths are already
-      repo-specific (they name the actual modules and components), so a
-      single occurrence is enough evidence that the term is part of the
-      codebase vocabulary.
-
-    Both sources are passed through the generic-term (:data:`_GENERIC_TERMS`)
-    and tech-stack (:data:`_TECH_VOCABULARY`) filters, then unioned.  Returns
-    a frozenset of domain-specific terms characterizing the linked repo.
-
-    The path-token branch materially improves matching for component-level
-    prompts (e.g. ``"Clusters Navigation Panel"`` matching
-    ``frontend/.../ClustersNavigationPanel.svelte``) that synthesis prose
-    alone is too sparse to surface.
-    """
-    from collections import Counter
-
-    tech_aliases: set[str] = set()
-    for techs in _TECH_VOCABULARY.values():
-        for aliases in techs.values():
-            tech_aliases.update(aliases)
-
-    # Synthesis tokens (freq >= 3)
-    synth_vocab: set[str] = set()
-    if synthesis:
-        words = re.findall(r"\b[a-z][a-z_]{3,}\b", synthesis.lower())
-        freq = Counter(words)
-        synth_vocab = {
-            w for w, c in freq.items()
-            if c >= 3 and w not in _GENERIC_TERMS and w not in tech_aliases
-        }
-
-    # Path tokens (freq >= 1 — paths are already repo-specific).
-    # `/`, `.`, `-` are word boundaries so CamelCase components inside
-    # e.g. ``ClustersNavigationPanel.svelte`` still split on `.` boundaries
-    # into individual tokens after lowercasing.
-    path_vocab: set[str] = set()
-    if file_paths:
-        for path in file_paths:
-            tokens = re.findall(r"\b[a-z][a-z_]{3,}\b", path.lower())
-            for t in tokens:
-                if t not in _GENERIC_TERMS and t not in tech_aliases:
-                    path_vocab.add(t)
-
-    return frozenset(synth_vocab | path_vocab)
-
-
-async def compute_repo_relevance(
-    raw_prompt: str,
-    explore_synthesis: str,
-    embedding_service: Any,
-    repo_full_name: str | None = None,
-    file_paths: list[str] | None = None,
-) -> tuple[float, dict[str, Any]]:
-    """Single-threshold relevance between a prompt and the linked repo.
-
-    The anchor text is assembled from three layers so the embedding
-    captures the project identity, its narrative architecture, **and** its
-    component-level surface area:
-
-    1. ``"Project: {repo_full_name}"`` — identity prefix, disambiguates two
-       repos with similar tech-stack signatures.
-    2. ``{explore_synthesis}`` — Haiku-generated narrative summary
-       (architectural overview, ~3K chars).
-    3. ``"Components:\\n{joined file paths}"`` — a stride-sampled subset of
-       indexed file paths (cap 100, for MiniLM's 512-token window), giving
-       the embedding explicit module-level signal.  Without this layer,
-       component-level prompts (e.g. *"Clusters Navigation Panel"*) often
-       fall below the floor because synthesis prose describes the system
-       in aggregate, not the individual files by name.
-
-    The prompt must clear ``REPO_RELEVANCE_FLOOR`` cosine against that
-    three-layer anchor to pass — one well-calibrated embedding threshold.
-
-    Returns ``(cosine, info)`` where *info* contains diagnostic keys:
-    ``cosine``, ``decision`` (``"pass"``/``"skip"``), ``reason``
-    (``"above_floor"``/``"below_floor"``), plus ``domain_overlap`` +
-    ``domain_matches`` + ``domain_vocab_size`` retained as diagnostics
-    only (they no longer gate the decision).
-
-    Used by :func:`ContextEnrichmentService.enrich` to gate codebase context
-    injection, preventing unrelated projects from inheriting the linked
-    repo's internal patterns.
-    """
-    import numpy as np
-
-    from app.services.pipeline_constants import REPO_RELEVANCE_FLOOR
-
-    # Repo-identity prefix makes the synthesis embedding carry the project
-    # identity alongside its tech-stack signature.  Without this, two
-    # FastAPI+SQLAlchemy projects with similar architecture synthesis can
-    # collide on cosine even when their domain focus is very different.
-    anchor = explore_synthesis
-    if repo_full_name:
-        anchor = f"Project: {repo_full_name}\n{explore_synthesis}"
-
-    # Component-level signal: stride-sample paths to cap the anchor at ~100
-    # lines.  Alphabetical ordering would over-represent top-level
-    # directories (e.g. take all `backend/...` and miss `frontend/...`) —
-    # stride sampling walks the tree breadth-first in path-sorted order so
-    # every major subtree contributes a roughly proportional share.
-    if file_paths:
-        if len(file_paths) > _MAX_ANCHOR_PATHS:
-            stride = len(file_paths) / _MAX_ANCHOR_PATHS
-            sampled = [file_paths[int(i * stride)] for i in range(_MAX_ANCHOR_PATHS)]
-        else:
-            sampled = list(file_paths)
-        anchor = f"{anchor}\n\nComponents:\n" + "\n".join(sampled)
-
-    prompt_vec = await embedding_service.aembed_single(raw_prompt)
-    synth_vec = await embedding_service.aembed_single(anchor)
-    cosine = float(
-        np.dot(prompt_vec, synth_vec)
-        / (np.linalg.norm(prompt_vec) * np.linalg.norm(synth_vec) + 1e-9)
-    )
-
-    # Diagnostic-only: vocabulary overlap no longer gates the decision but
-    # remains in the info dict for observability/debugging.  Vocab uses
-    # *all* supplied paths (not the stride sample) — it's token-deduped
-    # downstream so size is bounded by the real vocabulary.
-    domain_vocab = extract_domain_vocab(explore_synthesis, file_paths=file_paths)
-    prompt_lower = raw_prompt.lower()
-    matches = [w for w in domain_vocab if w in prompt_lower]
-
-    if cosine >= REPO_RELEVANCE_FLOOR:
-        return cosine, {
-            "cosine": round(cosine, 4),
-            "domain_overlap": len(matches),
-            "domain_matches": sorted(matches)[:10],
-            "domain_vocab_size": len(domain_vocab),
-            "decision": "pass",
-            "reason": "above_floor",
-        }
-
-    return cosine, {
-        "cosine": round(cosine, 4),
-        "domain_overlap": len(matches),
-        "domain_matches": sorted(matches)[:10],
-        "domain_vocab_size": len(domain_vocab),
-        "decision": "skip",
-        "reason": "below_floor",
-    }
-
-
-# ---------------------------------------------------------------------------
-# B1: Prompt-context divergence detection
-# ---------------------------------------------------------------------------
-
-_TECH_VOCABULARY: dict[str, dict[str, set[str]]] = {
-    "database": {
-        "postgresql": {"postgresql", "postgres", "psycopg", "asyncpg", "pg_"},
-        "mysql": {"mysql", "mariadb", "pymysql", "mysqlclient"},
-        "sqlite": {"sqlite", "aiosqlite", "sqlite3"},
-        "mongodb": {"mongodb", "pymongo", "motor", "mongosh"},
-        "redis": {"redis"},
-    },
-    "framework": {
-        "fastapi": {"fastapi"},
-        "django": {"django"},
-        "flask": {"flask"},
-        "express": {"express", "expressjs"},
-        "nextjs": {"nextjs", "next.js"},
-        "rails": {"rails", "ruby on rails"},
-        "spring": {"spring", "springframework", "spring boot"},
-    },
-    "language": {
-        "python": {"python", "pyproject", "setuptools", ".py"},
-        "javascript": {"javascript", "node_modules"},
-        "typescript": {"typescript", "tsconfig"},
-        "java": {"java", "maven", "gradle"},
-        "go": {"golang", "go.mod", "go.sum"},
-        "rust": {"rust", "cargo.toml", "rustc"},
-        "ruby": {"ruby", "gemfile", "bundler"},
-    },
-}
-
-# Pairs within the same category that are NOT conflicts
-_COMPAT_PAIRS = frozenset({
-    ("typescript", "javascript"),  # TS is a superset of JS
-    ("javascript", "typescript"),
-})
-
-# Technologies that are always additive (no conflict even if different category tech exists)
-_ADDITIVE_TECHS = frozenset({
-    "redis", "celery", "rabbitmq", "docker", "kubernetes", "nginx",
-    "terraform", "prometheus", "grafana", "elasticsearch",
-})
-
-_MIGRATION_KEYWORDS = frozenset({
-    "migrate", "migration", "upgrade", "switch to", "replace with",
-    "move to", "transition to", "port to", "convert to",
-})
-
-
-@dataclass(frozen=True)
-class Divergence:
-    """A detected tech stack conflict between prompt and codebase context."""
-
-    prompt_tech: str
-    codebase_tech: str
-    category: str
-    severity: str  # "conflict" | "migration"
-
-
-def _extract_techs(text: str) -> dict[str, set[str]]:
-    """Extract technology mentions from text, grouped by category.
-
-    Uses word-boundary-aware matching to avoid false positives
-    (e.g., "flask" in "flasks", "go" in "going").
-    Multi-word aliases and aliases containing dots/punctuation use
-    substring matching (same pattern as _TASK_TYPE_SIGNALS).
-
-    Returns {category: {tech_name, ...}} for each tech found.
-    """
-    if not text:
-        return {}
-    text_lower = text.lower()
-    found: dict[str, set[str]] = {}
-    for category, techs in _TECH_VOCABULARY.items():
-        for tech_name, aliases in techs.items():
-            for alias in aliases:
-                # Multi-word or dotted aliases: substring match
-                if " " in alias or "." in alias:
-                    matched = alias in text_lower
-                else:
-                    # Single-word aliases: word boundary match
-                    matched = bool(re.search(r"\b" + re.escape(alias) + r"\b", text_lower))
-                if matched:
-                    found.setdefault(category, set()).add(tech_name)
-                    break  # one alias match is enough per tech
-    return found
-
-
-def detect_divergences(
-    raw_prompt: str,
-    codebase_context: str | None,
-) -> list[Divergence]:
-    """Compare tech mentions in prompt vs codebase context.
-
-    Returns a list of Divergence objects for any conflicts detected.
-    Only runs when codebase_context is available (repo linked + synthesis/curated).
-    """
-    if not codebase_context:
-        return []
-
-    prompt_techs = _extract_techs(raw_prompt)
-    codebase_techs = _extract_techs(codebase_context)
-
-    if not prompt_techs or not codebase_techs:
-        return []
-
-    # Check for migration keywords in the prompt (NOT codebase — Alembic migrations are noise).
-    # Multi-word patterns like "replace...with" are checked with a word-window scan
-    # since the user may write "Replace our X layer with Y" (words between "replace" and "with").
-    prompt_lower = raw_prompt.lower()
-    prompt_words = prompt_lower.split()
-    has_migration = any(kw in prompt_lower for kw in _MIGRATION_KEYWORDS)
-    _migration_match: str | None = None
-    if has_migration:
-        _migration_match = next((kw for kw in _MIGRATION_KEYWORDS if kw in prompt_lower), None)
-    else:
-        # Window-based check for "replace...with" and "rewrite...in" patterns
-        for i, w in enumerate(prompt_words):
-            if w == "replace":
-                if "with" in prompt_words[i + 1 : i + 8]:
-                    has_migration = True
-                    _migration_match = "replace...with (window)"
-                    break
-            elif w == "rewrite":
-                if "in" in prompt_words[i + 1 : i + 6]:
-                    has_migration = True
-                    _migration_match = "rewrite...in (window)"
-                    break
-
-    logger.debug(
-        "divergence_scan: prompt_techs=%s codebase_techs=%s migration=%s match=%s",
-        prompt_techs, codebase_techs, has_migration, _migration_match,
-    )
-
-    divergences: list[Divergence] = []
-    for category, prompt_set in prompt_techs.items():
-        codebase_set = codebase_techs.get(category, set())
-        if not codebase_set:
-            continue  # no codebase tech in this category — can't conflict
-
-        for p_tech in prompt_set:
-            # Skip additive technologies
-            if p_tech in _ADDITIVE_TECHS:
-                continue
-            # Skip if the tech IS in the codebase (no conflict)
-            if p_tech in codebase_set:
-                continue
-            # Skip compatible pairs (TS/JS)
-            compatible = any(
-                (p_tech, c_tech) in _COMPAT_PAIRS for c_tech in codebase_set
-            )
-            if not compatible:
-                # Genuine divergence — determine severity
-                severity = "migration" if has_migration else "conflict"
-                c_tech = next(iter(codebase_set))
-                divergences.append(Divergence(
-                    prompt_tech=p_tech,
-                    codebase_tech=c_tech,
-                    category=category,
-                    severity=severity,
-                ))
-
-    return divergences
-
-
-async def resolve_performance_signals(
-    db: AsyncSession,
-    task_type: str,
-    domain: str,
-) -> tuple[str | None, bool]:
-    """Resolve performance signals: strategy perf by domain, anti-patterns, domain keywords.
-
-    Standalone function — callable from both the enrichment service (instance method)
-    and the sampling pipeline (no instance needed). Cheap signals (~150 tokens) from
-    the Optimization table, no LLM calls.
-
-    Returns:
-        Tuple of (formatted signals text or None, fallback_used flag).
-        When the exact domain+task_type query is empty, falls back to
-        task_type-only across all domains (C1 domain-relaxed fallback).
-    """
-    try:
-        from sqlalchemy import func, select
-
-        from app.models import Optimization
-
-        lines: list[str] = []
-
-        # 1. Strategy performance by domain+task_type (top 3)
-        _strategy_base = select(
-            Optimization.strategy_used,
-            func.avg(Optimization.overall_score).label("avg_score"),
-            func.count().label("n"),
-        ).where(
-            Optimization.task_type == task_type,
-            Optimization.overall_score.isnot(None),
-            Optimization.strategy_used.isnot(None),
-        )
-
-        # Exact match first (domain + task_type)
-        perf_q = await db.execute(
-            _strategy_base.where(Optimization.domain == domain)
-            .group_by(Optimization.strategy_used)
-            .having(func.count() >= 3)
-            .order_by(func.avg(Optimization.overall_score).desc())
-            .limit(3)
-        )
-        top_strategies = perf_q.all()
-        strategy_fallback = False
-
-        # C1: Domain-relaxed fallback when exact match returns nothing
-        if not top_strategies:
-            fallback_q = await db.execute(
-                _strategy_base
-                .group_by(Optimization.strategy_used)
-                .having(func.count() >= 3)
-                .order_by(func.avg(Optimization.overall_score).desc())
-                .limit(3)
-            )
-            top_strategies = fallback_q.all()
-            if top_strategies:
-                strategy_fallback = True
-                logger.info(
-                    "strategy_intelligence: exact=%s+%s empty, fallback to %s-only (%d strategies)",
-                    task_type, domain, task_type, len(top_strategies),
-                )
-
-        if top_strategies:
-            strat_parts = [
-                f"{r.strategy_used} ({r.avg_score:.1f}, n={r.n})"
-                for r in top_strategies
-            ]
-            scope = f"{task_type} (across all domains)" if strategy_fallback else f"{domain}+{task_type}"
-            lines.append(f"Top strategies for {scope}: " + ", ".join(strat_parts))
-
-        # 2. Anti-patterns: strategies whose average is below 5.5
-        anti_q = await db.execute(
-            _strategy_base.where(Optimization.domain == domain)
-            .group_by(Optimization.strategy_used)
-            .having(func.count() >= 3, func.avg(Optimization.overall_score) < 5.5)
-            .order_by(func.avg(Optimization.overall_score).asc())
-            .limit(2)
-        )
-        anti_patterns = anti_q.all()
-        anti_fallback = False
-
-        # C1: Anti-pattern fallback (independent of strategy fallback)
-        if not anti_patterns:
-            anti_fb_q = await db.execute(
-                _strategy_base
-                .group_by(Optimization.strategy_used)
-                .having(func.count() >= 3, func.avg(Optimization.overall_score) < 5.5)
-                .order_by(func.avg(Optimization.overall_score).asc())
-                .limit(2)
-            )
-            anti_patterns = anti_fb_q.all()
-            if anti_patterns:
-                anti_fallback = True
-
-        if anti_patterns:
-            scope = f"{task_type} (across all domains)" if anti_fallback else f"{domain}+{task_type}"
-            for r in anti_patterns:
-                lines.append(
-                    f"Avoid: {r.strategy_used} averaged {r.avg_score:.1f} "
-                    f"for {scope} (n={r.n})"
-                )
-
-        # Unified fallback flag — either strategy or anti-pattern needed the fallback
-        fallback_used = strategy_fallback or anti_fallback
-
-        # 3. Domain keywords from DomainSignalLoader singleton
-        try:
-            from app.services.domain_signal_loader import get_signal_loader
-            loader = get_signal_loader()
-            if loader:
-                domain_signals = loader.signals.get(domain, [])
-                if domain_signals:
-                    keywords = [kw for kw, _weight in domain_signals[:8]]
-                    lines.append(
-                        f"Domain vocabulary: {', '.join(keywords)}"
-                    )
-        except Exception:
-            pass  # DomainSignalLoader may not be initialized
-
-        return ("\n".join(lines) if lines else None, fallback_used)
-    except Exception:
-        logger.debug("Performance signals resolution failed", exc_info=True)
-        return None, False
-
-
-async def resolve_strategy_intelligence(
-    db: AsyncSession,
-    task_type: str,
-    domain: str,
-) -> tuple[str | None, bool]:
-    """Unified strategy intelligence — merges performance signals + user adaptation feedback.
-
-    Combines domain+task-type strategy performance data with user approval ratings
-    into a single strategy advisory.
-
-    Standalone function — callable from the enrichment service, sampling pipeline,
-    batch pipeline, and refinement fallback paths.
-
-    Returns:
-        Tuple of (formatted strategy intelligence string or None, fallback_used flag).
-        The fallback flag indicates whether the domain-relaxed fallback (C1) was used
-        for performance signals.
-    """
-    sections: list[str] = []
-    fallback_used = False
-
-    # 1. Score-based strategy rankings + anti-patterns + domain keywords
-    perf, fallback_used = await resolve_performance_signals(db, task_type, domain)
-    if perf:
-        sections.append(perf)
-
-    # 2. Feedback-based affinities from AdaptationTracker
-    try:
-        from app.services.adaptation_tracker import AdaptationTracker
-
-        tracker = AdaptationTracker(db)
-        affinities = await tracker.get_affinities(task_type)
-
-        if affinities:
-            aff_lines: list[str] = []
-            for strategy, data in sorted(
-                affinities.items(),
-                key=lambda x: x[1]["approval_rate"],
-                reverse=True,
-            ):
-                total = data["thumbs_up"] + data["thumbs_down"]
-                rate = data["approval_rate"]
-                aff_lines.append(
-                    f"  {strategy}: {rate:.0%} approval ({total} feedbacks)"
-                )
-            sections.append("User feedback:\n" + "\n".join(aff_lines))
-
-        # 3. Blocked strategies (approval < 0.3 with 5+ feedbacks)
-        blocked = await tracker.get_blocked_strategies(task_type)
-        if blocked:
-            sections.append(
-                "Blocked strategies (low approval): "
-                + ", ".join(sorted(blocked))
-            )
-    except Exception:
-        logger.debug("Adaptation data resolution failed", exc_info=True)
-
-    return ("\n\n".join(sections) if sections else None, fallback_used)
 
 
 @dataclass(frozen=True)
@@ -863,164 +317,25 @@ class ContextEnrichmentService:
                 enrichment_meta_dict["task_type_scores"] = analysis.task_type_scores
         skipped_layers: list[str] = []
 
-        # 2. Codebase context — unified layer combining three sources:
-        #    (a) Cached Haiku synthesis (architectural overview)
-        #    (b) Per-prompt curated retrieval (task-gated)
-        #    (c) Workspace guidance (fallback when synthesis is absent)
-        #
-        #    Workspace guidance is a strict subset of synthesis when a repo is
-        #    linked — it detects tech stack from manifests, which synthesis
-        #    already covers. It only has unique value when IDE is connected
-        #    without a repo (MCP roots or filesystem path).
-        codebase_context: str | None = None
+        # 2. Codebase context — resolved in _resolve_codebase_context_layer.
         skip_codebase = profile == PROFILE_KNOWLEDGE_WORK
         if skip_codebase:
             skipped_layers.append("codebase_context")
-        if repo_full_name and not skip_codebase:
-            # Resolve branch from LinkedRepo if not explicitly provided
-            if not repo_branch:
-                try:
-                    from sqlalchemy import select as _sel_br
-
-                    from app.models import LinkedRepo
-                    _lr_q = await db.execute(
-                        _sel_br(LinkedRepo).where(
-                            LinkedRepo.full_name == repo_full_name,
-                        ).limit(1)
-                    )
-                    _lr = _lr_q.scalar_one_or_none()
-                    repo_branch = (_lr.branch or _lr.default_branch) if _lr else "main"
-                except Exception:
-                    repo_branch = "main"
-            branch = repo_branch
-
-            enrichment_meta_dict["repo_full_name"] = repo_full_name
-            enrichment_meta_dict["repo_branch"] = branch
-
-            # 2a. Cached explore synthesis (architectural context) — always fetched
-            explore_synthesis = await self._get_explore_synthesis(
-                repo_full_name, branch, db,
-            )
-            enrichment_meta_dict["explore_synthesis"] = {
-                "present": explore_synthesis is not None,
-                "char_count": len(explore_synthesis) if explore_synthesis else 0,
-            }
-
-            # 2a-gate. Repo relevance gate — skip codebase context when the
-            # prompt is clearly unrelated to the linked repo (different
-            # project, possibly same tech stack).  Single embedding
-            # threshold against a repo-anchored synthesis.  Only fires
-            # when synthesis exists (can't compute relevance without it).
-            _repo_relevance_skipped = False
-            if explore_synthesis:
-                try:
-                    # Fetch indexed file paths to enrich the relevance anchor
-                    # with component-level signal.  Hard-cap at 500 rows so
-                    # very large repos don't blow past memory or tokenizer
-                    # limits — vocab extraction dedupes downstream, and
-                    # ``compute_repo_relevance()`` stride-samples the anchor
-                    # subset to stay inside MiniLM's 512-token window.
-                    repo_file_paths: list[str] = []
-                    try:
-                        from sqlalchemy import select as _sel_paths
-
-                        from app.models import RepoFileIndex
-                        _paths_q = await db.execute(
-                            _sel_paths(RepoFileIndex.file_path)
-                            .where(
-                                RepoFileIndex.repo_full_name == repo_full_name,
-                                RepoFileIndex.branch == branch,
-                                RepoFileIndex.embedding.isnot(None),
-                            )
-                            .order_by(RepoFileIndex.file_path)
-                            .limit(500)
-                        )
-                        repo_file_paths = [r[0] for r in _paths_q.all()]
-                    except Exception:
-                        logger.debug(
-                            "repo_relevance_gate: file path fetch failed, "
-                            "proceeding without path enrichment",
-                            exc_info=True,
-                        )
-
-                    relevance, relevance_info = await compute_repo_relevance(
-                        raw_prompt, explore_synthesis, self._embedding_service,
-                        repo_full_name=repo_full_name,
-                        file_paths=repo_file_paths or None,
-                    )
-                    enrichment_meta_dict["repo_relevance_anchor_paths"] = (
-                        len(repo_file_paths)
-                    )
-                    enrichment_meta_dict["repo_relevance_score"] = round(relevance, 3)
-                    enrichment_meta_dict["repo_relevance_info"] = relevance_info
-
-                    if relevance_info["decision"] == "skip":
-                        logger.info(
-                            "repo_relevance_gate: cosine=%.3f reason=%s, "
-                            "skipping codebase context (repo=%s)",
-                            relevance, relevance_info["reason"], repo_full_name,
-                        )
-                        enrichment_meta_dict["repo_relevance_skipped"] = True
-                        explore_synthesis = None
-                        _repo_relevance_skipped = True
-                except Exception:
-                    logger.debug(
-                        "repo_relevance_gate: failed, proceeding without gate",
-                        exc_info=True,
-                    )
-                    enrichment_meta_dict["repo_relevance_error"] = True
-
-            # 2b. Workspace guidance as fallback when synthesis is absent
-            if not explore_synthesis and not _repo_relevance_skipped:
-                ws_fallback = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
-                if ws_fallback:
-                    explore_synthesis = ws_fallback
-                    enrichment_meta_dict["workspace_as_fallback"] = True
-
-            # 2c. Per-prompt curated index retrieval — task-gated
-            skip_curated, skip_reason = self._should_skip_curated(
-                task_type or "general", raw_prompt,
-            )
-            # Also skip curated if repo relevance gate fired
-            if _repo_relevance_skipped:
-                skip_curated = True
-                skip_reason = "repo_relevance_gate"
-            if skip_curated:
-                curated_text = None
-                _skip_status = (
-                    "skipped_repo_relevance" if _repo_relevance_skipped
-                    else "skipped_task_type"
-                )
-                enrichment_meta_dict["curated_retrieval"] = {
-                    "status": _skip_status,
-                    "files_included": 0,
-                    "reason": skip_reason,
-                }
-                logger.info(
-                    "Curated retrieval skipped: %s (repo=%s)",
-                    skip_reason, repo_full_name,
-                )
-            else:
-                curated_text, curated_meta = await self._query_index_context(
-                    repo_full_name, branch, raw_prompt,
-                    task_type, analysis.domain if analysis else None, db,
-                )
-                enrichment_meta_dict["curated_retrieval"] = curated_meta
-
-            # Combine: synthesis first (overview), then curated (prompt-specific)
-            if explore_synthesis and curated_text:
-                codebase_context = f"{explore_synthesis}\n\n---\n\n{curated_text}"
-            elif explore_synthesis:
-                codebase_context = explore_synthesis
-            elif curated_text:
-                codebase_context = curated_text
-
-        elif not skip_codebase:
-            # No repo linked — workspace guidance is the only codebase context source
-            ws_guidance = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
-            if ws_guidance:
-                codebase_context = ws_guidance
-                enrichment_meta_dict["workspace_as_fallback"] = True
+        (
+            codebase_context,
+            repo_branch,
+        ) = await self._resolve_codebase_context_layer(
+            raw_prompt=raw_prompt,
+            repo_full_name=repo_full_name,
+            repo_branch=repo_branch,
+            skip_codebase=skip_codebase,
+            mcp_ctx=mcp_ctx,
+            workspace_path=workspace_path,
+            task_type=task_type,
+            analysis=analysis,
+            db=db,
+            enrichment_meta_dict=enrichment_meta_dict,
+        )
 
         # 3. Divergence detection — compare prompt tech vs codebase stack.
         #    When profile=knowledge_work skips codebase context but a repo IS linked,
@@ -1176,6 +491,206 @@ class ContextEnrichmentService:
             context_sources=sources,
             enrichment_meta=MappingProxyType(enrichment_meta_dict) if enrichment_meta_dict else MappingProxyType({}),
         )
+
+    async def _resolve_codebase_context_layer(
+        self,
+        raw_prompt: str,
+        repo_full_name: str | None,
+        repo_branch: str | None,
+        skip_codebase: bool,
+        mcp_ctx: Any | None,
+        workspace_path: str | None,
+        task_type: str | None,
+        analysis: HeuristicAnalysis | None,
+        db: AsyncSession,
+        enrichment_meta_dict: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
+        """Resolve the codebase-context layer (synthesis + curated + workspace fallback).
+
+        Unified layer combining three sources:
+            (a) Cached Haiku synthesis (architectural overview)
+            (b) Per-prompt curated retrieval (task-gated)
+            (c) Workspace guidance (fallback when synthesis is absent)
+
+        Workspace guidance is a strict subset of synthesis when a repo is
+        linked — it detects tech stack from manifests, which synthesis
+        already covers. It only has unique value when IDE is connected
+        without a repo (MCP roots or filesystem path).
+
+        Mutates ``enrichment_meta_dict`` with all resolved metadata keys.
+        Returns ``(codebase_context, resolved_repo_branch)``.
+        """
+        codebase_context: str | None = None
+
+        if repo_full_name and not skip_codebase:
+            if not repo_branch:
+                try:
+                    from sqlalchemy import select as _sel_br
+
+                    from app.models import LinkedRepo
+                    _lr_q = await db.execute(
+                        _sel_br(LinkedRepo).where(
+                            LinkedRepo.full_name == repo_full_name,
+                        ).limit(1)
+                    )
+                    _lr = _lr_q.scalar_one_or_none()
+                    repo_branch = (_lr.branch or _lr.default_branch) if _lr else "main"
+                except Exception:
+                    repo_branch = "main"
+            branch = repo_branch
+
+            enrichment_meta_dict["repo_full_name"] = repo_full_name
+            enrichment_meta_dict["repo_branch"] = branch
+
+            # 2a. Cached explore synthesis (architectural context) — always fetched
+            explore_synthesis = await self._get_explore_synthesis(
+                repo_full_name, branch, db,
+            )
+            enrichment_meta_dict["explore_synthesis"] = {
+                "present": explore_synthesis is not None,
+                "char_count": len(explore_synthesis) if explore_synthesis else 0,
+            }
+
+            # 2a-gate. Repo relevance gate
+            explore_synthesis, _repo_relevance_skipped = await self._apply_repo_relevance_gate(
+                raw_prompt=raw_prompt,
+                explore_synthesis=explore_synthesis,
+                repo_full_name=repo_full_name,
+                branch=branch,
+                db=db,
+                enrichment_meta_dict=enrichment_meta_dict,
+            )
+
+            # 2b. Workspace guidance as fallback when synthesis is absent
+            if not explore_synthesis and not _repo_relevance_skipped:
+                ws_fallback = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
+                if ws_fallback:
+                    explore_synthesis = ws_fallback
+                    enrichment_meta_dict["workspace_as_fallback"] = True
+
+            # 2c. Per-prompt curated index retrieval — task-gated
+            skip_curated, skip_reason = self._should_skip_curated(
+                task_type or "general", raw_prompt,
+            )
+            if _repo_relevance_skipped:
+                skip_curated = True
+                skip_reason = "repo_relevance_gate"
+            if skip_curated:
+                curated_text = None
+                _skip_status = (
+                    "skipped_repo_relevance" if _repo_relevance_skipped
+                    else "skipped_task_type"
+                )
+                enrichment_meta_dict["curated_retrieval"] = {
+                    "status": _skip_status,
+                    "files_included": 0,
+                    "reason": skip_reason,
+                }
+                logger.info(
+                    "Curated retrieval skipped: %s (repo=%s)",
+                    skip_reason, repo_full_name,
+                )
+            else:
+                curated_text, curated_meta = await self._query_index_context(
+                    repo_full_name, branch, raw_prompt,
+                    task_type, analysis.domain if analysis else None, db,
+                )
+                enrichment_meta_dict["curated_retrieval"] = curated_meta
+
+            # Combine: synthesis first (overview), then curated (prompt-specific)
+            if explore_synthesis and curated_text:
+                codebase_context = f"{explore_synthesis}\n\n---\n\n{curated_text}"
+            elif explore_synthesis:
+                codebase_context = explore_synthesis
+            elif curated_text:
+                codebase_context = curated_text
+
+        elif not skip_codebase:
+            # No repo linked — workspace guidance is the only codebase context source
+            ws_guidance = await self._resolve_workspace_guidance(mcp_ctx, workspace_path)
+            if ws_guidance:
+                codebase_context = ws_guidance
+                enrichment_meta_dict["workspace_as_fallback"] = True
+
+        return codebase_context, repo_branch
+
+    async def _apply_repo_relevance_gate(
+        self,
+        raw_prompt: str,
+        explore_synthesis: str | None,
+        repo_full_name: str,
+        branch: str,
+        db: AsyncSession,
+        enrichment_meta_dict: dict[str, Any],
+    ) -> tuple[str | None, bool]:
+        """Apply the B0 repo-relevance gate to the explore synthesis.
+
+        When synthesis exists and the prompt is unrelated to the linked repo,
+        the gate clears ``explore_synthesis`` (returns ``None``) so downstream
+        stages treat this as a no-context request. The gate never fires without
+        a synthesis to anchor against.
+
+        Returns ``(explore_synthesis_after_gate, skipped_flag)``.
+        Mutates ``enrichment_meta_dict`` with relevance diagnostics.
+        """
+        if not explore_synthesis:
+            return explore_synthesis, False
+
+        try:
+            # Fetch indexed file paths to enrich the relevance anchor with
+            # component-level signal.  Hard-cap at 500 rows so very large
+            # repos don't blow past memory or tokenizer limits — vocab
+            # extraction dedupes downstream, and ``compute_repo_relevance()``
+            # stride-samples the anchor subset to stay inside MiniLM's 512-
+            # token window.
+            repo_file_paths: list[str] = []
+            try:
+                from sqlalchemy import select as _sel_paths
+
+                from app.models import RepoFileIndex
+                _paths_q = await db.execute(
+                    _sel_paths(RepoFileIndex.file_path)
+                    .where(
+                        RepoFileIndex.repo_full_name == repo_full_name,
+                        RepoFileIndex.branch == branch,
+                        RepoFileIndex.embedding.isnot(None),
+                    )
+                    .order_by(RepoFileIndex.file_path)
+                    .limit(500)
+                )
+                repo_file_paths = [r[0] for r in _paths_q.all()]
+            except Exception:
+                logger.debug(
+                    "repo_relevance_gate: file path fetch failed, "
+                    "proceeding without path enrichment",
+                    exc_info=True,
+                )
+
+            relevance, relevance_info = await compute_repo_relevance(
+                raw_prompt, explore_synthesis, self._embedding_service,
+                repo_full_name=repo_full_name,
+                file_paths=repo_file_paths or None,
+            )
+            enrichment_meta_dict["repo_relevance_anchor_paths"] = len(repo_file_paths)
+            enrichment_meta_dict["repo_relevance_score"] = round(relevance, 3)
+            enrichment_meta_dict["repo_relevance_info"] = relevance_info
+
+            if relevance_info["decision"] == "skip":
+                logger.info(
+                    "repo_relevance_gate: cosine=%.3f reason=%s, "
+                    "skipping codebase context (repo=%s)",
+                    relevance, relevance_info["reason"], repo_full_name,
+                )
+                enrichment_meta_dict["repo_relevance_skipped"] = True
+                return None, True
+        except Exception:
+            logger.debug(
+                "repo_relevance_gate: failed, proceeding without gate",
+                exc_info=True,
+            )
+            enrichment_meta_dict["repo_relevance_error"] = True
+
+        return explore_synthesis, False
 
     async def _resolve_workspace_guidance(
         self, mcp_ctx: Any | None, workspace_path: str | None,
@@ -1392,3 +907,25 @@ class ContextEnrichmentService:
                 len(text), settings.MAX_STRATEGY_INTELLIGENCE_CHARS,
             )
         return capped
+
+
+__all__ = [
+    # Profile selection
+    "PROFILE_CODE_AWARE",
+    "PROFILE_KNOWLEDGE_WORK",
+    "PROFILE_COLD_START",
+    "select_enrichment_profile",
+    # Dataclass
+    "EnrichedContext",
+    # Orchestrator
+    "ContextEnrichmentService",
+    # Re-exports — B0 repo relevance
+    "compute_repo_relevance",
+    "extract_domain_vocab",
+    # Re-exports — B1/B2 divergence detection
+    "Divergence",
+    "detect_divergences",
+    # Re-exports — strategy intelligence
+    "resolve_performance_signals",
+    "resolve_strategy_intelligence",
+]
