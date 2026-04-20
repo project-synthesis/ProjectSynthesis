@@ -169,14 +169,22 @@ export interface ReclusterResult {
 
 // -- API functions --
 
-export async function getClusterTree(minPersistence?: number): Promise<ClusterNode[]> {
-  const qs = minPersistence != null ? `?min_persistence=${minPersistence}` : '';
-  const resp = await apiFetch<{ nodes: ClusterNode[] }>(`/clusters/tree${qs}`);
+export async function getClusterTree(
+  minPersistence?: number,
+  projectId?: string | null,
+): Promise<ClusterNode[]> {
+  const params = new URLSearchParams();
+  if (minPersistence != null) params.set('min_persistence', String(minPersistence));
+  if (projectId) params.set('project_id', projectId);
+  const qs = params.toString();
+  const resp = await apiFetch<{ nodes: ClusterNode[] }>(`/clusters/tree${qs ? '?' + qs : ''}`);
   return resp.nodes;
 }
 
-export const getClusterStats = () =>
-  apiFetch<ClusterStats>('/clusters/stats');
+export const getClusterStats = (projectId?: string | null) => {
+  const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  return apiFetch<ClusterStats>(`/clusters/stats${qs}`);
+};
 
 export const getClusterDetail = (clusterId: string) =>
   apiFetch<ClusterDetail>(`/clusters/${encodeURIComponent(clusterId)}`);
@@ -196,10 +204,20 @@ export async function getClusterTemplates(params?: { offset?: number; limit?: nu
   return apiFetch(`/clusters/templates${qs ? '?' + qs : ''}`);
 }
 
-export const matchPattern = (prompt_text: string, signal?: AbortSignal) =>
+export const matchPattern = (
+  prompt_text: string,
+  signal?: AbortSignal,
+  projectId?: string | null,
+) =>
   apiFetch<ClusterMatchResponse>('/clusters/match', {
     method: 'POST',
-    body: JSON.stringify({ prompt_text }),
+    body: JSON.stringify({
+      prompt_text,
+      // ADR-005 F3 — scope pattern matching to the current project
+      // unless the user opted into "All projects".  Backend honours this
+      // when present; absent/null falls back to the legacy global search.
+      project_id: projectId ?? undefined,
+    }),
     signal,
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { toastStore, addToast, addInfoToast } from './toast.svelte';
+import { toastStore, addToast, addInfoToast, addActionToast } from './toast.svelte';
 
 describe('ToastStore', () => {
   beforeEach(() => {
@@ -112,6 +112,56 @@ describe('ToastStore', () => {
       expect(toastStore.toasts).toHaveLength(3);
       expect(toastStore.toasts.find(t => t.message === 'First')).toBeUndefined();
       expect(toastStore.toasts[toastStore.toasts.length - 1].message).toBe('fourth');
+    });
+  });
+
+  describe('addWithActions (ADR-005 F5)', () => {
+    it('attaches actions and returns toast id', () => {
+      const id = toastStore.addWithActions('info', 'Move N prompts?', [
+        { label: 'Move', variant: 'primary', onClick: () => {} },
+        { label: 'Keep in Legacy', onClick: () => {} },
+      ]);
+      expect(id).toMatch(/^toast-/);
+      expect(toastStore.toasts).toHaveLength(1);
+      expect(toastStore.toasts[0].actions).toHaveLength(2);
+      expect(toastStore.toasts[0].actions?.[0].label).toBe('Move');
+      expect(toastStore.toasts[0].actions?.[0].variant).toBe('primary');
+    });
+
+    it('action toasts are sticky — no auto-dismiss', () => {
+      toastStore.addWithActions('info', 'Decide', [
+        { label: 'A', onClick: () => {} },
+      ]);
+      expect(toastStore.toasts).toHaveLength(1);
+      vi.advanceTimersByTime(30_000);
+      // No timer fired — user must dismiss manually.
+      expect(toastStore.toasts).toHaveLength(1);
+    });
+
+    it('manual dismiss removes action toast', () => {
+      const id = toastStore.addWithActions('info', 'Decide', [
+        { label: 'A', onClick: () => {} },
+      ]);
+      toastStore.dismiss(id);
+      expect(toastStore.toasts).toHaveLength(0);
+    });
+
+    it('addActionToast helper produces the same result', () => {
+      const id = addActionToast('info', 'Via helper', [
+        { label: 'Go', onClick: () => {} },
+      ]);
+      expect(id).toMatch(/^toast-/);
+      expect(toastStore.toasts).toHaveLength(1);
+      expect(toastStore.toasts[0].actions?.[0].label).toBe('Go');
+    });
+
+    it('info with actions is also sticky', () => {
+      toastStore.info('Sticky info', {
+        actions: [{ label: 'OK', onClick: () => {} }],
+      });
+      expect(toastStore.toasts).toHaveLength(1);
+      vi.advanceTimersByTime(30_000);
+      expect(toastStore.toasts).toHaveLength(1);
     });
   });
 });

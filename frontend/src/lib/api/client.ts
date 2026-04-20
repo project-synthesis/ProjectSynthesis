@@ -167,6 +167,34 @@ export interface LinkedRepo {
   linked_at?: string | null;
 }
 
+/**
+ * ADR-005 B4 — candidates eligible for migration into the newly-linked project.
+ *
+ * Backend returns this on `POST /github/repos/link` so the UI can offer a
+ * post-link toast: "Move N recent Legacy prompts to ProjectX?"  Never
+ * auto-migrates — the user is the decider.
+ */
+export interface MigrationCandidates {
+  count: number;
+  from_project_id: string | null;
+  since: string | null;
+}
+
+/**
+ * ADR-005 B4 — response shape from `POST /github/repos/link`.
+ *
+ * Carries the project id so the frontend can switch views, plus migration
+ * candidates that drive the transition toast.
+ */
+export interface LinkRepoResponse {
+  full_name: string;
+  default_branch: string;
+  branch: string;
+  language: string | null;
+  project_id: string | null;
+  migration_candidates: MigrationCandidates | null;
+}
+
 export interface FeedbackResponse {
   id: string;
   optimization_id: string;
@@ -282,6 +310,7 @@ export function optimizeSSE(
   onComplete: () => void,
   appliedPatternIds?: string[] | null,
   repoFullName?: string | null,
+  projectId?: string | null,
 ): AbortController {
   return streamSSE(
     '/optimize',
@@ -290,6 +319,10 @@ export function optimizeSSE(
       strategy: strategy || undefined,
       applied_pattern_ids: appliedPatternIds?.length ? appliedPatternIds : undefined,
       repo_full_name: repoFullName || undefined,
+      // ADR-005 F3/B1 — caller-supplied project_id is the authoritative
+      // answer to "which project does this prompt belong to?"  Falls
+      // through to backend's repo-chain / Legacy default when null.
+      project_id: projectId ?? undefined,
     }),
     onEvent,
     onError,
@@ -361,20 +394,64 @@ export const githubMe = () => tryFetch<GitHubUser>('/github/auth/me');
 export const githubLogout = () => apiFetch<void>('/github/auth/logout', { method: 'POST' });
 export const githubRepos = (page = 1) => apiFetch<{ repos: GitHubRepository[]; count: number }>(`/github/repos?page=${page}`);
 export const githubLink = (fullName: string, projectId?: string) =>
-  apiFetch<LinkedRepo>('/github/repos/link', {
+  apiFetch<LinkRepoResponse>('/github/repos/link', {
     method: 'POST',
     body: JSON.stringify({ full_name: fullName, project_id: projectId ?? null }),
   });
 export const githubLinked = () => tryFetch<LinkedRepo>('/github/repos/linked');
-export const githubUnlink = () => apiFetch<void>('/github/repos/unlink', { method: 'DELETE' });
+/**
+ * ADR-005 B5 — response from `DELETE /github/repos/unlink`.
+ * `mode='keep'` leaves attributions alone; `mode='rehome'` moves recent opts
+ * back to Legacy.  The project node itself is never deleted — projects are
+ * forever in Hybrid.
+ */
+export interface UnlinkRepoResponse {
+  ok: boolean;
+  mode: string;
+  project_id: string | null;
+  rehomed_count: number;
+}
+export const githubUnlink = (mode: 'keep' | 'rehome' = 'keep') =>
+  apiFetch<UnlinkRepoResponse>(
+    `/github/repos/unlink?mode=${encodeURIComponent(mode)}`,
+    { method: 'DELETE' },
+  );
 export const githubIndexStatus = () => tryFetch<IndexStatus>('/github/repos/index-status');
 
 export interface ProjectInfo {
   id: string;
   label: string;
+  /** Alias of ``prompt_count`` kept for backward compatibility. */
   member_count: number;
+  /** Count of ``Optimization.project_id == id`` — ground truth. */
+  prompt_count?: number;
+  /** Count of active|candidate|mature clusters with matching ``dominant_project_id``. */
+  cluster_count?: number;
 }
 export const listProjects = () => apiFetch<ProjectInfo[]>('/projects');
+
+/**
+ * ADR-005 B3 — bulk-move `Optimization` rows between projects.  Always
+ * explicit; backend rate-limits to 10/min.  Response `migrated` reflects the
+ * actual number of rows moved (dry-run returns the count without touching
+ * anything).
+ */
+export interface MigrateProjectsRequest {
+  from_project_id: string;
+  to_project_id: string;
+  since?: string | null;
+  repo_full_name_is_null?: boolean;
+  dry_run?: boolean;
+}
+export interface MigrateProjectsResponse {
+  migrated: number;
+  dry_run: boolean;
+}
+export const migrateProjects = (body: MigrateProjectsRequest) =>
+  apiFetch<MigrateProjectsResponse>('/projects/migrate', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 
 // ---- GitHub Repo Browsing ----
 export interface RepoTreeEntry {

@@ -12,6 +12,7 @@ import {
   type ClusterMatchResponse, type ClusterDetail, type ClusterNode, type ClusterStats,
   type SimilarityEdge, type InjectionEdge, type TaxonomyActivityEvent,
 } from '$lib/api/clusters';
+import { projectStore } from '$lib/stores/project.svelte';
 
 /** A node is orphaned when it has no members and no usage — its optimizations
  *  were reassigned by cold-path but the cluster wasn't retired yet. */
@@ -174,7 +175,14 @@ class ClusterStore {
 
       const signal = this._matchAbort.signal;
       try {
-        const resp = await matchPattern(trimmed, signal);
+        // ADR-005 F3 — scope pattern matching to the current project so
+        // cross-project patterns don't surface suggestions for unrelated
+        // work.  null ("All projects") keeps legacy global behaviour.
+        const resp = await matchPattern(
+          trimmed,
+          signal,
+          projectStore.currentProjectId,
+        );
         this._lastMatchedText = trimmed;
 
         if (resp.match && resp.match.meta_patterns.length > 0) {
@@ -223,9 +231,13 @@ class ClusterStore {
     this.taxonomyLoading = true;
     this.taxonomyError = null;
     try {
+      // ADR-005 F4 — tree/stats scoped to current project.  "All projects"
+      // (null) keeps the panoramic view; scoped mode uses the B6
+      // dominant_project_id filter that keeps structural skeleton visible.
+      const pid = projectStore.currentProjectId;
       const [tree, stats, simEdges, injEdges] = await Promise.all([
-        getClusterTree(),
-        getClusterStats(),
+        getClusterTree(undefined, pid),
+        getClusterStats(pid),
         getClusterSimilarityEdges().catch(() => [] as SimilarityEdge[]),
         getClusterInjectionEdges().catch(() => [] as InjectionEdge[]),
       ]);

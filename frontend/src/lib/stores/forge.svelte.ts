@@ -7,6 +7,7 @@ import type { OptimizationResult, DimensionScores, SSEEvent } from '$lib/api/cli
 import { editorStore } from '$lib/stores/editor.svelte';
 import { clustersStore } from '$lib/stores/clusters.svelte';
 import { githubStore } from '$lib/stores/github.svelte';
+import { projectStore } from '$lib/stores/project.svelte';
 import { addToast } from '$lib/stores/toast.svelte';
 
 export type ForgeStatus = 'idle' | 'analyzing' | 'optimizing' | 'scoring' | 'complete' | 'error' | 'passthrough';
@@ -164,6 +165,11 @@ class ForgeStore {
       },
       patternIds,
       githubStore.linkedRepo?.full_name,
+      // ADR-005 F3 — attribute this prompt to the current project scope.
+      // null ("All projects") falls through to backend's repo-chain / Legacy
+      // default; explicit Legacy selection while a repo is linked is the
+      // "unrelated side-question" override.
+      projectStore.currentProjectId,
     );
   }
 

@@ -2,12 +2,14 @@
 import {
   githubMe, githubLogout, githubRepos, githubLink, githubLinked, githubUnlink,
   githubDeviceRequest, githubDevicePoll, githubTree, githubBranches,
-  githubFileContent, githubReindex, githubIndexStatus,
+  githubFileContent, githubReindex, githubIndexStatus, migrateProjects,
 } from '$lib/api/client';
 import type {
   GitHubUser, LinkedRepo, GitHubRepository, RepoTreeEntry, IndexStatus,
 } from '$lib/api/client';
 import { clustersStore } from '$lib/stores/clusters.svelte';
+import { projectStore } from '$lib/stores/project.svelte';
+import { toastStore } from '$lib/stores/toast.svelte';
 
 export interface TreeNode {
   name: string;
@@ -272,14 +274,74 @@ class GitHubStore {
 
   async linkRepo(fullName: string, projectId?: string) {
     try {
-      await githubLink(fullName, projectId);
+      const response = await githubLink(fullName, projectId);
+      // ADR-005 F1/F5: capture the newly-linked project + migration
+      // candidates so the UI can auto-switch scope and offer the sweep
+      // toast.  Must happen before loadLinked() so the project list
+      // refresh below reflects the new project node immediately.
+      projectStore.applyLinkResponse(
+        response.project_id ?? null,
+        response.migration_candidates ?? null,
+      );
+      await projectStore.refresh();
       // Re-fetch from GET /repos/linked to get full response (includes project_label)
       await this.loadLinked();
+      // ADR-005 F5 — migration toast: offer to sweep recent Legacy prompts
+      // into the newly-linked project.  User decides; never automatic.
+      this._offerMigrationToast(response.project_id);
       // Start polling index status (background indexing triggered by link)
       this.pollIndexStatus();
     } catch (err: unknown) {
       this.error = err instanceof Error ? err.message : 'Operation failed';
     }
+  }
+
+  /** ADR-005 F5 — Move/Keep toast rendered post-link when candidates exist. */
+  private _offerMigrationToast(targetProjectId: string | null): void {
+    const candidates = projectStore.lastMigrationCandidates;
+    if (!candidates || candidates.count <= 0 || !candidates.from_project_id || !targetProjectId) {
+      // Nothing to migrate (fresh install, repo re-link, or backend gate miss).
+      projectStore.clearMigrationCandidates();
+      return;
+    }
+    const target = projectStore.projects.find((p) => p.id === targetProjectId);
+    const targetLabel = target?.label ?? 'this project';
+    const count = candidates.count;
+    const fromId = candidates.from_project_id;
+    const sinceIso = candidates.since;
+
+    toastStore.addWithActions(
+      'info',
+      `Now working in ${targetLabel}. Move ${count} recent Legacy prompt${count === 1 ? '' : 's'} to this project?`,
+      [
+        {
+          label: 'Move',
+          variant: 'primary',
+          onClick: async () => {
+            try {
+              const res = await migrateProjects({
+                from_project_id: fromId,
+                to_project_id: targetProjectId,
+                since: sinceIso,
+                repo_full_name_is_null: true,
+              });
+              toastStore.add('modified', `Moved ${res.migrated} prompt${res.migrated === 1 ? '' : 's'} to ${targetLabel}`);
+            } catch (err: unknown) {
+              toastStore.add('deleted', err instanceof Error ? err.message : 'Migration failed');
+            } finally {
+              projectStore.clearMigrationCandidates();
+              await projectStore.refresh();
+            }
+          },
+        },
+        {
+          label: 'Keep in Legacy',
+          onClick: () => {
+            projectStore.clearMigrationCandidates();
+          },
+        },
+      ],
+    );
   }
 
   async loadLinked() {
@@ -292,19 +354,68 @@ class GitHubStore {
     }
   }
 
-  async unlinkRepo() {
+  async unlinkRepo(mode: 'keep' | 'rehome' = 'keep') {
     try {
-      await githubUnlink();
+      // Capture labels before mutating state so the toast text can reference
+      // the repo that was just unlinked.
+      const prevRepoName = this.linkedRepo?.full_name ?? null;
+      const prevProjectId = this.linkedRepo?.project_node_id ?? null;
+      const response = await githubUnlink(mode);
       this.linkedRepo = null;
       this.fileTree = [];
       this.branches = [];
       this.indexStatus = null;
+      // Refresh project list (member counts shift when rehome moves opts).
+      await projectStore.refresh();
       // Clean cluster state: project-tagged clusters may be stale after unlink
       clustersStore.selectCluster(null);
       clustersStore.invalidateClusters();
+      // ADR-005 F5 — Stay/Switch toast: user picks whether to stay scoped to
+      // the disconnected project or hop back to Legacy.  Skipped for rehome
+      // (explicit "send me back to Legacy" intent already made the decision).
+      if (mode === 'keep' && prevRepoName && prevProjectId) {
+        this._offerStaySwitchToast(prevRepoName, prevProjectId);
+      }
+      if (response.rehomed_count > 0) {
+        toastStore.add(
+          'modified',
+          `Rehomed ${response.rehomed_count} prompt${response.rehomed_count === 1 ? '' : 's'} to Legacy`,
+        );
+      }
     } catch (err: unknown) {
       this.error = err instanceof Error ? err.message : 'Operation failed';
     }
+  }
+
+  /** ADR-005 F5 — Stay/Switch toast rendered post-unlink. */
+  private _offerStaySwitchToast(repoName: string, projectId: string): void {
+    const project = projectStore.projects.find((p) => p.id === projectId);
+    const projectLabel = project?.label ?? 'the project';
+    const legacy = projectStore.projects.find(
+      (p) => p.label.trim().toLowerCase() === 'legacy',
+    );
+    // No Legacy project yet? Fall back to "All projects" — safe neutral.
+    const legacyId = legacy?.id ?? null;
+
+    toastStore.addWithActions(
+      'info',
+      `Disconnected from ${repoName}. Continue viewing ${projectLabel} or switch to Legacy?`,
+      [
+        {
+          label: 'Stay',
+          onClick: () => {
+            // No-op: current scope already points at the disconnected project.
+          },
+        },
+        {
+          label: 'Switch',
+          variant: 'primary',
+          onClick: () => {
+            projectStore.setCurrent(legacyId);
+          },
+        },
+      ],
+    );
   }
 
   // -- Repo browsing --

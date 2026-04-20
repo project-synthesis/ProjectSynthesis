@@ -13,6 +13,7 @@
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { routing } from '$lib/stores/routing.svelte';
   import { githubStore } from '$lib/stores/github.svelte';
+  import { projectStore } from '$lib/stores/project.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
 
   let { children } = $props();
@@ -23,6 +24,8 @@
   $effect(() => {
     preferencesStore.init();
     forgeStore.restoreSession();
+    // Seed the project list so the F2 selector renders with labels.
+    projectStore.refresh();
     clustersStore.loadTree();
 
     // Check GitHub auth state on mount
@@ -50,6 +53,17 @@
     };
     window.addEventListener('switch-activity', handler);
     return () => window.removeEventListener('switch-activity', handler);
+  });
+
+  // ADR-005 F4 — re-fetch tree/topology whenever the project scope changes.
+  // Reading `projectStore.currentProjectId` inside an $effect tracks the
+  // rune dependency; `clustersStore.loadTree()` reads the current scope
+  // internally and threads it into the API call.
+  $effect(() => {
+    // Track the dependency — the read itself is what subscribes.
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    projectStore.currentProjectId;
+    clustersStore.loadTree();
   });
 </script>
 
