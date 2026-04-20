@@ -248,9 +248,11 @@ CURRENT_STEP="git commit (release)"
 if [[ -z "$(git status --porcelain)" ]]; then
     # Confirm the release commit exists somewhere in the branch so we're not
     # tagging a branch that just happens to have version.json at $RELEASE_VERSION
-    # by coincidence.
-    if git log --pretty=%s | grep -qxF "release: $TAG"; then
-        echo "  ✓ Release commit already on branch — tagging HEAD (idempotent)"
+    # by coincidence. `git log --grep -F` avoids pipe-to-grep SIGPIPE under
+    # `set -e pipefail`.
+    RELEASE_SHA=$(git log -F --grep="release: $TAG" --pretty=%H -1)
+    if [[ -n "$RELEASE_SHA" ]]; then
+        echo "  ✓ Release commit already on branch ($RELEASE_SHA) — tagging HEAD (idempotent)"
     else
         echo "  ✗ Nothing to commit and no 'release: $TAG' commit on branch"
         exit 1
