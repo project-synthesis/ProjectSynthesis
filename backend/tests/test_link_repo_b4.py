@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import GitHubToken, Optimization, PromptCluster
 
-
 _TEST_SECRET_KEY = "test-secret-key-for-b4"
 
 

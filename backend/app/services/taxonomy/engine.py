@@ -3196,7 +3196,6 @@ class TaxonomyEngine:
             DOMAIN_DISCOVERY_CANDIDATE_MIN_MEMBERS,
             DOMAIN_DISCOVERY_MIN_MEMBERS,
         )
-
         from app.services.taxonomy.family_ops import get_canonical_general
 
         general = await get_canonical_general(db)
@@ -3654,7 +3653,6 @@ class TaxonomyEngine:
             DOMAIN_DISCOVERY_MIN_COHERENCE,
             DOMAIN_DISCOVERY_MIN_MEMBERS,
         )
-
         from app.services.taxonomy.family_ops import get_canonical_general
 
         general_node = await get_canonical_general(db)
