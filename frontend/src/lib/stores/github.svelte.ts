@@ -24,7 +24,7 @@ export type GitHubUiTab = 'info' | 'files';
 
 const UI_TAB_KEY = 'synthesis:github_tab';
 
-function loadUiTab(): GitHubUiTab {
+export function loadUiTab(): GitHubUiTab {
   if (typeof localStorage === 'undefined') return 'info';
   try {
     const v = localStorage.getItem(UI_TAB_KEY);
@@ -676,6 +676,7 @@ class GitHubStore {
     this.selectedFile = null;
     this.fileContent = null;
     this.fileLoading = false;
+    this.uiTab = 'info';
   }
 }
 

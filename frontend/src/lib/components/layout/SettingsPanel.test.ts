@@ -76,7 +76,6 @@ describe('SettingsPanel', () => {
     forgeStore._reset();
     preferencesStore._reset?.();
     githubStore._reset();
-    githubStore.uiTab = 'info';
     vi.clearAllMocks();
 
     // Sensible defaults so initial render doesn't throw

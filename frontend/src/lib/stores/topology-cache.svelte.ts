@@ -40,6 +40,10 @@ class TopologyCacheStore {
       if (!raw) return null;
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) return null;
+      // Reject any entry where a value is not a finite number — corrupted
+      // JSON (e.g. stringified positions, nulls) would otherwise decay into
+      // NaN through Float32Array(), producing garbage scene positions.
+      if (!parsed.every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
       return new Float32Array(parsed as number[]);
     } catch {
       return null;
