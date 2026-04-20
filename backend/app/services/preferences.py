@@ -52,6 +52,12 @@ DEFAULTS: dict[str, Any] = {
         "enable_scoring": True,
         "enable_strategy_intelligence": True,
         "enable_llm_classification_fallback": True,
+        # ADR-005 B7: cross-project meta-pattern injection. Default OFF —
+        # patterns are scoped to the current project. Users who want Legacy
+        # techniques to enrich new-project prompts can opt in here.
+        # GlobalPattern injection is unaffected (cross-project is the point
+        # of Global).
+        "enable_cross_project_injection": False,
         "force_sampling": False,
         "force_passthrough": False,
         "optimizer_effort": "high",
@@ -79,6 +85,7 @@ DEFAULTS: dict[str, Any] = {
 _PIPELINE_TOGGLES = (
     "enable_explore", "enable_scoring", "enable_strategy_intelligence",
     "enable_llm_classification_fallback",
+    "enable_cross_project_injection",
     "force_sampling", "force_passthrough",
 )
 

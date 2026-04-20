@@ -25,6 +25,7 @@ from app.services.taxonomy._constants import (
     GLOBAL_PATTERN_DEDUP_COSINE,
     GLOBAL_PATTERN_DEMOTION_SCORE,
     GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS,
+    GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
     GLOBAL_PATTERN_PROMOTION_MIN_SCORE,
     _utcnow,
 )
@@ -202,6 +203,14 @@ async def _discover_promotion_candidates(db: AsyncSession) -> tuple[int, int]:
         if len(all_cluster_ids) < GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS:
             continue
 
+        # ADR-005 B8: distinct-project breadth gate.  A pattern that lives
+        # inside a single project — even if it spans 5+ clusters there —
+        # is not yet "global" in any meaningful sense.  Treat it as a
+        # project-scoped pattern and defer promotion until a sibling
+        # emerges in another project.
+        if len(all_project_ids) < GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS:
+            continue
+
         # Per-cluster score gate
         avg_scores: list[float] = []
         for cid in all_cluster_ids:
@@ -331,25 +340,43 @@ async def _validate_existing_patterns(db: AsyncSession) -> tuple[int, int, int]:
 
         gp.avg_cluster_score = mean(live_scores) if live_scores else 0.0
 
-        # Demotion: active with score below threshold
-        if gp.avg_cluster_score < GLOBAL_PATTERN_DEMOTION_SCORE and gp.state == "active":
+        # ADR-005 B8: if the pattern's live project breadth has collapsed
+        # below the current gate (e.g. a project was removed or members
+        # migrated away), demote it.  This keeps the Global tier from
+        # carrying legacy promotions that pre-date the tightened gate.
+        live_projects = set(gp.source_project_ids or [])
+        project_breadth_ok = len(live_projects) >= GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS
+
+        # Demotion: active with score below threshold OR project breadth collapsed
+        if gp.state == "active" and (
+            gp.avg_cluster_score < GLOBAL_PATTERN_DEMOTION_SCORE
+            or not project_breadth_ok
+        ):
             gp.state = "demoted"
             demoted += 1
             _log_event("demoted", gp.id, {
                 "avg_score": round(gp.avg_cluster_score, 2),
                 "threshold": GLOBAL_PATTERN_DEMOTION_SCORE,
+                "project_count": len(live_projects),
+                "min_projects": GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
+                "reason": (
+                    "low_score" if gp.avg_cluster_score < GLOBAL_PATTERN_DEMOTION_SCORE
+                    else "project_breadth_collapsed"
+                ),
             })
 
-        # Re-promotion: demoted with score recovered
+        # Re-promotion: demoted with score recovered AND project breadth intact
         elif (
             gp.avg_cluster_score >= GLOBAL_PATTERN_PROMOTION_MIN_SCORE
             and gp.state == "demoted"
+            and project_breadth_ok  # ADR-005 B8
         ):
             gp.state = "active"
             re_promoted += 1
             _log_event("re_promoted", gp.id, {
                 "avg_score": round(gp.avg_cluster_score, 2),
                 "threshold": GLOBAL_PATTERN_PROMOTION_MIN_SCORE,
+                "project_count": len(live_projects),
             })
 
         # Retirement: all source clusters archived AND stale validation
@@ -431,6 +458,69 @@ async def _enforce_retention_cap(db: AsyncSession) -> int:
         logger.info("GlobalPattern retention cap: evicted %d patterns", evicted)
 
     return evicted
+
+
+# ------------------------------------------------------------------
+# Startup repair (ADR-005 B8)
+# ------------------------------------------------------------------
+
+
+async def repair_legacy_only_promotions(db: AsyncSession) -> dict[str, int]:
+    """One-shot audit of existing GlobalPatterns against the tightened gate.
+
+    Patterns promoted under the old gate (``MIN_PROJECTS=1``) may have
+    been admitted from a single project.  This function finds any
+    ``active``/``demoted`` GlobalPattern whose ``source_project_ids`` now
+    has fewer distinct entries than ``GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS``
+    and demotes it (active → demoted) or retires it (demoted → retired).
+
+    Intended to run once at startup, idempotent, non-fatal.  Returns a
+    stats dict with ``demoted`` and ``retired`` counts.
+    """
+    stats = {"demoted": 0, "retired": 0}
+    try:
+        stmt = select(GlobalPattern).where(
+            GlobalPattern.state.in_(["active", "demoted"]),
+        )
+        result = await db.execute(stmt)
+        patterns = list(result.scalars().all())
+
+        for gp in patterns:
+            project_ids = set(gp.source_project_ids or [])
+            if len(project_ids) >= GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS:
+                continue
+
+            if gp.state == "active":
+                gp.state = "demoted"
+                stats["demoted"] += 1
+                _log_event("demoted", gp.id, {
+                    "reason": "b8_startup_repair",
+                    "project_count": len(project_ids),
+                    "min_projects": GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
+                })
+            else:  # demoted — retire it
+                gp.state = "retired"
+                stats["retired"] += 1
+                _log_event("retired", gp.id, {
+                    "reason": "b8_startup_repair",
+                    "project_count": len(project_ids),
+                    "min_projects": GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
+                })
+
+        if stats["demoted"] or stats["retired"]:
+            await db.commit()
+            logger.info(
+                "B8 startup repair: demoted=%d retired=%d (min_projects=%d)",
+                stats["demoted"], stats["retired"],
+                GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
+            )
+    except Exception as exc:
+        logger.warning("B8 startup repair failed (non-fatal): %s", exc)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+    return stats
 
 
 # ------------------------------------------------------------------

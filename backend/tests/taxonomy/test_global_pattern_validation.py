@@ -43,13 +43,19 @@ def _make_gp(
     last_validated_at=None,
     seed: int = 42,
 ) -> GlobalPattern:
-    """Create and add a GlobalPattern to the session (not yet flushed)."""
+    """Create and add a GlobalPattern to the session (not yet flushed).
+
+    Defaults to two distinct projects so the ADR-005 B8 breadth gate
+    (``GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS=2``) is satisfied for tests
+    that don't specifically exercise project breadth.
+    """
+    _project_ids = source_project_ids if source_project_ids is not None else ["p1", "p2"]
     gp = GlobalPattern(
         pattern_text="test pattern",
         embedding=_unit_vec(seed).tobytes(),
         source_cluster_ids=source_cluster_ids or [],
-        source_project_ids=source_project_ids or ["p1"],
-        cross_project_count=len(source_project_ids or ["p1"]),
+        source_project_ids=_project_ids,
+        cross_project_count=len(_project_ids),
         global_source_count=len(source_cluster_ids or []),
         avg_cluster_score=avg_cluster_score,
         state=state,
@@ -322,3 +328,87 @@ async def test_demotion_and_retirement_mutually_exclusive(db: AsyncSession):
     await db.flush()
     await db.refresh(gp)
     assert gp.state == "demoted"
+
+
+# ---------------------------------------------------------------------------
+# ADR-005 B8 — project-breadth gate
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_b8_active_demoted_when_project_breadth_collapses(db: AsyncSession):
+    """Active GlobalPattern with single-project history gets demoted on validate."""
+    c = PromptCluster(label="c", state="active", domain="general", avg_score=8.0)
+    db.add(c)
+    await db.flush()
+
+    gp = _make_gp(
+        db, state="active", source_cluster_ids=[c.id],
+        source_project_ids=["p1"],  # violates B8 gate
+        avg_cluster_score=8.0,
+    )
+    await db.flush()
+
+    demoted, re_promoted, retired = await _validate_existing_patterns(db)
+    assert demoted == 1
+    assert re_promoted == 0
+    await db.flush()
+    await db.refresh(gp)
+    assert gp.state == "demoted"
+
+
+@pytest.mark.asyncio
+async def test_b8_demoted_not_re_promoted_when_project_breadth_insufficient(
+    db: AsyncSession,
+):
+    """Demoted single-project pattern does NOT re-promote even at high score."""
+    c = PromptCluster(label="c", state="active", domain="general", avg_score=9.0)
+    db.add(c)
+    await db.flush()
+
+    gp = _make_gp(
+        db, state="demoted", source_cluster_ids=[c.id],
+        source_project_ids=["p1"],  # violates B8 gate
+        avg_cluster_score=4.0,
+    )
+    await db.flush()
+
+    demoted, re_promoted, retired = await _validate_existing_patterns(db)
+    assert re_promoted == 0, "B8 blocks re-promotion when breadth is insufficient"
+    await db.flush()
+    await db.refresh(gp)
+    assert gp.state == "demoted"
+
+
+@pytest.mark.asyncio
+async def test_b8_startup_repair_demotes_and_retires(db: AsyncSession):
+    """repair_legacy_only_promotions: demote active, retire demoted, skip healthy."""
+    from app.services.taxonomy.global_patterns import repair_legacy_only_promotions
+
+    # Legacy-admitted active pattern with single project → should demote
+    gp_active_narrow = _make_gp(
+        db, state="active", source_cluster_ids=[],
+        source_project_ids=["p1"], avg_cluster_score=8.0, seed=71,
+    )
+    # Legacy-admitted demoted pattern with single project → should retire
+    gp_demoted_narrow = _make_gp(
+        db, state="demoted", source_cluster_ids=[],
+        source_project_ids=["p1"], avg_cluster_score=3.0, seed=72,
+    )
+    # Healthy cross-project pattern → should be untouched
+    gp_ok = _make_gp(
+        db, state="active", source_cluster_ids=[],
+        source_project_ids=["p1", "p2", "p3"],
+        avg_cluster_score=8.0, seed=73,
+    )
+    await db.flush()
+
+    stats = await repair_legacy_only_promotions(db)
+    assert stats["demoted"] == 1
+    assert stats["retired"] == 1
+
+    await db.refresh(gp_active_narrow)
+    await db.refresh(gp_demoted_narrow)
+    await db.refresh(gp_ok)
+    assert gp_active_narrow.state == "demoted"
+    assert gp_demoted_narrow.state == "retired"
+    assert gp_ok.state == "active", "healthy cross-project patterns must be untouched"
