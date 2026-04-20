@@ -21,7 +21,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Annotated
 
-import aiosqlite
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
@@ -220,13 +219,8 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     if not _process_initialized:
         _process_initialized = True
 
-        # Enable WAL mode for SQLite
-        db_path = DATA_DIR / "synthesis.db"
-        if db_path.exists():
-            async with aiosqlite.connect(str(db_path)) as db:
-                await db.execute("PRAGMA journal_mode=WAL")
-                await db.execute("PRAGMA busy_timeout=30000")  # 30s — warm path can hold lock 10-20s
-            logger.info("MCP lifespan: SQLite WAL mode enabled")
+        # SQLite PRAGMAs are applied to every pool checkout by the event hook
+        # in app.database — see app/database.py. No throwaway connect() needed.
 
         # Initialize taxonomy event logger for scoring observability.
         # Without this, pipeline score events are silently skipped because
