@@ -135,6 +135,17 @@ class PromptCluster(Base):
     domain: Mapped[str] = mapped_column(String(50), nullable=False, default="general")
     task_type: Mapped[str] = mapped_column(String(50), nullable=False, default="general")
 
+    # ADR-005 hardening: denormalised pointer to the project whose members
+    # dominate this cluster. Refreshed by warm Phase 0 and cold path. Drives
+    # O(1) tree filtering — see routers/clusters.py. NULL only for structural
+    # nodes (projects, domains, archived) and brand-new empty clusters.
+    dominant_project_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("prompt_cluster.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     centroid_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     member_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     template_count: Mapped[int] = mapped_column(
@@ -169,8 +180,11 @@ class PromptCluster(Base):
     )
 
     # Relationships
+    # Explicit ``foreign_keys`` disambiguates the parent→children tree walk
+    # from the ADR-005 ``dominant_project_id`` self-FK.
     children = relationship(
         "PromptCluster",
+        foreign_keys="PromptCluster.parent_id",
         backref=backref("parent", remote_side="PromptCluster.id"),
         lazy="select",
     )
