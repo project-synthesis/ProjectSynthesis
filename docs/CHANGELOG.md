@@ -4,6 +4,18 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- **Frontend test coverage for extracted utilities and Navigator panels** — closes HIGH findings from the PR #33 audit. New unit tests:
+  - `keyboard.test.ts` (23 cases) — locks the pure `nextTablistValue` tablist arrow-key logic across orientation (horizontal/vertical), wrap semantics, edge cases (empty items, current-not-in-items, unhandled keys, single-item), plus `handleTablistArrowKeys` wrapper behavior (preventDefault + onChange, no-op on non-arrow keys).
+  - `transitions.test.ts` (7 cases) — anchors `navSlide`/`navFade` preset duration/easing, locks the Newton-Raphson bezier solver at 0/1, clamp boundaries, monotonicity, `[0,1]` range, and the fast-ease-out shape characteristic of `--ease-spring` (`easeSpring(0.25) > 0.6`, `easeSpring(0.5) > 0.85`).
+  - 8 Navigator panel smoke tests (`StateFilterTabs`, `ClusterRow`, `DomainGroup`, `TemplatesSection`, `StrategiesPanel`, `HistoryPanel`, `GitHubPanel`, `SettingsPanel`) — cover mount-without-throwing under active/inactive states, store-driven rendering, lazy-fetch gating for async panels, and per-panel interaction contracts (click handlers, aria-selected, conditional rendering, empty states, group headers).
+
+### Fixed
+- **`transitions.ts` easing fidelity — Newton-Raphson bezier solver for true `--ease-spring`** — the navigator slide/fade presets previously used Svelte's built-in `cubicOut` (`cubic-bezier(0.33, 1, 0.68, 1)`), which is materially flatter than the brand's `--ease-spring` (`cubic-bezier(0.16, 1, 0.3, 1)` in `app.css:89`). JS-driven transitions drifted visibly from CSS-driven ones on the same surface. Replaced with an inline 8-iteration Newton-Raphson solver for the exact `--ease-spring` control points; both `navSlide` and `navFade` now share the same curve as every CSS `transition: ... var(--ease-spring)` elsewhere in the app — single source of truth for the brand spring.
+
+### Changed
+- **Module-level store imports retained in extracted Navigator panels (architectural decision)** — evaluated the MEDIUM finding to refactor the 8 panels toward stores-via-props dependency injection. Decision: retain current pattern. Svelte 5 runes-backed stores (`.svelte.ts` modules exporting singleton class instances) are the idiomatic boundary, and the new smoke-test suite proves each panel is unit-testable in isolation without DI — tests mutate singleton state in `beforeEach` and assert render output without touching the panel's imports. Refactoring to props-DI would add boilerplate with no testability or reuse payoff, and would fight the framework's reactive graph. See `frontend/CLAUDE.md` → "Key patterns" for the store pattern canon.
+
 ## v0.4.0 — 2026-04-19
 
 ### Added
