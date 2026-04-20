@@ -28,6 +28,29 @@ DOMAIN_COHERENCE_FLOOR = 0.3
 # Domain proliferation ceiling (ADR-004 Risk 1)
 DOMAIN_COUNT_CEILING = 30
 
+# Cross-cluster pooled evidence floor — when several tiny clusters under
+# "general" all share a consistent primary ``domain_raw``, their collective
+# member count crosses this floor to trigger organic domain promotion even
+# though no single cluster meets DOMAIN_DISCOVERY_MIN_MEMBERS.
+# Per-cluster internal consistency (DOMAIN_DISCOVERY_CONSISTENCY) still applies.
+DOMAIN_DISCOVERY_POOL_MIN_MEMBERS = 3
+
+# Sparse-DB bootstrap threshold — below this total-optimization count, the
+# per-cluster member floor relaxes by 1 (3 → 2) so a 2-prompt signal on a
+# fresh DB can promote organically.  Above this threshold, the standard
+# DOMAIN_DISCOVERY_MIN_MEMBERS floor applies.  ADR-006 compliant: applies
+# to ANY label, not just seed labels — purely data-density-aware.
+DOMAIN_DISCOVERY_BOOTSTRAP_DB_THRESHOLD = 20
+
+# Per-project domain visibility threshold (Hybrid taxonomy, 2026-04-19).
+# A top-level domain is visible to a given project when either (a) its
+# per-project member count ≥ DOMAIN_DISCOVERY_MIN_MEMBERS (3), or (b) its
+# per-project share of optimizations ≥ VISIBILITY_THRESHOLD_FRACTION (5%).
+# Catches fresh-project regime where absolute counts are tiny but a
+# single concentrated signal dominates.  Canonical "general" is always
+# visible (it's the taxonomy root default).
+VISIBILITY_THRESHOLD_FRACTION = 0.05
+
 # Signal staleness ratio (ADR-004 Risk 2) — refresh when member_count doubles
 SIGNAL_REFRESH_MEMBER_RATIO = 2.0
 

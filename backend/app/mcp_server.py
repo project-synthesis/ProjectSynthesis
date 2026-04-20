@@ -412,6 +412,28 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         except Exception as _tt_exc:
             logger.warning("MCP lifespan: TaskTypeSignals cache load failed — static bootstrap: %s", _tt_exc)
 
+        # B1: Prime Legacy project_id cache so MCP-process pipelines share
+        # the same zero-query fallback used by the backend.  Without this,
+        # MCP-driven optimize calls would lazy-warm the cache on first use,
+        # which is correct but incurs one extra query per cold process.
+        try:
+            from app.services.project_service import (
+                get_legacy_project_id,
+                prime_legacy_project_id_cache,
+            )
+            async with _shared.async_session_factory() as _lpid_db:
+                _mcp_legacy_id = await get_legacy_project_id(_lpid_db)
+            prime_legacy_project_id_cache(_mcp_legacy_id)
+            logger.info(
+                "MCP lifespan: Legacy project_id cached: %s",
+                (_mcp_legacy_id or "none")[:8],
+            )
+        except Exception as _lpid_exc:
+            logger.warning(
+                "MCP lifespan: Legacy cache prime failed (non-fatal): %s",
+                _lpid_exc,
+            )
+
         # Subscribe to domain events for cache invalidation
         async def _reload_domain_caches() -> None:
             try:

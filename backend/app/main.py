@@ -30,77 +30,97 @@ _warm_path_pending = asyncio.Event()
 
 
 async def _backfill_project_ids(db) -> None:
-    """Backfill Optimization.project_id from cluster ancestry (2 hops: cluster->domain->project)."""
+    """Backfill Optimization.project_id via repo_full_name → LinkedRepo (Hybrid).
+
+    Hybrid taxonomy: projects are sibling roots alongside global domains, so
+    project_id cannot be derived from cluster ancestry anymore. Resolution
+    path: Optimization.repo_full_name → LinkedRepo.project_node_id, falling
+    back to the Legacy project node for repo-less optimizations.
+    """
     from sqlalchemy import select as _sel
 
-    from app.models import Optimization, PromptCluster
+    from app.models import LinkedRepo, Optimization, PromptCluster
+
+    # Resolve Legacy project (fallback for repo-less optimizations).
+    legacy = (await db.execute(
+        _sel(PromptCluster).where(
+            PromptCluster.state == "project",
+            PromptCluster.label == "Legacy",
+        ).limit(1)
+    )).scalar_one_or_none()
+    legacy_id = legacy.id if legacy else None
+
+    # Bulk-load repo → project_node_id map (typically small).
+    repo_map: dict[str, str] = {}
+    lr_rows = (await db.execute(
+        _sel(LinkedRepo.full_name, LinkedRepo.project_node_id)
+        .where(LinkedRepo.project_node_id.isnot(None))
+    )).all()
+    for row in lr_rows:
+        repo_map[row[0]] = row[1]
 
     total_filled = 0
     while True:
-        missing_q = await db.execute(
-            _sel(Optimization).where(
-                Optimization.project_id.is_(None),
-                Optimization.cluster_id.isnot(None),
-            ).limit(500)
-        )
-        missing = missing_q.scalars().all()
+        missing = (await db.execute(
+            _sel(Optimization).where(Optimization.project_id.is_(None)).limit(500)
+        )).scalars().all()
         if not missing:
             break
 
-        # Build cluster_id -> project_id lookup (2-hop: cluster -> domain -> project)
-        cluster_ids = {opt.cluster_id for opt in missing if opt.cluster_id}
-        if not cluster_ids:
-            break
-
-        clusters = (await db.execute(
-            _sel(PromptCluster).where(PromptCluster.id.in_(cluster_ids))
-        )).scalars().all()
-
-        cluster_to_domain = {c.id: c.parent_id for c in clusters}
-
-        domain_ids = {pid for pid in cluster_to_domain.values() if pid}
-        domains = (await db.execute(
-            _sel(PromptCluster).where(PromptCluster.id.in_(domain_ids))
-        )).scalars().all() if domain_ids else []
-
-        domain_to_project = {d.id: d.parent_id for d in domains}
-
-        # Backfill this batch
         filled = 0
         for opt in missing:
-            domain_id = cluster_to_domain.get(opt.cluster_id)
-            project_id = domain_to_project.get(domain_id) if domain_id else None
-            if project_id:
-                opt.project_id = project_id
+            resolved: str | None = None
+            if opt.repo_full_name and opt.repo_full_name in repo_map:
+                resolved = repo_map[opt.repo_full_name]
+            elif legacy_id:
+                resolved = legacy_id
+            if resolved:
+                opt.project_id = resolved
                 filled += 1
 
         if filled == 0:
-            break  # No more backfillable rows — prevent infinite loop
+            break  # No fillable rows remaining — prevent infinite loop.
 
         total_filled += filled
         await db.flush()
 
     if total_filled:
-        logger.info("ADR-005 migration: backfilled project_id on %d optimizations", total_filled)
+        logger.info(
+            "Hybrid migration: backfilled project_id on %d optimizations",
+            total_filled,
+        )
 
 
 async def _run_adr005_migration(db) -> None:
-    """ADR-005: Create Legacy project node, re-parent domains, backfill project_id.
+    """Hybrid taxonomy migration: ensure Legacy, detach domain tree, backfill project_id.
 
-    Idempotent — safe to run on every startup. Skips if project node already exists.
+    Hybrid architecture (2026-04-19): projects and global domains are sibling
+    root nodes (``parent_id IS NULL``). Projects isolate via
+    ``Optimization.project_id`` FK, not via tree ancestry. Any legacy rows
+    where a domain is parented under a project are detached here.
+
+    Step 2.5 auto-provisions a project node per LinkedRepo that is missing
+    ``project_node_id`` — one repo earns one project, never bulk-assigned to
+    Legacy. This preserves the "each project learns its own domain"
+    invariant under resets and pre-ADR-005 migrations.
+
+    Idempotent — safe to run on every startup.
     """
     from sqlalchemy import select as _sel
 
-    from app.models import PromptCluster
+    from app.models import LinkedRepo, PromptCluster
+    from app.services.project_service import ensure_project_for_repo
 
-    # Step 1: Find or create project node
-    existing = await db.execute(
-        _sel(PromptCluster).where(PromptCluster.state == "project").limit(1)
+    # Step 1: Find or create the canonical Legacy project node.
+    legacy_q = await db.execute(
+        _sel(PromptCluster).where(
+            PromptCluster.state == "project",
+            PromptCluster.label == "Legacy",
+        ).limit(1)
     )
-    legacy = existing.scalar_one_or_none()
+    legacy = legacy_q.scalar_one_or_none()
 
     if legacy is None:
-        # First run: create Legacy project node
         legacy = PromptCluster(
             label="Legacy",
             state="project",
@@ -111,26 +131,64 @@ async def _run_adr005_migration(db) -> None:
         db.add(legacy)
         await db.flush()
         logger.info(
-            "ADR-005 migration: created Legacy project node %s", legacy.id,
+            "Hybrid migration: created Legacy project node %s", legacy.id,
         )
 
-    # Step 2: Re-parent orphan domain nodes under project (every startup)
-    domain_q = await db.execute(
-        _sel(PromptCluster).where(
-            PromptCluster.state == "domain",
-            PromptCluster.parent_id.is_(None),
-        )
+    # Step 2: Detach top-level domains from any project parent.
+    # Domains must live at the taxonomy root so projects and domains are
+    # sibling roots. Sub-domains (parent.state == "domain") are preserved.
+    project_ids_q = await db.execute(
+        _sel(PromptCluster.id).where(PromptCluster.state == "project")
     )
-    domains = domain_q.scalars().all()
-    for d in domains:
-        d.parent_id = legacy.id
-    if domains:
+    project_ids = {row[0] for row in project_ids_q.all()}
+    detached_count = 0
+    if project_ids:
+        parented = (await db.execute(
+            _sel(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.parent_id.in_(project_ids),
+            )
+        )).scalars().all()
+        for d in parented:
+            d.parent_id = None
+            detached_count += 1
+        if detached_count:
+            await db.flush()
+            logger.info(
+                "Hybrid migration: detached %d domain nodes from project tree",
+                detached_count,
+            )
+
+    # Step 2.5: Auto-provision a project node per LinkedRepo with NULL
+    # project_node_id. Creates one project per repo (or re-attaches to an
+    # existing project whose label matches the repo name). This replaces
+    # the legacy bulk-assign-to-Legacy behavior that collapsed every
+    # linked repo into a single shared project.
+    try:
+        unlinked_repos = (await db.execute(
+            _sel(LinkedRepo).where(LinkedRepo.project_node_id.is_(None))
+        )).scalars().all()
+    except Exception:
+        # Column may not exist yet on very old schemas — handled by the
+        # ALTER TABLE block in lifespan. Safe to skip here.
+        unlinked_repos = []
+
+    provisioned = 0
+    for lr in unlinked_repos:
+        if not lr.full_name:
+            continue
+        await ensure_project_for_repo(db, lr.full_name)
+        provisioned += 1
+    if provisioned:
+        await db.flush()
         logger.info(
-            "ADR-005 migration: re-parented %d domain nodes under Legacy",
-            len(domains),
+            "Hybrid migration: auto-provisioned %d project nodes for linked repos",
+            provisioned,
         )
 
-    # Step 3: Backfill project_id on Optimizations
+    # Step 3: Backfill project_id on Optimizations via repo_full_name.
+    # Runs AFTER Step 2.5 so the LinkedRepo → project_node_id map is
+    # populated before we attempt to resolve optimization project_ids.
     await _backfill_project_ids(db)
 
 
@@ -530,15 +588,9 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
-            # ADR-005: Legacy project node + domain re-parenting + project_id backfill
-            try:
-                async with async_session_factory() as _adr005_db:
-                    await _run_adr005_migration(_adr005_db)
-                    await _adr005_db.commit()
-            except Exception as adr005_exc:
-                logger.warning("ADR-005 migration failed (non-fatal): %s", adr005_exc)
-
             # ADR-005 Phase 2A: ensure project_node_id column on linked_repos
+            # (must run BEFORE _run_adr005_migration because Step 2.5 reads
+            # and writes LinkedRepo.project_node_id to auto-provision projects).
             try:
                 async with async_session_factory() as _pnid_db:
                     from sqlalchemy import text as _text_pnid
@@ -550,34 +602,57 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass  # Column already exists
 
-            # ADR-005 Phase 2A: backfill project_node_id on existing LinkedRepo rows
+            # ADR-005: Legacy project node + domain detach + per-repo project
+            # provisioning + project_id backfill. See _run_adr005_migration.
             try:
-                async with async_session_factory() as _pnid_bf_db:
-                    from sqlalchemy import select as _sel_pnid
+                async with async_session_factory() as _adr005_db:
+                    await _run_adr005_migration(_adr005_db)
+                    await _adr005_db.commit()
+            except Exception as adr005_exc:
+                logger.warning("ADR-005 migration failed (non-fatal): %s", adr005_exc)
 
-                    from app.models import LinkedRepo, PromptCluster
+            # B1: Cache Legacy project_id on app.state for zero-query pipeline
+            # fallback. Resolved after _run_adr005_migration so the Legacy
+            # node is guaranteed to exist. Also primes the module-level
+            # project_service cache so helpers that don't have app.state
+            # access (sampling/passthrough, MCP tool handlers, batch
+            # pipeline) share the same zero-query fallback. A fresh DB
+            # where migration failed degrades gracefully to None — the
+            # startup _backfill_project_ids sweep will repair NULL rows on
+            # the next boot.
+            try:
+                from app.services.project_service import (
+                    get_legacy_project_id,
+                    prime_legacy_project_id_cache,
+                )
+                async with async_session_factory() as _lpid_db:
+                    app.state.legacy_project_id = await get_legacy_project_id(_lpid_db)
+                prime_legacy_project_id_cache(app.state.legacy_project_id)
+                logger.info(
+                    "Legacy project_id cached: %s",
+                    (app.state.legacy_project_id or "none")[:8],
+                )
+            except Exception as _lpid_exc:
+                logger.warning("Failed to cache legacy_project_id: %s", _lpid_exc)
+                app.state.legacy_project_id = None
 
-                    # Find Legacy project node
-                    legacy = (await _pnid_bf_db.execute(
-                        _sel_pnid(PromptCluster).where(
-                            PromptCluster.state == "project",
-                        ).limit(1)
-                    )).scalar_one_or_none()
-
-                    if legacy:
-                        # Backfill any LinkedRepo rows missing project_node_id
-                        unlinked = (await _pnid_bf_db.execute(
-                            _sel_pnid(LinkedRepo).where(
-                                LinkedRepo.project_node_id.is_(None),
-                            )
-                        )).scalars().all()
-                        for lr in unlinked:
-                            lr.project_node_id = legacy.id
-                        if unlinked:
-                            await _pnid_bf_db.commit()
-                            logger.info("Backfilled project_node_id on %d LinkedRepo rows", len(unlinked))
-            except Exception as pnid_exc:
-                logger.warning("LinkedRepo project_node_id backfill failed (non-fatal): %s", pnid_exc)
+            # ADR-005 B8: one-shot startup repair.  Demote/retire any
+            # GlobalPatterns admitted under the old single-project gate
+            # that no longer meet ``GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS``.
+            try:
+                from app.services.taxonomy.global_patterns import (
+                    repair_legacy_only_promotions,
+                )
+                async with async_session_factory() as _b8_db:
+                    _b8_stats = await repair_legacy_only_promotions(_b8_db)
+                if _b8_stats.get("demoted") or _b8_stats.get("retired"):
+                    logger.info(
+                        "B8 repair applied: demoted=%d retired=%d",
+                        _b8_stats.get("demoted", 0),
+                        _b8_stats.get("retired", 0),
+                    )
+            except Exception as _b8_exc:
+                logger.warning("B8 startup repair failed (non-fatal): %s", _b8_exc)
 
             # ADR-005 Phase 2B: ensure global_pattern_id column on optimization_patterns
             try:
@@ -821,6 +896,64 @@ async def lifespan(app: FastAPI):
             except Exception as backfill_exc:
                 logger.warning(
                     "Orphan backfill failed (non-fatal): %s", backfill_exc
+                )
+
+            # Cold-start bootstrap: if orphans remain AND no active clusters
+            # exist (fresh install, post-reset, or migrated DB), drive each
+            # orphan through ``engine.process_optimization()`` which creates
+            # the first clusters organically. Without this, ``backfill_orphans``
+            # can't link orphans to anything (nothing to link to) and the
+            # system stays frozen on an empty taxonomy tree forever.
+            try:
+                from sqlalchemy import func as _cs_func
+                from sqlalchemy import select as _cs_select
+
+                from app.models import Optimization as _CS_Opt
+                from app.models import PromptCluster as _CS_Cluster
+                async with async_session_factory() as _cs_db:
+                    active_count = (await _cs_db.execute(
+                        _cs_select(_cs_func.count(_CS_Cluster.id)).where(
+                            _CS_Cluster.state.in_(
+                                ["active", "candidate", "mature"]
+                            )
+                        )
+                    )).scalar() or 0
+                    orphan_ids: list[str] = []
+                    if active_count == 0:
+                        orphan_q = await _cs_db.execute(
+                            _cs_select(_CS_Opt.id).where(
+                                _CS_Opt.status == "completed",
+                                _CS_Opt.raw_prompt.isnot(None),
+                                _CS_Opt.cluster_id.is_(None),
+                            )
+                        )
+                        orphan_ids = [row[0] for row in orphan_q.all()]
+
+                if orphan_ids:
+                    logger.info(
+                        "Cold-start bootstrap: seeding taxonomy from %d orphan "
+                        "optimizations (empty cluster tree detected)",
+                        len(orphan_ids),
+                    )
+                    seeded = 0
+                    for _opt_id in orphan_ids:
+                        try:
+                            async with async_session_factory() as _seed_db:
+                                await engine.process_optimization(_opt_id, _seed_db)
+                                await _seed_db.commit()
+                            seeded += 1
+                        except Exception as _seed_exc:
+                            logger.warning(
+                                "Cold-start seed failed for %s: %s",
+                                _opt_id, _seed_exc,
+                            )
+                    logger.info(
+                        "Cold-start bootstrap complete: seeded %d/%d optimizations",
+                        seeded, len(orphan_ids),
+                    )
+            except Exception as cs_exc:
+                logger.warning(
+                    "Cold-start bootstrap failed (non-fatal): %s", cs_exc
                 )
 
             logger.info("Taxonomy extraction listener started — subscribing to event bus")
@@ -1515,6 +1648,12 @@ except ImportError:
     pass
 
 try:
+    from app.routers.patterns import router as patterns_router
+    app.include_router(patterns_router)
+except ImportError:
+    pass
+
+try:
     from app.routers.seed import router as seed_router
     app.include_router(seed_router)
 except ImportError:
@@ -1535,6 +1674,12 @@ except ImportError:
 try:
     from app.routers.update import router as update_router
     app.include_router(update_router)
+except ImportError:
+    pass
+
+try:
+    from app.routers.projects import router as projects_router
+    app.include_router(projects_router)
 except ImportError:
     pass
 

@@ -50,7 +50,6 @@ from app.services.pipeline_constants import (
     semantic_upgrade_general,
 )
 from app.services.preferences import PreferencesService
-from app.services.project_service import resolve_project_id
 from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
@@ -146,6 +145,7 @@ class PipelineOrchestrator:
         db: AsyncSession,
         trace_id: str,
         optimization_id: str | None = None,
+        project_id: str | None = None,
     ) -> tuple[list[InjectedPattern], list[str]]:
         """Auto-inject cluster meta-patterns based on prompt embedding similarity.
 
@@ -155,6 +155,7 @@ class PipelineOrchestrator:
         return await auto_inject_patterns(
             raw_prompt, taxonomy_engine, db, trace_id,
             optimization_id=optimization_id,
+            project_id=project_id,
         )
 
     # ------------------------------------------------------------------
@@ -172,6 +173,7 @@ class PipelineOrchestrator:
         strategy_intelligence: str | None = None,
         context_sources: dict[str, Any] | None = None,
         repo_full_name: str | None = None,
+        project_id: str | None = None,
         github_token: str | None = None,
         applied_pattern_ids: list[str] | None = None,
         taxonomy_engine: Any | None = None,
@@ -180,7 +182,16 @@ class PipelineOrchestrator:
         heuristic_domain: str | None = None,
         divergence_alerts: str | None = None,
     ) -> AsyncGenerator[PipelineEvent, None]:
-        """Execute the full pipeline, yielding SSE events."""
+        """Execute the full pipeline, yielding SSE events.
+
+        ``project_id`` is frozen at entry by the caller (router / MCP tool) —
+        no persist-time resolution happens inside the pipeline. This
+        eliminates the race where a repo link committed mid-pipeline would
+        non-deterministically flip a prompt from Legacy to the new project.
+        Pass ``None`` only when the caller has no way to resolve it; the
+        row will land with ``project_id=NULL`` and the next
+        ``_backfill_project_ids`` sweep at startup will repair it.
+        """
         trace_id = str(uuid.uuid4())
         opt_id = str(uuid.uuid4())
         start_time = time.monotonic()
@@ -453,6 +464,7 @@ class PipelineOrchestrator:
                             db=db,
                             trace_id=trace_id,
                             optimization_id=opt_id,
+                            project_id=project_id,
                         )
                     )
                     if auto_injected_patterns:
@@ -887,13 +899,9 @@ class PipelineOrchestrator:
             # ---------------------------------------------------------------
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
-            # Resolve project_id from repo chain (non-fatal)
-            _pip_project_id: str | None = None
-            if repo_full_name:
-                try:
-                    _pip_project_id = await resolve_project_id(db, repo_full_name)
-                except Exception:
-                    pass
+            # B1: project_id frozen at entry by caller — no persist-time
+            # resolution (prevents repo-link-mid-pipeline race).
+            _pip_project_id: str | None = project_id
 
             db_opt = Optimization(
                 id=opt_id,

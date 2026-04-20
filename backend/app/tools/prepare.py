@@ -68,6 +68,9 @@ async def handle_prepare(
     from app.config import PROJECT_ROOT
     effective_workspace = workspace_path or str(PROJECT_ROOT)
 
+    # B1/B7: freeze project_id BEFORE enrichment so pattern scoping honors it.
+    _, _prep_project_id = await resolve_repo_project(effective_repo)
+
     context_service = get_context_service()
     async with async_session_factory() as enrich_db:
         enrichment = await context_service.enrich(
@@ -77,6 +80,7 @@ async def handle_prepare(
             workspace_path=effective_workspace,
             mcp_ctx=ctx,
             repo_full_name=effective_repo,
+            project_id=_prep_project_id,
         )
 
     # Few-shot retrieval for passthrough (parity with internal/sampling)
@@ -119,7 +123,6 @@ async def handle_prepare(
     trace_id = str(uuid.uuid4())
 
     # Store pending optimization with raw_prompt for later save_result linkage
-    _, _prep_project_id = await resolve_repo_project(effective_repo)
     async with async_session_factory() as db:
         pending = Optimization(
             id=str(uuid.uuid4()),

@@ -70,6 +70,12 @@ async def handle_optimize(
     from app.config import PROJECT_ROOT
     effective_workspace = workspace_path or str(PROJECT_ROOT)
 
+    # B1: Freeze project_id at pipeline entry (resolve once, not at persist).
+    # Resolution: repo chain → Legacy fallback via cached module-level
+    # singleton on the MCP-process side.  Done BEFORE enrich() so B7 pattern
+    # scoping can honor it.
+    _, _effective_project_id = await resolve_repo_project(effective_repo)
+
     context_service = get_context_service()
     async with async_session_factory() as enrich_db:
         enrichment = await context_service.enrich(
@@ -81,6 +87,7 @@ async def handle_optimize(
             repo_full_name=effective_repo,
             applied_pattern_ids=applied_pattern_ids,
             preferences_snapshot=prefs_snapshot,
+            project_id=_effective_project_id,
         )
 
     if decision.tier == "passthrough":
@@ -114,7 +121,6 @@ async def handle_optimize(
             few_shot_examples=_pt_few_shot,
         )
         trace_id = str(uuid.uuid4())
-        _, _pt_project_id = await resolve_repo_project(effective_repo)
         async with async_session_factory() as db:
             pending = Optimization(
                 id=str(uuid.uuid4()),
@@ -129,7 +135,7 @@ async def handle_optimize(
                 domain_raw=enrichment.domain_value,
                 intent_label=enrichment.intent_label,
                 repo_full_name=effective_repo,
-                project_id=_pt_project_id,
+                project_id=_effective_project_id,
                 context_sources=enrichment.context_sources_dict,
             )
             db.add(pending)
@@ -159,6 +165,7 @@ async def handle_optimize(
                 ctx, prompt,
                 effective_strategy if effective_strategy != "auto" else None,
                 repo_full_name=effective_repo,
+                project_id=_effective_project_id,
                 applied_pattern_ids=applied_pattern_ids,
                 codebase_context=enrichment.codebase_context,
                 heuristic_task_type=enrichment.task_type,
@@ -216,6 +223,7 @@ async def handle_optimize(
             strategy_intelligence=enrichment.strategy_intelligence,
             context_sources=enrichment.context_sources_dict,
             repo_full_name=effective_repo,
+            project_id=_effective_project_id,
             applied_pattern_ids=applied_pattern_ids,
             taxonomy_engine=get_taxonomy_engine(),
             domain_resolver=_mcp_domain_resolver,

@@ -96,6 +96,15 @@ class OptimizeRequest(BaseModel):
     applied_pattern_ids: list[str] | None = Field(
         None, max_length=20, description="Pattern IDs to inject into optimizer context",
     )
+    project_id: str | None = Field(
+        None,
+        description=(
+            "Explicit project node ID (ADR-005). Overrides repo-based "
+            "resolution — lets the caller route a prompt to Legacy or a "
+            "specific project even when a repo is linked. Resolution order: "
+            "explicit project_id → repo_full_name → cached Legacy fallback."
+        ),
+    )
 
 
 @router.post("/optimize")
@@ -152,6 +161,21 @@ async def optimize(
         except Exception:
             pass  # Non-fatal — proceed without codebase context
 
+    # B1: Freeze project_id at pipeline entry — eliminates persist-time races.
+    # Resolution order: explicit request → repo chain → cached Legacy fallback.
+    # Resolved BEFORE enrich() so B7 pattern scoping can honor it.
+    _legacy_pid: str | None = getattr(request.app.state, "legacy_project_id", None)
+    if body.project_id:
+        effective_project_id: str | None = body.project_id
+    else:
+        try:
+            effective_project_id = await resolve_project_id(
+                db, effective_repo, legacy_project_id=_legacy_pid,
+            )
+        except Exception:
+            logger.debug("project_id resolution failed; using cached Legacy fallback")
+            effective_project_id = _legacy_pid
+
     enrichment = await context_service.enrich(
         raw_prompt=body.prompt,
         tier=decision.tier,
@@ -160,6 +184,7 @@ async def optimize(
         repo_full_name=effective_repo,
         applied_pattern_ids=body.applied_pattern_ids,
         preferences_snapshot=prefs_snapshot,
+        project_id=effective_project_id,
     )
 
     if decision.tier == "passthrough":
@@ -193,12 +218,6 @@ async def optimize(
 
         trace_id = str(uuid.uuid4())
         opt_id = str(uuid.uuid4())
-        _pt_project_id: str | None = None
-        if effective_repo:
-            try:
-                _pt_project_id = await resolve_project_id(db, effective_repo)
-            except Exception:
-                pass
         pending = Optimization(
             id=opt_id, raw_prompt=body.prompt, status="pending",
             trace_id=trace_id, provider="web_passthrough", routing_tier="passthrough",
@@ -209,7 +228,7 @@ async def optimize(
             intent_label=enrichment.intent_label,
             context_sources=enrichment.context_sources_dict,
             repo_full_name=effective_repo,
-            project_id=_pt_project_id,
+            project_id=effective_project_id,
         )
         db.add(pending)
         await db.commit()
@@ -250,6 +269,7 @@ async def optimize(
                 strategy_intelligence=enrichment.strategy_intelligence,
                 context_sources=enrichment.context_sources_dict,
                 repo_full_name=effective_repo,
+                project_id=effective_project_id,
                 applied_pattern_ids=body.applied_pattern_ids,
                 taxonomy_engine=get_taxonomy_engine(app=request.app),
                 domain_resolver=getattr(request.app.state, "domain_resolver", None),
@@ -481,6 +501,20 @@ async def passthrough_prepare(
 
     from app.config import PROJECT_ROOT as _PT_ROOT
     effective_pt_workspace = body.workspace_path or str(_PT_ROOT)
+
+    # B1/B7: freeze project_id before enrichment so pattern scoping honors it.
+    _pt2_legacy_pid: str | None = getattr(request.app.state, "legacy_project_id", None)
+    _pt2_project_id: str | None
+    if body.project_id:
+        _pt2_project_id = body.project_id
+    else:
+        try:
+            _pt2_project_id = await resolve_project_id(
+                db, body.repo_full_name, legacy_project_id=_pt2_legacy_pid,
+            )
+        except Exception:
+            _pt2_project_id = _pt2_legacy_pid
+
     enrichment = await context_service.enrich(
         raw_prompt=body.prompt,
         tier="passthrough",
@@ -488,6 +522,7 @@ async def passthrough_prepare(
         workspace_path=effective_pt_workspace,
         repo_full_name=body.repo_full_name,
         applied_pattern_ids=body.applied_pattern_ids,
+        project_id=_pt2_project_id,
     )
 
     # Few-shot retrieval for passthrough (parity with internal/sampling)
@@ -518,13 +553,6 @@ async def passthrough_prepare(
 
     trace_id = str(uuid.uuid4())
     opt_id = str(uuid.uuid4())
-
-    _pt2_project_id: str | None = None
-    if body.repo_full_name:
-        try:
-            _pt2_project_id = await resolve_project_id(db, body.repo_full_name)
-        except Exception:
-            pass
 
     pending = Optimization(
         id=opt_id,

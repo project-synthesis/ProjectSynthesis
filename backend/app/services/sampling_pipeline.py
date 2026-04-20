@@ -458,6 +458,7 @@ async def run_sampling_pipeline(
     strategy_override: str | None,
     *,
     repo_full_name: str | None = None,
+    project_id: str | None = None,
     applied_pattern_ids: list[str] | None = None,
     codebase_context: str | None = None,  # pre-computed by enrichment service
     heuristic_task_type: str | None = None,
@@ -476,6 +477,11 @@ async def run_sampling_pipeline(
         + Intent drift detection (non-fatal)
 
     Each phase is a separate sampling request, mirroring the internal pipeline.
+
+    ``project_id`` is frozen at entry by the caller (MCP tool handler) — no
+    persist-time resolution happens inside the pipeline (B1). Falls back to
+    legacy ``resolve_repo_project()`` only when the caller did not supply
+    one, preserving backward compatibility for older MCP clients.
     """
     start = time.monotonic()
     loader = PromptLoader(PROMPTS_DIR)
@@ -713,6 +719,7 @@ async def run_sampling_pipeline(
                         taxonomy_engine=_inject_engine,
                         db=_inject_db,
                         trace_id=trace_id,
+                        project_id=project_id,
                     )
                 )
             if auto_injected_patterns:
@@ -1123,8 +1130,14 @@ async def run_sampling_pipeline(
     elapsed_ms = int((time.monotonic() - start) * 1000)
     opt_id = str(uuid.uuid4())
 
-    # Resolve project_id from repo chain (non-fatal)
-    _, _project_id = await resolve_repo_project(repo_full_name)
+    # B1: project_id frozen at entry by caller. Fallback to repo-chain
+    # resolution only when the caller (older MCP client) didn't supply one —
+    # keeps backward compatibility for anything still going through the
+    # legacy resolve_repo_project() path. New code MUST pass project_id.
+    if project_id is not None:
+        _project_id: str | None = project_id
+    else:
+        _, _project_id = await resolve_repo_project(repo_full_name)
 
     async with async_session_factory() as db:
         db_opt = Optimization(
@@ -1265,11 +1278,21 @@ async def run_sampling_pipeline(
 # ---------------------------------------------------------------------------
 
 
-async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
+async def run_sampling_analyze(
+    ctx: Context,
+    prompt: str,
+    *,
+    repo_full_name: str | None = None,
+    project_id: str | None = None,
+) -> dict:
     """Two-phase sampling pipeline: analyze + baseline score.
 
     Used by ``synthesis_analyze`` when no local LLM provider is available
     but the MCP client supports sampling.
+
+    ``project_id`` is frozen at entry by the caller (B1). Falls back to
+    ``resolve_repo_project()`` only when the caller didn't supply one,
+    preserving backward compatibility.
     """
     start = time.monotonic()
     loader = PromptLoader(PROMPTS_DIR)
@@ -1435,8 +1458,20 @@ async def run_sampling_analyze(ctx: Context, prompt: str) -> dict:
     opt_id = str(uuid.uuid4())
     trace_id = str(uuid.uuid4())
 
-    # Resolve repo → project chain (no repo_full_name param in analyze-only path)
-    _sa_repo, _sa_project_id = await resolve_repo_project()
+    # B1: honor caller-frozen project_id if supplied; else fall back to
+    # legacy repo-chain resolution (auto-resolves from last linked repo).
+    if project_id is not None:
+        _sa_repo = repo_full_name
+        _sa_project_id: str | None = project_id
+        if _sa_repo is None:
+            # Caller gave us a project_id but no repo name — resolve the
+            # repo alone for reporting (project_id is authoritative).
+            try:
+                _sa_repo, _ = await resolve_repo_project()
+            except Exception:
+                _sa_repo = None
+    else:
+        _sa_repo, _sa_project_id = await resolve_repo_project(repo_full_name)
 
     async with async_session_factory() as db:
         opt = Optimization(
