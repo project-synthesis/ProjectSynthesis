@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.1 — 2026-04-20
+
 ### Added
 - **Sidebar brand audit finale — Navigator 2,692 → 182 lines via 8-panel extraction** — `Navigator.svelte` now delegates to eight focused panels (`StrategiesPanel`, `HistoryPanel`, `GitHubPanel`, `SettingsPanel`, `ClusterRow`, `DomainGroup`, `StateFilterTabs`, `TemplatesSection`) under `components/layout/`. `ClusterNavigator.svelte` split into per-domain row components. `CollapsibleSectionHeader` gains Snippet-based whole-bar/split modes. `ActivityBar` gets a sliding indicator + accessibility polish; `Inspector` gets a phase-dot indicator. Brand-token sweep across editor, refinement, shared, and taxonomy components.
 - **Inspector.svelte split — 3 sections extracted** — `ClusterPatternsSection.svelte` (103 lines, meta-patterns list + 5 context-aware empty states), `ClusterTemplatesSection.svelte` (70 lines, cluster-scoped templates — named to disambiguate from the proven-templates Navigator section), `TaxonomyHealthPanel.svelte` (123 lines, idle-state Q_health/coherence/separation panel with sparkline). `Inspector.svelte` 1,404 → 1,165 lines total. Dead-code cleanup (unused `feedback = $derived(...)`).
