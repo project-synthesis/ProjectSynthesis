@@ -1,8 +1,8 @@
 # ADR-005: Taxonomy Scaling Architecture — Project Partitions, Adaptive Warm Path, and Cross-Project Pattern Sharing
 
-**Status:** Accepted (design phase)
-**Date:** 2026-04-08
-**Authors:** Human + Claude Opus 4.6
+**Status:** Amended 2026-04-19 — hybrid taxonomy supersedes the "project as tree parent" data model. Original design body preserved below for historical context; see `## Amendment 2026-04-19 — Hybrid Taxonomy` at the end.
+**Date:** 2026-04-08 (original) · Amended 2026-04-19
+**Authors:** Human + Claude Opus 4.6 (original) · Human + Claude Opus 4.7 (amendment)
 
 ## Context
 
@@ -190,3 +190,75 @@ Project Synthesis's taxonomy engine manages all prompt optimizations through an 
 - Embedding index: `backend/app/services/taxonomy/embedding_index.py`
 - Quality metrics: `backend/app/services/taxonomy/quality.py`
 - UMAP projection (separated from cold path): `backend/app/services/taxonomy/cold_path.py` (`execute_umap_projection`)
+
+---
+
+## Amendment 2026-04-19 — Hybrid Taxonomy
+
+### Why the tree-parent model was revisited
+
+The original ADR placed projects as tree parents (`project → domain → cluster`). Six months of operation exposed four structural problems:
+
+1. **Duplicate filtering surfaces.** Every endpoint that surfaced clusters had to walk the parent chain to filter by project. `/api/clusters/tree?project_id=X` was a dead code path: it returned only the project node and its bare child clusters, because clusters parent under *domains*, not projects. Stats, topology, similarity-edges all had the same dead-path bug.
+2. **Mega-Legacy domain split.** With every existing optimization re-parented under `Legacy`, the Legacy project's `general` domain ballooned. Warm-path merge/split decisions had to repeatedly traverse project→domain→cluster ancestry, which HDBSCAN/spectral were never designed to respect.
+3. **Frontend couldn't compose views.** "Show me project X's patterns" and "show me project X's domains" needed two different query shapes. The cluster store and pattern store had no shared filter primitive — projects were a tree axis but patterns were not.
+4. **Cross-project learning is the product.** Taxonomy should be global; *view* is per-project. The tree-parent model inverted this.
+
+### New data model
+
+- **Projects live at `parent_id = NULL`** with `state = "project"`. They are sibling roots.
+- **Domains also live at `parent_id = NULL`** with `state = "domain"` (unchanged from ADR-004).
+- **Clusters parent to domains** via `parent_id`. They do *not* parent to projects.
+- **`PromptCluster.dominant_project_id`** — new nullable FK column (S1 migration). Populated by warm Phase 0 and cold path from majority-project-by-member count. Ties resolve non-Legacy preferred. Index-backed view filtering: `WHERE dominant_project_id = X OR state IN ('project','domain') OR id = X`.
+- **`Optimization.project_id`** remains the authoritative per-prompt attribution (denormalized FK). B1 freezes it at pipeline entry, eliminating the persist-time race.
+
+### Contract changes shipped (B1–B8, C1a–C1c)
+
+- **B1** — Explicit `project_id` in all optimize/refine/sampling/batch pipelines. Resolution order: explicit request → `resolve_project_id(repo_full_name)` → cached `legacy_project_id`. Legacy cache primed in both backend and MCP lifespans.
+- **B2** — `migrate_optimizations()` service (bulk re-attribution with `since` / `repo_full_name_is_null` filters, emits `optimizations_migrated` event).
+- **B3** — `POST /api/projects/migrate` rate-limited router.
+- **B4** — `link_repo` response now carries `migration_candidates: {count, from_project_id, since}` for UI toast. No auto-migration.
+- **B5** — `unlink_repo` accepts `?mode=keep|rehome`. "keep" preserves attribution; "rehome" migrates recent opts back to Legacy. Emits `repo_unlinked` event.
+- **B6** — `/api/clusters/tree`, `/api/clusters/stats`, `/api/clusters/similarity-edges` accept `?project_id=X` + `?scope=all`. Hybrid filter clause ensures structural skeleton always visible. `engine._stats_cache` keyed per-project.
+- **B7** — `auto_inject_patterns(db, query_embedding, project_id=None)` threads `project_filter` into `embedding_index.search()`. GlobalPatterns unchanged (cross-project is the point). `enable_cross_project_injection` preference flag (default false).
+- **B8** — `GlobalPattern` promotion tightened with `distinct_project_count >= GLOBAL_PATTERN_MIN_PROJECTS` gate. Legacy-only patterns can no longer reach the Global tier.
+- **C1a** — Warm Phase 0 recomputes `dominant_project_id` alongside `member_count`.
+- **C1b** — Cold path writes `dominant_project_id` on each cluster after the members sweep.
+- **C1c** — `_reassign_to_active()` accepts `preferred_project_id` kwarg and prefers same-project targets with per-opt default; cross-project wins only when cosine margin ≥ `CROSS_PROJECT_REASSIGN_MARGIN` (0.10) over the best same-project option. Mixed-cluster dissolution no longer silently leaks members into Legacy.
+
+### Frontend delta (F1–F5)
+
+- **F1** — `frontend/src/lib/stores/project.svelte.ts` (Svelte 5 rune store). `currentProjectId` persisted to `localStorage`; survives unlink and no-GitHub sessions. `eligibleForLegacyMigration()` returns the count from the last `linkRepo` response.
+- **F2** — Project selector dropdown in Navigator header with live prompt/cluster counts. Hidden when only Legacy exists.
+- **F3** — All `optimize`/`refine`/`match` calls carry `project_id` from the store. Explicit "Legacy" selection overrides repo-link inference, enabling Legacy-only prompts while a repo is linked.
+- **F4** — Tree, topology, and pattern match consumers re-fetch on store change via `$effect`. "All projects" omits the param.
+- **F5** — Transition toasts: link offers Legacy migration (Move/Keep via `addWithActions`); unlink offers Stay/Switch; Inspector renders per-project `member_counts_by_project` breakdown; empty-state panel on scoped empty views.
+
+### Locked-decision record
+
+The full discovery + design exchange that led to this amendment is captured in `docs/hybrid-taxonomy-plan.md` (locked 2026-04-19). It carries the complete problem matrix (pipeline / repo-link / repo-unlink / repo-switch / tree filter / pattern injection / cross-project merges / UI state model), the intermittent-prompting handling matrix, and the verification plan.
+
+### Evidence of shipment
+
+- **Commit range on `main`:** `ab07fd30 … c1ab12f7` (8 sequential commits — S1 schema, B1, B2–B5, B6, B7–B8, C1a–C1c, F1–F5, ops utilities)
+- **Schema migration:** `backend/alembic/versions/d9e0f1a2b3c4_add_dominant_project_id_to_prompt_cluster.py`
+- **Key files:**
+  - `backend/app/services/project_service.py` — `ensure_project_for_repo()`, `resolve_project_id()`, `migrate_optimizations()`, Legacy cache primitives
+  - `backend/app/routers/projects.py` — `GET /api/projects`, `POST /api/projects/migrate`
+  - `backend/app/routers/clusters.py` — B6 hybrid scope filter on tree/stats/similarity-edges
+  - `backend/app/routers/github_repos.py` — B4/B5 link/unlink contract
+  - `backend/app/services/taxonomy/engine.py` — `_stats_scope_clause()`, per-project `_stats_cache` keying
+  - `backend/app/services/taxonomy/warm_phases.py` — C1a Phase 0 `dominant_project_id` reconciliation, C1c same-project preference in `_reassign_to_active()`
+  - `backend/app/services/taxonomy/cold_path.py` — C1b write-through of `dominant_project_id`
+  - `backend/app/services/pattern_injection.py` — B7 project-scoped injection
+  - `backend/app/services/taxonomy/global_patterns.py` — B8 distinct-project gate
+  - `frontend/src/lib/stores/project.svelte.ts` + `project.test.ts`
+  - `frontend/src/lib/components/layout/Navigator.svelte` — F2 dropdown + F5 toasts
+  - `frontend/src/lib/stores/toast.svelte.ts` — `addWithActions()` primitive
+- **New tests:** `backend/tests/test_link_repo_b4.py`, `backend/tests/test_unlink_repo_b5.py`, `backend/tests/test_projects_router.py`, `backend/tests/test_pattern_injection_project_scope.py`, `backend/tests/test_patterns_router.py`, `backend/tests/taxonomy/test_dissolve_same_project_pref.py`, plus extensions to `test_project_migration.py`, `test_engine_read_api.py` (per-scope cache isolation), `test_global_pattern_promotion.py`, `test_global_pattern_validation.py`.
+- **Ops:** `scripts/taxonomy-reset.sh` — fresh-start utility preserving optimizations/feedback/linked-repos while wiping derived taxonomy graph.
+
+### Still deferred from the 2026-04-08 design
+
+- **Phase 3 HNSW embedding index** — code path present (`_HnswBackend` in `backend/app/services/taxonomy/embedding_index.py`, activated at `HNSW_CLUSTER_THRESHOLD=1000`), currently dormant with numpy backend primary. Trigger condition (≥ 1000 clusters for multiple warm cycles) has not been reached.
+- **Phase 3 round-robin warm scheduling** — the adaptive scheduler (linear regression boundary, all-dirty vs per-project budget modes, starvation guard) shipped as part of B-layer work; the deferred piece is large-DB stress validation, which awaits real 5K+ prompt corpora.

@@ -30,3 +30,13 @@ Environment-gated bearer token authentication via ASGI middleware:
 - Any MCP client can pass the token via standard HTTP headers
 - Future upgrade path to OAuth without breaking changes
 - Query param fallback creates a log-hygiene concern — document nginx log masking
+
+## Implementation status
+
+**Shipped.** Middleware and env gates are in production.
+
+- `MCP_AUTH_TOKEN` + `MCP_ALLOW_QUERY_TOKEN` defined in `backend/app/config.py:158-161`
+- Bearer-token middleware wired at `backend/app/mcp_server.py:518` (no-op when `MCP_AUTH_TOKEN` is `None`) and registered at `backend/app/mcp_server.py:891-892`
+- Regression tests in `backend/tests/test_security_hardening.py:149-165`
+
+Default deployment leaves `MCP_AUTH_TOKEN` unset (zero-friction local dev, matches the decision). Production/remote deployments opt in by setting the env var — no code change required.
