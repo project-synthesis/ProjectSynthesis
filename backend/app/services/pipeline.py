@@ -598,6 +598,7 @@ class PipelineOrchestrator:
                 provider=provider,
                 optimizer_model=optimizer_model,
                 model_ids=model_ids,
+                error_message=str(exc),
             )
 
             yield PipelineEvent(event="error", data={
