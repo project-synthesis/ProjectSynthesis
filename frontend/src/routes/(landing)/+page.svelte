@@ -1224,7 +1224,7 @@
     transition: fill var(--duration-hover) var(--ease-spring);
   }
   :global(.kg-synthesizing .kg-center-node) {
-    animation: kg-center-pop 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: kg-center-pop 0.6s var(--ease-spring) forwards;
     animation-delay: 0.8s;
   }
 

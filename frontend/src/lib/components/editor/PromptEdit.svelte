@@ -275,7 +275,7 @@
     font-size: 10px;
     font-family: var(--font-mono);
     cursor: pointer;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring);
     outline: none;
   }
 
@@ -311,7 +311,7 @@
     height: 20px;
     line-height: 18px;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
     white-space: nowrap;
   }
 

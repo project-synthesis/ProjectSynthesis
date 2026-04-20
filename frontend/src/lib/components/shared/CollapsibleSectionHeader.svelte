@@ -14,9 +14,9 @@
    *     for per-domain groups where the header both toggles collapse AND
    *     toggles the domain-highlight independently.
    *
-   * Brand rules: 1px contours only, no glow/shadow/transform on the caret
-   * — it is a character swap (▾/▸), matching the `RefinementTimeline`
-   * precedent. All typography comes from brand tokens.
+   * Brand rules: 1px contours only, no glow/shadow. Caret is a single `▸`
+   * glyph rotated via CSS transform when open — GPU-accelerated, zero
+   * layout jitter. All typography comes from brand tokens.
    */
   import type { Snippet } from 'svelte';
 
@@ -39,11 +39,19 @@
 
   let { open, onToggle, label, count, header, actions, ariaLabel }: Props = $props();
 
-  const caret = $derived(open ? '▾' : '▸');
   const splitMode = $derived(header !== undefined);
   const composedAriaLabel = $derived(
     ariaLabel ?? (label ? `Toggle ${label}` : 'Toggle section'),
   );
+
+  // `all: unset` on our buttons drops the implicit keyboard activation
+  // (Enter/Space) browsers attach to real <button>s, so we re-add it.
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onToggle();
+    }
+  }
 </script>
 
 <div class="nsh-bar" class:nsh-bar--split={splitMode}>
@@ -52,10 +60,11 @@
       type="button"
       class="nsh-caret-btn"
       onclick={onToggle}
+      onkeydown={handleKeydown}
       aria-expanded={open}
       aria-label={composedAriaLabel}
     >
-      <span class="nsh-caret" aria-hidden="true">{caret}</span>
+      <span class="nsh-caret" class:nsh-caret--open={open} aria-hidden="true">▸</span>
     </button>
     <div class="nsh-header-slot">
       {@render header!()}
@@ -65,10 +74,11 @@
       type="button"
       class="nsh-toggle"
       onclick={onToggle}
+      onkeydown={handleKeydown}
       aria-expanded={open}
       aria-label={composedAriaLabel}
     >
-      <span class="nsh-caret" aria-hidden="true">{caret}</span>
+      <span class="nsh-caret" class:nsh-caret--open={open} aria-hidden="true">▸</span>
       {#if label}
         <span class="nsh-label">{label}</span>
       {/if}
@@ -166,6 +176,12 @@
     width: 8px;
     display: inline-flex;
     justify-content: center;
+    transform-origin: center;
+    transition: transform var(--duration-micro) var(--ease-spring);
+  }
+
+  .nsh-caret--open {
+    transform: rotate(90deg);
   }
 
   .nsh-label {

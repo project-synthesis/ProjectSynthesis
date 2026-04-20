@@ -2,6 +2,7 @@
   import Logo from '$lib/components/shared/Logo.svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { ACTIVITY_TOOLTIPS } from '$lib/utils/ui-tooltips';
+  import { handleTablistArrowKeys } from '$lib/utils/keyboard';
 
   type Activity = 'editor' | 'history' | 'clusters' | 'github' | 'settings';
 
@@ -14,6 +15,18 @@
     { id: 'github', label: 'GitHub' },
     { id: 'settings', label: 'Settings' },
   ];
+
+  const activityIds = $derived(activities.map((a) => a.id));
+
+  function onKeyDown(event: KeyboardEvent) {
+    handleTablistArrowKeys(
+      event,
+      { items: activityIds, current: active, orientation: 'vertical' },
+      (next) => {
+        active = next;
+      },
+    );
+  }
 </script>
 
 <nav
@@ -26,14 +39,24 @@
     <Logo size={24} variant="mark" />
   </div>
 
+  <div
+    class="activity-tablist"
+    role="tablist"
+    aria-orientation="vertical"
+    aria-label="Primary sections"
+    tabindex={-1}
+    onkeydown={onKeyDown}
+  >
   {#each activities as act}
     <button
       class="activity-icon"
       class:active={active === act.id}
       onclick={() => (active = act.id)}
       use:tooltip={act.label}
+      role="tab"
       aria-label={act.label}
-      aria-pressed={active === act.id}
+      aria-selected={active === act.id}
+      tabindex={active === act.id ? 0 : -1}
     >
       {#if act.id === 'editor'}
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><path d="M13.5 2.5l2 2-9 9H4.5v-2l9-9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -48,6 +71,7 @@
       {/if}
     </button>
   {/each}
+  </div>
 </nav>
 
 <style>
@@ -58,6 +82,14 @@
     padding-top: 0;
     gap: 1px;
     height: 100%;
+  }
+
+  .activity-tablist {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    width: 100%;
   }
 
   .activity-icon {
@@ -72,8 +104,8 @@
     cursor: pointer;
     position: relative;
     transition:
-      color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-      background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+      color var(--duration-hover) var(--ease-spring),
+      background var(--duration-hover) var(--ease-spring);
   }
 
   .activity-icon:hover {
@@ -91,10 +123,10 @@
   .activity-icon.active::before {
     content: '';
     position: absolute;
-    left: -4px;
+    left: -3px;
     top: 6px;
     bottom: 6px;
-    width: 2px;
+    width: 1px;
     background: var(--tier-accent, var(--color-neon-cyan));
   }
 

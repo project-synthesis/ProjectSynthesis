@@ -56,7 +56,7 @@
     background: var(--color-bg-secondary);
     border: 1px solid var(--color-border-accent);
     margin: 4px 0;
-    animation: slide-up-in 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: slide-up-in var(--duration-hover) var(--ease-spring) forwards;
     font-size: 11px;
     font-family: var(--font-sans);
   }
@@ -140,7 +140,7 @@
     font-family: var(--font-mono);
     font-size: 10px;
     cursor: pointer;
-    transition: color 200ms, border-color 200ms;
+    transition: color var(--duration-hover) var(--ease-spring), border-color var(--duration-hover) var(--ease-spring);
   }
 
   .action-btn:hover {

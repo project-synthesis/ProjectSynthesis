@@ -164,7 +164,7 @@
     height: 16px;
     padding: 0;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
     line-height: 1;
   }
 
@@ -185,7 +185,7 @@
     height: 16px;
     line-height: 14px;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
     white-space: nowrap;
   }
 
@@ -254,7 +254,7 @@
     height: 16px;
     line-height: 14px;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
     white-space: nowrap;
   }
 
@@ -320,7 +320,7 @@
     line-height: 1.6;
     padding: 6px;
     outline: none;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring);
     box-sizing: border-box;
   }
 
@@ -353,7 +353,7 @@
     font-size: 11px;
     font-family: var(--font-sans);
     outline: none;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring);
   }
 
   .summary-input::placeholder {
@@ -377,7 +377,7 @@
     height: 20px;
     line-height: 18px;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
     white-space: nowrap;
   }
 

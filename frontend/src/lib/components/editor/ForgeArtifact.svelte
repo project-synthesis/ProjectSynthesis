@@ -5,6 +5,7 @@
   import MarkdownRenderer from '$lib/components/shared/MarkdownRenderer.svelte';
   import { copyToClipboard, formatCompactChars } from '$lib/utils/formatting';
   import { slide } from 'svelte/transition';
+  import { navSlide } from '$lib/utils/transitions';
   import { tooltip } from '$lib/actions/tooltip';
   import { ARTIFACT_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
@@ -193,7 +194,7 @@
           <span class="section-title">CHANGES</span>
         </button>
         {#if !changesCollapsed}
-          <div class="changes-body" transition:slide={{ duration: 200 }}>
+          <div class="changes-body" transition:slide={navSlide}>
             <MarkdownRenderer content={result.changes_summary} class="changes-md" />
           </div>
         {/if}
@@ -209,7 +210,7 @@
           <span class="header-metrics"><span class="header-metric"><span class="header-metric-value">{activeLayerCount}/{totalLayerCount}</span> layers</span></span>
         </button>
         {#if !enrichmentCollapsed}
-          <div class="enrichment-body" transition:slide={{ duration: 200 }}>
+          <div class="enrichment-body" transition:slide={navSlide}>
             <!-- Classification: task type + domain (from heuristic analysis) -->
             {#if result?.task_type || result?.domain || enrichmentMeta?.enrichment_profile}
               <div class="enrichment-classification">
@@ -424,7 +425,7 @@
           </span>
         </button>
         {#if !contextCollapsed}
-          <div class="context-body" transition:slide={{ duration: 200 }}>
+          <div class="context-body" transition:slide={navSlide}>
             {#if hasDiagnostics}
               <div class="context-stats">
                 <span class="context-stat">
@@ -591,7 +592,7 @@
     cursor: pointer;
     flex-shrink: 0;
     width: 100%;
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring);
   }
 
   .changes-toggle:hover {
@@ -652,8 +653,8 @@
     border: 1px solid transparent;
     color: var(--color-text-dim);
     cursor: pointer;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring),
+                border-color var(--duration-hover) var(--ease-spring);
   }
 
   .feedback-btn:hover {

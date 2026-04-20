@@ -69,3 +69,26 @@ if (typeof SVGElement !== 'undefined') {
   (SVGElement.prototype as any).getBBox = () => ({ x: 0, y: 0, width: 100, height: 20 }) as DOMRect;
   (SVGElement.prototype as any).getComputedTextLength = () => 50;
 }
+
+// ── Web Animations API mock (for Svelte slide/fade transitions) ──
+// jsdom doesn't implement Element.animate. Svelte's intro/outro
+// transitions call it internally when JS transitions fire. Stub a
+// no-op Animation so components that use transition:slide/transition:fade
+// render in tests without throwing.
+if (typeof Element !== 'undefined' && typeof (Element.prototype as any).animate !== 'function') {
+  (Element.prototype as any).animate = function () {
+    return {
+      cancel: () => {},
+      finish: () => {},
+      play: () => {},
+      pause: () => {},
+      reverse: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      finished: Promise.resolve(),
+      onfinish: null,
+      oncancel: null,
+      playState: 'finished',
+    };
+  };
+}

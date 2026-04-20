@@ -52,8 +52,8 @@
     border-radius: 0;
     color: var(--color-text-dim);
     white-space: nowrap;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring),
+                border-color var(--duration-hover) var(--ease-spring);
   }
 
   .variant-cli {

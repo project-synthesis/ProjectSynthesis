@@ -613,7 +613,7 @@ class HeuristicAnalyzer:
             # gracefully to the heuristic result (returning None).
             result = await call_provider_with_retry(
                 provider,
-                model=getattr(settings, "MODEL_HAIKU", "claude-haiku-4-5"),
+                model=settings.MODEL_HAIKU,
                 system_prompt="You are a prompt classifier.",
                 user_message=prompt_text,
                 output_format=_ClassificationResult,

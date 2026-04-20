@@ -306,7 +306,7 @@
     border: 1px solid var(--color-border-subtle);
     overflow: hidden;
     outline: none;
-    animation: guide-in 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: guide-in var(--duration-structural) var(--ease-spring) forwards;
   }
 
   @keyframes guide-in {
@@ -358,7 +358,7 @@
     color: var(--color-text-dim);
     font-size: 10px;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
     padding: 0;
     line-height: 1;
   }
@@ -425,7 +425,7 @@
     display: flex;
     flex-direction: column;
     opacity: 0;
-    animation: step-stagger 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: step-stagger var(--duration-stagger) var(--ease-spring) forwards;
   }
 
   @keyframes step-stagger {
@@ -452,7 +452,7 @@
     border: none;
     cursor: pointer;
     text-align: left;
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring);
   }
 
   .step-toggle:hover { background: var(--color-bg-hover); }
@@ -468,7 +468,7 @@
     font-family: var(--font-mono);
     font-weight: 700;
     border: 1px solid var(--color-border-subtle);
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
   }
 
   .step-title {
@@ -476,7 +476,7 @@
     font-family: var(--font-sans);
     font-weight: 500;
     flex: 1;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring);
   }
 
   .step-nav {
@@ -498,7 +498,7 @@
     height: 20px;
     line-height: 18px;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
     white-space: nowrap;
   }
 
@@ -520,7 +520,7 @@
 
   .step-content {
     padding: 2px 4px 4px 26px;
-    animation: step-expand 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: step-expand var(--duration-structural) var(--ease-spring) forwards;
   }
 
   @keyframes step-expand {
@@ -542,7 +542,7 @@
     width: 1px;
     height: 10px;
     margin-left: 11px;
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring);
   }
 
   /* ------------------------------------------------------------------ */
@@ -654,7 +654,7 @@
     height: 20px;
     line-height: 18px;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
     white-space: nowrap;
   }
 

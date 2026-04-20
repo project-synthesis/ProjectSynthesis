@@ -60,7 +60,7 @@
     color: inherit;
     font: inherit;
     cursor: pointer;
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring);
   }
 
   .suggestions-toggle:hover {
@@ -105,8 +105,8 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring),
+                background var(--duration-hover) var(--ease-spring);
   }
 
   .suggestion-card:hover {

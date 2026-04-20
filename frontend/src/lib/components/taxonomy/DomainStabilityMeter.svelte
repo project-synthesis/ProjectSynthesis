@@ -140,8 +140,8 @@
     left: 0;
     top: 0;
     height: 100%;
-    transition: width 500ms cubic-bezier(0.16, 1, 0.3, 1),
-      background-color 500ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: width var(--duration-progress) var(--ease-spring),
+      background-color var(--duration-progress) var(--ease-spring);
   }
 
   .dsm-marker {

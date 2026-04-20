@@ -66,8 +66,8 @@
     font-size: 11px;
     cursor: pointer;
     padding: 0;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
 
   .nav-btn:hover:not(:disabled) {

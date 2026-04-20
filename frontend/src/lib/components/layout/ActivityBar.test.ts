@@ -1,7 +1,10 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import ActivityBar from './ActivityBar.svelte';
+
+// ActivityBar uses a tablist pattern — each icon is a tab with aria-selected,
+// not a toggle button with aria-pressed. Tests query by role="tab".
 
 describe('ActivityBar', () => {
   afterEach(() => {
@@ -13,101 +16,113 @@ describe('ActivityBar', () => {
     expect(screen.getByRole('navigation', { name: 'Activity bar' })).toBeInTheDocument();
   });
 
-  it('renders 5 activity icon buttons', () => {
+  it('renders a tablist with 5 tabs', () => {
     render(ActivityBar);
-    const buttons = screen.getAllByRole('button');
-    // 5 activity buttons (may include logo button)
-    const activityButtons = screen.getAllByRole('button').filter(b =>
-      ['Editor', 'History', 'Clusters', 'GitHub', 'Settings'].includes(b.getAttribute('aria-label') ?? '')
-    );
-    expect(activityButtons).toHaveLength(5);
+    expect(screen.getByRole('tablist', { name: 'Primary sections' })).toBeInTheDocument();
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toHaveLength(5);
   });
 
-  it('renders an Editor button', () => {
+  it('renders an Editor tab', () => {
     render(ActivityBar);
-    expect(screen.getByRole('button', { name: 'Editor' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Editor' })).toBeInTheDocument();
   });
 
-  it('renders a History button', () => {
+  it('renders a History tab', () => {
     render(ActivityBar);
-    expect(screen.getByRole('button', { name: 'History' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'History' })).toBeInTheDocument();
   });
 
-  it('renders a Clusters button', () => {
+  it('renders a Clusters tab', () => {
     render(ActivityBar);
-    expect(screen.getByRole('button', { name: 'Clusters' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Clusters' })).toBeInTheDocument();
   });
 
-  it('renders a GitHub button', () => {
+  it('renders a GitHub tab', () => {
     render(ActivityBar);
-    expect(screen.getByRole('button', { name: 'GitHub' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'GitHub' })).toBeInTheDocument();
   });
 
-  it('renders a Settings button', () => {
+  it('renders a Settings tab', () => {
     render(ActivityBar);
-    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Settings' })).toBeInTheDocument();
   });
 
-  it('Editor button is active by default (aria-pressed=true)', () => {
+  it('Editor tab is selected by default (aria-selected=true)', () => {
     render(ActivityBar);
-    const editorBtn = screen.getByRole('button', { name: 'Editor' });
-    expect(editorBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('tab', { name: 'Editor' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('non-active buttons have aria-pressed=false', () => {
+  it('non-selected tabs have aria-selected=false', () => {
     render(ActivityBar);
-    expect(screen.getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('button', { name: 'Clusters' })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('tab', { name: 'History' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'Clusters' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'false');
   });
 
-  it('clicking History button sets it as active', async () => {
+  it('clicking History tab selects it', async () => {
     const user = userEvent.setup();
     render(ActivityBar);
-    const historyBtn = screen.getByRole('button', { name: 'History' });
-    await user.click(historyBtn);
-    expect(historyBtn).toHaveAttribute('aria-pressed', 'true');
+    const historyTab = screen.getByRole('tab', { name: 'History' });
+    await user.click(historyTab);
+    expect(historyTab).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('clicking a different button deactivates the previous one', async () => {
+  it('clicking a different tab deselects the previous one', async () => {
     const user = userEvent.setup();
     render(ActivityBar);
-    const editorBtn = screen.getByRole('button', { name: 'Editor' });
-    const historyBtn = screen.getByRole('button', { name: 'History' });
+    const editorTab = screen.getByRole('tab', { name: 'Editor' });
+    const historyTab = screen.getByRole('tab', { name: 'History' });
 
-    // Initially Editor is active
-    expect(editorBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(editorTab).toHaveAttribute('aria-selected', 'true');
 
-    // Click History
-    await user.click(historyBtn);
-    expect(historyBtn).toHaveAttribute('aria-pressed', 'true');
-    expect(editorBtn).toHaveAttribute('aria-pressed', 'false');
+    await user.click(historyTab);
+    expect(historyTab).toHaveAttribute('aria-selected', 'true');
+    expect(editorTab).toHaveAttribute('aria-selected', 'false');
   });
 
-  it('clicking Clusters makes it active', async () => {
+  it('clicking Clusters selects it', async () => {
     const user = userEvent.setup();
     render(ActivityBar);
-    await user.click(screen.getByRole('button', { name: 'Clusters' }));
-    expect(screen.getByRole('button', { name: 'Clusters' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('tab', { name: 'Clusters' }));
+    expect(screen.getByRole('tab', { name: 'Clusters' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('clicking Settings makes it active', async () => {
+  it('clicking Settings selects it', async () => {
     const user = userEvent.setup();
     render(ActivityBar);
-    await user.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+    expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('clicking GitHub makes it active', async () => {
+  it('clicking GitHub selects it', async () => {
     const user = userEvent.setup();
     render(ActivityBar);
-    await user.click(screen.getByRole('button', { name: 'GitHub' }));
-    expect(screen.getByRole('button', { name: 'GitHub' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('tab', { name: 'GitHub' }));
+    expect(screen.getByRole('tab', { name: 'GitHub' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('accepts an initial active prop', () => {
     render(ActivityBar, { props: { active: 'settings' } });
-    expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Editor' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Editor' })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('ArrowDown cycles to the next tab', async () => {
+    const user = userEvent.setup();
+    render(ActivityBar);
+    const tablist = screen.getByRole('tablist', { name: 'Primary sections' });
+    tablist.focus();
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('tab', { name: 'History' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('ArrowUp from first tab wraps to the last tab', async () => {
+    const user = userEvent.setup();
+    render(ActivityBar);
+    const tablist = screen.getByRole('tablist', { name: 'Primary sections' });
+    tablist.focus();
+    await user.keyboard('{ArrowUp}');
+    expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'true');
   });
 });

@@ -105,7 +105,7 @@
     border: 1px solid var(--color-border-subtle);
     background: var(--color-bg-card);
     cursor: pointer;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring);
   }
 
   .turn-card:hover {

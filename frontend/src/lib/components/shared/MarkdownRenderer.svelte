@@ -390,7 +390,7 @@
     color: var(--tier-accent, var(--color-neon-cyan));
     text-decoration: none;
     border-bottom: 1px solid rgba(var(--tier-accent-rgb, 0, 229, 255), 0.2);
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring);
   }
 
   .md-render :global(a:hover) {

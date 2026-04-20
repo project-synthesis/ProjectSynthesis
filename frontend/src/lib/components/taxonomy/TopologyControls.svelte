@@ -282,7 +282,7 @@
     font-family: var(--font-mono);
     font-size: 9px;
     color: color-mix(in srgb, var(--color-text-dim) 40%, transparent);
-    transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-structural) var(--ease-spring);
   }
 
   .hud-lod {
@@ -302,7 +302,7 @@
     font-family: var(--font-mono);
     font-size: 9px;
     color: color-mix(in srgb, var(--color-text-dim) 40%, transparent);
-    transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-structural) var(--ease-spring);
     white-space: nowrap;
   }
 
@@ -324,8 +324,8 @@
     padding: 6px;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1),
-                transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-structural) var(--ease-spring),
+                transform var(--duration-structural) var(--ease-spring);
     background: color-mix(in srgb, var(--color-bg-primary) 80%, transparent);
   }
 
@@ -347,9 +347,9 @@
     font-family: var(--font-mono);
     font-size: 9px;
     cursor: pointer;
-    transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-micro) var(--ease-spring),
+                color var(--duration-micro) var(--ease-spring),
+                background var(--duration-micro) var(--ease-spring);
   }
 
   .hud-btn:hover:not(:disabled) {
@@ -378,8 +378,8 @@
     pointer-events: none;
     opacity: 0;
     transform: translateY(8px);
-    transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1),
-                transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-structural) var(--ease-spring),
+                transform var(--duration-structural) var(--ease-spring);
     background: color-mix(in srgb, var(--color-bg-primary) 80%, transparent);
   }
 
@@ -399,7 +399,7 @@
     justify-content: center;
     pointer-events: auto;
     background: color-mix(in srgb, var(--color-bg-primary) 40%, transparent);
-    animation: hint-fade-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: hint-fade-in var(--duration-hover) var(--ease-spring);
     z-index: 20;
   }
 
@@ -413,7 +413,7 @@
     background: color-mix(in srgb, var(--color-bg-secondary) 95%, transparent);
     border: 1px solid color-mix(in srgb, var(--hint-accent, var(--color-neon-cyan)) 25%, transparent);
     font-family: var(--font-mono);
-    animation: hint-slide-in 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: hint-slide-in var(--duration-structural) var(--ease-spring);
   }
 
   @keyframes hint-slide-in {

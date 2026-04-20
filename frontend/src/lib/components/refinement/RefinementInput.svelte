@@ -59,7 +59,7 @@
     background: var(--color-bg-input);
     border: 1px solid var(--color-border-subtle);
     outline: none;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring);
   }
 
   .input-field::placeholder {
@@ -89,8 +89,8 @@
     cursor: pointer;
     white-space: nowrap;
     flex-shrink: 0;
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
 
   .submit-btn:hover:not(:disabled) {

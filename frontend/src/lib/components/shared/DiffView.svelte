@@ -308,7 +308,7 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
     cursor: pointer;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
   }
 
   .mode-btn:first-child {
