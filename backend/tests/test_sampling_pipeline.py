@@ -339,7 +339,7 @@ async def test_run_sampling_analyze():
     ctx = _make_ctx()
     ctx.session.create_message = AsyncMock(side_effect=mock_create_message)
 
-    with patch("app.services.sampling_pipeline.async_session_factory") as mock_factory:
+    with patch("app.services.sampling.analyze.async_session_factory") as mock_factory:
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()
