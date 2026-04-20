@@ -79,7 +79,8 @@ src/lib/components/
                 # [meta-patterns + 5 context-aware empty states],
                 # ClusterTemplatesSection [cluster-scoped templates],
                 # TaxonomyHealthPanel [idle Q_health/coherence/separation +
-                # sparkline]), StatusBar
+                # sparkline] — all three Inspector sections co-located in
+                # layout/, not a subfolder), StatusBar
   editor/       # PromptEdit, ForgeArtifact, PatternSuggestion, PassthroughView
   taxonomy/     # SemanticTopology, TopologyControls (diegetic UI — auto-hide controls,
                 # right-edge hover zone, Q key metrics, inline hint card),
