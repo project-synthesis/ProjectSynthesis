@@ -85,16 +85,65 @@ class UpdateClusterResponse(BaseModel):
 async def list_projects(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """List all project nodes for project selection UI."""
-    result = await db.execute(
+    """List all project nodes for project selection UI.
+
+    ``prompt_count`` and ``cluster_count`` are computed live so the dropdown
+    never lies about the user's view:
+
+      * ``prompt_count`` — optimisations whose ``project_id`` matches. Ground
+        truth; driven by B1 pipeline attribution at persist time.
+      * ``cluster_count`` — visible clusters (active|candidate|mature) whose
+        ``dominant_project_id`` matches. Zero when warm/cold phases haven't
+        reconciled ``dominant_project_id`` yet — in that case ``prompt_count``
+        stays accurate since opts are authoritative.
+
+    ``member_count`` is retained for backward compatibility and mirrors
+    ``prompt_count`` — the pre-fix contract of the dropdown was "prompts this
+    project owns", and the UI helper labels the parenthetical accordingly.
+    Project nodes maintain ``member_count=0`` on the DB row because no warm
+    phase aggregates descendants onto project nodes; compute-on-read is the
+    right pattern here (one GROUP BY per dropdown refresh).
+    """
+    # Prompts per project — ground truth from Optimization.project_id.
+    prompt_counts = await db.execute(
+        select(
+            Optimization.project_id, func.count(Optimization.id),
+        )
+        .where(Optimization.project_id.isnot(None))
+        .group_by(Optimization.project_id)
+    )
+    prompt_by_pid: dict[str, int] = {
+        pid: int(cnt) for pid, cnt in prompt_counts.all() if pid is not None
+    }
+
+    # Clusters per project — derived from dominant_project_id.
+    cluster_counts = await db.execute(
+        select(
+            PromptCluster.dominant_project_id,
+            func.count(PromptCluster.id),
+        )
+        .where(
+            PromptCluster.state.in_(("active", "candidate", "mature")),
+            PromptCluster.dominant_project_id.isnot(None),
+        )
+        .group_by(PromptCluster.dominant_project_id)
+    )
+    cluster_by_pid: dict[str, int] = {
+        pid: int(cnt) for pid, cnt in cluster_counts.all() if pid is not None
+    }
+
+    projects_result = await db.execute(
         select(PromptCluster).where(PromptCluster.state == "project")
     )
-    projects = result.scalars().all()
+    projects = projects_result.scalars().all()
     return [
         {
             "id": p.id,
             "label": p.label,
-            "member_count": p.member_count or 0,
+            "prompt_count": prompt_by_pid.get(p.id, 0),
+            "cluster_count": cluster_by_pid.get(p.id, 0),
+            # Backward-compat alias — UI reads this today.
+            "member_count": prompt_by_pid.get(p.id, 0),
         }
         for p in projects
     ]
@@ -104,28 +153,50 @@ async def list_projects(
 async def get_cluster_tree(
     request: Request,
     min_persistence: float = Query(0.0, ge=0.0, le=1.0),
-    project_id: str | None = Query(None),  # ADR-005 Phase 2A
+    project_id: str | None = Query(None),  # ADR-005 B6 — hybrid-aware scope
+    scope: str | None = Query(
+        None,
+        description="'all' to force global view even when project_id is set",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> ClusterTreeResponse:
-    """Flat node list for 3D topology visualization."""
+    """Flat node list for 3D topology visualization.
+
+    ADR-005 B6 — Hybrid-aware project filter:
+    When ``project_id`` is provided and ``scope != "all"``:
+      * Clusters where ``dominant_project_id == project_id`` are included.
+      * The requested project node itself is included.
+      * All structural *domain* nodes (siblings of projects at the root of the
+        hybrid taxonomy) are included as the visible skeleton so that a
+        freshly-linked project never renders as an empty canvas.
+      * Other project nodes are excluded.
+    ``?scope=all`` forces the global view (no filter).
+    """
     try:
         db.autoflush = False
         engine = _get_engine(request)
         nodes = await engine.get_tree(db, min_persistence=min_persistence)
 
-        # ADR-005 Phase 2A: filter tree to a single project sub-tree
-        if project_id:
-            # Collect IDs of the project node + its children + grandchildren
-            project_ids = {project_id}
-            # First pass: direct children of the project node
+        if project_id and scope != "all":
+            filtered: list[dict] = []
             for n in nodes:
-                if n.get("parent_id") in project_ids:
-                    project_ids.add(n["id"])
-            # Second pass: grandchildren (cluster -> domain -> project)
-            for n in nodes:
-                if n.get("parent_id") in project_ids:
-                    project_ids.add(n["id"])
-            nodes = [n for n in nodes if n["id"] in project_ids]
+                nid = n["id"]
+                nstate = n.get("state")
+                dpid = n.get("dominant_project_id")
+                if nid == project_id:
+                    # The requested project node itself — always visible.
+                    filtered.append(n)
+                elif nstate == "project":
+                    # Other projects — excluded from scoped view.
+                    continue
+                elif nstate == "domain":
+                    # Domain nodes are global structural skeleton.
+                    filtered.append(n)
+                elif dpid == project_id:
+                    # In-scope cluster (active / candidate / mature / archived).
+                    filtered.append(n)
+                # All other clusters (belong to another project) are excluded.
+            nodes = filtered
 
         return ClusterTreeResponse(nodes=[ClusterNode(**n) for n in nodes])
     except OperationalError as exc:
@@ -139,13 +210,28 @@ async def get_cluster_tree(
 @router.get("/api/clusters/stats")
 async def get_cluster_stats(
     request: Request,
+    project_id: str | None = Query(None),  # ADR-005 B6
+    scope: str | None = Query(
+        None,
+        description="'all' to force global view even when project_id is set",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> ClusterStats:
-    """System quality metrics and snapshot history."""
+    """System quality metrics and snapshot history.
+
+    ADR-005 B6 — When ``project_id`` is provided and ``scope != "all"``,
+    per-project counts, tree depth, leaf count and live ``q_health`` are
+    scoped to the target project (matching the tree filter's semantics:
+    project node + structural domain nodes + clusters whose
+    ``dominant_project_id`` matches). Snapshot-derived series (``q_history``,
+    ``q_sparkline``, ``q_system``) stay global since ``TaxonomySnapshot`` is a
+    system-wide audit trail.
+    """
     try:
         db.autoflush = False
         engine = _get_engine(request)
-        data = await engine.get_stats(db)
+        effective_pid = project_id if scope != "all" else None
+        data = await engine.get_stats(db, project_id=effective_pid)
 
         # Map total_families -> total_clusters for the unified schema
         total_clusters = data.pop("total_families", 0)
@@ -163,11 +249,32 @@ async def get_similarity_edges(
     request: Request,
     threshold: float = Query(0.50, ge=0.0, le=1.0),
     max_edges: int = Query(100, ge=1, le=1000),
+    project_id: str | None = Query(None),  # ADR-005 B6
+    scope: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
 ) -> SimilarityEdgesResponse:
-    """Pairwise cosine similarity edges above threshold for topology overlay."""
+    """Pairwise cosine similarity edges above threshold for topology overlay.
+
+    ADR-005 B6: When ``project_id`` is set and ``scope != "all"``, edges are
+    filtered to pairs where both endpoints live in the target project
+    (``dominant_project_id == project_id`` or the cluster *is* the project
+    node).  This keeps the topology overlay aligned with the scoped tree view.
+    """
     try:
         engine = _get_engine(request)
         pairs = engine.embedding_index.pairwise_similarities(threshold, max_edges)
+
+        if project_id and scope != "all":
+            # Load the membership set once — cheap compared to the O(N²) pair sweep.
+            mem_rows = (await db.execute(
+                select(PromptCluster.id).where(
+                    (PromptCluster.dominant_project_id == project_id)
+                    | (PromptCluster.id == project_id)
+                )
+            )).all()
+            allowed: set[str] = {r[0] for r in mem_rows}
+            pairs = [(a, b, s) for a, b, s in pairs if a in allowed and b in allowed]
+
         return SimilarityEdgesResponse(
             edges=[
                 SimilarityEdge(from_id=a, to_id=b, similarity=s)
@@ -185,6 +292,8 @@ async def get_similarity_edges(
 @router.get("/api/clusters/injection-edges")
 async def get_injection_edges(
     request: Request,
+    project_id: str | None = Query(None),  # ADR-005 B6
+    scope: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> InjectionEdgesResponse:
     """Directed injection provenance edges: source cluster → target cluster.
@@ -195,9 +304,18 @@ async def get_injection_edges(
     is the number of injection events along that source→target pair.
 
     Only includes edges where both source and target clusters are non-structural.
+
+    ADR-005 B6: When ``project_id`` is set and ``scope != "all"``, edges are
+    restricted to clusters whose ``dominant_project_id`` matches — so the
+    overlay doesn't leak cross-project injection provenance into a scoped view.
     """
     try:
         db.autoflush = False
+        scope_filter = PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+        if project_id and scope != "all":
+            scope_filter = scope_filter & (
+                PromptCluster.dominant_project_id == project_id
+            )
         stmt = (
             select(
                 OptimizationPattern.cluster_id.label("source_id"),
@@ -211,13 +329,13 @@ async def get_injection_edges(
             .where(
                 OptimizationPattern.relationship == "injected",
                 Optimization.cluster_id.isnot(None),
-                # Source cluster must still exist and be non-structural
+                # Source cluster must still exist and be in scope
                 OptimizationPattern.cluster_id.in_(
-                    select(PromptCluster.id).where(PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES))
+                    select(PromptCluster.id).where(scope_filter)
                 ),
-                # Target cluster must still exist and be non-structural
+                # Target cluster must still exist and be in scope
                 Optimization.cluster_id.in_(
-                    select(PromptCluster.id).where(PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES))
+                    select(PromptCluster.id).where(scope_filter)
                 ),
             )
             .group_by(

@@ -33,6 +33,7 @@ class ClusterNode(BaseModel):
     split_failures: int = 0
     meta_pattern_count: int = 0
     created_at: datetime | None = None
+    dominant_project_id: str | None = None  # ADR-005 B6 — scope filter source
 
 
 class ClusterTreeResponse(BaseModel):

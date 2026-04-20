@@ -180,3 +180,48 @@ async def test_get_stats_cache_invalidation(db, mock_embedding, mock_provider):
 
     # Different objects (cache was cleared)
     assert result1 is not result2
+
+
+@pytest.mark.asyncio
+async def test_get_stats_cache_isolated_per_project_scope(
+    db, mock_embedding, mock_provider,
+) -> None:
+    """ADR-005 B6: stats cache is keyed by project_id, so scoped and global
+    callers do not poison each other. Populating the cache for project-a must
+    not return project-a's snapshot when queried globally (project_id=None)
+    or for project-b."""
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+    project_a = PromptCluster(
+        label="project-a",
+        state="project",
+        centroid_embedding=np.ones(384, dtype=np.float32).tobytes(),
+        member_count=0,
+        coherence=0.0,
+    )
+    project_b = PromptCluster(
+        label="project-b",
+        state="project",
+        centroid_embedding=np.ones(384, dtype=np.float32).tobytes(),
+        member_count=0,
+        coherence=0.0,
+    )
+    db.add_all([project_a, project_b])
+    await db.flush()
+
+    global_result = await engine.get_stats(db)
+    scoped_a = await engine.get_stats(db, project_id=project_a.id)
+    scoped_b = await engine.get_stats(db, project_id=project_b.id)
+
+    # Per-scope cache: three distinct cache entries, three distinct objects.
+    assert None in engine._stats_cache
+    assert project_a.id in engine._stats_cache
+    assert project_b.id in engine._stats_cache
+    assert global_result is not scoped_a
+    assert global_result is not scoped_b
+    assert scoped_a is not scoped_b
+
+    # Cache hit isolation: re-querying each scope returns its own snapshot.
+    assert await engine.get_stats(db) is global_result
+    assert await engine.get_stats(db, project_id=project_a.id) is scoped_a
+    assert await engine.get_stats(db, project_id=project_b.id) is scoped_b

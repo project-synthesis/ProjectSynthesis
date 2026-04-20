@@ -24,6 +24,73 @@ from app.models import PromptCluster
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Bootstrap domain vocabulary — classification-only fallback
+# ---------------------------------------------------------------------------
+#
+# Mirrors ``alembic/versions/a1b2c3d4e5f6_add_domain_nodes.py``'s
+# ``SEED_DOMAINS[*]["signal_keywords"]``.  Used by :meth:`DomainSignalLoader.load`
+# as a fallback for labels that do not have a live ``state='domain'`` node in
+# the database, so heuristic classification stays functional after ADR-006
+# dissolves empty seed domains.
+#
+# Rationale: ADR-006 forbids **structural** seed protection (no permanent
+# domain nodes), but it does not forbid a baseline **classification**
+# vocabulary.  The distinction is that this vocabulary never creates a
+# ``PromptCluster`` row — it only feeds the heuristic A3 layer so incoming
+# prompts can still be labeled "backend" / "frontend" / ... once seed
+# domains dissolve.  New structural domains still emerge organically via
+# ``_propose_domains()`` once enough matching optimizations accumulate.
+#
+# Keep in sync with the alembic migration.  Live domain signals always win
+# (merged by label in :meth:`DomainSignalLoader.load`), so organic
+# evolution in cluster_metadata overrides bootstrap without loss.
+BOOTSTRAP_DOMAIN_VOCABULARY: dict[str, list[tuple[str, float]]] = {
+    "backend": [
+        ("api", 0.8), ("endpoint", 0.9), ("server", 0.8),
+        ("middleware", 0.9), ("fastapi", 1.0), ("django", 1.0),
+        ("flask", 1.0), ("authentication", 0.7), ("route", 0.6),
+    ],
+    "frontend": [
+        ("react", 1.0), ("svelte", 1.0), ("component", 0.8),
+        ("css", 0.9), ("ui", 0.8), ("layout", 0.7),
+        ("responsive", 0.8), ("tailwind", 0.9), ("vue", 1.0),
+    ],
+    "database": [
+        ("sql", 1.0), ("migration", 0.9), ("schema", 0.8),
+        ("query", 0.7), ("postgresql", 1.0), ("sqlite", 1.0),
+        ("orm", 0.8), ("table", 0.6),
+    ],
+    "devops": [
+        ("docker", 1.0), ("ci/cd", 1.0), ("kubernetes", 1.0),
+        ("terraform", 1.0), ("nginx", 0.9), ("monitoring", 0.7),
+        ("deploy", 0.8),
+    ],
+    "security": [
+        ("auth", 0.7), ("encryption", 1.0), ("vulnerability", 1.0),
+        ("cors", 0.9), ("jwt", 0.9), ("oauth", 0.9), ("sanitize", 0.8),
+        ("injection", 0.9), ("xss", 1.0), ("csrf", 1.0),
+    ],
+    "fullstack": [
+        ("fullstack", 1.0), ("full-stack", 1.0), ("full stack", 1.0),
+        ("end-to-end", 0.7), ("system-wide", 0.6), ("comprehensive", 0.3),
+        ("frontend", 0.5), ("backend", 0.5),
+        ("react", 0.4), ("svelte", 0.4), ("vue", 0.4),
+        ("api", 0.4), ("endpoint", 0.3),
+        ("component", 0.3), ("server", 0.3),
+        ("ui", 0.3), ("database", 0.3),
+    ],
+    "data": [
+        ("data science", 1.0), ("machine learning", 1.0), ("dataset", 1.0),
+        ("pandas", 0.9), ("numpy", 0.9), ("sklearn", 0.9), ("jupyter", 0.9),
+        ("model training", 0.9), ("prediction", 0.8), ("classification", 0.8),
+        ("visualization", 0.7), ("analytics", 0.7), ("etl", 0.8),
+        ("statistics", 0.7), ("regression", 0.8), ("notebook", 0.7),
+        ("feature engineering", 0.9), ("churn", 0.6), ("sentiment", 0.6),
+    ],
+    # "general" has no signal_keywords in the migration — same here.
+}
+
+# ---------------------------------------------------------------------------
 # Process-level singleton — mirrors DomainResolver pattern
 # ---------------------------------------------------------------------------
 
@@ -85,8 +152,18 @@ class DomainSignalLoader:
     # Loading
     # ------------------------------------------------------------------
 
-    async def load(self, db: AsyncSession) -> None:
+    async def load(self, db: AsyncSession, *, live_only: bool = False) -> None:
         """Query domain nodes and populate signal tables.
+
+        Merges live domain signals with :data:`BOOTSTRAP_DOMAIN_VOCABULARY` as
+        a fallback.  Live entries always win when labels collide — organic
+        evolution overrides bootstrap without loss.
+
+        Args:
+            db: Async SQLAlchemy session.
+            live_only: When True, skip the bootstrap vocabulary merge.  Used
+                by tests that need to verify zero-vocabulary behavior on a
+                fresh DB, and by callers that explicitly want no baseline.
 
         Silently ignores DB errors so a taxonomy failure never crashes the
         heuristic path.
@@ -109,6 +186,17 @@ class DomainSignalLoader:
                 if gen_qual:
                     new_qualifier_cache[cluster.label] = gen_qual
 
+            live_count = len(new_signals)
+            live_labels = set(new_signals.keys())
+
+            # Bootstrap fallback — merge only labels not already live
+            bootstrap_count = 0
+            if not live_only:
+                for label, kws in BOOTSTRAP_DOMAIN_VOCABULARY.items():
+                    if label not in new_signals:
+                        new_signals[label] = list(kws)
+                        bootstrap_count += 1
+
             self._signals = new_signals
             self._precompile_patterns()
             self._qualifier_cache = new_qualifier_cache
@@ -120,20 +208,23 @@ class DomainSignalLoader:
 
             total_keywords = sum(len(kws) for kws in new_signals.values())
             logger.info(
-                "DomainSignalLoader loaded %d domains with %d total keywords",
+                "DomainSignalLoader loaded %d domains with %d total keywords "
+                "(live=%d, bootstrap=%d, live_only=%s)",
                 len(self._signals), total_keywords,
+                live_count, bootstrap_count, live_only,
             )
             # Only warn when there are *actual* non-general domain nodes with
             # no signals — the seed 'general' domain legitimately has no
             # signal_keywords because it's the fallback classification, and
             # shipping that warning at every startup with only seed data was
-            # misleading noise.
+            # misleading noise.  Use `live_labels` (not `self._signals`) so
+            # the bootstrap merge doesn't mask the warning.
             non_general_clusters = [c for c in clusters if c.label != "general"]
-            if not self._signals and non_general_clusters:
+            if not live_labels and non_general_clusters:
                 logger.warning(
                     "DomainSignalLoader: %d non-general domain node(s) present "
-                    "but no signal_keywords extracted — classifier will default "
-                    "to 'general' for them",
+                    "but no signal_keywords extracted — classifier will fall "
+                    "back to bootstrap vocabulary for them",
                     len(non_general_clusters),
                 )
         except Exception:

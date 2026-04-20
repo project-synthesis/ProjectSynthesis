@@ -369,8 +369,11 @@ class TaxonomyEngine:
         # warm path lacks the full embedding matrix needed for silhouette.
         self._last_silhouette: float = 0.0
         # Stats cache — monotonic TTL, invalidated on warm/cold path completion.
-        self._stats_cache: dict | None = None
-        self._stats_cache_time: float = 0.0
+        # ADR-005 B6: keyed per project_id (None = global/unscoped) so that
+        # ``/api/clusters/stats?project_id=X`` views don't pollute the global
+        # cache and vice versa.
+        self._stats_cache: dict[str | None, dict] = {}
+        self._stats_cache_time: dict[str | None, float] = {}
         # ADR-005: Dirty-set tracking for warm path optimization.
         # Hot path marks clusters as dirty when members change.
         # Warm path snapshots and clears at cycle start.
@@ -1586,9 +1589,11 @@ class TaxonomyEngine:
 
         from app.services.pipeline_constants import (
             DOMAIN_COUNT_CEILING,
+            DOMAIN_DISCOVERY_BOOTSTRAP_DB_THRESHOLD,
             DOMAIN_DISCOVERY_CONSISTENCY,
             DOMAIN_DISCOVERY_MIN_COHERENCE,
             DOMAIN_DISCOVERY_MIN_MEMBERS,
+            DOMAIN_DISCOVERY_POOL_MIN_MEMBERS,
         )
         # --- Step a: Check domain ceiling ---
         ceiling_q = await db.execute(
@@ -1613,17 +1618,30 @@ class TaxonomyEngine:
                 logger.debug("Failed to publish domain_ceiling_reached event: %s", _dc_exc)
             return []
 
-        # --- Step b: Find "general" domain node ---
-        gen_q = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state == "domain",
-                PromptCluster.label == "general",
-            )
-        )
-        general_node = gen_q.scalars().first()
+        # --- Step b: Find canonical global "general" domain node ---
+        # Hybrid taxonomy: prefer parent_id=NULL (global root); deterministic
+        # ordering prevents multi-project databases from picking an arbitrary
+        # per-project general via `.first()` on an unordered query.
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        general_node = await get_canonical_general(db)
         if general_node is None:
             logger.debug("No 'general' domain node — skipping discovery")
             return []
+
+        # --- Change B: Adaptive member floor for sparse databases ---
+        # Below DOMAIN_DISCOVERY_BOOTSTRAP_DB_THRESHOLD total optimizations, the
+        # per-cluster member floor relaxes by 1 so a 2-prompt signal on a fresh
+        # DB can promote. Above the threshold, the standard floor applies.
+        # ADR-006 compliant: applies to ANY label, not just seeds.
+        total_opts_q = await db.execute(
+            select(func.count()).select_from(Optimization)
+        )
+        total_opts = int(total_opts_q.scalar() or 0)
+        if total_opts < DOMAIN_DISCOVERY_BOOTSTRAP_DB_THRESHOLD:
+            effective_min_members = max(2, DOMAIN_DISCOVERY_MIN_MEMBERS - 1)
+        else:
+            effective_min_members = DOMAIN_DISCOVERY_MIN_MEMBERS
 
         # --- Step c: Query eligible children ---
         # Coherence is now recomputed from actual member embeddings during
@@ -1632,13 +1650,14 @@ class TaxonomyEngine:
             select(PromptCluster).where(
                 PromptCluster.parent_id == general_node.id,
                 PromptCluster.state.in_(["active", "mature"]),
-                PromptCluster.member_count >= DOMAIN_DISCOVERY_MIN_MEMBERS,
+                PromptCluster.member_count >= effective_min_members,
                 PromptCluster.coherence >= DOMAIN_DISCOVERY_MIN_COHERENCE,
             )
         )
         candidates = list(children_q.scalars().all())
-        if not candidates:
-            return []
+        # Note: do NOT early-return here — Change A's cross-cluster pooled pass
+        # runs on clusters below the per-cluster member gate, so an empty
+        # per-cluster candidate list does not preclude pooled promotion.
 
         # --- Step d-f: Gather existing domain labels for dedup ---
         existing_q = await db.execute(
@@ -1724,6 +1743,129 @@ class TaxonomyEngine:
                     candidate.id, exc_info=True,
                 )
                 continue
+
+        # --- Change A: Cross-cluster pooled evidence pass ---
+        # Fragmented signals — 3 backend prompts split across 3 single-member
+        # clusters — all fail member_count >= MIN_MEMBERS individually, but
+        # their collective signal is unambiguous.  Pool by primary domain_raw
+        # across ALL general-parented clusters (no per-cluster member gate);
+        # each contributing cluster must still be internally consistent
+        # (>= DOMAIN_DISCOVERY_CONSISTENCY), and the pooled total must cross
+        # DOMAIN_DISCOVERY_POOL_MIN_MEMBERS.  Labels already promoted by the
+        # per-cluster pass are skipped.
+        try:
+            all_children_q = await db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.parent_id == general_node.id,
+                    PromptCluster.state.in_(["active", "mature", "candidate"]),
+                )
+            )
+            all_children = list(all_children_q.scalars().all())
+
+            pooled: dict[str, dict] = {}
+            for candidate in all_children:
+                try:
+                    opt_q = await db.execute(
+                        select(Optimization.domain_raw).where(
+                            Optimization.cluster_id == candidate.id,
+                            Optimization.domain_raw.isnot(None),
+                        )
+                    )
+                    raws = [row[0] for row in opt_q.all() if row[0]]
+                    if not raws:
+                        continue
+                    primary_counts: Counter[str] = Counter()
+                    for raw in raws:
+                        primary, _ = parse_domain(raw)
+                        primary_counts[primary] += 1
+                    top_label, top_count = primary_counts.most_common(1)[0]
+                    if top_label == "general":
+                        continue
+                    # Per-cluster internal consistency gate — inconsistent
+                    # clusters don't contribute any members to the pool.
+                    if top_count / len(raws) < DOMAIN_DISCOVERY_CONSISTENCY:
+                        continue
+                    entry = pooled.setdefault(
+                        top_label, {"members": 0, "clusters": []},
+                    )
+                    entry["members"] += top_count
+                    entry["clusters"].append(candidate)
+                except Exception:
+                    logger.debug(
+                        "Pooled-pass cluster scan failed for %s — skipping",
+                        getattr(candidate, "id", "?"), exc_info=True,
+                    )
+                    continue
+
+            # Change B + A interaction: apply the same bootstrap relaxation
+            # to the pooled floor. With <BOOTSTRAP_DB_THRESHOLD total opts
+            # (e.g. 5 prompts split 3 backend + 2 frontend), a 2-member
+            # pooled signal is meaningful; the dissolution floor still
+            # collects premature promotions at the next maintenance cycle.
+            effective_pool_min_members = (
+                max(2, DOMAIN_DISCOVERY_POOL_MIN_MEMBERS - 1)
+                if total_opts < DOMAIN_DISCOVERY_BOOTSTRAP_DB_THRESHOLD
+                else DOMAIN_DISCOVERY_POOL_MIN_MEMBERS
+            )
+
+            for label, bucket in pooled.items():
+                if label in created:
+                    continue
+                if label in existing_domains:
+                    continue
+                if bucket["members"] < effective_pool_min_members:
+                    continue
+                # Respect ceiling (may have grown via per-cluster pass)
+                if (domain_count + len(created)) >= DOMAIN_COUNT_CEILING:
+                    break
+                # Seed the domain node off the largest contributing cluster
+                # so _create_domain_node has a meaningful seed for coloring.
+                seed_cluster = max(
+                    bucket["clusters"],
+                    key=lambda c: c.member_count or 0,
+                )
+                try:
+                    _domain_node, _members_reparented = (
+                        await self._create_domain_node(
+                            db, label, existing_domains, seed_cluster,
+                            general_node_id=general_node.id,
+                        )
+                    )
+                    created.append(label)
+                    existing_domains.add(label)
+                    # Re-parent every contributing cluster to the new domain
+                    for c in bucket["clusters"]:
+                        if c.id == seed_cluster.id:
+                            continue  # already reparented by _create_domain_node
+                        c.parent_id = _domain_node.id
+                        c.domain = label
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover",
+                            decision="domain_created",
+                            cluster_id=_domain_node.id,
+                            context={
+                                "domain_label": label,
+                                "source": "cross_cluster_pool",
+                                "pooled_members": bucket["members"],
+                                "contributing_clusters": len(bucket["clusters"]),
+                                "total_domains_after": (
+                                    domain_count + len(created)
+                                ),
+                            },
+                        )
+                    except RuntimeError:
+                        pass
+                except Exception:
+                    logger.error(
+                        "Pooled domain promotion failed for label %s",
+                        label, exc_info=True,
+                    )
+                    continue
+        except Exception as pool_exc:
+            logger.warning(
+                "Cross-cluster pooled pass failed (non-fatal): %s", pool_exc,
+            )
 
         # --- Post-discovery re-parenting sweep ---
         # Check ALL general-parented clusters against existing domain nodes.
@@ -2620,14 +2762,10 @@ class TaxonomyEngine:
 
         dissolved: list[str] = []
 
-        # Find the "general" domain node as dissolution target
-        general_q = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state == "domain",
-                PromptCluster.label == "general",
-            )
-        )
-        general_node = general_q.scalars().first()
+        # Find the canonical global "general" domain node as dissolution target.
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        general_node = await get_canonical_general(db)
         if not general_node:
             return dissolved
 
@@ -3059,13 +3197,9 @@ class TaxonomyEngine:
             DOMAIN_DISCOVERY_MIN_MEMBERS,
         )
 
-        general_q = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state == "domain",
-                PromptCluster.label == "general",
-            )
-        )
-        general = general_q.scalars().first()
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        general = await get_canonical_general(db)
         if not general:
             return
 
@@ -3521,13 +3655,9 @@ class TaxonomyEngine:
             DOMAIN_DISCOVERY_MIN_MEMBERS,
         )
 
-        general = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state == "domain",
-                PromptCluster.label == "general",
-            )
-        )
-        general_node = general.scalars().first()
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        general_node = await get_canonical_general(db)
         if not general_node:
             return
 
@@ -3726,20 +3856,55 @@ class TaxonomyEngine:
         return mean_coherence, separation
 
     def _invalidate_stats_cache(self) -> None:
-        """Clear the stats cache after a warm or cold path mutation."""
-        self._stats_cache = None
+        """Clear all stats cache entries after a warm or cold path mutation."""
+        self._stats_cache.clear()
+        self._stats_cache_time.clear()
 
-    async def get_stats(self, db: AsyncSession) -> dict:
+    @staticmethod
+    def _stats_scope_clause(project_id: str | None):
+        """Return a SQLAlchemy WHERE clause matching the B6 tree filter.
+
+        Mirrors ``GET /api/clusters/tree?project_id=X`` semantics: include the
+        project node itself, all domain nodes (structural skeleton), and any
+        cluster whose ``dominant_project_id`` matches. Returns ``None`` when
+        ``project_id`` is ``None`` (global scope — no filter).
+        """
+        if project_id is None:
+            return None
+        return (
+            (PromptCluster.dominant_project_id == project_id)
+            | (PromptCluster.id == project_id)
+            | (PromptCluster.state == "domain")
+        )
+
+    async def get_stats(
+        self, db: AsyncSession, project_id: str | None = None,
+    ) -> dict:
+        """Return system/taxonomy health metrics.
+
+        ADR-005 B6 — When ``project_id`` is provided, counts (active, candidate,
+        mature, archived), tree depth/leaf metrics, total families and live
+        ``q_health`` are scoped to the target project + structural skeleton.
+        Snapshot-derived series (``q_history``, ``q_sparkline``, ``q_system``)
+        remain global since ``TaxonomySnapshot`` is system-wide. The cache is
+        keyed per ``project_id`` (including ``None``) so scoped and global
+        callers don't pollute each other.
+        """
         now = time.monotonic()
-        if self._stats_cache is not None and (now - self._stats_cache_time) < self._STATS_CACHE_TTL:
-            return self._stats_cache
+        cached = self._stats_cache.get(project_id)
+        cached_at = self._stats_cache_time.get(project_id, 0.0)
+        if cached is not None and (now - cached_at) < self._STATS_CACHE_TTL:
+            return cached
+
+        scope_clause = self._stats_scope_clause(project_id)
 
         # Node state counts via GROUP BY (avoids loading full ORM objects + blobs)
-        state_result = await db.execute(
-            select(PromptCluster.state, func.count(PromptCluster.id)).group_by(
-                PromptCluster.state
-            )
-        )
+        state_stmt = select(
+            PromptCluster.state, func.count(PromptCluster.id),
+        ).group_by(PromptCluster.state)
+        if scope_clause is not None:
+            state_stmt = state_stmt.where(scope_clause)
+        state_result = await db.execute(state_stmt)
         state_counts: dict[str, int] = dict(state_result.all())  # type: ignore[arg-type]
         active = state_counts.get("active", 0)
         candidate = state_counts.get("candidate", 0)
@@ -3747,9 +3912,12 @@ class TaxonomyEngine:
         archived = state_counts.get("archived", 0)
 
         # max_depth + leaf_count: lightweight projection (id + parent_id + state only)
-        tree_result = await db.execute(
-            select(PromptCluster.id, PromptCluster.parent_id, PromptCluster.state)
+        tree_stmt = select(
+            PromptCluster.id, PromptCluster.parent_id, PromptCluster.state,
         )
+        if scope_clause is not None:
+            tree_stmt = tree_stmt.where(scope_clause)
+        tree_result = await db.execute(tree_stmt)
         tree_rows = tree_result.all()
         id_to_parent: dict[str, str | None] = {r.id: r.parent_id for r in tree_rows}
 
@@ -3773,11 +3941,12 @@ class TaxonomyEngine:
         leaf_count = sum(1 for nid in active_ids if nid not in parent_ids)
 
         # Total pattern families (leaf clusters with a parent) via scalar COUNT
-        fam_count_result = await db.execute(
-            select(func.count(PromptCluster.id)).where(
-                PromptCluster.parent_id.isnot(None)
-            )
+        fam_stmt = select(func.count(PromptCluster.id)).where(
+            PromptCluster.parent_id.isnot(None)
         )
+        if scope_clause is not None:
+            fam_stmt = fam_stmt.where(scope_clause)
+        fam_count_result = await db.execute(fam_stmt)
         total_families = fam_count_result.scalar() or 0
 
         # Recent snapshots (last 30, ascending chronological)
@@ -3871,11 +4040,16 @@ class TaxonomyEngine:
         result["q_health_total_members"] = None
         result["q_health_cluster_count"] = None
         try:
-            _health_nodes_q = await db.execute(
-                select(PromptCluster).where(
-                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
-                )
+            _health_stmt = select(PromptCluster).where(
+                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
             )
+            if project_id is not None:
+                # Scoped q_health — in-project clusters only (drop the structural
+                # domain/project nodes that the wider scope clause lets through).
+                _health_stmt = _health_stmt.where(
+                    PromptCluster.dominant_project_id == project_id
+                )
+            _health_nodes_q = await db.execute(_health_stmt)
             _health_nodes = list(_health_nodes_q.scalars().all())
             _health_result = self._compute_q_health_from_nodes(
                 _health_nodes, silhouette=self._last_silhouette,
@@ -3889,8 +4063,8 @@ class TaxonomyEngine:
         except Exception as qh_exc:
             logger.debug("q_health computation failed (non-fatal): %s", qh_exc)
 
-        self._stats_cache = result
-        self._stats_cache_time = time.monotonic()
+        self._stats_cache[project_id] = result
+        self._stats_cache_time[project_id] = time.monotonic()
 
         return result
 
@@ -4115,14 +4289,11 @@ class TaxonomyEngine:
             )
             repaired += result.rowcount  # type: ignore[attr-defined]
 
-        # Repair orphaned clusters → re-parent under "general"
-        general_result = await db.execute(
-            select(PromptCluster.id).where(
-                PromptCluster.state == "domain", PromptCluster.label == "general"
-            )
-        )
-        general_row = general_result.first()
-        if general_row:
+        # Repair orphaned clusters → re-parent under canonical global "general"
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        general_node = await get_canonical_general(db)
+        if general_node is not None:
             orphan_result = await db.execute(
                 text("""
                     UPDATE prompt_cluster
@@ -4131,7 +4302,7 @@ class TaxonomyEngine:
                       AND parent_id NOT IN (SELECT id FROM prompt_cluster)
                       AND state != 'domain'
                 """),
-                {"general_id": general_row[0]},
+                {"general_id": general_node.id},
             )
             if orphan_result.rowcount > 0:  # type: ignore[attr-defined]
                 logger.info(
@@ -4267,4 +4438,5 @@ class TaxonomyEngine:
             "blend_w_optimized": round(w_opt, 4),
             "blend_w_transform": CLUSTERING_BLEND_W_TRANSFORM,
             "split_failures": meta.get("split_failures", 0),
+            "dominant_project_id": getattr(node, "dominant_project_id", None),
         }
