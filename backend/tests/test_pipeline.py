@@ -161,7 +161,7 @@ class TestPipelineOrchestrator:
             _make_analysis(), _make_optimization(),
             _make_scores(a_clarity=4.0, b_clarity=8.0),
         ]
-        with patch("app.services.pipeline.random.choice", return_value=True):  # original_first
+        with patch("app.services.pipeline_phases.random.choice", return_value=True):  # original_first
             events = []
             async for event in orchestrator.run(
                 raw_prompt="test", provider=mock_provider, db=db_session,
