@@ -1,14 +1,33 @@
 export type ToastAction = 'created' | 'modified' | 'deleted' | 'info';
 
+/**
+ * Optional action button rendered inside a toast.  Used by ADR-005 F5
+ * transition toasts ("Move / Keep in Legacy", "Stay / Switch") where the
+ * user needs a binary decision inline without opening the Navigator.
+ */
+export interface ToastActionButton {
+  label: string;
+  onClick: () => void | Promise<void>;
+  /** Visual weight.  Primary = accented; default = dim outline. */
+  variant?: 'primary' | 'default';
+}
+
 export interface ToastItem {
   id: string;
   symbol: string;
   message: string;
   color: string;
+  /**
+   * Optional action buttons.  When present, the toast is sticky (no auto-
+   * dismiss) until the user clicks an action or explicitly dismisses.
+   */
+  actions?: ToastActionButton[];
 }
 
 export interface ToastOptions {
   dismissMs?: number;
+  /** Force-override of the default — used by info() to keep toasts longer. */
+  actions?: ToastActionButton[];
 }
 
 const ACTION_CONFIG: Record<ToastAction, { symbol: string; color: string }> = {
@@ -33,13 +52,22 @@ class ToastStore {
   private _timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** Add a toast for a structural action (created/modified/deleted). Auto-dismisses after the default window. */
-  add(action: ToastAction, message: string): void {
-    this._enqueue(action, message, DISMISS_MS);
+  add(action: ToastAction, message: string): string {
+    return this._enqueue(action, message, DISMISS_MS);
   }
 
   /** Add a neutral info toast. Optional `dismissMs` override (finite positive number); falls back to the default. */
-  info(message: string, opts?: ToastOptions): void {
-    this._enqueue('info', message, _resolveDismissMs(opts));
+  info(message: string, opts?: ToastOptions): string {
+    return this._enqueue('info', message, _resolveDismissMs(opts), opts?.actions);
+  }
+
+  /**
+   * Add a toast with inline action buttons.  Sticky (no auto-dismiss) until the
+   * user clicks an action or explicitly dismisses.  Used by ADR-005 F5 migration
+   * ("Move / Keep in Legacy") and unlink ("Stay / Switch") toasts.
+   */
+  addWithActions(action: ToastAction, message: string, actions: ToastActionButton[]): string {
+    return this._enqueue(action, message, null, actions);
   }
 
   /** Dismiss a toast by id, cancelling its pending auto-dismiss timer. */
@@ -48,7 +76,12 @@ class ToastStore {
     this.toasts = this.toasts.filter(t => t.id !== id);
   }
 
-  private _enqueue(action: ToastAction, message: string, dismissMs: number): void {
+  private _enqueue(
+    action: ToastAction,
+    message: string,
+    dismissMs: number | null,
+    actions?: ToastActionButton[],
+  ): string {
     const config = ACTION_CONFIG[action];
     const id = `toast-${Date.now()}-${_counter++}`;
 
@@ -58,8 +91,15 @@ class ToastStore {
       this.toasts = this.toasts.slice(1);
     }
 
-    this.toasts = [...this.toasts, { id, symbol: config.symbol, message, color: config.color }];
-    this._timers.set(id, setTimeout(() => this.dismiss(id), dismissMs));
+    const item: ToastItem = { id, symbol: config.symbol, message, color: config.color };
+    if (actions && actions.length > 0) item.actions = actions;
+    this.toasts = [...this.toasts, item];
+
+    // Sticky when actions are present — user drives dismissal via button click.
+    if (dismissMs !== null && !item.actions) {
+      this._timers.set(id, setTimeout(() => this.dismiss(id), dismissMs));
+    }
+    return id;
   }
 
   private _clearTimer(id: string): void {
@@ -81,3 +121,8 @@ class ToastStore {
 export const toastStore = new ToastStore();
 export const addToast = (action: ToastAction, message: string) => toastStore.add(action, message);
 export const addInfoToast = (message: string, opts?: ToastOptions) => toastStore.info(message, opts);
+export const addActionToast = (
+  action: ToastAction,
+  message: string,
+  actions: ToastActionButton[],
+) => toastStore.addWithActions(action, message, actions);

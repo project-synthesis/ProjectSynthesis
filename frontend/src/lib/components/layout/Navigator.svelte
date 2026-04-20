@@ -15,8 +15,9 @@
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
   import { samplingGuide } from '$lib/stores/sampling-guide.svelte';
   import { routing } from '$lib/stores/routing.svelte';
-  import { getSettings, getProviders, getHistory, getOptimization, updateOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy, listProjects } from '$lib/api/client';
-  import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo, ProjectInfo } from '$lib/api/client';
+  import { getSettings, getProviders, getHistory, getOptimization, updateOptimization, getApiKey, setApiKey, deleteApiKey, getStrategies, getStrategy, updateStrategy } from '$lib/api/client';
+  import type { SettingsResponse, ProvidersResponse, HistoryItem, ApiKeyStatus, StrategyInfo } from '$lib/api/client';
+  import { projectStore } from '$lib/stores/project.svelte';
 
   // Tab-aware active result for showing per-optimization models in Settings
   const activeResult = $derived(editorStore.activeResult ?? forgeStore.result);
@@ -142,11 +143,12 @@
   let historyHasMore = $state(false);
   let historyNextOffset = $state<number | null>(null);
   let historyLoadingMore = $state(false);
-  let historyProjectFilter = $state<string | null>(null);
+  // History project filter now mirrors the global projectStore scope so
+  // History respects the same project the tree/topology are scoped to.
   let completedItems = $derived(historyItems.filter(i => i.status === 'completed'));
   let filteredCompletedItems = $derived(
-    historyProjectFilter
-      ? completedItems.filter(i => i.project_id === historyProjectFilter)
+    projectStore.currentProjectId
+      ? completedItems.filter(i => i.project_id === projectStore.currentProjectId)
       : completedItems
   );
 
@@ -169,12 +171,17 @@
   );
   let repoPickerOpen = $state(false);
   let repoSearch = $state('');
-  let projects = $state<ProjectInfo[]>([]);
+  // Project list now lives in projectStore; local `projects` is a
+  // read-only view bound to `projectStore.projects` via $derived for
+  // template compatibility.  Keeps the template minimal-diff friendly.
+  const projects = $derived(projectStore.projects);
   const projectLabelMap = $derived<Record<string, string>>(
     Object.fromEntries(projects.map(p => [p.id, p.label]))
   );
   let selectedProjectId = $state<string | null>(null);
   let linkingRepo = $state<string | null>(null);
+  // F2 — project selector visibility: hidden when only Legacy exists.
+  const showProjectScope = $derived(projects.length > 1);
 
   let filteredRepos = $derived(
     githubStore.repos.filter(r =>
@@ -188,11 +195,8 @@
     selectedProjectId = null;
     linkingRepo = null;
     githubStore.loadRepos();
-    try {
-      projects = await listProjects();
-    } catch {
-      projects = [];
-    }
+    // Refresh the shared project list — swallows errors into the store.
+    await projectStore.refresh();
   }
 
   async function confirmLinkRepo(fullName: string) {
@@ -299,12 +303,23 @@
     }
   });
 
-  // Load project labels for history row badges (one-time, matches settingsLoaded pattern)
+  // Load project labels into the shared store (one-time, matches
+  // settingsLoaded pattern).  The store is the single source of truth for
+  // the project list + current scope; local `projects` is a live proxy.
   let projectsLoaded = false;
   $effect(() => {
     if (projectsLoaded) return;
     projectsLoaded = true;
-    listProjects().then(p => { projects = p; }).catch(() => {});
+    projectStore.refresh();
+  });
+
+  // Refresh the project list when taxonomy changes — catches new project
+  // nodes created by repo links in other tabs or by backend cycles, and
+  // keeps counts/labels current after migrations.
+  $effect(() => {
+    const handler = () => projectStore.refresh();
+    window.addEventListener('taxonomy-changed', handler);
+    return () => window.removeEventListener('taxonomy-changed', handler);
   });
 
   // Auto-refresh history when real-time events arrive from any source
@@ -531,6 +546,31 @@
   style="background: var(--color-bg-secondary); border-right: 1px solid var(--color-border-subtle);"
   aria-label="Navigator"
 >
+  <!-- ADR-005 F2 — global project scope selector.
+       Visible the moment a second project exists.  Drives tree, topology,
+       history, and the pipeline's project attribution (F3/F4). -->
+  {#if showProjectScope}
+    <div class="project-scope-bar" role="region" aria-label="Project scope">
+      <span class="project-scope-label">Project</span>
+      <select
+        class="project-scope-select"
+        value={projectStore.currentProjectId ?? ''}
+        onchange={(e) => {
+          const v = (e.target as HTMLSelectElement).value;
+          projectStore.setCurrent(v || null);
+        }}
+        use:tooltip={'Scope tree, topology, and history to a project. Select "All projects" for a global view.'}
+      >
+        <option value="">All projects</option>
+        {#each projects as proj (proj.id)}
+          <option value={proj.id}
+            >{proj.label} ({proj.prompt_count ?? proj.member_count} prompts)</option
+          >
+        {/each}
+      </select>
+    </div>
+  {/if}
+
   <!-- ============ EDITOR PANEL ============ -->
   {#if active === 'editor'}
     <div class="panel">
@@ -597,18 +637,6 @@
     <div class="panel">
       <header class="panel-header">
         <span class="section-heading">History</span>
-        {#if projects.length > 0}
-          <select
-            class="history-project-select"
-            value={historyProjectFilter ?? ''}
-            onchange={(e) => { historyProjectFilter = (e.target as HTMLSelectElement).value || null; }}
-          >
-            <option value="">All projects</option>
-            {#each projects as proj (proj.id)}
-              <option value={proj.id}>{proj.label}</option>
-            {/each}
-          </select>
-        {/if}
       </header>
       <div class="panel-body">
         {#if historyError}
@@ -714,7 +742,7 @@
             {/if}
           {/each}
           {#if filteredCompletedItems.length === 0}
-            <p class="empty-note">{historyProjectFilter ? 'No optimizations for this project.' : 'No completed optimizations yet.'}</p>
+            <p class="empty-note">{projectStore.currentProjectId ? 'No optimizations for this project.' : 'No completed optimizations yet.'}</p>
           {/if}
           {#if historyHasMore}
             <button
@@ -947,7 +975,12 @@
                   <label class="radio-row">
                     <input type="radio" name="project" value={proj.id} bind:group={selectedProjectId} />
                     <span class="font-mono">{proj.label}</span>
-                    <span class="repo-meta">({proj.member_count} clusters)</span>
+                    <span class="repo-meta"
+                      >({proj.prompt_count ?? proj.member_count} prompts
+                      {#if (proj.cluster_count ?? 0) > 0}
+                        · {proj.cluster_count} clusters
+                      {/if})</span
+                    >
                   </label>
                 {/each}
                 <div class="picker-actions">
@@ -1858,29 +1891,47 @@
     cursor: default;
   }
 
-  /* ---- History project filter dropdown ---- */
-  .history-project-select {
+  /* ---- ADR-005 F2 — global project scope selector ---- */
+  .project-scope-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--color-bg-tertiary, var(--color-bg-secondary));
+    border-bottom: 1px solid var(--color-border-subtle);
+    flex-shrink: 0;
+  }
+
+  .project-scope-label {
     font-family: var(--font-mono);
     font-size: 8px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--color-text-dim);
+  }
+
+  .project-scope-select {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-primary);
     background: transparent;
     border: 1px solid var(--color-border-subtle);
-    padding: 1px 4px;
+    padding: 2px 4px;
     cursor: pointer;
     outline: none;
-    max-width: 120px;
+    min-width: 0;
     text-overflow: ellipsis;
     transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
                 border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .history-project-select:hover,
-  .history-project-select:focus {
-    color: var(--color-text-primary);
+  .project-scope-select:hover,
+  .project-scope-select:focus {
     border-color: var(--tier-accent, var(--color-neon-cyan));
   }
 
-  .history-project-select option {
+  .project-scope-select option {
     background: var(--color-bg-secondary);
     color: var(--color-text-primary);
   }

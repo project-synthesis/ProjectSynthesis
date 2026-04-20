@@ -15,6 +15,7 @@
   import CollapsibleSectionHeader from '$lib/components/shared/CollapsibleSectionHeader.svelte';
   import { navCollapse } from '$lib/stores/nav_collapse.svelte';
   import { templatesStore } from '$lib/stores/templates.svelte';
+  import { projectStore } from '$lib/stores/project.svelte';
 
   function handleReadinessSelect(domainId: string): void {
     clustersStore.selectCluster(domainId);
@@ -392,7 +393,22 @@
     {:else if !loaded}
       <p class="empty-note">Loading...</p>
     {:else if totalFamilies === 0 && !hasVisibleTemplates}
-      <p class="empty-note">Optimize your first prompt to start building your pattern library.</p>
+      {#if projectStore.currentProjectId !== null}
+        <!-- ADR-005 F5 — scoped empty-state: user picked a specific project,
+             but nothing is assigned to it yet.  Offer an escape hatch to the
+             panoramic view so the workbench never feels "stuck blank". -->
+        <div class="scoped-empty">
+          <p class="empty-note">No prompts in <strong>{projectStore.currentLabel}</strong> yet.</p>
+          <p class="empty-note">Try prompting, or</p>
+          <button
+            type="button"
+            class="scoped-empty-cta"
+            onclick={() => projectStore.setCurrent(null)}
+          >Switch to All projects</button>
+        </div>
+      {:else}
+        <p class="empty-note">Optimize your first prompt to start building your pattern library.</p>
+      {/if}
     {:else}
       <!-- Domain readiness overview — lifecycle proximity across all domains -->
       <div class="section-wrapper">
@@ -652,6 +668,32 @@
 </div>
 
 <style>
+  /* ADR-005 F5 — scoped empty-state panel shown when a specific project
+     scope returns zero clusters.  Offers escape hatch to panoramic view. */
+  .scoped-empty {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+    padding: 8px 10px;
+  }
+
+  .scoped-empty-cta {
+    margin-top: 2px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--color-neon-cyan);
+    color: var(--color-neon-cyan);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: pointer;
+    transition: background 120ms;
+  }
+
+  .scoped-empty-cta:hover {
+    background: color-mix(in srgb, var(--color-neon-cyan) 12%, transparent);
+  }
+
   /* ---- State filter tabs ---- */
   .state-tabs {
     display: flex;

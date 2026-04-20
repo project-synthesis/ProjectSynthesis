@@ -290,6 +290,30 @@
                   }).join(', ')}
                 </span>
               </div>
+              {#if family.project_ids.length > 1 && family.member_counts_by_project}
+                {@const totalMembers = family.project_ids.reduce(
+                  (sum: number, id: string) => sum + (family.member_counts_by_project?.[id] ?? 0), 0,
+                )}
+                {#if totalMembers > 0}
+                  <div class="meta-row project-breakdown-row">
+                    <span class="meta-label">Mix</span>
+                    <div class="project-breakdown-bar" role="img" aria-label="Per-project member breakdown">
+                      {#each family.project_ids as id (id)}
+                        {@const count = family.member_counts_by_project?.[id] ?? 0}
+                        {@const pct = (count / totalMembers) * 100}
+                        {#if count > 0}
+                          <div
+                            class="project-breakdown-seg"
+                            style:width="{pct}%"
+                            style:background={taxonomyColor((projectLabels[id] ?? '').split('/').pop() ?? '')}
+                            use:tooltip={`${projectLabels[id] ?? id.slice(0, 8)}: ${count} (${pct.toFixed(0)}%)`}
+                          ></div>
+                        {/if}
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+              {/if}
             {/if}
             <div class="meta-row" use:tooltip={CLUSTER_TOOLTIPS.avg_score}>
               <span class="meta-label">Avg Score</span>
@@ -880,6 +904,33 @@
 
   .meta-value.neon-yellow {
     color: var(--color-neon-yellow);
+  }
+
+  /* ADR-005 F5 — per-project member breakdown for multi-project clusters. */
+  .project-breakdown-row {
+    gap: 6px;
+  }
+
+  .project-breakdown-bar {
+    flex: 1;
+    display: flex;
+    align-items: stretch;
+    height: 6px;
+    background: var(--color-bg-panel);
+    border: 1px solid var(--color-border-subtle);
+    min-width: 80px;
+    overflow: hidden;
+  }
+
+  .project-breakdown-seg {
+    height: 100%;
+    flex-shrink: 0;
+    cursor: help;
+    transition: opacity 120ms;
+  }
+
+  .project-breakdown-seg:hover {
+    opacity: 0.85;
   }
 
   /* Changes summary */
