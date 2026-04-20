@@ -47,8 +47,7 @@ vi.mock('./TopologyRenderer', () => ({
 }));
 
 import TopologyControls from './TopologyControls.svelte';
-
-const HINT_KEY = 'synthesis:pattern_graph_hints_dismissed';
+import { hintsStore } from '$lib/stores/hints.svelte';
 
 function renderControls(overrides: Record<string, unknown> = {}) {
   return render(TopologyControls, {
@@ -67,6 +66,7 @@ function renderControls(overrides: Record<string, unknown> = {}) {
 describe('TopologyControls', () => {
   beforeEach(() => {
     localStorage.clear();
+    hintsStore._reset();
     vi.clearAllMocks();
   });
 
@@ -90,10 +90,10 @@ describe('TopologyControls', () => {
     });
   });
 
-  it('hides hint when previously dismissed via localStorage', async () => {
-    localStorage.setItem(HINT_KEY, '1');
+  it('hides hint when previously dismissed via hintsStore', async () => {
+    hintsStore.dismiss('pattern_graph');
     const { container } = renderControls();
-    // onMount checks localStorage and keeps hintVisible=false
+    // onMount reads hintsStore and keeps hintVisible=false
     await vi.waitFor(() => {
       expect(container.querySelector('.hud-hint')).toBeNull();
     });

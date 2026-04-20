@@ -19,9 +19,32 @@ vi.mock('$lib/stores/github.svelte', () => {
     connectionState: 'disconnected' as string,
     phaseLabel: '' as string,
     indexErrorText: null as string | null,
+    // Additional fields GitHubPanel now reads directly
+    uiTab: 'info' as 'info' | 'files',
+    fileTree: [] as unknown[],
+    selectedFile: null as string | null,
+    fileContent: null as string | null,
+    fileLoading: false,
+    treeLoading: false,
+    indexStatus: null as unknown,
+    repos: [] as unknown[],
+    userCode: null as string | null,
+    verificationUri: null as string | null,
+    polling: false,
     checkAuth: vi.fn().mockResolvedValue(undefined),
     login: vi.fn(),
     unlinkRepo: vi.fn(),
+    setUiTab: vi.fn(),
+    loadFileTree: vi.fn(),
+    loadIndexStatus: vi.fn(),
+    toggleTreeNode: vi.fn(),
+    loadFileContent: vi.fn(),
+    reconnect: vi.fn(),
+    reindex: vi.fn(),
+    closeFile: vi.fn(),
+    loadRepos: vi.fn(),
+    linkRepo: vi.fn(),
+    cancelLogin: vi.fn(),
     _reset() {
       this.user = null;
       this.linkedRepo = null;
@@ -30,6 +53,17 @@ vi.mock('$lib/stores/github.svelte', () => {
       this.connectionState = 'disconnected';
       this.phaseLabel = '';
       this.indexErrorText = null;
+      this.uiTab = 'info';
+      this.fileTree = [];
+      this.selectedFile = null;
+      this.fileContent = null;
+      this.fileLoading = false;
+      this.treeLoading = false;
+      this.indexStatus = null;
+      this.repos = [];
+      this.userCode = null;
+      this.verificationUri = null;
+      this.polling = false;
     },
   };
   return { githubStore: store };
