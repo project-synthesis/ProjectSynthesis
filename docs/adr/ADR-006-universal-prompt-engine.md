@@ -255,3 +255,20 @@ Domain decision rules (examples — discover the domain from the prompt's subjec
 - Context enrichment: `backend/app/services/context_enrichment.py` (abstraction layer)
 - Heuristic analyzer: `backend/app/services/heuristic_analyzer.py` (signal-driven, extensible)
 - ADR-005: Taxonomy scaling architecture (multi-project isolation supports multi-vertical)
+
+## Implementation status
+
+**Shipped as a principle enforcement; no code changes required by the ADR itself.** The audit in the Decision section correctly identified that the engine layer was already universal. Work since has preserved that invariant:
+
+- **Seed-agent hot-reload** — `backend/app/services/agent_loader.py` + `prompts/seed-agents/*.md` (5 developer-vertical seeds shipped; adding marketing/legal/education verticals is a content-only playbook, verified unchanged).
+- **Organic domain discovery** — `_propose_domains()` + `_propose_sub_domains()` in `backend/app/services/taxonomy/engine.py`. No hardcoded vertical assumptions in the discovery path.
+- **Domain signal loader** — `backend/app/services/domain_signal_loader.py` reads keyword signals from domain metadata; generated enriched vocabulary from Haiku (`generated_qualifiers`) replaces any hardcoded signal dict.
+- **Universal scoring** — `backend/app/services/heuristic_scorer.py` + `backend/app/services/score_blender.py` operate on the 5 dimensions (clarity, specificity, structure, faithfulness, conciseness) independent of domain.
+- **No engine-layer vertical gates** — grep for hardcoded developer assumptions in `backend/app/services/taxonomy/`, `pattern_injection.py`, `scoring` paths returns zero results. Seed-domain protection was deliberately removed to match the ADR (commit surface referenced in ADR-004 footer).
+
+**Remaining developer-scaffolding-only items** (intentional per the ADR — future verticals add their own, they do not replace these):
+- GitHub integration (`backend/app/services/github_service.py`, `backend/app/routers/github_*.py`) — first external context provider
+- Codebase scanning + indexing (`workspace_intelligence.py`, `repo_index_service.py`) — developer vertical
+- 5 developer-focused seed agents in `prompts/seed-agents/`
+
+Non-developer verticals remain a content addition per the 5-step playbook. Partial UI onboarding work for non-dev users is tracked on the ROADMAP.

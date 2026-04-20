@@ -1,6 +1,6 @@
 # ADR-007: Live Pattern Intelligence — Real-Time Context Awareness During Prompt Authoring
 
-**Status:** Accepted
+**Status:** Accepted (design — pre-implementation)
 **Date:** 2026-04-13
 **Authors:** Human + Claude Opus 4.6
 
@@ -312,3 +312,14 @@ User in Project B types something matching Project A's template → Tier 1 shows
 - `backend/app/services/context_enrichment.py`: Unified enrichment pipeline
 - `backend/app/services/heuristic_analyzer.py`: Zero-LLM classification
 - `backend/app/services/pattern_injection.py`: Auto-injection + few-shot retrieval
+
+## Implementation status
+
+**As of 2026-04-19: not yet started.** No phases A–E have shipped. Specifically:
+
+- `POST /api/clusters/preview-enrichment` — not implemented (no `backend/app/routers/preview.py`)
+- `ContextPanel.svelte` — not created
+- `ProactiveHints.svelte` — not created
+- Existing paste-only `PatternSuggestion.svelte` remains in place unchanged
+
+Tracked under `docs/ROADMAP.md` → "Live Pattern Intelligence" in the Planned section. All composed primitives referenced in the Architecture section (`HeuristicAnalyzer`, `resolve_strategy_intelligence`, `auto_inject_patterns`, hierarchical match cascade, embedding index) are shipped — implementation risk is UI orchestration, not backend capability.
