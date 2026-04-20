@@ -413,17 +413,7 @@ async def test_analyze_sampling_fallback(db_session) -> None:
     ctx.session.create_message = AsyncMock(side_effect=mock_create_message)
     ctx.session.client_params = None
 
-    with (
-        patch("app.tools._shared._routing", _mock_routing("sampling")),
-        patch("app.services.sampling.analyze.async_session_factory") as mock_factory,
-    ):
-        mock_db = AsyncMock()
-        mock_db.add = MagicMock()
-        mock_db.commit = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=MagicMock())
-        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
+    with patch("app.tools._shared._routing", _mock_routing("sampling")):
         result = await synthesis_analyze(
             prompt="Write a Python function that validates email addresses using RFC 5322 regex.",
             ctx=ctx,
@@ -431,7 +421,8 @@ async def test_analyze_sampling_fallback(db_session) -> None:
 
     assert isinstance(result, AnalyzeOutput)
     assert result.task_type == "coding"
-    assert result.optimization_id
+    # Contract: synthesis_analyze is read-only; no Optimization row is written.
+    assert result.optimization_id is None
     assert result.overall_score > 0
     assert result.intent_label == "test task"
     assert result.domain == "backend"

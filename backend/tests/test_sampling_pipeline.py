@@ -340,22 +340,16 @@ async def test_run_sampling_analyze():
     ctx = _make_ctx()
     ctx.session.create_message = AsyncMock(side_effect=mock_create_message)
 
-    with patch("app.services.sampling.analyze.async_session_factory") as mock_factory:
-        mock_db = AsyncMock()
-        mock_db.add = MagicMock()
-        mock_db.commit = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=MagicMock())
-        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        result = await run_sampling_analyze(
-            ctx, "Write a comprehensive blog post about sustainable energy trends.",
-        )
+    # run_sampling_analyze no longer opens a DB session — diagnostic only.
+    result = await run_sampling_analyze(
+        ctx, "Write a comprehensive blog post about sustainable energy trends.",
+    )
 
     assert result["task_type"] == "writing"
     assert result["selected_strategy"] == "structured-output"
     assert result["overall_score"] > 0
-    assert result["optimization_id"]
+    # Contract: no DB row is created, so optimization_id is always None
+    assert result["optimization_id"] is None
     assert result["baseline_scores"]
     assert result["intent_label"] == "blog post"
     assert result["domain"] == "general"

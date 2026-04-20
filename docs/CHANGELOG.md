@@ -4,6 +4,11 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+- **`synthesis_analyze` is now read-only — no DB persistence, no cluster assignment** — `backend/app/tools/analyze.py` and `backend/app/services/sampling/analyze.py` no longer insert `Optimization` rows or call `map_domain()`. The tool is a pure diagnostic that returns the analysis result to the caller; persistence requires an explicit `synthesis_optimize` call. Fixes History vs Clusters inconsistency where repeated analyze-only invocations accumulated `status='analyzed'` rows that inflated `PromptCluster.member_count` (visible in Clusters navigation) while being hidden from History (frontend filters to `status='completed'`). `AnalyzeOutput.optimization_id` is now always `None` with a docstring explaining the contract change.
+- **Phase 0 reconciliation defensive guard — `status='completed'` filter** — `backend/app/services/taxonomy/warm_phases.py::phase_reconcile` now counts only `status='completed'` rows toward `member_count`. Diagnostic/transient rows (`analyzed`, `failed`) never inflate cluster membership, preventing recurrence of the History vs Clusters drift via any future code path.
+- **One-shot cleanup of 7 stale `status='analyzed'` rows** — direct SQL deletion of orphan analyze-only rows + their `optimization_patterns` join rows, followed by `member_count` reconciliation. History count (5) now equals sum of active cluster `member_count` (5) as expected.
+
 ## v0.4.1 — 2026-04-20
 
 ### Added

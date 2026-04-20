@@ -11,14 +11,11 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from typing import Any
 
 from mcp.server.fastmcp import Context
 
 from app.config import DATA_DIR, PROMPTS_DIR
-from app.database import async_session_factory
-from app.models import Optimization
 from app.schemas.pipeline_contracts import (
     AnalysisResult,
     DimensionScores,
@@ -29,11 +26,9 @@ from app.services.heuristic_scorer import HeuristicScorer
 from app.services.pipeline_constants import (
     MAX_DOMAIN_RAW_LENGTH,
     MAX_INTENT_LABEL_LENGTH,
-    VALID_TASK_TYPES,
     semantic_check,
     semantic_upgrade_general,
 )
-from app.services.project_service import resolve_repo_project
 from app.services.prompt_loader import PromptLoader
 from app.services.sampling.persistence import fetch_historical_stats
 from app.services.sampling.primitives import (
@@ -58,11 +53,9 @@ async def run_sampling_analyze(
     """Two-phase sampling pipeline: analyze + baseline score.
 
     Used by ``synthesis_analyze`` when no local LLM provider is available
-    but the MCP client supports sampling.
-
-    ``project_id`` is frozen at entry by the caller (B1). Falls back to
-    ``resolve_repo_project()`` only when the caller didn't supply one,
-    preserving backward compatibility.
+    but the MCP client supports sampling. Pure diagnostic — no DB row is
+    created and no cluster assignment happens. ``repo_full_name`` and
+    ``project_id`` are accepted for caller compatibility but are no-ops.
     """
     start = time.monotonic()
     loader = PromptLoader(PROMPTS_DIR)
@@ -154,29 +147,11 @@ async def run_sampling_analyze(
     except (ValueError, Exception):
         effective_domain = "general"
 
-    # Domain mapping (Spec Section 4.2, 4.4)
-    domain_raw = (getattr(analysis, "domain", None) or "general")[:MAX_DOMAIN_RAW_LENGTH]
-    cluster_id: str | None = None
-
-    try:
-        from app.services.taxonomy import get_engine
-
-        _sampling_engine = get_engine()
-        async with async_session_factory() as _db:
-            mapping = await _sampling_engine.map_domain(
-                domain_raw=domain_raw,
-                db=_db,
-                applied_pattern_ids=None,
-            )
-        cluster_id = mapping.cluster_id
-
-        if cluster_id:
-            logger.info(
-                "Domain mapped (sampling/analyze): '%s' -> '%s'",
-                domain_raw, mapping.taxonomy_label,
-            )
-    except Exception as exc:
-        logger.warning("Domain mapping failed (sampling/analyze, non-fatal): %s", exc)
+    # Domain mapping + DB persistence intentionally removed: sampling analyze
+    # is diagnostic (same contract as the internal-tier analyze tool). The
+    # domain label still flows through the return payload below; no cluster
+    # assignment or Optimization row is created.
+    _ = MAX_DOMAIN_RAW_LENGTH  # kept for future callers that re-enable persistence
 
     # --- Phase 2: Baseline score ---
     phase_t0 = time.monotonic()
@@ -225,59 +200,16 @@ async def run_sampling_analyze(
     overall = baseline.overall
     total_ms = int((time.monotonic() - start) * 1000)
 
-    # --- Persist ---
-    opt_id = str(uuid.uuid4())
-    trace_id = str(uuid.uuid4())
+    # No DB persistence — see module docstring. The intent label is
+    # lightly normalised here so the return payload matches the pipeline
+    # contract shape even though nothing is stored.
+    _ = MAX_INTENT_LABEL_LENGTH  # kept for future callers that re-enable persistence
+    _ = context_sources  # still computed for diagnostic output only
 
-    if project_id is not None:
-        _sa_repo = repo_full_name
-        _sa_project_id: str | None = project_id
-        if _sa_repo is None:
-            try:
-                _sa_repo, _ = await resolve_repo_project()
-            except Exception:
-                _sa_repo = None
-    else:
-        _sa_repo, _sa_project_id = await resolve_repo_project(repo_full_name)
-
-    async with async_session_factory() as db:
-        opt = Optimization(
-            id=opt_id,
-            raw_prompt=prompt,
-            optimized_prompt="",
-            task_type=analysis.task_type if analysis.task_type in VALID_TASK_TYPES else "general",
-            intent_label=(getattr(analysis, "intent_label", None) or "general")[:MAX_INTENT_LABEL_LENGTH],
-            domain=effective_domain,
-            domain_raw=domain_raw,
-            cluster_id=cluster_id,
-            strategy_used=analysis.selected_strategy,
-            changes_summary="",
-            score_clarity=baseline.clarity,
-            score_specificity=baseline.specificity,
-            score_structure=baseline.structure,
-            score_faithfulness=baseline.faithfulness,
-            score_conciseness=baseline.conciseness,
-            overall_score=overall,
-            provider="mcp_sampling",
-            routing_tier="sampling",
-            model_used=_analyze_model,
-            scoring_mode="baseline",
-            status="analyzed",
-            trace_id=trace_id,
-            duration_ms=total_ms,
-            tokens_by_phase=phase_durations,
-            models_by_phase={"analyze": _analyze_model, "score": _score_model},
-            repo_full_name=_sa_repo,
-            project_id=_sa_project_id,
-            context_sources=context_sources,
-        )
-        db.add(opt)
-        await db.commit()
-
-    # --- Notify event bus ---
+    # --- Notify event bus (diagnostic telemetry only) ---
     await notify_event_bus("optimization_analyzed", {
-        "id": opt_id,
-        "trace_id": trace_id,
+        "id": None,
+        "trace_id": None,
         "task_type": analysis.task_type,
         "strategy": analysis.selected_strategy,
         "overall_score": overall,
@@ -309,7 +241,7 @@ async def run_sampling_analyze(
         )
 
     return {
-        "optimization_id": opt_id,
+        "optimization_id": None,
         "task_type": analysis.task_type,
         "weaknesses": analysis.weaknesses,
         "strengths": analysis.strengths,

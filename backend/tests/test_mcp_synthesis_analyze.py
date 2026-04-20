@@ -63,7 +63,6 @@ async def test_synthesis_analyze_with_provider():
         patch("app.tools._shared._routing", _mock_routing(
             "internal", provider=mock_provider, provider_name="mock_provider",
         )),
-        patch("app.tools.analyze.async_session_factory") as mock_session_factory,
         patch("app.tools.analyze.blend_scores") as mock_blend,
         patch("app.tools.analyze.PreferencesService") as mock_prefs_service,
         patch("app.tools.analyze.HeuristicScorer") as mock_heuristic,
@@ -85,10 +84,6 @@ async def test_synthesis_analyze_with_provider():
         mock_prefs.load.return_value = {}
         mock_prefs_service.return_value = mock_prefs
 
-        mock_session = AsyncMock()
-        mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
         result = await synthesis_analyze(
             "This is a prompt that is long enough to pass validation.",
         )
@@ -96,6 +91,12 @@ async def test_synthesis_analyze_with_provider():
         assert result.task_type == "coding"
         assert result.baseline_scores["clarity"] == 5.0
         assert mock_provider.complete_parsed.call_count == 2
+        # synthesis_analyze is a pure diagnostic tool — it MUST NOT persist
+        # an Optimization row or assign a cluster. Past behavior inflated
+        # cluster member_count with analyze-only rows, desynchronising the
+        # History (status=completed only) and Clusters views.
+        # Contract: optimization_id is None because no DB row exists.
+        assert result.optimization_id is None
 
 
 async def test_synthesis_analyze_no_provider_but_sampling():
@@ -115,8 +116,9 @@ async def test_synthesis_analyze_no_provider_but_sampling():
         mock_prefs_service.return_value = mock_prefs
 
         # Return dict that matches AnalyzeOutput schema
+        # optimization_id is now None — sampling analyze no longer persists
         mock_sampling.return_value = {
-            "optimization_id": "opt_123",
+            "optimization_id": None,
             "task_type": "writing",
             "intent_label": "Draft email",
             "domain": "general",

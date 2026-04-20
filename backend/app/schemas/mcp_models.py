@@ -127,8 +127,11 @@ class OptimizeOutput(BaseModel):
 class AnalyzeOutput(BaseModel):
     """Output for synthesis_analyze."""
 
-    optimization_id: str = Field(
-        description="Unique optimization record ID.",
+    optimization_id: str | None = Field(
+        default=None,
+        description="Always null. synthesis_analyze is a read-only diagnostic "
+        "tool and does not persist an Optimization row. Call "
+        "synthesis_optimize to create a persisted, cluster-assigned record.",
     )
     task_type: str = Field(
         description="Task classification: 'coding', 'writing', 'analysis', "

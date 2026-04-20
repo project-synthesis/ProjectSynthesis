@@ -147,6 +147,52 @@ async def test_phase_reconcile_updates_member_count(db, mock_embedding, mock_pro
 
 
 @pytest.mark.asyncio
+async def test_phase_reconcile_excludes_analyzed_status(db, mock_embedding, mock_provider):
+    """phase_reconcile must exclude status='analyzed' rows from member_count.
+
+    Regression guard: the ``synthesis_analyze`` MCP tool previously persisted
+    Optimization rows with ``status='analyzed'`` and a ``cluster_id``, which
+    inflated ``member_count`` and desynchronised the History view (which
+    filters to ``status='completed'``) from the Clusters view. Phase 0
+    reconciliation now counts only completed rows so this class of bug
+    cannot recur regardless of how the row got there.
+    """
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    node = PromptCluster(
+        label="Analyze-leak Guard",
+        state="active",
+        domain="general",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#a855f7",
+    )
+    db.add(node)
+    await db.flush()
+
+    # 2 completed rows (the real work) + 3 analyzed rows (should be ignored)
+    for i in range(2):
+        db.add(Optimization(
+            raw_prompt=f"completed {i}",
+            cluster_id=node.id,
+            status="completed",
+        ))
+    for i in range(3):
+        db.add(Optimization(
+            raw_prompt=f"analyzed-only {i}",
+            cluster_id=node.id,
+            status="analyzed",
+        ))
+    await db.commit()
+
+    await phase_reconcile(engine, db)
+    await db.refresh(node)
+    assert node.member_count == 2, (
+        "analyzed-status rows must not inflate member_count"
+    )
+
+
+@pytest.mark.asyncio
 async def test_phase_reconcile_updates_coherence(db, mock_embedding, mock_provider):
     """phase_reconcile recomputes coherence from actual member embeddings."""
     engine = _make_mock_engine(db, mock_embedding, mock_provider)

@@ -1292,10 +1292,17 @@ async def phase_reconcile(
         logger.warning("Hybrid general collapse failed (non-fatal): %s", collapse_exc)
 
     # --- Member count + coherence reconciliation ---
+    # Only status='completed' rows count as real members. Analyze-only
+    # diagnostic rows (status='analyzed') and transient failures must
+    # not inflate member_count — they have no optimized_prompt and do not
+    # represent user-validated work worth clustering.
     try:
         count_q = await db.execute(
             select(Optimization.cluster_id, func.count().label("ct"))
-            .where(Optimization.cluster_id.isnot(None))
+            .where(
+                Optimization.cluster_id.isnot(None),
+                Optimization.status == "completed",
+            )
             .group_by(Optimization.cluster_id)
         )
         actual_counts: dict[str, int] = dict(count_q.all())  # type: ignore[arg-type]

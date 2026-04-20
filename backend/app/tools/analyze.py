@@ -7,25 +7,21 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 
 from mcp.server.fastmcp import Context
 
 from app.config import PROMPTS_DIR
-from app.database import async_session_factory
-from app.models import Optimization
 from app.schemas.mcp_models import AnalyzeOutput
 from app.schemas.pipeline_contracts import AnalysisResult, ScoreResult
 from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.preferences import PreferencesService
-from app.services.project_service import resolve_repo_project
 from app.services.prompt_loader import PromptLoader
 from app.services.routing import RoutingContext
 from app.services.sampling_pipeline import run_sampling_analyze
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
-from app.tools._shared import DATA_DIR, get_domain_resolver, get_routing, get_taxonomy_engine
+from app.tools._shared import DATA_DIR, get_domain_resolver, get_routing
 
 logger = logging.getLogger(__name__)
 
@@ -145,73 +141,17 @@ async def handle_analyze(
         overall, total_ms,
     )
 
-    # --- Phase 2.5: Domain Mapping (Spec 6.7, hot-path only) ---
-    domain_raw = getattr(analysis, "domain", None) or "general"
-    cluster_id = None
-    taxonomy_engine = get_taxonomy_engine()
-    if taxonomy_engine is not None:
-        try:
-            async with async_session_factory() as db_map:
-                mapping = await taxonomy_engine.map_domain(
-                    domain_raw=domain_raw,
-                    db=db_map,
-                    applied_pattern_ids=None,
-                )
-                cluster_id = mapping.cluster_id
-        except Exception as exc:
-            logger.warning("MCP domain mapping failed (non-fatal): %s", exc)
+    # synthesis_analyze is a pure diagnostic tool — no DB persistence, no
+    # cluster assignment. Persistence is the responsibility of
+    # synthesis_optimize (which produces a completed row worth clustering).
+    # Past behaviour inflated cluster member_count with analyze-only rows
+    # and desynchronised the History (status=completed only) view from the
+    # Clusters view; see commit history for the root-cause fix.
 
-    # --- Persist to DB ---
-    opt_id = str(uuid.uuid4())
-    trace_id = str(uuid.uuid4())
-
-    # Resolve repo → project chain so project_id is set at creation time
-    resolved_repo, resolved_project_id = await resolve_repo_project()
-
-    async with async_session_factory() as db:
-        opt = Optimization(
-            id=opt_id,
-            raw_prompt=prompt,
-            optimized_prompt="",
-            task_type=analysis.task_type,
-            intent_label=getattr(analysis, "intent_label", None) or "general",
-            domain=getattr(analysis, "domain", None) or "general",
-            strategy_used=analysis.selected_strategy,
-            changes_summary="",
-            score_clarity=baseline.clarity,
-            score_specificity=baseline.specificity,
-            score_structure=baseline.structure,
-            score_faithfulness=baseline.faithfulness,
-            score_conciseness=baseline.conciseness,
-            overall_score=overall,
-            domain_raw=domain_raw,
-            cluster_id=cluster_id,
-            repo_full_name=resolved_repo,
-            project_id=resolved_project_id,
-            provider=provider.name,
-            routing_tier="internal",
-            model_used=analyzer_model,
-            models_by_phase={
-                "analyze": analyzer_model,
-                "score": scorer_model,
-            },
-            scoring_mode="baseline",
-            status="analyzed",
-            trace_id=trace_id,
-            duration_ms=total_ms,
-        )
-        db.add(opt)
-        await db.commit()
-
-    logger.info(
-        "synthesis_analyze persisted: optimization_id=%s trace_id=%s cluster_id=%s",
-        opt_id, trace_id, cluster_id,
-    )
-
-    # --- Notify event bus ---
+    # --- Notify event bus (diagnostic telemetry only) ---
     await notify_event_bus("optimization_analyzed", {
-        "id": opt_id,
-        "trace_id": trace_id,
+        "id": None,
+        "trace_id": None,
         "task_type": analysis.task_type,
         "strategy": analysis.selected_strategy,
         "overall_score": overall,
@@ -243,7 +183,7 @@ async def handle_analyze(
         )
 
     return AnalyzeOutput(
-        optimization_id=opt_id,
+        optimization_id=None,
         task_type=analysis.task_type,
         weaknesses=analysis.weaknesses,
         strengths=analysis.strengths,
