@@ -114,6 +114,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 ./init.sh start        # start all (provider detection + bridge install + health probes)
 ./init.sh stop         # graceful stop (process group kill, no orphans)
 ./init.sh restart      # stop + start
+./init.sh reload-mcp   # restart MCP server only (faster, requires /mcp reconnect)
 ./init.sh status       # service health + VS Code + provider + active tier
 ./init.sh logs         # tail all logs
 ./init.sh setup-vscode # install/update VS Code bridge extension
@@ -210,13 +211,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2631 tests)
+# Backend tests (2722 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1222 tests)
+# Frontend tests (1323 tests)
 cd frontend && npm test
 
 # Frontend build

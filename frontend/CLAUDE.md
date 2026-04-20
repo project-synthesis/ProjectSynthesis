@@ -38,9 +38,9 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 
 | Store | Purpose |
 |-------|---------|
-| `forge.svelte.ts` | Pipeline state (prompt, strategy, SSE, result, feedback). `localStorage` persistence via `synthesis:last_trace_id` — refresh restores last optimization |
+| `forge.svelte.ts` | Pipeline state (prompt, strategy, SSE, result, feedback). `localStorage` persistence via `synthesis:last_trace_id` — refresh restores last optimization. `OptimizationResult.optimized_scores: DimensionScores \| null` (legacy alias, narrowed — drops `as any` casts in favour of typed normalization) |
 | `editor.svelte.ts` | Tab management (prompt/result/diff/mindmap types) |
-| `github.svelte.ts` | GitHub Device Flow auth + token refresh, `connectionState` getter (7 states: `disconnected | expired | authenticated | linked | indexing | error | ready`), `phaseLabel` + `indexErrorText` for per-phase progress/error surfacing, `reconnect()`, repo picker, file browser (tree/content), branch list, index status, project selection. `applyPhaseEvent()` consumes `index_phase_changed` SSE; `_handleAuthError()` centralizes 401 detection |
+| `github.svelte.ts` | GitHub Device Flow auth + token refresh, `connectionState` getter (7 states: `disconnected | expired | authenticated | linked | indexing | error | ready`), `phaseLabel` + `indexErrorText` for per-phase progress/error surfacing, `reconnect()`, repo picker, file browser (tree/content), branch list, index status, project selection, `uiTab` + `setUiTab()` for GitHubPanel tab persistence (migrated from ad-hoc `$effect` → `synthesis:github_tab` localStorage). `applyPhaseEvent()` consumes `index_phase_changed` SSE; `_handleAuthError()` centralizes 401 detection |
 | `project.svelte.ts` | ADR-005 multi-project scope (F1–F5). `currentProjectId` rune (`null` = "All projects", `<uuid>` = scoped view, persisted to `localStorage['synthesis:current_project_id']` as JSON — survives repo unlink). `projects` list, `currentLabel`, `isLegacyScope` getters. `setCurrent()`, `refresh()` hits `GET /api/projects`. `applyLinkResponse(projectId, candidates)` auto-switches scope on `githubStore.linkRepo()` response and stashes `lastMigrationCandidates` for the F5 post-link migration toast (dismissed via `clearMigrationCandidates()`). F2 project selector subscribes; F3 threads explicit `project_id` into `/api/optimize`, `/api/refine`, `synthesis_optimize`; F4 tree/topology/pattern consumers scope by `currentProjectId`; F5 link/unlink transition toasts via `taxonomy_changed` SSE (`trigger: "project_created"`) and Inspector per-project breakdown |
 | `refinement.svelte.ts` | Refinement sessions: turns, branches, suggestions, score progression |
 | `preferences.svelte.ts` | Persistent user preferences loaded from backend |
@@ -61,15 +61,25 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `readiness.svelte.ts` | Domain readiness cache with 30s stale window matching backend TTL. Invalidated on `taxonomy_changed`/`domain_created` SSE. Exposes `reports`, `byDomain(id)`, `refresh()`, `fresh()` (bypass server cache) |
 | `readiness-window.svelte.ts` | Persistent time-window selector (24h/7d/30d) for DomainReadinessSparkline. Stored under `synthesis:readiness_window`; invalid/missing values fall back to `'24h'` |
 | `nav_collapse.svelte.ts` | Persisted collapse state for sidebar sections. `isOpen(key)`, `toggle(key)`, `collapseAll(prefix?)`. Keys: `readiness`, `templates`, `domain:${name}`, `subdomain:${id}`. Persisted to `localStorage['synthesis:navigator_collapsed']` as JSON array; default-open policy |
+| `hints.svelte.ts` | Persistent dismissal tracking for one-shot UI hints (e.g. pattern-graph onboarding). Keys: `pattern_graph_keyboard`, `pattern_graph_drag`. Persisted under `synthesis:ui_hints_dismissed`; one-shot migration from the legacy `synthesis:pattern_graph_hints_dismissed` key |
+| `topology-cache.svelte.ts` | 60-iteration settled-position cache for `SemanticTopology` layout. Fingerprint-based single-entry staleness policy — swap on node-set change, reuse on tab switch. Persisted under `synthesis:topology_cache` |
 
 ## Component layout
 
 ```
 src/lib/components/
-  layout/       # ActivityBar, Navigator, ClusterNavigator (reads templatesStore,
-                # renders PROVEN TEMPLATES section grouped by frozen domain),
-                # EditorGroups, Inspector (Templates collapsible section),
-                # StatusBar
+  layout/       # ActivityBar (sliding tab indicator), Navigator (182-line shell
+                # delegating to 8 focused panels: StrategiesPanel, HistoryPanel,
+                # GitHubPanel, SettingsPanel, ClusterRow, DomainGroup,
+                # StateFilterTabs, TemplatesSection — all Navigator sidebar logic
+                # lives in these panel files), ClusterNavigator (reads
+                # templatesStore, renders PROVEN TEMPLATES section grouped by
+                # frozen domain), EditorGroups, Inspector (phase-dot indicator;
+                # Templates collapsible section; delegates to ClusterPatternsSection
+                # [meta-patterns + 5 context-aware empty states],
+                # ClusterTemplatesSection [cluster-scoped templates],
+                # TaxonomyHealthPanel [idle Q_health/coherence/separation +
+                # sparkline]), StatusBar
   editor/       # PromptEdit, ForgeArtifact, PatternSuggestion, PassthroughView
   taxonomy/     # SemanticTopology, TopologyControls (diegetic UI — auto-hide controls,
                 # right-edge hover zone, Q key metrics, inline hint card),
@@ -121,6 +131,8 @@ src/routes/
 | `strategies.ts` | Strategy display name/description helpers |
 | `mcp-tooltips.ts` | MCP tool tooltip content for UI hints |
 | `ui-tooltips.ts` | Structured tooltip builders (e.g., GitHub index file count) |
+| `keyboard.ts` | Pure `nextTablistValue()` + `handleTablistArrowKeys()` for tablist arrow-key navigation (wrap, orientation, no-op branches; `preventDefault` + `onChange` wrapper) |
+| `transitions.ts` | `navSlide`/`navFade` presets driven by an inline 8-iteration Newton-Raphson bezier solver matching `--ease-spring` (`cubic-bezier(0.16, 1, 0.3, 1)`) exactly — single source of truth for the brand spring across JS + CSS transitions (Svelte's built-in `cubicOut` drifted visibly) |
 
 ## Brand and design system
 
@@ -165,7 +177,10 @@ Fixed 60s health polling for StatusBar display only — no routing decisions fro
 - **Pattern detection**: two-path — typing (800ms debounce, 30-char min) + paste (300ms, 30-char delta). AbortController cancels in-flight requests. No auto-dismiss. `applySuggestion()` returns `{ids, clusterLabel}` for persistent chip bar. `appliedPatternLabel` on forge store for UI confirmation
 - **Toggle safety**: disabled conditions prefixed with `!currentValue &&` — toggle already ON is always interactive
 - **Routing reactivity**: frontend is purely reactive — receives `routing_state_changed` SSE, never makes routing decisions
-- **GitHub connection state**: `githubStore.connectionState` getter (7 states: `disconnected | expired | authenticated | linked | indexing | error | ready`) replaces ad-hoc null checks. `ready` requires `index_phase === 'ready'` AND `status === 'ready'` AND synthesis complete — no premature transitions while synthesis is still running. `phaseLabel`/`indexErrorText` render per-phase copy + error rows. `reconnect()` clears `linkedRepo` before Device Flow so template falls to auth branch. `_handleAuthError()` centralizes 401 detection. Tab selection persisted to `localStorage` key `synthesis:github_tab`
+- **GitHub connection state**: `githubStore.connectionState` getter (7 states: `disconnected | expired | authenticated | linked | indexing | error | ready`) replaces ad-hoc null checks. `ready` requires `index_phase === 'ready'` AND `status === 'ready'` AND synthesis complete — no premature transitions while synthesis is still running. `phaseLabel`/`indexErrorText` render per-phase copy + error rows. `reconnect()` clears `linkedRepo` before Device Flow so template falls to auth branch. `_handleAuthError()` centralizes 401 detection. Tab selection persisted via `githubStore.uiTab` → `synthesis:github_tab` localStorage (store-owned, not component-owned)
+- **UI persistence through stores**: localStorage access lives in store modules, not components. `githubStore.uiTab` / `stores/hints.svelte.ts` / `stores/topology-cache.svelte.ts` replace ad-hoc `$effect` + direct localStorage reads in `GitHubPanel`, `TopologyControls`, and `SemanticTopology` respectively. One-shot migration shims preserve user state across key renames
+- **Module-level store imports retained (architectural decision)**: Svelte 5 runes stores (`.svelte.ts` modules exporting singleton class instances) are the idiomatic DI boundary. Extracted Navigator panels import stores at module level; smoke tests mutate singleton state in `beforeEach` and assert render output without touching panel imports — props-DI would add boilerplate with no testability or reuse payoff. See PR #33 audit + code-quality sweep phase 1
+- **Brand-aligned animation tokens**: `--duration-skeleton` (1500ms) + `--duration-stagger` (350ms) in `app.css` replace hardcoded `1500ms` / `350ms` literals in `ClusterRow`, `HistoryPanel`, `TierGuide`. `ForgeArtifact` uses the shared `navSlide` preset instead of three `{duration: 200}` overrides
 - **Cross-component SSE**: MCP pipeline events route through `forgeStore.handleExternalEvent()` (single code path). Refinement turns propagated to `refinementStore.reloadTurns()`. Seed batch progress persisted in `clustersStore` (survives modal close)
 - **Per-tab feedback caching**: `editorStore.cacheFeedback()`/`activeFeedback` getter prevents feedback state loss on tab switch
 - **Version**: `src/lib/version.ts` imports from root `version.json` — auto-synced by `scripts/sync-version.sh`, never edit manually
