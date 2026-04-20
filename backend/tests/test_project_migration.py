@@ -489,6 +489,11 @@ async def test_b2_emits_optimizations_migrated_event(db_session: AsyncSession):
     from app.services.event_bus import event_bus
     from app.services.project_service import migrate_optimizations
 
+    # Prior tests that exercise lifespan may have flipped ``_shutting_down``,
+    # which makes ``publish()`` silently return.  Reset so this test is
+    # order-independent in the full suite.
+    event_bus._shutting_down = False  # type: ignore[attr-defined]
+
     ids = await _make_projects(db_session)
     await _make_opt(db_session, project_id=ids["Legacy"])
 

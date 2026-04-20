@@ -112,6 +112,11 @@ async def test_b3_migrate_endpoint_emits_taxonomy_changed(
 
     from app.services.event_bus import event_bus
 
+    # Prior tests that exercise lifespan may have flipped ``_shutting_down``,
+    # which makes ``publish()`` silently return.  Reset so this test is
+    # order-independent in the full suite.
+    event_bus._shutting_down = False  # type: ignore[attr-defined]
+
     ids = await _seed_projects(db_session)
     await _seed_opt(db_session, project_id=ids["Legacy"])
 
