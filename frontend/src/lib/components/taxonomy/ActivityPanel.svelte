@@ -512,9 +512,9 @@
     font-size: 10px;
     cursor: pointer;
     line-height: 1;
-    transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-micro) var(--ease-spring),
+                color var(--duration-micro) var(--ease-spring),
+                background var(--duration-micro) var(--ease-spring);
   }
 
   .ap-pin:hover {
@@ -560,9 +560,9 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     cursor: pointer;
-    transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-micro) var(--ease-spring),
+                color var(--duration-micro) var(--ease-spring),
+                background var(--duration-micro) var(--ease-spring);
   }
 
   .ap-chip-row > .ap-chip::before {
@@ -572,7 +572,7 @@
     flex-shrink: 0;
     background: var(--chip-color, var(--color-text-dim));
     opacity: 0.4;
-    transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-micro) var(--ease-spring);
   }
 
   .ap-chip-row > .ap-chip:hover {
@@ -617,10 +617,10 @@
     letter-spacing: 0.03em;
     cursor: pointer;
     opacity: 0.45;
-    transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                opacity 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-micro) var(--ease-spring),
+                color var(--duration-micro) var(--ease-spring),
+                opacity var(--duration-micro) var(--ease-spring),
+                background var(--duration-micro) var(--ease-spring);
   }
 
   .ap-filter-row > .ap-chip:hover {
@@ -688,7 +688,7 @@
     font-family: var(--font-mono);
     font-size: 9px;
     color: var(--color-text-secondary);
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring);
   }
 
   .ap-row-summary:hover {
@@ -747,7 +747,7 @@
     cursor: pointer;
     text-decoration: underline dotted;
     flex-shrink: 0;
-    transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-micro) var(--ease-spring);
   }
 
   .ap-row-summary:hover .ap-cluster-link { opacity: 0.6; }
@@ -774,7 +774,7 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
-    animation: ctx-enter 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: ctx-enter var(--duration-hover) var(--ease-spring);
   }
 
   @keyframes ctx-enter {

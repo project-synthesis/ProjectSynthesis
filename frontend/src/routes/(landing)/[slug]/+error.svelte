@@ -75,7 +75,7 @@
     color: var(--color-text-primary);
     border: 1px solid var(--color-border-subtle);
     background: transparent;
-    transition: border-color 200ms, color 200ms;
+    transition: border-color var(--duration-hover) var(--ease-spring), color var(--duration-hover) var(--ease-spring);
   }
 
   .error-page__cta:hover {

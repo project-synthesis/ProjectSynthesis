@@ -204,8 +204,8 @@
     user-select: none;
     position: relative;
     outline: none;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring),
+                background var(--duration-hover) var(--ease-spring);
   }
 
   .tab:hover {
@@ -251,8 +251,8 @@
     line-height: 1;
     cursor: pointer;
     opacity: 0;
-    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
 
   .tab:hover .tab-close,
@@ -283,7 +283,7 @@
     font-size: 14px;
     font-family: var(--font-mono);
     cursor: pointer;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring);
     flex-shrink: 0;
     outline: none;
     user-select: none;

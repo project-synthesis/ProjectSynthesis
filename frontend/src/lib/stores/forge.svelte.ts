@@ -234,7 +234,7 @@ class ForgeStore {
     } else if (eventType === 'suggestions') {
       this.initialSuggestions = (event.suggestions || []) as Array<Record<string, string>>;
     } else if (eventType === 'optimization_complete') {
-      const data = event as any;
+      const data = event as unknown as OptimizationResult;
       // Normalize: SSE sends optimized_scores, REST sends scores
       if (data.optimized_scores && !data.scores) {
         data.scores = data.optimized_scores;
@@ -244,9 +244,9 @@ class ForgeStore {
         this.initialSuggestions = data.suggestions;
       }
       if (data.models_by_phase) {
-        this.phaseModels = data.models_by_phase as Record<string, string>;
+        this.phaseModels = data.models_by_phase;
       }
-      this.loadFromRecord(data as OptimizationResult);
+      this.loadFromRecord(data);
       // Auto-switch to editor panel (only fires from user's own SSE stream)
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'editor' }));
@@ -341,7 +341,7 @@ class ForgeStore {
     this.passthroughStrategy = null;
 
     // Normalize: SSE sends optimized_scores, REST sends scores
-    const scores = opt.scores ?? (opt as any).optimized_scores ?? null;
+    const scores = opt.scores ?? opt.optimized_scores ?? null;
     if (scores) this.scores = scores;
     this.originalScores = opt.original_scores ?? null;
     this.scoreDeltas = opt.score_deltas ?? null;

@@ -175,7 +175,7 @@
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--tier-accent, var(--color-text-dim));
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring);
   }
 
   .status-indicator {

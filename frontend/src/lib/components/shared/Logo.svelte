@@ -73,7 +73,7 @@
 
   .brand-svg {
     flex-shrink: 0;
-    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: transform var(--duration-hover) var(--ease-spring);
   }
 
   .logo-container:hover .brand-svg {
@@ -87,7 +87,7 @@
     fill: var(--color-text-primary);
     transform-origin: 16px 16px;
     transform: scale(1.2);
-    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
   }
 
   .brand-track {

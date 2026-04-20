@@ -734,7 +734,7 @@
   .phase-dot {
     width: 18px;
     height: 18px;
-    border-radius: 50%;
+    /* Sharp 1px contour per brand spec — no rounded corners, no pulse. */
     border: 1px solid var(--color-border-subtle);
     display: flex;
     align-items: center;
@@ -743,24 +743,25 @@
     font-size: 9px;
     font-weight: 600;
     color: var(--color-text-dim);
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    background: transparent;
+    transition: color var(--duration-hover) var(--ease-spring),
+                border-color var(--duration-hover) var(--ease-spring),
+                background var(--duration-hover) var(--ease-spring);
   }
 
+  /* Active phase: tint the background at 12% to signal activity without
+     animating opacity (brand forbids pulse/breathe keyframes). The contour
+     and text colour shift to the tier accent. */
   .phase-dot--active {
     border-color: var(--tier-accent, var(--color-neon-cyan));
     color: var(--tier-accent, var(--color-neon-cyan));
-    animation: phase-active 1.5s ease-in-out infinite;
+    background: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 12%, transparent);
   }
 
   .phase-dot--done {
     border-color: var(--color-neon-green);
     color: var(--color-neon-green);
     font-size: 10px;
-  }
-
-  @keyframes phase-active {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
   }
 
   .phase-step-label {
@@ -809,7 +810,8 @@
     cursor: pointer;
     margin-top: 4px;
     opacity: 0.6;
-    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1), color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
 
   .phase-cancel:hover {
@@ -926,7 +928,7 @@
     height: 100%;
     flex-shrink: 0;
     cursor: help;
-    transition: opacity 120ms;
+    transition: opacity var(--duration-micro) var(--ease-spring);
   }
 
   .project-breakdown-seg:hover {
@@ -1050,7 +1052,7 @@
     padding: 0 4px;
     cursor: pointer;
     line-height: 14px;
-    transition: color 200ms, border-color 200ms;
+    transition: color var(--duration-hover) var(--ease-spring), border-color var(--duration-hover) var(--ease-spring);
   }
 
   .dim-toggle:hover {
@@ -1113,7 +1115,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring);
   }
 
   .family-intent:hover {
@@ -1153,7 +1155,7 @@
     font-size: 12px;
     cursor: pointer;
     flex-shrink: 0;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring);
   }
 
   .rename-save {
@@ -1200,7 +1202,7 @@
     font-size: 12px;
     cursor: pointer;
     flex-shrink: 0;
-    transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-hover) var(--ease-spring);
   }
 
   .dismiss-btn:hover {
@@ -1324,9 +1326,9 @@
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
     cursor: pointer;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                background 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring),
+                background var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
 
   .action-btn:hover {

@@ -356,7 +356,7 @@
     height: 28px;
     padding: 0 10px;
     cursor: pointer;
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring);
     border-left: 1px solid transparent;
   }
 

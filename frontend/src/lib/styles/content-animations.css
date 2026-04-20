@@ -35,7 +35,7 @@ details .details-content {
     interpolate-size: allow-keywords;
     opacity: 1;
     height: auto;
-    transition: opacity 300ms var(--ease-spring), height 300ms var(--ease-spring);
+    transition: opacity var(--duration-structural) var(--ease-spring), height var(--duration-structural) var(--ease-spring);
   }
 
   details:not([open]) .details-content {

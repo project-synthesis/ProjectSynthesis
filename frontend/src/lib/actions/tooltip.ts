@@ -35,7 +35,7 @@ function createTooltipElement(): HTMLDivElement {
     pointerEvents: 'none',
     whiteSpace: 'pre-line',
     opacity: '0',
-    transition: 'opacity 150ms cubic-bezier(0.16, 1, 0.3, 1)',
+    transition: 'opacity var(--duration-micro, 150ms) var(--ease-spring, cubic-bezier(0.16, 1, 0.3, 1))',
   });
 
   return el;

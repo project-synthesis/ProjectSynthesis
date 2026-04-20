@@ -2,7 +2,7 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.3.41-dev (latest release: v0.3.40). Reflects shipped state as of 2026-04-19.
+**Snapshot:** v0.4.1-dev (latest release: v0.4.0). Reflects shipped state as of 2026-04-19.
 
 ## Conventions
 

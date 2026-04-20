@@ -66,7 +66,7 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-text-dim);
-    animation: toast-in 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: toast-in var(--duration-structural) var(--ease-spring) forwards;
     pointer-events: auto;
   }
 
@@ -109,7 +109,7 @@
     font-family: var(--font-mono);
     font-size: 10px;
     cursor: pointer;
-    transition: border-color 120ms, color 120ms;
+    transition: border-color var(--duration-micro) var(--ease-spring), color var(--duration-micro) var(--ease-spring);
   }
 
   .toast-action:hover {

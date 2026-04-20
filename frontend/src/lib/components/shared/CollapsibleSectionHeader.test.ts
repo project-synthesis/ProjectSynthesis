@@ -47,17 +47,24 @@ describe('CollapsibleSectionHeader — whole-bar mode', () => {
     expect(container.querySelector('.nsh-count')?.textContent?.trim()).toBe('7');
   });
 
-  it('renders caret ▾ when open, ▸ when collapsed', () => {
+  it('renders a single ▸ caret that rotates via CSS when open', () => {
+    // Brand-compliant caret: single glyph always rendered, rotated 90° via
+    // transform when open. No character swap (avoids layout jitter from
+    // differing glyph widths).
     const openRender = render(Harness, {
       props: { open: true, onToggle: () => {}, mode: 'whole', label: 'X' },
     });
-    expect(openRender.container.querySelector('.nsh-caret')?.textContent?.trim()).toBe('▾');
+    const openCaret = openRender.container.querySelector('.nsh-caret');
+    expect(openCaret?.textContent?.trim()).toBe('▸');
+    expect(openCaret?.classList.contains('nsh-caret--open')).toBe(true);
     openRender.unmount();
 
     const closedRender = render(Harness, {
       props: { open: false, onToggle: () => {}, mode: 'whole', label: 'X' },
     });
-    expect(closedRender.container.querySelector('.nsh-caret')?.textContent?.trim()).toBe('▸');
+    const closedCaret = closedRender.container.querySelector('.nsh-caret');
+    expect(closedCaret?.textContent?.trim()).toBe('▸');
+    expect(closedCaret?.classList.contains('nsh-caret--open')).toBe(false);
   });
 
   it('exposes aria-expanded mirroring open prop', () => {

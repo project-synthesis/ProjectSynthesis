@@ -365,8 +365,8 @@
     cursor: pointer;
     border: 1px solid var(--color-border-subtle);
     box-sizing: border-box;
-    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-      border-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-micro) var(--ease-spring),
+      border-color var(--duration-micro) var(--ease-spring);
   }
 
   .drp-master-mute:hover {
@@ -394,8 +394,8 @@
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-secondary);
     cursor: pointer;
-    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-      border-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-micro) var(--ease-spring),
+      border-color var(--duration-micro) var(--ease-spring);
   }
 
   .drp-refresh:hover:not(:disabled) {
@@ -447,7 +447,7 @@
     padding: 0 6px;
     cursor: pointer;
     border-bottom: 1px solid color-mix(in srgb, var(--color-border-subtle) 50%, transparent);
-    transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background-color var(--duration-micro) var(--ease-spring);
     box-sizing: border-box;
   }
 
@@ -527,8 +527,8 @@
     cursor: pointer;
     border: 1px solid transparent;
     box-sizing: border-box;
-    transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-      border-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: color var(--duration-micro) var(--ease-spring),
+      border-color var(--duration-micro) var(--ease-spring);
   }
 
   .drp-mute:hover {

@@ -66,6 +66,10 @@ export interface OptimizationResult {
   heuristic_flags: string[];
   repo_full_name?: string | null;
   suggestions: Array<{ text: string; source: string }>;
+  // Legacy SSE alias for `scores` — SSE 'optimization_complete' events carry
+  // the dimensions under this name; REST responses use `scores`. Normalize
+  // via `opt.scores ?? opt.optimized_scores` at read sites.
+  optimized_scores?: DimensionScores | null;
 }
 
 export interface SSEEvent {
