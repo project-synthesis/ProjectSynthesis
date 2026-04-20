@@ -274,6 +274,7 @@ async def test_run_sampling_pipeline_full():
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=MagicMock())
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -343,6 +344,7 @@ async def test_run_sampling_analyze():
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=MagicMock())
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -431,6 +433,7 @@ async def test_confidence_gate_overrides_strategy():
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=MagicMock())
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -499,6 +502,7 @@ async def test_semantic_check_reduces_confidence():
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=MagicMock())
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -567,6 +571,7 @@ async def test_strategy_override_bypasses_confidence_gate():
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=MagicMock())
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
