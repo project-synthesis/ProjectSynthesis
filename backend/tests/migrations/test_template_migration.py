@@ -292,19 +292,27 @@ def test_orphan_parent_sets_domain_label_general(migrated_db):
 
 
 def test_downgrade_refuses(migrated_db):
-    """downgrade -1 must exit non-zero and emit 'forward-only' in output."""
+    """Downgrading *across* the template migration must exit non-zero and
+    emit 'forward-only' in output.
+
+    We target ``_PRE_TEMPLATE_HEAD`` explicitly so the test survives new
+    migrations stacked on top of the template revision — ``downgrade -1``
+    alone would just peel the newest migration off instead of crossing
+    the forward-only boundary.
+    """
     engine, ini_path = migrated_db
     _run_template_migration(engine, ini_path)
 
     result = _alembic(
-        ["downgrade", "-1"],
+        ["downgrade", _PRE_TEMPLATE_HEAD],
         ini_path,
         check=False,
         capture=True,
     )
 
     assert result.returncode != 0, (
-        f"expected non-zero exit from downgrade -1, got {result.returncode}; "
+        f"expected non-zero exit from downgrade to {_PRE_TEMPLATE_HEAD}, "
+        f"got {result.returncode}; "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
     assert "forward-only" in result.stderr.lower(), (

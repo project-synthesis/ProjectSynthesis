@@ -18,8 +18,11 @@ async def test_lifespan_startup_and_shutdown():
     mock_routing.available_tiers = ["internal", "passthrough"]
     mock_routing_cls = MagicMock(return_value=mock_routing)
 
-    with patch("app.main.aiosqlite.connect") as mock_connect, \
-         patch("app.providers.detector.detect_provider") as mock_detect_provider, \
+    # PRAGMAs are now applied via SQLAlchemy event hook in app/database.py
+    # (see tests/test_database_pragmas.py). main.py no longer opens a
+    # throwaway aiosqlite connection at startup — so we no longer need to
+    # patch aiosqlite.connect here.
+    with patch("app.providers.detector.detect_provider") as mock_detect_provider, \
          patch("app.services.prompt_loader.PromptLoader"), \
          patch("app.services.strategy_loader.StrategyLoader"), \
          patch("app.main.watch_strategy_files", new_callable=MagicMock), \
@@ -36,9 +39,6 @@ async def test_lifespan_startup_and_shutdown():
             mock_db_path = MagicMock()
             mock_db_path.exists.return_value = True
             mock_data_dir.__truediv__.return_value = mock_db_path
-
-            mock_db = AsyncMock()
-            mock_connect.return_value.__aenter__.return_value = mock_db
 
             mock_provider = MagicMock()
             mock_provider.name = "mock_provider"
@@ -112,8 +112,9 @@ async def test_lifespan_startup_handler_errors_do_not_crash():
     mock_routing.state.provider_name = None
     mock_routing.available_tiers = ["passthrough"]
 
-    with patch("app.main.aiosqlite.connect"), \
-         patch("app.providers.detector.detect_provider", side_effect=ImportError("No provider")), \
+    # aiosqlite.connect no longer imported into app.main (see comment in
+    # test_lifespan_startup_and_shutdown above).
+    with patch("app.providers.detector.detect_provider", side_effect=ImportError("No provider")), \
          patch("app.services.prompt_loader.PromptLoader") as mock_prompt_loader, \
          patch("app.services.strategy_loader.StrategyLoader"), \
          patch("app.main.watch_strategy_files", new_callable=MagicMock):

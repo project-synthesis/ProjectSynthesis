@@ -5,7 +5,6 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-import aiosqlite
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -205,12 +204,11 @@ async def lifespan(app: FastAPI):
     _error_logger = ErrorLogger(DATA_DIR / "errors")
     set_error_logger(_error_logger)
 
-    db_path = DATA_DIR / "synthesis.db"
-    if db_path.exists():
-        async with aiosqlite.connect(str(db_path)) as db:
-            await db.execute("PRAGMA journal_mode=WAL")
-            await db.execute("PRAGMA busy_timeout=30000")  # 30s — warm path can hold lock 10-20s
-        logger.info("SQLite WAL mode enabled for %s", db_path)
+    # SQLite PRAGMAs (WAL, busy_timeout, foreign_keys, synchronous, cache_size)
+    # are applied to every pool checkout by the event hook in app.database.
+    # The previous throwaway aiosqlite.connect() only set WAL+busy_timeout on a
+    # single connection — busy_timeout is per-connection and was silently lost
+    # for the pool. See app/database.py for the hook definition.
 
     # Initialize routing service
     from app.providers.detector import detect_provider
@@ -263,6 +261,26 @@ async def lifespan(app: FastAPI):
             await run_startup_gc(db)  # type: ignore[arg-type]
     except Exception as exc:
         logger.debug("Startup GC skipped: %s", exc)
+
+    # Recurring garbage collection — hourly sweep of expired tokens and
+    # orphan LinkedRepo rows. Complements run_startup_gc (which handles
+    # cold-start dead records). Task handle lives on app.state and is
+    # cancelled during shutdown.
+    async def _recurring_gc_task() -> None:
+        from app.database import async_session_factory
+        from app.services.gc import run_recurring_gc
+
+        while True:
+            try:
+                async with async_session_factory() as db:  # type: ignore[assignment]
+                    await run_recurring_gc(db)  # type: ignore[arg-type]
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("recurring_gc sweep failed")
+            await asyncio.sleep(3600)  # 1h
+
+    app.state.recurring_gc_task = asyncio.create_task(_recurring_gc_task())
 
     # Start strategy file watcher
     watcher_task = asyncio.create_task(
@@ -1432,6 +1450,7 @@ async def lifespan(app: FastAPI):
             getattr(app.state, "refresh_task", None),
             getattr(app.state, "watcher_task", None),
             getattr(app.state, "agent_watcher_task", None),
+            getattr(app.state, "recurring_gc_task", None),
         ]
         if t is not None
     ]
