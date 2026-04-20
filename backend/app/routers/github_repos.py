@@ -212,11 +212,37 @@ class RepoListResponse(BaseModel):
     count: int = Field(description="Number of repos returned in this page.")
 
 
+class MigrationCandidates(BaseModel):
+    """ADR-005 B4 — candidates eligible for migration to the newly-linked project.
+
+    Powers the post-link toast that offers to sweep recent Legacy prompts into
+    the new project.  Never auto-migrates — the user is the decider.
+    """
+
+    count: int = Field(description="Number of Legacy opts in the lookback window.")
+    from_project_id: str | None = Field(
+        default=None, description="Source project (typically Legacy)."
+    )
+    since: str | None = Field(
+        default=None, description="ISO-8601 cutoff timestamp for the lookback."
+    )
+
+
 class LinkRepoResponse(BaseModel):
     full_name: str = Field(description="GitHub repo in 'owner/repo' format.")
     default_branch: str = Field(description="Repository default branch name.")
     branch: str = Field(description="Active branch for this link.")
     language: str | None = Field(default=None, description="Primary programming language.")
+    project_id: str | None = Field(
+        default=None, description="ADR-005: project node id the repo links to."
+    )
+    migration_candidates: MigrationCandidates | None = Field(
+        default=None,
+        description=(
+            "ADR-005 B4: Legacy opts in last 7 days with NULL repo_full_name. "
+            "Drives the post-link migration toast."
+        ),
+    )
 
 
 class LinkedRepoResponse(BaseModel):
@@ -345,11 +371,45 @@ async def link_repo(
     except Exception as idx_exc:
         logger.warning("Failed to trigger background indexing: %s", idx_exc)
 
+    # ADR-005 B4: compute last-7-day Legacy candidates for the migration toast.
+    # Uses the same `dry_run` semantics as the migration endpoint so the count
+    # is authoritative (same WHERE clause, same filters).
+    migration_candidates: MigrationCandidates | None = None
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        from app.services.project_service import (
+            get_legacy_project_id,
+            migrate_optimizations,
+        )
+
+        legacy_id = await get_legacy_project_id(db)
+        if legacy_id and legacy_id != project_node_id:
+            since_dt = datetime.now(timezone.utc) - timedelta(days=7)
+            candidate_count = await migrate_optimizations(
+                db,
+                from_project_id=legacy_id,
+                to_project_id=project_node_id,
+                since=since_dt,
+                repo_full_name_is_null=True,
+                dry_run=True,
+            )
+            migration_candidates = MigrationCandidates(
+                count=int(candidate_count),
+                from_project_id=legacy_id,
+                since=since_dt.isoformat(),
+            )
+    except Exception as exc:
+        # Non-fatal — the toast is a nice-to-have; linking must succeed.
+        logger.debug("B4 migration-candidate probe failed: %s", exc)
+
     return LinkRepoResponse(
         full_name=full_name,
         default_branch=default_branch,
         branch=active_branch,
         language=language,
+        project_id=project_node_id,
+        migration_candidates=migration_candidates,
     )
 
 
@@ -387,21 +447,101 @@ async def get_linked(
     )
 
 
+class UnlinkResponse(BaseModel):
+    """ADR-005 B5 — response from DELETE /api/github/repos/unlink.
+
+    ``mode='keep'`` (default) preserves ``Optimization.project_id`` as-is;
+    the project node survives and can still be selected from the UI.
+    ``mode='rehome'`` moves the project's recent opts back to Legacy via
+    ``migrate_optimizations``.
+    """
+
+    ok: bool = True
+    mode: str = Field(default="keep", description="'keep' or 'rehome'.")
+    project_id: str | None = Field(
+        default=None,
+        description="The project node the repo was attached to (null if none).",
+    )
+    rehomed_count: int = Field(
+        default=0, description="Number of opts moved to Legacy in rehome mode."
+    )
+
+
 @router.delete("/repos/unlink")
 async def unlink_repo(
     request: Request,
+    mode: str = Query(
+        "keep",
+        pattern="^(keep|rehome)$",
+        description=(
+            "ADR-005 B5: 'keep' leaves attributions unchanged; "
+            "'rehome' migrates recent opts back to Legacy."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
-) -> OkResponse:
-    """Remove the linked repo for the current session."""
+) -> UnlinkResponse:
+    """Remove the linked repo for the current session.
+
+    ADR-005 B5: supports ``?mode=keep|rehome`` — 'keep' (default) leaves
+    ``Optimization.project_id`` alone and keeps the project node alive so
+    the user can still scope to it; 'rehome' moves the last-7-day opts
+    from this project back to Legacy so the user can start fresh.  Never
+    deletes the project node itself — projects are forever (ADR-005).
+    """
     session_id, _token = await _get_session_token(request, db)
     result = await db.execute(
         select(LinkedRepo).where(LinkedRepo.session_id == session_id)
     )
     linked = result.scalar_one_or_none()
+
+    project_id: str | None = None
+    rehomed = 0
+
     if linked:
+        project_id = linked.project_node_id
+
+        # B5 rehome: before deleting the link, migrate the last-7-day opts
+        # back to Legacy so the user doesn't see them under a "disconnected"
+        # project selector.
+        if mode == "rehome" and project_id:
+            try:
+                from datetime import datetime, timedelta, timezone
+
+                from app.services.project_service import (
+                    get_legacy_project_id,
+                    migrate_optimizations,
+                )
+
+                legacy_id = await get_legacy_project_id(db)
+                if legacy_id and legacy_id != project_id:
+                    since_dt = datetime.now(timezone.utc) - timedelta(days=7)
+                    rehomed = await migrate_optimizations(
+                        db,
+                        from_project_id=project_id,
+                        to_project_id=legacy_id,
+                        since=since_dt,
+                    )
+            except Exception as exc:
+                logger.warning("B5 rehome failed (non-fatal): %s", exc)
+                rehomed = 0
+
         await db.delete(linked)
         await db.commit()
-    return OkResponse()
+
+        # Emit observability event so the UI can toast "disconnected" status.
+        try:
+            from app.services.event_bus import event_bus
+            event_bus.publish("repo_unlinked", {
+                "project_id": project_id,
+                "mode": mode,
+                "rehomed_count": int(rehomed),
+            })
+        except Exception as exc:
+            logger.debug("repo_unlinked publish failed: %s", exc)
+
+    return UnlinkResponse(
+        ok=True, mode=mode, project_id=project_id, rehomed_count=int(rehomed),
+    )
 
 
 # ---------------------------------------------------------------------------
