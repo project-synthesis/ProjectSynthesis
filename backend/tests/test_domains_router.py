@@ -89,6 +89,196 @@ class TestListDomains:
         assert labels == sorted(labels)
 
 
+class TestListDomainsPerProject:
+    """Hybrid taxonomy: ``project_id`` filters to evidence-earned domains."""
+
+    @pytest.mark.asyncio
+    async def test_project_filter_hides_zero_evidence_domains(
+        self, app_client, db_session,
+    ):
+        """Project with no optimizations sees only the canonical general."""
+        from app.models import PromptCluster
+
+        project = PromptCluster(
+            id="proj-empty",
+            label="empty-project",
+            state="project",
+            domain="general",
+            task_type="general",
+            member_count=0,
+        )
+        db_session.add(project)
+        await db_session.commit()
+
+        resp = await app_client.get(f"/api/domains?project_id={project.id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        labels = [d["label"] for d in data]
+        # Canonical general is always visible; other domains are not.
+        assert labels == ["general"]
+        # Per-project count is exposed.
+        assert data[0]["project_member_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_project_filter_absolute_threshold(
+        self, app_client, db_session,
+    ):
+        """Domain with ≥3 project-owned opts crosses the absolute threshold."""
+        from app.models import Optimization, PromptCluster
+
+        project = PromptCluster(
+            id="proj-abs",
+            label="abs-project",
+            state="project",
+            domain="general",
+            task_type="general",
+            member_count=0,
+        )
+        db_session.add(project)
+        await db_session.flush()
+
+        # Cluster parented under a domain the conftest already seeded.
+        cluster = PromptCluster(
+            id="abs-cluster",
+            label="API stuff",
+            state="active",
+            domain="backend",
+            task_type="coding",
+            member_count=3,
+            centroid_embedding=b"\x00" * 384,
+        )
+        db_session.add(cluster)
+        await db_session.flush()
+
+        for i in range(3):
+            db_session.add(Optimization(
+                raw_prompt=f"p{i}",
+                status="completed",
+                cluster_id=cluster.id,
+                project_id=project.id,
+                overall_score=7.0,
+            ))
+        await db_session.commit()
+
+        resp = await app_client.get(f"/api/domains?project_id={project.id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        labels = {d["label"] for d in data}
+        assert "backend" in labels
+        backend = next(d for d in data if d["label"] == "backend")
+        assert backend["project_member_count"] == 3
+        assert backend["member_count"] == 3  # project-scoped view
+
+    @pytest.mark.asyncio
+    async def test_project_filter_proportional_threshold(
+        self, app_client, db_session,
+    ):
+        """Small project: 2 backend / 2 total = 100% > 5% → visible."""
+        from app.models import Optimization, PromptCluster
+
+        project = PromptCluster(
+            id="proj-prop",
+            label="prop-project",
+            state="project",
+            domain="general",
+            task_type="general",
+            member_count=0,
+        )
+        db_session.add(project)
+        await db_session.flush()
+
+        cluster = PromptCluster(
+            id="prop-cluster",
+            label="Small backend",
+            state="active",
+            domain="backend",
+            task_type="coding",
+            member_count=2,
+            centroid_embedding=b"\x00" * 384,
+        )
+        db_session.add(cluster)
+        await db_session.flush()
+
+        for i in range(2):
+            db_session.add(Optimization(
+                raw_prompt=f"p{i}",
+                status="completed",
+                cluster_id=cluster.id,
+                project_id=project.id,
+                overall_score=6.5,
+            ))
+        await db_session.commit()
+
+        resp = await app_client.get(f"/api/domains?project_id={project.id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        labels = {d["label"] for d in data}
+        # Below absolute floor (3), but 2/2 = 100% >> 5% visibility.
+        assert "backend" in labels
+
+    @pytest.mark.asyncio
+    async def test_project_filter_isolates_cross_project_evidence(
+        self, app_client, db_session,
+    ):
+        """Evidence from another project does NOT make a domain visible here."""
+        from app.models import Optimization, PromptCluster
+
+        proj_a = PromptCluster(
+            id="proj-a",
+            label="project-a",
+            state="project",
+            domain="general",
+            task_type="general",
+            member_count=0,
+        )
+        proj_b = PromptCluster(
+            id="proj-b",
+            label="project-b",
+            state="project",
+            domain="general",
+            task_type="general",
+            member_count=0,
+        )
+        db_session.add_all([proj_a, proj_b])
+        await db_session.flush()
+
+        cluster = PromptCluster(
+            id="shared-cluster",
+            label="security stuff",
+            state="active",
+            domain="security",
+            task_type="coding",
+            member_count=5,
+            centroid_embedding=b"\x00" * 384,
+        )
+        db_session.add(cluster)
+        await db_session.flush()
+
+        # 5 opts all belong to project A.
+        for i in range(5):
+            db_session.add(Optimization(
+                raw_prompt=f"p{i}",
+                status="completed",
+                cluster_id=cluster.id,
+                project_id=proj_a.id,
+                overall_score=7.0,
+            ))
+        await db_session.commit()
+
+        # Project B has no evidence — security must NOT be visible.
+        resp_b = await app_client.get(f"/api/domains?project_id={proj_b.id}")
+        assert resp_b.status_code == 200
+        labels_b = {d["label"] for d in resp_b.json()}
+        assert "security" not in labels_b
+        assert "general" in labels_b
+
+        # Project A has 5 opts — security IS visible.
+        resp_a = await app_client.get(f"/api/domains?project_id={proj_a.id}")
+        assert resp_a.status_code == 200
+        labels_a = {d["label"] for d in resp_a.json()}
+        assert "security" in labels_a
+
+
 class TestPromoteToDomain:
     @pytest.mark.asyncio
     async def test_promote_cluster_to_domain(self, app_client, db_session):

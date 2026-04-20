@@ -89,11 +89,60 @@ async def test_score_words(db):
 
 
 @pytest.mark.asyncio
-async def test_empty_signals_classify_general(db):
-    """No domain nodes → classifier returns 'general' for everything."""
+async def test_empty_signals_classify_general_with_live_only(db):
+    """live_only=True + no domain nodes → classifier returns 'general'.
+
+    This is the explicit escape hatch for callers that intentionally want
+    zero-vocabulary state (e.g. tests verifying a fresh-DB baseline).
+    """
+    loader = DomainSignalLoader()
+    await loader.load(db, live_only=True)
+    assert loader.classify({"backend": 5.0}) == "general"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_vocabulary_fallback(db):
+    """No domain nodes + live_only=False → bootstrap vocab populates signals."""
+    from app.services.domain_signal_loader import BOOTSTRAP_DOMAIN_VOCABULARY
+
+    loader = DomainSignalLoader()
+    await loader.load(db)  # default live_only=False
+
+    # Every bootstrap label should now be in signals
+    for label in BOOTSTRAP_DOMAIN_VOCABULARY:
+        assert label in loader.signals, f"{label} missing from bootstrap merge"
+
+    # Classifier should route a backend prompt correctly
+    assert loader.classify({"backend": 3.0}) == "backend"
+
+
+@pytest.mark.asyncio
+async def test_live_domain_overrides_bootstrap(db):
+    """Live domain signals win when the label collides with bootstrap vocab."""
+    # Seed a live "backend" with a distinct, custom keyword set
+    await _seed_domain(db, "backend", [["custom_token", 2.5]])
+
     loader = DomainSignalLoader()
     await loader.load(db)
-    assert loader.classify({"backend": 5.0}) == "general"
+
+    backend_signals = loader.signals["backend"]
+    # Live keywords present
+    assert ("custom_token", 2.5) in backend_signals
+    # Bootstrap keywords did NOT leak in for the same label
+    bootstrap_keywords = {"api", "endpoint", "fastapi", "django", "flask"}
+    live_keyword_names = {kw for kw, _ in backend_signals}
+    assert not (bootstrap_keywords & live_keyword_names), (
+        f"bootstrap leaked into live backend: {bootstrap_keywords & live_keyword_names}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_live_only_returns_empty_without_live_domains(db):
+    """live_only=True → no bootstrap merge, empty signals on fresh DB."""
+    loader = DomainSignalLoader()
+    await loader.load(db, live_only=True)
+    assert loader.signals == {}
+    assert loader.patterns == {}
 
 
 @pytest.mark.asyncio
