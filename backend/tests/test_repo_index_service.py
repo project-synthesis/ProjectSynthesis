@@ -2113,20 +2113,19 @@ async def test_embedding_persists_content_sha_on_fresh_build(db_session):
 @pytest.mark.asyncio
 async def test_read_file_caches_same_sha(db_session):
     """Second _read_file call for the same (repo,branch,path,sha) hits cache."""
+    from app.services.repo_index_file_reader import _read_file
     from app.services.repo_index_service import invalidate_file_cache
 
     invalidate_file_cache()  # start from clean state
 
     gc = AsyncMock()
     gc.get_file_content = AsyncMock(return_value="def f(): pass")
-    es = MagicMock()
-    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
 
     sem = asyncio.Semaphore(1)
     item = {"path": "src/f.py", "sha": "blob_sha_1"}
 
-    _, c1 = await svc._read_file(sem, "tok", "o/r", "main", item)
-    _, c2 = await svc._read_file(sem, "tok", "o/r", "main", item)
+    _, c1 = await _read_file(gc, sem, "tok", "o/r", "main", item)
+    _, c2 = await _read_file(gc, sem, "tok", "o/r", "main", item)
 
     assert c1 == c2 == "def f(): pass"
     # GitHub hit exactly once — second call served from cache.
@@ -2136,6 +2135,7 @@ async def test_read_file_caches_same_sha(db_session):
 @pytest.mark.asyncio
 async def test_read_file_bypasses_cache_on_sha_change(db_session):
     """A different sha for the same path must re-fetch — new content."""
+    from app.services.repo_index_file_reader import _read_file
     from app.services.repo_index_service import invalidate_file_cache
 
     invalidate_file_cache()
@@ -2144,15 +2144,13 @@ async def test_read_file_bypasses_cache_on_sha_change(db_session):
     gc.get_file_content = AsyncMock(
         side_effect=["old body", "new body"],
     )
-    es = MagicMock()
-    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
 
     sem = asyncio.Semaphore(1)
-    _, c_old = await svc._read_file(
-        sem, "tok", "o/r", "main", {"path": "src/f.py", "sha": "sha_old"},
+    _, c_old = await _read_file(
+        gc, sem, "tok", "o/r", "main", {"path": "src/f.py", "sha": "sha_old"},
     )
-    _, c_new = await svc._read_file(
-        sem, "tok", "o/r", "main", {"path": "src/f.py", "sha": "sha_new"},
+    _, c_new = await _read_file(
+        gc, sem, "tok", "o/r", "main", {"path": "src/f.py", "sha": "sha_new"},
     )
 
     assert c_old == "old body"
@@ -2163,19 +2161,18 @@ async def test_read_file_bypasses_cache_on_sha_change(db_session):
 @pytest.mark.asyncio
 async def test_read_file_cache_shared_across_branches(db_session):
     """Same blob sha on a different branch reuses cache — vendored-file win."""
+    from app.services.repo_index_file_reader import _read_file
     from app.services.repo_index_service import invalidate_file_cache
 
     invalidate_file_cache()
 
     gc = AsyncMock()
     gc.get_file_content = AsyncMock(return_value="shared")
-    es = MagicMock()
-    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
 
     sem = asyncio.Semaphore(1)
     item = {"path": "vendor/lib.py", "sha": "blob_abc"}
-    await svc._read_file(sem, "tok", "o/r", "main", item)
-    await svc._read_file(sem, "tok", "o/r", "feature/x", item)
+    await _read_file(gc, sem, "tok", "o/r", "main", item)
+    await _read_file(gc, sem, "tok", "o/r", "feature/x", item)
 
     # Same blob SHA = same content (git guarantees it) → one API call total.
     assert gc.get_file_content.await_count == 1
@@ -2184,20 +2181,19 @@ async def test_read_file_cache_shared_across_branches(db_session):
 @pytest.mark.asyncio
 async def test_read_file_skips_cache_without_sha(db_session):
     """No sha on the tree item → no cache key → always fetch."""
+    from app.services.repo_index_file_reader import _read_file
     from app.services.repo_index_service import invalidate_file_cache
 
     invalidate_file_cache()
 
     gc = AsyncMock()
     gc.get_file_content = AsyncMock(return_value="body")
-    es = MagicMock()
-    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
 
     sem = asyncio.Semaphore(1)
     item = {"path": "src/f.py"}  # no sha
 
-    await svc._read_file(sem, "tok", "o/r", "main", item)
-    await svc._read_file(sem, "tok", "o/r", "main", item)
+    await _read_file(gc, sem, "tok", "o/r", "main", item)
+    await _read_file(gc, sem, "tok", "o/r", "main", item)
 
     assert gc.get_file_content.await_count == 2  # not cached
 
@@ -2273,9 +2269,11 @@ async def test_shared_content_sha_embeddings_are_independent(db_session):
     es = MagicMock()
     es.aembed_texts = AsyncMock(return_value=[])  # must not be called
 
-    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
-    processed, _reads, _embs = await svc._read_and_embed_files(
-        tree_items, "tok", "new/repo", "main",
+    from app.services.repo_index_file_reader import read_and_embed_files
+
+    processed, _reads, _embs = await read_and_embed_files(
+        db=db_session, embedding_service=es, github_client=gc,
+        items=tree_items, token="tok", repo_full_name="new/repo", branch="main",
     )
 
     # Both files should have embeddings (copied from the cache).
@@ -2325,9 +2323,11 @@ async def test_stale_null_embedding_row_does_not_poison_dedup(db_session):
     es = MagicMock()
     es.aembed_texts = AsyncMock(return_value=[fresh_vec])
 
-    svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
-    processed, _r, _e = await svc._read_and_embed_files(
-        tree_items, "tok", "new/repo", "main",
+    from app.services.repo_index_file_reader import read_and_embed_files
+
+    processed, _r, _e = await read_and_embed_files(
+        db=db_session, embedding_service=es, github_client=gc,
+        items=tree_items, token="tok", repo_full_name="new/repo", branch="main",
     )
 
     # Embedder ran (because the NULL row didn't count as a cache hit).
@@ -2339,7 +2339,7 @@ async def test_stale_null_embedding_row_does_not_poison_dedup(db_session):
 @pytest.mark.asyncio
 async def test_file_content_cache_evicts_oldest_on_overflow(monkeypatch):
     """Cap-and-evict behaviour: oldest 10% drop when the cache overflows."""
-    from app.services import repo_index_service as m
+    from app.services import repo_index_file_reader as m
 
     # Shrink the cap so the test runs fast + the math is obvious.
     monkeypatch.setattr(m, "_FILE_CACHE_MAX_ENTRIES", 10)
