@@ -14,11 +14,11 @@ from pydantic import BaseModel
 
 from app.schemas.pipeline_contracts import AnalysisResult, DimensionScores, ScoreResult
 from app.services.pipeline_constants import CODING_KEYWORDS, CONFIDENCE_GATE
-from app.services.sampling_pipeline import (
-    _parse_text_response,
-    _pydantic_to_mcp_tool,
-    _sampling_request_plain,
-    _sampling_request_structured,
+from app.services.sampling import (
+    parse_text_response as _parse_text_response,
+    pydantic_to_mcp_tool as _pydantic_to_mcp_tool,
+    sampling_request_plain as _sampling_request_plain,
+    sampling_request_structured as _sampling_request_structured,
 )
 
 # ---------------------------------------------------------------------------
