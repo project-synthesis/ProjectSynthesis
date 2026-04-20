@@ -420,6 +420,7 @@ async def test_analyze_sampling_fallback(db_session) -> None:
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=MagicMock())
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
