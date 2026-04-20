@@ -24,14 +24,13 @@ vi.mock('$lib/stores/toast.svelte', () => ({
 }));
 
 import GitHubPanel from './GitHubPanel.svelte';
-import { githubStore } from '$lib/stores/github.svelte';
+import { githubStore, loadUiTab } from '$lib/stores/github.svelte';
 import { projectStore } from '$lib/stores/project.svelte';
 import * as apiClient from '$lib/api/client';
 
 describe('GitHubPanel', () => {
   beforeEach(() => {
     githubStore._reset();
-    githubStore.uiTab = 'info';
     projectStore._reset?.();
     vi.clearAllMocks();
     localStorage.clear();
@@ -88,26 +87,22 @@ describe('GitHubPanel', () => {
       expect(localStorage.getItem('synthesis:github_tab')).toBe('files');
     });
 
-    it('reads persisted uiTab on load', async () => {
+    it('loadUiTab() reads the persisted value from localStorage', () => {
+      // Directly covers the load path that runs once at store construction —
+      // integration render cannot re-trigger that singleton boot, so we unit-test
+      // the helper here to prove the persistence contract.
       localStorage.setItem('synthesis:github_tab', 'files');
-      // Trigger re-init by manually applying the persisted value.
-      // The store reads localStorage at module construction. For this test,
-      // we directly set uiTab to simulate the load path.
-      githubStore.uiTab = 'files';
+      expect(loadUiTab()).toBe('files');
 
-      githubStore.linkedRepo = {
-        full_name: 'owner/repo',
-        branch: 'main',
-        default_branch: 'main',
-        language: 'TypeScript',
-        project_label: 'Project X',
-        linked_at: '2026-04-01T00:00:00Z',
-      } as never;
-      vi.mocked(apiClient.githubTree).mockResolvedValueOnce([] as never);
+      localStorage.setItem('synthesis:github_tab', 'info');
+      expect(loadUiTab()).toBe('info');
 
-      render(GitHubPanel, { props: { active: true } });
-      const filesTab = screen.getByRole('tab', { name: /^Files/ });
-      expect(filesTab).toHaveAttribute('aria-selected', 'true');
+      // Unknown / missing values fall back to 'info'.
+      localStorage.setItem('synthesis:github_tab', 'garbage');
+      expect(loadUiTab()).toBe('info');
+
+      localStorage.removeItem('synthesis:github_tab');
+      expect(loadUiTab()).toBe('info');
     });
   });
 

@@ -248,7 +248,9 @@ describe('HistoryPanel', () => {
       render(HistoryPanel, { props: { active: true } });
       await waitFor(() => expect(screen.getByText('With cluster')).toBeInTheDocument());
 
-      const clusterLink = screen.getByText('API patt');
+      // Cluster label is rendered with truncation — match by regex so the
+      // test doesn't break if the truncation cutoff changes.
+      const clusterLink = screen.getByText(/API patt/);
       await fireEvent.click(clusterLink);
 
       await waitFor(() => {
