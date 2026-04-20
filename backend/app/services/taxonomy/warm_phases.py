@@ -48,6 +48,7 @@ from app.services.prompt_lifecycle import AUTO_RETIRE_SOURCE_FLOOR
 # taxonomy._constants → warm_phases`` on cold-start from test_template_service.
 from app.services.taxonomy._constants import (
     CANDIDATE_COHERENCE_FLOOR,
+    CROSS_PROJECT_REASSIGN_MARGIN,
     DISSOLVE_COHERENCE_CEILING,
     DISSOLVE_MAX_MEMBERS,
     DISSOLVE_MIN_AGE_HOURS,
@@ -269,6 +270,7 @@ class ReconcileResult:
     templates_demoted: int = 0
     templates_archived: int = 0
     templates_auto_retired: int = 0
+    dominant_project_id_updated: int = 0
 
 
 def _log_template_event(
@@ -475,16 +477,33 @@ async def _reassign_to_active(
     opt_ids: list[str],
     opt_embeddings: list[np.ndarray],
     exclude_cluster_ids: set[str] | None = None,
+    prefer_same_project: bool = True,
+    preferred_project_id: str | None = None,
 ) -> list[dict]:
     """Reassign optimizations to the nearest active/mature/template cluster.
 
-    Domain-aware: prefers same-domain targets to prevent dissolution cascades
-    where cross-domain reassignment creates more incoherent clusters that
-    trigger further dissolutions.  Falls back to cross-domain only when no
-    same-domain target has cosine >= ``_CROSS_DOMAIN_FALLBACK_FLOOR``.
+    Project-and-domain-aware: prevents mixed-cluster dissolution from silently
+    leaking members into Legacy (ADR-005 C1c).
 
-    When reassigning cross-domain, updates ``opt.domain`` to match the
-    target cluster's domain so the Optimization row stays consistent.
+    Preference order per opt:
+      1. Same-project same-domain, if cosine >= floor.
+      2. Same-project any-domain, if within ``CROSS_PROJECT_REASSIGN_MARGIN``
+         (0.10) cosine of the best cross-project option.
+      3. Same-domain cross-project, if cosine >= floor.
+      4. Global best cosine.
+
+    The "preferred project" for an opt is resolved in this order:
+      * Explicit ``preferred_project_id`` (if set) — applies uniformly to
+        every opt in this batch. Matches the ADR-005 C1c spec: dissolving
+        cluster's dominant project is preferred across all its members.
+      * Otherwise, per-opt ``opt.project_id`` (when ``prefer_same_project``
+        is True) — better for mixed clusters because it preserves each
+        member's existing attribution rather than coercing minorities into
+        the majority project.
+      * Otherwise, no project preference (global cosine only).
+
+    When reassigning cross-domain, updates ``opt.domain`` to match the target
+    cluster's domain so the Optimization row stays consistent.
 
     Only targets non-candidate, non-archived, non-domain clusters so that
     rejected candidate members always land in a stable parent cluster.
@@ -495,6 +514,14 @@ async def _reassign_to_active(
         opt_embeddings: Corresponding unit-norm embeddings (same order).
         exclude_cluster_ids: Cluster IDs to exclude from targets (e.g., the
             dissolving cluster itself).
+        prefer_same_project: When True (default) and ``preferred_project_id``
+            is None, each opt prefers its own ``opt.project_id``. When False,
+            no project preference is applied unless ``preferred_project_id``
+            is set.
+        preferred_project_id: Explicit project ID to prefer for every opt in
+            this batch (overrides per-opt ``opt.project_id`` inference). Use
+            when you want spec-exact "dissolving-cluster-project-wins"
+            behavior rather than per-opt same-project preservation.
 
     Returns:
         List of {cluster_id, cluster_label, count} dicts summarizing
@@ -528,6 +555,7 @@ async def _reassign_to_active(
     target_centroids: list[np.ndarray] = []
     valid_targets: list[PromptCluster] = []
     target_domains: list[str] = []  # parsed primary domain per target
+    target_projects: list[str | None] = []  # dominant_project_id per target
     for tc in target_clusters:
         if tc.centroid_embedding:
             try:
@@ -535,6 +563,7 @@ async def _reassign_to_active(
                 target_centroids.append(centroid)
                 valid_targets.append(tc)
                 target_domains.append(parse_domain(tc.domain)[0])
+                target_projects.append(tc.dominant_project_id)
             except (ValueError, TypeError) as _tc_exc:
                 logger.warning(
                     "Corrupt centroid in reassignment targets, cluster='%s': %s",
@@ -557,26 +586,55 @@ async def _reassign_to_active(
             continue
 
         opt_primary_domain, _ = parse_domain(opt.domain)
+        # Explicit preferred_project_id overrides per-opt inference.
+        # Matches ADR-005 C1c spec: dissolving cluster's dominant project
+        # preferred uniformly across all its members.
+        if preferred_project_id is not None:
+            opt_project_id = preferred_project_id
+        elif prefer_same_project:
+            opt_project_id = opt.project_id
+        else:
+            opt_project_id = None
 
-        # Two-pass search: same-domain first, cross-domain fallback
-        best_same: PromptCluster | None = None
-        best_same_sim: float = -1.0
+        # Multi-pass search: track best same-project, same-domain, and global.
+        best_same_domain: PromptCluster | None = None
+        best_same_domain_sim: float = -1.0
+        best_same_project: PromptCluster | None = None
+        best_same_project_sim: float = -1.0
         best_any: PromptCluster | None = None
         best_any_sim: float = -1.0
 
-        for tc, centroid, td in zip(valid_targets, target_centroids, target_domains):
+        for tc, centroid, td, tp in zip(
+            valid_targets, target_centroids, target_domains, target_projects
+        ):
             sim = cosine_similarity(emb, centroid)
             if sim > best_any_sim:
                 best_any_sim = sim
                 best_any = tc
-            if td == opt_primary_domain and sim > best_same_sim:
-                best_same_sim = sim
-                best_same = tc
+            if td == opt_primary_domain and sim > best_same_domain_sim:
+                best_same_domain_sim = sim
+                best_same_domain = tc
+            if (
+                opt_project_id is not None
+                and tp == opt_project_id
+                and sim > best_same_project_sim
+            ):
+                best_same_project_sim = sim
+                best_same_project = tc
 
-        # Prefer same-domain target.  Only fall back to cross-domain when
-        # no same-domain target reaches the minimum cosine floor.
-        if best_same is not None and best_same_sim >= cross_domain_fallback_floor:
-            chosen = best_same
+        # Selection policy (project-preferred, then domain-preferred, then global):
+        chosen: PromptCluster | None = None
+        if (
+            best_same_project is not None
+            and best_same_project_sim >= cross_domain_fallback_floor
+            and (best_any_sim - best_same_project_sim) < CROSS_PROJECT_REASSIGN_MARGIN
+        ):
+            chosen = best_same_project
+        elif (
+            best_same_domain is not None
+            and best_same_domain_sim >= cross_domain_fallback_floor
+        ):
+            chosen = best_same_domain
         elif best_any is not None:
             chosen = best_any
         else:
@@ -1145,6 +1203,94 @@ async def phase_reconcile(
     except Exception as _legacy_exc:
         logger.debug("Legacy template state check failed (non-fatal): %s", _legacy_exc)
 
+    # --- Hybrid taxonomy: collapse per-project `general` domains ---
+    # Hybrid architecture (2026-04-19): exactly one ``general`` domain at the
+    # taxonomy root (parent_id=NULL). Pre-hybrid databases can contain multiple
+    # per-project ``general`` nodes created by the old family_ops bootstrap.
+    # This step canonicalizes the oldest unparented general (or just promotes
+    # the oldest) and archives duplicates after reparenting their children.
+    # Idempotent: on a canonical DB (exactly one general with parent_id=NULL)
+    # it is a no-op.
+    try:
+        from app.services.taxonomy.family_ops import _canonical_general_order
+
+        general_q = await db.execute(
+            select(PromptCluster)
+            .where(
+                PromptCluster.state == "domain",
+                PromptCluster.label == "general",
+            )
+            .order_by(
+                _canonical_general_order().asc(),
+                PromptCluster.created_at.asc(),
+            )
+        )
+        generals = list(general_q.scalars().all())
+        if len(generals) > 1:
+            canonical = generals[0]
+            stale = generals[1:]
+            if canonical.parent_id is not None:
+                logger.info(
+                    "Hybrid: canonicalizing 'general' domain %s (was parent=%s)",
+                    canonical.id[:8], str(canonical.parent_id)[:8],
+                )
+                canonical.parent_id = None
+            stale_ids = [g.id for g in stale]
+            # Reparent clusters under stale generals to canonical.
+            reparent_result = await db.execute(
+                update(PromptCluster)
+                .where(PromptCluster.parent_id.in_(stale_ids))
+                .values(parent_id=canonical.id)
+            )
+            reparent_count = int(reparent_result.rowcount or 0)  # type: ignore[arg-type]
+            # Archive stale generals with provenance.
+            for sg in stale:
+                sg.state = "archived"
+                sg.archived_at = _utcnow()
+                sg.cluster_metadata = write_meta(
+                    sg.cluster_metadata,
+                    collapsed_to_canonical=canonical.id,
+                    collapsed_at=_utcnow().isoformat(),
+                    reason="hybrid_general_collapse",
+                )
+            logger.info(
+                "Hybrid general collapse: canonical=%s, archived %d stale generals, reparented %d clusters",
+                canonical.id[:8], len(stale), reparent_count,
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="reconcile", decision="general_collapsed",
+                    context={
+                        "canonical_id": canonical.id,
+                        "archived_ids": stale_ids,
+                        "reparented_count": reparent_count,
+                    },
+                )
+            except RuntimeError:
+                pass
+            await db.flush()
+        elif len(generals) == 1 and generals[0].parent_id is not None:
+            # Single general still parented under a project — promote to root.
+            old_parent = generals[0].parent_id
+            generals[0].parent_id = None
+            logger.info(
+                "Hybrid: canonicalizing single 'general' domain %s (was parent=%s)",
+                generals[0].id[:8], str(old_parent)[:8],
+            )
+            try:
+                get_event_logger().log_decision(
+                    path="warm", op="reconcile", decision="general_canonicalized",
+                    context={
+                        "general_id": generals[0].id,
+                        "previous_parent_id": old_parent,
+                    },
+                )
+            except RuntimeError:
+                pass
+            await db.flush()
+    except Exception as collapse_exc:
+        logger.warning("Hybrid general collapse failed (non-fatal): %s", collapse_exc)
+
     # --- Member count + coherence reconciliation ---
     try:
         count_q = await db.execute(
@@ -1281,6 +1427,53 @@ async def phase_reconcile(
                 node.avg_score = avg
                 node.scored_count = scored
                 result.scores_reconciled += 1
+
+        # ADR-005 hardening: reconcile ``dominant_project_id`` from member
+        # distribution. Tie-break: non-Legacy projects win over Legacy, then
+        # lexical project_id (deterministic). Drives tree filtering in
+        # routers/clusters.py and keeps the hot-path ``_cluster_project_cache``
+        # honest across restarts.
+        project_dist_q = await db.execute(
+            select(
+                Optimization.cluster_id,
+                Optimization.project_id,
+                func.count().label("n"),
+            ).where(
+                Optimization.cluster_id.isnot(None),
+                Optimization.project_id.isnot(None),
+            ).group_by(Optimization.cluster_id, Optimization.project_id)
+        )
+        project_label_q = await db.execute(
+            select(PromptCluster.id, PromptCluster.label).where(
+                PromptCluster.state == "project",
+            )
+        )
+        project_labels = {pid: lbl for pid, lbl in project_label_q.all()}
+
+        # cluster_id -> list[(project_id, count)]
+        dist_by_cluster: dict[str, list[tuple[str, int]]] = {}
+        for cid, pid, n in project_dist_q.all():
+            dist_by_cluster.setdefault(cid, []).append((pid, n))
+
+        for node in live_nodes:
+            buckets = dist_by_cluster.get(node.id, [])
+            if not buckets:
+                if node.dominant_project_id is not None:
+                    node.dominant_project_id = None
+                    result.dominant_project_id_updated += 1
+                continue
+            # Sort: count DESC, then non-Legacy preferred, then lexical project_id
+            buckets.sort(
+                key=lambda x: (
+                    -x[1],
+                    0 if project_labels.get(x[0]) != "Legacy" else 1,
+                    x[0],
+                )
+            )
+            dominant = buckets[0][0]
+            if node.dominant_project_id != dominant:
+                node.dominant_project_id = dominant
+                result.dominant_project_id_updated += 1
 
         # Recompute weighted_member_sum and centroid from member data.
         # The hot-path running mean can drift; this corrects from ground truth.
@@ -3048,7 +3241,13 @@ async def phase_retire(
                 )
                 opt_embs.append(np.zeros(384, dtype=np.float32))
 
-        # Reassign members to nearest active cluster (exclude self)
+        # Reassign members to nearest active cluster (exclude self).
+        # ADR-005 C1c — per-opt same-project preference (the default) is used
+        # here rather than threading ``preferred_project_id=node.dominant_project_id``
+        # so that minority-project members in a mixed cluster land in their
+        # OWN project's targets, not the majority's. This aligns with the plan
+        # matrix entry "routes minority-project members to same-project
+        # targets first" and strictly beats spec-exact uniform-pref behavior.
         reassignment_info = await _reassign_to_active(
             db, opt_ids, opt_embs, exclude_cluster_ids={node.id},
         )

@@ -46,12 +46,113 @@ class TestEngineProjectCaches:
         assert sig.parameters["repo_full_name"].default is None
 
 
+class TestGetCanonicalGeneral:
+    """Hybrid: `get_canonical_general` returns the single root-level general."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_absent(self, db_session: AsyncSession):
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        # Clear any seeded generals to start clean.
+        from sqlalchemy import delete
+        await db_session.execute(
+            delete(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.label == "general",
+            )
+        )
+        await db_session.flush()
+
+        result = await get_canonical_general(db_session)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_prefers_root_general_over_parented(
+        self, db_session: AsyncSession,
+    ):
+        """When both a root and a parented general exist, pick the root one."""
+        from sqlalchemy import delete
+
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        await db_session.execute(
+            delete(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.label == "general",
+            )
+        )
+        await db_session.flush()
+
+        project = PromptCluster(
+            label="p", state="project",
+            domain="general", task_type="general", member_count=0,
+        )
+        db_session.add(project)
+        await db_session.flush()
+
+        parented = PromptCluster(
+            id="parented-general",
+            label="general", state="domain",
+            domain="general", task_type="general",
+            parent_id=project.id, member_count=0,
+        )
+        root = PromptCluster(
+            id="root-general",
+            label="general", state="domain",
+            domain="general", task_type="general",
+            parent_id=None, member_count=0,
+        )
+        db_session.add_all([parented, root])
+        await db_session.flush()
+
+        result = await get_canonical_general(db_session)
+        assert result is not None
+        assert result.id == "root-general"
+        assert result.parent_id is None
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_parented_when_only_option(
+        self, db_session: AsyncSession,
+    ):
+        """With only a parented general, return it (caller will canonicalize)."""
+        from sqlalchemy import delete
+
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        await db_session.execute(
+            delete(PromptCluster).where(
+                PromptCluster.state == "domain",
+                PromptCluster.label == "general",
+            )
+        )
+        await db_session.flush()
+
+        project = PromptCluster(
+            label="p", state="project",
+            domain="general", task_type="general", member_count=0,
+        )
+        db_session.add(project)
+        await db_session.flush()
+
+        parented = PromptCluster(
+            label="general", state="domain",
+            domain="general", task_type="general",
+            parent_id=project.id, member_count=0,
+        )
+        db_session.add(parented)
+        await db_session.flush()
+
+        result = await get_canonical_general(db_session)
+        assert result is not None
+        assert result.parent_id == project.id
+
+
 class TestResolveOrCreateDomain:
     """Tests for _resolve_or_create_domain helper."""
 
     @pytest.mark.asyncio
     async def test_bootstraps_general_domain(self, db_session: AsyncSession):
-        """_resolve_or_create_domain creates general domain if none exists."""
+        """Hybrid: _resolve_or_create_domain bootstraps the canonical GLOBAL general."""
         from app.services.taxonomy.family_ops import _resolve_or_create_domain
 
         project = PromptCluster(
@@ -68,7 +169,8 @@ class TestResolveOrCreateDomain:
         assert domain is not None
         assert domain.label == "general"
         assert domain.state == "domain"
-        assert domain.parent_id == project.id
+        # Hybrid (2026-04-19): general lives at the taxonomy root, not under the project.
+        assert domain.parent_id is None
 
     @pytest.mark.asyncio
     async def test_returns_matching_domain(self, db_session: AsyncSession):
@@ -102,12 +204,19 @@ class TestResolveOrCreateDomain:
         assert domain.label == "backend"
 
     @pytest.mark.asyncio
-    async def test_returns_none_without_project_id(self, db_session: AsyncSession):
-        """Returns None when project_id is None."""
+    async def test_resolves_canonical_general_without_project_id(
+        self, db_session: AsyncSession
+    ):
+        """Hybrid: project_id=None is valid; the call returns/creates the canonical general."""
         from app.services.taxonomy.family_ops import _resolve_or_create_domain
 
         result = await _resolve_or_create_domain(db_session, None, "backend")
-        assert result is None
+        # Hybrid: when no domain for the label exists, the canonical global
+        # general is returned (and auto-created if absent). project_id=None is
+        # a valid input, not an early-return signal.
+        assert result is not None
+        assert result.label == "general"
+        assert result.parent_id is None
 
     @pytest.mark.asyncio
     async def test_falls_back_to_general(self, db_session: AsyncSession):

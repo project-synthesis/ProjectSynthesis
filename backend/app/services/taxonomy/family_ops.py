@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 import numpy as np
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -281,17 +281,90 @@ async def _recompute_cluster_task_type(
             cluster.task_type = mode_type
 
 
+def _canonical_general_order():
+    """SQLAlchemy expression to order generals: canonical (parent_id=NULL) first, then oldest.
+
+    Hybrid taxonomy (2026-04-19): the canonical ``general`` domain is the one
+    without a project parent (global root). During the collapse window, the
+    oldest per-project general is used as a fallback.
+    """
+    # 0 when parent_id IS NULL (canonical), else 1 — ASC brings canonical first.
+    return case((PromptCluster.parent_id.is_(None), 0), else_=1)
+
+
+async def get_canonical_general(db: AsyncSession) -> PromptCluster | None:
+    """Return the canonical global ``general`` domain node.
+
+    Hybrid architecture (2026-04-19): ``general`` is a single global root with
+    ``parent_id IS NULL``. Falls back to the oldest legacy per-project general
+    during the collapse window so callers remain stable until warm Phase 0
+    reconciles. Used by all discovery/readiness/monitoring sites that previously
+    called ``.first()`` on an unordered query (the source of the grey-parent
+    regression on multi-project databases).
+    """
+    result = await db.execute(
+        select(PromptCluster)
+        .where(
+            PromptCluster.state == "domain",
+            PromptCluster.label == "general",
+        )
+        .order_by(
+            _canonical_general_order().asc(),
+            PromptCluster.created_at.asc(),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def _get_project_domain_ids(
     db: AsyncSession, project_id: str,
 ) -> set[str]:
-    """Get domain node IDs for a project."""
-    result = await db.execute(
+    """Get domain node IDs visible for a project.
+
+    Hybrid architecture (2026-04-19): domain nodes are global (``parent_id=NULL``
+    at the taxonomy root). A domain is *visible* for a project when any of its
+    child clusters contains an optimization owned by the project. Returns an
+    empty set for projects that haven't yet accrued in-domain evidence.
+
+    Legacy per-project parenting (``domain.parent_id == project.id``) is still
+    honoured as a fallback so callers keep working while warm Phase 0 collapses
+    pre-existing per-project generals.
+    """
+    # Primary: domains whose child clusters contain at least one project-owned opt.
+    child_cluster_ids_subq = (
+        select(Optimization.cluster_id)
+        .where(
+            Optimization.project_id == project_id,
+            Optimization.cluster_id.isnot(None),
+        )
+        .distinct()
+    )
+    domain_ids_with_visible_clusters_subq = (
+        select(PromptCluster.parent_id)
+        .where(
+            PromptCluster.id.in_(child_cluster_ids_subq),
+            PromptCluster.parent_id.isnot(None),
+        )
+        .distinct()
+    )
+    primary_q = await db.execute(
+        select(PromptCluster.id).where(
+            PromptCluster.state == "domain",
+            PromptCluster.id.in_(domain_ids_with_visible_clusters_subq),
+        )
+    )
+    ids = {row[0] for row in primary_q.all() if row[0]}
+
+    # Legacy fallback: domains still parented under the project (pre-collapse).
+    legacy_q = await db.execute(
         select(PromptCluster.id).where(
             PromptCluster.parent_id == project_id,
             PromptCluster.state == "domain",
         )
     )
-    return {row[0] for row in result.all()}
+    ids.update(row[0] for row in legacy_q.all())
+    return ids
 
 
 async def _resolve_or_create_domain(
@@ -299,42 +372,44 @@ async def _resolve_or_create_domain(
     project_id: str | None,
     domain_label: str,
 ) -> PromptCluster | None:
-    """Find or create a domain node under the project for new cluster parenting.
+    """Find the global domain node matching *domain_label*, or fall back to ``general``.
+
+    Hybrid architecture (2026-04-19): domain nodes live at the taxonomy root
+    (``parent_id IS NULL``). ``project_id`` is retained in the signature for
+    backward compatibility but no longer drives tree parenting — attribution
+    rides on :attr:`Optimization.project_id` instead.
 
     Search order:
-    1. Domain matching *domain_label* under the project
-    2. "general" domain under the project
-    3. Auto-bootstrap: create a new "general" domain with OKLab color
-    """
-    if not project_id:
-        return None
+      1. Any domain node matching *domain_label* (prefer canonical, then oldest).
+      2. Canonical global ``general`` (prefer ``parent_id=NULL``, then oldest).
+      3. Auto-bootstrap the canonical global ``general`` with an OKLab color.
 
-    # Look for existing domain under this project matching the label
+    Non-``general`` labels that don't yet exist return ``general`` (step 2) so
+    new clusters park under it until warm Phase 5 promotes them organically via
+    ``_propose_domains()``.
+    """
     result = await db.execute(
-        select(PromptCluster).where(
-            PromptCluster.parent_id == project_id,
+        select(PromptCluster)
+        .where(
             PromptCluster.state == "domain",
             PromptCluster.label == domain_label,
-        ).limit(1)
+        )
+        .order_by(
+            _canonical_general_order().asc(),
+            PromptCluster.created_at.asc(),
+        )
+        .limit(1)
     )
     domain_node = result.scalar_one_or_none()
     if domain_node:
         return domain_node
 
-    # Look for "general" domain under this project
-    result = await db.execute(
-        select(PromptCluster).where(
-            PromptCluster.parent_id == project_id,
-            PromptCluster.state == "domain",
-            PromptCluster.label == "general",
-        ).limit(1)
-    )
-    general = result.scalar_one_or_none()
+    # Fall back to canonical global general for any label without a dedicated node yet.
+    general = await get_canonical_general(db)
     if general:
         return general
 
-    # Auto-bootstrap: create general domain for this project
-    # Assign OKLab color maximally distant from existing domain colors
+    # Auto-bootstrap the canonical global general.
     from app.services.taxonomy.coloring import compute_max_distance_color
 
     color_q = await db.execute(
@@ -352,15 +427,15 @@ async def _resolve_or_create_domain(
         domain="general",
         task_type="general",
         member_count=0,
-        parent_id=project_id,
+        parent_id=None,  # Hybrid: canonical global general is unparented.
         color_hex=color_hex,
         persistence=1.0,
     )
     db.add(new_domain)
     await db.flush()
     logger.info(
-        "Phase 2A: auto-created 'general' domain under project %s (color=%s)",
-        project_id[:8], color_hex,
+        "Auto-bootstrapped canonical global 'general' domain (color=%s)",
+        color_hex,
     )
     return new_domain
 

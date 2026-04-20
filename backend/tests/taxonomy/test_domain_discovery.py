@@ -239,6 +239,272 @@ async def test_novel_domain_still_uses_max_distance(db, mock_embedding):
 
 
 @pytest.mark.asyncio
+async def test_propose_domains_pools_fragmented_clusters(db, mock_embedding):
+    """Change A: 3 single-member backend clusters pool into one 'backend' domain.
+
+    Each cluster individually fails the per-cluster member gate, but their
+    collective pooled member count crosses DOMAIN_DISCOVERY_POOL_MIN_MEMBERS.
+    Every contributing cluster gets re-parented to the new domain node.
+    """
+    general = await _seed_general_domain(db)
+
+    cluster_ids = []
+    for i in range(3):
+        c = PromptCluster(
+            label=f"fragment-{i}", state="active", domain="general",
+            parent_id=general.id, member_count=1, coherence=0.5,
+            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        )
+        db.add(c)
+        await db.flush()
+        cluster_ids.append(c.id)
+        db.add(Optimization(
+            raw_prompt=f"backend prompt {i}", domain="general",
+            domain_raw="backend", cluster_id=c.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    created = await engine._propose_domains(db)
+
+    assert "backend" in created
+
+    # All three contributing clusters should be re-parented
+    result = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            PromptCluster.label == "backend",
+        )
+    )
+    backend_node = result.scalar_one()
+    for cid in cluster_ids:
+        c = await db.get(PromptCluster, cid)
+        assert c.parent_id == backend_node.id, (
+            f"cluster {cid} not re-parented to backend (parent={c.parent_id})"
+        )
+        assert c.domain == "backend"
+
+
+@pytest.mark.asyncio
+async def test_pooled_pass_skips_inconsistent_cluster(db, mock_embedding):
+    """Change A: clusters whose internal consistency < 60% contribute 0 members."""
+    general = await _seed_general_domain(db)
+
+    # Cluster 1: all backend (consistent) — contributes 1 member
+    c1 = PromptCluster(
+        label="consistent", state="active", domain="general",
+        parent_id=general.id, member_count=1, coherence=0.5,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(c1)
+    await db.flush()
+    db.add(Optimization(
+        raw_prompt="consistent backend", domain="general",
+        domain_raw="backend", cluster_id=c1.id, status="completed",
+    ))
+
+    # Cluster 2: 50/50 backend/frontend (inconsistent) — contributes nothing
+    c2 = PromptCluster(
+        label="mixed", state="active", domain="general",
+        parent_id=general.id, member_count=2, coherence=0.5,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(c2)
+    await db.flush()
+    db.add(Optimization(
+        raw_prompt="mixed 1", domain="general",
+        domain_raw="backend", cluster_id=c2.id, status="completed",
+    ))
+    db.add(Optimization(
+        raw_prompt="mixed 2", domain="general",
+        domain_raw="frontend", cluster_id=c2.id, status="completed",
+    ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    created = await engine._propose_domains(db)
+
+    # Only 1 backend member (pool floor = 3) — no promotion
+    assert "backend" not in created
+    assert "frontend" not in created
+
+
+@pytest.mark.asyncio
+async def test_pooled_pass_respects_ceiling(db, mock_embedding):
+    """Change A: pooled promotions respect DOMAIN_COUNT_CEILING."""
+    general = await _seed_general_domain(db)
+
+    # Fill to ceiling (30 domains already)
+    for i in range(30):
+        db.add(PromptCluster(
+            label=f"domain-{i}", state="domain",
+            domain=f"domain-{i}", persistence=1.0,
+        ))
+    await db.flush()
+
+    # Eligible pooled evidence (3 single-member clusters)
+    for i in range(3):
+        c = PromptCluster(
+            label=f"fragment-{i}", state="active", domain="general",
+            parent_id=general.id, member_count=1, coherence=0.5,
+            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        )
+        db.add(c)
+        await db.flush()
+        db.add(Optimization(
+            raw_prompt=f"newdomain {i}", domain="general",
+            domain_raw="newdomain", cluster_id=c.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    created = await engine._propose_domains(db)
+    assert created == []
+
+
+@pytest.mark.asyncio
+async def test_pooled_does_not_duplicate_per_cluster_pass(db, mock_embedding):
+    """Change A: labels promoted by per-cluster pass are skipped by pooled pass."""
+    general = await _seed_general_domain(db)
+
+    # Big cluster that WILL promote via per-cluster pass
+    big = PromptCluster(
+        label="big-backend", state="active", domain="general",
+        parent_id=general.id, member_count=8, coherence=0.75,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(big)
+    await db.flush()
+    for i in range(8):
+        db.add(Optimization(
+            raw_prompt=f"big backend {i}", domain="general",
+            domain_raw="backend", cluster_id=big.id, status="completed",
+        ))
+
+    # Additional small clusters that ALSO resolve to "backend"
+    for i in range(3):
+        c = PromptCluster(
+            label=f"small-{i}", state="active", domain="general",
+            parent_id=general.id, member_count=1, coherence=0.5,
+            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        )
+        db.add(c)
+        await db.flush()
+        db.add(Optimization(
+            raw_prompt=f"small backend {i}", domain="general",
+            domain_raw="backend", cluster_id=c.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    created = await engine._propose_domains(db)
+
+    # "backend" appears exactly once — no duplicate from pooled pass
+    assert created.count("backend") == 1
+
+    # Only one backend domain node exists
+    result = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state == "domain",
+            PromptCluster.label == "backend",
+        )
+    )
+    backend_nodes = result.scalars().all()
+    assert len(backend_nodes) == 1
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_threshold_relaxes_when_db_sparse(db, mock_embedding):
+    """Change B: total_opts<20 → per-cluster floor relaxes 3→2.
+
+    A single 2-member backend cluster on a sparse DB crosses the relaxed
+    per-cluster member gate and promotes via the per-cluster pass.
+    """
+    general = await _seed_general_domain(db)
+
+    cluster = PromptCluster(
+        label="small-but-consistent", state="active", domain="general",
+        parent_id=general.id, member_count=2, coherence=0.7,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(cluster)
+    await db.flush()
+    for i in range(2):
+        db.add(Optimization(
+            raw_prompt=f"backend prompt {i}", domain="general",
+            domain_raw="backend", cluster_id=cluster.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    created = await engine._propose_domains(db)
+    assert "backend" in created
+
+
+@pytest.mark.asyncio
+async def test_adaptive_threshold_restores_at_scale(db, mock_embedding):
+    """Change B: total_opts>=20 → per-cluster floor restored to 3.
+
+    A single 2-member cluster on a large DB fails the per-cluster gate.  The
+    cross-cluster pooled pass (Change A) also requires >=3 pooled members,
+    so a single 2-member cluster cannot promote by either path.
+    """
+    general = await _seed_general_domain(db)
+
+    # Fill DB with 25 unrelated optimizations to cross the bootstrap threshold
+    decoy = PromptCluster(
+        label="decoy", state="active", domain="general",
+        parent_id=general.id, member_count=25, coherence=0.5,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(decoy)
+    await db.flush()
+    for i in range(25):
+        db.add(Optimization(
+            raw_prompt=f"decoy {i}", domain="general",
+            domain_raw="general", cluster_id=decoy.id, status="completed",
+        ))
+
+    # Candidate cluster: 2 backend members (below restored floor of 3)
+    cluster = PromptCluster(
+        label="two-backend", state="active", domain="general",
+        parent_id=general.id, member_count=2, coherence=0.7,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(cluster)
+    await db.flush()
+    for i in range(2):
+        db.add(Optimization(
+            raw_prompt=f"backend {i}", domain="general",
+            domain_raw="backend", cluster_id=cluster.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    created = await engine._propose_domains(db)
+    # 2 pooled backend members < POOL_MIN_MEMBERS(3) — no promotion
+    assert "backend" not in created
+
+
+@pytest.mark.asyncio
 async def test_domain_ceiling_blocks_discovery(db, mock_embedding):
     """When DOMAIN_COUNT_CEILING is reached, no new domains are created."""
     general = await _seed_general_domain(db)
