@@ -9,15 +9,6 @@
   import { INSPECTOR_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import { tooltip } from '$lib/actions/tooltip';
 
-  /** Deduplicate array by `id` field (prevents Svelte keyed each errors). */
-  function dedupe<T extends { id: string }>(items: T[]): T[] {
-    const seen = new Set<string>();
-    return items.filter(item => {
-      if (seen.has(item.id)) return false;
-      seen.add(item.id);
-      return true;
-    });
-  }
   import { updateCluster } from '$lib/api/clusters';
   import { listProjects } from '$lib/api/client';
   import { addToast } from '$lib/stores/toast.svelte';
@@ -25,6 +16,7 @@
   import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
   import ScoreSparkline from '$lib/components/shared/ScoreSparkline.svelte';
   import ClusterTemplatesSection from './ClusterTemplatesSection.svelte';
+  import ClusterPatternsSection from './ClusterPatternsSection.svelte';
   import TaxonomyHealthPanel from './TaxonomyHealthPanel.svelte';
   import { PHASE_LABELS, DIMENSION_LABELS } from '$lib/utils/dimensions';
   import { formatScore, isPassthroughResult, trendInfo, formatRelativeTime } from '$lib/utils/formatting';
@@ -120,9 +112,6 @@
     }
     promoteSaving = false;
   }
-
-  // F6: Tab-aware feedback — read from per-tab cache when viewing a cached tab
-  const feedback = $derived(editorStore.activeFeedback ?? forgeStore.feedback);
 
   // Sync feedback state from real-time events (e.g. MCP or cross-tab submissions)
   $effect(() => {
@@ -339,43 +328,11 @@
           {/if}
 
           <!-- Meta-patterns (context-aware by node state) -->
-          {#if family.meta_patterns.length > 0}
-            <div class="family-section">
-              <div class="section-heading" style="margin-bottom: 4px;">
-                {#if family.state === 'domain'}
-                  Top Patterns ({family.member_count} {family.member_count === 1 ? 'cluster' : 'clusters'})
-                {:else if family.state === 'archived'}
-                  Meta-patterns (archived)
-                {:else}
-                  Meta-patterns
-                {/if}
-              </div>
-              <div class="pattern-list">
-                {#each dedupe(family.meta_patterns) as mp (mp.id)}
-                  <div class="pattern-item">
-                    <span class="pattern-text">{mp.pattern_text}</span>
-                    <span class="source-badge" use:tooltip={CLUSTER_TOOLTIPS.source_count}>{mp.source_count}</span>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {:else if family.state === 'domain' && family.member_count > 0}
-            <div class="family-section">
-              <p class="empty-note">Patterns emerge as optimizations accumulate</p>
-            </div>
-          {:else if family.state === 'domain' && family.member_count === 0}
-            <div class="family-section">
-              <p class="empty-note">No clusters in this domain yet</p>
-            </div>
-          {:else if family.state === 'candidate'}
-            <div class="family-section">
-              <p class="empty-note">Patterns extracted after promotion to active</p>
-            </div>
-          {:else if family.state === 'archived'}
-            <div class="family-section">
-              <p class="empty-note">No meta-patterns were extracted</p>
-            </div>
-          {/if}
+          <ClusterPatternsSection
+            metaPatterns={family.meta_patterns}
+            familyState={family.state}
+            memberCount={family.member_count}
+          />
 
           <!-- Templates forked from this cluster — shows reparent annotation when
                the cluster's current domain drifted away from the template's frozen
@@ -1137,49 +1094,6 @@
 
   .dismiss-btn:hover {
     color: var(--color-text-primary);
-  }
-
-  /* Family sub-sections */
-  .family-section {
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* Meta-patterns list */
-  .pattern-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .pattern-item {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 6px;
-    padding: 3px 6px;
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-border-subtle);
-  }
-
-  .pattern-text {
-    font-size: 10px;
-    font-family: var(--font-sans);
-    color: var(--color-text-secondary);
-    line-height: 1.4;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .source-badge {
-    font-size: 9px;
-    font-family: var(--font-mono);
-    color: var(--tier-accent, var(--color-neon-cyan));
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border-subtle);
-    padding: 0 4px;
-    flex-shrink: 0;
-    line-height: 1.6;
   }
 
   /* State badge */
