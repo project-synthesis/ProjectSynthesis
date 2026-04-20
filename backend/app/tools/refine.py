@@ -119,7 +119,8 @@ async def handle_refine(
         if not latest_turn:
             raise ValueError(f"No turns found on branch {branch.id}")
 
-        # Resolve workspace guidance via unified context enrichment
+        # Resolve workspace guidance via unified context enrichment.
+        # B7: refinement stays in the source optimization's project scope.
         context_service = get_context_service()
         enrichment = await context_service.enrich(
             raw_prompt=opt.optimized_prompt,
@@ -127,6 +128,7 @@ async def handle_refine(
             db=db,
             workspace_path=workspace_path,
             mcp_ctx=ctx,
+            project_id=opt.project_id,
         )
         # Consume the refinement generator to completion
         logger.info(

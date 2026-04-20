@@ -142,6 +142,24 @@ async def refine(
                     pass
 
             from app.config import PROJECT_ROOT
+
+            # B1/B7: project_id carries over from the original optimization.
+            # Refinement stays in the same project scope as the source prompt.
+            _ref_project_id: str | None = opt.project_id
+            if _ref_project_id is None and _repo:
+                try:
+                    from app.services.project_service import resolve_project_id
+                    _ref_legacy_pid = getattr(
+                        request.app.state, "legacy_project_id", None,
+                    )
+                    _ref_project_id = await resolve_project_id(
+                        db, _repo, legacy_project_id=_ref_legacy_pid,
+                    )
+                except Exception:
+                    _ref_project_id = getattr(
+                        request.app.state, "legacy_project_id", None,
+                    )
+
             enrichment = await context_service.enrich(
                 raw_prompt=opt.optimized_prompt or opt.raw_prompt,
                 tier=decision.tier,
@@ -149,6 +167,7 @@ async def refine(
                 workspace_path=str(PROJECT_ROOT),
                 repo_full_name=_repo,
                 preferences_snapshot=prefs_snapshot,
+                project_id=_ref_project_id,
             )
             _codebase_context = enrichment.codebase_context
             _strategy_intelligence = enrichment.strategy_intelligence

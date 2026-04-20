@@ -142,6 +142,7 @@ async def run_single_prompt(
     tier: str = "internal",
     context_service: Any | None = None,
     historical_stats: ScoreDistribution | None = None,
+    project_id: str | None = None,
 ) -> PendingOptimization:
     """Run one prompt through analyze → optimize → score → embed in memory.
 
@@ -286,6 +287,7 @@ async def run_single_prompt(
                         repo_full_name=repo_full_name,
                         applied_pattern_ids=None,
                         preferences_snapshot=prefs_snapshot,
+                        project_id=project_id,
                     )
                 applied_patterns_text = enrichment.applied_patterns
                 adaptation_text = enrichment.strategy_intelligence
@@ -646,6 +648,15 @@ async def run_batch(
         except Exception as _hs_exc:
             logger.debug("Batch-level historical stats fetch failed: %s", _hs_exc)
 
+    # B1/B7: freeze project_id once per batch so enrichment + final stamping
+    # share a single resolved value. Every seed prompt in this batch belongs
+    # to the same project scope.
+    _batch_project_id: str | None = None
+    try:
+        _, _batch_project_id = await resolve_repo_project(repo_full_name)
+    except Exception as _pid_exc:
+        logger.debug("Batch project_id resolution failed: %s", _pid_exc)
+
     async def _run_with_semaphore(index: int, prompt: str) -> None:
         # Rate limit (429) backoff: reduce semaphore by half on first 429, retry once
         _rate_limited = False
@@ -668,6 +679,7 @@ async def run_batch(
                 tier=tier,
                 context_service=context_service,
                 historical_stats=shared_stats,
+                project_id=_batch_project_id,
             )
             # Check for rate limit error in result
             if (
@@ -700,6 +712,7 @@ async def run_batch(
                         tier=tier,
                         context_service=context_service,
                         historical_stats=shared_stats,
+                        project_id=_batch_project_id,
                     )
                     return retry
                 finally:
@@ -762,8 +775,7 @@ async def run_batch(
         return_exceptions=True,
     )
 
-    # Stamp project_id on all completed results (resolve once, not per-prompt)
-    _, _batch_project_id = await resolve_repo_project(repo_full_name)
+    # Stamp project_id on all completed results (resolved once at batch head).
     if _batch_project_id:
         for r in results:
             if r is not None and r.status == "completed":

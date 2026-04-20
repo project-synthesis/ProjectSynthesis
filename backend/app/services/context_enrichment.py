@@ -780,6 +780,7 @@ class ContextEnrichmentService:
         repo_branch: str | None = None,
         applied_pattern_ids: list[str] | None = None,
         preferences_snapshot: dict | None = None,
+        project_id: str | None = None,
     ) -> EnrichedContext:
         """Resolve all context layers for the given tier.
 
@@ -1107,6 +1108,7 @@ class ContextEnrichmentService:
         else:
             patterns, _pattern_details = await self._resolve_patterns(
                 raw_prompt, applied_pattern_ids, db,
+                project_id=project_id,
             )
             if _pattern_details:
                 enrichment_meta_dict["applied_pattern_texts"] = _pattern_details
@@ -1285,6 +1287,7 @@ class ContextEnrichmentService:
         raw_prompt: str,
         applied_pattern_ids: list[str] | None,
         db: AsyncSession,
+        project_id: str | None = None,
     ) -> tuple[str | None, list[dict] | None]:
         """Resolve applied meta-patterns via full auto-injection + explicit IDs.
 
@@ -1338,6 +1341,7 @@ class ContextEnrichmentService:
                         taxonomy_engine=self._taxonomy_engine,
                         db=db,
                         trace_id=str(_uuid.uuid4()),
+                        project_id=project_id,
                     )
                     for ip in auto_injected:
                         pattern_details.append({
