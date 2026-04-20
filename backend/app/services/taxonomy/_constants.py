@@ -64,6 +64,13 @@ EXCLUDED_STRUCTURAL_STATES: frozenset[str] = frozenset({
 # Project A than it would need to be within its own project.
 CROSS_PROJECT_THRESHOLD_BOOST: float = 0.15
 
+# Dissolution-time margin (ADR-005 hardening): a cross-project reassignment
+# target must beat the best same-project target by at least this cosine
+# margin before we'll leak the member out of its project. Smaller than the
+# hot-path boost because dissolution already implies the original cluster
+# was unstable — we'd rather keep the project signal than chase an epsilon.
+CROSS_PROJECT_REASSIGN_MARGIN: float = 0.10
+
 
 # ---------------------------------------------------------------------------
 # Global Pattern Tier (ADR-005 Section 6)
@@ -71,7 +78,11 @@ CROSS_PROJECT_THRESHOLD_BOOST: float = 0.15
 GLOBAL_PATTERN_RELEVANCE_BOOST: float = 1.3
 GLOBAL_PATTERN_CAP: int = 500
 GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS: int = 5
-GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS: int = 1
+# ADR-005 B8: minimum distinct projects a pattern must span before it can
+# graduate to the Global tier.  Raising from 1 → 2 prevents Legacy-only
+# patterns from being promoted as "Global" — they may be excellent but
+# are single-project by definition, not cross-project.
+GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS: int = 2
 GLOBAL_PATTERN_PROMOTION_MIN_SCORE: float = 6.0
 GLOBAL_PATTERN_DEMOTION_SCORE: float = 5.0
 GLOBAL_PATTERN_DEDUP_COSINE: float = 0.90

@@ -1175,3 +1175,129 @@ async def test_recompute_preferred_strategies_filters_by_template_count(db, monk
 
     assert "c_has" in called_with
     assert "c_empty" not in called_with
+
+
+# ---------------------------------------------------------------------------
+# phase_reconcile — Hybrid general collapse (Task 43)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_collapses_per_project_generals(
+    db, mock_embedding, mock_provider,
+):
+    """Hybrid: multiple per-project `general` domains collapse to one global canonical."""
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    # Two project nodes with their own per-project general domains.
+    proj_a = PromptCluster(
+        id="proj_a", label="ProjectA", state="project",
+        domain="general", task_type="general", member_count=0,
+    )
+    proj_b = PromptCluster(
+        id="proj_b", label="ProjectB", state="project",
+        domain="general", task_type="general", member_count=0,
+    )
+    db.add_all([proj_a, proj_b])
+    await db.flush()
+
+    # Two per-project generals, A created before B.
+    gen_a = PromptCluster(
+        id="gen_a", label="general", state="domain",
+        domain="general", task_type="general", member_count=0,
+        parent_id="proj_a", color_hex="#aaaaaa", persistence=1.0,
+    )
+    gen_b = PromptCluster(
+        id="gen_b", label="general", state="domain",
+        domain="general", task_type="general", member_count=0,
+        parent_id="proj_b", color_hex="#bbbbbb", persistence=1.0,
+    )
+    db.add_all([gen_a, gen_b])
+    await db.flush()
+    # Force distinct created_at timestamps so _canonical_general_order picks A.
+    await db.execute(text(
+        "UPDATE prompt_cluster SET created_at = datetime('now', '-1 day') WHERE id='gen_a'"
+    ))
+    await db.execute(text(
+        "UPDATE prompt_cluster SET created_at = datetime('now') WHERE id='gen_b'"
+    ))
+
+    # Attach one child cluster to each general so we can verify reparenting.
+    child_a = PromptCluster(
+        id="child_a", label="A-child", state="active",
+        domain="general", task_type="general", member_count=1,
+        parent_id="gen_a",
+        centroid_embedding=np.zeros(EMBEDDING_DIM, dtype=np.float32).tobytes(),
+    )
+    child_b = PromptCluster(
+        id="child_b", label="B-child", state="active",
+        domain="general", task_type="general", member_count=1,
+        parent_id="gen_b",
+        centroid_embedding=np.zeros(EMBEDDING_DIM, dtype=np.float32).tobytes(),
+    )
+    db.add_all([child_a, child_b])
+    await db.commit()
+
+    await phase_reconcile(engine, db)
+
+    # Canonical general is gen_a, promoted to root.
+    await db.refresh(gen_a)
+    await db.refresh(gen_b)
+    await db.refresh(child_b)
+    assert gen_a.state == "domain"
+    assert gen_a.parent_id is None, "canonical general must be at taxonomy root"
+    assert gen_b.state == "archived", "stale general must be archived"
+
+    # Gen B's child is reparented to canonical.
+    assert child_b.parent_id == gen_a.id
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_canonicalizes_single_parented_general(
+    db, mock_embedding, mock_provider,
+):
+    """Hybrid: one parented general gets promoted to the taxonomy root."""
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    proj = PromptCluster(
+        id="proj_x", label="ProjectX", state="project",
+        domain="general", task_type="general", member_count=0,
+    )
+    db.add(proj)
+    await db.flush()
+
+    gen = PromptCluster(
+        id="gen_x", label="general", state="domain",
+        domain="general", task_type="general", member_count=0,
+        parent_id="proj_x", color_hex="#ccc", persistence=1.0,
+    )
+    db.add(gen)
+    await db.commit()
+
+    await phase_reconcile(engine, db)
+
+    await db.refresh(gen)
+    assert gen.parent_id is None, "single parented general must promote to root"
+    assert gen.state == "domain"
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_noop_on_canonical_general(
+    db, mock_embedding, mock_provider,
+):
+    """Hybrid: a single unparented general is a no-op (idempotent)."""
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    gen = PromptCluster(
+        id="gen_canonical", label="general", state="domain",
+        domain="general", task_type="general", member_count=0,
+        parent_id=None, color_hex="#ddd", persistence=1.0,
+    )
+    db.add(gen)
+    await db.commit()
+
+    await phase_reconcile(engine, db)
+
+    await db.refresh(gen)
+    assert gen.parent_id is None
+    assert gen.state == "domain"

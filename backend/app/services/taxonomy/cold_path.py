@@ -76,7 +76,9 @@ async def _resolve_cluster_project_ids(
     """Build cluster_id -> dominant project_id mapping from Optimization rows.
 
     For clusters with members from multiple projects, returns the project_id
-    with the highest member count (dominant project).
+    with the highest member count. Ties are broken by preferring non-Legacy
+    projects, then by lexical project_id for determinism — matches warm
+    Phase 0 and the S1 migration backfill rule.
     """
     rows = (await db.execute(
         select(
@@ -89,14 +91,31 @@ async def _resolve_cluster_project_ids(
         ).group_by(
             Optimization.cluster_id,
             Optimization.project_id,
-        ).order_by(sa_func.count().desc())
+        )
     )).all()
 
-    result: dict[str, str | None] = {}
-    for cluster_id, project_id, _ct in rows:
-        if cluster_id not in result:  # first row per cluster = highest count
-            result[cluster_id] = project_id
-    return result
+    label_rows = (await db.execute(
+        select(PromptCluster.id, PromptCluster.label).where(
+            PromptCluster.state == "project",
+        )
+    )).all()
+    project_labels = {pid: lbl for pid, lbl in label_rows}
+
+    buckets: dict[str, list[tuple[str, int]]] = {}
+    for cluster_id, project_id, ct in rows:
+        buckets.setdefault(cluster_id, []).append((project_id, int(ct)))
+
+    resolved: dict[str, str | None] = {}
+    for cid, pairs in buckets.items():
+        pairs.sort(
+            key=lambda x: (
+                -x[1],
+                0 if project_labels.get(x[0]) != "Legacy" else 1,
+                x[0],
+            )
+        )
+        resolved[cid] = pairs[0][0]
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +590,29 @@ async def execute_cold_path(
         avg, scored = score_map.get(node.id, (None, 0))
         node.avg_score = avg
         node.scored_count = scored
+
+    # Step 14.5: Reconcile dominant_project_id (ADR-005 hardening).
+    # Writes the persisted pointer used by the hybrid-aware tree filter in
+    # routers/clusters.py. Uses the same tiebreak (non-Legacy, then lexical)
+    # as warm Phase 0 and the migration backfill.
+    dominant_map = await _resolve_cluster_project_ids(db)
+    dpid_repairs = 0
+    for node in all_nodes:
+        if node.state in EXCLUDED_STRUCTURAL_STATES:
+            # Structural nodes (project / domain / archived) never carry
+            # ``dominant_project_id`` themselves.
+            if node.dominant_project_id is not None:
+                node.dominant_project_id = None
+                dpid_repairs += 1
+            continue
+        new_dpid = dominant_map.get(node.id)
+        if node.dominant_project_id != new_dpid:
+            node.dominant_project_id = new_dpid
+            dpid_repairs += 1
+    if dpid_repairs:
+        logger.info(
+            "Cold path: reconciled %d dominant_project_id values", dpid_repairs
+        )
 
     # Step 15: Reconcile domain node member_counts (child cluster count)
     for dn_label, dn_id in domain_node_map.items():
