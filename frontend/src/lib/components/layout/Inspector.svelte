@@ -25,6 +25,7 @@
   import MarkdownRenderer from '$lib/components/shared/MarkdownRenderer.svelte';
   import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
   import ScoreSparkline from '$lib/components/shared/ScoreSparkline.svelte';
+  import ClusterTemplatesSection from './ClusterTemplatesSection.svelte';
   import { PHASE_LABELS, DIMENSION_LABELS } from '$lib/utils/dimensions';
   import { formatScore, isPassthroughResult, trendInfo, formatRelativeTime } from '$lib/utils/formatting';
 
@@ -380,26 +381,7 @@
                the cluster's current domain drifted away from the template's frozen
                domain_label (templates preserve their origin domain even across reparents). -->
           {@const clusterTemplates = (templatesStore.templates ?? []).filter((t) => t.source_cluster_id === family.id && !t.retired_at)}
-          {#if clusterTemplates.length > 0}
-            <div class="family-section">
-              <div class="section-heading" style="margin-bottom: 4px;">
-                Templates ({clusterTemplates.length})
-              </div>
-              <div class="template-list">
-                {#each clusterTemplates as tpl (tpl.id)}
-                  <div class="template-row-compact">
-                    <span class="template-label-compact">{tpl.label}</span>
-                    <span class="template-origin-compact">
-                      {tpl.domain_label}
-                      {#if tpl.domain_label !== family.domain}
-                        <em class="template-reparented">(reparented)</em>
-                      {/if}
-                    </span>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {/if}
+          <ClusterTemplatesSection templates={clusterTemplates} familyDomain={family.domain} />
 
           <!-- Linked optimizations moved to ClusterNavigator as sub-items -->
         {/if}
@@ -1369,36 +1351,4 @@
     color: var(--color-text-secondary);
   }
 
-  .template-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .template-row-compact {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    padding: 3px 4px;
-    font-size: 10px;
-    border-left: 1px solid var(--color-border-subtle);
-  }
-  .template-label-compact {
-    flex: 1;
-    min-width: 0;
-    color: var(--color-text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .template-origin-compact {
-    font-size: 9px;
-    font-family: var(--font-mono);
-    color: var(--color-text-dim);
-    flex-shrink: 0;
-  }
-  .template-reparented {
-    font-style: italic;
-    color: var(--color-neon-amber, var(--color-text-muted));
-    margin-left: 4px;
-  }
 </style>
