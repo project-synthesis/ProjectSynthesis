@@ -415,7 +415,7 @@ async def test_analyze_sampling_fallback(db_session) -> None:
 
     with (
         patch("app.tools._shared._routing", _mock_routing("sampling")),
-        patch("app.services.sampling_pipeline.async_session_factory") as mock_factory,
+        patch("app.services.sampling.analyze.async_session_factory") as mock_factory,
     ):
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
