@@ -1,60 +1,52 @@
 """Pipeline orchestrator — async generator yielding SSE PipelineEvents.
 
 Each LLM phase (analyze, optimize, score) is an independent provider call,
-not an Agent SDK agent. The orchestrator coordinates them sequentially and
-streams status events for the frontend SSE endpoint.
+not an Agent SDK agent.  The orchestrator coordinates them sequentially
+and streams status events for the frontend SSE endpoint.
+
+The heavy lifting for each phase lives in :mod:`app.services.pipeline_phases`
+— this module is the thin async-generator shell that wires the phase
+helpers together and yields SSE events at the boundaries.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import random
 import time
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import DATA_DIR, settings
-from app.models import Optimization
+from app.config import DATA_DIR
 from app.providers.base import LLMProvider, TokenUsage, call_provider_with_retry
 from app.schemas.pipeline_contracts import (
-    DIMENSION_WEIGHTS,
     AnalysisResult,
-    DimensionScores,
     OptimizationResult,
     PipelineEvent,
-    PipelineResult,
-    ScoreResult,
-    SuggestionsOutput,
 )
-from app.services.heuristic_scorer import HeuristicScorer
 from app.services.pattern_injection import (
     InjectedPattern,
     auto_inject_patterns,
-    format_injected_patterns,
 )
-from app.services.pipeline_constants import (
-    ANALYZE_MAX_TOKENS,
-    MAX_DOMAIN_RAW_LENGTH,
-    MAX_INTENT_LABEL_LENGTH,
-    SCORE_MAX_TOKENS,
-    VALID_TASK_TYPES,
-    compute_optimize_max_tokens,
-    resolve_effective_strategy,
-    semantic_check,
-    semantic_upgrade_general,
+from app.services.pipeline_constants import ANALYZE_MAX_TOKENS
+from app.services.pipeline_phases import (
+    PersistenceInputs,
+    build_optimize_context,
+    build_pipeline_result,
+    persist_and_propagate,
+    persist_failed_optimization,
+    resolve_blocked_strategies,
+    resolve_post_analyze_state,
+    run_hybrid_scoring,
+    run_suggestion_phase,
 )
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
-from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.services.trace_logger import TraceLogger
-from app.utils.text_cleanup import title_case_label, validate_intent_label
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +66,6 @@ class PipelineOrchestrator:
         # shared production preferences.json.
         self._data_dir: Path = data_dir or DATA_DIR
 
-        # Trace logger — optional; skip if directory cannot be created
         try:
             self.trace_logger: TraceLogger | None = TraceLogger(self._data_dir / "traces")
         except OSError:
@@ -107,9 +98,8 @@ class PipelineOrchestrator:
 
         Delegates to the shared ``call_provider_with_retry`` utility
         in ``providers.base`` which handles retryable vs non-retryable
-        error classification and exponential backoff.
-
-        When ``streaming=True``, dispatches to ``complete_parsed_streaming()``
+        error classification and exponential backoff.  When
+        ``streaming=True``, dispatches to ``complete_parsed_streaming()``
         to prevent HTTP timeouts on long outputs (e.g. Opus 128K).
         """
         return await call_provider_with_retry(
@@ -131,12 +121,6 @@ class PipelineOrchestrator:
         if isinstance(usage, TokenUsage):
             return usage
         return TokenUsage()
-
-    # _semantic_check delegated to pipeline_constants.semantic_check()
-
-    # ------------------------------------------------------------------
-    # Auto-injection helper
-    # ------------------------------------------------------------------
 
     @staticmethod
     async def _auto_inject_patterns(
@@ -185,7 +169,7 @@ class PipelineOrchestrator:
         """Execute the full pipeline, yielding SSE events.
 
         ``project_id`` is frozen at entry by the caller (router / MCP tool) —
-        no persist-time resolution happens inside the pipeline. This
+        no persist-time resolution happens inside the pipeline.  This
         eliminates the race where a repo link committed mid-pipeline would
         non-deterministically flip a prompt from Legacy to the new project.
         Pass ``None`` only when the caller has no way to resolve it; the
@@ -210,6 +194,7 @@ class PipelineOrchestrator:
         yield PipelineEvent(event="optimization_start", data={"trace_id": trace_id})
 
         phase_durations: dict[str, int] = {}
+        effective_strategy: str | None = None
 
         try:
             # ---------------------------------------------------------------
@@ -241,43 +226,13 @@ class PipelineOrchestrator:
 
             system_prompt = self._load_system_prompt()
 
-            # Resolve blocked strategies (low approval rate) to filter from analyzer input
-            blocked_strategies: set[str] = set()
             strategy_intel_enabled = prefs.get(
                 "pipeline.enable_strategy_intelligence", prefs_snapshot,
             )
-            if strategy_intel_enabled and not strategy_override:
-                try:
-                    from app.services.adaptation_tracker import AdaptationTracker
-                    _tracker = AdaptationTracker(db)
-                    # Pre-scan: we don't know the task_type yet (analyzer determines it),
-                    # so collect blocked strategies across ALL task types to prevent
-                    # universally-disliked strategies from being presented.
-                    from sqlalchemy import select as sa_select
-
-                    from app.models import StrategyAffinity
-                    _result = await db.execute(sa_select(StrategyAffinity))
-                    _all_rows = _result.scalars().all()
-                    _by_strategy: dict[str, list[float]] = {}
-                    _by_strategy_total: dict[str, int] = {}
-                    for _row in _all_rows:
-                        _total = (_row.thumbs_up or 0) + (_row.thumbs_down or 0)
-                        if _total >= AdaptationTracker._MIN_FEEDBACK_FOR_GATE:
-                            _by_strategy.setdefault(_row.strategy, []).append(_row.approval_rate)
-                            _by_strategy_total[_row.strategy] = (
-                                _by_strategy_total.get(_row.strategy, 0) + _total
-                            )
-                    for _strat, _rates in _by_strategy.items():
-                        _avg = sum(_rates) / len(_rates)
-                        if _avg < AdaptationTracker._BLOCK_THRESHOLD:
-                            blocked_strategies.add(_strat)
-                            logger.info(
-                                "Strategy '%s' blocked pre-analysis: avg_approval=%.2f across %d task types",
-                                _strat, _avg, len(_rates),
-                            )
-                except Exception as exc:
-                    logger.debug("Adaptation pre-filter unavailable: %s", exc)
-
+            blocked_strategies = await resolve_blocked_strategies(
+                db, enabled=bool(strategy_intel_enabled),
+                strategy_override=strategy_override,
+            )
             available_strategies = self.strategy_loader.format_available(
                 blocked=blocked_strategies,
             )
@@ -304,7 +259,6 @@ class PipelineOrchestrator:
                 max_tokens=ANALYZE_MAX_TOKENS,
             )
 
-            # Capture actual model ID from provider response
             if isinstance(provider.last_model, str):
                 model_ids["analyze"] = provider.last_model
             yield PipelineEvent(
@@ -329,126 +283,24 @@ class PipelineOrchestrator:
                     },
                 )
 
-            # Semantic check + domain confidence gate (shared with sampling pipeline)
-            confidence = semantic_check(analysis.task_type, raw_prompt, analysis.confidence)
-
-            # Upgrade "general" to a specific type when strong keywords are present
-            effective_task_type = semantic_upgrade_general(analysis.task_type, raw_prompt)
-            if effective_task_type != analysis.task_type:
-                analysis.task_type = effective_task_type  # type: ignore[assignment]
-
-            logger.info(
-                "Domain resolution: raw='%s' confidence=%.2f (analyzer=%.2f) trace_id=%s",
-                analysis.domain, confidence, analysis.confidence, trace_id,
-            )
-
-            # Resolve domain via domain nodes (replaces hardcoded VALID_DOMAINS whitelist)
-            if domain_resolver is not None:
-                effective_domain = await domain_resolver.resolve(
-                    analysis.domain or "general", confidence, raw_prompt=raw_prompt,
-                )
-                logger.info(
-                    "Domain resolved: '%s' → '%s' trace_id=%s",
-                    analysis.domain, effective_domain, trace_id,
-                )
-            else:
-                # Startup race or no domain_resolver — default to "general"
-                effective_domain = "general"
-
-            # E1: Heuristic vs LLM classification agreement tracking
-            if heuristic_task_type is not None:
-                try:
-                    from app.services.classification_agreement import get_classification_agreement
-                    get_classification_agreement().record(
-                        heuristic_task_type=heuristic_task_type,
-                        heuristic_domain=heuristic_domain or "general",
-                        llm_task_type=effective_task_type,
-                        llm_domain=effective_domain,
-                        prompt_snippet=raw_prompt[:80],
-                    )
-                except Exception:
-                    logger.debug("Classification agreement tracking failed", exc_info=True)
-
             # ---------------------------------------------------------------
-            # Phase 1.5: Domain Mapping (Spec Section 4.2)
+            # Phase 1.5: Post-analyze state resolution
             # ---------------------------------------------------------------
-            domain_raw = (analysis.domain or "general")[:MAX_DOMAIN_RAW_LENGTH]  # pre-gate, truncated
-            cluster_id = None
-            taxonomy_label = None
-            taxonomy_breadcrumb: list[str] = []
-
-            try:
-                from app.services.taxonomy import TaxonomyMapping
-
-                if taxonomy_engine is not None:
-                    mapping: TaxonomyMapping = await taxonomy_engine.map_domain(
-                        domain_raw=domain_raw,
-                        db=db,
-                        applied_pattern_ids=applied_pattern_ids,
-                    )
-                    cluster_id = mapping.cluster_id
-                    taxonomy_label = mapping.taxonomy_label
-                    taxonomy_breadcrumb = mapping.taxonomy_breadcrumb
-
-                    if cluster_id:
-                        logger.info(
-                            "Domain mapped: '%s' -> node '%s' (%s) trace_id=%s",
-                            domain_raw, taxonomy_label,
-                            " > ".join(taxonomy_breadcrumb), trace_id,
-                        )
-                    else:
-                        logger.info(
-                            "Domain unmapped: '%s' (below alignment floor) trace_id=%s",
-                            domain_raw, trace_id,
-                        )
-                else:
-                    logger.debug("Taxonomy engine not available — skipping domain mapping")
-            except Exception as exc:
-                logger.warning(
-                    "Domain mapping failed (non-fatal): %s trace_id=%s",
-                    exc, trace_id,
-                )
-
-            # Pre-compute prompt embedding once for all downstream consumers
-            # (strategy recommendation, pattern injection, few-shot retrieval)
-            _prompt_embedding = None
-            try:
-                from app.services.embedding_service import EmbeddingService as _EmbSvc
-
-                _prompt_embedding = await _EmbSvc().aembed_single(raw_prompt)
-            except Exception as _emb_exc:
-                logger.warning(
-                    "Prompt embedding failed (downstream consumers will re-embed independently): "
-                    "%s trace_id=%s",
-                    _emb_exc, trace_id,
-                )
-
-            # Score-informed strategy recommendation from historical data
-            data_recommendation = None
-            try:
-                from app.services.pipeline_constants import recommend_strategy_from_history
-
-                data_recommendation = await recommend_strategy_from_history(
-                    raw_prompt=raw_prompt,
-                    db=db,
-                    available_strategies=self.strategy_loader.list_strategies(),
-                    trace_id=trace_id,
-                    prompt_embedding=_prompt_embedding,
-                )
-            except Exception:
-                logger.debug("Strategy recommendation unavailable. trace_id=%s", trace_id)
-
-            # Strategy resolution chain (shared with sampling pipeline)
-            effective_strategy = resolve_effective_strategy(
-                selected_strategy=analysis.selected_strategy,
-                available=self.strategy_loader.list_strategies(),
-                blocked_strategies=blocked_strategies,
-                confidence=confidence,
+            post_analyze = await resolve_post_analyze_state(
+                raw_prompt=raw_prompt,
+                analysis=analysis,
+                db=db,
+                strategy_loader=self.strategy_loader,
+                domain_resolver=domain_resolver,
+                taxonomy_engine=taxonomy_engine,
                 strategy_override=strategy_override,
+                blocked_strategies=blocked_strategies,
+                heuristic_task_type=heuristic_task_type,
+                heuristic_domain=heuristic_domain,
+                applied_pattern_ids=applied_pattern_ids,
                 trace_id=trace_id,
-                data_recommendation=data_recommendation,
-                task_type=analysis.task_type,
             )
+            effective_strategy = post_analyze.effective_strategy
 
             # ---------------------------------------------------------------
             # Pre-Phase: Auto-inject cluster meta-patterns
@@ -480,9 +332,9 @@ class PipelineOrchestrator:
                         context_sources["cluster_injection"] = True
 
                         # Store pattern texts for UI attribution (ForgeArtifact)
-                        _em = context_sources.get("enrichment_meta")
-                        if isinstance(_em, dict):
-                            _em["applied_pattern_texts"] = [
+                        em = context_sources.get("enrichment_meta")
+                        if isinstance(em, dict):
+                            em["applied_pattern_texts"] = [
                                 {
                                     "text": ip.pattern_text,
                                     "source": ip.source or "cluster",
@@ -508,7 +360,6 @@ class PipelineOrchestrator:
             if not enable_si:
                 strategy_intelligence = None
             elif strategy_intelligence is None:
-                # Resolve on-demand when not pre-provided by enrichment service
                 try:
                     from app.services.context_enrichment import resolve_strategy_intelligence
                     strategy_intelligence, _ = await resolve_strategy_intelligence(
@@ -517,119 +368,52 @@ class PipelineOrchestrator:
                 except Exception as exc:
                     logger.debug("Strategy intelligence unavailable: %s", exc)
 
-            strategy_instructions = self.strategy_loader.load(effective_strategy)
-            analysis_summary = (
-                f"Task type: {analysis.task_type}\n"
-                f"Domain: {effective_domain}\n"
-                f"Weaknesses: {', '.join(analysis.weaknesses)}\n"
-                f"Strengths: {', '.join(analysis.strengths)}\n"
-                f"Strategy: {effective_strategy}\n"
-                f"Rationale: {analysis.strategy_rationale}"
+            optimize_bundle = await build_optimize_context(
+                raw_prompt=raw_prompt,
+                analysis=analysis,
+                effective_strategy=effective_strategy,
+                effective_domain=post_analyze.effective_domain,
+                prompt_loader=self.prompt_loader,
+                strategy_loader=self.strategy_loader,
+                db=db,
+                applied_pattern_ids=applied_pattern_ids,
+                auto_injected_patterns=auto_injected_patterns,
+                codebase_context=codebase_context,
+                strategy_intelligence=strategy_intelligence,
+                divergence_alerts=divergence_alerts,
+                prompt_embedding=post_analyze.prompt_embedding,
+                trace_id=trace_id,
             )
 
-            # Resolve applied meta-patterns from knowledge graph
-            applied_patterns_text: str | None = None
-            if applied_pattern_ids:
-                try:
-                    from app.models import MetaPattern
-
-                    mp_q_result = await db.execute(
-                        select(MetaPattern).where(MetaPattern.id.in_(applied_pattern_ids))
-                    )
-                    patterns = mp_q_result.scalars().all()
-                    if patterns:
-                        lines = [
-                            f"- {p.pattern_text}" for p in patterns
-                        ]
-                        applied_patterns_text = (
-                            "The following proven patterns from past optimizations "
-                            "should be applied where relevant:\n"
-                            + "\n".join(lines)
-                        )
-
-                        logger.info(
-                            "Injecting %d applied patterns into optimizer context. trace_id=%s",
-                            len(patterns), trace_id,
-                        )
-                except Exception as exc:
-                    logger.warning("Failed to resolve applied patterns: %s", exc)
-
-            # Combine explicit applied_patterns_text with auto-injected patterns
-            applied_patterns_text = format_injected_patterns(
-                auto_injected_patterns, applied_patterns_text,
-            )
-
-            # Few-shot example retrieval (show, don't tell)
-            few_shot_text: str | None = None
-            try:
-                from app.services.pattern_injection import (
-                    format_few_shot_examples,
-                    retrieve_few_shot_examples,
-                )
-
-                few_shot_examples = await retrieve_few_shot_examples(
-                    raw_prompt=raw_prompt, db=db, trace_id=trace_id,
-                    prompt_embedding=_prompt_embedding,
-                )
-                few_shot_text = format_few_shot_examples(few_shot_examples)
-                if few_shot_text:
-                    if context_sources is None:
-                        context_sources = {}
-                    context_sources["few_shot_examples"] = True
-            except Exception:
-                logger.debug("Few-shot retrieval failed. trace_id=%s", trace_id)
-
-            optimize_msg = self.prompt_loader.render("optimize.md", {
-                "raw_prompt": raw_prompt,
-                "analysis_summary": analysis_summary,
-                "strategy_instructions": strategy_instructions,
-                "codebase_context": codebase_context,
-                "strategy_intelligence": strategy_intelligence,
-                "applied_patterns": applied_patterns_text,
-                "few_shot_examples": few_shot_text,
-                "divergence_alerts": divergence_alerts,
-            })
-
-            dynamic_max_tokens = compute_optimize_max_tokens(len(raw_prompt))
-
-            logger.info(
-                "optimize_inject: trace_id=%s input_chars=%d (~%d tokens) "
-                "prompt=%d codebase=%d strategy_intel=%d patterns=%d fewshot=%d",
-                trace_id, len(optimize_msg), len(optimize_msg) // 4,
-                len(raw_prompt),
-                len(codebase_context) if codebase_context else 0,
-                len(strategy_intelligence) if strategy_intelligence else 0,
-                len(applied_patterns_text) if applied_patterns_text else 0,
-                len(few_shot_text) if few_shot_text else 0,
-            )
+            if optimize_bundle.context_updates:
+                if context_sources is None:
+                    context_sources = {}
+                context_sources.update(optimize_bundle.context_updates)
 
             phase_start = time.monotonic()
             optimization: OptimizationResult = await self._call_provider(
                 provider,
                 system_prompt=system_prompt,
-                user_message=optimize_msg,
+                user_message=optimize_bundle.optimize_msg,
                 output_format=OptimizationResult,
                 model=optimizer_model,
                 effort=prefs.get("pipeline.optimizer_effort", prefs_snapshot) or "high",
-                max_tokens=dynamic_max_tokens,
+                max_tokens=optimize_bundle.dynamic_max_tokens,
                 streaming=True,
             )
 
             # Post-cleanup: strip leaked ## Changes / ## Applied Patterns
-            # from optimized_prompt — LLMs frequently embed change narratives
-            # in the prompt field despite structured output schema separation.
             from app.utils.text_cleanup import sanitize_optimization_result
 
-            _clean_prompt, _clean_changes = sanitize_optimization_result(
+            clean_prompt, clean_changes = sanitize_optimization_result(
                 optimization.optimized_prompt, optimization.changes_summary,
             )
             optimization = OptimizationResult(
-                optimized_prompt=_clean_prompt,
-                changes_summary=_clean_changes,
+                optimized_prompt=clean_prompt,
+                changes_summary=clean_changes,
                 strategy_used=optimization.strategy_used,
             )
 
-            # Capture actual model ID from provider response
             if isinstance(provider.last_model, str):
                 model_ids["optimize"] = provider.last_model
             yield PipelineEvent(
@@ -662,417 +446,111 @@ class PipelineOrchestrator:
             })
 
             # ---------------------------------------------------------------
-            # Phase 3: Score
+            # Phase 3: Score (optional)
             # ---------------------------------------------------------------
-            _divergence_flags: list[str] = []
+            scoring = None
             if prefs.get("pipeline.enable_scoring", prefs_snapshot):
                 yield PipelineEvent(
                     event="status",
                     data={"stage": "score", "state": "running", "model": model_ids["score"]},
                 )
 
-                # Randomize A/B assignment
-                original_first = random.choice([True, False])
-                if original_first:
-                    prompt_a = raw_prompt
-                    prompt_b = optimization.optimized_prompt
-                    presentation_order = "original_first"
-                else:
-                    prompt_a = optimization.optimized_prompt
-                    prompt_b = raw_prompt
-                    presentation_order = "optimized_first"
-
-                logger.info(
-                    "Scorer presentation_order=%s trace_id=%s",
-                    presentation_order, trace_id,
+                scoring = await run_hybrid_scoring(
+                    raw_prompt=raw_prompt,
+                    optimization=optimization,
+                    analysis=analysis,
+                    effective_strategy=effective_strategy,
+                    provider=provider,
+                    prompt_loader=self.prompt_loader,
+                    trace_logger=self.trace_logger,
+                    prefs=prefs,
+                    prefs_snapshot=prefs_snapshot,
+                    scorer_model=scorer_model,
+                    trace_id=trace_id,
+                    db=db,
+                    call_provider=self._call_provider,
                 )
 
-                scoring_system = self.prompt_loader.load("scoring.md")
-                # Use XML tags to prevent prompt content (which may contain ##
-                # headers) from corrupting the A/B boundary for the scorer.
-                scorer_msg = (
-                    f"<prompt-a>\n{prompt_a}\n</prompt-a>\n\n"
-                    f"<prompt-b>\n{prompt_b}\n</prompt-b>"
-                )
-
-                phase_start = time.monotonic()
-                scores: ScoreResult = await self._call_provider(
-                    provider,
-                    system_prompt=scoring_system,
-                    user_message=scorer_msg,
-                    output_format=ScoreResult,
-                    model=scorer_model,
-                    effort=prefs.get("pipeline.scorer_effort", prefs_snapshot) or "low",
-                    max_tokens=SCORE_MAX_TOKENS,
-                    cache_ttl="1h",
-                )
-
-                # Capture actual model ID from provider response
-                if isinstance(provider.last_model, str):
-                    model_ids["score"] = provider.last_model
+                model_ids["score"] = scoring.score_model
                 yield PipelineEvent(
                     event="status",
                     data={"stage": "score", "state": "complete", "model": model_ids["score"]},
                 )
-
-                score_duration = int((time.monotonic() - phase_start) * 1000)
-                phase_durations["score_ms"] = score_duration
-
-                usage = self._get_usage(provider)
-                if self.trace_logger:
-                    self.trace_logger.log_phase(
-                        trace_id=trace_id, phase="score",
-                        duration_ms=score_duration,
-                        tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
-                        model=scorer_model, provider=provider.name,
-                        result={"effort": prefs.get("pipeline.scorer_effort", prefs_snapshot) or "low"},
-                    )
-
-                # Map A/B scores back to original/optimized
-                if original_first:
-                    llm_original_scores = scores.prompt_a_scores
-                    llm_optimized_scores = scores.prompt_b_scores
-                else:
-                    llm_original_scores = scores.prompt_b_scores
-                    llm_optimized_scores = scores.prompt_a_scores
-
-                # ---------------------------------------------------------------
-                # Hybrid scoring: blend LLM + heuristic scores
-                # ---------------------------------------------------------------
-                heur_original = HeuristicScorer.score_prompt(raw_prompt)
-                heur_optimized = HeuristicScorer.score_prompt(
-                    optimization.optimized_prompt, original=raw_prompt,
-                )
-
-                # Fetch historical stats for z-score normalization (non-fatal)
-                historical_stats: dict | None = None
-                try:
-                    from app.services.optimization_service import OptimizationService
-                    opt_svc = OptimizationService(db)
-                    historical_stats = await opt_svc.get_score_distribution(
-                        exclude_scoring_modes=["heuristic"],
-                    )
-                except Exception as exc:
-                    logger.debug("Historical stats unavailable for normalization: %s", exc)
-
-                blended_original = blend_scores(
-                    llm_original_scores, heur_original, historical_stats,
-                )
-                blended_optimized = blend_scores(
-                    llm_optimized_scores, heur_optimized, historical_stats,
-                )
-
-                original_scores = blended_original.to_dimension_scores()
-                optimized_scores = blended_optimized.to_dimension_scores()
-
-                logger.info(
-                    "Hybrid scoring complete: llm_opt=%.1f heur_opt=%s blended_opt=%.1f "
-                    "divergence=%s normalized=%s trace_id=%s",
-                    llm_optimized_scores.overall,
-                    {k: round(v, 1) for k, v in heur_optimized.items()},
-                    optimized_scores.overall,
-                    blended_optimized.divergence_flags,
-                    blended_optimized.normalization_applied,
-                    trace_id,
-                )
-
-                deltas = DimensionScores.compute_deltas(original_scores, optimized_scores)
-
-                # Log scoring trace for observability
-                try:
-                    from app.services.taxonomy.event_logger import get_event_logger
-                    get_event_logger().log_decision(
-                        path="hot", op="score", decision="scored",
-                        optimization_id=trace_id,
-                        context={
-                            "scoring_mode": "hybrid",
-                            "overall": optimized_scores.overall,
-                            "intent_label": analysis.intent_label,
-                            "blended": blended_optimized.as_dict(),
-                            "raw_llm": blended_optimized.raw_llm,
-                            "raw_heuristic": blended_optimized.raw_heuristic,
-                            "deltas": deltas,
-                            "divergence": blended_optimized.divergence_flags,
-                            "normalization": blended_optimized.normalization_applied,
-                            "strategy": effective_strategy,
-                            "task_type": analysis.task_type,
-                        },
-                    )
-                except RuntimeError:
-                    pass
-
-                if optimized_scores.faithfulness < 6.0:
-                    logger.warning(
-                        "Low faithfulness score (%.1f) — optimization may have altered intent. trace_id=%s",
-                        optimized_scores.faithfulness, trace_id,
-                    )
+                phase_durations["score_ms"] = scoring.score_duration_ms
 
                 yield PipelineEvent(event="score_card", data={
-                    "original_scores": original_scores.model_dump(),
-                    "scores": optimized_scores.model_dump(),
-                    "deltas": deltas,
-                    "overall_score": optimized_scores.overall,
+                    "original_scores": scoring.original_scores.model_dump(),
+                    "scores": scoring.optimized_scores.model_dump(),
+                    "deltas": scoring.deltas,
+                    "overall_score": scoring.optimized_scores.overall,
                 })
-
-                # ---------------------------------------------------------------
-                # Intent drift gate
-                # ---------------------------------------------------------------
-                warnings: list[str] = []
-                _divergence_flags = blended_optimized.divergence_flags or []
-                if _divergence_flags:
-                    warnings.append(
-                        "Score divergence between LLM and heuristic on: "
-                        + ", ".join(_divergence_flags)
-                    )
-
-                try:
-                    import numpy as np
-
-                    from app.services.embedding_service import EmbeddingService
-
-                    drift_svc = EmbeddingService()
-                    orig_vec = await drift_svc.aembed_single(raw_prompt)
-                    opt_vec = await drift_svc.aembed_single(optimization.optimized_prompt)
-                    similarity = float(
-                        np.dot(orig_vec, opt_vec)
-                        / (np.linalg.norm(orig_vec) * np.linalg.norm(opt_vec) + 1e-9)
-                    )
-
-                    if similarity < 0.5:
-                        warnings.append(
-                            f"Intent drift detected: semantic similarity {similarity:.2f} "
-                            f"between original and optimized prompt is below threshold (0.50)"
-                        )
-                        logger.warning(
-                            "Intent drift detected: similarity=%.2f trace_id=%s",
-                            similarity, trace_id,
-                        )
-                except (ImportError, RuntimeError, ValueError, MemoryError) as exc:
-                    logger.debug("Intent drift check skipped: %s", exc)
             else:
-                # Scoring disabled — skip Phase 3 entirely
-                original_scores = None
-                optimized_scores = None
-                deltas = None
-                warnings = []
                 logger.info("Scoring phase skipped per user preferences. trace_id=%s", trace_id)
 
             # ---------------------------------------------------------------
             # Phase 4: Suggest (when scoring produced results)
             # ---------------------------------------------------------------
             suggestions: list[dict[str, str]] = []
-            if optimized_scores and analysis.weaknesses is not None:
-                try:
-                    yield PipelineEvent(
-                        event="status",
-                        data={"stage": "suggest", "state": "running", "model": settings.MODEL_HAIKU},
-                    )
-
-                    suggest_msg = self.prompt_loader.render("suggest.md", {
-                        "optimized_prompt": optimization.optimized_prompt,
-                        "scores": json.dumps(optimized_scores.model_dump(), indent=2),
-                        "weaknesses": ", ".join(analysis.weaknesses) if analysis.weaknesses else "none identified",
-                        "strategy_used": effective_strategy,
-                        "score_deltas": "first optimization — no previous deltas",
-                        "score_trajectory": "first turn",
-                    })
-
-                    suggest_result: SuggestionsOutput = await self._call_provider(
-                        provider,
-                        system_prompt=self._load_system_prompt(),
-                        user_message=suggest_msg,
-                        output_format=SuggestionsOutput,
-                        model=settings.MODEL_HAIKU,
-                        max_tokens=2048,
-                    )
-                    suggestions = suggest_result.suggestions
-
-                    yield PipelineEvent(event="suggestions", data={"suggestions": suggestions})
-                    yield PipelineEvent(event="status", data={"stage": "suggest", "state": "complete"})
-
-                    logger.info("Suggestions generated: %d items. trace_id=%s", len(suggestions), trace_id)
-                except Exception as exc:
-                    logger.warning("Suggestion generation failed (non-fatal): %s", exc)
+            if scoring and scoring.optimized_scores and analysis.weaknesses is not None:
+                yield PipelineEvent(
+                    event="status",
+                    data={"stage": "suggest", "state": "running", "model": "claude-haiku-4-5"},
+                )
+                suggestions = await run_suggestion_phase(
+                    optimization=optimization,
+                    optimized_scores=scoring.optimized_scores,
+                    analysis=analysis,
+                    effective_strategy=effective_strategy,
+                    prompt_loader=self.prompt_loader,
+                    system_prompt=self._load_system_prompt(),
+                    provider=provider,
+                    trace_id=trace_id,
+                    call_provider=self._call_provider,
+                )
+                yield PipelineEvent(event="suggestions", data={"suggestions": suggestions})
+                yield PipelineEvent(event="status", data={"stage": "suggest", "state": "complete"})
 
             # ---------------------------------------------------------------
-            # Persist to DB
+            # Persist to DB + propagate usage
             # ---------------------------------------------------------------
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
-            # B1: project_id frozen at entry by caller — no persist-time
-            # resolution (prevents repo-link-mid-pipeline race).
-            _pip_project_id: str | None = project_id
-
-            db_opt = Optimization(
-                id=opt_id,
+            persist_inputs = PersistenceInputs(
+                opt_id=opt_id,
                 raw_prompt=raw_prompt,
-                optimized_prompt=optimization.optimized_prompt,
-                task_type=analysis.task_type if analysis.task_type in VALID_TASK_TYPES else "general",
-                intent_label=validate_intent_label(
-                    title_case_label(analysis.intent_label or "general"),
-                    raw_prompt,
-                )[:MAX_INTENT_LABEL_LENGTH],
-                domain=effective_domain,
-                domain_raw=domain_raw,
-                cluster_id=cluster_id,
-                strategy_used=effective_strategy,
-                changes_summary=optimization.changes_summary,
-                score_clarity=optimized_scores.clarity if optimized_scores else None,
-                score_specificity=optimized_scores.specificity if optimized_scores else None,
-                score_structure=optimized_scores.structure if optimized_scores else None,
-                score_faithfulness=optimized_scores.faithfulness if optimized_scores else None,
-                score_conciseness=optimized_scores.conciseness if optimized_scores else None,
-                overall_score=optimized_scores.overall if optimized_scores else None,
-                provider=provider.name,
-                routing_tier="internal",
-                model_used=model_ids.get("optimize", optimizer_model),
-                scoring_mode="hybrid" if optimized_scores else "skipped",
-                duration_ms=duration_ms,
-                status="completed",
-                trace_id=trace_id,
-                repo_full_name=repo_full_name,
-                project_id=_pip_project_id,
-                context_sources=context_sources or {},
-                original_scores=original_scores.model_dump() if original_scores else None,
-                score_deltas=deltas,
-                tokens_by_phase=phase_durations,
-                models_by_phase=model_ids,
-                heuristic_flags=_divergence_flags or None,
+                analysis=analysis,
+                optimization=optimization,
+                effective_strategy=effective_strategy,
+                effective_domain=post_analyze.effective_domain,
+                domain_raw=post_analyze.domain_raw,
+                cluster_id=post_analyze.cluster_id,
+                scoring=scoring,
                 suggestions=suggestions,
+                phase_durations=phase_durations,
+                model_ids=model_ids,
+                optimizer_model=optimizer_model,
+                provider_name=provider.name,
+                repo_full_name=repo_full_name,
+                project_id=project_id,
+                context_sources=context_sources,
+                trace_id=trace_id,
+                duration_ms=duration_ms,
+                applied_pattern_ids=applied_pattern_ids,
+                auto_injected_cluster_ids=auto_injected_cluster_ids,
+                taxonomy_engine=taxonomy_engine,
+                divergence_flags=scoring.divergence_flags if scoring else [],
             )
-            # Compute weighted improvement score from deltas.
-            if deltas:
-                _imp = sum(
-                    deltas.get(dim, 0) * w
-                    for dim, w in DIMENSION_WEIGHTS.items()
-                )
-                db_opt.improvement_score = round(max(0.0, min(10.0, _imp)), 2)
-            db.add(db_opt)
-
-            # Track applied patterns in join table (relationship: "applied")
-            applied_cluster_ids: set[str] = set()
-            if applied_pattern_ids:
-                try:
-                    from app.models import OptimizationPattern
-
-                    # Collect unique cluster_ids from applied patterns
-                    for pid in applied_pattern_ids:
-                        mp_result = await db.execute(
-                            select(MetaPattern).where(MetaPattern.id == pid)
-                        )
-                        mp = mp_result.scalar_one_or_none()
-                        if mp:
-                            db.add(OptimizationPattern(
-                                optimization_id=opt_id,
-                                cluster_id=mp.cluster_id,
-                                meta_pattern_id=mp.id,
-                                relationship="applied",
-                            ))
-                            applied_cluster_ids.add(mp.cluster_id)
-
-                except Exception as exc:
-                    logger.warning("Failed to track applied patterns: %s", exc)
-
-            await db.commit()
-
-            # Include auto-injected cluster IDs in usage propagation
-            if auto_injected_cluster_ids:
-                applied_cluster_ids.update(auto_injected_cluster_ids)
-
-            # Propagate usage counts AFTER successful commit (Spec 7.8)
-            # Use a fresh session — the original db session may be expired post-commit
-            if applied_cluster_ids and taxonomy_engine:
-                try:
-                    from app.database import async_session_factory
-
-                    async with async_session_factory() as usage_db:
-                        for fid in applied_cluster_ids:
-                            try:
-                                await taxonomy_engine.increment_usage(fid, usage_db)
-                            except Exception as usage_exc:
-                                logger.warning("Usage propagation failed for %s: %s", fid, usage_exc)
-                                # Fallback: atomic SQL increment (no tree walk)
-                                # Matches sampling_pipeline.py robustness pattern
-                                try:
-                                    from sqlalchemy import update as sa_upd
-
-                                    from app.models import PromptCluster
-                                    await usage_db.execute(
-                                        sa_upd(PromptCluster)
-                                        .where(PromptCluster.id == fid)
-                                        .values(
-                                            usage_count=PromptCluster.usage_count + 1,
-                                        )
-                                    )
-                                except Exception:
-                                    pass  # truly non-fatal
-                        await usage_db.commit()
-                except Exception as exc:
-                    logger.warning("Post-commit usage propagation failed: %s", exc)
-
-            # Publish real-time event for cross-source notifications
-            try:
-                from app.services.event_bus import event_bus
-                event_bus.publish("optimization_created", {
-                    "id": opt_id,
-                    "trace_id": trace_id,
-                    "task_type": analysis.task_type,
-                    "intent_label": analysis.intent_label or "general",
-                    "domain": effective_domain,
-                    "domain_raw": domain_raw,
-                    "strategy_used": effective_strategy,
-                    "overall_score": optimized_scores.overall if optimized_scores else None,
-                    "provider": provider.name,
-                    "status": "completed",
-                })
-            except Exception:
-                logger.debug("Event bus publish failed", exc_info=True)
+            await persist_and_propagate(db, persist_inputs)
 
             # ---------------------------------------------------------------
             # Final event
             # ---------------------------------------------------------------
-            _result_kwargs = dict(
-                id=opt_id,
-                trace_id=trace_id,
-                raw_prompt=raw_prompt,
-                optimized_prompt=optimization.optimized_prompt,
-                task_type=analysis.task_type,
-                strategy_used=effective_strategy,
-                changes_summary=optimization.changes_summary,
-                optimized_scores=optimized_scores,
-                original_scores=original_scores,
-                score_deltas=deltas,
-                overall_score=optimized_scores.overall if optimized_scores else None,
-                provider=provider.name,
-                routing_tier="internal",
-                model_used=model_ids.get("optimize", optimizer_model),
-                models_by_phase=model_ids,
-                scoring_mode="hybrid" if optimized_scores else "skipped",
-                duration_ms=duration_ms,
-                status="completed",
-                suggestions=suggestions,
-                context_sources=context_sources or {},
-                warnings=warnings if warnings else [],
-                intent_label=analysis.intent_label,
-                domain=effective_domain,
-            )
-            try:
-                result = PipelineResult(**_result_kwargs)
-            except Exception as val_err:
-                logger.warning(
-                    "PipelineResult validation failed, retrying with sanitized "
-                    "context_sources: %s", val_err,
-                )
-                _result_kwargs["context_sources"] = {
-                    k: v for k, v in (context_sources or {}).items()
-                    if isinstance(v, (bool, str, int, float, type(None)))
-                }
-                result = PipelineResult(**_result_kwargs)
+            result = build_pipeline_result(persist_inputs)
 
-            if optimized_scores:
+            if scoring and scoring.optimized_scores:
                 logger.info(
                     "Pipeline completed: trace_id=%s duration=%dms strategy=%s overall=%.2f",
-                    trace_id, duration_ms, effective_strategy, optimized_scores.overall,
+                    trace_id, duration_ms, effective_strategy, scoring.optimized_scores.overall,
                 )
             else:
                 logger.info(
@@ -1104,43 +582,28 @@ class PipelineOrchestrator:
                     traceback=_tb.format_exc(),
                     request_context={
                         "trace_id": trace_id,
-                        "strategy": effective_strategy if "effective_strategy" in dir() else None,
+                        "strategy": effective_strategy,
                         "provider": provider.name if provider else None,
                     },
                 )
             except Exception:
-                pass  # Error logger not available
-
-            # Persist failed optimization
-            try:
-                await db.rollback()
-                failed_opt = Optimization(
-                    id=opt_id,
-                    raw_prompt=raw_prompt,
-                    status="failed",
-                    routing_tier="internal",
-                    trace_id=trace_id,
-                    duration_ms=duration_ms,
-                    provider=provider.name,
-                    model_used=optimizer_model,
-                    models_by_phase=model_ids,
-                )
-                db.add(failed_opt)
-                await db.commit()
-            except Exception as db_exc:
-                logger.error("Failed to persist failed optimization: %s", db_exc)
-
-            # Publish failure event for cross-source notifications
-            try:
-                from app.services.event_bus import event_bus
-                event_bus.publish("optimization_failed", {
-                    "trace_id": trace_id,
-                    "error": str(exc),
-                })
-            except Exception:
                 pass
+
+            await persist_failed_optimization(
+                db,
+                opt_id=opt_id,
+                raw_prompt=raw_prompt,
+                trace_id=trace_id,
+                duration_ms=duration_ms,
+                provider=provider,
+                optimizer_model=optimizer_model,
+                model_ids=model_ids,
+            )
 
             yield PipelineEvent(event="error", data={
                 "trace_id": trace_id,
                 "error": str(exc),
             })
+
+
+__all__ = ["PipelineOrchestrator"]
