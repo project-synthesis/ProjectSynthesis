@@ -1,24 +1,37 @@
-"""In-memory batch optimization pipeline.
+"""In-memory batch optimization pipeline — seed-prompt execution.
 
-Runs N prompts through analyze → optimize → score → embed in parallel
-with zero DB writes. Results accumulate as PendingOptimization objects.
-Bulk persist writes everything in a single transaction.
+Runs one seed prompt end-to-end (analyze → optimize → score → embed) without
+any DB writes. Results accumulate as ``PendingOptimization`` objects and are
+persisted in a single transaction by ``bulk_persist`` after the batch
+completes.
+
+Phase 3E split: parallel orchestration and post-batch persistence live in
+sibling modules to keep this file focused on per-prompt execution.
+
+* ``PendingOptimization`` — in-memory result dataclass (kept here because all
+  three split modules use it; defined in the module that callers import).
+* ``run_single_prompt`` — per-prompt execution loop; enrichment via
+  ``ContextEnrichmentService.enrich()`` matches the regular ``pipeline.py``
+  contract.
+* ``estimate_batch_cost`` — USD cost estimator for a batch seed run.
+* ``run_batch`` / ``bulk_persist`` / ``batch_taxonomy_assign`` are
+  re-exported from ``batch_orchestrator`` and ``batch_persistence`` for
+  backward compatibility — external callers (``tools/seed.py``,
+  ``tests/test_batch_pipeline.py``) continue to import them from
+  ``app.services.batch_pipeline``.
+
+Copyright 2025-2026 Project Synthesis contributors.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
-from sqlalchemy import select as sa_select
-
 from app.config import DATA_DIR
-from app.models import Optimization, OptimizationPattern
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.schemas.pipeline_contracts import (
     DIMENSION_WEIGHTS,
@@ -28,10 +41,11 @@ from app.schemas.pipeline_contracts import (
     ScoreResult,
     SuggestionsOutput,
 )
+from app.services.batch_orchestrator import run_batch
+from app.services.batch_persistence import batch_taxonomy_assign, bulk_persist
 from app.services.classification_agreement import get_classification_agreement
 from app.services.context_enrichment import resolve_strategy_intelligence
 from app.services.embedding_service import EmbeddingService
-from app.services.event_bus import event_bus
 from app.services.heuristic_scorer import HeuristicScorer
 from app.services.optimization_service import OptimizationService
 from app.services.pattern_injection import (
@@ -49,14 +63,9 @@ from app.services.pipeline_constants import (
     semantic_upgrade_general,
 )
 from app.services.preferences import PreferencesService
-from app.services.project_service import resolve_repo_project
 from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
-from app.services.taxonomy import get_engine
-from app.services.taxonomy.cluster_meta import write_meta
-from app.services.taxonomy.event_logger import get_event_logger
-from app.services.taxonomy.family_ops import assign_cluster
 from app.utils.text_cleanup import (
     sanitize_optimization_result,
     title_case_label,
@@ -597,458 +606,6 @@ async def run_single_prompt(
         )
 
 
-async def run_batch(
-    prompts: list[str],
-    provider: LLMProvider,
-    prompt_loader: PromptLoader,
-    embedding_service: EmbeddingService,
-    *,
-    max_parallel: int = 10,
-    codebase_context: str | None = None,
-    repo_full_name: str | None = None,
-    batch_id: str | None = None,
-    on_progress: Any | None = None,
-    session_factory: SessionFactory | None = None,
-    taxonomy_engine: Any | None = None,
-    domain_resolver: Any | None = None,
-    tier: str = "internal",
-    context_service: Any | None = None,
-) -> list[PendingOptimization]:
-    """Run N prompts through the pipeline in parallel.
-
-    Args:
-        prompts: Raw prompt strings to optimize.
-        provider: LLM provider for all phases.
-        max_parallel: Concurrency limit (10 internal, 5 API, 2 sampling).
-        on_progress: Callback fired after each prompt completes.
-        session_factory: Async DB session factory for enrichment queries
-            (pattern injection, few-shot retrieval, adaptation state, score stats).
-        taxonomy_engine: TaxonomyEngine singleton for pattern injection.
-        domain_resolver: DomainResolver singleton for domain resolution.
-
-    Returns:
-        List of PendingOptimization results (some may have status="failed").
-    """
-    batch_id = batch_id or str(uuid.uuid4())
-    semaphore = asyncio.Semaphore(max_parallel)
-    results: list[PendingOptimization] = [None] * len(prompts)  # type: ignore
-
-    # Pre-fetch the score distribution once per batch so every prompt shares
-    # a single DB round-trip instead of N redundant aggregate queries
-    # (previously run inside run_single_prompt per prompt — N+1 pattern).
-    # Matches pipeline.py where z-score stats are resolved once at setup.
-    shared_stats: ScoreDistribution | None = None
-    if session_factory is not None:
-        try:
-            async with session_factory() as _stats_db:
-                svc = OptimizationService(_stats_db)
-                shared_stats = await svc.get_score_distribution(
-                    exclude_scoring_modes=["heuristic"],
-                )
-        except Exception as _hs_exc:
-            logger.debug("Batch-level historical stats fetch failed: %s", _hs_exc)
-
-    # B1/B7: freeze project_id once per batch so enrichment + final stamping
-    # share a single resolved value. Every seed prompt in this batch belongs
-    # to the same project scope.
-    _batch_project_id: str | None = None
-    try:
-        _, _batch_project_id = await resolve_repo_project(repo_full_name)
-    except Exception as _pid_exc:
-        logger.debug("Batch project_id resolution failed: %s", _pid_exc)
-
-    async def _run_with_semaphore(index: int, prompt: str) -> None:
-        # Rate limit (429) backoff: reduce semaphore by half on first 429, retry once
-        _rate_limited = False
-
-        async def _attempt() -> PendingOptimization:
-            nonlocal _rate_limited
-            result = await run_single_prompt(
-                raw_prompt=prompt,
-                provider=provider,
-                prompt_loader=prompt_loader,
-                embedding_service=embedding_service,
-                codebase_context=codebase_context,
-                repo_full_name=repo_full_name,
-                batch_id=batch_id,
-                prompt_index=index,
-                total_prompts=len(prompts),
-                session_factory=session_factory,
-                taxonomy_engine=taxonomy_engine,
-                domain_resolver=domain_resolver,
-                tier=tier,
-                context_service=context_service,
-                historical_stats=shared_stats,
-                project_id=_batch_project_id,
-            )
-            # Check for rate limit error in result
-            if (
-                result.status == "failed"
-                and result.error
-                and ("429" in result.error or "rate_limit" in result.error.lower())
-                and not _rate_limited
-            ):
-                _rate_limited = True
-                logger.warning(
-                    "Rate limit hit on prompt %d — reducing concurrency and retrying", index
-                )
-                # Reduce effective parallelism by acquiring an extra slot
-                await semaphore.acquire()
-                try:
-                    await asyncio.sleep(5)
-                    retry = await run_single_prompt(
-                        raw_prompt=prompt,
-                        provider=provider,
-                        prompt_loader=prompt_loader,
-                        embedding_service=embedding_service,
-                        codebase_context=codebase_context,
-                        repo_full_name=repo_full_name,
-                        batch_id=batch_id,
-                        prompt_index=index,
-                        total_prompts=len(prompts),
-                        session_factory=session_factory,
-                        taxonomy_engine=taxonomy_engine,
-                        domain_resolver=domain_resolver,
-                        tier=tier,
-                        context_service=context_service,
-                        historical_stats=shared_stats,
-                        project_id=_batch_project_id,
-                    )
-                    return retry
-                finally:
-                    semaphore.release()
-            return result
-
-        async with semaphore:
-            result = await _attempt()
-            results[index] = result
-
-            # Log per-prompt event
-            try:
-                decision = "seed_prompt_scored" if result.status == "completed" else "seed_prompt_failed"
-                ctx: dict[str, Any] = {
-                    "batch_id": batch_id,
-                    "prompt_index": index,
-                    "total": len(prompts),
-                    "overall_score": result.overall_score,
-                    "improvement_score": result.improvement_score,
-                    "task_type": result.task_type,
-                    "strategy_used": result.strategy_used,
-                    "intent_label": result.intent_label,
-                    "duration_ms": result.duration_ms,
-                    "error": result.error,
-                }
-                if result.status == "failed":
-                    ctx["recovery"] = "skipped"
-                get_event_logger().log_decision(
-                    path="hot", op="seed", decision=decision,
-                    optimization_id=result.trace_id,
-                    context=ctx,
-                )
-            except RuntimeError:
-                pass
-
-            # Publish seed_batch_progress to event bus for SSE frontend
-            try:
-                event_bus.publish("seed_batch_progress", {
-                    "batch_id": batch_id,
-                    "phase": "optimize",
-                    "completed": sum(1 for r in results if r is not None),
-                    "total": len(prompts),
-                    "current_prompt": (
-                        result.intent_label or result.raw_prompt[:60]
-                        if result.status == "completed"
-                        else result.raw_prompt[:60]
-                    ),
-                    "failed": sum(
-                        1 for r in results if r is not None and r.status == "failed"
-                    ),
-                })
-            except Exception as _bus_exc:
-                logger.debug("seed_batch_progress publish failed: %s", _bus_exc)
-
-            if on_progress:
-                on_progress(index, len(prompts), result)
-
-    await asyncio.gather(
-        *[_run_with_semaphore(i, p) for i, p in enumerate(prompts)],
-        return_exceptions=True,
-    )
-
-    # Stamp project_id on all completed results (resolved once at batch head).
-    if _batch_project_id:
-        for r in results:
-            if r is not None and r.status == "completed":
-                r.project_id = _batch_project_id
-
-    return [r for r in results if r is not None]
-
-
-async def bulk_persist(
-    results: list[PendingOptimization],
-    session_factory: SessionFactory,
-    batch_id: str,
-) -> int:
-    """Persist all completed optimizations in a single transaction.
-
-    Returns count of rows inserted. Skips failed optimizations.
-    Idempotent: skips prompts already persisted for this batch_id.
-    Includes retry logic — one retry after 5s on transient failures.
-    """
-    t0 = time.monotonic()
-    # Quality gate: filter out low-quality seeds before persisting.
-    # Seeds with overall_score < 5.0 or improvement_score <= 0.0 add noise
-    # to the taxonomy and few-shot pool without providing value.
-    seed_min_score = 5.0
-    completed_raw = [r for r in results if r.status == "completed"]
-    completed = []
-    quality_rejected = 0
-    for r in completed_raw:
-        if r.overall_score is not None and r.overall_score < seed_min_score:
-            quality_rejected += 1
-            logger.info(
-                "Seed quality gate: rejected %s (score=%.2f, improvement=%.2f)",
-                r.id[:8], r.overall_score, r.improvement_score or 0.0,
-            )
-            continue
-        completed.append(r)
-    if quality_rejected:
-        logger.info("Seed quality gate: %d/%d rejected (min_score=%.1f)",
-                     quality_rejected, len(completed_raw), seed_min_score)
-
-    if not completed:
-        return 0
-
-    inserted = 0
-    inserted_pendings: list[PendingOptimization] = []
-    for attempt in range(2):
-        try:
-            async with session_factory() as db:
-                # Idempotency check: find already-persisted IDs for this batch
-                existing_ids_result = await db.execute(
-                    sa_select(Optimization.id).where(
-                        Optimization.context_sources.op("->>")(
-                            "batch_id"
-                        ) == batch_id
-                    )
-                )
-                existing_ids: set[str] = {row[0] for row in existing_ids_result}
-                inserted = 0  # Reset for retry
-                inserted_pendings = []  # Reset for retry
-                for pending in completed:
-                    if pending.id in existing_ids:
-                        logger.debug(
-                            "Skipping already-persisted optimization %s (batch_id=%s)",
-                            pending.id[:8], batch_id,
-                        )
-                        continue
-
-                    db_opt = Optimization(
-                        id=pending.id,
-                        trace_id=pending.trace_id,
-                        raw_prompt=pending.raw_prompt,
-                        optimized_prompt=pending.optimized_prompt,
-                        task_type=pending.task_type,
-                        strategy_used=pending.strategy_used,
-                        changes_summary=pending.changes_summary,
-                        score_clarity=pending.score_clarity,
-                        score_specificity=pending.score_specificity,
-                        score_structure=pending.score_structure,
-                        score_faithfulness=pending.score_faithfulness,
-                        score_conciseness=pending.score_conciseness,
-                        overall_score=pending.overall_score,
-                        improvement_score=pending.improvement_score,
-                        scoring_mode=pending.scoring_mode,
-                        intent_label=pending.intent_label,
-                        domain=pending.domain,
-                        domain_raw=pending.domain_raw,
-                        embedding=pending.embedding,
-                        optimized_embedding=pending.optimized_embedding,
-                        transformation_embedding=pending.transformation_embedding,
-                        models_by_phase=pending.models_by_phase,
-                        original_scores=pending.original_scores,
-                        score_deltas=pending.score_deltas,
-                        duration_ms=pending.duration_ms,
-                        status=pending.status,
-                        provider=pending.provider,
-                        model_used=pending.model_used,
-                        routing_tier=pending.routing_tier,
-                        heuristic_flags=pending.heuristic_flags,
-                        suggestions=pending.suggestions,
-                        repo_full_name=pending.repo_full_name,
-                        project_id=pending.project_id,
-                        context_sources=pending.context_sources,
-                    )
-                    db.add(db_opt)
-                    inserted += 1
-                    inserted_pendings.append(pending)
-
-                await db.commit()
-            break  # success
-        except Exception as exc:
-            if attempt == 0:
-                logger.warning("Bulk persist failed, retrying in 5s: %s", exc)
-                await asyncio.sleep(5)
-            else:
-                raise
-
-    # Per-prompt event emission — parallels the regular pipeline contract so
-    # frontend history refresh and cross-process MCP bridge fire reliably.
-    # `source="batch_seed"` lets consumers distinguish seed-originated rows
-    # from text-editor optimizations while batch-level `seed_*` events still
-    # stream the coarser batch progress view.
-    if inserted_pendings:
-        try:
-            for pending in inserted_pendings:
-                event_bus.publish("optimization_created", {
-                    "id": pending.id,
-                    "trace_id": pending.trace_id,
-                    "task_type": pending.task_type,
-                    "intent_label": pending.intent_label or "general",
-                    "domain": pending.domain,
-                    "domain_raw": pending.domain_raw,
-                    "strategy_used": pending.strategy_used,
-                    "overall_score": pending.overall_score,
-                    "provider": pending.provider,
-                    "status": pending.status,
-                    "routing_tier": pending.routing_tier,
-                    "source": "batch_seed",
-                    "batch_id": batch_id,
-                })
-        except Exception:
-            logger.debug("Event bus publish failed", exc_info=True)
-
-    duration_ms = int((time.monotonic() - t0) * 1000)
-
-    try:
-        get_event_logger().log_decision(
-            path="hot", op="seed", decision="seed_persist_complete",
-            context={
-                "batch_id": batch_id,
-                "rows_inserted": inserted,
-                "rows_skipped_idempotent": len(completed) - inserted,
-                "transaction_ms": duration_ms,
-            },
-        )
-    except RuntimeError:
-        pass
-
-    logger.info("Bulk persist: %d rows in %dms", inserted, duration_ms)
-    return inserted
-
-
-async def batch_taxonomy_assign(
-    results: list[PendingOptimization],
-    session_factory: SessionFactory,
-    batch_id: str,
-) -> dict[str, Any]:
-    """Assign clusters for all persisted optimizations in one transaction.
-
-    Pattern extraction is deferred (pattern_stale=True) — the warm path
-    handles it after the batch completes.
-
-    Returns summary dict with clusters_assigned, clusters_created, domains_touched.
-    """
-    t0 = time.monotonic()
-    completed = [r for r in results if r.status == "completed" and r.embedding]
-    clusters_created = 0
-    domains_touched: set[str] = set()
-
-    if not completed:
-        return {"clusters_assigned": 0, "clusters_created": 0, "domains_touched": []}
-
-    engine = get_engine()
-    assigned = 0
-
-    async with session_factory() as db:
-        for pending in completed:
-            try:
-                embedding = np.frombuffer(pending.embedding, dtype=np.float32)  # type: ignore[arg-type]
-                cluster = await assign_cluster(
-                    db=db,
-                    embedding=embedding,
-                    label=pending.intent_label or "general",
-                    domain=pending.domain or "general",
-                    task_type=pending.task_type or "general",
-                    overall_score=pending.overall_score,
-                    embedding_index=engine._embedding_index,
-                )
-
-                # Write cluster_id back to the Optimization row (matches engine.py hot path)
-                opt_row = await db.execute(
-                    sa_select(Optimization).where(Optimization.id == pending.id)
-                )
-                opt = opt_row.scalar_one_or_none()
-                if opt is not None:
-                    opt.cluster_id = cluster.id
-
-                # Create OptimizationPattern join record so downstream consumers
-                # (history, detail view, lifecycle, pattern injection) can find this
-                # optimization's cluster. Matches engine.py hot path step 5.
-                db.add(OptimizationPattern(
-                    optimization_id=pending.id,
-                    cluster_id=cluster.id,
-                    relationship="source",
-                ))
-
-                # Track what was created
-                if cluster.member_count == 1:
-                    clusters_created += 1
-                domains_touched.add(pending.domain or "general")
-                assigned += 1
-
-                # Defer pattern extraction to warm path
-                cluster.cluster_metadata = write_meta(
-                    cluster.cluster_metadata, pattern_stale=True,
-                )
-
-            except Exception as exc:
-                logger.warning(
-                    "Taxonomy assign failed for %s: %s",
-                    pending.id[:8], exc,
-                )
-
-        await db.commit()
-
-    duration_ms = int((time.monotonic() - t0) * 1000)
-    domains_list = sorted(domains_touched)
-
-    try:
-        get_event_logger().log_decision(
-            path="hot", op="seed", decision="seed_taxonomy_complete",
-            context={
-                "batch_id": batch_id,
-                "clusters_assigned": assigned,
-                "clusters_created": clusters_created,
-                "domains_touched": domains_list,
-                "transaction_ms": duration_ms,
-            },
-        )
-    except RuntimeError:
-        pass
-
-    # Trigger warm path (single event — debounce handles the rest)
-    try:
-        event_bus.publish("taxonomy_changed", {
-            "trigger": "batch_seed",
-            "batch_id": batch_id,
-            "clusters_created": clusters_created,
-        })
-    except Exception as _bus_exc:
-        logger.warning("taxonomy_changed publish failed after batch seed: %s", _bus_exc)
-
-    logger.info(
-        "Taxonomy assign: %d clusters (%d new), domains=%s (%dms)",
-        assigned, clusters_created, domains_list, duration_ms,
-    )
-
-    return {
-        "clusters_assigned": assigned,
-        "clusters_created": clusters_created,
-        "domains_touched": domains_list,
-    }
-
-
 def estimate_batch_cost(
     prompt_count: int,
     agent_count: int,
@@ -1075,3 +632,14 @@ def estimate_batch_cost(
     per_opt = sonnet_cost + opus_cost + sonnet_cost  # analyze + optimize + score
 
     return round(agent_cost + prompt_count * per_opt, 2)
+
+
+__all__ = [
+    "PendingOptimization",
+    "ScoreDistribution",
+    "batch_taxonomy_assign",
+    "bulk_persist",
+    "estimate_batch_cost",
+    "run_batch",
+    "run_single_prompt",
+]
