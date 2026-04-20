@@ -151,6 +151,7 @@ async def auto_inject_patterns(
     db: AsyncSession,
     trace_id: str,
     optimization_id: str | None = None,
+    project_id: str | None = None,
 ) -> tuple[list[InjectedPattern], list[str]]:
     """Auto-inject cluster meta-patterns based on prompt embedding similarity.
 
@@ -167,6 +168,11 @@ async def auto_inject_patterns(
             provenance as ``OptimizationPattern`` records with
             ``relationship="injected"``.  When ``None`` (default), no records
             are written — backward compatible with callers that lack an ID.
+        project_id: ADR-005 B7 scoping — when set, only meta-patterns from
+            clusters in this project are injected. Gated by the
+            ``enable_cross_project_injection`` preference (default OFF ⇒
+            scope applies). ``GlobalPattern`` injection is *not* scoped —
+            cross-project is the whole point of the global tier.
 
     Returns:
         ``(injected_patterns, cluster_ids)`` — both empty lists if no match or error.
@@ -202,10 +208,31 @@ async def auto_inject_patterns(
             phase="pattern_injection",
         )
 
+        # ADR-005 B7: apply project scope unless user opts into cross-project.
+        _project_filter: str | None = None
+        if project_id is not None:
+            try:
+                from app.services.preferences import PreferencesService
+                _prefs = PreferencesService().load()
+                _cross = bool(
+                    _prefs.get("pipeline", {}).get(
+                        "enable_cross_project_injection", False,
+                    )
+                )
+            except Exception:
+                # Fail closed — default to project-scoped when prefs are
+                # unreadable. Quieter than risking a leak.
+                _cross = False
+            if not _cross:
+                _project_filter = project_id
+
         # Threshold 0.45: broad clusters (post-cold-path merge) have averaged
         # centroids that score ~0.45-0.55 against specific prompts. The
         # optimizer prompt's precision instructions handle relevance filtering.
-        matches = embedding_index.search(search_embedding, k=5, threshold=0.45)
+        matches = embedding_index.search(
+            search_embedding, k=5, threshold=0.45,
+            project_filter=_project_filter,
+        )
         if not matches:
             logger.info(
                 "No pattern matches above threshold (0.45). trace_id=%s",

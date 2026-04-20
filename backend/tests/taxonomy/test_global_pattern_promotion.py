@@ -26,7 +26,10 @@ def test_global_pattern_constants():
     assert GLOBAL_PATTERN_RELEVANCE_BOOST == 1.3
     assert GLOBAL_PATTERN_CAP == 500
     assert GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS == 5
-    assert GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS == 1
+    # ADR-005 B8: raised from 1 → 2 so Legacy-only patterns can't be
+    # promoted as "Global" — they may be excellent but are single-project
+    # by definition, not cross-project.
+    assert GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS == 2
     assert GLOBAL_PATTERN_PROMOTION_MIN_SCORE == 6.0
     assert GLOBAL_PATTERN_DEMOTION_SCORE == 5.0
     assert GLOBAL_PATTERN_DEDUP_COSINE == 0.90
@@ -226,7 +229,8 @@ async def test_validate_demotes_low_score(db: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_validate_re_promotes_recovered_score(db: AsyncSession):
-    """Demoted GlobalPattern with recovered avg_cluster_score >= 6.0 gets re-promoted."""
+    """Demoted GlobalPattern with recovered avg_cluster_score >= 6.0 AND
+    distinct project breadth >= MIN_PROJECTS (ADR-005 B8) gets re-promoted."""
     from app.services.taxonomy.global_patterns import _validate_existing_patterns
 
     emb_bytes = _unit_vec(seed=11).tobytes()
@@ -237,8 +241,10 @@ async def test_validate_re_promotes_recovered_score(db: AsyncSession):
 
     gp = GlobalPattern(
         pattern_text="test", embedding=emb_bytes,
-        source_cluster_ids=[c.id], source_project_ids=["p1"],
-        cross_project_count=1, global_source_count=1,
+        source_cluster_ids=[c.id],
+        # B8: two distinct projects — required for (re-)promotion
+        source_project_ids=["p1", "p2"],
+        cross_project_count=2, global_source_count=1,
         avg_cluster_score=4.0, state="demoted",
     )
     db.add(gp)
@@ -332,8 +338,13 @@ async def test_retention_cap_evicts_demoted_first(db: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_promotion_single_project_with_cluster_breadth(db: AsyncSession):
-    """Pattern in 5 clusters within 1 project is promoted (cluster breadth is the gate)."""
+async def test_no_promotion_single_project_breadth(db: AsyncSession):
+    """ADR-005 B8: pattern in 5 clusters within only 1 project must NOT be promoted.
+
+    Cluster breadth alone is no longer sufficient — the Global tier now
+    requires ``GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS`` distinct projects
+    so that Legacy-only (single-project) patterns can't graduate.
+    """
     from app.services.taxonomy.global_patterns import run_global_pattern_phase
 
     shared_emb = _unit_vec(seed=50)
@@ -346,13 +357,47 @@ async def test_promotion_single_project_with_cluster_breadth(db: AsyncSession):
         clusters.append(c)
     await db.flush()
 
-    # All optimizations in the same project
+    # All optimizations in the same project — fails B8 project gate
     for i, c in enumerate(clusters):
         db.add(Optimization(raw_prompt=f"p-{i}", cluster_id=c.id, project_id="proj-A"))
 
     for i, c in enumerate(clusters):
         db.add(MetaPattern(
             cluster_id=c.id, pattern_text="single-project pattern",
+            embedding=emb_bytes, source_count=2,
+            global_source_count=5 if i == 0 else 1,
+        ))
+    await db.flush()
+
+    stats = await run_global_pattern_phase(db, warm_path_age=0.0)
+    assert stats["promoted"] == 0, "B8 gate should block single-project promotions"
+
+
+@pytest.mark.asyncio
+async def test_promotion_cross_project_breadth(db: AsyncSession):
+    """ADR-005 B8: pattern in 5 clusters spanning 2+ projects IS promoted."""
+    from app.services.taxonomy.global_patterns import run_global_pattern_phase
+
+    shared_emb = _unit_vec(seed=52)
+    emb_bytes = shared_emb.tobytes()
+
+    clusters = []
+    for i in range(5):
+        c = PromptCluster(label=f"c-{i}", state="active", domain="general", avg_score=8.0)
+        db.add(c)
+        clusters.append(c)
+    await db.flush()
+
+    # Alternate projects — 3 in proj-A, 2 in proj-B → 2 distinct projects
+    for i, c in enumerate(clusters):
+        db.add(Optimization(
+            raw_prompt=f"p-{i}", cluster_id=c.id,
+            project_id="proj-A" if i % 2 == 0 else "proj-B",
+        ))
+
+    for i, c in enumerate(clusters):
+        db.add(MetaPattern(
+            cluster_id=c.id, pattern_text="cross-project pattern",
             embedding=emb_bytes, source_count=2,
             global_source_count=5 if i == 0 else 1,
         ))
