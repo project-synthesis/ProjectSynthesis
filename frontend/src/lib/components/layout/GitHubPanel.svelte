@@ -3,9 +3,9 @@
    * GitHubPanel — sidebar GitHub tab.
    *
    * Owns Device Flow auth, repo picker, Info/Files sub-tabs, linked-repo
-   * instrumentation and the recursive file-tree render. Persists the
-   * Info/Files selection to `localStorage['synthesis:github_tab']` so the
-   * preference survives reloads.
+   * instrumentation and the recursive file-tree render. Info/Files
+   * selection is persisted through `githubStore.uiTab` (store owns the
+   * localStorage bridge — see `stores/github.svelte.ts`).
    *
    * Extracted from Navigator.svelte. Depends on `githubStore` + `projectStore`.
    */
@@ -22,9 +22,6 @@
 
   let { active }: Props = $props();
 
-  let githubTab = $state<'info' | 'files'>(
-    (typeof localStorage !== 'undefined' && (localStorage.getItem('synthesis:github_tab') as 'info' | 'files')) || 'info',
-  );
   let repoPickerOpen = $state(false);
   let repoSearch = $state('');
   let selectedProjectId = $state<string | null>(null);
@@ -44,15 +41,6 @@
     if (active && !githubChecked) {
       githubChecked = true;
       githubStore.checkAuth().catch(() => {});
-    }
-  });
-
-  // Persist Info/Files selection
-  $effect(() => {
-    try {
-      localStorage.setItem('synthesis:github_tab', githubTab);
-    } catch {
-      /* noop */
     }
   });
 
@@ -141,17 +129,17 @@
       <div class="github-tabs" role="tablist">
         <button
           class="github-tab"
-          class:github-tab--active={githubTab === 'info'}
-          onclick={() => { githubTab = 'info'; }}
+          class:github-tab--active={githubStore.uiTab === 'info'}
+          onclick={() => { githubStore.setUiTab('info'); }}
           role="tab"
-          aria-selected={githubTab === 'info'}
+          aria-selected={githubStore.uiTab === 'info'}
         >Info</button>
         <button
           class="github-tab"
-          class:github-tab--active={githubTab === 'files'}
-          onclick={() => { githubTab = 'files'; if (githubStore.fileTree.length === 0) githubStore.loadFileTree(); githubStore.loadIndexStatus(); }}
+          class:github-tab--active={githubStore.uiTab === 'files'}
+          onclick={() => { githubStore.setUiTab('files'); if (githubStore.fileTree.length === 0) githubStore.loadFileTree(); githubStore.loadIndexStatus(); }}
           role="tab"
-          aria-selected={githubTab === 'files'}
+          aria-selected={githubStore.uiTab === 'files'}
         >Files
           {#if githubStore.indexStatus?.status === 'building'}
             <span class="index-badge index-badge--building">...</span>
@@ -161,7 +149,7 @@
         </button>
       </div>
 
-      {#if githubTab === 'info'}
+      {#if githubStore.uiTab === 'info'}
         {#if githubStore.connectionState === 'expired'}
           <div class="auth-expired-banner">
             <span class="error-note" style="margin: 0;">GitHub session expired</span>

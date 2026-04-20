@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { readinessStore } from '$lib/stores/readiness.svelte';
+  import { topologyCache } from '$lib/stores/topology-cache.svelte';
 
   import { TopologyRenderer, type LODTier } from './TopologyRenderer';
   import { buildSceneData, assignLodVisibility, buildNodeMap, computeHierarchicalOpacity, type SceneData, type SceneNode } from './TopologyData';
@@ -1134,34 +1135,20 @@
         // UMAP rest positions (copy before force modification)
         const restPositions = new Float32Array(positions);
 
-        const cacheKey = 'topology_settled_' + sceneData.nodes.map(n => n.id).sort().join('|');
+        const fingerprint = topologyCache.computeFingerprint(sceneData.nodes.map(n => n.id));
         let settledPositions: Float32Array;
-        
-        try {
-          const cached = localStorage.getItem(cacheKey);
-          if (cached) {
-            settledPositions = new Float32Array(JSON.parse(cached));
-          } else {
-            const settled = settleForces({
-              positions, restPositions, sizes,
-              parentIndices, domainGroups,
-              iterations: 60,
-            });
-            settledPositions = settled.positions;
-            try {
-              // Remove stale topology cache entries before writing new one
-              for (let k = localStorage.length - 1; k >= 0; k--) {
-                const key = localStorage.key(k);
-                if (key?.startsWith('topology_settled_') && key !== cacheKey) {
-                  localStorage.removeItem(key);
-                }
-              }
-              localStorage.setItem(cacheKey, JSON.stringify(Array.from(settledPositions)));
-            } catch { /* quota exceeded — ignore */ }
-          }
-        } catch {
-          const settled = settleForces({ positions, restPositions, sizes, parentIndices, domainGroups, iterations: 60 });
+
+        const cached = topologyCache.get(fingerprint);
+        if (cached) {
+          settledPositions = cached;
+        } else {
+          const settled = settleForces({
+            positions, restPositions, sizes,
+            parentIndices, domainGroups,
+            iterations: 60,
+          });
           settledPositions = settled.positions;
+          topologyCache.set(fingerprint, settledPositions);
         }
 
         // Start all nodes collapsed at origin for galaxy formation

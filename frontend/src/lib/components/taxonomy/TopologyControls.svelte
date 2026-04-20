@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { hintsStore } from '$lib/stores/hints.svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { TOPOLOGY_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import TopologyInfoPanel from './TopologyInfoPanel.svelte';
@@ -65,18 +66,18 @@
   }
 
   // --- Hint card (shows once on first visit) ---
-  const HINT_KEY = 'synthesis:pattern_graph_hints_dismissed';
+  const HINT_KEY = 'pattern_graph';
   let hintVisible = $state(false);
 
   onMount(() => {
-    if (localStorage.getItem(HINT_KEY) !== '1') {
+    if (!hintsStore.isDismissed(HINT_KEY)) {
       hintVisible = true;
     }
   });
 
   function dismissHint() {
     hintVisible = false;
-    localStorage.setItem(HINT_KEY, '1');
+    hintsStore.dismiss(HINT_KEY);
   }
 
   function showHint() {

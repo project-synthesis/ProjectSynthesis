@@ -20,6 +20,29 @@ export interface TreeNode {
   expanded?: boolean;
 }
 
+export type GitHubUiTab = 'info' | 'files';
+
+const UI_TAB_KEY = 'synthesis:github_tab';
+
+function loadUiTab(): GitHubUiTab {
+  if (typeof localStorage === 'undefined') return 'info';
+  try {
+    const v = localStorage.getItem(UI_TAB_KEY);
+    return v === 'files' ? 'files' : 'info';
+  } catch {
+    return 'info';
+  }
+}
+
+function persistUiTab(tab: GitHubUiTab): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(UI_TAB_KEY, tab);
+  } catch {
+    /* noop — quota / disabled storage */
+  }
+}
+
 class GitHubStore {
   user = $state<GitHubUser | null>(null);
   linkedRepo = $state<LinkedRepo | null>(null);
@@ -41,6 +64,15 @@ class GitHubStore {
   fileTree = $state<TreeNode[]>([]);
   treeLoading = $state(false);
   indexStatus = $state<IndexStatus | null>(null);
+
+  // Sidebar sub-tab selection ('info' | 'files'), persisted across reloads.
+  uiTab = $state<GitHubUiTab>(loadUiTab());
+
+  setUiTab(tab: GitHubUiTab): void {
+    if (this.uiTab === tab) return;
+    this.uiTab = tab;
+    persistUiTab(tab);
+  }
 
   /** Unified connection state — single source of truth for all UI components.
    *
