@@ -4,10 +4,9 @@
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { templatesStore } from '$lib/stores/templates.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
-  import { taxonomyColor, scoreColor, qHealthColor, stateColor, DIMENSION_COLORS } from '$lib/utils/colors';
-  import { TAXONOMY_TOOLTIPS, CLUSTER_TOOLTIPS, STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
+  import { taxonomyColor, stateColor, DIMENSION_COLORS } from '$lib/utils/colors';
+  import { CLUSTER_TOOLTIPS, STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
   import { INSPECTOR_TOOLTIPS } from '$lib/utils/ui-tooltips';
-  import { assessTaxonomyHealth } from '$lib/utils/taxonomy-health';
   import { tooltip } from '$lib/actions/tooltip';
 
   /** Deduplicate array by `id` field (prevents Svelte keyed each errors). */
@@ -26,6 +25,7 @@
   import ScoreCard from '$lib/components/shared/ScoreCard.svelte';
   import ScoreSparkline from '$lib/components/shared/ScoreSparkline.svelte';
   import ClusterTemplatesSection from './ClusterTemplatesSection.svelte';
+  import TaxonomyHealthPanel from './TaxonomyHealthPanel.svelte';
   import { PHASE_LABELS, DIMENSION_LABELS } from '$lib/utils/dimensions';
   import { formatScore, isPassthroughResult, trendInfo, formatRelativeTime } from '$lib/utils/formatting';
 
@@ -389,39 +389,11 @@
 
     {:else if !viewingCachedTab && forgeStore.status === 'idle'}
       {#if clustersStore.taxonomyStats}
-        {@const stats = clustersStore.taxonomyStats}
-        {@const health = assessTaxonomyHealth(stats)}
-        <div class="health-panel">
-          <div class="health-title">TAXONOMY HEALTH</div>
-          <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.q_system}>
-            <span class="metric-label">Q_health</span>
-            <span class="metric-value" style="color: {qHealthColor(stats.q_health ?? stats.q_system)}">{(stats.q_health ?? stats.q_system)?.toFixed(3) ?? '—'}</span>
-          </div>
-          <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.coherence}>
-            <span class="metric-label">Coherence</span>
-            <span class="metric-value">{(stats.q_health_coherence_w ?? stats.q_coherence)?.toFixed(3) ?? '—'}</span>
-          </div>
-          <div class="health-metric" use:tooltip={TAXONOMY_TOOLTIPS.separation}>
-            <span class="metric-label">Separation</span>
-            <span class="metric-value">{(stats.q_health_separation_w ?? stats.q_separation)?.toFixed(3) ?? '—'}</span>
-          </div>
-          {#if stats.q_sparkline && stats.q_sparkline.length >= 2}
-            <div class="health-sparkline">
-              <ScoreSparkline scores={stats.q_sparkline} width={100} height={18} minRange={0.2} />
-              {#if health}
-                <span class="health-headline" style="color: {health.color}">{health.headline}</span>
-              {/if}
-            </div>
-          {/if}
-          {#if health}
-            <div class="health-detail">{health.detail}</div>
-          {/if}
-          <div class="health-counts">
-            <span use:tooltip={TAXONOMY_TOOLTIPS.active}>{clustersStore.clusterCounts.active} active</span>
-            <span class="dot-sep">·</span>
-            <span use:tooltip={TAXONOMY_TOOLTIPS.candidate}>{clustersStore.clusterCounts.candidate} candidate</span>
-          </div>
-        </div>
+        <TaxonomyHealthPanel
+          stats={clustersStore.taxonomyStats}
+          activeCount={clustersStore.clusterCounts.active}
+          candidateCount={clustersStore.clusterCounts.candidate}
+        />
       {:else}
         <!-- Empty state -->
         <div class="empty-note">
@@ -1042,30 +1014,6 @@
     border-color: var(--color-neon-cyan);
   }
 
-  .health-sparkline {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 2px;
-  }
-
-  .health-headline {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    white-space: nowrap;
-    font-weight: 600;
-  }
-
-  .health-detail {
-    font-family: var(--font-sans);
-    font-size: 10px;
-    color: var(--color-text-secondary);
-    line-height: 1.4;
-    margin-top: 2px;
-  }
-
-  /* .health-trend removed — unused selector */
-
   /* Pattern family detail */
   .family-detail {
     display: flex;
@@ -1232,57 +1180,6 @@
     padding: 0 4px;
     flex-shrink: 0;
     line-height: 1.6;
-  }
-
-  /* Taxonomy health panel */
-  .health-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 6px 0;
-  }
-
-  .health-title {
-    font-size: 9px;
-    font-family: var(--font-mono);
-    color: var(--color-text-dim);
-    letter-spacing: 0.08em;
-    padding: 0 6px;
-  }
-
-  .health-metric {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 2px 6px;
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-border-subtle);
-  }
-
-  .metric-label {
-    font-size: 10px;
-    font-family: var(--font-sans);
-    color: var(--color-text-dim);
-  }
-
-  .metric-value {
-    font-size: 10px;
-    font-family: var(--font-mono);
-    color: var(--color-text-secondary);
-  }
-
-  .health-counts {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 6px;
-    font-size: 10px;
-    font-family: var(--font-mono);
-    color: var(--color-text-dim);
-  }
-
-  .dot-sep {
-    color: var(--color-border-subtle);
   }
 
   /* State badge */
