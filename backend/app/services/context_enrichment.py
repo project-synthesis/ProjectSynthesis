@@ -588,6 +588,12 @@ class ContextEnrichmentService:
         #    Internal/sampling tiers skip enrichment-level patterns because their
         #    pipelines call auto_inject_patterns() directly with provenance recording.
         patterns: str | None = None
+        # UI1: always emit injection_stats so the Inspector's CONTEXT INJECTION
+        # section renders a consistent shape. Deferred tiers get zero-count
+        # stats that pipeline.py/sampling_pipeline.py overwrite with real values
+        # after auto-injection completes.
+        _injected_count = 0
+        _injected_cluster_count = 0
         if profile == PROFILE_COLD_START:
             skipped_layers.append("applied_patterns")
         elif tier in ("internal", "sampling"):
@@ -600,6 +606,19 @@ class ContextEnrichmentService:
             )
             if _pattern_details:
                 enrichment_meta_dict["applied_pattern_texts"] = _pattern_details
+                # Injected entries = everything non-"explicit"; cluster_labels
+                # are present on auto-injected entries only.
+                _injected = [d for d in _pattern_details if d.get("source") != "explicit"]
+                _injected_count = len(_injected)
+                _injected_cluster_count = len({
+                    d.get("cluster_label") for d in _injected
+                    if d.get("cluster_label")
+                })
+        enrichment_meta_dict["injection_stats"] = {
+            "patterns_injected": _injected_count,
+            "injection_clusters": _injected_cluster_count,
+            "has_explicit_patterns": bool(applied_pattern_ids),
+        }
 
         # 6. Content capping and injection hardening
         codebase_context = self._cap_codebase_context(codebase_context)

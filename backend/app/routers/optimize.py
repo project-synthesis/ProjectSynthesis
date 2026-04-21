@@ -23,7 +23,7 @@ from app.services.pipeline_constants import (
     VALID_TASK_TYPES,
 )
 from app.services.preferences import PreferencesService
-from app.services.project_service import resolve_project_id
+from app.services.project_service import resolve_effective_repo, resolve_project_id
 from app.services.taxonomy import get_engine as get_taxonomy_engine
 from app.utils.sse import format_sse
 from app.utils.text_cleanup import split_prompt_and_changes, title_case_label, validate_intent_label
@@ -143,23 +143,18 @@ async def optimize(
     from app.config import PROJECT_ROOT
     effective_workspace = body.workspace_path or str(PROJECT_ROOT)
 
-    # Auto-resolve repo_full_name from session's linked repo if not provided.
-    # This ensures codebase context is always injected when a repo is linked,
-    # even if the caller doesn't explicitly pass it.
-    effective_repo = body.repo_full_name
-    if not effective_repo:
-        try:
-            from app.models import LinkedRepo
-            session_id = request.cookies.get("session_id")
-            if session_id:
-                linked = (await db.execute(
-                    select(LinkedRepo).where(LinkedRepo.session_id == session_id)
-                )).scalar_one_or_none()
-                if linked:
-                    effective_repo = linked.full_name
-                    logger.debug("Auto-resolved repo from session: %s", effective_repo)
-        except Exception:
-            pass  # Non-fatal — proceed without codebase context
+    # AA1: unified resolution — explicit request → session cookie → most
+    # recently linked repo (global fallback for curl/API callers without
+    # cookies). This ensures curls auto-associate to the active project
+    # instead of silently falling through to Legacy.
+    try:
+        effective_repo = await resolve_effective_repo(
+            db,
+            explicit_repo=body.repo_full_name,
+            session_id=request.cookies.get("session_id"),
+        )
+    except Exception:
+        effective_repo = body.repo_full_name  # Non-fatal — proceed as given
 
     # B1: Freeze project_id at pipeline entry — eliminates persist-time races.
     # Resolution order: explicit request → repo chain → cached Legacy fallback.
@@ -502,6 +497,16 @@ async def passthrough_prepare(
     from app.config import PROJECT_ROOT as _PT_ROOT
     effective_pt_workspace = body.workspace_path or str(_PT_ROOT)
 
+    # AA1: unified repo resolution for passthrough too.
+    try:
+        _pt2_effective_repo = await resolve_effective_repo(
+            db,
+            explicit_repo=body.repo_full_name,
+            session_id=request.cookies.get("session_id"),
+        )
+    except Exception:
+        _pt2_effective_repo = body.repo_full_name
+
     # B1/B7: freeze project_id before enrichment so pattern scoping honors it.
     _pt2_legacy_pid: str | None = getattr(request.app.state, "legacy_project_id", None)
     _pt2_project_id: str | None
@@ -510,7 +515,7 @@ async def passthrough_prepare(
     else:
         try:
             _pt2_project_id = await resolve_project_id(
-                db, body.repo_full_name, legacy_project_id=_pt2_legacy_pid,
+                db, _pt2_effective_repo, legacy_project_id=_pt2_legacy_pid,
             )
         except Exception:
             _pt2_project_id = _pt2_legacy_pid
@@ -520,7 +525,7 @@ async def passthrough_prepare(
         tier="passthrough",
         db=db,
         workspace_path=effective_pt_workspace,
-        repo_full_name=body.repo_full_name,
+        repo_full_name=_pt2_effective_repo,
         applied_pattern_ids=body.applied_pattern_ids,
         project_id=_pt2_project_id,
     )
@@ -567,7 +572,7 @@ async def passthrough_prepare(
         domain_raw=enrichment.domain_value,
         intent_label=enrichment.intent_label,
         context_sources=enrichment.context_sources_dict,
-        repo_full_name=body.repo_full_name,
+        repo_full_name=_pt2_effective_repo,
         project_id=_pt2_project_id,
     )
     db.add(pending)
