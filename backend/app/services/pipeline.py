@@ -445,6 +445,23 @@ class PipelineOrchestrator:
             optimize_duration = int((time.monotonic() - phase_start) * 1000)
             phase_durations["optimize_ms"] = optimize_duration
 
+            # UI1: Persist injection stats into enrichment_meta so the Inspector
+            # can render them. Previously these fields only went to the per-phase
+            # JSONL trace, leaving the UI with no observability for "what was
+            # actually injected into the optimizer call".
+            injection_stats = {
+                "patterns_injected": len(auto_injected_patterns),
+                "injection_clusters": len(auto_injected_cluster_ids),
+                "has_explicit_patterns": bool(applied_pattern_ids),
+            }
+            if context_sources is None:
+                context_sources = {}
+            em = context_sources.get("enrichment_meta")
+            if not isinstance(em, dict):
+                em = {}
+                context_sources["enrichment_meta"] = em
+            em["injection_stats"] = injection_stats
+
             usage = self._get_usage(provider)
             if self.trace_logger:
                 self.trace_logger.log_phase(
@@ -455,9 +472,7 @@ class PipelineOrchestrator:
                     result={
                         "strategy_used": effective_strategy,
                         "effort": prefs.get("pipeline.optimizer_effort", prefs_snapshot) or "high",
-                        "patterns_injected": len(auto_injected_patterns),
-                        "injection_clusters": len(auto_injected_cluster_ids),
-                        "has_explicit_patterns": bool(applied_pattern_ids),
+                        **injection_stats,
                     },
                 )
 

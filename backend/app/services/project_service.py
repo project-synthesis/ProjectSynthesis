@@ -150,6 +150,47 @@ async def _warm_legacy_cache(db: AsyncSession) -> str | None:
     return _cached_legacy_project_id
 
 
+async def resolve_effective_repo(
+    db: AsyncSession,
+    *,
+    explicit_repo: str | None,
+    session_id: str | None,
+) -> str | None:
+    """Resolve ``repo_full_name`` for a pipeline request (AA1).
+
+    Resolution order:
+      1. ``explicit_repo`` — caller-provided ``repo_full_name`` wins.
+      2. ``session_id`` — browser session cookie maps to a LinkedRepo row.
+      3. Most recently linked repo — curl/API callers without cookies still
+         associate to the project they are actively working on, rather than
+         silently falling through to Legacy.
+
+    Returns ``None`` only when no LinkedRepo rows exist at all. Callers then
+    pass ``None`` through to :func:`resolve_project_id`, which falls back
+    to the cached Legacy project.
+
+    This helper exists because the pre-AA1 behaviour auto-resolved from the
+    session cookie only — curls landed on Legacy despite having exactly one
+    active LinkedRepo, contradicting the product intent that "connected repo
+    ⇒ prompts belong to that project".
+    """
+    if explicit_repo:
+        return explicit_repo
+    if session_id:
+        linked = (await db.execute(
+            select(LinkedRepo).where(LinkedRepo.session_id == session_id).limit(1)
+        )).scalar_one_or_none()
+        if linked:
+            return linked.full_name
+    # AA1: global fallback to most-recently-linked repo. For single-user
+    # self-hosted deploys (the only topology today) this is always the
+    # correct project association.
+    latest = (await db.execute(
+        select(LinkedRepo).order_by(LinkedRepo.linked_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    return latest.full_name if latest else None
+
+
 async def resolve_project_id(
     db: AsyncSession,
     repo_full_name: str | None,

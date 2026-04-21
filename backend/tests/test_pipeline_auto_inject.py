@@ -436,3 +436,82 @@ class TestPipelineAutoInjectionIntegration:
         event_names = [e.event for e in events]
         assert "optimization_complete" in event_names
         assert "error" not in event_names
+
+    async def test_injection_stats_persisted_to_enrichment_meta(
+        self, orchestrator, mock_provider, db_session
+    ):
+        """UI1: injection_stats must land in enrichment_meta so the Inspector
+        can render patterns_injected / injection_clusters / has_explicit_patterns.
+        Currently these are only emitted to per-phase JSONL traces."""
+        mock_provider.complete_parsed.side_effect = [
+            self._make_analysis(),
+            self._make_optimization(),
+            self._make_scores(),
+        ]
+        cluster_id = "cluster-042"
+        engine = _make_taxonomy_engine(size=1, matches=[(cluster_id, 0.91)])
+
+        injected = InjectedPattern(
+            pattern_text="Include explicit examples",
+            cluster_label="Examples",
+            domain="coding",
+            similarity=0.91,
+        )
+
+        events = []
+        with patch(
+            "app.services.pipeline.PipelineOrchestrator._auto_inject_patterns",
+            new=AsyncMock(return_value=([injected], [cluster_id])),
+        ):
+            async for event in orchestrator.run(
+                raw_prompt="Write a sort function",
+                provider=mock_provider,
+                db=db_session,
+                taxonomy_engine=engine,
+                applied_pattern_ids=["explicit-pattern-99"],
+            ):
+                events.append(event)
+
+        complete = next(e for e in events if e.event == "optimization_complete")
+        em = complete.data["context_sources"]["enrichment_meta"]
+        assert "injection_stats" in em, (
+            "enrichment_meta must carry injection_stats for Inspector rendering"
+        )
+        stats = em["injection_stats"]
+        assert stats["patterns_injected"] == 1
+        assert stats["injection_clusters"] == 1
+        assert stats["has_explicit_patterns"] is True
+
+    async def test_injection_stats_present_even_with_zero_injected(
+        self, orchestrator, mock_provider, db_session
+    ):
+        """UI1: injection_stats is still written when nothing was injected so
+        the UI can show '0 patterns / 0 clusters' truthfully rather than
+        hiding the row (ambiguous: did injection fire and miss, or not run?)."""
+        mock_provider.complete_parsed.side_effect = [
+            self._make_analysis(),
+            self._make_optimization(),
+            self._make_scores(),
+        ]
+        engine = _make_taxonomy_engine(size=0, matches=[])
+
+        events = []
+        with patch(
+            "app.services.pipeline.PipelineOrchestrator._auto_inject_patterns",
+            new=AsyncMock(return_value=([], [])),
+        ):
+            async for event in orchestrator.run(
+                raw_prompt="Write a sort function",
+                provider=mock_provider,
+                db=db_session,
+                taxonomy_engine=engine,
+            ):
+                events.append(event)
+
+        complete = next(e for e in events if e.event == "optimization_complete")
+        em = complete.data["context_sources"]["enrichment_meta"]
+        assert "injection_stats" in em
+        stats = em["injection_stats"]
+        assert stats["patterns_injected"] == 0
+        assert stats["injection_clusters"] == 0
+        assert stats["has_explicit_patterns"] is False

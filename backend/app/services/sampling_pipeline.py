@@ -583,13 +583,31 @@ async def run_sampling_pipeline(
 
     model_ids["optimize"] = optimize_model
     phase_durations["optimize_ms"] = int((time.monotonic() - phase_t0) * 1000)
+
+    # UI1: persist injection_stats into enrichment_meta so the Inspector's
+    # CONTEXT INJECTION section renders for sampling-pipeline rows too. This
+    # overwrites the zero-count placeholder emitted by ContextEnrichmentService
+    # (internal/sampling tiers defer pattern resolution to the pipeline).
+    injection_stats = {
+        "patterns_injected": len(auto_injected_patterns),
+        "injection_clusters": len(auto_injected_cluster_ids),
+        "has_explicit_patterns": bool(applied_pattern_ids),
+    }
+    if context_sources is None:
+        context_sources = {}
+    em = context_sources.get("enrichment_meta")
+    if not isinstance(em, dict):
+        em = {}
+        context_sources["enrichment_meta"] = em
+    em["injection_stats"] = injection_stats
+
     if trace_logger:
         trace_logger.log_phase(
             trace_id=trace_id, phase="optimize",
             duration_ms=phase_durations["optimize_ms"],
             tokens_in=0, tokens_out=0,
             model=optimize_model, provider="mcp_sampling",
-            result={"strategy_used": effective_strategy},
+            result={"strategy_used": effective_strategy, **injection_stats},
         )
     await notify_event_bus("optimization_status", {
         "trace_id": trace_id, "phase": "optimizing", "state": "complete",

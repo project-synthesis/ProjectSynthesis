@@ -212,3 +212,102 @@ async def test_two_repos_share_one_project(db_session: AsyncSession):
         db_session, "user/repo-b", target_project_id=pid1,
     )
     assert pid1 == pid2  # same project
+
+
+# ---------------------------------------------------------------------------
+# AA1: Auto-associate curl/API callers to linked repo's project
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_effective_repo_explicit_wins(db_session: AsyncSession):
+    """Explicit repo_full_name overrides session and global fallbacks."""
+    from app.services.project_service import resolve_effective_repo
+
+    # Seed a LinkedRepo that would otherwise be picked by the global fallback
+    lr = LinkedRepo(
+        session_id="some-session",
+        full_name="user/linked-globally",
+        branch="main",
+        language="Python",
+    )
+    db_session.add(lr)
+    await db_session.flush()
+
+    result = await resolve_effective_repo(
+        db_session,
+        explicit_repo="user/explicit",
+        session_id=None,
+    )
+    assert result == "user/explicit"
+
+
+@pytest.mark.asyncio
+async def test_resolve_effective_repo_session_cookie_resolves(db_session: AsyncSession):
+    """session_id cookie picks the matching LinkedRepo when no explicit repo."""
+    from app.services.project_service import resolve_effective_repo
+
+    lr = LinkedRepo(
+        session_id="cookie-sess", full_name="user/from-cookie",
+        branch="main", language="Python",
+    )
+    db_session.add(lr)
+    await db_session.flush()
+
+    result = await resolve_effective_repo(
+        db_session,
+        explicit_repo=None,
+        session_id="cookie-sess",
+    )
+    assert result == "user/from-cookie"
+
+
+@pytest.mark.asyncio
+async def test_resolve_effective_repo_falls_back_to_most_recent_linked(
+    db_session: AsyncSession,
+):
+    """AA1: curl without cookies must auto-pick the most recently linked repo.
+
+    This is the fix for the user-reported behaviour where `POST /api/optimize`
+    curls landed on Legacy instead of associating to the live LinkedRepo.
+    """
+    from app.services.project_service import resolve_effective_repo
+    from datetime import datetime, timedelta, timezone
+
+    # Seed two LinkedRepos; the most recent should win even though neither
+    # matches the (absent) session cookie.
+    older = LinkedRepo(
+        session_id="s1", full_name="user/older-repo",
+        branch="main", language="Python",
+        linked_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=5),
+    )
+    newer = LinkedRepo(
+        session_id="s2", full_name="user/newer-repo",
+        branch="main", language="Python",
+        linked_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db_session.add(older)
+    db_session.add(newer)
+    await db_session.flush()
+
+    result = await resolve_effective_repo(
+        db_session,
+        explicit_repo=None,
+        session_id=None,
+    )
+    assert result == "user/newer-repo"
+
+
+@pytest.mark.asyncio
+async def test_resolve_effective_repo_none_when_no_linked_repos(
+    db_session: AsyncSession,
+):
+    """When no LinkedRepo rows exist, resolve_effective_repo returns None."""
+    from app.services.project_service import resolve_effective_repo
+
+    result = await resolve_effective_repo(
+        db_session,
+        explicit_repo=None,
+        session_id=None,
+    )
+    assert result is None

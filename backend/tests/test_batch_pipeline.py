@@ -309,6 +309,11 @@ def _enriched(**overrides: Any) -> EnrichedContext:
         }),
         enrichment_meta=MappingProxyType({
             "enrichment_profile": "code_aware",
+            "injection_stats": {
+                "patterns_injected": 0,
+                "injection_clusters": 0,
+                "has_explicit_patterns": False,
+            },
         }),
     )
     defaults.update(overrides)
@@ -503,6 +508,48 @@ class TestContextEnrichmentIntegration:
             result.context_sources.get("enrichment_meta", {}).get("enrichment_profile")
             == "code_aware"
         )
+
+    async def test_injection_stats_persisted_to_enrichment_meta(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+        mock_context_service: AsyncMock,
+        mock_session_factory: Any,
+    ) -> None:
+        """UI1: batch pipeline must persist injection_stats in enrichment_meta
+        so seed-created optimizations appear in the Inspector's CONTEXT
+        INJECTION section the same way internal-pipeline rows do."""
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(), _optimization(), _scores(), _suggestions(),
+        ]
+
+        result: PendingOptimization = await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            tier="internal",
+            context_service=mock_context_service,
+            session_factory=mock_session_factory,
+        )
+
+        assert result.status == "completed", f"run failed: {result.error}"
+        assert result.context_sources is not None
+        em = result.context_sources.get("enrichment_meta")
+        assert isinstance(em, dict), (
+            "enrichment_meta must be a dict on completed rows"
+        )
+        assert "injection_stats" in em, (
+            "batch pipeline must carry injection_stats in enrichment_meta"
+        )
+        stats = em["injection_stats"]
+        assert set(stats.keys()) == {
+            "patterns_injected", "injection_clusters", "has_explicit_patterns",
+        }
+        assert isinstance(stats["patterns_injected"], int)
+        assert isinstance(stats["injection_clusters"], int)
+        assert isinstance(stats["has_explicit_patterns"], bool)
 
 
 # ---------------------------------------------------------------------------
