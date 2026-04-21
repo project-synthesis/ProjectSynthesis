@@ -96,7 +96,7 @@ Variable reference: `prompts/manifest.json`
 
 ## MCP server
 
-13 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`). All use `structured_output=True`. Tool handlers in `backend/app/tools/*.py`; `mcp_server.py` is a thin registration layer. See `AGENTS.md` for detailed tool usage guidance.
+14 tools with `synthesis_` prefix on port 8001 (`http://127.0.0.1:8001/mcp`). All use `structured_output=True`. Tool handlers in `backend/app/tools/*.py`; `mcp_server.py` is a thin registration layer. See `AGENTS.md` for detailed tool usage guidance.
 
 **Adding a tool:**
 1. Define Pydantic output model in `schemas/mcp_models.py`

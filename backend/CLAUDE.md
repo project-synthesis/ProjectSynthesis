@@ -45,7 +45,7 @@ Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MOD
 | Router | Endpoints |
 |--------|-----------|
 | `optimize.py` | `POST /api/optimize` (SSE), `GET /api/optimize/{trace_id}` |
-| `history.py` | `GET /api/history` (sort/filter, pagination envelope) |
+| `history.py` | `GET /api/history` (sort/filter, pagination envelope), `DELETE /api/optimizations/{id}` |
 | `feedback.py` | `POST /api/feedback`, `GET /api/feedback?optimization_id=X` |
 | `refinement.py` | `POST /api/refine` (SSE), `GET /api/refine/{id}/versions`, `POST /api/refine/{id}/rollback` |
 | `providers.py` | `GET /api/providers`, `GET/PATCH/DELETE /api/provider/api-key` |

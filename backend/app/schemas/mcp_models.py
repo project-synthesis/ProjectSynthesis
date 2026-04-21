@@ -505,6 +505,31 @@ class StrategiesOutput(BaseModel):
     )
 
 
+class DeleteOptimizationOutput(BaseModel):
+    """Output for synthesis_delete.
+
+    Mirrors the REST ``DELETE /api/optimizations/{id}`` envelope so MCP
+    clients (Copilot CLI, VS Code bridge, Claude Code) receive the same
+    shape and can surface cluster/project reconciliation hints to the
+    user after a delete cascade.
+    """
+
+    deleted: int = Field(
+        description="Number of optimization rows removed (1 on success).",
+    )
+    affected_cluster_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Cluster ids whose member_count will be reconciled by the "
+            "next warm-path Phase 0 cycle. Useful for UI hints."
+        ),
+    )
+    affected_project_ids: list[str] = Field(
+        default_factory=list,
+        description="Project ids whose aggregate counts may change.",
+    )
+
+
 class OptimizationDetailOutput(BaseModel):
     """Output for synthesis_get_optimization."""
 

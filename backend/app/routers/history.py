@@ -1,14 +1,14 @@
-"""History endpoint — sorted/filtered optimization list."""
+"""History endpoint — sorted/filtered optimization list + per-id delete."""
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Feedback, OptimizationPattern
+from app.models import Feedback, Optimization, OptimizationPattern
 from app.services.optimization_service import VALID_SORT_COLUMNS, OptimizationService
 
 logger = logging.getLogger(__name__)
@@ -132,4 +132,57 @@ async def get_history(
             )
             for opt in items
         ],
+    )
+
+
+class DeleteOptimizationResponse(BaseModel):
+    """Envelope returned by ``DELETE /api/optimizations/{id}``.
+
+    Mirrors ``DeleteOptimizationsResult`` but with lists (JSON-safe) so
+    clients can refresh cluster-scoped UI after the cascade fires.
+    """
+
+    deleted: int = Field(description="Rows removed (1 on success).")
+    affected_cluster_ids: list[str] = Field(
+        default_factory=list,
+        description="Cluster ids whose member counts need reconciliation.",
+    )
+    affected_project_ids: list[str] = Field(
+        default_factory=list,
+        description="Project ids whose opt counts need reconciliation.",
+    )
+
+
+@router.delete("/optimizations/{optimization_id}")
+async def delete_optimization(
+    optimization_id: str = Path(
+        ..., description="Optimization id to delete (uuid)."
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> DeleteOptimizationResponse:
+    """Delete one optimization and cascade dependents.
+
+    Translates the service's "silent no-op on unknown id" into a proper
+    404 so REST clients can distinguish typos from successful deletes.
+    Cascade semantics + event emission + dirty-marking are owned by
+    ``OptimizationService.delete_optimizations`` (see the service for
+    full contract). This router is a thin HTTP translator.
+    """
+    svc = OptimizationService(db)
+    # Probe before delete so we can 404 unknown ids. The service itself
+    # returns deleted=0 silently — fine for bulk_reset/gc_sweep callers,
+    # but bad for a REST client typing a wrong id.
+    exists = await db.execute(
+        select(Optimization.id).where(Optimization.id == optimization_id)
+    )
+    if exists.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Optimization not found")
+
+    result = await svc.delete_optimizations(
+        [optimization_id], reason="user_request",
+    )
+    return DeleteOptimizationResponse(
+        deleted=result.deleted,
+        affected_cluster_ids=sorted(result.affected_cluster_ids),
+        affected_project_ids=sorted(result.affected_project_ids),
     )

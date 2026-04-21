@@ -28,6 +28,7 @@ from app.config import DATA_DIR, PROMPTS_DIR
 from app.providers.detector import detect_provider
 from app.schemas.mcp_models import (
     AnalyzeOutput,
+    DeleteOptimizationOutput,
     ExplainResult,
     FeedbackOutput,
     HealthOutput,
@@ -897,6 +898,7 @@ mcp.streamable_http_app = _patched_streamable_http_app  # type: ignore[method-as
 
 # Import handlers
 from app.tools.analyze import handle_analyze  # noqa: E402
+from app.tools.delete import handle_delete  # noqa: E402
 from app.tools.explain import handle_explain  # noqa: E402
 from app.tools.feedback import handle_feedback  # noqa: E402
 from app.tools.get_optimization import handle_get_optimization  # noqa: E402
@@ -1130,6 +1132,29 @@ async def synthesis_get_optimization(
     Returns full prompt texts, scores, feedback status, and refinement count.
     """
     return await handle_get_optimization(optimization_id)
+
+
+@mcp.tool(structured_output=True)
+async def synthesis_delete(
+    optimization_id: Annotated[
+        str, Field(description="ID of the optimization to delete (uuid)."),
+    ],
+    ctx: Context | None = None,
+) -> DeleteOptimizationOutput:
+    """Delete one optimization and cascade dependents.
+
+    Use this to retract a bad or duplicate optimization you just created
+    via synthesis_optimize. All dependent rows (feedback, refinement
+    branches/turns, optimization_patterns) are removed atomically; any
+    PromptTemplate forked from the source is preserved (its FK is
+    auto-nulled). Warm Phase 0 reconciles cluster member counts on the
+    next cycle.
+
+    Returns the cluster / project ids affected by the delete so callers
+    can surface a "cluster X will rebalance" hint. Raises an error when
+    the id doesn't exist — a typo shouldn't masquerade as a no-op.
+    """
+    return await handle_delete(optimization_id)
 
 
 @mcp.tool(structured_output=True)
