@@ -28,6 +28,40 @@ logger = logging.getLogger(__name__)
 _warm_path_pending = asyncio.Event()
 
 
+def _apply_cross_process_dirty_marks(engine, event_data) -> None:
+    """Gap B bridge: mark clusters dirty from cross-process ``taxonomy_changed``.
+
+    ``OptimizationService.delete_optimizations()`` marks clusters dirty on
+    the live engine in its own process. When the producer is another
+    process (MCP, CLI, tests, future admin tools) the in-process
+    ``mark_dirty`` call is a no-op because ``get_engine()`` raises — only
+    the cross-process HTTP event carries the affected clusters forward.
+    Without this bridge the warm-path timer would fire on
+    ``taxonomy_changed`` but Phase 0 would skip with
+    ``decision="no_dirty_clusters"`` and stale ``member_count`` rows would
+    survive until the next maintenance cadence hit.
+
+    Pure-ish: reads from ``event_data``, mutates only the supplied engine.
+    Never raises — this is called from the event-bus consumer loop and an
+    exception here would tear the listener down.
+    """
+    if engine is None or not isinstance(event_data, dict):
+        return
+    affected = event_data.get("affected_clusters")
+    if not affected:
+        return
+    for cid in affected:
+        if not isinstance(cid, str) or not cid:
+            continue
+        try:
+            engine.mark_dirty(cid)
+        except Exception:
+            logger.debug(
+                "mark_dirty(%s) raised from cross-process bridge — skipping",
+                cid, exc_info=True,
+            )
+
+
 async def _backfill_project_ids(db) -> None:
     """Backfill Optimization.project_id via repo_full_name → LinkedRepo (Hybrid).
 
@@ -1072,8 +1106,17 @@ async def lifespan(app: FastAPI):
                     # the warm path or it creates an infinite cascade loop.
                     # candidate_evaluation fires from within warm path Phase
                     # 0.5 — excluding it prevents self-re-triggering.
-                    trigger = event.get("data", {}).get("trigger", "")
+                    event_data = event.get("data") or {}
+                    trigger = event_data.get("trigger", "") if isinstance(event_data, dict) else ""
                     if trigger not in ("warm_path", "cold_path", "candidate_evaluation"):
+                        # Gap B: propagate ``affected_clusters`` into the
+                        # resident engine's dirty set so the warm path's
+                        # Phase 0 reconciliation actually runs. Without this
+                        # bridge, cross-process deletes fire ``taxonomy_changed``
+                        # but Phase 0 sees an empty dirty set and skips with
+                        # ``decision="no_dirty_clusters"`` — leaving stale
+                        # ``member_count`` on domain nodes forever.
+                        _apply_cross_process_dirty_marks(engine, event_data)
                         _warm_path_pending.set()
         except asyncio.CancelledError:
             logger.info("Taxonomy extraction listener shutting down")
