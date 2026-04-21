@@ -136,3 +136,101 @@ class TestTechnicalNounDisambiguationCoverage:
         assert coding_score > 0, (
             f"Expected coding score > 0 for CLI prompt, got {coding_score}"
         )
+
+
+class TestORMFactoryAndFrameworkNounCoverage:
+    """B1: session-factory + ORM-framework prompts misclassify as creative.
+
+    Live reference: "Design a SQLAlchemy async session factory with per-request
+    dependency injection for FastAPI". Under pre-B1 rules:
+    - Only ``design`` fires (creative, weight 0.7, first-sentence 2x → 1.4).
+    - A2 disambiguation scans first sentence for ``design`` + technical noun
+      within 4 words. "session", "factory", "sqlalchemy", "fastapi" are all
+      absent from ``_TECHNICAL_NOUNS`` so the gate misses.
+    - Result: task_type=creative → enrichment profile selector rejects
+      code_aware (task_type ∉ _CODEBASE_TASK_TYPES) → codebase context skipped.
+
+    Why the noun set: ``session`` and ``factory`` are OOP patterns that appear
+    almost exclusively in coding contexts (DB sessions, factory functions).
+    Framework names like ``sqlalchemy``/``fastapi``/``django``/``flask`` are
+    unambiguous tech identifiers — no creative-writing prompt says "design a
+    FastAPI". Keep the list conservative: ``app``, ``tool``, and ``client``
+    are NOT added because each has legitimate creative-writing use.
+    """
+
+    def test_design_a_session_factory_triggers_disambiguation(self):
+        """Session factory is OOP pattern + factory-function — always coding."""
+        assert ttc.check_technical_disambiguation(
+            "design a sqlalchemy async session factory with dependency injection"
+        )
+
+    def test_sqlalchemy_framework_noun_triggers_disambiguation(self):
+        """Framework names are unambiguous coding context."""
+        assert ttc.check_technical_disambiguation(
+            "design a sqlalchemy model for the user table"
+        )
+
+    def test_fastapi_framework_noun_triggers_disambiguation(self):
+        assert ttc.check_technical_disambiguation(
+            "build a fastapi dependency that validates auth"
+        )
+
+    def test_django_flask_framework_nouns(self):
+        assert ttc.check_technical_disambiguation(
+            "configure a django middleware for rate limiting"
+        )
+        assert ttc.check_technical_disambiguation(
+            "design a flask blueprint for the api routes"
+        )
+
+    def test_factory_alone_triggers_disambiguation(self):
+        """Pure 'design a factory' (OOP factory pattern) is coding."""
+        assert ttc.check_technical_disambiguation(
+            "design a factory that produces http clients"
+        )
+
+    def test_session_alone_triggers_disambiguation(self):
+        """DB/HTTP session objects are OOP technical nouns."""
+        assert ttc.check_technical_disambiguation(
+            "build a session manager for websocket connections"
+        )
+
+    def test_non_technical_creative_still_rejects(self):
+        """B1 widening must preserve creative-writing rejection."""
+        assert not ttc.check_technical_disambiguation(
+            "design a poster for the conference"
+        )
+        assert not ttc.check_technical_disambiguation(
+            "create a plot for the novel"
+        )
+
+    def test_session_factory_prompt_scores_on_coding(self):
+        """End-to-end: live SQLAlchemy prompt must produce coding_score > 0.
+
+        Without a coding-table hit the A2 disambiguation flip is a no-op
+        (the classifier flip logic requires ``coding_score > 0``).
+        """
+        signals = ttc.get_task_type_signals()
+        prompt = (
+            "design a sqlalchemy async session factory with per-request "
+            "dependency injection for fastapi"
+        )
+        coding_score = ttc.score_category(prompt, prompt, signals["coding"])
+        assert coding_score > 0, (
+            f"Expected coding score > 0 for session-factory prompt, got {coding_score}"
+        )
+
+    def test_dependency_injection_and_connection_pool_score_on_coding(self):
+        """Prompt-specific compound patterns: dependency-injection +
+        connection-pool are always coding idioms."""
+        signals = ttc.get_task_type_signals()
+        prompt = (
+            "design a sqlalchemy async session factory with per-request "
+            "dependency injection for fastapi. include connection pool tuning."
+        )
+        coding_score = ttc.score_category(prompt, prompt, signals["coding"])
+        # First-sentence 2x boost on 'design' (0.7 creative) gives 1.4 to creative;
+        # coding needs to beat that. Multiple signal hits required.
+        assert coding_score >= 1.5, (
+            f"Expected coding score >= 1.5 for DB+pool prompt, got {coding_score}"
+        )

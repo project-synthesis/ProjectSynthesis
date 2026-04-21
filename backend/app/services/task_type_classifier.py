@@ -36,6 +36,14 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
         ("add a feature", 1.0), ("add an endpoint", 1.1),
         ("delivery system", 1.1), ("retry logic", 1.0),
         ("dead letter", 1.0), ("rate limiter", 1.0),
+        # B1: ORM / factory / DI / pool compounds. Live reference:
+        # "Design a SQLAlchemy async session factory with per-request
+        # dependency injection for FastAPI". Pre-B1 this prompt only hit
+        # "design" (creative 0.7 × 2 first-sentence = 1.4) because none of
+        # these compound idioms scored on the coding table.
+        ("session factory", 1.2), ("dependency injection", 1.1),
+        ("connection pool", 1.0), ("design a factory", 1.2),
+        ("build a factory", 1.2), ("design a session", 1.1),
         # Single-word signals
         ("implement", 1.0), ("refactor", 1.0), ("debug", 0.9),
         ("function", 0.7), ("api", 0.8), ("endpoint", 0.8),
@@ -54,6 +62,14 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
         # deliberately moderate so they don't steamroll genuine writing
         # tasks ("a binary decision", "a command-line in the play script").
         ("cli", 0.7), ("daemon", 0.7), ("binary", 0.5),
+        # B1: framework names. Live reference: "Design a SQLAlchemy async
+        # session factory ... for FastAPI". No creative-writing prompt
+        # says "design a FastAPI" — these identifiers are unambiguous tech
+        # context and must register on the coding table so A2
+        # disambiguation can flip "design" away from creative.
+        ("sqlalchemy", 0.7), ("fastapi", 0.7),
+        ("django", 0.7), ("flask", 0.6),
+        ("factory", 0.5), ("session", 0.4),
     ],
     "writing": [
         # Compound signals
@@ -148,6 +164,16 @@ _TECHNICAL_NOUNS = frozenset({
     # Conservative additions only — generic words like "tool"/"script" are
     # excluded because they legitimately appear in creative briefs.
     "cli", "daemon", "binary",
+    # B1: OOP-pattern nouns and framework identifiers. Live reference:
+    # "Design a SQLAlchemy async session factory ... for FastAPI". The
+    # creative "design" verb needs to flip via A2 disambiguation and
+    # required a technical-noun hit inside the first sentence, 4-word
+    # window. ``session`` / ``factory`` are OOP patterns (DB sessions,
+    # factory functions). Framework names are unambiguous tech context —
+    # no creative-writing prompt says "design a FastAPI".
+    # Explicitly NOT added: ``app``, ``tool``, ``client`` — all three
+    # have legitimate creative-writing use.
+    "factory", "session", "sqlalchemy", "fastapi", "django", "flask",
 })
 
 # Pre-compiled word-boundary patterns for task_type keywords.  Built once at
