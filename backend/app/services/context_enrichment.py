@@ -152,7 +152,19 @@ def _build_domain_signals_block(
     runner_candidates = [(k, float(v)) for k, v in scores.items() if k != winner]
     if runner_candidates:
         best_runner = max(runner_candidates, key=lambda kv: kv[1])
-        if best_runner[1] >= top_score - _DOMAIN_SIGNAL_RUNNER_UP_MARGIN:
+        # Two bounds: within margin (informational proximity) AND not above
+        # the resolved winner (a "runner-up" that outscores the winner is a
+        # classification divergence, not a runner-up — that evidence stays
+        # in ``heuristic_domain_scores`` rather than misleading the UI).
+        # Live case (2026-04-21): resolver picked "devops" (score 0.0) while
+        # heuristic saw "backend" at 1.0; the old code emitted
+        # ``runner_up={"backend": 1.0}`` because the gap check was satisfied
+        # trivially. The UI rendered "devops 0.00 ~ backend 1.00", implying
+        # backend "came second" when it actually won the heuristic.
+        within_margin = best_runner[1] >= top_score - _DOMAIN_SIGNAL_RUNNER_UP_MARGIN
+        not_above_winner = best_runner[1] <= top_score
+        runner_has_evidence = best_runner[1] > 0  # zero-signal runner is vacuous
+        if within_margin and not_above_winner and runner_has_evidence:
             runner_up_entry = {
                 "label": best_runner[0],
                 "score": round(best_runner[1], 3),

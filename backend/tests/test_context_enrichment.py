@@ -12,9 +12,11 @@ from app.services.context_enrichment import (
     PROFILE_KNOWLEDGE_WORK,
     ContextEnrichmentService,
     EnrichedContext,
+    _build_domain_signals_block,
     compute_repo_relevance,
     detect_divergences,
     extract_domain_vocab,
+    reconcile_domain_signals,
     resolve_strategy_intelligence,
     select_enrichment_profile,
 )
@@ -822,6 +824,80 @@ class TestDomainSignalsShape:
         meta = dict(result.enrichment_meta)
         if result.analysis and not result.analysis.domain_scores:
             assert "domain_signals" not in meta
+
+
+class TestDomainSignalsRunnerUpBound:
+    """A1 follow-up 2 (2026-04-21 live): runner-up must never outscore the
+    resolved winner.
+
+    **Live evidence.** The inspector rendered ``devops 0.00 ~ backend 1.00`` —
+    ``resolved="devops"`` (score 0.0) with ``runner_up={"label": "backend",
+    "score": 1.0}``. That's semantically broken: a "runner-up" that beats the
+    winner is the winner. The UI presents it as "devops is the domain, backend
+    came close" when the heuristic evidence is actually the reverse.
+
+    **Root cause.** ``_build_domain_signals_block`` only checks the *gap*
+    (margin 0.15), not the *direction*. When ``reconcile_domain_signals``
+    re-anchors to an LLM-assigned domain that has zero heuristic score, the
+    gap check ``best_runner >= top_score - 0.15`` is trivially satisfied by
+    any runner with score ≥ -0.15 — including one that scored 1.0.
+
+    **Contract.** ``runner_up.score <= resolved.score``. If a non-winner
+    outscored the resolved winner, something upstream is wrong (LLM disagrees
+    with heuristic) — that divergence lives in ``heuristic_domain_scores`` as
+    evidence, not in a "runner-up" slot that falsely implies it placed second.
+    """
+
+    def test_runner_up_never_exceeds_resolved_pure(self):
+        """Pure-unit: construct the exact live failure shape and verify the
+        block no longer emits an inverted runner-up."""
+        # resolver picked "devops", heuristic saw only "backend" at 1.0
+        scores = {"backend": 1.0}
+        block = _build_domain_signals_block("devops", scores)
+        assert block["resolved"] == "devops"
+        assert block["score"] == 0.0
+        assert block["runner_up"] is None, (
+            f"runner_up must not outscore resolved; got {block['runner_up']!r}"
+        )
+
+    def test_runner_up_allowed_when_below_resolved(self):
+        """Regression guard: the legitimate case — runner genuinely came
+        second within the margin — still surfaces."""
+        scores = {"backend": 0.9, "fullstack": 0.8}
+        block = _build_domain_signals_block("backend", scores)
+        assert block["resolved"] == "backend"
+        assert block["score"] == 0.9
+        assert block["runner_up"] == {"label": "fullstack", "score": 0.8}
+
+    def test_runner_up_suppressed_when_tied_zero(self):
+        """Edge case: resolver picked a domain with no heuristic evidence AND
+        all other scores are also zero. No runner-up — nothing placed."""
+        scores = {"backend": 0.0, "frontend": 0.0}
+        block = _build_domain_signals_block("devops", scores)
+        assert block["score"] == 0.0
+        assert block["runner_up"] is None
+
+    def test_reconcile_preserves_bound_invariant(self):
+        """End-to-end: the reconcile helper (which re-anchors to the LLM
+        domain, the exact path that created the live bug) must never emit a
+        runner-up that outscores the resolved winner."""
+        meta = {
+            "heuristic_domain_scores": {"backend": 1.0, "frontend": 0.5},
+            "domain_signals": {
+                "resolved": "backend", "score": 1.0,
+                "runner_up": {"label": "frontend", "score": 0.5},
+            },
+        }
+        # LLM / resolver upgraded to "devops" (zero heuristic evidence).
+        out = reconcile_domain_signals(meta, "devops")
+        ds = out["domain_signals"]
+        assert ds["resolved"] == "devops"
+        assert ds["score"] == 0.0
+        assert ds["runner_up"] is None, (
+            "After reconcile, runner_up must not show a higher-scored domain; "
+            f"got {ds['runner_up']!r} — heuristic evidence belongs in "
+            "heuristic_domain_scores, not a misleading 'runner-up' slot."
+        )
 
 
 class TestReconcileDomainSignals:
