@@ -31,7 +31,11 @@ from app.services.pattern_injection import (
     InjectedPattern,
     auto_inject_patterns,
 )
-from app.services.pipeline_constants import ANALYZE_MAX_TOKENS, clamp_analyze_effort
+from app.services.pipeline_constants import (
+    ANALYZE_MAX_TOKENS,
+    clamp_analyze_effort,
+    should_run_strategy_intelligence_fallback,
+)
 from app.services.pipeline_phases import (
     PersistenceInputs,
     build_optimize_context,
@@ -378,9 +382,21 @@ class PipelineOrchestrator:
             enable_si = prefs.get(
                 "pipeline.enable_strategy_intelligence", prefs_snapshot,
             )
+            # A9: honor the enrichment profile's intentional SI skip (e.g.
+            # cold_start). Without this gate the fallback re-fetches SI that
+            # enrichment deliberately suppressed — the live audit caught this
+            # as ``strategy_intel=none`` at enrichment vs ``=82`` at optimize.
+            _enrichment_profile = (
+                (context_sources or {}).get("enrichment_meta", {}).get("enrichment_profile")
+                if isinstance(context_sources, dict) else None
+            )
             if not enable_si:
                 strategy_intelligence = None
-            elif strategy_intelligence is None:
+            elif should_run_strategy_intelligence_fallback(
+                strategy_intelligence=strategy_intelligence,
+                enrichment_profile=_enrichment_profile,
+                enable_strategy_intelligence=bool(enable_si),
+            ):
                 try:
                     from app.services.context_enrichment import resolve_strategy_intelligence
                     strategy_intelligence, _ = await resolve_strategy_intelligence(

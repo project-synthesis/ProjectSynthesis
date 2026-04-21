@@ -61,6 +61,7 @@ from app.services.pipeline_constants import (
     resolve_effective_strategy,
     semantic_check,
     semantic_upgrade_general,
+    should_run_strategy_intelligence_fallback,
 )
 from app.services.preferences import PreferencesService
 from app.services.project_service import resolve_repo_project
@@ -109,6 +110,7 @@ async def run_sampling_pipeline(
     heuristic_domain: str | None = None,
     divergence_alerts: str | None = None,
     pre_resolved_strategy_intelligence: str | None = None,  # pre-computed by enrichment
+    enrichment_profile: str | None = None,  # A9: honor cold_start SI skip
 ) -> dict:
     """Run the full pipeline via MCP sampling (IDE's LLM).
 
@@ -481,8 +483,13 @@ async def run_sampling_pipeline(
     )
     if not enable_si:
         strategy_intelligence = None
-    elif strategy_intelligence is None:
-        # Fallback: resolve on-demand when enrichment didn't provide
+    elif should_run_strategy_intelligence_fallback(
+        strategy_intelligence=strategy_intelligence,
+        enrichment_profile=enrichment_profile,
+        enable_strategy_intelligence=bool(enable_si),
+    ):
+        # Fallback: resolve on-demand when enrichment didn't provide AND the
+        # active enrichment profile permits SI (A9: cold_start skip is honored).
         try:
             from app.services.context_enrichment import resolve_strategy_intelligence
             async with async_session_factory() as _si_db:

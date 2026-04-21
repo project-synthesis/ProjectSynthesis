@@ -172,6 +172,7 @@ async def handle_optimize(
                 heuristic_domain=enrichment.domain_value,
                 divergence_alerts=enrichment.divergence_alerts,
                 pre_resolved_strategy_intelligence=enrichment.strategy_intelligence,
+                enrichment_profile=enrichment.enrichment_meta.get("enrichment_profile"),
             )
             return _sampling_result_to_output(result)
         except Exception as exc:

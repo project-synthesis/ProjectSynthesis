@@ -656,6 +656,47 @@ def clamp_analyze_effort(pref: str | None) -> str:
     ceil_idx = _EFFORT_ORDER.index(ANALYZE_EFFORT_CEILING)
     return _EFFORT_ORDER[min(idx, ceil_idx)]
 
+
+# ---------------------------------------------------------------------------
+# A9: Strategy intelligence fallback gate — profile-aware
+# ---------------------------------------------------------------------------
+# Live audit (2026-04-21) found ``pipeline.py`` silently re-fetching strategy
+# intelligence when enrichment returned ``None``, even in the ``cold_start``
+# enrichment profile that intentionally skips SI (< 10 optimizations = no
+# meaningful adaptation signal). Logs showed the mismatch: enrichment layer
+# reports ``strategy_intel=none`` while optimize-phase inject reports
+# ``strategy_intel=82`` chars. Centralizing the gate keeps pipeline.py and
+# sampling_pipeline.py in lock-step without either reimplementing the rule.
+_ENRICHMENT_PROFILE_COLD_START = "cold_start"
+
+
+def should_run_strategy_intelligence_fallback(
+    *,
+    strategy_intelligence: str | None,
+    enrichment_profile: str | None,
+    enable_strategy_intelligence: bool,
+) -> bool:
+    """Decide whether the pipeline should re-fetch strategy intelligence.
+
+    Returns ``False`` — skip the fallback — when any of these hold:
+
+    - ``enable_strategy_intelligence`` is ``False`` (feature kill switch).
+    - ``strategy_intelligence`` is already populated (nothing to fetch).
+    - ``enrichment_profile`` is ``"cold_start"`` (profile intentionally skips
+      SI on sparse DBs — re-fetching defeats the design).
+
+    A missing/unknown profile falls through to ``True`` (preserves legacy
+    callers that never set a profile, e.g. some tests).
+    """
+    if not enable_strategy_intelligence:
+        return False
+    if strategy_intelligence is not None:
+        return False
+    if enrichment_profile == _ENRICHMENT_PROFILE_COLD_START:
+        return False
+    return True
+
+
 # Cross-cluster pattern injection (Phase 0 — unified embedding architecture)
 CROSS_CLUSTER_MIN_SOURCE_COUNT = 2     # min global_source_count to qualify
 CROSS_CLUSTER_MAX_PATTERNS = 5         # max cross-cluster patterns per injection
