@@ -340,6 +340,30 @@ class OptimizationService:
                 },
             )
 
+        # Mark affected clusters dirty on the live taxonomy engine so the
+        # next warm cycle actually reconciles them (Phase 0 lifecycle
+        # phases are dirty-gated — without this the warm path would skip
+        # with `decision="no_dirty_clusters"` even after taxonomy_changed
+        # fires). The engine import is local to keep the optional service
+        # layer free of a hard dependency on the taxonomy subsystem; if
+        # the engine singleton isn't initialised yet (tests, CLI scripts,
+        # migrations) we just skip the marking.
+        try:
+            from app.services.taxonomy.engine import get_engine
+            try:
+                engine = get_engine()
+            except RuntimeError:
+                engine = None
+            if engine is not None:
+                for cluster_id in result.affected_cluster_ids:
+                    project_id = next(
+                        (pid for _, cid, pid in rows if cid == cluster_id),
+                        None,
+                    )
+                    engine.mark_dirty(cluster_id, project_id=project_id)
+        except ImportError:
+            pass
+
         logger.info(
             "Deleted %d optimizations (requested=%d, reason=%s, clusters=%d)",
             result.deleted, len(ids), reason, len(result.affected_cluster_ids),
