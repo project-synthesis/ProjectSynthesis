@@ -314,3 +314,61 @@ def test_remove_domain_nonexistent_is_safe():
 
     loader = DomainSignalLoader()
     loader.remove_domain("nonexistent")  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_no_warning_when_bootstrap_covers_missing_labels(db, caplog):
+    """Domain nodes without signal_keywords but covered by BOOTSTRAP should not warn.
+
+    Regression guard for I-3: the warning was firing on every startup after
+    delete-cascade left backend/frontend domain nodes without signal_keywords
+    (they get stripped during Phase 0 reconciliation). Since BOOTSTRAP has
+    vocabulary for those labels, the classifier stays functional — no noise.
+    """
+    import logging
+
+    # Seed backend + frontend domain nodes without signal_keywords
+    db.add(PromptCluster(
+        label="backend", state="domain", domain="backend", persistence=1.0,
+        cluster_metadata={"source": "seed"},
+    ))
+    db.add(PromptCluster(
+        label="frontend", state="domain", domain="frontend", persistence=1.0,
+        cluster_metadata={"source": "seed"},
+    ))
+    await db.commit()
+
+    loader = DomainSignalLoader()
+    with caplog.at_level(logging.WARNING, logger="app.services.domain_signal_loader"):
+        await loader.load(db)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert not warnings, (
+        f"Unexpected warnings when bootstrap covers missing labels: "
+        f"{[r.getMessage() for r in warnings]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_warning_when_custom_label_not_in_bootstrap(db, caplog):
+    """Custom domain node not in BOOTSTRAP without signal_keywords should warn.
+
+    When a domain node has no signal_keywords AND bootstrap has no entry
+    for that label, the classifier genuinely loses vocabulary for it —
+    operator should know.
+    """
+    import logging
+
+    db.add(PromptCluster(
+        label="customdomain", state="domain", domain="customdomain", persistence=1.0,
+        cluster_metadata={"source": "seed"},
+    ))
+    await db.commit()
+
+    loader = DomainSignalLoader()
+    with caplog.at_level(logging.WARNING, logger="app.services.domain_signal_loader"):
+        await loader.load(db)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings, "Expected warning for custom label not covered by bootstrap"
+    assert any("customdomain" in r.getMessage() or "1" in r.getMessage() for r in warnings)

@@ -285,3 +285,76 @@ async def test_empty_ids_is_noop(db_session):
     assert result.deleted == 0
     assert result.affected_cluster_ids == set()
     assert result.affected_project_ids == set()
+
+
+async def test_publishes_taxonomy_changed_on_bulk_delete(db_session):
+    """Bulk delete must publish a single `taxonomy_changed` event carrying
+    the affected cluster ids so warm Phase 0 kicks in (I-0).
+
+    Without this, `delete_optimizations` only marked clusters dirty on the
+    in-process engine singleton — which is absent in MCP/CLI/test contexts.
+    The SSE event is the cross-process signal that drives reconciliation.
+    """
+    cluster_a = str(uuid.uuid4())
+    cluster_b = str(uuid.uuid4())
+    db_session.add_all([
+        PromptCluster(id=cluster_a, label="a", state="active"),
+        PromptCluster(id=cluster_b, label="b", state="active"),
+    ])
+    await db_session.commit()
+
+    id_a = (await _seed_opt_with_dependents(db_session, cluster_id=cluster_a))["opt_id"]
+    id_b = (await _seed_opt_with_dependents(db_session, cluster_id=cluster_b))["opt_id"]
+
+    event_bus._shutting_down = False
+    queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    event_bus._subscribers.add(queue)
+    try:
+        svc = OptimizationService(db_session)
+        result = await svc.delete_optimizations(
+            [id_a, id_b], reason="bulk_reset",
+        )
+        assert result.deleted == 2
+
+        taxonomy_events: list[dict] = []
+        while True:
+            try:
+                evt = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if evt.get("event") == "taxonomy_changed":
+                taxonomy_events.append(evt)
+    finally:
+        event_bus._subscribers.discard(queue)
+
+    assert len(taxonomy_events) == 1, (
+        f"expected exactly 1 taxonomy_changed event; got {len(taxonomy_events)}"
+    )
+    payload = taxonomy_events[0]["data"]
+    assert payload["reason"] == "bulk_reset"
+    assert payload["trigger"] == "bulk_delete"
+    assert set(payload["affected_clusters"]) == {cluster_a, cluster_b}
+
+
+async def test_no_taxonomy_changed_event_when_nothing_deleted(db_session):
+    """Unknown ids → zero rows deleted → no taxonomy_changed event."""
+    event_bus._shutting_down = False
+    queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    event_bus._subscribers.add(queue)
+    try:
+        svc = OptimizationService(db_session)
+        result = await svc.delete_optimizations([str(uuid.uuid4())])
+        assert result.deleted == 0
+
+        taxonomy_events = []
+        while True:
+            try:
+                evt = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if evt.get("event") == "taxonomy_changed":
+                taxonomy_events.append(evt)
+    finally:
+        event_bus._subscribers.discard(queue)
+
+    assert taxonomy_events == []

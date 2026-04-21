@@ -8,7 +8,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -774,6 +774,62 @@ async def repair_integrity(
     except Exception as exc:
         logger.error("Data integrity repair failed: %s", exc, exc_info=True)
         raise HTTPException(500, "Repair failed") from exc
+
+
+@router.post("/api/taxonomy/reset")
+async def reset_taxonomy(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Admin recovery: force-prune archived zero-member clusters + run warm path.
+
+    Bypasses the 24h grace floor that warm Phase 0 normally enforces on
+    archived nodes. Intended for one-command recovery after a bulk delete
+    leaves structural debris (archived clusters with live centroids,
+    orphan project nodes, stale domain signal caches, empty embedding
+    index). After the force-prune, delegates to ``run_warm_path`` for the
+    full reconciliation sweep (member_count, embedding index rebuild,
+    domain signal refresh, meta-pattern orphan cleanup).
+
+    Not rate-limited at the router level — call sites are admin UI /
+    direct curl. The endpoint is idempotent: re-running is safe.
+    """
+    engine = _get_engine(request)
+
+    # 1. Force-prune archived 0-member clusters regardless of age.
+    #    Normal warm Phase 0 refuses to drop rows younger than 24h to
+    #    survive transient member_count=0 windows during reconciliation.
+    #    Admin-triggered reset is by definition deliberate, so the floor
+    #    doesn't apply.
+    prune_result = await db.execute(
+        delete(PromptCluster).where(
+            PromptCluster.state == "archived",
+            PromptCluster.member_count == 0,
+        )
+    )
+    archived_pruned = int(prune_result.rowcount or 0)
+    await db.commit()
+
+    # 2. Run warm path synchronously so the caller gets a completed
+    #    reconciliation before the response returns (no 30s debounce).
+    from app.database import async_session_factory
+    try:
+        await engine.run_warm_path(async_session_factory)
+    except OperationalError as exc:
+        logger.warning("Taxonomy reset DB contention: %s", exc)
+        raise HTTPException(503, "Database busy — retry in a moment") from exc
+    except Exception as exc:
+        logger.error("Taxonomy reset warm_path failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Taxonomy reset failed") from exc
+
+    logger.info(
+        "Taxonomy reset: pruned %d archived 0-member clusters, warm path complete",
+        archived_pruned,
+    )
+    return {
+        "status": "completed",
+        "archived_pruned": archived_pruned,
+    }
 
 
 @router.post("/api/clusters/reassign")

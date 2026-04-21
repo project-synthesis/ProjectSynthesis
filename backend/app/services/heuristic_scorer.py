@@ -12,6 +12,20 @@ import re
 logger = logging.getLogger(__name__)
 
 
+#: Strategies whose explicit job is to EXPAND a raw prompt (add role framing,
+#: reasoning scaffolds, few-shot blocks, etc.). For these the heuristic
+#: cosine mapping under-rates faithfulness — the LLM correctly sees the
+#: optimized prompt preserves intent, but the cosine drops into 0.3–0.5.
+#: Kept in lower-case-with-hyphens form to match `prompts/strategies/*.md`.
+EXPANSION_STRATEGIES: frozenset[str] = frozenset({
+    "meta-prompting",
+    "role-playing",
+    "chain-of-thought",
+    "tree-of-thought",
+    "few-shot",
+})
+
+
 class HeuristicScorer:
     """Static scoring utilities for passthrough pipeline validation."""
 
@@ -288,10 +302,19 @@ class HeuristicScorer:
         return round(max(1.0, min(10.0, score)), 2)
 
     @staticmethod
-    def heuristic_faithfulness(original: str, optimized: str) -> float:
+    def heuristic_faithfulness(
+        original: str,
+        optimized: str,
+        strategy_used: str | None = None,
+    ) -> float:
         """Faithfulness via embedding cosine similarity between original and optimized.
 
-        Returns 5.0 (neutral) if embedding is unavailable or inputs are invalid.
+        Expansion strategies (meta-prompting, role-playing, chain-of-thought,
+        tree-of-thought, few-shot) are EXPECTED to balloon length and add
+        framing, so the cosine-to-score mapping is rebased upward for them —
+        the raw cosine still drives ordering, just on a higher floor. Direct
+        strategies (structured-output, auto-direct, etc.) keep the original
+        calibration. Returns 5.0 (neutral) if embedding is unavailable.
         """
         if not original or not optimized:
             return 5.0
@@ -311,13 +334,28 @@ class HeuristicScorer:
             # restructured text). This should map to HIGH faithfulness (7-9), not
             # mediocre (4-6). Bands calibrated against LLM scorer agreement.
             if similarity >= 0.85:
-                return round(min(10.0, 9.0 + (similarity - 0.85) * 6.67), 2)
+                score = min(10.0, 9.0 + (similarity - 0.85) * 6.67)
             elif similarity >= 0.50:
-                return round(7.0 + (similarity - 0.50) / 0.35 * 2.0, 2)
+                score = 7.0 + (similarity - 0.50) / 0.35 * 2.0
             elif similarity >= 0.30:
-                return round(4.0 + (similarity - 0.30) / 0.20 * 3.0, 2)
+                score = 4.0 + (similarity - 0.30) / 0.20 * 3.0
             else:
-                return round(max(1.0, similarity * 13.3), 2)
+                score = max(1.0, similarity * 13.3)
+
+            # Strategy-aware dampener: expansion strategies are exempt from
+            # length-drift penalty — their job is to expand. Lift the score
+            # toward the high-faithfulness band while preserving cosine order.
+            if (
+                strategy_used
+                and strategy_used.strip().lower() in EXPANSION_STRATEGIES
+                and score < 7.0
+            ):
+                # Blend 40% of the gap to 8.5 — keeps ordering (higher
+                # cosine still scores higher) but removes the expansion
+                # penalty that the LLM scorer never applies.
+                score = score + (8.5 - score) * 0.4
+
+            return round(max(1.0, min(10.0, score)), 2)
         except (ImportError, EmbeddingError, ValueError, MemoryError):
             logger.debug("Embedding unavailable for faithfulness heuristic — returning neutral score")
             return 5.0
@@ -331,6 +369,7 @@ class HeuristicScorer:
         cls,
         prompt: str,
         original: str | None = None,
+        strategy_used: str | None = None,
     ) -> dict[str, float]:
         """Compute all 5 heuristic dimension scores for a prompt.
 
@@ -338,6 +377,8 @@ class HeuristicScorer:
             prompt: The prompt to score.
             original: If provided, used for faithfulness comparison.
                       If None, faithfulness defaults to 5.0 (self-baseline).
+            strategy_used: Optional strategy name (matches `prompts/strategies/`
+                      filenames) to scope the faithfulness expansion exemption.
 
         Returns:
             Dict with keys: clarity, specificity, structure, faithfulness, conciseness.
@@ -347,7 +388,7 @@ class HeuristicScorer:
             "specificity": cls.heuristic_specificity(prompt),
             "structure": cls.heuristic_structure(prompt),
             "faithfulness": (
-                cls.heuristic_faithfulness(original, prompt)
+                cls.heuristic_faithfulness(original, prompt, strategy_used=strategy_used)
                 if original
                 else 5.0
             ),

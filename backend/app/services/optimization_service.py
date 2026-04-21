@@ -364,6 +364,23 @@ class OptimizationService:
         except ImportError:
             pass
 
+        # Publish taxonomy_changed so the debounced warm-path runner picks
+        # this up cross-process. In-process dirty marking above is the fast
+        # path; this event is the safety net for MCP/CLI/test contexts
+        # where the engine singleton isn't resident. Callers doing a "reset
+        # to fresh" delete can hit /api/taxonomy/reset for immediate,
+        # synchronous reconciliation (I-0).
+        if result.deleted > 0:
+            event_bus.publish(
+                "taxonomy_changed",
+                {
+                    "reason": reason,
+                    "trigger": "bulk_delete",
+                    "affected_clusters": list(result.affected_cluster_ids),
+                    "affected_projects": list(result.affected_project_ids),
+                },
+            )
+
         logger.info(
             "Deleted %d optimizations (requested=%d, reason=%s, clusters=%d)",
             result.deleted, len(ids), reason, len(result.affected_cluster_ids),

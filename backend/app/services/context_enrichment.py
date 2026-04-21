@@ -54,11 +54,23 @@ PROFILE_KNOWLEDGE_WORK = "knowledge_work"
 PROFILE_COLD_START = "cold_start"
 
 _COLD_START_THRESHOLD = 10  # optimization count below which cold-start profile activates
+# I-6: if meta_patterns exist from prior seeding/import, the pattern tier is
+# warm enough to unlock strategy intelligence + pattern injection even on a
+# freshly-reset optimization table. Threshold is deliberately permissive —
+# 5 patterns is the minimum for meaningful auto-injection.
+_COLD_START_PATTERN_THRESHOLD = 5
 
 # Task types where curated codebase retrieval (L3b) provides high value.
 # Non-coding prompts (writing, creative, general) waste ~40% of the context
 # window on irrelevant source files.
 _CODEBASE_TASK_TYPES = frozenset({"coding", "system", "data"})
+
+# Code-adjacent task types: the task_type itself doesn't guarantee code, but
+# when the B0 repo-relevance gate has already said "this prompt is about this
+# codebase" (cosine ≥ floor), curated retrieval is high-value. Covers
+# "audit X", "review the Y middleware", "trace the Z pipeline" prompts that
+# don't mention the narrow _CODE_ESCAPE_KEYWORDS allowlist.
+_CODE_ADJACENT_TASK_TYPES = frozenset({"analysis", "system"})
 
 # Escape-hatch keywords: even for non-coding task types, if the prompt
 # mentions code-related concepts, curated retrieval is still valuable.
@@ -68,11 +80,17 @@ _CODE_ESCAPE_KEYWORDS = frozenset({
     "refactor", "deploy", "migration", "config", "dockerfile",
 })
 
+# B0 floor value kept in sync with app.services.repo_relevance.REPO_RELEVANCE_FLOOR
+# Duplicated here to keep `_should_skip_curated` a pure function with no
+# import-cycle risk. Update both when the floor changes.
+_CURATED_B0_FLOOR = 0.15
+
 
 def select_enrichment_profile(
     task_type: str,
     repo_linked: bool,
     optimization_count: int,
+    meta_pattern_count: int = 0,
 ) -> str:
     """Select enrichment profile based on observable state.
 
@@ -82,9 +100,20 @@ def select_enrichment_profile(
     Profiles:
         code_aware     — All layers active. Coding/system/data task with repo linked.
         knowledge_work — Skip codebase context. Writing/creative/analysis/general tasks.
-        cold_start     — Skip strategy intelligence + patterns. < 10 optimizations.
+        cold_start     — Skip strategy intelligence + patterns. Truly cold DB.
+
+    Signal-aware cold-start (I-6): ``cold_start`` triggers only when BOTH
+    ``optimization_count < _COLD_START_THRESHOLD`` AND
+    ``meta_pattern_count < _COLD_START_PATTERN_THRESHOLD``. The moment the
+    pattern tier has accreted enough signal (via batch-seed, prior import,
+    or >=5 optimizations' worth of extraction), strategy intelligence + auto-
+    injection unlock regardless of opt_count — otherwise seed-first workflows
+    never benefit from the patterns they just seeded.
     """
-    if optimization_count < _COLD_START_THRESHOLD:
+    if (
+        optimization_count < _COLD_START_THRESHOLD
+        and meta_pattern_count < _COLD_START_PATTERN_THRESHOLD
+    ):
         return PROFILE_COLD_START
     if task_type in _CODEBASE_TASK_TYPES and repo_linked:
         return PROFILE_CODE_AWARE
@@ -208,14 +237,42 @@ class ContextEnrichmentService:
         self._taxonomy_engine = taxonomy_engine
 
     @staticmethod
-    def _should_skip_curated(task_type: str, raw_prompt: str) -> tuple[bool, str | None]:
+    def _should_skip_curated(
+        task_type: str,
+        raw_prompt: str,
+        repo_relevance_score: float | None = None,
+    ) -> tuple[bool, str | None]:
         """Determine whether curated codebase retrieval should be skipped.
 
-        Returns (True, reason) when the task type is non-coding AND the prompt
-        contains no code-related escape keywords.  Returns (False, None) otherwise.
+        Decision chain:
+
+        1. **Strong-coding task types** (``coding``/``system``/``data``) always keep
+           curated on.
+        2. **B0 cosine escape** — for code-adjacent task types (``analysis``/
+           ``system``) with a ``repo_relevance_score`` at or above
+           :data:`_CURATED_B0_FLOOR`, the semantic gate has already ruled
+           the prompt is about this codebase; keep curated on even without
+           an allowlist keyword hit.
+        3. **Keyword allowlist escape** — fall back to :data:`_CODE_ESCAPE_KEYWORDS`
+           for any other task type.
+        4. Otherwise skip with a descriptive reason string.
+
+        Returns ``(skip, reason)``. ``reason`` is ``None`` when the gate lets
+        curated through.
         """
         if task_type in _CODEBASE_TASK_TYPES:
             return False, None
+
+        # B0 cosine escape — semantic gate beats the 19-word allowlist for
+        # analysis/system prompts about this codebase ("audit the middleware",
+        # "review the routing pipeline", etc).
+        if (
+            task_type in _CODE_ADJACENT_TASK_TYPES
+            and repo_relevance_score is not None
+            and repo_relevance_score >= _CURATED_B0_FLOOR
+        ):
+            return False, None
+
         # Escape hatch: check for code-related keywords in the prompt
         prompt_lower = raw_prompt.lower()
         for kw in _CODE_ESCAPE_KEYWORDS:
@@ -287,22 +344,30 @@ class ContextEnrichmentService:
         # 1b. Enrichment profile selection — determines which layers to activate.
         #     Pure function of observable state: task_type, repo link, history depth.
         opt_count = 0
+        meta_pattern_count = 0
         try:
             from sqlalchemy import func
             from sqlalchemy import select as _sel_count
 
-            from app.models import Optimization
+            from app.models import MetaPattern, Optimization
             _count_q = await db.execute(
                 _sel_count(func.count()).select_from(Optimization)
             )
             opt_count = _count_q.scalar() or 0
+            # I-6: meta-pattern count unlocks cold-start when seed-first
+            # workflows produce patterns before any optimizations land.
+            _pat_q = await db.execute(
+                _sel_count(func.count()).select_from(MetaPattern)
+            )
+            meta_pattern_count = _pat_q.scalar() or 0
         except Exception:
-            logger.debug("Optimization count query failed, defaulting to 0")
+            logger.debug("Optimization/MetaPattern count query failed, defaulting to 0")
 
         profile = select_enrichment_profile(
             task_type or "general",
             repo_full_name is not None,
             opt_count,
+            meta_pattern_count=meta_pattern_count,
         )
         enrichment_meta_dict: dict[str, Any] = {"enrichment_profile": profile}
         if _disambiguation_info:
@@ -569,8 +634,16 @@ class ContextEnrichmentService:
                     enrichment_meta_dict["workspace_as_fallback"] = True
 
             # 2c. Per-prompt curated index retrieval — task-gated
+            # Pass the B0 repo relevance cosine when available so the gate
+            # can upgrade analysis/system prompts to "code-adjacent" status.
+            _relevance_for_gate: float | None = None
+            if not _repo_relevance_skipped:
+                _raw_rel = enrichment_meta_dict.get("repo_relevance_score")
+                if isinstance(_raw_rel, (int, float)):
+                    _relevance_for_gate = float(_raw_rel)
             skip_curated, skip_reason = self._should_skip_curated(
                 task_type or "general", raw_prompt,
+                repo_relevance_score=_relevance_for_gate,
             )
             if _repo_relevance_skipped:
                 skip_curated = True

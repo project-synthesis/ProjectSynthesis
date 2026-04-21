@@ -320,3 +320,140 @@ class TestScoringValidationMatrix:
         dense = HeuristicScorer.heuristic_specificity(self.P3_DENSE)
         structured = HeuristicScorer.heuristic_specificity(self.P2_STRUCTURED)
         assert abs(dense - structured) < 2.5
+
+
+# ---------------------------------------------------------------------------
+# heuristic_faithfulness — strategy-aware expansion tolerance (I-5)
+# ---------------------------------------------------------------------------
+# Real-world divergence: expansion-style strategies (meta-prompting,
+# role-playing, chain-of-thought) deliberately balloon a 300-char prompt into
+# a 15K+ char scaffold. The pure cosine heuristic sees this as semantic drift
+# and returns ~5.x while the LLM scorer correctly rates faithfulness ~9.x.
+# A strategy-class-aware dampener keeps the heuristic in line on expansion
+# while preserving the penalty for direct-instruction strategies.
+
+
+_RAW_I5 = (
+    "Write me a blog post about how to set up a CI pipeline for a Python "
+    "FastAPI backend with GitHub Actions. Cover linting, tests, type checks, "
+    "and deployment to Fly.io. Keep it practical for junior developers."
+)
+
+
+def _expansion_scaffold(raw: str) -> str:
+    """Synthetic ~15K-char meta-prompted rewrite covering every raw concept."""
+    return (
+        "<role>\n"
+        "You are a Senior DevOps Engineer and Technical Writer with 10+ years "
+        "of experience publishing practical CI/CD tutorials for Python web "
+        "services. You have shipped production FastAPI backends, maintained "
+        "GitHub Actions workflows, configured linting (Ruff) and type checks "
+        "(mypy/pyright), wired up pytest and coverage gates, and deployed to "
+        "Fly.io from both monorepos and single-service repos.\n"
+        "</role>\n\n"
+        "<audience>\n"
+        "Junior developers. Assume Python familiarity but NOT prior CI/CD, "
+        "GitHub Actions, or Fly.io experience. Explain each concept before "
+        "using it. Favor concrete commands and copy-pasteable YAML over "
+        "abstract advice.\n"
+        "</audience>\n\n"
+        "<task>\n"
+        "Write a practical blog post that walks a junior developer through "
+        "setting up a CI pipeline for a Python FastAPI backend using GitHub "
+        "Actions. The pipeline must cover: (1) linting with Ruff, (2) pytest "
+        "with coverage, (3) type checks with mypy or pyright, and "
+        "(4) continuous deployment to Fly.io on main branch merges.\n"
+        "</task>\n\n"
+        "<structure>\n"
+        "1. Hook + promise (what the reader will have by the end).\n"
+        "2. Prerequisites (Python 3.12, FastAPI project, Fly.io account, "
+        "GitHub repo).\n"
+        "3. Repository layout assumptions (pyproject.toml, tests/, app/).\n"
+        "4. Workflow anatomy: triggers, jobs, steps, runners.\n"
+        "5. Linting job — Ruff install, ruff check, ruff format --check.\n"
+        "6. Test job — pytest with coverage, failure gate at 80%.\n"
+        "7. Type-check job — mypy config + CI invocation.\n"
+        "8. Deploy job — gated on previous jobs, Fly.io deploy token, "
+        "flyctl deploy --remote-only.\n"
+        "9. Secrets management — GitHub repository secrets, never commit.\n"
+        "10. Wrap-up — badge in README, next steps.\n"
+        "</structure>\n\n"
+        "<tone>\n"
+        "Practical, encouraging, and specific. Avoid jargon without a "
+        "one-line definition the first time it appears. Use the second "
+        "person ('you') throughout. Keep sentences short.\n"
+        "</tone>\n\n"
+        "<constraints>\n"
+        "- Length: 1500-2500 words.\n"
+        "- Every YAML snippet must be valid and directly paste-able into "
+        "`.github/workflows/ci.yml`.\n"
+        "- Cite exact action versions (e.g., `actions/checkout@v4`, "
+        "`actions/setup-python@v5`).\n"
+        "- Include a complete end-to-end `ci.yml` file at the end.\n"
+        "- Call out common mistakes at each step (missing `fetch-depth`, "
+        "forgotten cache keys, secret leaks in logs, etc.).\n"
+        "- Do NOT recommend deprecated actions or Python 3.8/3.9.\n"
+        "- Do NOT gloss over Fly.io auth — show exactly how to create a "
+        "deploy token and add it as `FLY_API_TOKEN`.\n"
+        "</constraints>\n\n"
+        "<self_check>\n"
+        "Before responding, verify: (a) every claim is specific enough to "
+        "act on, (b) every YAML block is syntactically valid, (c) the "
+        "article explicitly covers linting, tests, type checks, AND "
+        "deployment to Fly.io, (d) the tone is approachable for a junior "
+        "developer, (e) the post includes a full reference workflow.\n"
+        "</self_check>\n\n"
+        "<output_format>\n"
+        "Markdown. Use H2 for major sections and H3 for sub-sections. "
+        "Use fenced code blocks with language hints (```yaml, ```bash, "
+        "```python). Include a final section titled 'Complete workflow "
+        "reference' with the full ci.yml.\n"
+        "</output_format>\n\n"
+        "<quality_bar>\n"
+        "A junior developer should be able to copy the snippets, fill in "
+        "their project's name, add the Fly.io token to GitHub secrets, "
+        "and have a green pipeline on their next push — without any "
+        "additional Googling.\n"
+        "</quality_bar>\n\n"
+        "Raw context from the requester:\n"
+        f"{raw}\n"
+    ) * 5  # quintuple for ~15K chars
+
+
+def test_faithfulness_meta_prompting_does_not_penalize_expansion() -> None:
+    """Meta-prompting is an expansion strategy — don't score faithfulness <7."""
+    optimized = _expansion_scaffold(_RAW_I5)
+    assert len(optimized) > 12000, "scaffold should be at least 12K chars"
+    score = HeuristicScorer.heuristic_faithfulness(
+        _RAW_I5, optimized, strategy_used="meta-prompting",
+    )
+    assert score >= 7.0, (
+        f"meta-prompting expansion scored {score}, expected >= 7.0 "
+        "(strategy-class dampener should exempt expansion strategies)"
+    )
+
+
+def test_faithfulness_direct_strategy_still_penalizes_excessive_expansion() -> None:
+    """Direct/structured-output strategies should NOT get the expansion pass."""
+    optimized = _expansion_scaffold(_RAW_I5)
+    score_direct = HeuristicScorer.heuristic_faithfulness(
+        _RAW_I5, optimized, strategy_used="structured-output",
+    )
+    score_expansion = HeuristicScorer.heuristic_faithfulness(
+        _RAW_I5, optimized, strategy_used="meta-prompting",
+    )
+    # Expansion-class strategies should score at least as high as direct ones;
+    # direct strategies stay at the baseline cosine mapping (no pass-through).
+    assert score_expansion >= score_direct, (
+        f"expansion={score_expansion} should be >= direct={score_direct}"
+    )
+
+
+def test_faithfulness_score_preserves_backward_compat_signature() -> None:
+    """Old two-arg callers (no strategy_used) must keep working."""
+    optimized = _expansion_scaffold(_RAW_I5)
+    score = HeuristicScorer.heuristic_faithfulness(_RAW_I5, optimized)
+    assert 1.0 <= score <= 10.0
+    # score_prompt facade also still accepts the original 2-arg shape
+    scores = HeuristicScorer.score_prompt(optimized, original=_RAW_I5)
+    assert 1.0 <= scores["faithfulness"] <= 10.0

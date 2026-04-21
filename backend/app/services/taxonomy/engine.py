@@ -4270,59 +4270,128 @@ class TaxonomyEngine:
     async def _repair_tree_violations(
         self, db: AsyncSession, violations: list[str]
     ) -> int:
-        """Auto-repair detected violations. Returns count of repairs."""
+        """Auto-repair detected violations. Returns count of repairs.
+
+        Emits one ``tree_integrity_repair`` taxonomy_activity event per
+        repaired row so operators can see what structural damage the warm
+        path has silently healed (I-8).
+        """
         from sqlalchemy import text, update
 
         repaired = 0
 
-        # Repair weak domain persistence
-        result = await db.execute(
-            update(PromptCluster)
-            .where(PromptCluster.state == "domain", PromptCluster.persistence < 1.0)
-            .values(persistence=1.0)
-        )
-        if result.rowcount > 0:  # type: ignore[attr-defined]
-            logger.info(
-                "Auto-repaired %d domain nodes with weak persistence", result.rowcount  # type: ignore[attr-defined]
+        def _emit(
+            violation_type: str,
+            action: str,
+            cluster_id: str | None,
+            label: str | None = None,
+            extra: dict | None = None,
+        ) -> None:
+            """Emit one repair event; swallow RuntimeError if logger absent."""
+            ctx: dict = {
+                "violation_type": violation_type,
+                "action": action,
+            }
+            if label is not None:
+                ctx["label"] = label
+            if extra:
+                ctx.update(extra)
+            try:
+                get_event_logger().log_decision(
+                    path="warm",
+                    op="tree_integrity_repair",
+                    decision="repaired",
+                    cluster_id=cluster_id,
+                    context=ctx,
+                )
+            except RuntimeError:
+                pass
+
+        # Repair weak domain persistence — select-then-update so each repair
+        # can emit its own event with the affected cluster id/label.
+        weak_nodes = (await db.execute(
+            select(PromptCluster.id, PromptCluster.label, PromptCluster.persistence).where(
+                PromptCluster.state == "domain",
+                PromptCluster.persistence < 1.0,
             )
-            repaired += result.rowcount  # type: ignore[attr-defined]
+        )).all()
+        if weak_nodes:
+            await db.execute(
+                update(PromptCluster)
+                .where(PromptCluster.state == "domain", PromptCluster.persistence < 1.0)
+                .values(persistence=1.0)
+            )
+            logger.info("Auto-repaired %d domain nodes with weak persistence", len(weak_nodes))
+            repaired += len(weak_nodes)
+            for row in weak_nodes:
+                _emit(
+                    violation_type="weak_persistence",
+                    action="persistence_set_to_1.0",
+                    cluster_id=row[0],
+                    label=row[1],
+                    extra={"previous_persistence": row[2]},
+                )
 
         # Repair orphaned clusters → re-parent under canonical global "general"
         from app.services.taxonomy.family_ops import get_canonical_general
 
         general_node = await get_canonical_general(db)
         if general_node is not None:
-            orphan_result = await db.execute(
-                text("""
-                    UPDATE prompt_cluster
-                    SET parent_id = :general_id, domain = 'general'
-                    WHERE parent_id IS NOT NULL
-                      AND parent_id NOT IN (SELECT id FROM prompt_cluster)
-                      AND state != 'domain'
-                """),
-                {"general_id": general_node.id},
-            )
-            if orphan_result.rowcount > 0:  # type: ignore[attr-defined]
-                logger.info(
-                    "Auto-repaired %d orphaned clusters → 'general'",
-                    orphan_result.rowcount,  # type: ignore[attr-defined]
+            orphan_rows = (await db.execute(text("""
+                SELECT c.id, c.label, c.parent_id
+                FROM prompt_cluster c
+                WHERE c.parent_id IS NOT NULL
+                  AND c.parent_id NOT IN (SELECT id FROM prompt_cluster)
+                  AND c.state != 'domain'
+            """))).all()
+            if orphan_rows:
+                await db.execute(
+                    text("""
+                        UPDATE prompt_cluster
+                        SET parent_id = :general_id, domain = 'general'
+                        WHERE parent_id IS NOT NULL
+                          AND parent_id NOT IN (SELECT id FROM prompt_cluster)
+                          AND state != 'domain'
+                    """),
+                    {"general_id": general_node.id},
                 )
-                repaired += orphan_result.rowcount  # type: ignore[attr-defined]
+                logger.info("Auto-repaired %d orphaned clusters → 'general'", len(orphan_rows))
+                repaired += len(orphan_rows)
+                for row in orphan_rows:
+                    _emit(
+                        violation_type="orphan_cluster",
+                        action="reparented_to_general",
+                        cluster_id=row[0],
+                        label=row[1],
+                        extra={"missing_parent_id": row[2]},
+                    )
 
         # Repair domain mismatches → reset to "general" (case-insensitive)
-        mismatch_result = await db.execute(text("""
-            UPDATE prompt_cluster
-            SET domain = 'general'
-            WHERE state != 'domain'
-              AND LOWER(domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
-              AND domain IS NOT NULL
-        """))
-        if mismatch_result.rowcount > 0:  # type: ignore[attr-defined]
-            logger.info(
-                "Auto-repaired %d domain mismatches → 'general'",
-                mismatch_result.rowcount,  # type: ignore[attr-defined]
-            )
-            repaired += mismatch_result.rowcount  # type: ignore[attr-defined]
+        mismatch_rows = (await db.execute(text("""
+            SELECT c.id, c.label, c.domain
+            FROM prompt_cluster c
+            WHERE c.state != 'domain'
+              AND LOWER(c.domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
+              AND c.domain IS NOT NULL
+        """))).all()
+        if mismatch_rows:
+            await db.execute(text("""
+                UPDATE prompt_cluster
+                SET domain = 'general'
+                WHERE state != 'domain'
+                  AND LOWER(domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
+                  AND domain IS NOT NULL
+            """))
+            logger.info("Auto-repaired %d domain mismatches → 'general'", len(mismatch_rows))
+            repaired += len(mismatch_rows)
+            for row in mismatch_rows:
+                _emit(
+                    violation_type="domain_mismatch",
+                    action="domain_reset_to_general",
+                    cluster_id=row[0],
+                    label=row[1],
+                    extra={"previous_domain": row[2]},
+                )
 
         # Repair self-referencing parents → re-parent under matching domain node
         self_ref_q = await db.execute(
@@ -4342,6 +4411,13 @@ class TaxonomyEngine:
                 node.parent_id = domain_node.id
                 repaired += 1
                 logger.info("Repaired self-ref parent: '%s' → domain '%s'", node.label, domain_label)
+                _emit(
+                    violation_type="self_reference",
+                    action=f"reparented_to_domain:{domain_label}",
+                    cluster_id=node.id,
+                    label=node.label,
+                    extra={"target_domain_id": domain_node.id},
+                )
 
         # Repair non-domain clusters with non-domain parents
         domain_id_map: dict[str, str] = {}
@@ -4362,8 +4438,19 @@ class TaxonomyEngine:
             domain_label = (node.domain or "general").lower().split(":")[0].strip()
             target = domain_id_map.get(domain_label) or domain_id_map.get("general")
             if target and target != node.parent_id:
+                previous_parent_id = node.parent_id
                 node.parent_id = target
                 reparented += 1
+                _emit(
+                    violation_type="non_domain_parent",
+                    action=f"reparented_to_domain:{domain_label}",
+                    cluster_id=node.id,
+                    label=node.label,
+                    extra={
+                        "previous_parent_id": previous_parent_id,
+                        "target_domain_id": target,
+                    },
+                )
         if reparented:
             repaired += reparented
             logger.info("Repaired %d non-domain parent relationships", reparented)
@@ -4386,6 +4473,16 @@ class TaxonomyEngine:
             logger.info(
                 "Unarchived cluster with usage: '%s' (usage=%d, members=%d)",
                 node.label, node.usage_count, node.member_count,
+            )
+            _emit(
+                violation_type="archived_with_usage",
+                action="unarchived",
+                cluster_id=node.id,
+                label=node.label,
+                extra={
+                    "usage_count": node.usage_count,
+                    "member_count": node.member_count,
+                },
             )
 
         # NOTE: do NOT commit here — the warm path handles commit/rollback

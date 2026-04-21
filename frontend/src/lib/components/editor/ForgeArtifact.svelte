@@ -62,6 +62,29 @@
     { key: 'performance_signals',   label: 'Performance Signals' },
   ];
 
+  // I-9: per-layer skip reason resolution. Backend populates
+  // `enrichment_meta.profile_skipped_layers` (list of layer keys) and
+  // `patterns_deferred_to_pipeline` (when internal/sampling tier defers
+  // applied_patterns to the pipeline's auto_inject_patterns() call).
+  // The copy below is what the Inspector shows next to gray layer dots
+  // so users understand *why* a layer is inactive ("by design, not bug").
+  function skipReasonFor(layerKey: string): string | null {
+    if (!enrichmentMeta) return null;
+    const skipped = enrichmentMeta.profile_skipped_layers as string[] | undefined;
+    if (!skipped?.includes(layerKey)) return null;
+    if (
+      layerKey === 'applied_patterns'
+      && enrichmentMeta.patterns_deferred_to_pipeline === true
+    ) {
+      return 'deferred to pipeline';
+    }
+    const profile = enrichmentMeta.enrichment_profile as string | undefined;
+    if (profile) {
+      return `skipped — ${profile.replace('_', ' ')} profile`;
+    }
+    return 'skipped';
+  }
+
   // The displayed prompt: original, selected refinement version, or latest optimized
   const displayPrompt = $derived.by(() => {
     if (showOriginal) return result?.raw_prompt || forgeStore.prompt || '';
@@ -261,9 +284,13 @@
               {#each LAYER_ORDER as layer (layer.key)}
                 {#if contextSources[layer.key] !== undefined}
                   {@const active = contextSources[layer.key]}
+                  {@const skipReason = active ? null : skipReasonFor(layer.key)}
                   <div class="enrichment-row" class:enrichment-row--active={active}>
                     <span class="enrichment-dot"></span>
                     <span class="enrichment-label">{layer.label}</span>
+                    {#if skipReason}
+                      <span class="enrichment-skip-reason">{skipReason}</span>
+                    {/if}
                   </div>
                 {/if}
               {/each}
@@ -806,6 +833,16 @@
 
   .enrichment-row--active .enrichment-label {
     color: var(--color-text-secondary);
+  }
+
+  .enrichment-skip-reason {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+    opacity: 0.7;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
   }
 
   .enrichment-patterns {

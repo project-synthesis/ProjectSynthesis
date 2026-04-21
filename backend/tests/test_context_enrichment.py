@@ -392,6 +392,60 @@ class TestShouldSkipCurated:
         assert skip is True
         assert "analysis" in reason  # type: ignore[operator]
 
+    # I-4: B0 cosine escape for code-adjacent task types
+    def test_analysis_task_with_above_floor_relevance_does_not_skip(self):
+        """I-4: analysis prompt + passing B0 relevance → keep curated on.
+
+        When the repo-relevance gate already said "this prompt is about this
+        codebase" (cosine ≥ floor), the 19-word keyword allowlist should not
+        veto. Covers the 'audit the backend middleware' class of prompts
+        that mention file/module terms rather than the allowlist words.
+        """
+        skip, reason = ContextEnrichmentService._should_skip_curated(
+            "analysis",
+            "Audit the MCP sampling pipeline for routing correctness",
+            repo_relevance_score=0.181,  # above REPO_RELEVANCE_FLOOR=0.15
+        )
+        assert skip is False, f"expected keep-on; got skip with reason={reason}"
+        assert reason is None
+
+    def test_system_task_with_above_floor_relevance_does_not_skip(self):
+        """I-4: system task also qualifies as code-adjacent."""
+        skip, reason = ContextEnrichmentService._should_skip_curated(
+            "system", "Review the deployment middleware",
+            repo_relevance_score=0.25,
+        )
+        assert skip is False
+        assert reason is None
+
+    def test_analysis_task_with_below_floor_relevance_still_skips(self):
+        """I-4: sub-floor relevance → no escape, keyword allowlist applies."""
+        skip, reason = ContextEnrichmentService._should_skip_curated(
+            "analysis", "Compare remote vs in-office productivity",
+            repo_relevance_score=0.05,  # below floor
+        )
+        assert skip is True
+        assert reason is not None
+
+    def test_writing_task_with_above_floor_relevance_still_skips(self):
+        """I-4: escape is code-adjacent only; writing never qualifies."""
+        skip, reason = ContextEnrichmentService._should_skip_curated(
+            "writing", "Write an essay about MCP sampling",
+            repo_relevance_score=0.8,
+        )
+        assert skip is True
+        assert reason is not None
+
+    def test_repo_relevance_score_none_preserves_old_behavior(self):
+        """I-4: when no relevance score provided, fall back to keyword allowlist."""
+        skip, reason = ContextEnrichmentService._should_skip_curated(
+            "analysis", "Audit the middleware",
+            repo_relevance_score=None,
+        )
+        # No code keyword, no relevance signal → skip (old behavior preserved)
+        assert skip is True
+        assert reason is not None
+
     def test_analysis_task_keeps_with_code_keywords(self):
         skip, reason = ContextEnrichmentService._should_skip_curated(
             "analysis", "Analyze the query performance of this SQL",
@@ -598,6 +652,34 @@ class TestSelectEnrichmentProfile:
 
     def test_knowledge_work_general(self):
         assert select_enrichment_profile("general", True, 200) == PROFILE_KNOWLEDGE_WORK
+
+    # I-6: signal-aware cold_start — pattern count unlocks strategy+patterns
+    def test_cold_start_unlocked_when_meta_patterns_present(self):
+        """I-6: ≥5 meta_patterns → leave cold_start even if opt_count < 10.
+
+        Seed workflows + imports-from-backup can produce a DB with
+        0 optimizations but ≥5 meta_patterns. The pattern tier is
+        warm enough to justify strategy intelligence + pattern injection.
+        """
+        assert select_enrichment_profile(
+            "coding", True, 0, meta_pattern_count=5,
+        ) == PROFILE_CODE_AWARE
+
+    def test_cold_start_unlocked_signals_knowledge_work(self):
+        """I-6: signal-aware unlock respects repo-less / writing-task routing."""
+        assert select_enrichment_profile(
+            "writing", False, 0, meta_pattern_count=8,
+        ) == PROFILE_KNOWLEDGE_WORK
+
+    def test_cold_start_stays_below_pattern_threshold(self):
+        """I-6: below the 5-pattern threshold → still cold_start."""
+        assert select_enrichment_profile(
+            "coding", True, 0, meta_pattern_count=4,
+        ) == PROFILE_COLD_START
+
+    def test_meta_pattern_count_defaults_to_zero(self):
+        """I-6: omitted arg preserves old cold-start behavior."""
+        assert select_enrichment_profile("coding", True, 0) == PROFILE_COLD_START
 
 
 class TestEnrichmentProfileIntegration:

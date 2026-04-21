@@ -442,15 +442,27 @@ async def build_optimize_context(
 
     dynamic_max_tokens = compute_optimize_max_tokens(len(raw_prompt))
 
+    def _content_len(value: str | None) -> int:
+        """Content-only char count — None/empty/whitespace-only → 0.
+
+        Prevents the log from counting wrapper tags (e.g. a template that
+        renders ``<strategy-intelligence></strategy-intelligence>`` when the
+        inner value is absent) as real payload. Match the enrichment log's
+        semantics: ``none`` means zero chars.
+        """
+        if not value or not value.strip():
+            return 0
+        return len(value)
+
     logger.info(
         "optimize_inject: trace_id=%s input_chars=%d (~%d tokens) "
         "prompt=%d codebase=%d strategy_intel=%d patterns=%d fewshot=%d",
         trace_id, len(optimize_msg), len(optimize_msg) // 4,
         len(raw_prompt),
-        len(codebase_context) if codebase_context else 0,
-        len(strategy_intelligence) if strategy_intelligence else 0,
-        len(applied_patterns_text) if applied_patterns_text else 0,
-        len(few_shot_text) if few_shot_text else 0,
+        _content_len(codebase_context),
+        _content_len(strategy_intelligence),
+        _content_len(applied_patterns_text),
+        _content_len(few_shot_text),
     )
 
     return OptimizeContextBundle(
@@ -549,7 +561,9 @@ async def run_hybrid_scoring(
 
     heur_original = HeuristicScorer.score_prompt(raw_prompt)
     heur_optimized = HeuristicScorer.score_prompt(
-        optimization.optimized_prompt, original=raw_prompt,
+        optimization.optimized_prompt,
+        original=raw_prompt,
+        strategy_used=effective_strategy,
     )
 
     historical_stats: dict | None = None

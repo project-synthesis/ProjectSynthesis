@@ -1044,6 +1044,66 @@ async def test_phase_refresh_split_flow_metadata_survives(
 
 
 @pytest.mark.asyncio
+async def test_phase_reconcile_prunes_archived_with_null_archived_at_and_old_updated_at(
+    db, mock_embedding, mock_provider,
+):
+    """I-2: archived 0-member cluster with NULL archived_at but updated_at > 24h old is still swept.
+
+    Regression guard: bulk-delete cascades that archive via direct SQL may
+    leave archived_at NULL. The prune sweep previously required archived_at
+    IS NOT NULL and skipped such rows forever. Use updated_at as the fallback
+    age signal so dangling tombstones still get reaped.
+    """
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    old = _utcnow() - timedelta(hours=25)
+    stale = PromptCluster(
+        label="stale-null-archived-at",
+        state="archived",
+        domain="general",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#a855f7",
+        archived_at=None,       # <-- key: NULL despite being archived
+        created_at=old,
+        updated_at=old,
+    )
+    db.add(stale)
+    await db.commit()
+
+    await phase_reconcile(engine, db)
+
+    pruned = await db.get(PromptCluster, stale.id)
+    assert pruned is None, "stale archived cluster with NULL archived_at should be pruned"
+
+
+@pytest.mark.asyncio
+async def test_phase_reconcile_preserves_archived_with_null_archived_at_and_recent_updated_at(
+    db, mock_embedding, mock_provider,
+):
+    """I-2: NULL archived_at + recent updated_at → preserved (24h floor still applies via fallback)."""
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    fresh = PromptCluster(
+        label="fresh-null-archived-at",
+        state="archived",
+        domain="general",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#a855f7",
+        archived_at=None,
+        # created_at/updated_at default to "now" — < 24h floor, must survive
+    )
+    db.add(fresh)
+    await db.commit()
+
+    await phase_reconcile(engine, db)
+
+    survivor = await db.get(PromptCluster, fresh.id)
+    assert survivor is not None, "recently-touched NULL archived_at row must not be pruned"
+
+
+@pytest.mark.asyncio
 async def test_phase_reconcile_notin_query_excludes_archived(
     db, mock_embedding, mock_provider
 ):

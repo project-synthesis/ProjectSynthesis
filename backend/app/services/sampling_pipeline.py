@@ -514,15 +514,26 @@ async def run_sampling_pipeline(
         "divergence_alerts": divergence_alerts,
     })
 
+    def _content_len(value: str | None) -> int:
+        """Content-only char count — None/empty/whitespace-only → 0.
+
+        Matches the enrichment log's ``strategy_intel=none`` semantics so
+        downstream observability does not disagree with upstream when a
+        skipped layer still lands as an empty/whitespace string.
+        """
+        if not value or not value.strip():
+            return 0
+        return len(value)
+
     logger.info(
         "optimize_inject: trace_id=%s input_chars=%d (~%d tokens) "
         "prompt=%d codebase=%d strategy_intel=%d patterns=%d fewshot=%d",
         trace_id, len(optimize_msg), len(optimize_msg) // 4,
         len(prompt),
-        len(codebase_context) if codebase_context else 0,
-        len(strategy_intelligence) if strategy_intelligence else 0,
-        len(applied_patterns_text) if applied_patterns_text else 0,
-        len(few_shot_text) if few_shot_text else 0,
+        _content_len(codebase_context),
+        _content_len(strategy_intelligence),
+        _content_len(applied_patterns_text),
+        _content_len(few_shot_text),
     )
 
     dynamic_max_tokens = compute_optimize_max_tokens(len(prompt))
@@ -588,7 +599,9 @@ async def run_sampling_pipeline(
 
     heur_original = HeuristicScorer.score_prompt(prompt)
     heur_optimized = HeuristicScorer.score_prompt(
-        optimization.optimized_prompt, original=prompt,
+        optimization.optimized_prompt,
+        original=prompt,
+        strategy_used=effective_strategy,
     )
 
     if scoring_enabled:

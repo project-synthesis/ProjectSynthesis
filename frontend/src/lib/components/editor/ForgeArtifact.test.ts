@@ -146,4 +146,77 @@ describe('ForgeArtifact', () => {
     // Clipboard mock in test-setup.ts handles this
     expect(screen.getByText(/COPIED|COPY/)).toBeInTheDocument();
   });
+
+  // I-9: per-layer enrichment skip reason codes
+  describe('enrichment skip reasons', () => {
+    it('renders skip reason on gray layers when profile skipped them', async () => {
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: false,
+          applied_patterns: false,
+          enrichment_meta: {
+            enrichment_profile: 'cold_start',
+            profile_skipped_layers: ['strategy_intelligence', 'applied_patterns'],
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      // Expand the ENRICHMENT section.
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      // Skip reason should be attached to each skipped layer row with
+      // copy like "skipped — cold start profile" (two skipped layers
+      // in this fixture → two matches).
+      const reasons = screen.getAllByText(/skipped.*cold.start.*profile/i);
+      expect(reasons.length).toBe(2);
+    });
+
+    it('does NOT render skip reason on active layers', async () => {
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      // No skip-reason copy when all layers active.
+      expect(screen.queryByText(/skipped/i)).not.toBeInTheDocument();
+    });
+
+    it('renders tier-defer reason when internal tier defers patterns', async () => {
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: false,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            profile_skipped_layers: ['applied_patterns'],
+            patterns_deferred_to_pipeline: true,
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      // When deferred to pipeline, skip text reflects that instead of profile.
+      expect(screen.getByText(/deferred/i)).toBeInTheDocument();
+    });
+  });
 });

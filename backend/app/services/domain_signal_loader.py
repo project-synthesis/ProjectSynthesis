@@ -213,19 +213,25 @@ class DomainSignalLoader:
                 len(self._signals), total_keywords,
                 live_count, bootstrap_count, live_only,
             )
-            # Only warn when there are *actual* non-general domain nodes with
-            # no signals — the seed 'general' domain legitimately has no
-            # signal_keywords because it's the fallback classification, and
-            # shipping that warning at every startup with only seed data was
-            # misleading noise.  Use `live_labels` (not `self._signals`) so
-            # the bootstrap merge doesn't mask the warning.
-            non_general_clusters = [c for c in clusters if c.label != "general"]
-            if not live_labels and non_general_clusters:
+            # Only warn about non-general domain nodes that lack signal_keywords
+            # AND are not covered by BOOTSTRAP_DOMAIN_VOCABULARY.  Bootstrap-
+            # covered labels (backend, frontend, database, etc.) keep
+            # classification functional after Phase 0 reconciliation strips
+            # signal_keywords from their domain nodes — no warning needed.
+            # The warning stays loud for genuinely orphaned custom labels.
+            uncovered = [
+                c for c in clusters
+                if c.label != "general"
+                and c.label not in live_labels
+                and c.label not in BOOTSTRAP_DOMAIN_VOCABULARY
+            ]
+            if uncovered:
                 logger.warning(
                     "DomainSignalLoader: %d non-general domain node(s) present "
-                    "but no signal_keywords extracted — classifier will fall "
-                    "back to bootstrap vocabulary for them",
-                    len(non_general_clusters),
+                    "with no signal_keywords AND no bootstrap coverage (%s) — "
+                    "classifier has no vocabulary for them",
+                    len(uncovered),
+                    ", ".join(c.label for c in uncovered[:5]),
                 )
         except Exception:
             logger.exception("DomainSignalLoader.load failed — using empty signals")

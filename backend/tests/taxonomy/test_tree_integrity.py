@@ -1,5 +1,7 @@
 """Tests for domain tree integrity verification and auto-repair."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from app.models import PromptCluster
@@ -108,3 +110,113 @@ async def test_auto_repair_weak_persistence(db, mock_embedding):
 
     await db.refresh(node)
     assert node.persistence == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Observability: each repair emits a taxonomy_activity event (I-8)
+# ---------------------------------------------------------------------------
+
+
+def _collect_repair_calls(mock_logger: MagicMock) -> list[dict]:
+    """Extract kwargs of log_decision calls with op='tree_integrity_repair'."""
+    calls = []
+    for call in mock_logger.log_decision.call_args_list:
+        kwargs = call.kwargs
+        if kwargs.get("op") == "tree_integrity_repair":
+            calls.append(kwargs)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_repair_emits_event_for_weak_persistence(db, mock_embedding):
+    """Each weak-persistence repair emits a tree_integrity_repair event."""
+    db.add(PromptCluster(label="backend", state="domain", domain="backend", persistence=0.5))
+    db.add(PromptCluster(label="frontend", state="domain", domain="frontend", persistence=0.3))
+    await db.commit()
+
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider_resolver=lambda: None)
+    violations = await engine.verify_domain_tree_integrity(db)
+
+    mock_logger = MagicMock()
+    with patch(
+        "app.services.taxonomy.engine.get_event_logger", return_value=mock_logger
+    ):
+        await engine._repair_tree_violations(db, violations)
+
+    repair_calls = _collect_repair_calls(mock_logger)
+    weak_events = [c for c in repair_calls if c["context"]["violation_type"] == "weak_persistence"]
+    assert len(weak_events) == 2
+    for c in weak_events:
+        assert c["path"] == "warm"
+        assert c["op"] == "tree_integrity_repair"
+        assert c["decision"] == "repaired"
+        assert c["context"]["action"] == "persistence_set_to_1.0"
+        assert c["cluster_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_repair_emits_event_for_orphan_cluster(db, mock_embedding):
+    """Orphan cluster repair emits a tree_integrity_repair event."""
+    db.add(PromptCluster(label="general", state="domain", domain="general", persistence=1.0))
+    db.add(PromptCluster(
+        label="orphan", state="active", domain="general", parent_id="nonexistent-uuid",
+    ))
+    await db.commit()
+
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider_resolver=lambda: None)
+    violations = await engine.verify_domain_tree_integrity(db)
+
+    mock_logger = MagicMock()
+    with patch(
+        "app.services.taxonomy.engine.get_event_logger", return_value=mock_logger
+    ):
+        await engine._repair_tree_violations(db, violations)
+
+    repair_calls = _collect_repair_calls(mock_logger)
+    orphan_events = [c for c in repair_calls if c["context"]["violation_type"] == "orphan_cluster"]
+    assert len(orphan_events) == 1
+    assert orphan_events[0]["context"]["action"] == "reparented_to_general"
+
+
+@pytest.mark.asyncio
+async def test_repair_emits_event_for_self_reference(db, mock_embedding):
+    """Self-referencing parent repair emits a tree_integrity_repair event."""
+    db.add(PromptCluster(label="backend", state="domain", domain="backend", persistence=1.0))
+    selfref = PromptCluster(label="loop", state="active", domain="backend")
+    db.add(selfref)
+    await db.flush()
+    selfref.parent_id = selfref.id
+    await db.commit()
+
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider_resolver=lambda: None)
+    violations = await engine.verify_domain_tree_integrity(db)
+
+    mock_logger = MagicMock()
+    with patch(
+        "app.services.taxonomy.engine.get_event_logger", return_value=mock_logger
+    ):
+        await engine._repair_tree_violations(db, violations)
+
+    repair_calls = _collect_repair_calls(mock_logger)
+    self_ref_events = [c for c in repair_calls if c["context"]["violation_type"] == "self_reference"]
+    assert len(self_ref_events) == 1
+    assert "reparented" in self_ref_events[0]["context"]["action"]
+    assert self_ref_events[0]["cluster_id"] == selfref.id
+
+
+@pytest.mark.asyncio
+async def test_repair_event_runtime_error_swallowed(db, mock_embedding):
+    """A RuntimeError from get_event_logger must not break the repair routine."""
+    db.add(PromptCluster(label="backend", state="domain", domain="backend", persistence=0.5))
+    await db.commit()
+
+    engine = TaxonomyEngine(embedding_service=mock_embedding, provider_resolver=lambda: None)
+    violations = await engine.verify_domain_tree_integrity(db)
+
+    with patch(
+        "app.services.taxonomy.engine.get_event_logger",
+        side_effect=RuntimeError("logger not initialized"),
+    ):
+        # Should not raise.
+        repaired = await engine._repair_tree_violations(db, violations)
+    assert repaired > 0

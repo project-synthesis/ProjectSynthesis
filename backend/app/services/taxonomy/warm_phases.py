@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -1863,12 +1863,25 @@ async def phase_reconcile(
             datetime.now(timezone.utc) - timedelta(hours=24)
         ).replace(tzinfo=None)
 
+        # Age filter falls back to updated_at when archived_at is NULL.
+        # Bulk-delete cascades + legacy rows can leave archived_at unset;
+        # without the fallback those tombstones survive forever. The row
+        # cannot be younger than its updated_at, so this is a safe lower
+        # bound on age.
         stale_archived_q = await db.execute(
             select(PromptCluster).where(
                 PromptCluster.state == "archived",
                 PromptCluster.member_count == 0,
-                PromptCluster.archived_at.isnot(None),
-                PromptCluster.archived_at < prune_cutoff,
+                or_(
+                    and_(
+                        PromptCluster.archived_at.isnot(None),
+                        PromptCluster.archived_at < prune_cutoff,
+                    ),
+                    and_(
+                        PromptCluster.archived_at.is_(None),
+                        PromptCluster.updated_at < prune_cutoff,
+                    ),
+                ),
             )
         )
         stale_archived = list(stale_archived_q.scalars().all())

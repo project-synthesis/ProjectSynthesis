@@ -454,7 +454,9 @@ async def run_single_prompt(
 
             heur_original = HeuristicScorer.score_prompt(raw_prompt)
             heur_optimized = HeuristicScorer.score_prompt(
-                optimization.optimized_prompt, original=raw_prompt,
+                optimization.optimized_prompt,
+                original=raw_prompt,
+                strategy_used=effective_strategy,
             )
 
             # Historical stats for z-score normalization. Prefer the pre-fetched
