@@ -120,29 +120,28 @@ def set_signal_loader(loader) -> None:
 async def auto_resolve_repo(repo_full_name: str | None) -> str | None:
     """Auto-resolve repo_full_name from the active linked repo if not provided.
 
-    MCP tool callers don't have session cookies, so we fall back to the most
-    recently linked repo.  This mirrors the REST endpoint's auto-resolution
-    (``routers/optimize.py``) which uses the session cookie.
+    Delegates to :func:`app.services.project_service.resolve_effective_repo` so
+    MCP tool callers and REST ``/api/optimize`` share one AA1 resolution path.
+    MCP callers have no session cookie, so ``session_id`` is passed as ``None``;
+    an explicit ``repo_full_name`` flows through unchanged.
 
     Returns the resolved repo name, or ``None`` if no linked repo exists.
     """
-    if repo_full_name:
-        return repo_full_name
     try:
-        from sqlalchemy import select
-
-        from app.models import LinkedRepo
+        from app.services.project_service import resolve_effective_repo
 
         async with async_session_factory() as db:
-            linked = (await db.execute(
-                select(LinkedRepo).order_by(LinkedRepo.linked_at.desc()).limit(1)
-            )).scalar_one_or_none()
-            if linked:
-                logger.debug("MCP auto-resolved repo: %s", linked.full_name)
-                return linked.full_name
+            resolved = await resolve_effective_repo(
+                db,
+                explicit_repo=repo_full_name,
+                session_id=None,
+            )
+            if resolved and resolved != repo_full_name:
+                logger.debug("MCP auto-resolved repo: %s", resolved)
+            return resolved
     except Exception:
-        pass  # Non-fatal — proceed without codebase context
-    return None
+        logger.debug("auto_resolve_repo failed — preserving caller value", exc_info=True)
+        return repo_full_name  # Non-fatal — preserve explicit caller value
 
 
 def build_scores_dict(obj: object) -> dict[str, float] | None:

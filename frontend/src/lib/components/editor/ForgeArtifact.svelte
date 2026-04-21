@@ -447,7 +447,7 @@
               {@const topScore = entries.length > 0 ? (entries[0][1] as number) : 0}
               {@const nonZero = entries.filter(([, v]) => (v as number) > 0)}
               {@const zeroCount = entries.length - nonZero.length}
-              {#if entries.length > 0}
+              {#if nonZero.length > 0}
                 <div class="enrichment-detail">
                   <div class="enrichment-detail-heading">TASK-TYPE SCORES</div>
                   {#each nonZero as [tt, sc]}

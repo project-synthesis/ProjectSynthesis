@@ -1749,3 +1749,127 @@ class TestRepoRelevanceAnchorEnrichment:
             ],
         )
         assert "sub_domain_readiness" in info["domain_matches"]
+
+
+# ---------------------------------------------------------------------------
+# N1: injection_clusters dedup by cluster_id (not cluster_label)
+# ---------------------------------------------------------------------------
+
+
+class TestInjectionClustersDedupByClusterId:
+    """``injection_clusters`` must count distinct ``cluster_id`` values.
+
+    Labels can legitimately be empty strings ("", untitled clusters) —
+    using ``cluster_label`` as the dedup key silently collapses all such
+    clusters into one and under-reports breadth. ``cluster_id`` is always
+    unique and is the contract between the taxonomy engine and the
+    enrichment stats. This test pins that contract.
+    """
+
+    @staticmethod
+    async def _seed_non_cold_start(db):
+        """Seed enough MetaPatterns to exit cold-start profile."""
+        from app.models import MetaPattern
+        for i in range(6):  # _COLD_START_PATTERN_THRESHOLD = 5
+            db.add(MetaPattern(
+                id=f"mp-seed-{i}",
+                cluster_id=f"seed-cluster-{i}",
+                pattern_text=f"seed pattern {i}",
+                source_count=1,
+            ))
+        await db.commit()
+
+    @pytest.mark.asyncio
+    async def test_two_empty_label_patterns_from_distinct_clusters_count_two(
+        self, db, tmp_path, monkeypatch,
+    ):
+        from app.services.pattern_injection import InjectedPattern
+
+        await self._seed_non_cold_start(db)
+        service = _build_service(tmp_path)
+        # Stub taxonomy engine so _resolve_patterns takes the auto-inject branch.
+        service._taxonomy_engine = object()
+
+        # Two patterns from two distinct clusters, both with empty labels
+        # (realistic: new/untitled clusters have cluster_label="").
+        p1 = InjectedPattern(
+            pattern_text="Use explicit type hints.",
+            cluster_label="",
+            domain="backend",
+            similarity=0.8,
+            cluster_id="cluster-aaa",
+            source="cluster",
+            source_id="mp-1",
+        )
+        p2 = InjectedPattern(
+            pattern_text="Prefer async context managers.",
+            cluster_label="",
+            domain="backend",
+            similarity=0.75,
+            cluster_id="cluster-bbb",
+            source="cluster",
+            source_id="mp-2",
+        )
+
+        async def _fake_auto_inject(*_args, **_kwargs):
+            return [p1, p2], {}
+
+        monkeypatch.setattr(
+            "app.services.pattern_injection.auto_inject_patterns",
+            _fake_auto_inject,
+        )
+
+        result = await service.enrich(
+            raw_prompt="Implement a REST endpoint with proper typing.",
+            tier="passthrough", db=db,
+        )
+
+        stats = result.enrichment_meta["injection_stats"]
+        assert stats["patterns_injected"] == 2
+        assert stats["injection_clusters"] == 2, (
+            "Two patterns from distinct cluster_ids must count as 2 clusters, "
+            "even when labels are empty. Dedup key must be cluster_id."
+        )
+
+    @pytest.mark.asyncio
+    async def test_two_patterns_same_cluster_count_one(
+        self, db, tmp_path, monkeypatch,
+    ):
+        """Two patterns from the *same* cluster_id still count as 1 cluster."""
+        from app.services.pattern_injection import InjectedPattern
+
+        await self._seed_non_cold_start(db)
+        service = _build_service(tmp_path)
+        service._taxonomy_engine = object()
+
+        p1 = InjectedPattern(
+            pattern_text="Pattern A.",
+            cluster_label="auth-patterns",
+            domain="backend",
+            similarity=0.8,
+            cluster_id="cluster-xyz",
+        )
+        p2 = InjectedPattern(
+            pattern_text="Pattern B.",
+            cluster_label="auth-patterns",
+            domain="backend",
+            similarity=0.7,
+            cluster_id="cluster-xyz",
+        )
+
+        async def _fake_auto_inject(*_args, **_kwargs):
+            return [p1, p2], {}
+
+        monkeypatch.setattr(
+            "app.services.pattern_injection.auto_inject_patterns",
+            _fake_auto_inject,
+        )
+
+        result = await service.enrich(
+            raw_prompt="Build auth middleware.",
+            tier="passthrough", db=db,
+        )
+
+        stats = result.enrichment_meta["injection_stats"]
+        assert stats["patterns_injected"] == 2
+        assert stats["injection_clusters"] == 1
