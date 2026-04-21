@@ -114,3 +114,83 @@ class TestOptimizeInjectStrategyIntelLog:
         payload = "Top strategies: chain-of-thought (8.2 avg)"
         chars = await self._invoke(loaders, db_session, caplog, payload)
         assert chars == len(payload)
+
+
+# ---------------------------------------------------------------------------
+# build_pipeline_result — repo_full_name propagation to SSE completion event
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPipelineResultRepoPropagation:
+    """``PipelineResult.repo_full_name`` must reflect the inputs.
+
+    The SSE ``optimization_complete`` event serializes
+    ``PipelineResult.model_dump()``.  AA1 auto-resolves
+    ``effective_repo`` from the most-recently-linked repo for curl/API
+    callers, and that resolution must surface in the event stream so
+    downstream consumers (UI, CLI) see the project binding even when the
+    request body itself omits ``repo_full_name``.
+    """
+
+    def _persistence_inputs(self, *, repo_full_name: str | None):
+        from app.schemas.pipeline_contracts import (
+            AnalysisResult,
+            OptimizationResult,
+        )
+        from app.services.pipeline_phases import PersistenceInputs
+
+        analysis = AnalysisResult(
+            task_type="coding",
+            weaknesses=["vague"],
+            strengths=["concise"],
+            selected_strategy="chain-of-thought",
+            strategy_rationale="good for coding",
+            confidence=0.9,
+        )
+        optimization = OptimizationResult(
+            optimized_prompt="rewritten prompt",
+            changes_summary="tightened scope",
+            strategy_used="chain-of-thought",
+        )
+        return PersistenceInputs(
+            opt_id="opt-abc",
+            raw_prompt="raw",
+            analysis=analysis,
+            optimization=optimization,
+            effective_strategy="chain-of-thought",
+            effective_domain="backend",
+            domain_raw="backend",
+            cluster_id=None,
+            scoring=None,
+            suggestions=[],
+            phase_durations={"analyze_ms": 1},
+            model_ids={"optimize": "claude-opus-4-7"},
+            optimizer_model="claude-opus-4-7",
+            provider_name="claude_cli",
+            repo_full_name=repo_full_name,
+            project_id="proj-1",
+            context_sources={},
+            trace_id="trace-1",
+            duration_ms=100,
+            applied_pattern_ids=None,
+            auto_injected_cluster_ids=[],
+            taxonomy_engine=None,
+        )
+
+    def test_repo_full_name_propagates_when_set(self):
+        """Explicit repo in PersistenceInputs flows to PipelineResult."""
+        from app.services.pipeline_phases import build_pipeline_result
+
+        inputs = self._persistence_inputs(
+            repo_full_name="project-synthesis/ProjectSynthesis",
+        )
+        result = build_pipeline_result(inputs)
+        assert result.repo_full_name == "project-synthesis/ProjectSynthesis"
+
+    def test_repo_full_name_none_preserved(self):
+        """``None`` stays ``None`` — no synthetic default."""
+        from app.services.pipeline_phases import build_pipeline_result
+
+        inputs = self._persistence_inputs(repo_full_name=None)
+        result = build_pipeline_result(inputs)
+        assert result.repo_full_name is None

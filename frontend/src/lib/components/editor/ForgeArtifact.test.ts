@@ -219,4 +219,144 @@ describe('ForgeArtifact', () => {
       expect(screen.getByText(/deferred/i)).toBeInTheDocument();
     });
   });
+
+  // UI2: surface analyzer fields that already ship in enrichment_meta but
+  // were previously invisible in the Inspector — signal source, task-type
+  // distribution, and context-injection stats.
+  describe('analyzer telemetry (UI2)', () => {
+    it('renders task_type_signal_source badge (bootstrap)', async () => {
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            task_type_signal_source: 'bootstrap',
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      // Label "signal source" with value "bootstrap" should appear.
+      expect(screen.getByText('signal source')).toBeInTheDocument();
+      expect(screen.getByText('bootstrap')).toBeInTheDocument();
+    });
+
+    it('renders task_type_signal_source badge (dynamic)', async () => {
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            task_type_signal_source: 'dynamic',
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      expect(screen.getByText('signal source')).toBeInTheDocument();
+      expect(screen.getByText('dynamic')).toBeInTheDocument();
+    });
+
+    it('renders task_type_scores distribution (top class highlighted)', async () => {
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            task_type_scores: {
+              coding: 2.0,
+              writing: 0.0,
+              analysis: 1.0,
+              creative: 0.0,
+              data: 0.0,
+              system: 0.0,
+            },
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      // TASK-TYPE SCORES heading + winning "coding" label (appears in the
+      // task tag AND in the scores row — allow both).
+      expect(screen.getByText('TASK-TYPE SCORES')).toBeInTheDocument();
+      expect(screen.getAllByText('coding').length).toBeGreaterThan(0);
+      // Zero rows collapsed into "others: 4 × 0.0".
+      expect(screen.getByText(/others/i)).toBeInTheDocument();
+    });
+
+    it('renders CONTEXT INJECTION section with patterns_injected + injection_clusters', async () => {
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            injection_stats: {
+              patterns_injected: 3,
+              injection_clusters: 2,
+              has_explicit_patterns: false,
+            },
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      // Dedicated "CONTEXT INJECTION" heading + counts.
+      expect(screen.getByText('CONTEXT INJECTION')).toBeInTheDocument();
+      // Counts appear as stat-values; verify both present.
+      const patternsVal = screen.getAllByText('3');
+      expect(patternsVal.length).toBeGreaterThan(0);
+      const clustersVal = screen.getAllByText('2');
+      expect(clustersVal.length).toBeGreaterThan(0);
+    });
+
+    it('CONTEXT INJECTION shows "explicit" badge when user selected patterns', async () => {
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            injection_stats: {
+              patterns_injected: 0,
+              injection_clusters: 0,
+              has_explicit_patterns: true,
+            },
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      // Explicit-selection label rendered (distinct from the auto-injection count).
+      expect(screen.getByText(/explicit/i)).toBeInTheDocument();
+    });
+  });
 });
