@@ -234,3 +234,52 @@ class TestORMFactoryAndFrameworkNounCoverage:
         assert coding_score >= 1.5, (
             f"Expected coding score >= 1.5 for DB+pool prompt, got {coding_score}"
         )
+
+
+class TestHasTechnicalNouns:
+    """B2: looser signal than ``check_technical_disambiguation`` — returns
+    True whenever the first sentence mentions any ``_TECHNICAL_NOUNS`` word,
+    regardless of paired verb. Used by the enrichment-profile selector to
+    rescue analysis/creative/general prompts about a linked codebase.
+    """
+
+    def test_audit_analysis_with_pipeline_noun(self):
+        """Analysis verbs ('audit') don't trigger the A2 flip but still
+        signal a codebase-adjacent prompt when paired with a tech noun."""
+        assert ttc.has_technical_nouns(
+            "audit the routing pipeline for race conditions"
+        )
+
+    def test_review_with_middleware_noun(self):
+        assert ttc.has_technical_nouns(
+            "review the websocket middleware error handling"
+        )
+
+    def test_framework_name_alone_fires(self):
+        assert ttc.has_technical_nouns("inspect the fastapi dependency graph")
+        assert ttc.has_technical_nouns("diagnose the sqlalchemy session leak")
+
+    def test_cli_daemon_binary_fire(self):
+        assert ttc.has_technical_nouns("debug the daemon startup sequence")
+        assert ttc.has_technical_nouns("profile the cli command dispatcher")
+
+    def test_prompt_without_tech_nouns_returns_false(self):
+        assert not ttc.has_technical_nouns("write a poem about the ocean")
+        assert not ttc.has_technical_nouns(
+            "tell me about the weather today and what i should wear"
+        )
+        assert not ttc.has_technical_nouns("draft a blog about gardening")
+
+    def test_trailing_punctuation_ignored(self):
+        """'pipeline,' / 'FastAPI.' / 'system!' must still register."""
+        assert ttc.has_technical_nouns("audit the pipeline, then review logs.")
+        assert ttc.has_technical_nouns("review FastAPI.")
+        assert ttc.has_technical_nouns("inspect the system!")
+
+    def test_case_insensitive(self):
+        assert ttc.has_technical_nouns("Review the SQLAlchemy Session Layer")
+        assert ttc.has_technical_nouns("AUDIT THE PIPELINE")
+
+    def test_empty_string_returns_false(self):
+        assert not ttc.has_technical_nouns("")
+        assert not ttc.has_technical_nouns("   ")

@@ -684,6 +684,75 @@ class TestSelectEnrichmentProfile:
         assert select_enrichment_profile("coding", True, 0) == PROFILE_COLD_START
 
 
+class TestSelectEnrichmentProfileTechnicalSignals:
+    """B2: rescue path for repo-linked prompts with technical signals.
+
+    Pre-B2 the selector gated code_aware on ``task_type ∈ {coding, system,
+    data}``. Prompts whose intent is analytical/creative but clearly about
+    a codebase ("Audit the routing pipeline", "Design a SQLAlchemy
+    factory") lost codebase context + patterns when the heuristic
+    classifier picked the non-coding bucket. B1 fixed the SQLAlchemy case
+    by pushing it into ``coding``, but "Audit the routing pipeline" is a
+    genuine analysis task — the fix has to live in the profile selector,
+    not the task-type classifier.
+
+    Why: ``technical_signals=True`` means the heuristic analyzer found
+    technical nouns (cli/daemon/pipeline/sqlalchemy/...) in the first
+    sentence. When a repo is linked AND a technical signal fires, the
+    prompt is almost certainly about this codebase — code_aware unlocks
+    curated retrieval + pattern injection that would otherwise be gated
+    out by task_type.
+    """
+
+    def test_technical_signals_rescues_analysis_to_code_aware(self):
+        """Analysis task + tech signal + repo linked → code_aware."""
+        assert select_enrichment_profile(
+            "analysis", True, 50, technical_signals=True,
+        ) == PROFILE_CODE_AWARE
+
+    def test_technical_signals_rescues_creative_to_code_aware(self):
+        """Creative misclass + tech signal + repo → code_aware rescue."""
+        assert select_enrichment_profile(
+            "creative", True, 50, technical_signals=True,
+        ) == PROFILE_CODE_AWARE
+
+    def test_technical_signals_rescues_general_to_code_aware(self):
+        """General fallback + tech signal + repo → code_aware rescue."""
+        assert select_enrichment_profile(
+            "general", True, 50, technical_signals=True,
+        ) == PROFILE_CODE_AWARE
+
+    def test_technical_signals_without_repo_stays_knowledge_work(self):
+        """Tech signal alone (no repo) must NOT upgrade to code_aware —
+        curated retrieval has nothing to retrieve without a linked repo.
+        """
+        assert select_enrichment_profile(
+            "analysis", False, 50, technical_signals=True,
+        ) == PROFILE_KNOWLEDGE_WORK
+
+    def test_no_technical_signals_preserves_old_behavior(self):
+        """B2 widening must not demote existing paths."""
+        assert select_enrichment_profile(
+            "analysis", True, 50, technical_signals=False,
+        ) == PROFILE_KNOWLEDGE_WORK
+        assert select_enrichment_profile(
+            "creative", True, 50, technical_signals=False,
+        ) == PROFILE_KNOWLEDGE_WORK
+
+    def test_technical_signals_still_respects_cold_start(self):
+        """Cold-start gate wins over tech-signal rescue — no patterns, no
+        strategy intel, no curated retrieval to serve up yet."""
+        assert select_enrichment_profile(
+            "analysis", True, 5, technical_signals=True,
+        ) == PROFILE_COLD_START
+
+    def test_technical_signals_defaults_to_false(self):
+        """Omitted param preserves backward-compat (pre-B2 call sites)."""
+        assert select_enrichment_profile(
+            "analysis", True, 50,
+        ) == PROFILE_KNOWLEDGE_WORK
+
+
 class TestEnrichmentProfileIntegration:
     """Integration tests: profile selection affects which layers are active."""
 

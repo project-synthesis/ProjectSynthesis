@@ -20,6 +20,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -41,6 +42,7 @@ from app.services.strategy_intelligence import (
     resolve_performance_signals,
     resolve_strategy_intelligence,
 )
+from app.services.task_type_classifier import has_technical_nouns
 from app.services.workspace_intelligence import WorkspaceIntelligence
 
 logger = logging.getLogger(__name__)
@@ -91,6 +93,7 @@ def select_enrichment_profile(
     repo_linked: bool,
     optimization_count: int,
     meta_pattern_count: int = 0,
+    technical_signals: bool = False,
 ) -> str:
     """Select enrichment profile based on observable state.
 
@@ -109,13 +112,22 @@ def select_enrichment_profile(
     or >=5 optimizations' worth of extraction), strategy intelligence + auto-
     injection unlock regardless of opt_count — otherwise seed-first workflows
     never benefit from the patterns they just seeded.
+
+    B2 technical-signals rescue: when ``technical_signals=True`` (heuristic
+    analyzer found framework / technical-noun signals in the first sentence)
+    AND ``repo_linked=True``, upgrade analysis/creative/general prompts to
+    ``code_aware``. Live reference: "Audit the routing pipeline for race
+    conditions" classifies as ``analysis`` (correctly — it's an analytical
+    task), but it's clearly about a specific codebase; curated retrieval
+    and pattern injection are high-value. Cold-start still wins when the DB
+    has no patterns to inject.
     """
     if (
         optimization_count < _COLD_START_THRESHOLD
         and meta_pattern_count < _COLD_START_PATTERN_THRESHOLD
     ):
         return PROFILE_COLD_START
-    if task_type in _CODEBASE_TASK_TYPES and repo_linked:
+    if repo_linked and (task_type in _CODEBASE_TASK_TYPES or technical_signals):
         return PROFILE_CODE_AWARE
     return PROFILE_KNOWLEDGE_WORK
 
@@ -466,13 +478,24 @@ class ContextEnrichmentService:
         except Exception:
             logger.debug("Optimization/MetaPattern count query failed, defaulting to 0")
 
+        # B2: compute technical-signal escape so analysis/creative/general
+        # prompts about a linked codebase still get code_aware context. The
+        # first sentence is extracted the same way the heuristic classifier
+        # does it so signals align with the analyzer's view of the prompt.
+        _first_sentence = re.split(r"[.?!]", raw_prompt.lower(), maxsplit=1)[0]
+        _tech_signals = has_technical_nouns(_first_sentence)
         profile = select_enrichment_profile(
             task_type or "general",
             repo_full_name is not None,
             opt_count,
             meta_pattern_count=meta_pattern_count,
+            technical_signals=_tech_signals,
         )
         enrichment_meta_dict: dict[str, Any] = {"enrichment_profile": profile}
+        if _tech_signals:
+            # Record the rescue so inspectors can see why code_aware fired
+            # on a non-coding task_type.
+            enrichment_meta_dict["technical_signals_detected"] = True
         if _disambiguation_info:
             enrichment_meta_dict["heuristic_disambiguation"] = _disambiguation_info
         if analysis and analysis.domain_scores:

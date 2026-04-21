@@ -348,6 +348,25 @@ def check_technical_disambiguation(first_sentence: str) -> bool:
     return False
 
 
+def has_technical_nouns(first_sentence: str) -> bool:
+    """Return True if the first sentence contains any ``_TECHNICAL_NOUNS`` word.
+
+    Looser signal than :func:`check_technical_disambiguation` — does NOT
+    require a paired technical verb. Used by the B2 enrichment-profile
+    rescue: an analysis/creative/general prompt that still references a
+    framework or technical artifact ("audit the routing pipeline", "review
+    the websocket middleware") is almost certainly about the linked
+    codebase and should get ``code_aware`` context even though the
+    task_type stays non-coding.
+
+    Words are lowercased and stripped of trailing punctuation before
+    matching so "FastAPI." / "pipeline," / "system!" all register.
+    """
+    lowered = first_sentence.lower()
+    words = [w.strip(".,;:!?()[]{}\"'") for w in lowered.split()]
+    return any(w in _TECHNICAL_NOUNS for w in words)
+
+
 async def classify_with_llm(
     raw_prompt: str,
     db: AsyncSession,
@@ -433,6 +452,7 @@ __all__ = [
     "classify_with_llm",
     "get_static_compound_signals",
     "get_task_type_signals",
+    "has_technical_nouns",
     "reset_task_type_extracted",
     "score_category",
     "set_task_type_signals",
