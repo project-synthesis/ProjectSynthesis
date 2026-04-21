@@ -30,7 +30,12 @@ from app.schemas.pipeline_contracts import (
     SuggestionsOutput,
 )
 from app.services.heuristic_scorer import HeuristicScorer
-from app.services.pipeline_constants import ANALYZE_MAX_TOKENS, SCORE_MAX_TOKENS, compute_optimize_max_tokens
+from app.services.pipeline_constants import (
+    ANALYZE_MAX_TOKENS,
+    SCORE_MAX_TOKENS,
+    clamp_analyze_effort,
+    compute_optimize_max_tokens,
+)
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
@@ -233,7 +238,9 @@ class RefinementService:
             user_message=analyze_msg,
             output_format=AnalysisResult,
             model=_prefs.resolve_model("analyzer", _prefs_snapshot),
-            effort=_prefs.get("pipeline.analyzer_effort", _prefs_snapshot) or "low",
+            effort=clamp_analyze_effort(
+                _prefs.get("pipeline.analyzer_effort", _prefs_snapshot)
+            ),
             max_tokens=ANALYZE_MAX_TOKENS,
         )
 

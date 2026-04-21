@@ -31,7 +31,7 @@ from app.services.pattern_injection import (
     InjectedPattern,
     auto_inject_patterns,
 )
-from app.services.pipeline_constants import ANALYZE_MAX_TOKENS
+from app.services.pipeline_constants import ANALYZE_MAX_TOKENS, clamp_analyze_effort
 from app.services.pipeline_phases import (
     PersistenceInputs,
     build_optimize_context,
@@ -255,7 +255,12 @@ class PipelineOrchestrator:
                 user_message=analyze_msg,
                 output_format=AnalysisResult,
                 model=analyzer_model,
-                effort=prefs.get("pipeline.analyzer_effort", prefs_snapshot) or "low",
+                # A3: clamp to ANALYZE_EFFORT_CEILING=high. Analyze is a
+                # classification task with ~50 output tokens; deep thinking
+                # at max burns 200+s of thinking budget for no quality gain.
+                effort=clamp_analyze_effort(
+                    prefs.get("pipeline.analyzer_effort", prefs_snapshot)
+                ),
                 max_tokens=ANALYZE_MAX_TOKENS,
             )
 
@@ -279,7 +284,9 @@ class PipelineOrchestrator:
                     result={
                         "task_type": analysis.task_type,
                         "strategy": analysis.selected_strategy,
-                        "effort": prefs.get("pipeline.analyzer_effort", prefs_snapshot) or "low",
+                        "effort": clamp_analyze_effort(
+                            prefs.get("pipeline.analyzer_effort", prefs_snapshot)
+                        ),
                     },
                 )
 

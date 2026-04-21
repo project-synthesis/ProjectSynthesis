@@ -537,6 +537,36 @@ def compute_optimize_max_tokens(prompt_len: int) -> int:
 ANALYZE_MAX_TOKENS = 4096
 SCORE_MAX_TOKENS = 4096
 
+# ---------------------------------------------------------------------------
+# A3: Analyze-phase effort ceiling
+# ---------------------------------------------------------------------------
+# The analyze phase is a classification task — it returns structured
+# AnalysisResult JSON (~50 output tokens). Deep thinking at `max` on
+# sonnet-4-6 burns 200+s of thinking tokens for no measurable quality gain.
+# `task_budget` is Opus 4.7 only, so an effort clamp is the only lever that
+# works across model families. `high` is the hard ceiling for this phase;
+# optimize/score deliberately remain unclamped since they benefit from deep
+# thinking.
+ANALYZE_EFFORT_CEILING = "high"
+_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+
+
+def clamp_analyze_effort(pref: str | None) -> str:
+    """Clamp an effort preference to the analyze-phase ceiling.
+
+    ``pref`` above the ceiling is lowered to the ceiling; at-or-below passes
+    through. Unknown / missing input defaults to ``"low"`` — we'd rather a
+    typo cost a few ms than a few minutes.
+    """
+    if not pref:
+        return "low"
+    normalized = pref.lower()
+    if normalized not in _EFFORT_ORDER:
+        return "low"
+    idx = _EFFORT_ORDER.index(normalized)
+    ceil_idx = _EFFORT_ORDER.index(ANALYZE_EFFORT_CEILING)
+    return _EFFORT_ORDER[min(idx, ceil_idx)]
+
 # Cross-cluster pattern injection (Phase 0 — unified embedding architecture)
 CROSS_CLUSTER_MIN_SOURCE_COUNT = 2     # min global_source_count to qualify
 CROSS_CLUSTER_MAX_PATTERNS = 5         # max cross-cluster patterns per injection

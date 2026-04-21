@@ -58,6 +58,7 @@ from app.services.pipeline_constants import (
     ANALYZE_MAX_TOKENS,
     SCORE_MAX_TOKENS,
     VALID_TASK_TYPES,
+    clamp_analyze_effort,
     compute_optimize_max_tokens,
     resolve_effective_strategy,
     semantic_upgrade_general,
@@ -223,7 +224,9 @@ async def run_single_prompt(
             user_message=analyze_msg,
             output_format=AnalysisResult,
             max_tokens=ANALYZE_MAX_TOKENS,
-            effort=prefs.get("pipeline.analyzer_effort", prefs_snapshot) or "low",
+            effort=clamp_analyze_effort(
+                prefs.get("pipeline.analyzer_effort", prefs_snapshot)
+            ),
         )
 
         # Semantic upgrade gate (matches pipeline.py)
