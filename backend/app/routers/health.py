@@ -98,6 +98,21 @@ class HealthResponse(BaseModel):
     qualifier_vocab: dict | None = Field(
         default=None, description="Organic qualifier vocabulary cache stats.",
     )
+    taxonomy_index_size: int | None = Field(
+        default=None,
+        description=(
+            "Number of cluster centroids currently held in the live "
+            "EmbeddingIndex. Null when the taxonomy engine isn't wired "
+            "on app.state (e.g. tests without a live engine)."
+        ),
+    )
+    avg_vocab_quality: float | None = Field(
+        default=None,
+        description=(
+            "Rolling-window mean of vocabulary-generation quality scores "
+            "(0.0-1.0). Null when no vocabulary has been generated yet."
+        ),
+    )
     domain_lifecycle: dict | None = Field(
         default=None, description="Domain dissolution lifecycle stats.",
     )
@@ -428,16 +443,24 @@ async def health_check(
         pass
 
     # Merge engine-side vocab quality scores into qualifier_vocab
+    # AND surface them at the top level for quick operator checks (I-1).
+    avg_vocab_quality: float | None = None
+    taxonomy_index_size: int | None = None
     try:
         _engine = getattr(request.app.state, "taxonomy_engine", None)
-        scores = getattr(_engine, "_vocab_quality_scores", None) if _engine else None
-        if scores:
-            qualifier_vocab_stats = qualifier_vocab_stats or {}
-            qualifier_vocab_stats["avg_vocab_quality"] = round(
-                sum(scores) / len(scores), 4
-            )
+        if _engine is not None:
+            scores = getattr(_engine, "_vocab_quality_scores", None)
+            if scores:
+                avg_vocab_quality = round(sum(scores) / len(scores), 4)
+                qualifier_vocab_stats = qualifier_vocab_stats or {}
+                qualifier_vocab_stats["avg_vocab_quality"] = avg_vocab_quality
+            _index = getattr(_engine, "embedding_index", None)
+            if _index is not None:
+                _size = getattr(_index, "size", None)
+                if isinstance(_size, int):
+                    taxonomy_index_size = _size
     except Exception:
-        pass
+        logger.debug("Health check taxonomy engine stats failed", exc_info=True)
 
     # Domain lifecycle stats
     domain_lifecycle_stats: dict | None = None
@@ -494,6 +517,8 @@ async def health_check(
         recovery=recovery_metrics,
         classification_agreement=agreement_data,
         qualifier_vocab=qualifier_vocab_stats,
+        taxonomy_index_size=taxonomy_index_size,
+        avg_vocab_quality=avg_vocab_quality,
         domain_lifecycle=domain_lifecycle_stats,
         global_patterns={
             "active": gp_active,
