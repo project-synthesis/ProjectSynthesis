@@ -418,7 +418,7 @@ async def test_b2_since_filter_scopes_by_created_at(db_session: AsyncSession):
 
     # Old row.
     old_opt = await _make_opt(db_session, project_id=ids["Legacy"])
-    old_opt.created_at = datetime.utcnow() - timedelta(days=30)
+    old_opt.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
     # New row (default created_at is "now").
     await _make_opt(db_session, project_id=ids["Legacy"])
     await db_session.flush()
