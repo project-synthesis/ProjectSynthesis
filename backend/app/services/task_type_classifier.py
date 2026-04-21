@@ -158,8 +158,17 @@ def _precompile_keyword_patterns() -> None:
 _precompile_keyword_patterns()
 
 
+# A4: Task types whose singles came from a *current* TF-IDF extraction run
+# (i.e. crossed the MIN_SAMPLES threshold). Signals loaded from a disk cache
+# at process boot do NOT populate this set — they look identical to freshly-
+# extracted signals in the merged table, but they are not proof of live
+# learning for telemetry purposes.
+_TASK_TYPE_EXTRACTED: set[str] = set()
+
+
 def set_task_type_signals(
     dynamic_signals: dict[str, list[tuple[str, float]]],
+    extracted_task_types: set[str] | None = None,
 ) -> None:
     """Merge dynamic single-word signals with static compound signals.
 
@@ -167,6 +176,12 @@ def set_task_type_signals(
     input, merges, clears + rebuilds pattern cache.  Silently no-ops on
     empty input or malformed payload so a single bad discovery run never
     destroys the baseline classifier.
+
+    A4: ``extracted_task_types`` names the task types whose signals come
+    from a *current* TF-IDF extraction run (they crossed the 30-sample
+    threshold in this process). Passing ``None`` — the default used by
+    cache-warmup loaders at boot — clears the extraction set so callers
+    never mistake a cached table for live learning.
     """
     if not dynamic_signals:
         logger.warning("set_task_type_signals: empty dict — keeping current signals")
@@ -180,14 +195,17 @@ def set_task_type_signals(
         compounds = _STATIC_COMPOUND_SIGNALS.get(task_type, [])
         singles = dynamic_signals.get(task_type, [])
         merged[task_type] = compounds + singles
-    global _TASK_TYPE_SIGNALS
+    global _TASK_TYPE_SIGNALS, _TASK_TYPE_EXTRACTED
     _TASK_TYPE_SIGNALS = merged
+    _TASK_TYPE_EXTRACTED = set(extracted_task_types) if extracted_task_types else set()
     _precompile_keyword_patterns()
     logger.info(
-        "TaskTypeSignals: merged %d task types, %d total keywords (%d compound + %d dynamic)",
+        "TaskTypeSignals: merged %d task types, %d total keywords "
+        "(%d compound + %d dynamic, extracted=%s)",
         len(merged), sum(len(v) for v in merged.values()),
         sum(len(v) for v in _STATIC_COMPOUND_SIGNALS.values()),
         sum(len(v) for v in dynamic_signals.values()),
+        sorted(_TASK_TYPE_EXTRACTED) or "∅",
     )
 
 
@@ -199,6 +217,23 @@ def get_task_type_signals() -> dict[str, list[tuple[str, float]]]:
 def get_static_compound_signals() -> dict[str, list[tuple[str, float]]]:
     """Return the static compound signal table (invariant across dynamic updates)."""
     return _STATIC_COMPOUND_SIGNALS
+
+
+def task_type_has_dynamic_signals(task_type: str) -> bool:
+    """Return True iff ``task_type`` was in the most recent extraction run.
+
+    A4: this is the authoritative check for whether the classifier is
+    operating on live TF-IDF signals vs bootstrap defaults. The merged
+    signal table alone cannot answer this — a cache-warmup load at boot
+    populates the same table shape as a fresh extraction.
+    """
+    return task_type in _TASK_TYPE_EXTRACTED
+
+
+def reset_task_type_extracted() -> None:
+    """Test helper — wipe the extraction set. Not used in production code."""
+    global _TASK_TYPE_EXTRACTED
+    _TASK_TYPE_EXTRACTED = set()
 
 
 def score_category(
@@ -359,8 +394,10 @@ __all__ = [
     "classify_with_llm",
     "get_static_compound_signals",
     "get_task_type_signals",
+    "reset_task_type_extracted",
     "score_category",
     "set_task_type_signals",
+    "task_type_has_dynamic_signals",
 ]
 
 # Public re-exports of the private gate constants (orchestrator needs them

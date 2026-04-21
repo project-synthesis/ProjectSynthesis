@@ -907,7 +907,13 @@ async def execute_warm_path(
             from app.services.task_type_signal_extractor import extract_task_type_signals
             tt_signals = await extract_task_type_signals(db)
             if tt_signals:
-                set_task_type_signals(tt_signals)
+                # A4: signals dict keys are exactly the task_types that crossed
+                # MIN_SAMPLES this run — pass them explicitly so heuristic
+                # analyzer can flag signal_source="dynamic" only for them.
+                set_task_type_signals(
+                    tt_signals,
+                    extracted_task_types=set(tt_signals.keys()),
+                )
                 import json as _tt_json
 
                 from app.config import DATA_DIR

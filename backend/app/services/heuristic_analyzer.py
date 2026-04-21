@@ -40,13 +40,13 @@ from app.services.domain_detector import (
     set_signal_loader,
 )
 from app.services.task_type_classifier import (
-    _STATIC_COMPOUND_SIGNALS,
     check_technical_disambiguation,
     classify_task_type,
     classify_with_llm,
     get_task_type_signals,
     score_category,
     set_task_type_signals,
+    task_type_has_dynamic_signals,
 )
 from app.services.task_type_classifier import (
     LLM_CLASSIFICATION_CONFIDENCE_GATE as _LLM_CLASSIFICATION_CONFIDENCE_GATE,
@@ -110,8 +110,12 @@ class HeuristicAnalysis:
     domain_scores: dict[str, float] | None = None
     # LLM fallback tracking (set when A4 confidence-gated LLM classification fires)
     llm_fallback_applied: bool = False
-    # Task-type signal source tracking
-    task_type_signal_source: str = "static"  # "dynamic" | "static"
+    # Task-type signal source tracking.
+    # "dynamic"   → current-run TF-IDF extraction crossed the sample threshold
+    # "bootstrap" → signals come from the static compound table and/or
+    #               cache-warmup load (A4: the legacy "static" label is
+    #               accepted as a synonym for read-compat).
+    task_type_signal_source: str = "bootstrap"
     task_type_scores: dict[str, float] | None = None  # raw scores per task type
 
     def format_summary(self) -> str:
@@ -256,12 +260,15 @@ class HeuristicAnalyzer:
             prompt_lower, first_sentence, signals,
         )
 
-        # Track whether dynamic or static signals were used for classification
-        _has_dynamic_singles = bool(signals.get(task_type)) and any(
-            " " not in kw for kw, _ in signals.get(task_type, [])
-            if (kw, _) not in _STATIC_COMPOUND_SIGNALS.get(task_type, [])
+        # Track whether dynamic (live TF-IDF extraction this run) or bootstrap
+        # (static defaults or cache-warmup) signals were used for classification.
+        # A4: explicit extraction-state tracking — presence in the merged signal
+        # table is insufficient because disk-cache-warmup at boot looks identical
+        # to signals just extracted in the current run, but only the latter prove
+        # live learning has fired.
+        _signal_source = (
+            "dynamic" if task_type_has_dynamic_signals(task_type) else "bootstrap"
         )
-        _signal_source = "dynamic" if _has_dynamic_singles else "static"
 
         # Layer 1b: Technical verb disambiguation (A2)
         disambiguation_applied = False

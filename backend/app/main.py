@@ -372,7 +372,15 @@ async def lifespan(app: FastAPI):
                 async with async_session_factory() as _tt_db:
                     tt_signals = await extract_task_type_signals(_tt_db)
                     if tt_signals:
-                        set_task_type_signals(tt_signals)
+                        # A4: keys of the extractor output are exactly the
+                        # task_types whose sample count crossed MIN_SAMPLES
+                        # — hand them over so HeuristicAnalysis can report
+                        # signal_source="dynamic" only for genuinely live
+                        # extraction (vs a cache-only warmup).
+                        set_task_type_signals(
+                            tt_signals,
+                            extracted_task_types=set(tt_signals.keys()),
+                        )
                         # Persist for MCP cold-start
                         import json as _tt_json
                         _tt_cache = DATA_DIR / "task_type_signals.json"
