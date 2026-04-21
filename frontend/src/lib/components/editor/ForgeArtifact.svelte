@@ -276,6 +276,20 @@
                     <span class="stat-value stat-ok">haiku</span>
                   </span>
                 {/if}
+                <!-- A4 / UI2: task_type signal source — bootstrap (static
+                     defaults) vs dynamic (live TF-IDF). Named "bootstrap"
+                     after A4 renaming; legacy "static" is read-compat. -->
+                {#if enrichmentMeta?.task_type_signal_source}
+                  {@const src = enrichmentMeta.task_type_signal_source as string}
+                  <span class="enrichment-tag">
+                    <span class="stat-label">signal source</span>
+                    <span
+                      class="stat-value"
+                      class:stat-ok={src === 'dynamic'}
+                      class:stat-skip={src === 'bootstrap' || src === 'static'}
+                    >{src === 'static' ? 'bootstrap' : src}</span>
+                  </span>
+                {/if}
               </div>
             {/if}
 
@@ -421,6 +435,65 @@
                   </div>
                 {/if}
               {/if}
+            {/if}
+
+            <!-- UI2: task_type_scores — 6-class distribution from the
+                 heuristic classifier. Surfaces why a given task_type
+                 won: the winner is highlighted, zero rows collapse to a
+                 single "others: 0" row to keep noise out of the panel. -->
+            {#if enrichmentMeta?.task_type_scores}
+              {@const scores = enrichmentMeta.task_type_scores as Record<string, number>}
+              {@const entries = Object.entries(scores).sort((a, b) => (b[1] as number) - (a[1] as number))}
+              {@const topScore = entries.length > 0 ? (entries[0][1] as number) : 0}
+              {@const nonZero = entries.filter(([, v]) => (v as number) > 0)}
+              {@const zeroCount = entries.length - nonZero.length}
+              {#if entries.length > 0}
+                <div class="enrichment-detail">
+                  <div class="enrichment-detail-heading">TASK-TYPE SCORES</div>
+                  {#each nonZero as [tt, sc]}
+                    <div class="context-stat" style="margin-bottom: 2px;">
+                      <span class="stat-label">{tt}</span>
+                      <span class="stat-value" class:stat-ok={(sc as number) === topScore}>
+                        {(sc as number).toFixed(1)}
+                      </span>
+                    </div>
+                  {/each}
+                  {#if zeroCount > 0}
+                    <div class="context-stat" style="margin-bottom: 2px; opacity: 0.55;">
+                      <span class="stat-label">others</span>
+                      <span class="stat-value">{zeroCount} &times; 0.0</span>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            {/if}
+
+            <!-- UI1+UI2: Context-injection stats — replaces the "invisible"
+                 gap where the enrichment service emits injection counts but
+                 the UI had no row. Shows auto-injection counts plus a badge
+                 when the caller supplied explicit pattern IDs. -->
+            {#if enrichmentMeta?.injection_stats}
+              {@const inj = enrichmentMeta.injection_stats as { patterns_injected?: number; injection_clusters?: number; has_explicit_patterns?: boolean }}
+              {@const pi = (inj.patterns_injected ?? 0) as number}
+              {@const ic = (inj.injection_clusters ?? 0) as number}
+              {@const hasExplicit = Boolean(inj.has_explicit_patterns)}
+              <div class="enrichment-detail">
+                <div class="enrichment-detail-heading">CONTEXT INJECTION</div>
+                <div class="context-stat" style="margin-bottom: 2px;">
+                  <span class="stat-label">patterns injected</span>
+                  <span class="stat-value" class:stat-ok={pi > 0} class:stat-skip={pi === 0}>{pi}</span>
+                </div>
+                <div class="context-stat" style="margin-bottom: 2px;">
+                  <span class="stat-label">source clusters</span>
+                  <span class="stat-value" class:stat-ok={ic > 0} class:stat-skip={ic === 0}>{ic}</span>
+                </div>
+                {#if hasExplicit}
+                  <div class="context-stat" style="margin-bottom: 2px;">
+                    <span class="stat-label">selection</span>
+                    <span class="stat-value stat-ok">explicit</span>
+                  </div>
+                {/if}
+              </div>
             {/if}
 
             <!-- Divergence alerts — tech stack conflicts between prompt and codebase -->

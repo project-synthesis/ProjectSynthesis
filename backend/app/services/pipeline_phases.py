@@ -929,6 +929,7 @@ def build_pipeline_result(inputs: PersistenceInputs) -> PipelineResult:
         warnings=scoring.warnings if scoring else [],
         intent_label=analysis.intent_label,
         domain=inputs.effective_domain,
+        repo_full_name=inputs.repo_full_name,
     )
     try:
         return PipelineResult(**result_kwargs)
