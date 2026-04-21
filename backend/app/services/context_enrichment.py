@@ -606,13 +606,15 @@ class ContextEnrichmentService:
             )
             if _pattern_details:
                 enrichment_meta_dict["applied_pattern_texts"] = _pattern_details
-                # Injected entries = everything non-"explicit"; cluster_labels
-                # are present on auto-injected entries only.
+                # Injected entries = everything non-"explicit". Dedup by
+                # ``cluster_id`` (always unique) — labels can legitimately be
+                # empty for new/untitled clusters, which would silently collapse
+                # distinct clusters into one.
                 _injected = [d for d in _pattern_details if d.get("source") != "explicit"]
                 _injected_count = len(_injected)
                 _injected_cluster_count = len({
-                    d.get("cluster_label") for d in _injected
-                    if d.get("cluster_label")
+                    d.get("cluster_id") for d in _injected
+                    if d.get("cluster_id")
                 })
         enrichment_meta_dict["injection_stats"] = {
             "patterns_injected": _injected_count,
@@ -1063,6 +1065,7 @@ class ContextEnrichmentService:
                             "text": ip.pattern_text,
                             "source": ip.source or "cluster",
                             "cluster_label": ip.cluster_label or "",
+                            "cluster_id": ip.cluster_id or "",
                             "similarity": round(ip.similarity, 3) if ip.similarity else None,
                         })
                 except Exception:

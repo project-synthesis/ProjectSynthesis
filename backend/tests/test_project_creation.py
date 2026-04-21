@@ -271,8 +271,9 @@ async def test_resolve_effective_repo_falls_back_to_most_recent_linked(
     This is the fix for the user-reported behaviour where `POST /api/optimize`
     curls landed on Legacy instead of associating to the live LinkedRepo.
     """
-    from app.services.project_service import resolve_effective_repo
     from datetime import datetime, timedelta, timezone
+
+    from app.services.project_service import resolve_effective_repo
 
     # Seed two LinkedRepos; the most recent should win even though neither
     # matches the (absent) session cookie.
@@ -311,3 +312,62 @@ async def test_resolve_effective_repo_none_when_no_linked_repos(
         session_id=None,
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_auto_resolve_repo_delegates_to_resolve_effective_repo(
+    monkeypatch,
+):
+    """N3: ``auto_resolve_repo()`` must delegate to ``resolve_effective_repo()``.
+
+    MCP tool callers and the REST endpoint should share one resolution
+    path — otherwise AA1's most-recently-linked fallback drifts between
+    callers. The MCP caller has no session cookie, so ``session_id`` is
+    passed as ``None``; ``explicit_repo`` flows through unchanged.
+    """
+    from app.tools import _shared
+
+    captured: dict = {}
+
+    async def _fake_resolve_effective_repo(db, *, explicit_repo, session_id):
+        captured["called"] = True
+        captured["explicit_repo"] = explicit_repo
+        captured["session_id"] = session_id
+        return "resolved/delegated-repo"
+
+    monkeypatch.setattr(
+        "app.services.project_service.resolve_effective_repo",
+        _fake_resolve_effective_repo,
+    )
+
+    result = await _shared.auto_resolve_repo(None)
+
+    assert captured.get("called") is True, (
+        "auto_resolve_repo() must delegate to resolve_effective_repo() "
+        "instead of duplicating the resolution logic (N3 DRY)."
+    )
+    assert captured["explicit_repo"] is None
+    assert captured["session_id"] is None
+    assert result == "resolved/delegated-repo"
+
+
+@pytest.mark.asyncio
+async def test_auto_resolve_repo_threads_explicit_repo(monkeypatch):
+    """Explicit repo_full_name flows through to resolve_effective_repo."""
+    from app.tools import _shared
+
+    captured: dict = {}
+
+    async def _fake_resolve_effective_repo(db, *, explicit_repo, session_id):
+        captured["explicit_repo"] = explicit_repo
+        return explicit_repo
+
+    monkeypatch.setattr(
+        "app.services.project_service.resolve_effective_repo",
+        _fake_resolve_effective_repo,
+    )
+
+    result = await _shared.auto_resolve_repo("user/explicit-repo")
+
+    assert captured["explicit_repo"] == "user/explicit-repo"
+    assert result == "user/explicit-repo"

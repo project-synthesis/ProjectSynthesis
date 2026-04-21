@@ -302,6 +302,37 @@ describe('ForgeArtifact', () => {
       expect(screen.getByText(/others/i)).toBeInTheDocument();
     });
 
+    it('omits TASK-TYPE SCORES block when all scores are zero (no orphan heading)', async () => {
+      // Guards against an empty heading + lonely "others" row when every
+      // classifier score is 0 — no signal means no panel, not "others: 6 × 0.0".
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            task_type_scores: {
+              coding: 0.0,
+              writing: 0.0,
+              analysis: 0.0,
+              creative: 0.0,
+              data: 0.0,
+              system: 0.0,
+            },
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      expect(screen.queryByText('TASK-TYPE SCORES')).not.toBeInTheDocument();
+      expect(screen.queryByText(/others/i)).not.toBeInTheDocument();
+    });
+
     it('renders CONTEXT INJECTION section with patterns_injected + injection_clusters', async () => {
       const user = userEvent.setup();
       forgeStore.result = mockOptimizationResult({
