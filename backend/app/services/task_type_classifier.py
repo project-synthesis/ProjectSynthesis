@@ -47,6 +47,13 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
         ("websocket", 0.7), ("server", 0.5), ("schema", 0.6),
         ("kubernetes", 0.6), ("docker", 0.5), ("ci/cd", 0.7),
         ("helm", 0.6), ("graphql", 0.7), ("microservice", 0.7),
+        # A8: CLI-family coding artifacts. The live "Fastapi Log Tail CLI"
+        # prompt classified as creative because "design" was the only
+        # matched keyword — "cli"/"daemon"/"binary" have to score on the
+        # coding table for A2 disambiguation to flip the verdict. Weights
+        # deliberately moderate so they don't steamroll genuine writing
+        # tasks ("a binary decision", "a command-line in the play script").
+        ("cli", 0.7), ("daemon", 0.7), ("binary", 0.5),
     ],
     "writing": [
         # Compound signals
@@ -135,6 +142,12 @@ _TECHNICAL_NOUNS = frozenset({
     "middleware", "pipeline", "queue", "cache", "scheduler", "server",
     "backend", "frontend", "module", "library", "framework", "migration",
     "table", "index", "model", "route", "handler", "worker",
+    # A8: unambiguous engineering artifacts. Added after the live "Fastapi
+    # Log Tail CLI" prompt classified as creative (score 1.4 from "design"
+    # alone) — the disambiguation gate was blind to CLI-family nouns.
+    # Conservative additions only — generic words like "tool"/"script" are
+    # excluded because they legitimately appear in creative briefs.
+    "cli", "daemon", "binary",
 })
 
 # Pre-compiled word-boundary patterns for task_type keywords.  Built once at

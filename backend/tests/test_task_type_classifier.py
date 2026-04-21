@@ -9,10 +9,18 @@ from app.services import task_type_classifier as ttc
 
 @pytest.fixture(autouse=True)
 def _reset_extraction_state():
-    """Isolate each test — the extraction set is a module-level singleton."""
+    """Isolate each test — the extraction set AND the signal table are both
+    module-level singletons. `set_task_type_signals()` (used by the dynamic-
+    signal tests below) permanently rewrites `_TASK_TYPE_SIGNALS`; without
+    a full snapshot + restore, later tests see an impoverished table and
+    fail with bogus score=0 assertions.
+    """
+    original_signals = {k: list(v) for k, v in ttc._TASK_TYPE_SIGNALS.items()}
     ttc.reset_task_type_extracted()
     yield
     ttc.reset_task_type_extracted()
+    ttc._TASK_TYPE_SIGNALS = original_signals
+    ttc._precompile_keyword_patterns()
 
 
 class TestTaskTypeHasDynamicSignals:
@@ -62,3 +70,69 @@ class TestTaskTypeHasDynamicSignals:
             extracted_task_types={"coding"},
         )
         assert ttc.task_type_has_dynamic_signals("meta-coding") is False
+
+
+class TestTechnicalNounDisambiguationCoverage:
+    """A8: extend `_TECHNICAL_NOUNS` to cover unambiguous coding artifacts.
+
+    The live "Fastapi Log Tail CLI" prompt was misclassified as ``creative``
+    because "design" scored alone and ``_TECHNICAL_NOUNS`` did not recognize
+    ``cli`` / ``daemon`` / ``binary`` as coding nouns. These are categorically
+    coding artifacts (command-line programs, system daemons, compiled
+    executables) that cannot plausibly be creative-writing tasks.
+
+    Why this specific set:
+    - ``cli``: command-line interface — unambiguously an engineering artifact
+    - ``daemon``: long-running system service — unambiguous
+    - ``binary``: compiled executable — unambiguous
+    Not added: ``tool`` / ``script`` / ``log`` — ambiguous (movie scripts,
+    captain's logs, marketing tools). Expanding there needs evidence.
+    """
+
+    def test_design_a_cli_triggers_disambiguation(self):
+        assert ttc.check_technical_disambiguation(
+            "design a cli tool that tails a fastapi app log"
+        )
+
+    def test_build_a_daemon_triggers_disambiguation(self):
+        assert ttc.check_technical_disambiguation(
+            "build a daemon that watches the filesystem"
+        )
+
+    def test_create_a_binary_triggers_disambiguation(self):
+        assert ttc.check_technical_disambiguation(
+            "create a binary that processes input streams"
+        )
+
+    def test_existing_nouns_still_pass(self):
+        """Regression guard: widening must not drop any existing noun."""
+        assert ttc.check_technical_disambiguation(
+            "design a caching system for the api"
+        )
+        assert ttc.check_technical_disambiguation(
+            "build an endpoint for user auth"
+        )
+
+    def test_non_technical_pairs_still_reject(self):
+        """Widening must not start claiming generic creative prompts are coding."""
+        assert not ttc.check_technical_disambiguation(
+            "design a logo for the brand"
+        )
+        assert not ttc.check_technical_disambiguation(
+            "create a poem about the ocean"
+        )
+
+    def test_cli_prompt_scores_on_coding(self):
+        """A8: `cli`/`daemon` must also score on the coding signal table.
+
+        Without this, A2 disambiguation fires (verb+noun pair detected) but
+        the coding flip requires ``coding_score > 0`` — prompts that mention
+        CLI/daemon as the *only* coding signal still fall through to creative.
+        The live 'Fastapi Log Tail CLI' prompt is the reference case.
+        """
+        signals = ttc.get_task_type_signals()
+        prompt = "design a cli tool that tails a fastapi app log"
+        coding_score = ttc.score_category(prompt, prompt, signals["coding"])
+        assert coding_score > 0, (
+            f"Expected coding score > 0 for CLI prompt, got {coding_score}"
+        )

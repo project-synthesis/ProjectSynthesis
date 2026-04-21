@@ -333,6 +333,67 @@ describe('ForgeArtifact', () => {
       expect(screen.queryByText(/others/i)).not.toBeInTheDocument();
     });
 
+    it('renders DOMAIN SIGNALS section heading when domain_signals block is present', async () => {
+      // Visibility: when domain_signals flows through, the section must have
+      // an explicit labeled heading matching TASK-TYPE SCORES / CONTEXT
+      // INJECTION / DIVERGENCES — not just an inline stat-label blended in
+      // with the values. A live audit showed this block indistinguishable
+      // from adjacent rows.
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            domain_signals: {
+              resolved: 'backend',
+              score: 0.88,
+              runner_up: { label: 'fullstack', score: 0.3 },
+            },
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      // Explicit heading for visual parity with other enrichment sections.
+      expect(screen.getByText('DOMAIN SIGNALS')).toBeInTheDocument();
+    });
+
+    it('renders RETRIEVAL section heading when retrieval diagnostics are present', async () => {
+      // Visibility: the retrieval-diagnostics row (curated / synthesis /
+      // workspace / budget / strategy-fallback) is another unlabeled block
+      // that visually blends into surrounding rows. A heading is required
+      // so operators can quickly locate the budget gauge and stop reasons.
+      const user = userEvent.setup();
+      forgeStore.result = mockOptimizationResult({
+        context_sources: {
+          heuristic_analysis: true,
+          codebase_context: true,
+          strategy_intelligence: true,
+          applied_patterns: true,
+          curated_retrieval: {
+            status: 'ok',
+            files_included: 3,
+            files: [],
+          },
+          enrichment_meta: {
+            enrichment_profile: 'code_aware',
+            combined_context_chars: 41400,
+          },
+        },
+      }) as any;
+      render(ForgeArtifact);
+
+      await user.click(screen.getByText('ENRICHMENT'));
+
+      expect(screen.getByText('RETRIEVAL')).toBeInTheDocument();
+    });
+
     it('renders CONTEXT INJECTION section with patterns_injected + injection_clusters', async () => {
       const user = userEvent.setup();
       forgeStore.result = mockOptimizationResult({

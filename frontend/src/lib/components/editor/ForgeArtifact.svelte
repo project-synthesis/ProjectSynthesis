@@ -332,9 +332,14 @@
               {/if}
             {/if}
 
-            <!-- Retrieval diagnostics row -->
+            <!-- Retrieval diagnostics row — explicit heading for visual
+                 parity with TASK-TYPE SCORES / CONTEXT INJECTION /
+                 DIVERGENCES (previously this row had no heading and blended
+                 into adjacent diagnostic blocks). -->
             {#if curatedRetrieval || enrichmentMeta?.explore_synthesis || enrichmentMeta?.combined_context_chars != null}
-              <div class="enrichment-diagnostics">
+              <div class="enrichment-detail">
+                <div class="enrichment-detail-heading">RETRIEVAL</div>
+                <div class="enrichment-diagnostics enrichment-diagnostics--nested">
                 {#if curatedRetrieval}
                   {@const status = curatedRetrieval.status as string}
                   {@const filesIncluded = (curatedRetrieval.files_included ?? 0) as number}
@@ -387,6 +392,7 @@
                     <span class="stat-value stat-ok">fallback (cross-domain)</span>
                   </span>
                 {/if}
+                </div>
               </div>
             {/if}
 
@@ -400,38 +406,44 @@
 
             <!-- Domain signals — A1: new shape names the resolved winner to
                  match the primary classification; legacy `{label: score}` dict
-                 shape is read-compat rendered until old rows are rewritten. -->
+                 shape is read-compat rendered until old rows are rewritten.
+                 UI: explicit DOMAIN SIGNALS heading for visual parity with
+                 TASK-TYPE SCORES / RETRIEVAL / CONTEXT INJECTION blocks. -->
             {#if enrichmentMeta?.domain_signals}
               {@const raw = enrichmentMeta.domain_signals as Record<string, unknown>}
               {#if typeof raw?.resolved === 'string'}
                 {@const resolved = raw.resolved as string}
                 {@const score = (raw.score as number | undefined) ?? 0}
                 {@const runnerUp = raw.runner_up as { label: string; score: number } | null | undefined}
-                <div class="enrichment-diagnostics">
-                  <span class="stat-label">domain signals</span>
-                  <span class="context-stat">
-                    <span class="stat-value">{resolved}</span>
-                    <span class="stat-value" style="opacity: 0.6;">{score.toFixed(2)}</span>
-                  </span>
-                  {#if runnerUp}
+                <div class="enrichment-detail">
+                  <div class="enrichment-detail-heading">DOMAIN SIGNALS</div>
+                  <div class="enrichment-diagnostics enrichment-diagnostics--nested">
                     <span class="context-stat">
-                      <span class="stat-value" style="opacity: 0.7;">~ {runnerUp.label}</span>
-                      <span class="stat-value" style="opacity: 0.5;">{runnerUp.score.toFixed(2)}</span>
+                      <span class="stat-value">{resolved}</span>
+                      <span class="stat-value" style="opacity: 0.6;">{score.toFixed(2)}</span>
                     </span>
-                  {/if}
+                    {#if runnerUp}
+                      <span class="context-stat">
+                        <span class="stat-value" style="opacity: 0.7;">~ {runnerUp.label}</span>
+                        <span class="stat-value" style="opacity: 0.5;">{runnerUp.score.toFixed(2)}</span>
+                      </span>
+                    {/if}
+                  </div>
                 </div>
               {:else}
                 <!-- Legacy `{label: score}` dict — read-compat path. -->
                 {@const entries = Object.entries(raw as Record<string, number>).sort((a, b) => (b[1] as number) - (a[1] as number))}
                 {#if entries.length > 0}
-                  <div class="enrichment-diagnostics">
-                    <span class="stat-label">domain signals</span>
-                    {#each entries as [domain, score]}
-                      <span class="context-stat">
-                        <span class="stat-value">{domain}</span>
-                        <span class="stat-value" style="opacity: 0.6;">{(score as number).toFixed(1)}</span>
-                      </span>
-                    {/each}
+                  <div class="enrichment-detail">
+                    <div class="enrichment-detail-heading">DOMAIN SIGNALS</div>
+                    <div class="enrichment-diagnostics enrichment-diagnostics--nested">
+                      {#each entries as [domain, score]}
+                        <span class="context-stat">
+                          <span class="stat-value">{domain}</span>
+                          <span class="stat-value" style="opacity: 0.6;">{(score as number).toFixed(1)}</span>
+                        </span>
+                      {/each}
+                    </div>
                   </div>
                 {/if}
               {/if}
@@ -985,6 +997,14 @@
     flex-wrap: wrap;
     padding-top: 3px;
     border-top: 1px solid var(--color-border-subtle);
+  }
+
+  /* Nested variant: inside an .enrichment-detail the heading already
+     establishes the visual break, so we drop the extra top border + pad
+     to avoid double rules stacking next to the heading. */
+  .enrichment-diagnostics--nested {
+    padding-top: 0;
+    border-top: none;
   }
 
   .enrichment-detail {
