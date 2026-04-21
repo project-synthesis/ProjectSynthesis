@@ -40,6 +40,12 @@ from app.services.domain_detector import (
     set_signal_loader,
 )
 from app.services.task_type_classifier import (
+    LLM_CLASSIFICATION_CONFIDENCE_GATE as _LLM_CLASSIFICATION_CONFIDENCE_GATE,
+)
+from app.services.task_type_classifier import (
+    LLM_CLASSIFICATION_MARGIN_GATE as _LLM_CLASSIFICATION_MARGIN_GATE,
+)
+from app.services.task_type_classifier import (
     check_technical_disambiguation,
     classify_task_type,
     classify_with_llm,
@@ -47,12 +53,6 @@ from app.services.task_type_classifier import (
     score_category,
     set_task_type_signals,
     task_type_has_dynamic_signals,
-)
-from app.services.task_type_classifier import (
-    LLM_CLASSIFICATION_CONFIDENCE_GATE as _LLM_CLASSIFICATION_CONFIDENCE_GATE,
-)
-from app.services.task_type_classifier import (
-    LLM_CLASSIFICATION_MARGIN_GATE as _LLM_CLASSIFICATION_MARGIN_GATE,
 )
 from app.services.weakness_detector import (
     detect_strengths,
