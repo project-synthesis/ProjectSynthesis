@@ -94,22 +94,27 @@ def compute_q_system(
     weights: QWeights,
     coverage: float = 1.0,
     dbcv: float = 0.0,
-) -> float:
+) -> float | None:
     """Compute composite system quality score.
 
     Reference: Spec Section 2.5
 
     Edge cases:
-    - Empty or all-excluded (domain/archived only): returns 0.0
-    - Single node: coherence=perfect, separation=perfect (no siblings)
+    - Empty or all-excluded (domain/archived only): returns None — undefined
+    - Fewer than 2 active nodes: returns None (separation undefined with <2 siblings)
     - NaN/Inf: replaced with 0.0
+
+    A5 N-guard: Q is meaningless when fewer than 2 active clusters exist.
+    A single cluster has no siblings to compare against, so both coherence
+    and separation degenerate to trivial perfect values (Q ≈ 1.0). That's
+    a lie, not a measurement. Return None so the UI can render "—".
 
     Included states: candidate, active, mature, template.
     Excluded states: domain (structural containers), archived (retired).
     """
     active = [n for n in nodes if n.state not in EXCLUDED_STRUCTURAL_STATES]
-    if not active:
-        return 0.0
+    if len(active) < 2:
+        return None
 
     # Gather finite coherence values
     coherences = [
@@ -153,9 +158,13 @@ class QHealthResult:
     Unlike Q_system (arithmetic mean across clusters), q_health weights
     each cluster's coherence and separation by its member_count, so a
     30-member cluster matters 30x more than a singleton.
+
+    A5 N-guard: ``q_health`` is ``None`` when fewer than 2 active clusters
+    exist — the metric is undefined without siblings to compare against.
+    Other breakdown fields remain populated for observability.
     """
 
-    q_health: float
+    q_health: float | None
     coherence_weighted: float
     separation_weighted: float
     coverage: float
@@ -163,6 +172,34 @@ class QHealthResult:
     weights: dict[str, float]
     total_members: int
     cluster_count: int
+
+
+def _degenerate_q_health(
+    active: list[NodeMetrics],
+    weights: QWeights,
+    coverage: float,
+    dbcv: float,
+) -> QHealthResult:
+    """Build a QHealthResult with q_health=None for degenerate N<2 cases.
+
+    Preserves observability fields (cluster_count, total_members) so callers
+    can still reason about taxonomy size even when the Q metric itself is
+    undefined.
+    """
+    total_members = sum(max(n.member_count, 0) for n in active)
+    return QHealthResult(
+        q_health=None,
+        coherence_weighted=0.0,
+        separation_weighted=0.0,
+        coverage=max(0.0, min(1.0, coverage)),
+        dbcv=max(0.0, min(1.0, dbcv)),
+        weights={
+            "w_c": weights.w_c, "w_s": weights.w_s,
+            "w_v": weights.w_v, "w_d": weights.w_d,
+        },
+        total_members=total_members,
+        cluster_count=len(active),
+    )
 
 
 def compute_q_health(
@@ -180,15 +217,14 @@ def compute_q_health(
 
     Falls back to equal weighting (identical to compute_q_system) when all
     clusters have member_count <= 1 or total_members == 0.
+
+    A5 N-guard: Returns ``q_health=None`` when fewer than 2 active clusters
+    exist (separation undefined). Breakdown fields still populated so callers
+    retain observability into cluster_count / total_members / coverage.
     """
     active = [n for n in nodes if n.state not in EXCLUDED_STRUCTURAL_STATES]
-    if not active:
-        return QHealthResult(
-            q_health=0.0, coherence_weighted=0.0, separation_weighted=0.0,
-            coverage=coverage, dbcv=dbcv,
-            weights={"w_c": weights.w_c, "w_s": weights.w_s, "w_v": weights.w_v, "w_d": weights.w_d},
-            total_members=0, cluster_count=0,
-        )
+    if len(active) < 2:
+        return _degenerate_q_health(active, weights, coverage, dbcv)
 
     total_members = sum(max(n.member_count, 0) for n in active)
 
@@ -295,8 +331,8 @@ def epsilon_tolerance(warm_path_age: int) -> float:
 
 
 def is_non_regressive(
-    q_before: float,
-    q_after: float,
+    q_before: float | None,
+    q_after: float | None,
     warm_path_age: int,
 ) -> bool:
     """Check if a warm-path quality transition passes the non-regression gate.
@@ -307,12 +343,27 @@ def is_non_regressive(
     epsilon_tolerance). For cold-path gating use is_cold_path_non_regressive.
 
     Q_after >= Q_before - epsilon (tolerance)
+
+    A5: Q is ``None`` when fewer than 2 active clusters exist.
+    Transition semantics when a side is ``None``:
+      * ``None → defined``: crossing the N=2 threshold is growth — accept.
+      * ``defined → None``: a prior valid taxonomy became degenerate
+        (e.g. a phase archived the last active cluster) — reject.
+      * ``None → None``: no measurable progress, and any ops that ran
+        operated on a degenerate taxonomy — reject conservatively.
     """
+    if q_after is None:
+        return False
+    if q_before is None:
+        return True
     eps = epsilon_tolerance(warm_path_age)
     return q_after >= q_before - eps
 
 
-def is_cold_path_non_regressive(q_before: float, q_after: float) -> bool:
+def is_cold_path_non_regressive(
+    q_before: float | None,
+    q_after: float | None,
+) -> bool:
     """Check if a cold-path quality transition passes the non-regression gate.
 
     Reference: Spec Section 2.5
@@ -323,13 +374,22 @@ def is_cold_path_non_regressive(q_before: float, q_after: float) -> bool:
 
     Q_after >= Q_before - COLD_PATH_EPSILON
 
+    A5: Transition semantics when a side is ``None`` (<2 active clusters):
+      * ``None → defined``: refit crossed the N=2 threshold — accept.
+      * ``defined → None``: refit destroyed the active set — reject.
+      * ``None → None``: refit made no measurable progress — reject.
+
     Args:
-        q_before: Q_system score before the cold-path refit.
-        q_after: Q_system score after the cold-path refit.
+        q_before: Q_system score before the cold-path refit (or None).
+        q_after: Q_system score after the cold-path refit (or None).
 
     Returns:
         True if the transition is within the allowed regression window.
     """
+    if q_after is None:
+        return False
+    if q_before is None:
+        return True
     return q_after >= q_before - COLD_PATH_EPSILON
 
 

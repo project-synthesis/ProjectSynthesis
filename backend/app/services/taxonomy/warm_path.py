@@ -225,13 +225,27 @@ async def _run_speculative_phase(
         phase_result.q_before = q_before
         phase_result.q_after = q_after
 
-        # Non-regression gate
+        # Non-regression gate. Q may be ``None`` when the taxonomy has <2
+        # active clusters (A5). Build a logging-safe view that preserves
+        # None through JSON so operators see "undefined" rather than 0.0.
+        def _q_fmt(q: float | None) -> str:
+            return "undefined" if q is None else f"{q:.4f}"
+
+        def _q_round(q: float | None) -> float | None:
+            return None if q is None else round(q, 4)
+
+        _q_delta = (
+            None if (q_before is None or q_after is None)
+            else round(q_after - q_before, 4)
+        )
+
         if is_non_regressive(q_before, q_after, engine._warm_path_age):
             await db.commit()
             phase_result.accepted = True
             logger.info(
-                "Phase %s accepted: Q %.4f -> %.4f (ops=%d)",
-                phase_name, q_before, q_after, phase_result.ops_accepted,
+                "Phase %s accepted: Q %s -> %s (ops=%d)",
+                phase_name, _q_fmt(q_before), _q_fmt(q_after),
+                phase_result.ops_accepted,
             )
             # Only log accepted phases that actually did work — idle
             # phases (0 attempted, 0 accepted) are noise in the
@@ -243,9 +257,9 @@ async def _run_speculative_phase(
                         context={
                             "phase_name": phase_name,
                             "phase_idx": phase_idx,
-                            "q_before": round(q_before, 4),
-                            "q_after": round(q_after, 4),
-                            "delta": round(q_after - q_before, 4),
+                            "q_before": _q_round(q_before),
+                            "q_after": _q_round(q_after),
+                            "delta": _q_delta,
                             "ops_accepted": phase_result.ops_accepted,
                             "ops_attempted": phase_result.ops_attempted,
                             "rejection_count": engine._phase_rejection_counters.get(phase_name, 0),
@@ -262,8 +276,8 @@ async def _run_speculative_phase(
             await engine._transformation_index.restore(ti_snapshot)
             phase_result.accepted = False
             logger.warning(
-                "Phase %s rejected (Q regression): Q %.4f -> %.4f",
-                phase_name, q_before, q_after,
+                "Phase %s rejected (Q regression): Q %s -> %s",
+                phase_name, _q_fmt(q_before), _q_fmt(q_after),
             )
             try:
                 get_event_logger().log_decision(
@@ -271,9 +285,9 @@ async def _run_speculative_phase(
                     context={
                         "phase_name": phase_name,
                         "phase_idx": phase_idx,
-                        "q_before": round(q_before, 4),
-                        "q_after": round(q_after, 4),
-                        "delta": round(q_after - q_before, 4),
+                        "q_before": _q_round(q_before),
+                        "q_after": _q_round(q_after),
+                        "delta": _q_delta,
                         "ops_attempted": phase_result.ops_attempted,
                         "rejection_count": engine._phase_rejection_counters.get(phase_name, 0),
                         "accepted": False,

@@ -54,19 +54,39 @@ class TestQWeights:
 
 
 class TestComputeQSystem:
-    """Spec Section 2.5 — edge cases and invariants."""
+    """Spec Section 2.5 — edge cases and invariants.
 
-    def test_empty_returns_zero(self):
-        assert compute_q_system([], QWeights.from_ramp(0.0)) == 0.0
+    A5 N-guard: Q_system is undefined when fewer than 2 active nodes
+    exist. Single-cluster taxonomies have no separation to measure
+    and no siblings to compare coherence against, so Q=1.0 is a
+    meaningless artifact. Return None so the UI can show "—".
+    """
 
-    def test_single_node(self):
-        """Single confirmed node: coherence=1.0, separation=1.0."""
+    def test_empty_returns_none(self):
+        """Empty node list: no active clusters, Q undefined."""
+        assert compute_q_system([], QWeights.from_ramp(0.0)) is None
+
+    def test_single_node_returns_none(self):
+        """Single active node: separation has no siblings, Q undefined."""
         from app.services.taxonomy.quality import NodeMetrics
 
         node = NodeMetrics(coherence=1.0, separation=1.0, state="active")
-        score = compute_q_system([node], QWeights.from_ramp(0.0), coverage=1.0)
+        assert (
+            compute_q_system([node], QWeights.from_ramp(0.0), coverage=1.0)
+            is None
+        )
+
+    def test_two_active_nodes_returns_float(self):
+        """Two active nodes: Q is well-defined."""
+        from app.services.taxonomy.quality import NodeMetrics
+
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.7, state="active"),
+            NodeMetrics(coherence=0.9, separation=0.6, state="active"),
+        ]
+        score = compute_q_system(nodes, QWeights.from_ramp(0.0), coverage=1.0)
+        assert score is not None
         assert 0.0 <= score <= 1.0
-        assert score > 0.5  # should be high with perfect metrics
 
     def test_result_bounded_zero_one(self):
         from app.services.taxonomy.quality import NodeMetrics
@@ -76,24 +96,44 @@ class TestComputeQSystem:
             NodeMetrics(coherence=0.9, separation=0.6, state="active"),
         ]
         score = compute_q_system(nodes, QWeights.from_ramp(0.5), coverage=0.95)
+        assert score is not None
         assert 0.0 <= score <= 1.0
 
     def test_nan_replaced_with_zero(self):
         from app.services.taxonomy.quality import NodeMetrics
 
-        node = NodeMetrics(coherence=float("nan"), separation=0.5, state="active")
-        score = compute_q_system([node], QWeights.from_ramp(0.0), coverage=1.0)
+        nodes = [
+            NodeMetrics(coherence=float("nan"), separation=0.5, state="active"),
+            NodeMetrics(coherence=0.5, separation=0.5, state="active"),
+        ]
+        score = compute_q_system(nodes, QWeights.from_ramp(0.0), coverage=1.0)
+        assert score is not None
         assert math.isfinite(score)
 
-    def test_retired_nodes_excluded(self):
+    def test_single_active_with_archived_returns_none(self):
+        """Retired nodes excluded — only 1 active remains → None."""
         from app.services.taxonomy.quality import NodeMetrics
 
         nodes = [
             NodeMetrics(coherence=0.8, separation=0.7, state="active"),
             NodeMetrics(coherence=0.0, separation=0.0, state="archived"),
         ]
+        assert (
+            compute_q_system(nodes, QWeights.from_ramp(0.0), coverage=1.0)
+            is None
+        )
+
+    def test_multi_active_with_archived_excludes_retired(self):
+        """Retired node should not drag score down (when ≥2 active)."""
+        from app.services.taxonomy.quality import NodeMetrics
+
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.7, state="active"),
+            NodeMetrics(coherence=0.9, separation=0.6, state="active"),
+            NodeMetrics(coherence=0.0, separation=0.0, state="archived"),
+        ]
         score = compute_q_system(nodes, QWeights.from_ramp(0.0), coverage=1.0)
-        # Retired node should not drag score down
+        assert score is not None
         assert score > 0.5
 
 
@@ -154,6 +194,36 @@ class TestIsNonRegressive:
         assert not is_non_regressive(q_before=0.8, q_after=0.7, warm_path_age=50)
 
 
+class TestNonRegressiveNoneTolerance:
+    """A5: Q-gate semantics when either side is ``None`` (<2 active clusters).
+
+      * ``None → defined``: crossing the N=2 threshold is growth — accept.
+      * ``defined → None``: a valid taxonomy became degenerate — reject.
+      * ``None → None``: no measurable progress — reject.
+    """
+
+    def test_warm_gate_accepts_growth_to_defined(self):
+        """None baseline → defined Q is growth (bootstrapping past N=2)."""
+        assert is_non_regressive(q_before=None, q_after=0.8, warm_path_age=0)
+
+    def test_warm_gate_rejects_destruction_to_none(self):
+        """Defined baseline → None means active set was dismantled."""
+        assert not is_non_regressive(q_before=0.8, q_after=None, warm_path_age=0)
+
+    def test_warm_gate_rejects_none_to_none(self):
+        """No measurable change from degenerate to degenerate."""
+        assert not is_non_regressive(q_before=None, q_after=None, warm_path_age=0)
+
+    def test_cold_gate_accepts_growth_to_defined(self):
+        assert is_cold_path_non_regressive(q_before=None, q_after=0.8)
+
+    def test_cold_gate_rejects_destruction_to_none(self):
+        assert not is_cold_path_non_regressive(q_before=0.8, q_after=None)
+
+    def test_cold_gate_rejects_none_to_none(self):
+        assert not is_cold_path_non_regressive(q_before=None, q_after=None)
+
+
 class TestIsColdPathNonRegressive:
     """Cold-path quality gate — flat COLD_PATH_EPSILON tolerance."""
 
@@ -196,28 +266,52 @@ class TestComputeQSystemStateMembership:
         return QWeights.from_ramp(0.0)
 
     def test_active_nodes_included(self):
-        nodes = [NodeMetrics(coherence=0.8, separation=0.7, state="active")]
-        assert compute_q_system(nodes, self._weights()) > 0.0
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.7, state="active"),
+            NodeMetrics(coherence=0.7, separation=0.6, state="active"),
+        ]
+        score = compute_q_system(nodes, self._weights())
+        assert score is not None and score > 0.0
 
     def test_mature_nodes_included(self):
-        nodes = [NodeMetrics(coherence=0.8, separation=0.7, state="mature")]
-        assert compute_q_system(nodes, self._weights()) > 0.0
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.7, state="mature"),
+            NodeMetrics(coherence=0.7, separation=0.6, state="mature"),
+        ]
+        score = compute_q_system(nodes, self._weights())
+        assert score is not None and score > 0.0
 
     def test_template_nodes_included(self):
-        nodes = [NodeMetrics(coherence=0.8, separation=0.7, state="template")]
-        assert compute_q_system(nodes, self._weights()) > 0.0
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.7, state="template"),
+            NodeMetrics(coherence=0.7, separation=0.6, state="template"),
+        ]
+        score = compute_q_system(nodes, self._weights())
+        assert score is not None and score > 0.0
 
     def test_candidate_nodes_included(self):
-        nodes = [NodeMetrics(coherence=0.8, separation=0.7, state="candidate")]
-        assert compute_q_system(nodes, self._weights()) > 0.0
+        nodes = [
+            NodeMetrics(coherence=0.8, separation=0.7, state="candidate"),
+            NodeMetrics(coherence=0.7, separation=0.6, state="candidate"),
+        ]
+        score = compute_q_system(nodes, self._weights())
+        assert score is not None and score > 0.0
 
     def test_domain_nodes_excluded(self):
-        nodes = [NodeMetrics(coherence=0.99, separation=0.99, state="domain")]
-        assert compute_q_system(nodes, self._weights()) == 0.0
+        """2 domain nodes → 0 active → Q undefined (None)."""
+        nodes = [
+            NodeMetrics(coherence=0.99, separation=0.99, state="domain"),
+            NodeMetrics(coherence=0.99, separation=0.99, state="domain"),
+        ]
+        assert compute_q_system(nodes, self._weights()) is None
 
     def test_archived_nodes_excluded(self):
-        nodes = [NodeMetrics(coherence=0.99, separation=0.99, state="archived")]
-        assert compute_q_system(nodes, self._weights()) == 0.0
+        """2 archived nodes → 0 active → Q undefined (None)."""
+        nodes = [
+            NodeMetrics(coherence=0.99, separation=0.99, state="archived"),
+            NodeMetrics(coherence=0.99, separation=0.99, state="archived"),
+        ]
+        assert compute_q_system(nodes, self._weights()) is None
 
     def test_mixed_states_only_non_excluded_contribute(self):
         """mature/template should contribute; domain/archived should not."""
@@ -234,14 +328,15 @@ class TestComputeQSystemStateMembership:
             NodeMetrics(coherence=0.0, separation=0.0, state="archived"),
         ]
         score = compute_q_system(contributing + excluded, self._weights(), coverage=1.0)
-        assert score > 0.5
+        assert score is not None and score > 0.5
 
-    def test_only_excluded_states_returns_zero(self):
+    def test_only_excluded_states_returns_none(self):
+        """Excluded-only → 0 active → None (no metrics to compute)."""
         nodes = [
             NodeMetrics(coherence=0.9, separation=0.9, state="domain"),
             NodeMetrics(coherence=0.9, separation=0.9, state="archived"),
         ]
-        assert compute_q_system(nodes, self._weights()) == 0.0
+        assert compute_q_system(nodes, self._weights()) is None
 
 
 class TestSuggestionThreshold:
@@ -387,6 +482,7 @@ class TestComputeQHealth:
         """QHealthResult contains all expected fields."""
         nodes = [
             NodeMetrics(coherence=0.7, separation=0.8, state="active", member_count=5),
+            NodeMetrics(coherence=0.6, separation=0.7, state="active", member_count=3),
         ]
         result = compute_q_health(nodes, self._weights())
 
@@ -402,6 +498,17 @@ class TestComputeQHealth:
         assert isinstance(result.total_members, int)
         assert isinstance(result.cluster_count, int)
 
+    def test_single_active_returns_none(self):
+        """A5: q_health undefined below 2 active clusters (symmetric with q_system)."""
+        nodes = [
+            NodeMetrics(coherence=0.7, separation=0.8, state="active", member_count=5),
+        ]
+        result = compute_q_health(nodes, self._weights())
+        assert result.q_health is None
+        # Breakdown fields still populated for observability
+        assert result.cluster_count == 1
+        assert result.total_members == 5
+
     def test_zero_members_fallback(self):
         """When all member_counts are 0, falls back to equal weighting."""
         nodes = [
@@ -416,15 +523,18 @@ class TestComputeQHealth:
         assert result.total_members == 0
         assert result.cluster_count == 2
 
-    def test_empty_returns_zero(self):
-        """Empty node list returns zero Q."""
+    def test_empty_returns_none(self):
+        """A5: Empty node list → q_health undefined (None)."""
         result = compute_q_health([], self._weights())
-        assert result.q_health == 0.0
+        assert result.q_health is None
         assert result.total_members == 0
         assert result.cluster_count == 0
 
     def test_excludes_domain_and_archived(self):
-        """Domain and archived nodes should be excluded from computation."""
+        """Domain and archived nodes should be excluded from computation.
+
+        Only 1 active remains after exclusion → q_health=None (A5 N-guard).
+        """
         nodes = [
             NodeMetrics(coherence=0.5, separation=0.7, state="active", member_count=10),
             NodeMetrics(coherence=0.0, separation=0.0, state="domain", member_count=100),
@@ -434,6 +544,7 @@ class TestComputeQHealth:
 
         assert result.cluster_count == 1  # Only the active node
         assert result.total_members == 10  # Only the active node's members
+        assert result.q_health is None  # <2 active → undefined
 
     def test_negative_member_count_clamped(self):
         """Negative member_count is treated as 0 (clamped via max(n, 0))."""

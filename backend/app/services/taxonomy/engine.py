@@ -1362,8 +1362,14 @@ class TaxonomyEngine:
 
     def _compute_q_from_nodes(
         self, nodes: list[PromptCluster], silhouette: float = 0.0
-    ) -> float:
-        """Compute Q_system from a list of PromptCluster rows."""
+    ) -> float | None:
+        """Compute Q_system from a list of PromptCluster rows.
+
+        A5: Returns ``None`` when fewer than 2 active (non-structural) nodes
+        exist — Q is undefined for single/empty taxonomies. Callers that
+        need a persistable value (snapshot writers) must coerce ``None`` at
+        the write boundary.
+        """
         from app.services.taxonomy.quality import (
             NodeMetrics,
             QWeights,
@@ -1371,7 +1377,7 @@ class TaxonomyEngine:
         )
 
         if not nodes:
-            return 0.0
+            return None
 
         metrics = []
         for n in nodes:
@@ -3698,7 +3704,7 @@ class TaxonomyEngine:
         self,
         db: AsyncSession,
         *,
-        q_system: float,
+        q_system: float | None,
         operations: list[dict],
         ops_attempted: int,
         ops_accepted: int,
@@ -3961,6 +3967,14 @@ class TaxonomyEngine:
         q_separation = latest.q_separation if latest else None
         q_coverage = latest.q_coverage if latest else None
         q_dbcv = latest.q_dbcv if latest else None
+
+        # A5: Q is undefined when fewer than 2 active (non-structural) nodes
+        # exist in the current (live) taxonomy — even if a stale snapshot
+        # persisted a coerced 0.0. Surface None so the UI chip + API consumers
+        # can render "—" instead of a misleading number.
+        _live_active_count = active + candidate + mature
+        if _live_active_count < 2:
+            q_system = None
 
         # Sparkline history — use q_health (member-weighted) exclusively.
         # Older snapshots that predate q_health and rejected cold path

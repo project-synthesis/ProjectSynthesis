@@ -245,6 +245,42 @@ describe('StatusBar', () => {
     expect(screen.queryByTitle('Taxonomy health (Q_system)')).not.toBeInTheDocument();
   });
 
+  it('omits Q chip when both q_health and q_system are null (A5 N<2 case)', async () => {
+    // A5: fewer than 2 active clusters → backend surfaces null for both Q
+    // metrics. The StatusBar chip must be absent rather than render "null" or 0.
+    clustersStore.taxonomyStats = {
+      q_system: null,
+      q_coherence: null,
+      q_separation: null,
+      q_coverage: null,
+      q_dbcv: null,
+      q_health: null,
+      q_health_coherence_w: null,
+      q_health_separation_w: null,
+      q_health_weights: null,
+      q_health_total_members: null,
+      q_health_cluster_count: null,
+      total_clusters: 1,
+      nodes: { active: 1, candidate: 0, mature: 0, template: 0, archived: 0, max_depth: 0, leaf_count: 1 },
+      last_warm_path: null,
+      last_cold_path: null,
+      warm_path_age: null,
+      q_history: [],
+      q_sparkline: [],
+      q_trend: 0,
+      q_current: null,
+      q_min: null,
+      q_max: null,
+      q_point_count: 0,
+    };
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    render(StatusBar);
+    await vi.waitFor(() => {}, { timeout: 100 });
+    // The "Q:" label appears only when the chip renders — its absence
+    // proves the chip was omitted for N<2.
+    expect(screen.queryByText(/^Q:$/)).not.toBeInTheDocument();
+  });
+
   it('renders sparkline SVG when q_sparkline has sufficient data', async () => {
     clustersStore.taxonomyStats = {
       q_system: 0.8,

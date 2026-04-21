@@ -27,7 +27,7 @@ async def create_snapshot(
     db: AsyncSession,
     *,
     trigger: str,
-    q_system: float,
+    q_system: float | None,
     q_coherence: float,
     q_separation: float,
     q_coverage: float,
@@ -65,9 +65,12 @@ async def create_snapshot(
         PromptCluster table instead.  The parameter was removed to prevent
         dead-data accumulation (~50KB per snapshot).
     """
+    # A5: TaxonomySnapshot.q_system is NOT NULL at the DB layer; coerce a
+    # None (insufficient-clusters) Q to 0.0 for persistence. Live endpoints
+    # recompute Q from current cluster state and surface None to consumers.
     snap = TaxonomySnapshot(
         trigger=trigger,
-        q_system=q_system,
+        q_system=0.0 if q_system is None else q_system,
         q_coherence=q_coherence,
         q_separation=q_separation,
         q_coverage=q_coverage,

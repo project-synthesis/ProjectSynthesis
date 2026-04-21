@@ -193,6 +193,24 @@ async def test_run_speculative_phase_accepted_commits(db, mock_embedding, mock_p
 
     engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
 
+    # A5: the Q gate needs Q to be defined on both sides, which requires
+    # ≥2 active non-structural clusters. Seed two pre-existing nodes so a
+    # no-op phase produces real Q_before and Q_after numbers.
+    for label in ("Pre-existing-A", "Pre-existing-B"):
+        db.add(
+            PromptCluster(
+                label=label,
+                state="active",
+                domain="general",
+                centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+                member_count=3,
+                coherence=0.8,
+                separation=0.8,
+                color_hex="#a855f7",
+            )
+        )
+    await db.commit()
+
     # Phase function that does nothing (Q_before == Q_after → non-regressive)
     async def no_op_phase(eng, session, split_protected_ids, dirty_ids=None):
         return PhaseResult(
