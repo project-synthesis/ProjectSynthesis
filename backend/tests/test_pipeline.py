@@ -373,6 +373,105 @@ class TestResolveEffectiveStrategy:
         assert result == "chain-of-thought"
 
 
+class TestResolveEffectiveStrategyIntent:
+    """A2: the auto-resolver must consider ``intent_label`` before falling back
+    to the coarse task-type map. A `task_type=analysis` prompt with intent
+    'MCP Sampling Pipeline Audit' should land on chain-of-thought, not the
+    task-type default 'meta-prompting'. Intent is pulled from
+    ``AnalysisResult.intent_label`` at the call site in ``pipeline_phases.py``.
+    """
+
+    _AVAILABLE = [
+        "auto", "chain-of-thought", "structured-output",
+        "role-playing", "meta-prompting", "few-shot",
+    ]
+
+    def test_audit_intent_resolves_to_chain_of_thought(self):
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="analysis",
+            intent_label="MCP Sampling Pipeline Audit",
+        )
+        assert result == "chain-of-thought"
+
+    def test_debug_intent_resolves_to_chain_of_thought(self):
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="coding",
+            intent_label="Debug memory leak in worker pool",
+        )
+        assert result == "chain-of-thought"
+
+    def test_extract_intent_resolves_to_structured_output(self):
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="data",
+            intent_label="Extract invoices from PDF",
+        )
+        assert result == "structured-output"
+
+    def test_story_intent_resolves_to_role_playing(self):
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="creative",
+            intent_label="Write a bedtime story about robots",
+        )
+        assert result == "role-playing"
+
+    def test_falls_back_to_task_type_map_on_unknown_intent(self):
+        """Intent with no keyword hit yields the task-type default."""
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="coding",
+            intent_label="Make it better",
+        )
+        assert result == "meta-prompting"
+
+    def test_falls_back_when_intent_is_none(self):
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="coding",
+            intent_label=None,
+        )
+        assert result == "meta-prompting"
+
+    def test_blocked_intent_pick_falls_through(self):
+        """Blocked intent-resolved strategies skip to task-type map."""
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, {"chain-of-thought"}, 0.9, None, "t1",
+            task_type="analysis",
+            intent_label="Audit the new middleware",
+        )
+        assert result == "meta-prompting"
+
+    def test_unavailable_intent_pick_falls_through(self):
+        """Intent-resolved strategies missing from available skip to task-type map."""
+        result = resolve_effective_strategy(
+            "auto", ["auto", "meta-prompting"],  # no chain-of-thought
+            set(), 0.9, None, "t1",
+            task_type="analysis",
+            intent_label="Debug the worker",
+        )
+        assert result == "meta-prompting"
+
+    def test_explicit_override_wins_over_intent(self):
+        """Intent mapping runs only on 'auto' — explicit override is final."""
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, set(), 0.9, "few-shot", "t1",
+            task_type="analysis",
+            intent_label="Audit the pipeline",
+        )
+        assert result == "few-shot"
+
+    def test_case_insensitive_keyword_matching(self):
+        result = resolve_effective_strategy(
+            "auto", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="analysis",
+            intent_label="AUDIT THE PIPELINE",
+        )
+        assert result == "chain-of-thought"
+
+
 class TestStrategyFiltering:
     def test_format_available_filters_blocked(self, orchestrator):
         """format_available excludes blocked strategies from the bullet list."""

@@ -418,6 +418,59 @@ def semantic_upgrade_general(task_type: str, raw_prompt: str) -> str:
     return task_type
 
 
+# ---------------------------------------------------------------------------
+# A2: Intent-aware auto-resolution
+# ---------------------------------------------------------------------------
+# When the analyzer picks ``"auto"``, the default path falls straight to the
+# coarse task-type map (``_auto_task_map`` in ``resolve_effective_strategy``).
+# That map ignores the semantic shape of the request: a ``task_type=analysis``
+# prompt whose ``intent_label`` clearly says "audit" or "debug" should land on
+# chain-of-thought, not the generic ``meta-prompting`` default.
+#
+# The keyword table below is intentionally short. It covers verbs/nouns that
+# unambiguously pick one strategy over another. Ambiguous intents (``make``,
+# ``improve``) fall through to the task-type map — we'd rather under-trigger
+# than misroute.
+_INTENT_STRATEGY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "chain-of-thought": (
+        "audit", "debug", "diagnose", "review",
+        "compare", "investigate", "trace", "root cause",
+    ),
+    "structured-output": (
+        "extract", "classify", "list", "schema",
+        "tabulate", "enumerate",
+    ),
+    "role-playing": (
+        "story", "poem", "narrative", "character",
+        "dialogue", "persona",
+    ),
+    # meta-prompting stays the task-type-default fallback (no keyword table).
+}
+
+
+def _resolve_intent_strategy(
+    intent_label: str | None,
+    available: list[str],
+    blocked: set[str],
+) -> str | None:
+    """Return an intent-driven strategy pick, or None when no keyword matches.
+
+    Selection order is dictionary order — the first matching strategy wins.
+    A pick is discarded when the strategy is unavailable on disk or blocked
+    by adaptation, since the caller has a task-type fallback waiting.
+    """
+    if not intent_label:
+        return None
+    low = intent_label.lower()
+    for strategy, keywords in _INTENT_STRATEGY_KEYWORDS.items():
+        if any(kw in low for kw in keywords):
+            if strategy in available and strategy not in blocked:
+                return strategy
+            # Strategy matched intent but is unavailable/blocked — keep
+            # scanning other strategies (their keywords may still hit).
+    return None
+
+
 def resolve_effective_strategy(
     selected_strategy: str,
     available: list[str],
@@ -428,6 +481,7 @@ def resolve_effective_strategy(
     *,
     data_recommendation: StrategyRecommendation | None = None,
     task_type: str | None = None,
+    intent_label: str | None = None,
 ) -> str:
     """Post-analysis strategy resolution chain.
 
@@ -496,6 +550,21 @@ def resolve_effective_strategy(
     # 5. Explicit override always wins (final)
     if strategy_override:
         effective = strategy_override
+
+    # 5b. Intent-aware resolution: before falling to the coarse task-type
+    # map, inspect the analyzer's intent_label for strong keyword hits
+    # (e.g. "audit"/"debug" → chain-of-thought). See A2 — task-type alone
+    # routed an audit prompt to meta-prompting, which is a poor fit.
+    if effective == "auto":
+        intent_pick = _resolve_intent_strategy(
+            intent_label, available, blocked_strategies,
+        )
+        if intent_pick:
+            logger.info(
+                "Auto→%s via intent_label='%s'. trace_id=%s",
+                intent_pick, intent_label, trace_id,
+            )
+            effective = intent_pick
 
     # 6. Auto resolution: "auto" should never reach the optimizer.
     # Resolve it to a task-type-appropriate named strategy so the

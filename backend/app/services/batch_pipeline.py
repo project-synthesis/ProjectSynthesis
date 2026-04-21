@@ -253,6 +253,7 @@ async def run_single_prompt(
             trace_id=trace_id,
             data_recommendation=None,
             task_type=analysis.task_type,
+            intent_label=analysis.intent_label,
         )
         strategy_instructions = strategy_loader.load(effective_strategy)
         analysis_summary = (
