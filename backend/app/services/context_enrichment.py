@@ -164,6 +164,53 @@ def _build_domain_signals_block(
     }
 
 
+def reconcile_domain_signals(
+    enrichment_meta: dict[str, Any],
+    effective_domain: str,
+) -> dict[str, Any]:
+    """Return a new enrichment_meta dict with domain_signals re-anchored to
+    the pipeline's final resolved domain.
+
+    **Why this exists.** The heuristic ``DomainSignalLoader.classify()`` caps
+    winners below its 1.0 promotion threshold as ``"general"`` (safety margin
+    against noisy keyword matches). The LLM + ``DomainResolver`` later
+    upgrades the prompt to the specific domain (e.g. ``"backend"``). Without
+    reconciliation the persisted ``enrichment_meta.domain_signals.resolved``
+    stays frozen at the heuristic's pre-threshold call, contradicting
+    ``optimization.domain`` in the same row — which is exactly the UI
+    contradiction A1 was meant to eliminate.
+
+    Contract:
+    - New ``domain_signals.resolved`` = qualifier-stripped ``effective_domain``.
+    - ``score`` is re-looked-up from the preserved ``heuristic_domain_scores``
+      (0.0 when the heuristic didn't score the new winner — honest: the
+      heuristic genuinely saw no evidence).
+    - ``runner_up`` is recomputed against the new winner from the same scores.
+    - Unknown / missing keys degrade gracefully; the helper never raises.
+    - ``heuristic_domain_scores`` is preserved in the output as evidence.
+    """
+    out = dict(enrichment_meta)  # shallow copy — caller's dict is not mutated
+    scores = out.get("heuristic_domain_scores") or {}
+    # Strip any qualifier suffix ("backend: auth" → "backend") to stay
+    # consistent with the winner lookup convention in _build_domain_signals_block.
+    winner = (effective_domain or "general").split(":")[0]
+
+    # No scores in meta → fall back to the existing block (if any) with the
+    # resolved winner, score 0.0, no runner (nothing to rank against).
+    if not scores:
+        if "domain_signals" in out or effective_domain:
+            out["domain_signals"] = {
+                "resolved": winner,
+                "score": 0.0,
+                "runner_up": None,
+            }
+        return out
+
+    # Scores present → rebuild the block using the same shape contract.
+    out["domain_signals"] = _build_domain_signals_block(winner, scores)
+    return out
+
+
 @dataclass(frozen=True)
 class EnrichedContext:
     """All resolved context layers for an optimization request."""
@@ -424,6 +471,16 @@ class ContextEnrichmentService:
             # contradicting the classification.
             enrichment_meta_dict["domain_signals"] = _build_domain_signals_block(
                 analysis.domain, analysis.domain_scores,
+            )
+            # A1 follow-up: preserve the raw heuristic score table as evidence
+            # so the pipeline can reconcile domain_signals against the final
+            # LLM/resolver-assigned domain (see ``reconcile_domain_signals``).
+            # The block above freezes the *heuristic's* pre-threshold call,
+            # which below-1.0 scores demote to "general" even when a specific
+            # domain clearly dominated — this table lets us rebuild the winner
+            # from the actual score distribution after resolution.
+            enrichment_meta_dict["heuristic_domain_scores"] = dict(
+                analysis.domain_scores,
             )
         if _llm_fallback:
             enrichment_meta_dict["llm_classification_fallback"] = True

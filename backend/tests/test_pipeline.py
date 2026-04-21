@@ -463,6 +463,50 @@ class TestResolveEffectiveStrategyIntent:
         )
         assert result == "few-shot"
 
+    # A2 follow-up (2026-04-21 live verification): the LLM analyzer in practice
+    # returns the task-type default (e.g. "meta-prompting" for task_type=analysis)
+    # directly rather than "auto". The original step 5b fired only on "auto",
+    # so strong intent signals ("audit", "debug") were silently ignored whenever
+    # the LLM produced the generic default. These tests pin the broadened
+    # behaviour: intent wins over the *task-type default* too, but not over an
+    # LLM pick that diverges from the default (that signal is the LLM saying
+    # "I explicitly chose this, respect me").
+
+    def test_intent_overrides_task_type_default_even_when_llm_picks_it(self):
+        """LLM directly picks 'meta-prompting' for analysis; intent says audit."""
+        result = resolve_effective_strategy(
+            "meta-prompting", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="analysis",
+            intent_label="MCP Sampling Pipeline Audit",
+        )
+        assert result == "chain-of-thought"
+
+    def test_intent_overrides_coding_default_on_debug_keyword(self):
+        result = resolve_effective_strategy(
+            "meta-prompting", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="coding",
+            intent_label="Debug flaky worker pool",
+        )
+        assert result == "chain-of-thought"
+
+    def test_intent_does_not_override_llm_non_default_pick(self):
+        """LLM actively chose a non-default strategy — respect its judgement."""
+        result = resolve_effective_strategy(
+            "few-shot", self._AVAILABLE, set(), 0.9, None, "t1",
+            task_type="analysis",
+            intent_label="Audit the pipeline",
+        )
+        assert result == "few-shot"
+
+    def test_intent_does_not_override_explicit_user_override_on_default(self):
+        """Even when strategy equals task-type default, explicit override wins."""
+        result = resolve_effective_strategy(
+            "meta-prompting", self._AVAILABLE, set(), 0.9, "few-shot", "t1",
+            task_type="analysis",
+            intent_label="Audit the pipeline",
+        )
+        assert result == "few-shot"
+
     def test_case_insensitive_keyword_matching(self):
         result = resolve_effective_strategy(
             "auto", self._AVAILABLE, set(), 0.9, None, "t1",

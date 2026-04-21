@@ -448,6 +448,21 @@ _INTENT_STRATEGY_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Task-type → generic default strategy. Exposed at module level so step 5b can
+# detect when the current effective strategy is "the LLM (or auto map) picked
+# the generic default" and let a strong intent keyword override it. Kept in
+# sync with ``_auto_task_map`` inside ``resolve_effective_strategy``.
+_TASK_TYPE_DEFAULTS: dict[str, str] = {
+    "coding": "meta-prompting",
+    "analysis": "meta-prompting",
+    "writing": "role-playing",
+    "creative": "role-playing",
+    "data": "structured-output",
+    "system": "meta-prompting",
+    "general": "meta-prompting",
+}
+
+
 def _resolve_intent_strategy(
     intent_label: str | None,
     available: list[str],
@@ -555,31 +570,36 @@ def resolve_effective_strategy(
     # map, inspect the analyzer's intent_label for strong keyword hits
     # (e.g. "audit"/"debug" → chain-of-thought). See A2 — task-type alone
     # routed an audit prompt to meta-prompting, which is a poor fit.
-    if effective == "auto":
-        intent_pick = _resolve_intent_strategy(
-            intent_label, available, blocked_strategies,
-        )
-        if intent_pick:
-            logger.info(
-                "Auto→%s via intent_label='%s'. trace_id=%s",
-                intent_pick, intent_label, trace_id,
+    #
+    # A2 follow-up (2026-04-21 live verification): in production the LLM
+    # analyzer returns the *task-type default* (e.g. "meta-prompting" for
+    # analysis) directly rather than "auto". The original condition
+    # `effective == "auto"` therefore never fired on real traffic — the
+    # intent table sat dormant. Broadened to also fire when the current
+    # strategy equals the task-type default: at that point the LLM is
+    # effectively echoing the generic map, and a strong intent keyword is
+    # the more specific signal. LLM picks diverging from the default
+    # (few-shot, chain-of-thought, role-playing when task_type≠creative…)
+    # are still respected — that divergence is the LLM saying "I chose
+    # this specifically".
+    if task_type and not strategy_override:
+        task_default = _TASK_TYPE_DEFAULTS.get(task_type)
+        if effective == "auto" or (task_default and effective == task_default):
+            intent_pick = _resolve_intent_strategy(
+                intent_label, available, blocked_strategies,
             )
-            effective = intent_pick
+            if intent_pick and intent_pick != effective:
+                logger.info(
+                    "%s→%s via intent_label='%s' (task_type=%s). trace_id=%s",
+                    effective, intent_pick, intent_label, task_type, trace_id,
+                )
+                effective = intent_pick
 
     # 6. Auto resolution: "auto" should never reach the optimizer.
     # Resolve it to a task-type-appropriate named strategy so the
     # optimizer always gets concrete technique guidance.
     if effective == "auto" and task_type:
-        _auto_task_map: dict[str, str] = {
-            "coding": "meta-prompting",
-            "analysis": "meta-prompting",
-            "writing": "role-playing",
-            "creative": "role-playing",
-            "data": "structured-output",
-            "system": "meta-prompting",
-            "general": "meta-prompting",
-        }
-        resolved = _auto_task_map.get(task_type, "meta-prompting")
+        resolved = _TASK_TYPE_DEFAULTS.get(task_type, "meta-prompting")
         if resolved in available and resolved not in blocked_strategies:
             logger.info(
                 "Auto→%s resolution (task_type=%s). trace_id=%s",

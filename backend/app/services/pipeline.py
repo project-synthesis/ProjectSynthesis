@@ -309,6 +309,20 @@ class PipelineOrchestrator:
             )
             effective_strategy = post_analyze.effective_strategy
 
+            # A1 follow-up: reconcile the enrichment_meta.domain_signals block
+            # against the LLM/resolver-assigned final domain. The heuristic-time
+            # block freezes the pre-threshold classifier call, which demotes
+            # below-1.0 winners to "general" even when a specific domain
+            # clearly dominated — producing UI rows that read
+            # "resolved: general" beside "optimization.domain = 'backend'".
+            if context_sources:
+                em = context_sources.get("enrichment_meta")
+                if isinstance(em, dict):
+                    from app.services.context_enrichment import reconcile_domain_signals
+                    context_sources["enrichment_meta"] = reconcile_domain_signals(
+                        em, post_analyze.effective_domain,
+                    )
+
             # ---------------------------------------------------------------
             # Pre-Phase: Auto-inject cluster meta-patterns
             # ---------------------------------------------------------------

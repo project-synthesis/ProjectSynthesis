@@ -310,6 +310,13 @@ async def run_single_prompt(
                 enrichment_sources = dict(enrichment.context_sources)
                 if enrichment.enrichment_meta:
                     enrichment_sources["enrichment_meta"] = dict(enrichment.enrichment_meta)
+                    # A1 follow-up: batch path also runs LLM analysis + domain
+                    # resolution. Reconcile signals against the final
+                    # effective_domain so seed rows don't ship contradictions.
+                    from app.services.context_enrichment import reconcile_domain_signals
+                    enrichment_sources["enrichment_meta"] = reconcile_domain_signals(
+                        enrichment_sources["enrichment_meta"], effective_domain,
+                    )
                 if applied_patterns_text:
                     context_flags["cluster_injection"] = True
                 if adaptation_text:

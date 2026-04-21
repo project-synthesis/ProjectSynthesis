@@ -824,6 +824,149 @@ class TestDomainSignalsShape:
             assert "domain_signals" not in meta
 
 
+class TestReconcileDomainSignals:
+    """A1 follow-up (2026-04-21 live verification): the heuristic's
+    ``DomainSignalLoader.classify()`` returns ``"general"`` whenever the top
+    candidate score falls below its 1.0 promotion threshold — even when a
+    specific domain clearly dominated (``backend`` at 0.9 in the live trace).
+    The LLM + ``DomainResolver`` then upgrade ``domain`` to the specific label,
+    but ``enrichment_meta.domain_signals.resolved`` stays frozen at the
+    heuristic's pre-threshold call. UI renders "resolved: general" beside
+    ``optimization.domain = 'backend'`` — the contradiction A1 was supposed
+    to eliminate.
+
+    Contract pinned below:
+    - ``reconcile_domain_signals(meta, effective_domain)`` returns a new meta
+      dict whose ``domain_signals.resolved`` matches the final domain.
+    - ``heuristic_domain_scores`` is preserved as evidence (the loader still
+      saw backend at 0.9; that's useful context).
+    - ``score`` is re-looked-up from the preserved heuristic scores so the
+      number tracks the new winner (0.9 for backend, not the old 0.0).
+    - When heuristic scores are missing entirely, the helper degrades to the
+      current ``{"resolved": ..., "score": 0.0, "runner_up": None}`` shape
+      rather than raising.
+    """
+
+    def test_reconcile_rewrites_resolved_with_effective_domain(self):
+        from app.services.context_enrichment import reconcile_domain_signals
+
+        meta = {
+            "enrichment_profile": "knowledge_work",
+            "domain_signals": {
+                "resolved": "general",
+                "score": 0.0,
+                "runner_up": {"label": "backend", "score": 0.9},
+            },
+            "heuristic_domain_scores": {"backend": 0.9, "general": 0.0},
+        }
+        out = reconcile_domain_signals(meta, "backend")
+        assert out["domain_signals"]["resolved"] == "backend"
+        assert out["domain_signals"]["score"] == 0.9
+
+    def test_reconcile_preserves_heuristic_scores_as_evidence(self):
+        from app.services.context_enrichment import reconcile_domain_signals
+
+        scores = {"backend": 0.9, "general": 0.0}
+        meta = {
+            "domain_signals": {"resolved": "general", "score": 0.0, "runner_up": None},
+            "heuristic_domain_scores": scores,
+        }
+        out = reconcile_domain_signals(meta, "backend")
+        # Scores stay as evidence of the heuristic's pre-threshold view.
+        assert out["heuristic_domain_scores"] == scores
+
+    def test_reconcile_strips_qualifier_suffix_from_effective_domain(self):
+        from app.services.context_enrichment import reconcile_domain_signals
+
+        meta = {
+            "domain_signals": {"resolved": "general", "score": 0.0, "runner_up": None},
+            "heuristic_domain_scores": {"backend": 0.9},
+        }
+        out = reconcile_domain_signals(meta, "backend: auth")
+        assert out["domain_signals"]["resolved"] == "backend"
+        assert out["domain_signals"]["score"] == 0.9
+
+    def test_reconcile_is_noop_when_effective_matches_current_resolved(self):
+        from app.services.context_enrichment import reconcile_domain_signals
+
+        meta = {
+            "domain_signals": {"resolved": "backend", "score": 0.9, "runner_up": None},
+            "heuristic_domain_scores": {"backend": 0.9},
+        }
+        out = reconcile_domain_signals(meta, "backend")
+        assert out["domain_signals"]["resolved"] == "backend"
+        assert out["domain_signals"]["score"] == 0.9
+
+    def test_reconcile_tolerates_missing_heuristic_scores(self):
+        """Safe degrade: no evidence to re-score against → 0.0 is honest."""
+        from app.services.context_enrichment import reconcile_domain_signals
+
+        meta = {
+            "domain_signals": {"resolved": "general", "score": 0.0, "runner_up": None},
+        }
+        out = reconcile_domain_signals(meta, "backend")
+        assert out["domain_signals"]["resolved"] == "backend"
+        assert out["domain_signals"]["score"] == 0.0
+
+    def test_reconcile_tolerates_missing_domain_signals_block(self):
+        """When enrichment skipped the signals block entirely, reconcile mints it."""
+        from app.services.context_enrichment import reconcile_domain_signals
+
+        meta = {"enrichment_profile": "knowledge_work"}
+        out = reconcile_domain_signals(meta, "backend")
+        # Either the helper adds the block with the resolved domain, or leaves
+        # it absent when there's nothing to report. The contract here is:
+        # never raise, never contradict.
+        ds = out.get("domain_signals")
+        if ds is not None:
+            assert ds["resolved"] == "backend"
+
+    def test_reconcile_picks_runner_up_from_heuristic_scores(self):
+        """Runner-up is recomputed from heuristic_domain_scores against the
+        new winner — not carried over from the stale block."""
+        from app.services.context_enrichment import reconcile_domain_signals
+
+        meta = {
+            "domain_signals": {
+                "resolved": "general",
+                "score": 0.0,
+                "runner_up": {"label": "backend", "score": 0.9},
+            },
+            "heuristic_domain_scores": {
+                "backend": 0.9, "frontend": 0.8, "general": 0.0,
+            },
+        }
+        out = reconcile_domain_signals(meta, "backend")
+        ru = out["domain_signals"]["runner_up"]
+        # frontend (0.8) is within 0.15 of backend (0.9) — surface it.
+        assert ru is not None
+        assert ru["label"] == "frontend"
+        assert ru["score"] == 0.8
+
+
+class TestEnrichmentExposesHeuristicDomainScores:
+    """A1 follow-up: enrichment must expose the raw heuristic score table as
+    ``heuristic_domain_scores`` so the reconcile step has evidence to rebuild
+    the signal block after LLM resolution. Without this, the pipeline can't
+    tell whether the heuristic simply didn't see the specific domain (score
+    missing → 0.0 honest) vs. saw it strongly but got gated by the < 1.0
+    threshold (score present → surface it alongside the resolved winner).
+    """
+
+    @pytest.mark.asyncio
+    async def test_heuristic_scores_exposed_in_enrichment_meta(self, db, tmp_path):
+        service = _build_service(tmp_path)
+        result = await service.enrich(
+            raw_prompt="Audit the backend authentication middleware for token leakage",
+            tier="passthrough", db=db,
+        )
+        meta = dict(result.enrichment_meta)
+        # When the heuristic scored any domain, the raw table MUST be exposed.
+        if result.analysis and result.analysis.domain_scores:
+            assert "heuristic_domain_scores" in meta
+            assert meta["heuristic_domain_scores"] == dict(result.analysis.domain_scores)
+
+
 class TestDisambiguationMetadata:
     """Verify disambiguation metadata flows from HeuristicAnalysis to enrichment_meta."""
 

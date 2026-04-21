@@ -307,6 +307,16 @@ async def run_sampling_pipeline(
         )
         effective_domain = "general"
 
+    # A1 follow-up: reconcile enrichment_meta.domain_signals against the
+    # final resolved domain so the persisted block doesn't contradict
+    # optimization.domain (see ``reconcile_domain_signals`` docstring).
+    em = context_sources.get("enrichment_meta") if isinstance(context_sources, dict) else None
+    if isinstance(em, dict):
+        from app.services.context_enrichment import reconcile_domain_signals
+        context_sources["enrichment_meta"] = reconcile_domain_signals(
+            em, effective_domain,
+        )
+
     # E1: Heuristic vs LLM classification agreement tracking
     if heuristic_task_type is not None:
         try:
