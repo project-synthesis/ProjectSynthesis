@@ -100,7 +100,11 @@ class Feedback(Base):
     __tablename__ = "feedbacks"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    optimization_id: Mapped[str] = mapped_column(String, ForeignKey("optimizations.id"), nullable=False)
+    optimization_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("optimizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
     rating: Mapped[str] = mapped_column(String, nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -234,7 +238,9 @@ class OptimizationPattern(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     optimization_id: Mapped[str] = mapped_column(
-        String, ForeignKey("optimizations.id"), nullable=False,
+        String,
+        ForeignKey("optimizations.id", ondelete="CASCADE"),
+        nullable=False,
     )
     cluster_id: Mapped[str] = mapped_column(
         String, ForeignKey("prompt_cluster.id"), nullable=False,
@@ -426,7 +432,9 @@ class RefinementBranch(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     optimization_id: Mapped[str] = mapped_column(
-        String, ForeignKey("optimizations.id"), nullable=False,
+        String,
+        ForeignKey("optimizations.id", ondelete="CASCADE"),
+        nullable=False,
     )
     parent_branch_id: Mapped[str | None] = mapped_column(String, nullable=True)
     forked_at_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -438,7 +446,9 @@ class RefinementTurn(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     optimization_id: Mapped[str] = mapped_column(
-        String, ForeignKey("optimizations.id"), nullable=False,
+        String,
+        ForeignKey("optimizations.id", ondelete="CASCADE"),
+        nullable=False,
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     branch_id: Mapped[str] = mapped_column(

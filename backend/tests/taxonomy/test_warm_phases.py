@@ -193,6 +193,55 @@ async def test_phase_reconcile_excludes_analyzed_status(db, mock_embedding, mock
 
 
 @pytest.mark.asyncio
+async def test_phase_reconcile_clears_learned_phase_weights_on_empty_cluster(
+    db, mock_embedding, mock_provider,
+):
+    """An empty cluster must have any stale learned_phase_weights popped.
+
+    Closing the delete-cascade gap: when every member of a cluster has
+    been removed, the learned profile keyed to that cluster is no longer
+    backed by evidence. Leaving it in place risks "phantom learning" if
+    the cluster id is reused or reacquires members later. Phase 0 is the
+    single reconciler of live Optimization state, so it also owns the
+    aggregate clean-up.
+    """
+    engine = _make_mock_engine(db, mock_embedding, mock_provider)
+
+    node = PromptCluster(
+        label="Empty Learned-Weights Node",
+        state="active",
+        domain="general",
+        centroid_embedding=np.random.randn(EMBEDDING_DIM).astype(np.float32).tobytes(),
+        member_count=0,
+        color_hex="#a855f7",
+        cluster_metadata={
+            "learned_phase_weights": {
+                "analyze": {
+                    "w_topic": 0.4,
+                    "w_transformation": 0.2,
+                    "w_output": 0.2,
+                    "w_pattern": 0.1,
+                    "w_qualifier": 0.1,
+                },
+            },
+            "some_other_key": "should_survive",
+        },
+    )
+    db.add(node)
+    await db.commit()
+
+    await phase_reconcile(engine, db)
+    await db.refresh(node)
+
+    assert node.cluster_metadata is not None
+    assert "learned_phase_weights" not in node.cluster_metadata or \
+        node.cluster_metadata.get("learned_phase_weights") is None
+    # Unrelated metadata must be preserved — only the learned weights key
+    # is owned by this reconciliation pass.
+    assert node.cluster_metadata.get("some_other_key") == "should_survive"
+
+
+@pytest.mark.asyncio
 async def test_phase_reconcile_updates_coherence(db, mock_embedding, mock_provider):
     """phase_reconcile recomputes coherence from actual member embeddings."""
     engine = _make_mock_engine(db, mock_embedding, mock_provider)

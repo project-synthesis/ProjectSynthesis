@@ -1356,6 +1356,18 @@ async def phase_reconcile(
                 node.member_count = expected
                 result.member_counts_fixed += 1
 
+            # On an empty cluster, clear any learned_phase_weights carried
+            # over from prior members. Leaving the weights in place creates
+            # "phantom learning" — stale profiles that linger on a
+            # zero-member cluster until the 24h archival window collects
+            # the node. Harmless while the cluster is unused but noise if
+            # the id is reused or the cluster later reacquires members.
+            if expected == 0 and node.cluster_metadata:
+                if node.cluster_metadata.get("learned_phase_weights") is not None:
+                    node.cluster_metadata = write_meta(
+                        node.cluster_metadata, learned_phase_weights=None,
+                    )
+
             # Always recompute coherence from actual member embeddings.
             if expected >= 2:
                 member_embs = emb_by_cluster.get(node.id, [])

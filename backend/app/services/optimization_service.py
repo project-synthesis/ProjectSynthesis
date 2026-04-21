@@ -4,15 +4,32 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import asc, desc, func, select
+from sqlalchemy import asc, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization
+from app.services.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DeleteOptimizationsResult:
+    """Result of a bulk optimization deletion.
+
+    ``affected_cluster_ids`` lets the caller publish a follow-up
+    ``taxonomy_changed`` event so warm Phase 0 reconciles the member_count
+    on those clusters in the next cycle instead of waiting for the
+    debounce window to close.
+    """
+
+    deleted: int = 0
+    affected_cluster_ids: set[str] = field(default_factory=set)
+    affected_project_ids: set[str] = field(default_factory=set)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -235,6 +252,99 @@ class OptimizationService:
         ).scalar() or 0
 
         return {"last_hour": last_hour, "last_24h": last_24h}
+
+    # ------------------------------------------------------------------
+    # Per-phase average durations
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Deletion
+    # ------------------------------------------------------------------
+
+    async def delete_optimizations(
+        self,
+        ids: list[str],
+        *,
+        reason: str = "user_request",
+    ) -> DeleteOptimizationsResult:
+        """Delete optimizations by id and cascade to all dependents.
+
+        Relies on the DB-level ``ondelete="CASCADE"`` rules
+        (migration ``a2f6d8e31b09``) to remove ``Feedback``,
+        ``OptimizationPattern``, ``RefinementBranch`` and ``RefinementTurn``
+        rows atomically. ``PromptTemplate.source_optimization_id`` is
+        auto-nulled by its ``ondelete="SET NULL"`` rule — templates are
+        immutable forks that outlive their source.
+
+        Cluster-level aggregates (``member_count``, ``dominant_project_id``,
+        coherence, learned_phase_weights) are **not** adjusted here; warm
+        Phase 0 reconciles them from the live Optimization table on the
+        next cycle. Callers that need immediate reconciliation should
+        publish a ``taxonomy_changed`` event after awaiting this method.
+
+        Emits one ``optimization_deleted`` event per deleted row with
+        payload ``{id, cluster_id, project_id, reason}`` so SSE clients
+        (e.g. HistoryPanel) can update in real time.
+
+        Args:
+            ids: Optimization ids to delete. Unknown ids are skipped silently
+                — the method returns the count of rows actually removed.
+            reason: Free-form string propagated on the event payload for
+                downstream consumers and audit trails
+                (e.g. ``"user_request"``, ``"bulk_reset"``,
+                ``"gc_sweep"``).
+
+        Returns:
+            ``DeleteOptimizationsResult`` with ``deleted`` count and the set
+            of ``affected_cluster_ids`` / ``affected_project_ids``.
+        """
+        result = DeleteOptimizationsResult()
+        if not ids:
+            return result
+
+        # Snapshot cluster_id / project_id for each target so we can emit
+        # events and report affected clusters after the DELETE fires.
+        rows = (
+            await self._session.execute(
+                select(
+                    Optimization.id,
+                    Optimization.cluster_id,
+                    Optimization.project_id,
+                ).where(Optimization.id.in_(ids))
+            )
+        ).all()
+        if not rows:
+            return result
+
+        for opt_id, cluster_id, project_id in rows:
+            if cluster_id:
+                result.affected_cluster_ids.add(cluster_id)
+            if project_id:
+                result.affected_project_ids.add(project_id)
+
+        # Single DELETE — DB cascade handles dependents.
+        deleted = await self._session.execute(
+            delete(Optimization).where(Optimization.id.in_(ids))
+        )
+        result.deleted = int(deleted.rowcount or 0)
+        await self._session.commit()
+
+        for opt_id, cluster_id, project_id in rows:
+            event_bus.publish(
+                "optimization_deleted",
+                {
+                    "id": opt_id,
+                    "cluster_id": cluster_id,
+                    "project_id": project_id,
+                    "reason": reason,
+                },
+            )
+
+        logger.info(
+            "Deleted %d optimizations (requested=%d, reason=%s, clusters=%d)",
+            result.deleted, len(ids), reason, len(result.affected_cluster_ids),
+        )
+        return result
 
     # ------------------------------------------------------------------
     # Per-phase average durations
