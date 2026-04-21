@@ -120,6 +120,50 @@ def select_enrichment_profile(
     return PROFILE_KNOWLEDGE_WORK
 
 
+# ---------------------------------------------------------------------------
+# A1: Domain-signal block for enrichment_meta
+# ---------------------------------------------------------------------------
+
+# Runner-up signal margin — how close (max-score minus runner-score) a second
+# candidate must be to appear as informational context alongside the winner.
+# Wider margins mean "runner_up: null" more often, which is what we want on
+# clear wins; narrower means we surface ambiguity the user might want to see.
+_DOMAIN_SIGNAL_RUNNER_UP_MARGIN = 0.15
+
+
+def _build_domain_signals_block(
+    resolved_domain: str, scores: dict[str, float],
+) -> dict[str, Any]:
+    """Shape the ``enrichment_meta.domain_signals`` block from analyzer output.
+
+    Returns a dict naming the winning domain (``resolved``), its score
+    (``score``, rounded to 3dp), and an optional ``runner_up`` sub-dict that
+    appears only when a second candidate is within
+    ``_DOMAIN_SIGNAL_RUNNER_UP_MARGIN`` of the winner. Informational, never
+    contradictory.
+
+    The winner is looked up in ``scores`` by qualifier-stripped primary
+    (``"backend: auth"`` → ``"backend"``), so sub-qualifiers in
+    ``analysis.domain`` stay consistent with the candidate-score table.
+    """
+    winner = (resolved_domain or "general").split(":")[0]
+    top_score = float(scores.get(winner, 0.0))
+    runner_up_entry: dict[str, Any] | None = None
+    runner_candidates = [(k, float(v)) for k, v in scores.items() if k != winner]
+    if runner_candidates:
+        best_runner = max(runner_candidates, key=lambda kv: kv[1])
+        if best_runner[1] >= top_score - _DOMAIN_SIGNAL_RUNNER_UP_MARGIN:
+            runner_up_entry = {
+                "label": best_runner[0],
+                "score": round(best_runner[1], 3),
+            }
+    return {
+        "resolved": winner,
+        "score": round(top_score, 3),
+        "runner_up": runner_up_entry,
+    }
+
+
 @dataclass(frozen=True)
 class EnrichedContext:
     """All resolved context layers for an optimization request."""
@@ -373,7 +417,14 @@ class ContextEnrichmentService:
         if _disambiguation_info:
             enrichment_meta_dict["heuristic_disambiguation"] = _disambiguation_info
         if analysis and analysis.domain_scores:
-            enrichment_meta_dict["domain_signals"] = analysis.domain_scores
+            # A1: expose the resolved winner instead of shipping the raw
+            # candidate-score table. The old `{label: score}` shape let the UI
+            # render a runner-up candidate ("fullstack": 0.3) even when the
+            # primary domain was something else ("backend" at 0.88) —
+            # contradicting the classification.
+            enrichment_meta_dict["domain_signals"] = _build_domain_signals_block(
+                analysis.domain, analysis.domain_scores,
+            )
         if _llm_fallback:
             enrichment_meta_dict["llm_classification_fallback"] = True
         if analysis:

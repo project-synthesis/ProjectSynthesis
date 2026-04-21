@@ -384,20 +384,42 @@
               </div>
             {/if}
 
-            <!-- Domain signal scores — shows which domains matched during heuristic classification -->
+            <!-- Domain signals — A1: new shape names the resolved winner to
+                 match the primary classification; legacy `{label: score}` dict
+                 shape is read-compat rendered until old rows are rewritten. -->
             {#if enrichmentMeta?.domain_signals}
-              {@const signals = enrichmentMeta.domain_signals as Record<string, number>}
-              {@const entries = Object.entries(signals).sort((a, b) => (b[1] as number) - (a[1] as number))}
-              {#if entries.length > 0}
+              {@const raw = enrichmentMeta.domain_signals as Record<string, unknown>}
+              {#if typeof raw?.resolved === 'string'}
+                {@const resolved = raw.resolved as string}
+                {@const score = (raw.score as number | undefined) ?? 0}
+                {@const runnerUp = raw.runner_up as { label: string; score: number } | null | undefined}
                 <div class="enrichment-diagnostics">
                   <span class="stat-label">domain signals</span>
-                  {#each entries as [domain, score]}
+                  <span class="context-stat">
+                    <span class="stat-value">{resolved}</span>
+                    <span class="stat-value" style="opacity: 0.6;">{score.toFixed(2)}</span>
+                  </span>
+                  {#if runnerUp}
                     <span class="context-stat">
-                      <span class="stat-value">{domain}</span>
-                      <span class="stat-value" style="opacity: 0.6;">{(score as number).toFixed(1)}</span>
+                      <span class="stat-value" style="opacity: 0.7;">~ {runnerUp.label}</span>
+                      <span class="stat-value" style="opacity: 0.5;">{runnerUp.score.toFixed(2)}</span>
                     </span>
-                  {/each}
+                  {/if}
                 </div>
+              {:else}
+                <!-- Legacy `{label: score}` dict — read-compat path. -->
+                {@const entries = Object.entries(raw as Record<string, number>).sort((a, b) => (b[1] as number) - (a[1] as number))}
+                {#if entries.length > 0}
+                  <div class="enrichment-diagnostics">
+                    <span class="stat-label">domain signals</span>
+                    {#each entries as [domain, score]}
+                      <span class="context-stat">
+                        <span class="stat-value">{domain}</span>
+                        <span class="stat-value" style="opacity: 0.6;">{(score as number).toFixed(1)}</span>
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
               {/if}
             {/if}
 

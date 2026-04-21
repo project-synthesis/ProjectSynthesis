@@ -738,6 +738,92 @@ class TestEnrichmentProfileIntegration:
 # ---------------------------------------------------------------------------
 
 
+class TestDomainSignalsShape:
+    """A1: the enrichment_meta.domain_signals block must name the winning
+    domain so the UI can render a non-contradictory label.
+
+    Live evidence: a prompt classified as domain='backend' (conf 0.88) shipped
+    ``domain_signals={"fullstack": 0.3}`` because the old code wrote
+    ``analysis.domain_scores`` verbatim — the candidate-score table, not a
+    resolved-domain signal. The UI rendered it as if ``fullstack`` were the
+    domain qualifier, contradicting the primary classification.
+
+    Shape contract:
+        {
+          "resolved": <winning domain, qualifier-stripped>,
+          "score":    <float, rounded to 3dp>,
+          "runner_up": {"label": ..., "score": ...} | None,
+        }
+
+    Runner-up is populated ONLY when it's within a small margin of the winner
+    (informational — never contradictory).
+    """
+
+    @pytest.mark.asyncio
+    async def test_resolved_domain_exposed_not_runner_up(self, db, tmp_path):
+        service = _build_service(tmp_path)
+        result = await service.enrich(
+            raw_prompt="Audit the backend auth middleware for token leakage",
+            tier="passthrough", db=db,
+        )
+        assert result.analysis is not None
+        meta = dict(result.enrichment_meta)
+        assert "domain_signals" in meta
+        ds = meta["domain_signals"]
+        # New shape is a dict with a `resolved` key (not a raw score table).
+        assert isinstance(ds, dict)
+        assert "resolved" in ds, f"domain_signals missing 'resolved' key: {ds!r}"
+        assert "score" in ds
+        # Resolved must match the analyzer's primary domain (qualifier stripped).
+        resolved_domain = (result.analysis.domain or "general").split(":")[0]
+        assert ds["resolved"] == resolved_domain
+
+    @pytest.mark.asyncio
+    async def test_score_is_rounded_float(self, db, tmp_path):
+        service = _build_service(tmp_path)
+        result = await service.enrich(
+            raw_prompt="Implement a new REST endpoint with SQLAlchemy",
+            tier="passthrough", db=db,
+        )
+        meta = dict(result.enrichment_meta)
+        if "domain_signals" in meta and result.analysis and result.analysis.domain_scores:
+            ds = meta["domain_signals"]
+            assert isinstance(ds["score"], float)
+            # 3-decimal rounding is the public contract for UI rendering.
+            assert round(ds["score"], 3) == ds["score"]
+
+    @pytest.mark.asyncio
+    async def test_runner_up_only_when_within_margin(self, db, tmp_path):
+        """Runner-up is populated only when score >= winner - 0.15."""
+        service = _build_service(tmp_path)
+        result = await service.enrich(
+            raw_prompt="Implement a backend service with frontend hooks",
+            tier="passthrough", db=db,
+        )
+        meta = dict(result.enrichment_meta)
+        if "domain_signals" not in meta:
+            pytest.skip("No domain signals extracted for this prompt")
+        ds = meta["domain_signals"]
+        assert "runner_up" in ds
+        if ds["runner_up"] is not None:
+            ru = ds["runner_up"]
+            # Within 0.15 of the winner — the contract for "informational".
+            assert ds["score"] - ru["score"] < 0.15 + 1e-9
+            assert ru["label"] != ds["resolved"]
+
+    @pytest.mark.asyncio
+    async def test_omitted_when_no_domain_scores(self, db, tmp_path):
+        """Keep the block absent when no signals exist — don't fabricate."""
+        service = _build_service(tmp_path)
+        result = await service.enrich(
+            raw_prompt="Make it nicer please",  # no domain cues
+            tier="passthrough", db=db,
+        )
+        meta = dict(result.enrichment_meta)
+        if result.analysis and not result.analysis.domain_scores:
+            assert "domain_signals" not in meta
+
+
 class TestDisambiguationMetadata:
     """Verify disambiguation metadata flows from HeuristicAnalysis to enrichment_meta."""
 
