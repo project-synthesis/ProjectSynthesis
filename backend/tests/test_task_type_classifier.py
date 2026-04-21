@@ -283,3 +283,128 @@ class TestHasTechnicalNouns:
     def test_empty_string_returns_false(self):
         assert not ttc.has_technical_nouns("")
         assert not ttc.has_technical_nouns("   ")
+
+
+class TestStaticSingleSignalsSurviveDynamicMerge:
+    """B6: `set_task_type_signals()` must not wipe the default single-word
+    signals when a dynamic payload is missing them.
+
+    Live reference: the 2026-04-21 SQLAlchemy session-factory optimization
+    persisted ``task_type_scores = {creative: 1.4, coding: 0.0}`` even though
+    the module defaults for ``coding`` include "sqlalchemy" 0.7, "fastapi"
+    0.7, "factory" 0.5, "session" 0.4 (all present in the prompt). The
+    classifier ran on a warm-path rebuilt table (``_STATIC_COMPOUND_SIGNALS
+    + {}``) that had dropped every single-word default.
+
+    Root cause: the merge at
+    ``set_task_type_signals()`` rebuilt the signal table from
+    ``_STATIC_COMPOUND_SIGNALS.get(task_type, []) + dynamic_signals.get(...)``
+    — ``_STATIC_COMPOUND_SIGNALS`` only contains *multi-word* entries, so
+    single-word defaults were never re-included once a warm-path call fired.
+
+    Fix: introduce a ``_STATIC_SINGLE_SIGNALS`` snapshot (mirror of
+    ``_STATIC_COMPOUND_SIGNALS`` but for single-word defaults) and fall back
+    to it when ``dynamic_signals`` has no entry for a given task type. Warm
+    paths that actually ran TF-IDF extraction still override the defaults
+    (they pass their own single-word list for that task type); warm paths
+    that ran partial extraction only replace the types they extracted.
+    """
+
+    def test_default_signal_table_has_single_words(self):
+        """Sanity: the module-load ``_TASK_TYPE_SIGNALS`` must contain the B1
+        single-word entries. Regression guard against accidental removal."""
+        coding = dict(ttc._TASK_TYPE_SIGNALS["coding"])
+        assert coding.get("sqlalchemy") == 0.7
+        assert coding.get("fastapi") == 0.7
+        assert coding.get("factory") == 0.5
+        assert coding.get("session") == 0.4
+
+    def test_static_single_signals_snapshot_exists(self):
+        """The implementation must expose a ``_STATIC_SINGLE_SIGNALS`` mirror
+        of ``_STATIC_COMPOUND_SIGNALS`` so the merge has a single-word
+        fallback tier. This is the structural claim of the fix."""
+        assert hasattr(ttc, "_STATIC_SINGLE_SIGNALS"), (
+            "task_type_classifier must expose _STATIC_SINGLE_SIGNALS "
+            "— the single-word baseline that survives set_task_type_signals()"
+        )
+        coding = dict(ttc._STATIC_SINGLE_SIGNALS["coding"])
+        # B1 single-word defaults must be captured in the baseline
+        assert coding.get("sqlalchemy") == 0.7
+        assert coding.get("fastapi") == 0.7
+        assert coding.get("factory") == 0.5
+        assert coding.get("session") == 0.4
+        # A8 CLI-family must also survive
+        assert coding.get("cli") == 0.7
+        assert coding.get("daemon") == 0.7
+
+    def test_empty_dynamic_task_type_preserves_single_defaults(self):
+        """When ``set_task_type_signals`` is called for OTHER task types but
+        not ``coding``, the coding single-word defaults must survive.
+
+        Live reference: warm-path TF-IDF extraction may cross the 30-sample
+        threshold for ``writing`` only, but the call still merges across all
+        task types. Pre-B6 this silently wiped ``coding`` single-words.
+        """
+        ttc.set_task_type_signals(
+            {"writing": [("blog", 0.9), ("article", 0.8)]},
+            extracted_task_types={"writing"},
+        )
+        signals = ttc.get_task_type_signals()
+        coding_keywords = dict(signals["coding"])
+        # Compound defaults survive (never broken)
+        assert coding_keywords.get("session factory") == 1.2
+        assert coding_keywords.get("dependency injection") == 1.1
+        # Single-word B1 defaults must also survive the rebuild
+        assert coding_keywords.get("sqlalchemy") == 0.7, (
+            f"single-word defaults wiped — keywords: {list(coding_keywords)}"
+        )
+        assert coding_keywords.get("fastapi") == 0.7
+        assert coding_keywords.get("factory") == 0.5
+        assert coding_keywords.get("session") == 0.4
+
+    def test_dynamic_singles_override_static_for_extracted_task_type(self):
+        """When TF-IDF extraction fires for ``coding`` with its own singles,
+        the dynamic payload REPLACES the static single-word defaults for
+        that task type only. Other task types keep their static singles."""
+        ttc.set_task_type_signals(
+            {"coding": [("tf-idf-signal-a", 0.9), ("tf-idf-signal-b", 0.8)]},
+            extracted_task_types={"coding"},
+        )
+        signals = ttc.get_task_type_signals()
+        coding_keywords = dict(signals["coding"])
+        # Compound defaults always survive
+        assert coding_keywords.get("session factory") == 1.2
+        # Dynamic singles for coding present
+        assert coding_keywords.get("tf-idf-signal-a") == 0.9
+        # Static single-word defaults for coding are replaced
+        # (the extraction claim is: "these are the current coding singles")
+        assert coding_keywords.get("sqlalchemy") is None
+        # But other task types (writing) keep their static singles because
+        # they weren't in the dynamic payload
+        writing_keywords = dict(signals["writing"])
+        assert writing_keywords.get("blog") == 1.0  # default from module
+
+    def test_session_factory_prompt_scores_on_coding_after_partial_warm_path(self):
+        """End-to-end regression: the 2026-04-21 SQL prompt must still score
+        on coding after a warm-path TF-IDF call that only extracted for
+        ``writing``. This was the live failure mode."""
+        ttc.set_task_type_signals(
+            {"writing": [("copywriting", 0.9)]},
+            extracted_task_types={"writing"},
+        )
+        signals = ttc.get_task_type_signals()
+        prompt = (
+            "design a sqlalchemy async session factory with per-request "
+            "dependency injection for fastapi"
+        )
+        coding_score = ttc.score_category(prompt, prompt, signals["coding"])
+        # Without the fix this assertion fires because coding lost its
+        # single-word signals ("sqlalchemy", "fastapi", "factory", "session")
+        # and only the compound hits ("session factory", "dependency
+        # injection") remain — even so, compounds alone should keep score > 0
+        # but we demand proper multi-signal coverage (>= 1.5) to beat
+        # creative's 1.4 ("design" × first-sentence 2x).
+        assert coding_score >= 1.5, (
+            f"Expected coding score >= 1.5 after partial warm-path merge, "
+            f"got {coding_score} (signals: {len(signals['coding'])})"
+        )

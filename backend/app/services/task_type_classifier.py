@@ -141,6 +141,19 @@ _STATIC_COMPOUND_SIGNALS: dict[str, list[tuple[str, float]]] = {
     for task_type, keywords in _TASK_TYPE_SIGNALS.items()
 }
 
+# B6: single-word baseline. ``set_task_type_signals()`` falls back to this
+# snapshot when a dynamic payload has no entry for a given task_type so the
+# B1/A8 defaults ("sqlalchemy", "fastapi", "factory", "session", "cli",
+# "daemon", ...) survive warm-path partial extractions. A partial extraction
+# (TF-IDF crossing the 30-sample threshold on, say, ``writing`` only) would
+# otherwise rebuild the table without any single-word entry for the other
+# task types — the 2026-04-21 live SQL session-factory prompt scored
+# ``coding=0.0`` exactly because of this regression.
+_STATIC_SINGLE_SIGNALS: dict[str, list[tuple[str, float]]] = {
+    task_type: [(kw, w) for kw, w in keywords if " " not in kw]
+    for task_type, keywords in _TASK_TYPE_SIGNALS.items()
+}
+
 # --- A4: Confidence-gated LLM fallback thresholds ---
 _LLM_CLASSIFICATION_CONFIDENCE_GATE = 0.5  # heuristic confidence below this triggers check
 _LLM_CLASSIFICATION_MARGIN_GATE = 0.2      # margin between top 2 categories below this triggers LLM
@@ -221,6 +234,13 @@ def set_task_type_signals(
     threshold in this process). Passing ``None`` — the default used by
     cache-warmup loaders at boot — clears the extraction set so callers
     never mistake a cached table for live learning.
+
+    B6: task types absent from ``dynamic_signals`` fall back to the
+    ``_STATIC_SINGLE_SIGNALS`` baseline captured at module load so single-
+    word B1/A8 defaults survive partial warm-path merges. A task type that
+    appears in ``dynamic_signals`` has its static singles replaced by the
+    dynamic payload (the extraction claim is: "these are the current
+    singles for this type"); unextracted types keep their defaults.
     """
     if not dynamic_signals:
         logger.warning("set_task_type_signals: empty dict — keeping current signals")
@@ -229,10 +249,24 @@ def set_task_type_signals(
         if not isinstance(keywords, list):
             logger.warning("set_task_type_signals: invalid keywords for %s — aborting", task_type)
             return
+    # B6: fall back to ``_STATIC_SINGLE_SIGNALS`` when a task type has no
+    # dynamic payload. Partial warm-path extractions (TF-IDF crossed the
+    # 30-sample threshold for some types but not others) must not wipe the
+    # single-word defaults for the unextracted types — that regression
+    # caused the live 2026-04-21 SQL session-factory prompt to score
+    # ``coding=0.0`` and drift to ``creative``.
     merged: dict[str, list[tuple[str, float]]] = {}
-    for task_type in set(list(dynamic_signals.keys()) + list(_STATIC_COMPOUND_SIGNALS.keys())):
+    all_task_types = (
+        set(dynamic_signals.keys())
+        | set(_STATIC_COMPOUND_SIGNALS.keys())
+        | set(_STATIC_SINGLE_SIGNALS.keys())
+    )
+    for task_type in all_task_types:
         compounds = _STATIC_COMPOUND_SIGNALS.get(task_type, [])
-        singles = dynamic_signals.get(task_type, [])
+        if task_type in dynamic_signals:
+            singles = dynamic_signals[task_type]
+        else:
+            singles = _STATIC_SINGLE_SIGNALS.get(task_type, [])
         merged[task_type] = compounds + singles
     global _TASK_TYPE_SIGNALS, _TASK_TYPE_EXTRACTED
     _TASK_TYPE_SIGNALS = merged
