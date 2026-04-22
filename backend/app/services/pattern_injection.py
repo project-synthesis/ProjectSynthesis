@@ -446,29 +446,26 @@ async def auto_inject_patterns(
         _prov_fail = 0
 
         # 1. Topic-based provenance (cluster matches from embedding index)
+        # Each block uses begin_nested() (SAVEPOINT) so an FK IntegrityError
+        # (optimization row not yet committed) only rolls back the savepoint,
+        # leaving the outer AsyncSession usable for subsequent pipeline phases.
         if cluster_ids:
             try:
-                pending: list[OptimizationPattern] = []
-                for cid in cluster_ids:
-                    record = OptimizationPattern(
-                        optimization_id=optimization_id,
-                        cluster_id=cid,
-                        relationship="injected",
-                        similarity=similarity_map.get(cid),
-                    )
-                    db.add(record)
-                    pending.append(record)
-                await db.flush()
-                _prov_ok += len(pending)
+                async with db.begin_nested():
+                    for cid in cluster_ids:
+                        record = OptimizationPattern(
+                            optimization_id=optimization_id,
+                            cluster_id=cid,
+                            relationship="injected",
+                            similarity=similarity_map.get(cid),
+                        )
+                        db.add(record)
+                    await db.flush()
+                _prov_ok += len(cluster_ids)
             except Exception as exc:
-                for record in pending:
-                    try:
-                        db.expunge(record)
-                    except Exception:
-                        pass
                 _prov_fail += 1
                 logger.warning(
-                    "Topic provenance failed (expunged): %s trace_id=%s",
+                    "Topic provenance failed (savepoint rolled back): %s trace_id=%s",
                     exc, trace_id,
                 )
 
@@ -477,46 +474,42 @@ async def auto_inject_patterns(
             if ip.source == "global" and ip.source_id:
                 # GlobalPattern injection
                 try:
-                    prov = OptimizationPattern(
-                        optimization_id=optimization_id,
-                        cluster_id=ip.cluster_id or "unknown",
-                        global_pattern_id=ip.source_id,
-                        relationship="global_injected",
-                        similarity=ip.similarity,
-                    )
-                    db.add(prov)
-                    await db.flush()
+                    async with db.begin_nested():
+                        prov = OptimizationPattern(
+                            optimization_id=optimization_id,
+                            cluster_id=ip.cluster_id or "unknown",
+                            global_pattern_id=ip.source_id,
+                            relationship="global_injected",
+                            similarity=ip.similarity,
+                        )
+                        db.add(prov)
+                        await db.flush()
                     _prov_ok += 1
                 except Exception as prov_exc:
-                    try:
-                        db.expunge(prov)
-                    except Exception:
-                        pass
                     _prov_fail += 1
                     logger.warning(
-                        "GlobalPattern provenance failed (expunged): %s", prov_exc,
+                        "GlobalPattern provenance failed (savepoint rolled back): %s",
+                        prov_exc,
                     )
             elif ip.source_id and ip.cluster_id not in cluster_ids:
                 # Cross-cluster injection (not already covered by topic provenance)
                 try:
-                    cc_prov = OptimizationPattern(
-                        optimization_id=optimization_id,
-                        cluster_id=ip.cluster_id,
-                        meta_pattern_id=ip.source_id,
-                        relationship="injected",
-                        similarity=ip.similarity,
-                    )
-                    db.add(cc_prov)
-                    await db.flush()
+                    async with db.begin_nested():
+                        cc_prov = OptimizationPattern(
+                            optimization_id=optimization_id,
+                            cluster_id=ip.cluster_id,
+                            meta_pattern_id=ip.source_id,
+                            relationship="injected",
+                            similarity=ip.similarity,
+                        )
+                        db.add(cc_prov)
+                        await db.flush()
                     _prov_ok += 1
                 except Exception as cc_prov_exc:
-                    try:
-                        db.expunge(cc_prov)
-                    except Exception:
-                        pass
                     _prov_fail += 1
                     logger.warning(
-                        "Cross-cluster provenance failed (expunged): %s", cc_prov_exc,
+                        "Cross-cluster provenance failed (savepoint rolled back): %s",
+                        cc_prov_exc,
                     )
 
         _injection_provenance_successes += _prov_ok
