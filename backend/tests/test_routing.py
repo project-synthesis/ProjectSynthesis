@@ -102,15 +102,15 @@ class TestForceSampling:
         state = _state(provider_name="anthropic-api", sampling_capable=True, mcp_connected=True)
         ctx = _ctx(caller="rest", force_sampling=True)
         decision = resolve_route(state, ctx)
-        assert decision.tier == "internal"
-        assert decision.degraded_from == "sampling"
+        assert decision.tier == "sampling"
+        assert decision.degraded_from is None
 
     def test_rest_caller_degrades_to_passthrough(self) -> None:
         state = _state(sampling_capable=True, mcp_connected=True)
         ctx = _ctx(caller="rest", force_sampling=True)
         decision = resolve_route(state, ctx)
-        assert decision.tier == "passthrough"
-        assert decision.degraded_from == "sampling"
+        assert decision.tier == "sampling"
+        assert decision.degraded_from is None
 
     def test_mcp_not_connected_degrades(self) -> None:
         state = _state(provider_name="claude-cli", sampling_capable=True, mcp_connected=False)
@@ -141,7 +141,7 @@ class TestInternalProvider:
         decision = resolve_route(state, ctx)
         assert decision.tier == "internal"
         assert decision.provider is not None
-        assert decision.degraded_from is None
+        assert decision.degraded_from == "sampling"
 
     def test_api_provider(self) -> None:
         state = _state(provider_name="anthropic-api")
@@ -150,11 +150,11 @@ class TestInternalProvider:
         assert decision.tier == "internal"
         assert decision.provider is not None
 
-    def test_provider_preferred_over_sampling(self) -> None:
+    def test_sampling_preferred_over_provider(self) -> None:
         state = _state(provider_name="claude-cli", sampling_capable=True, mcp_connected=True)
         ctx = _ctx(caller="mcp")
         decision = resolve_route(state, ctx)
-        assert decision.tier == "internal"
+        assert decision.tier == "sampling"
 
 
 # ---------------------------------------------------------------------------
@@ -170,14 +170,14 @@ class TestAutoSampling:
         ctx = _ctx(caller="mcp")
         decision = resolve_route(state, ctx)
         assert decision.tier == "sampling"
-        assert decision.degraded_from == "internal"
+        assert decision.degraded_from is None
 
-    def test_rest_never_reaches_sampling(self) -> None:
+    def test_rest_reaches_sampling(self) -> None:
         state = _state(sampling_capable=True, mcp_connected=True)
         ctx = _ctx(caller="rest")
         decision = resolve_route(state, ctx)
-        assert decision.tier == "passthrough"
-        assert decision.tier != "sampling"
+        assert decision.tier == "sampling"
+        assert decision.degraded_from is None
 
 
 # ---------------------------------------------------------------------------
@@ -193,21 +193,21 @@ class TestPassthroughFallback:
         ctx = _ctx()
         decision = resolve_route(state, ctx)
         assert decision.tier == "passthrough"
-        assert decision.degraded_from == "internal"
+        assert decision.degraded_from == "sampling"
 
     def test_sampling_not_connected(self) -> None:
         state = _state(sampling_capable=True, mcp_connected=False)
         ctx = _ctx(caller="mcp")
         decision = resolve_route(state, ctx)
         assert decision.tier == "passthrough"
-        assert decision.degraded_from == "internal"
+        assert decision.degraded_from == "sampling"
 
     def test_sampling_none(self) -> None:
         state = _state(sampling_capable=None, mcp_connected=True)
         ctx = _ctx(caller="mcp")
         decision = resolve_route(state, ctx)
         assert decision.tier == "passthrough"
-        assert decision.degraded_from == "internal"
+        assert decision.degraded_from == "sampling"
 
 
 # ---------------------------------------------------------------------------

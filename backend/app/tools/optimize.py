@@ -21,7 +21,6 @@ from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
 from app.services.project_service import resolve_repo_project
 from app.services.routing import RoutingContext
-from app.services.sampling_pipeline import run_sampling_pipeline
 from app.tools._shared import (
     DATA_DIR,
     auto_resolve_repo,
@@ -155,38 +154,29 @@ async def handle_optimize(
             ),
         )
 
+    if decision.tier not in ("internal", "sampling"):
+        raise ValueError(f"Unsupported tier: {decision.tier}")
+
     if decision.tier == "sampling":
-        # Sampling pipeline: run via IDE's LLM
         logger.info("synthesis_optimize: tier=sampling reason=%r", decision.reason)
         if not ctx or not hasattr(ctx, "session") or not ctx.session:
             raise ValueError("Sampling tier selected but no MCP session available")
-        try:
-            result = await run_sampling_pipeline(
-                ctx, prompt,
-                effective_strategy if effective_strategy != "auto" else None,
-                repo_full_name=effective_repo,
-                project_id=_effective_project_id,
-                applied_pattern_ids=applied_pattern_ids,
-                codebase_context=enrichment.codebase_context,
-                heuristic_task_type=enrichment.task_type,
-                heuristic_domain=enrichment.domain_value,
-                divergence_alerts=enrichment.divergence_alerts,
-                pre_resolved_strategy_intelligence=enrichment.strategy_intelligence,
-                enrichment_profile=enrichment.enrichment_meta.get("enrichment_profile"),
-            )
-            return _sampling_result_to_output(result)
-        except Exception as exc:
-            logger.error("Sampling pipeline failed: %s", exc, exc_info=True)
-            error_msg = await _persist_sampling_failure(prompt, effective_strategy, exc)
-            return OptimizeOutput(
-                status="error",
-                pipeline_mode="sampling",
-                strategy_used=effective_strategy,
-                warnings=[error_msg],
-            )
-
-    # Internal pipeline (decision.tier == "internal")
-    logger.info("synthesis_optimize: tier=internal provider=%s reason=%r", decision.provider_name, decision.reason)
+        from app.providers.sampling import MCPSamplingProvider
+        mcp_provider = MCPSamplingProvider(ctx)
+        
+        provider = mcp_provider
+        provider_instances = None
+        if decision.providers_by_phase:
+            provider_instances = {}
+            for phase, p_tier in decision.providers_by_phase.items():
+                if p_tier == "sampling":
+                    provider_instances[phase] = mcp_provider
+                elif p_tier == "internal" and decision.provider:
+                    provider_instances[phase] = decision.provider
+    else:
+        logger.info("synthesis_optimize: tier=internal provider=%s reason=%r", decision.provider_name, decision.reason)
+        provider = decision.provider
+        provider_instances = None
 
     start = time.monotonic()
 
@@ -217,8 +207,9 @@ async def handle_optimize(
 
         async for event in orchestrator.run(
             raw_prompt=prompt,
-            provider=decision.provider,  # type: ignore[arg-type]
+            provider=provider,  # type: ignore[arg-type]
             db=db,
+            provider_instances=provider_instances,
             strategy_override=effective_strategy if effective_strategy != "auto" else None,
             codebase_context=enrichment.codebase_context,
             strategy_intelligence=enrichment.strategy_intelligence,
@@ -264,13 +255,13 @@ async def handle_optimize(
             "domain_raw": pipeline_result.get("domain_raw", "general"),
             "strategy_used": pipeline_result.get("strategy_used", ""),
             "overall_score": pipeline_result.get("overall_score"),
-            "provider": decision.provider_name,
+            "provider": decision.provider_name if decision.tier == "internal" else ("mcp_sampling" if decision.tier == "sampling" else "unknown"),
             "status": "completed",
         })
 
         return OptimizeOutput(
             status="completed",
-            pipeline_mode="internal",
+            pipeline_mode=decision.tier,
             optimization_id=pipeline_result.get("id", ""),
             optimized_prompt=pipeline_result.get("optimized_prompt", ""),
             task_type=pipeline_result.get("task_type", ""),

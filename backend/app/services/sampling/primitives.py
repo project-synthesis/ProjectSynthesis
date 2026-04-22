@@ -39,6 +39,11 @@ from mcp.types import (
 )
 from pydantic import BaseModel
 
+from app.providers.base import (
+    ProviderError,
+    ProviderOverloadedError,
+    ProviderRateLimitError,
+)
 from app.schemas.pipeline_contracts import AnalysisResult
 from app.services.event_notification import notify_event_bus
 
@@ -93,10 +98,14 @@ async def sampling_request_plain(
             ctx.session.create_message(**kwargs),
             timeout=SAMPLING_TIMEOUT_SECONDS,
         )
-    except asyncio.TimeoutError:
-        raise TimeoutError(
+    except asyncio.TimeoutError as exc:
+        raise ProviderOverloadedError(
             f"Sampling request timed out after {SAMPLING_TIMEOUT_SECONDS}s"
-        ) from None
+        ) from exc
+    except McpError as exc:
+        # Most MCP errors (rate limits, server overloaded, connection drop)
+        # should be retryable via standard Provider error handling.
+        raise ProviderError(f"MCP sampling error: {exc}", retryable=True) from exc
 
     text = extract_text(result)
     model_id = getattr(result, "model", "unknown") or "unknown"
@@ -211,10 +220,10 @@ async def sampling_request_structured(
                 ctx.session.create_message(**kwargs),
                 timeout=SAMPLING_TIMEOUT_SECONDS,
             )
-        except asyncio.TimeoutError:
-            raise TimeoutError(
+        except asyncio.TimeoutError as exc:
+            raise ProviderOverloadedError(
                 f"Structured sampling request timed out after {SAMPLING_TIMEOUT_SECONDS}s"
-            ) from None
+            ) from exc
         model_id = getattr(result, "model", "unknown") or "unknown"
 
         parsed = extract_tool_use(result, output_model)

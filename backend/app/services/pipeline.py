@@ -156,6 +156,7 @@ class PipelineOrchestrator:
         provider: LLMProvider,
         db: AsyncSession,
         *,
+        provider_instances: dict[str, LLMProvider] | None = None,
         strategy_override: str | None = None,
         codebase_context: str | None = None,
         strategy_intelligence: str | None = None,
@@ -253,8 +254,9 @@ class PipelineOrchestrator:
             })
 
             phase_start = time.monotonic()
+            analyze_provider = provider_instances.get("analyze", provider) if provider_instances else provider
             analysis: AnalysisResult = await self._call_provider(
-                provider,
+                analyze_provider,
                 system_prompt=system_prompt,
                 user_message=analyze_msg,
                 output_format=AnalysisResult,
@@ -268,8 +270,8 @@ class PipelineOrchestrator:
                 max_tokens=ANALYZE_MAX_TOKENS,
             )
 
-            if isinstance(provider.last_model, str):
-                model_ids["analyze"] = provider.last_model
+            if isinstance(analyze_provider.last_model, str):
+                model_ids["analyze"] = analyze_provider.last_model
             yield PipelineEvent(
                 event="status",
                 data={"stage": "analyze", "state": "complete", "model": model_ids["analyze"]},
@@ -278,13 +280,13 @@ class PipelineOrchestrator:
             analyze_duration = int((time.monotonic() - phase_start) * 1000)
             phase_durations["analyze_ms"] = analyze_duration
 
-            usage = self._get_usage(provider)
+            usage = self._get_usage(analyze_provider)
             if self.trace_logger:
                 self.trace_logger.log_phase(
                     trace_id=trace_id, phase="analyze",
                     duration_ms=analyze_duration,
                     tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
-                    model=analyzer_model, provider=provider.name,
+                    model=analyzer_model, provider=analyze_provider.name,
                     result={
                         "task_type": analysis.task_type,
                         "strategy": analysis.selected_strategy,
@@ -428,8 +430,9 @@ class PipelineOrchestrator:
                 context_sources.update(optimize_bundle.context_updates)
 
             phase_start = time.monotonic()
+            optimize_provider = provider_instances.get("optimize", provider) if provider_instances else provider
             optimization: OptimizationResult = await self._call_provider(
-                provider,
+                optimize_provider,
                 system_prompt=system_prompt,
                 user_message=optimize_bundle.optimize_msg,
                 output_format=OptimizationResult,
@@ -451,8 +454,8 @@ class PipelineOrchestrator:
                 strategy_used=optimization.strategy_used,
             )
 
-            if isinstance(provider.last_model, str):
-                model_ids["optimize"] = provider.last_model
+            if isinstance(optimize_provider.last_model, str):
+                model_ids["optimize"] = optimize_provider.last_model
             yield PipelineEvent(
                 event="status",
                 data={"stage": "optimize", "state": "complete", "model": model_ids["optimize"]},
@@ -478,13 +481,13 @@ class PipelineOrchestrator:
                 context_sources["enrichment_meta"] = em
             em["injection_stats"] = injection_stats
 
-            usage = self._get_usage(provider)
+            usage = self._get_usage(optimize_provider)
             if self.trace_logger:
                 self.trace_logger.log_phase(
                     trace_id=trace_id, phase="optimize",
                     duration_ms=optimize_duration,
                     tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
-                    model=optimizer_model, provider=provider.name,
+                    model=optimizer_model, provider=optimize_provider.name,
                     result={
                         "strategy_used": effective_strategy,
                         "effort": prefs.get("pipeline.optimizer_effort", prefs_snapshot) or "high",
@@ -512,7 +515,7 @@ class PipelineOrchestrator:
                     optimization=optimization,
                     analysis=analysis,
                     effective_strategy=effective_strategy,
-                    provider=provider,
+                    provider=provider_instances.get("score", provider) if provider_instances else provider,
                     prompt_loader=self.prompt_loader,
                     trace_logger=self.trace_logger,
                     prefs=prefs,
@@ -555,7 +558,7 @@ class PipelineOrchestrator:
                     effective_strategy=effective_strategy,
                     prompt_loader=self.prompt_loader,
                     system_prompt=self._load_system_prompt(),
-                    provider=provider,
+                    provider=provider_instances.get("suggest", provider) if provider_instances else provider,
                     trace_id=trace_id,
                     call_provider=self._call_provider,
                 )
@@ -581,7 +584,7 @@ class PipelineOrchestrator:
                 phase_durations=phase_durations,
                 model_ids=model_ids,
                 optimizer_model=optimizer_model,
-                provider_name=provider.name,
+                provider_name=(provider_instances.get("optimize", provider) if provider_instances else provider).name,
                 repo_full_name=repo_full_name,
                 project_id=project_id,
                 context_sources=context_sources,
@@ -635,7 +638,7 @@ class PipelineOrchestrator:
                     request_context={
                         "trace_id": trace_id,
                         "strategy": effective_strategy,
-                        "provider": provider.name if provider else None,
+                        "provider": (provider_instances.get("optimize", provider) if provider_instances else provider).name if provider else None,
                     },
                 )
             except Exception:
@@ -647,7 +650,7 @@ class PipelineOrchestrator:
                 raw_prompt=raw_prompt,
                 trace_id=trace_id,
                 duration_ms=duration_ms,
-                provider=provider,
+                provider=provider_instances.get("optimize", provider) if provider_instances else provider,
                 optimizer_model=optimizer_model,
                 model_ids=model_ids,
                 error_message=str(exc),

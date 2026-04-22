@@ -724,10 +724,10 @@ _probe_mcp_sampling() {
 _resolve_active_tier() {
     # Determines which routing tier will be active based on detected state.
     # Returns the tier name via echo: "internal", "sampling", or "passthrough".
-    if [[ -n "$_PROVIDER_NAME" ]]; then
-        echo "internal"
-    elif [[ -n "$_VS_BRIDGE_VER" ]] && [[ "$_VS_HEALTH" == "ok" ]]; then
+    if [[ -n "$_VS_BRIDGE_VER" ]] && [[ "$_VS_HEALTH" == "ok" ]]; then
         echo "sampling"
+    elif [[ -n "$_PROVIDER_NAME" ]]; then
+        echo "internal"
     else
         echo "passthrough"
     fi
@@ -780,8 +780,12 @@ _verify_bridge_health() {
             ;;
         sampling)
             _ok "Active tier: ${_BLD}sampling${_RST} — pipeline via VS Code Copilot's LLM"
-            _info "For zero-cost internal pipeline: install Claude CLI"
-            _info "  npm install -g @anthropic-ai/claude-code"
+            if [[ -n "$_PROVIDER_NAME" ]]; then
+                _info "Internal pipeline also available via ${_PROVIDER_LABEL}"
+            else
+                _info "For zero-cost internal pipeline: install Claude CLI"
+                _info "  npm install -g @anthropic-ai/claude-code"
+            fi
             ;;
         passthrough)
             if [[ -z "$_PROVIDER_NAME" ]] && (( ${#_VS_BINS[@]} == 0 )); then

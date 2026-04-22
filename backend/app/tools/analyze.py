@@ -18,7 +18,6 @@ from app.services.heuristic_scorer import HeuristicScorer
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.routing import RoutingContext
-from app.services.sampling_pipeline import run_sampling_analyze
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.tools._shared import DATA_DIR, get_domain_resolver, get_routing
@@ -44,19 +43,21 @@ async def handle_analyze(
 
     provider = decision.provider
 
+    if decision.tier not in ("internal", "sampling"):
+        raise ValueError(f"Unsupported tier: {decision.tier}")
+
     if decision.tier == "sampling":
         logger.info("synthesis_analyze: tier=sampling prompt_len=%d reason=%r", len(prompt), decision.reason)
         if ctx and hasattr(ctx, "session") and ctx.session:
-            try:
-                result = await run_sampling_analyze(ctx, prompt)
-                return AnalyzeOutput(**result)
-            except Exception as exc:
-                logger.warning("Sampling analyze failed: %s: %s", type(exc).__name__, exc)
-        raise ValueError("No LLM provider available. Set ANTHROPIC_API_KEY or install the Claude CLI.")
-
-    if decision.tier == "passthrough":
-        logger.info("synthesis_analyze: tier=passthrough — rejecting (analysis requires provider)")
-        raise ValueError("Analysis requires a local provider or MCP sampling capability.")
+            from app.providers.sampling import MCPSamplingProvider
+            provider = MCPSamplingProvider(ctx)
+            # Check if hybrid routing provided an internal provider for analyze
+            if decision.providers_by_phase and decision.providers_by_phase.get("analyze") == "internal" and decision.provider:
+                provider = decision.provider
+        else:
+            raise ValueError("Sampling tier selected but no MCP session available")
+    elif decision.tier == "internal":
+        provider = decision.provider
 
     if provider is None:
         raise ValueError("No LLM provider available.")

@@ -118,6 +118,7 @@ class RoutingDecision:
     provider_name: str | None = None
     reason: str = ""
     degraded_from: str | None = None
+    providers_by_phase: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +129,7 @@ class RoutingDecision:
 def _can_sample(state: RoutingState, ctx: RoutingContext) -> bool:
     """Whether sampling is available for the current request."""
     return (
-        ctx.caller == "mcp"
+        ctx.caller in ("mcp", "rest")
         and state.sampling_capable is True
         and state.mcp_connected
     )
@@ -194,12 +195,29 @@ def _resolve_with_fallback(
     for tier in _FALLBACK_CHAIN[start_idx:]:
         available, reason = checkers[tier]
         if available:
+            providers_by_phase = None
+            if tier == "sampling":
+                if _can_internal(state):
+                    providers_by_phase = {
+                        "analyze": "internal",
+                        "score": "internal",
+                        "suggest": "internal",
+                        "optimize": "sampling",
+                    }
+                else:
+                    providers_by_phase = {
+                        "analyze": "sampling",
+                        "score": "sampling",
+                        "suggest": "sampling",
+                        "optimize": "sampling",
+                    }
             return RoutingDecision(
                 tier=tier,
-                provider=state.provider if tier == "internal" else None,
-                provider_name=state.provider_name if tier == "internal" else None,
+                provider=state.provider if (tier == "internal" or (tier == "sampling" and _can_internal(state))) else None,
+                provider_name=state.provider_name if (tier == "internal" or (tier == "sampling" and _can_internal(state))) else ("mcp_sampling" if tier == "sampling" else None),
                 reason=reason,
                 degraded_from=label if (tier != requested or always_degraded) else None,
+                providers_by_phase=providers_by_phase,
             )
 
     # Unreachable — passthrough is always True
@@ -215,8 +233,8 @@ def resolve_route(state: RoutingState, ctx: RoutingContext) -> RoutingDecision:
     Priority chain (highest to lowest):
       1. ``force_passthrough`` — unconditional passthrough
       2. ``force_sampling`` — sampling with fallback to internal → passthrough
-      3. Internal provider available
-      4. Auto-sampling (MCP caller + sampling capable)
+      3. Auto-sampling (if connected and capable)
+      4. Internal provider available
       5. Passthrough fallback
     """
     pipeline = ctx.preferences.get("pipeline", {})
@@ -236,22 +254,8 @@ def resolve_route(state: RoutingState, ctx: RoutingContext) -> RoutingDecision:
             "sampling", state, ctx, "force_sampling"
         )
 
-    # Tier 3: internal provider available
-    if _can_internal(state):
-        return RoutingDecision(
-            tier="internal",
-            provider=state.provider,
-            provider_name=state.provider_name,
-            reason="internal provider available",
-        )
-
-    # Tier 4–5: auto-sampling or passthrough fallback.
-    # degraded_from tracks "internal" — that's the natural tier we'd use
-    # if a provider were available.
-    return _resolve_with_fallback(
-        "sampling", state, ctx, "auto",
-        degraded_from_label="internal",
-    )
+    # Tier 3–5: Auto-route prioritizing sampling, then internal, then passthrough
+    return _resolve_with_fallback("sampling", state, ctx, "auto")
 
 
 # ---------------------------------------------------------------------------

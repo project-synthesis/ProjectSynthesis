@@ -58,6 +58,17 @@ _session_file = MCPSessionFile(DATA_DIR)
 try:
     from mcp.server.streamable_http import StreamableHTTPServerTransport
 
+    _orig_get_session_id = StreamableHTTPServerTransport._get_session_id
+
+    def _patched_get_session_id(self, request):
+        """Accept session ID from query params for TS SDK compatibility."""
+        sid = _orig_get_session_id(self, request)
+        if sid:
+            return sid
+        return request.query_params.get("sessionId") or request.query_params.get("session_id")
+
+    StreamableHTTPServerTransport._get_session_id = _patched_get_session_id
+
     _orig_validate_session = StreamableHTTPServerTransport._validate_session
 
     async def _patched_validate_session(self, request, send):
@@ -71,7 +82,7 @@ try:
         return await _orig_validate_session(self, request, send)
 
     StreamableHTTPServerTransport._validate_session = _patched_validate_session  # type: ignore[method-assign]
-    logger.debug("Patched StreamableHTTPServerTransport._validate_session for SSE reconnection")
+    logger.debug("Patched StreamableHTTPServerTransport for TS SDK query params and SSE reconnection")
 except Exception:
     logger.warning("Could not patch StreamableHTTPServerTransport — SSE reconnection may not work", exc_info=True)
 
@@ -106,6 +117,10 @@ try:
 
         request = _Req(scope, receive)
         request_mcp_session_id = request.headers.get("mcp-session-id")
+        if not request_mcp_session_id:
+            request_mcp_session_id = request.query_params.get("sessionId")
+        if not request_mcp_session_id:
+            request_mcp_session_id = request.query_params.get("session_id")
 
         # Existing session — handle directly (no lock needed)
         if (
@@ -619,6 +634,11 @@ class _CapabilityDetectionMiddleware:
             for k, v in scope.get("headers", [])
         )
         req_session_id = req_headers.get("mcp-session-id", "")
+        if not req_session_id:
+            from urllib.parse import parse_qs
+            qs = parse_qs(scope.get("query_string", b"").decode())
+            req_session_id = qs.get("sessionId", [""])[0] or qs.get("session_id", [""])[0]
+
         is_sampling_client = req_session_id in cls._sampling_session_ids
 
         # Only refresh routing activity from sampling clients
@@ -650,12 +670,7 @@ class _CapabilityDetectionMiddleware:
                 response_status = message.get("status", 0)
                 if is_initialize and response_status == 200:
                     # Register session ID by capability
-                    resp_headers = dict(
-                        (k.decode() if isinstance(k, bytes) else k,
-                         v.decode() if isinstance(v, bytes) else v)
-                        for k, v in message.get("headers", [])
-                    )
-                    sid = resp_headers.get("mcp-session-id", "")
+                    sid = req_session_id
                     if sid:
                         if sampling_declared:
                             cls._sampling_session_ids.add(sid)
@@ -666,7 +681,7 @@ class _CapabilityDetectionMiddleware:
 
         await self.app(scope, _buffered_receive, _capture_send)
 
-        if response_status in (400, 404):
+        if response_status in (400, 404) and req_session_id:
             self._invalidate_stale_session()
 
     # ── GET handler (SSE streams) ─────────────────────────────────
@@ -679,7 +694,6 @@ class _CapabilityDetectionMiddleware:
         )
         session_id = headers.get("mcp-session-id", "")
         has_session_id = bool(session_id)
-        is_sampling_stream = session_id in self._sampling_session_ids
 
         if not has_session_id:
             logger.info("GET /mcp without session ID — allowing for reconnection")
@@ -689,15 +703,25 @@ class _CapabilityDetectionMiddleware:
         cls = _CapabilityDetectionMiddleware
 
         async def _capture_get_send(message):
-            nonlocal get_handled, get_is_sse
+            nonlocal get_handled, get_is_sse, session_id
             if message["type"] == "http.response.start" and not get_handled:
                 get_handled = True
                 status = message.get("status", 0)
-                if status in (400, 404):
+                if status in (400, 404) and session_id:
                     cls._invalidate_stale_session()
                 elif status == 200:
                     get_is_sse = True
                     cls._active_sse_streams += 1
+                    
+                    if not session_id:
+                        resp_headers = dict(
+                            (k.decode() if isinstance(k, bytes) else k,
+                             v.decode() if isinstance(v, bytes) else v)
+                            for k, v in message.get("headers", [])
+                        )
+                        session_id = resp_headers.get("mcp-session-id", "")
+                        
+                    is_sampling_stream = session_id and session_id in cls._sampling_session_ids
                     if is_sampling_stream:
                         cls._sampling_sse_sessions.add(session_id)
                         logger.info("Sampling SSE opened: %s (total=%d, sampling=%d)",
@@ -711,8 +735,22 @@ class _CapabilityDetectionMiddleware:
                         if routing:
                             routing.on_mcp_activity()
             elif message["type"] == "http.response.body" and get_is_sse:
-                # SSE body chunk — only refresh routing from sampling streams
+                if not session_id:
+                    body_bytes = message.get("body", b"")
+                    if b"endpoint" in body_bytes or b"session_id" in body_bytes or b"sessionId" in body_bytes:
+                        import re
+                        m = re.search(br'(?:sessionId|session_id|mcp-session-id)=([a-zA-Z0-9_-]+)', body_bytes)
+                        if m:
+                            session_id = m.group(1).decode()
+                            logger.debug("Extracted session ID from SSE body: %s", session_id[:12])
+                
+                is_sampling_stream = session_id and session_id in cls._sampling_session_ids
                 if is_sampling_stream:
+                    if session_id not in cls._sampling_sse_sessions:
+                        cls._sampling_sse_sessions.add(session_id)
+                        logger.info("Sampling SSE mapped dynamically: %s (total=%d, sampling=%d)",
+                                    session_id[:12], cls._active_sse_streams,
+                                    len(cls._sampling_sse_sessions))
                     self._touch_routing_activity()
                 self._touch_session_file()
             await send(message)
@@ -722,7 +760,7 @@ class _CapabilityDetectionMiddleware:
         finally:
             if get_is_sse:
                 cls._active_sse_streams = max(0, cls._active_sse_streams - 1)
-                was_sampling = session_id in cls._sampling_sse_sessions
+                was_sampling = session_id and session_id in cls._sampling_sse_sessions
                 if was_sampling:
                     cls._sampling_sse_sessions.discard(session_id)
 
@@ -733,14 +771,10 @@ class _CapabilityDetectionMiddleware:
                     pass
 
                 # Disconnect logic — fire instant routing state transitions
-                # when the last sampling SSE closes.  The disconnect loop
-                # (30s poll) is a fallback; this is the primary signal.
                 routing = _shared._routing
                 if was_sampling and not cls._sampling_sse_sessions and routing:
                     if cls._active_sse_streams == 0:
-                        logger.info(
-                            "All SSE streams closed — firing on_mcp_disconnect()"
-                        )
+                        logger.info("All SSE streams closed — firing on_mcp_disconnect()")
                         routing.on_mcp_disconnect()
                     else:
                         logger.info(
