@@ -337,7 +337,11 @@ class EmbeddingIndex:
                     return False
                 if project_filter is not None:
                     if label < len(project_ids):
-                        return project_ids[label] == project_filter
+                        lp = project_ids[label]
+                        # A10: None means unreconciled (warm Phase 0 hasn't run yet)
+                        # — treat as visible within the caller's project scope so
+                        # brand-new clusters contribute patterns before reconciliation.
+                        return lp == project_filter or lp is None
                     return False
                 return True
 

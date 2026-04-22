@@ -88,13 +88,44 @@ class TestProjectFilteredSearch:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_search_filter_none_entries_excluded(self, index):
-        await index.upsert("c1", np.array([1, 0, 0, 0], dtype=np.float32), project_id=None)
-        await index.upsert("c2", np.array([0.9, 0.1, 0, 0], dtype=np.float32), project_id="proj-A")
+    async def test_search_filter_includes_unscoped_null_clusters(self, index):
+        # A10: clusters with dominant_project_id=None (not yet reconciled by warm
+        # Phase 0) should be visible when project_filter is set.  They are
+        # unreconciled, not cross-project — failing closed here silently drops
+        # brand-new cluster patterns from injection until warm Phase 0 runs.
+        emb_null = np.array([1, 0, 0, 0], dtype=np.float32)   # unscoped (new cluster)
+        emb_proj = np.array([0.9, 0.1, 0, 0], dtype=np.float32)  # tagged proj-A
+        emb_other = np.array([0, 1, 0, 0], dtype=np.float32)  # tagged proj-B
         query = np.array([1, 0, 0, 0], dtype=np.float32)
+        await index.upsert("unscoped", emb_null, project_id=None)
+        await index.upsert("in_proj", emb_proj, project_id="proj-A")
+        await index.upsert("other_proj", emb_other, project_id="proj-B")
         results = index.search(query, k=5, threshold=0.0, project_filter="proj-A")
-        assert len(results) == 1
-        assert results[0][0] == "c2"
+        ids = [r[0] for r in results]
+        assert "unscoped" in ids, "Unscoped cluster must be visible under project filter"
+        assert "in_proj" in ids, "Same-project cluster must be visible"
+        assert "other_proj" not in ids, "Other-project cluster must be excluded"
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_search_filter_all_null_returns_all(self, index):
+        # All unscoped — project_filter should still return them all
+        emb_a = np.array([1, 0, 0, 0], dtype=np.float32)
+        emb_b = np.array([0.9, 0.1, 0, 0], dtype=np.float32)
+        query = np.array([1, 0, 0, 0], dtype=np.float32)
+        await index.upsert("c1", emb_a, project_id=None)
+        await index.upsert("c2", emb_b, project_id=None)
+        results = index.search(query, k=5, threshold=0.0, project_filter="proj-A")
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_search_filter_null_never_matches_different_project(self, index):
+        # Unscoped clusters must NOT bleed across distinct project filters
+        await index.upsert("other", np.array([1, 0, 0, 0], dtype=np.float32), project_id="proj-B")
+        query = np.array([1, 0, 0, 0], dtype=np.float32)
+        # proj-B tagged cluster should NOT appear when filtering for proj-A
+        results = index.search(query, k=5, threshold=0.0, project_filter="proj-A")
+        assert results == []
 
 
 class TestCacheWithProjectIds:
