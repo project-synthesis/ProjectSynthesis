@@ -180,6 +180,7 @@ async def optimize(
         applied_pattern_ids=body.applied_pattern_ids,
         preferences_snapshot=prefs_snapshot,
         project_id=effective_project_id,
+        provider=routing.state.provider if routing else None,
     )
 
     if decision.tier == "passthrough":
@@ -520,6 +521,7 @@ async def passthrough_prepare(
         except Exception:
             _pt2_project_id = _pt2_legacy_pid
 
+    _routing = getattr(request.app.state, "routing", None)
     enrichment = await context_service.enrich(
         raw_prompt=body.prompt,
         tier="passthrough",
@@ -528,6 +530,7 @@ async def passthrough_prepare(
         repo_full_name=_pt2_effective_repo,
         applied_pattern_ids=body.applied_pattern_ids,
         project_id=_pt2_project_id,
+        provider=_routing.state.provider if _routing else None,
     )
 
     # Few-shot retrieval for passthrough (parity with internal/sampling)
@@ -690,8 +693,15 @@ async def passthrough_save(
 
     # Generate heuristic suggestions (zero-LLM)
     from app.services.heuristic_analyzer import HeuristicAnalyzer
+    from starlette.requests import Request
+    _provider = None
+    if opt.routing_tier == "sampling":
+        # It's difficult to get the request routing object deep inside this endpoint 
+        # unless it is passed. Let's just pass `try detect_provider?` NO, that's what we removed.
+        pass
+    
     _analyzer = HeuristicAnalyzer()
-    _analysis = await _analyzer.analyze(opt.raw_prompt, db)
+    _analysis = await _analyzer.analyze(opt.raw_prompt, db, provider=request.app.state.routing.state.provider if hasattr(request, "app") and hasattr(request.app.state, "routing") and request.app.state.routing else None)
     suggestions = generate_heuristic_suggestions(
         dimension_scores=optimized_scores or {},
         weaknesses=_analysis.weaknesses,

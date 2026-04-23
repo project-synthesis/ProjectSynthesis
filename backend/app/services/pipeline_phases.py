@@ -564,7 +564,6 @@ async def run_hybrid_scoring(
     heur_optimized = HeuristicScorer.score_prompt(
         optimization.optimized_prompt,
         original=raw_prompt,
-        strategy_used=effective_strategy,
     )
 
     historical_stats: dict | None = None

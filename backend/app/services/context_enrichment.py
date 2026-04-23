@@ -407,6 +407,7 @@ class ContextEnrichmentService:
         applied_pattern_ids: list[str] | None = None,
         preferences_snapshot: dict | None = None,
         project_id: str | None = None,
+        provider: Any | None = None,
     ) -> EnrichedContext:
         """Resolve all context layers for the given tier.
 
@@ -435,7 +436,7 @@ class ContextEnrichmentService:
         _enable_llm_fallback = prefs.get("enable_llm_classification_fallback", True)
         try:
             analysis = await self._heuristic_analyzer.analyze(
-                raw_prompt, db, enable_llm_fallback=_enable_llm_fallback,
+                raw_prompt, db, provider=provider, enable_llm_fallback=_enable_llm_fallback,
             )
             task_type = analysis.task_type
         except Exception:

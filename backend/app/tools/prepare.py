@@ -81,6 +81,7 @@ async def handle_prepare(
             mcp_ctx=ctx,
             repo_full_name=effective_repo,
             project_id=_prep_project_id,
+            provider=routing.state.provider,
         )
 
     # Few-shot retrieval for passthrough (parity with internal/sampling)

@@ -291,6 +291,14 @@ async def run_single_prompt(
 
         if context_service is not None and session_factory is not None:
             try:
+                # Retrieve routing safely via app state or shared MCP accessor
+                routing = None
+                try:
+                    from app.tools._shared import get_routing
+                    routing = get_routing()
+                except Exception:
+                    pass
+                
                 async with session_factory() as _enrich_db:
                     enrichment = await context_service.enrich(
                         raw_prompt=raw_prompt,
@@ -301,6 +309,7 @@ async def run_single_prompt(
                         applied_pattern_ids=None,
                         preferences_snapshot=prefs_snapshot,
                         project_id=project_id,
+                        provider=routing.provider if routing else None,
                     )
                 applied_patterns_text = enrichment.applied_patterns
                 adaptation_text = enrichment.strategy_intelligence
@@ -467,7 +476,6 @@ async def run_single_prompt(
             heur_optimized = HeuristicScorer.score_prompt(
                 optimization.optimized_prompt,
                 original=raw_prompt,
-                strategy_used=effective_strategy,
             )
 
             # Historical stats for z-score normalization. Prefer the pre-fetched

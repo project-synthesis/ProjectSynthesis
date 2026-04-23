@@ -359,7 +359,6 @@ class RefinementService:
             heur_optimized = HeuristicScorer.score_prompt(
                 refined.optimized_prompt,
                 original=original_prompt,
-                strategy_used=refined.strategy_used,
             )
 
             # Fetch historical stats for z-score normalization (non-fatal)

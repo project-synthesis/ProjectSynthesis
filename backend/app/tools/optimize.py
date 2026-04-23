@@ -83,6 +83,7 @@ async def handle_optimize(
             db=enrich_db,
             workspace_path=effective_workspace,
             mcp_ctx=ctx,
+            provider=routing.state.provider,
             repo_full_name=effective_repo,
             applied_pattern_ids=applied_pattern_ids,
             preferences_snapshot=prefs_snapshot,

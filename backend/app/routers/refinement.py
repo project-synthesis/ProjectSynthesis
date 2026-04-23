@@ -168,6 +168,7 @@ async def refine(
                 repo_full_name=_repo,
                 preferences_snapshot=prefs_snapshot,
                 project_id=_ref_project_id,
+                provider=routing.provider,
             )
             _codebase_context = enrichment.codebase_context
             _strategy_intelligence = enrichment.strategy_intelligence

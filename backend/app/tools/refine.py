@@ -129,6 +129,7 @@ async def handle_refine(
             workspace_path=workspace_path,
             mcp_ctx=ctx,
             project_id=opt.project_id,
+            provider=routing.state.provider,
         )
         # Consume the refinement generator to completion
         logger.info(
