@@ -817,13 +817,30 @@ class _CapabilityDetectionMiddleware:
 
     @classmethod
     def _write_optimistic_session(cls) -> None:
-        """Session-less GET succeeded — client reconnecting after server restart."""
+        """Session-less GET succeeded — client reconnecting after server restart.
+
+        Do NOT assume sampling_capable=True here.  Both VS Code bridge
+        (sampling) and plain Claude Code (non-sampling) reconnect without a
+        session ID.  Assuming True for all reconnects causes a stuck
+        ``sampling_capable=True`` state after the bridge disconnects:
+        the subsequent non-sampling ``initialize`` is silently ignored by
+        ``_inspect_initialize()`` because sampling is already "active".
+
+        Instead: preserve the current in-memory sampling_capable and mark the
+        connection as active.  The real initialize handshake that follows
+        within milliseconds will set the authoritative capability value.
+        """
         try:
             routing = _shared._routing
+            current_sampling = routing.state.sampling_capable is True if routing else False
             if routing:
-                routing.on_mcp_initialize(sampling_capable=True)
-            _session_file.write_session(True, sse_streams=cls._active_sse_streams)
-            logger.info("Optimistic session write: sampling_capable=True (reconnection)")
+                routing.on_mcp_activity()  # mark connected, refresh last_activity
+            _session_file.write_session(current_sampling, sse_streams=cls._active_sse_streams)
+            logger.info(
+                "Optimistic session write: reconnection detected "
+                "(preserving sampling_capable=%s — initialize will set final value)",
+                current_sampling,
+            )
         except Exception:
             logger.debug("Could not write optimistic session", exc_info=True)
 
