@@ -832,13 +832,13 @@ class TestLLMFallbackGating:
         mock_provider.complete_parsed = AsyncMock(return_value=_MockResult())
 
         with patch(
-            "app.providers.detector.detect_provider", return_value=mock_provider
-        ), patch(
             "app.providers.base.call_provider_with_retry",
             new=AsyncMock(return_value=_MockResult()),
         ) as mock_retry:
             await HeuristicAnalyzer._classify_with_llm(
-                "ambiguous prompt needing classification", db,
+                "ambiguous prompt needing classification",
+                db,
+                provider=mock_provider,
             )
 
         # The retry wrapper must have been awaited. The direct call must NOT.
@@ -870,11 +870,11 @@ class TestLLMFallbackGating:
         mock_provider = MagicMock()
         mock_provider.complete_parsed = AsyncMock(side_effect=_flaky)
 
-        with patch(
-            "app.providers.detector.detect_provider", return_value=mock_provider
-        ), patch("app.providers.base.asyncio.sleep", new=AsyncMock()):
+        with patch("app.providers.base.asyncio.sleep", new=AsyncMock()):
             result = await HeuristicAnalyzer._classify_with_llm(
-                "ambiguous prompt needing classification", db,
+                "ambiguous prompt needing classification",
+                db,
+                provider=mock_provider,
             )
 
         # Retried and succeeded

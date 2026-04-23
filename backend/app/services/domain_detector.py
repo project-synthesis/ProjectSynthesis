@@ -51,8 +51,17 @@ def classify_domain(scored: dict[str, float]) -> str:
     """
     loader = _get_signal_loader()
     if loader is None:
+        logger.debug("classify_domain: no signal loader — defaulting to 'general'")
         return "general"
-    return loader.classify(scored)
+    result = loader.classify(scored)
+    logger.debug(
+        "classify_domain: result=%s scored=%s",
+        result,
+        {k: round(v, 2) for k, v in sorted(
+            scored.items(), key=lambda x: x[1], reverse=True,
+        )[:4]} if scored else {},
+    )
+    return result
 
 
 def enrich_domain_qualifier(domain: str, prompt_lower: str) -> str:
@@ -79,6 +88,10 @@ def enrich_domain_qualifier(domain: str, prompt_lower: str) -> str:
             return domain
         qualifiers = loader.get_qualifiers(primary)
     except Exception:
+        logger.debug(
+            "enrich_domain_qualifier: loader error for domain=%s",
+            primary, exc_info=True,
+        )
         return domain
 
     if not qualifiers:

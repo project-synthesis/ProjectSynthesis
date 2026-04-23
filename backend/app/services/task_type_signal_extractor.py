@@ -89,10 +89,23 @@ async def extract_task_type_signals(
             row[0]: row[1] for row in type_counts_q.all()
         }
 
-        total_samples = sum(type_counts.values())
+        # 1b. Count telemetry samples per task type
+        from app.models import TaskTypeTelemetry
+        telemetry_counts_q = await db.execute(
+            select(TaskTypeTelemetry.task_type, func.count(TaskTypeTelemetry.id))
+            .where(TaskTypeTelemetry.task_type.isnot(None))
+            .group_by(TaskTypeTelemetry.task_type)
+        )
+        telemetry_counts: dict[str, int] = {
+            row[0]: row[1] for row in telemetry_counts_q.all()
+        }
+
+        total_samples = sum(type_counts.values()) + sum(telemetry_counts.values())
+        all_task_types = set(type_counts.keys()) | set(telemetry_counts.keys())
+
         logger.info(
             "extract_task_type_signals: start — %d total samples across %d task types",
-            total_samples, len(type_counts),
+            total_samples, len(all_task_types),
         )
 
         # 2. Fetch global sample for background frequency
@@ -116,11 +129,15 @@ async def extract_task_type_signals(
         dynamic_count = 0
         static_count = 0
 
-        for task_type, count in type_counts.items():
-            if count < MIN_SAMPLES:
+        for task_type in all_task_types:
+            opt_count = type_counts.get(task_type, 0)
+            tel_count = telemetry_counts.get(task_type, 0)
+            effective_count = opt_count + tel_count * 5  # 5x weight for gold-standard telemetry
+
+            if effective_count < MIN_SAMPLES:
                 logger.info(
-                    "extract_task_type_signals: task_type='%s' bootstrap — %d samples < %d threshold",
-                    task_type, count, MIN_SAMPLES,
+                    "extract_task_type_signals: task_type='%s' bootstrap — %d effective samples < %d threshold",
+                    task_type, effective_count, MIN_SAMPLES,
                 )
                 static_count += 1
                 try:
@@ -131,7 +148,7 @@ async def extract_task_type_signals(
                         decision="task_type_signals_bootstrap",
                         context={
                             "task_type": task_type,
-                            "sample_count": count,
+                            "sample_count": effective_count,
                             "threshold": MIN_SAMPLES,
                         },
                     )
@@ -149,6 +166,17 @@ async def extract_task_type_signals(
                     )
                 )
                 type_prompts = [r[0] for r in type_q.all()]
+
+                tel_q = await db.execute(
+                    select(TaskTypeTelemetry.raw_prompt).where(
+                        TaskTypeTelemetry.task_type == task_type,
+                        TaskTypeTelemetry.raw_prompt.isnot(None),
+                    )
+                )
+                tel_prompts = [r[0] for r in tel_q.all()]
+
+                # Multiply telemetry prompts by 5 in the corpus to enforce the weight!
+                type_prompts.extend(tel_prompts * 5)
 
                 # Compute task-type term frequency
                 type_doc_count: Counter[str] = Counter()

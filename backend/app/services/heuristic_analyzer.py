@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -215,6 +216,7 @@ class HeuristicAnalyzer:
     async def analyze(
         self, raw_prompt: str, db: AsyncSession,
         *,
+        provider: Any | None = None,
         enable_llm_fallback: bool = True,
     ) -> HeuristicAnalysis:
         """Classify prompt and detect weaknesses.  May invoke LLM for ambiguous cases.
@@ -222,13 +224,14 @@ class HeuristicAnalyzer:
         Args:
             raw_prompt: The user's raw prompt text.
             db: Async database session.
+            provider: The active LLM provider for A4 fallback.
             enable_llm_fallback: When False, skip A4 confidence-gated LLM
                 fallback.  Controlled by ``enable_llm_classification_fallback``
                 preference.
         """
         try:
             return await self._analyze_inner(
-                raw_prompt, db, enable_llm_fallback=enable_llm_fallback,
+                raw_prompt, db, provider=provider, enable_llm_fallback=enable_llm_fallback,
             )
         except Exception:
             logger.exception("Heuristic analysis failed — returning general fallback")
@@ -240,7 +243,7 @@ class HeuristicAnalyzer:
 
     async def _analyze_inner(
         self, raw_prompt: str, db: AsyncSession,
-        *, enable_llm_fallback: bool = True,
+        *, provider: Any | None = None, enable_llm_fallback: bool = True,
     ) -> HeuristicAnalysis:
         prompt_lower = raw_prompt.lower()
         words = prompt_lower.split()
@@ -259,6 +262,14 @@ class HeuristicAnalyzer:
         task_type, task_confidence, all_scores = classify_task_type(
             prompt_lower, first_sentence, signals,
         )
+        logger.debug(
+            "L1_classify: task_type=%s confidence=%.2f signal_source=%s "
+            "scores=%s first_sentence=%.60s",
+            task_type, task_confidence,
+            "dynamic" if task_type_has_dynamic_signals(task_type) else "bootstrap",
+            {k: round(v, 2) for k, v in all_scores.items()},
+            first_sentence,
+        )
 
         # Track whether dynamic (live TF-IDF extraction this run) or bootstrap
         # (static defaults or cache-warmup) signals were used for classification.
@@ -274,7 +285,12 @@ class HeuristicAnalyzer:
         disambiguation_applied = False
         disambiguation_from: str | None = None
         if task_type in ("creative", "general"):
-            if check_technical_disambiguation(first_sentence):
+            tech_disambig = check_technical_disambiguation(first_sentence)
+            logger.debug(
+                "L1b_disambig_gate: task_type=%s tech_pair_found=%s",
+                task_type, tech_disambig,
+            )
+            if tech_disambig:
                 coding_score = score_category(
                     prompt_lower, first_sentence, signals["coding"],
                 )
@@ -284,8 +300,9 @@ class HeuristicAnalyzer:
                     task_confidence = max(task_confidence, coding_score, 0.6)
                     disambiguation_applied = True
                     logger.info(
-                        "heuristic_disambiguation: %s → coding, prompt=%.80s",
-                        disambiguation_from, raw_prompt,
+                        "heuristic_disambiguation: %s → coding, "
+                        "coding_score=%.2f prompt=%.80s",
+                        disambiguation_from, coding_score, raw_prompt,
                     )
 
         # Layer 1c: Confidence-gated LLM fallback (A4)
@@ -301,17 +318,26 @@ class HeuristicAnalyzer:
         ):
             sorted_vals = sorted(all_scores.values(), reverse=True)
             margin = (sorted_vals[0] - sorted_vals[1]) if len(sorted_vals) >= 2 else 999
+            logger.debug(
+                "L1c_llm_gate: confidence=%.2f < %.2f, margin=%.2f < %.2f → %s",
+                task_confidence, _LLM_CLASSIFICATION_CONFIDENCE_GATE,
+                margin, _LLM_CLASSIFICATION_MARGIN_GATE,
+                "triggering" if margin < _LLM_CLASSIFICATION_MARGIN_GATE else "skipped",
+            )
             if margin < _LLM_CLASSIFICATION_MARGIN_GATE:
-                llm_result = await classify_with_llm(raw_prompt, db)
+                llm_result = await classify_with_llm(raw_prompt, db, provider=provider)
                 if llm_result:
                     disambiguation_from = task_type
                     task_type = llm_result[0]
                     task_confidence = 0.8  # LLM classification is higher confidence than heuristic
                     llm_fallback_applied = True
+                    # A4 domain assignment: Save it so we don't accidentally overwrite it
+                    # with a weak 'general' heuristic later.
+                    _a4_domain = llm_result[1]
                     logger.info(
                         "llm_classification_fallback: heuristic=%s → llm=%s "
                         "domain=%s margin=%.2f prompt=%.80s",
-                        disambiguation_from, task_type, llm_result[1],
+                        disambiguation_from, task_type, _a4_domain,
                         margin, raw_prompt,
                     )
 
@@ -323,6 +349,24 @@ class HeuristicAnalyzer:
         # Enrich domain with sub-qualifier from prompt keywords
         domain = _enrich_domain_qualifier(domain, prompt_lower)
         domain_confidence = min(1.0, max(domain_scores.values())) if domain_scores else 0.0
+        logger.debug(
+            "domain_classify: domain=%s confidence=%.2f "
+            "top_scores=%s loader=%s",
+            domain, domain_confidence,
+            {k: round(v, 2) for k, v in sorted(
+                domain_scores.items(), key=lambda x: x[1], reverse=True,
+            )[:3]} if domain_scores else {},
+            "loaded" if loader is not None else "absent",
+        )
+        
+        # Apply the A4 fallback domain if the heuristic fell back to general
+        if llm_fallback_applied and domain == "general" and _a4_domain != "general":
+            domain = _a4_domain
+            domain_confidence = 0.8
+            logger.debug(
+                "domain_a4_override: heuristic=general → llm=%s",
+                _a4_domain,
+            )
 
         # Layer 2: Structural signals
         has_code = _has_code_blocks(raw_prompt)
@@ -337,6 +381,11 @@ class HeuristicAnalyzer:
                 prompt_lower, first_sentence, signals.get("coding", []),
             )
             if coding_score > task_confidence * 0.7:
+                logger.debug(
+                    "L2_code_boost: %s → coding, "
+                    "coding_score=%.2f > threshold=%.2f",
+                    task_type, coding_score, task_confidence * 0.7,
+                )
                 task_type = "coding"
                 task_confidence = max(task_confidence, coding_score)
 
@@ -346,18 +395,30 @@ class HeuristicAnalyzer:
                 prompt_lower, first_sentence, signals.get("analysis", []),
             )
             if analysis_score > task_confidence * 0.5:
+                logger.debug(
+                    "L2_question_boost: %s → analysis, "
+                    "analysis_score=%.2f > threshold=%.2f",
+                    task_type, analysis_score, task_confidence * 0.5,
+                )
                 task_type = "analysis"
                 task_confidence = max(task_confidence, analysis_score)
 
-        # Pre-compute shared keyword flags for weakness/strength detection
+        # Pre-compute shared keyword flags for weakness/strength detection.
+        # Phase 4 hardening: use negation-aware matching so prompts like
+        # "there are no constraints" do not falsely set has_constraints=True.
         from app.services.weakness_detector import (
             _AUDIENCE_KEYWORDS,
             _CONSTRAINT_KEYWORDS,
             _OUTCOME_KEYWORDS,
+            has_keyword_unnegated,
         )
-        has_constraints = any(kw in prompt_lower for kw in _CONSTRAINT_KEYWORDS)
-        has_outcome = any(kw in prompt_lower for kw in _OUTCOME_KEYWORDS)
-        has_audience = any(kw in prompt_lower for kw in _AUDIENCE_KEYWORDS)
+        has_constraints = has_keyword_unnegated(prompt_lower, _CONSTRAINT_KEYWORDS)
+        has_outcome = has_keyword_unnegated(prompt_lower, _OUTCOME_KEYWORDS)
+        has_audience = has_keyword_unnegated(prompt_lower, _AUDIENCE_KEYWORDS)
+        logger.debug(
+            "negation_aware_flags: constraints=%s outcome=%s audience=%s",
+            has_constraints, has_outcome, has_audience,
+        )
 
         # Layer 3: Weakness + strength detection
         weaknesses = detect_weaknesses(
@@ -384,6 +445,17 @@ class HeuristicAnalyzer:
         confidence = min(1.0, (task_confidence + domain_confidence) / 2)
         if task_type == "general":
             confidence = min(confidence, 0.3)
+
+        logger.debug(
+            "analysis_complete: task_type=%s domain=%s strategy=%s "
+            "confidence=%.2f intent=%s weaknesses=%d strengths=%d "
+            "disambig=%s llm_fallback=%s signal_source=%s prompt=%.60s",
+            task_type, domain, strategy,
+            round(confidence, 2), intent_label,
+            len(weaknesses), len(strengths),
+            disambiguation_applied, llm_fallback_applied,
+            _signal_source, raw_prompt,
+        )
 
         return HeuristicAnalysis(
             task_type=task_type,
@@ -429,8 +501,9 @@ class HeuristicAnalyzer:
     async def _classify_with_llm(
         raw_prompt: str,
         db: AsyncSession,
+        provider: Any | None = None,
     ) -> tuple[str, str] | None:
-        return await classify_with_llm(raw_prompt, db)
+        return await classify_with_llm(raw_prompt, db, provider=provider)
 
     @staticmethod
     def _detect_weaknesses(

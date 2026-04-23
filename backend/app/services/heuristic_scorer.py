@@ -12,18 +12,6 @@ import re
 logger = logging.getLogger(__name__)
 
 
-#: Strategies whose explicit job is to EXPAND a raw prompt (add role framing,
-#: reasoning scaffolds, few-shot blocks, etc.). For these the heuristic
-#: cosine mapping under-rates faithfulness — the LLM correctly sees the
-#: optimized prompt preserves intent, but the cosine drops into 0.3–0.5.
-#: Kept in lower-case-with-hyphens form to match `prompts/strategies/*.md`.
-EXPANSION_STRATEGIES: frozenset[str] = frozenset({
-    "meta-prompting",
-    "role-playing",
-    "chain-of-thought",
-    "tree-of-thought",
-    "few-shot",
-})
 
 
 class HeuristicScorer:
@@ -305,20 +293,21 @@ class HeuristicScorer:
     def heuristic_faithfulness(
         original: str,
         optimized: str,
-        strategy_used: str | None = None,
     ) -> float:
-        """Faithfulness via embedding cosine similarity between original and optimized.
+        """Faithfulness via asymmetrical projection metric.
 
-        Expansion strategies (meta-prompting, role-playing, chain-of-thought,
-        tree-of-thought, few-shot) are EXPECTED to balloon length and add
-        framing, so the cosine-to-score mapping is rebased upward for them —
-        the raw cosine still drives ordering, just on a higher floor. Direct
-        strategies (structured-output, auto-direct, etc.) keep the original
-        calibration. Returns 5.0 (neutral) if embedding is unavailable.
+        If the optimized prompt expands the original (increasing length), the cosine
+        similarity organically drops due to added framing/reasoning tokens. This metric
+        projects the original vector mathematically into the expanded space using the
+        logarithmic length ratio, recovering the true faithfulness without penalizing
+        the length increase. Contractions (summaries) fall back to raw cosine, preserving
+        penalties for dropped constraints. Returns 5.0 (neutral) if embedding unavailable.
         """
         if not original or not optimized:
             return 5.0
         try:
+            import math
+
             import numpy as np
 
             from app.services.embedding_service import EmbeddingError, EmbeddingService
@@ -329,31 +318,24 @@ class HeuristicScorer:
                 np.dot(orig_vec, opt_vec)
                 / (np.linalg.norm(orig_vec) * np.linalg.norm(opt_vec) + 1e-9)
             )
-            # Map similarity (0-1) to score (1-10).
-            # Prompt optimization typically produces similarity 0.4-0.7 (same intent,
-            # restructured text). This should map to HIGH faithfulness (7-9), not
-            # mediocre (4-6). Bands calibrated against LLM scorer agreement.
-            if similarity >= 0.85:
-                score = min(10.0, 9.0 + (similarity - 0.85) * 6.67)
-            elif similarity >= 0.50:
-                score = 7.0 + (similarity - 0.50) / 0.35 * 2.0
-            elif similarity >= 0.30:
-                score = 4.0 + (similarity - 0.30) / 0.20 * 3.0
-            else:
-                score = max(1.0, similarity * 13.3)
 
-            # Strategy-aware dampener: expansion strategies are exempt from
-            # length-drift penalty — their job is to expand. Lift the score
-            # toward the high-faithfulness band while preserving cosine order.
-            if (
-                strategy_used
-                and strategy_used.strip().lower() in EXPANSION_STRATEGIES
-                and score < 7.0
-            ):
-                # Blend 40% of the gap to 8.5 — keeps ordering (higher
-                # cosine still scores higher) but removes the expansion
-                # penalty that the LLM scorer never applies.
-                score = score + (8.5 - score) * 0.4
+            # Asymmetrical inclusion projection
+            l1 = max(40, len(original))
+            l2 = max(40, len(optimized))
+            projection = similarity * (math.log(max(l1, l2)) / math.log(l1))
+            projection = min(1.0, projection)
+
+            # Map projection (0-1) to score (1-10).
+            # Because expansions are log-boosted back to high projections (~0.85-1.0),
+            # this piecewise function organically outputs high faithfulness (8-10) for them.
+            if projection >= 0.85:
+                score = min(10.0, 9.0 + (projection - 0.85) * 6.67)
+            elif projection >= 0.50:
+                score = 7.0 + (projection - 0.50) / 0.35 * 2.0
+            elif projection >= 0.30:
+                score = 4.0 + (projection - 0.30) / 0.20 * 3.0
+            else:
+                score = max(1.0, projection * 13.3)
 
             return round(max(1.0, min(10.0, score)), 2)
         except (ImportError, EmbeddingError, ValueError, MemoryError):
@@ -369,7 +351,6 @@ class HeuristicScorer:
         cls,
         prompt: str,
         original: str | None = None,
-        strategy_used: str | None = None,
     ) -> dict[str, float]:
         """Compute all 5 heuristic dimension scores for a prompt.
 
@@ -377,8 +358,6 @@ class HeuristicScorer:
             prompt: The prompt to score.
             original: If provided, used for faithfulness comparison.
                       If None, faithfulness defaults to 5.0 (self-baseline).
-            strategy_used: Optional strategy name (matches `prompts/strategies/`
-                      filenames) to scope the faithfulness expansion exemption.
 
         Returns:
             Dict with keys: clarity, specificity, structure, faithfulness, conciseness.
@@ -388,7 +367,7 @@ class HeuristicScorer:
             "specificity": cls.heuristic_specificity(prompt),
             "structure": cls.heuristic_structure(prompt),
             "faithfulness": (
-                cls.heuristic_faithfulness(original, prompt, strategy_used=strategy_used)
+                cls.heuristic_faithfulness(original, prompt)
                 if original
                 else 5.0
             ),

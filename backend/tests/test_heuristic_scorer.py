@@ -420,36 +420,31 @@ def _expansion_scaffold(raw: str) -> str:
     ) * 5  # quintuple for ~15K chars
 
 
-def test_faithfulness_meta_prompting_does_not_penalize_expansion() -> None:
-    """Meta-prompting is an expansion strategy — don't score faithfulness <7."""
+def test_faithfulness_asymmetrical_projection_handles_expansion() -> None:
+    """Asymmetrical projection should not penalize length-expanding scaffolds."""
     optimized = _expansion_scaffold(_RAW_I5)
     assert len(optimized) > 12000, "scaffold should be at least 12K chars"
     score = HeuristicScorer.heuristic_faithfulness(
-        _RAW_I5, optimized, strategy_used="meta-prompting",
+        _RAW_I5, optimized,
     )
     assert score >= 7.0, (
-        f"meta-prompting expansion scored {score}, expected >= 7.0 "
-        "(strategy-class dampener should exempt expansion strategies)"
+        f"Expansion projection scored {score}, expected >= 7.0 "
+        "due to the log-ratio projection bounding."
     )
 
 
-def test_faithfulness_direct_strategy_still_penalizes_excessive_expansion() -> None:
-    """Direct/structured-output strategies should NOT get the expansion pass."""
-    optimized = _expansion_scaffold(_RAW_I5)
-    score_direct = HeuristicScorer.heuristic_faithfulness(
-        _RAW_I5, optimized, strategy_used="structured-output",
+def test_faithfulness_contraction_penalizes_drift() -> None:
+    """If optimized prompt is shorter, projection falls back to pure cosine mapping."""
+    optimized = "Write a blog post about CI/CD."  # Drops most intent
+    score_contraction = HeuristicScorer.heuristic_faithfulness(
+        _RAW_I5, optimized,
     )
-    score_expansion = HeuristicScorer.heuristic_faithfulness(
-        _RAW_I5, optimized, strategy_used="meta-prompting",
-    )
-    # Expansion-class strategies should score at least as high as direct ones;
-    # direct strategies stay at the baseline cosine mapping (no pass-through).
-    assert score_expansion >= score_direct, (
-        f"expansion={score_expansion} should be >= direct={score_direct}"
+    assert score_contraction < 7.0, (
+        f"Lossy contraction scored {score_contraction}, expected < 7.0"
     )
 
 
-def test_faithfulness_score_preserves_backward_compat_signature() -> None:
+def test_faithfulness_score_prompt_facade() -> None:
     """Old two-arg callers (no strategy_used) must keep working."""
     optimized = _expansion_scaffold(_RAW_I5)
     score = HeuristicScorer.heuristic_faithfulness(_RAW_I5, optimized)

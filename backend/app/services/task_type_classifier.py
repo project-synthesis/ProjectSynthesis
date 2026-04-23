@@ -360,8 +360,15 @@ def classify_task_type(
     for category, keywords in signals.items():
         scores[category] = score_category(prompt_lower, first_sentence, keywords)
     if not scores or max(scores.values()) == 0:
+        logger.debug("classify_task_type: all scores zero — fallback to 'general'")
         return "general", 0.0, scores
     best = max(scores, key=scores.get)  # type: ignore[arg-type]
+    logger.debug(
+        "classify_task_type: best=%s confidence=%.2f runner_up=%s",
+        best, min(1.0, scores[best]),
+        sorted(scores.items(), key=lambda x: x[1], reverse=True)[1][0]
+        if len(scores) > 1 else "n/a",
+    )
     return best, min(1.0, scores[best]), scores
 
 
@@ -378,6 +385,10 @@ def check_technical_disambiguation(first_sentence: str) -> bool:
         if word in _TECHNICAL_VERBS:
             for j in range(i + 1, min(i + 5, len(words))):
                 if words[j] in _TECHNICAL_NOUNS:
+                    logger.debug(
+                        "tech_disambig: verb=%r noun=%r distance=%d",
+                        word, words[j], j - i,
+                    )
                     return True
     return False
 
@@ -404,6 +415,8 @@ def has_technical_nouns(first_sentence: str) -> bool:
 async def classify_with_llm(
     raw_prompt: str,
     db: AsyncSession,
+    *,
+    provider: Any | None = None,
 ) -> tuple[str, str] | None:
     """Fast LLM classification fallback using Haiku (A4 gate).
 
@@ -422,11 +435,9 @@ async def classify_with_llm(
 
         from app.config import settings
         from app.providers.base import call_provider_with_retry
-        from app.providers.detector import detect_provider
 
-        provider = detect_provider()
         if provider is None:
-            logger.debug("llm_classification_fallback: no provider available")
+            logger.warning("llm_classification_fallback: no provider supplied, skipping A4 fallback")
             return None
 
         # Build known domains list from the signal loader when available.
@@ -471,6 +482,20 @@ async def classify_with_llm(
             "llm_classification_result: task_type=%s domain=%s",
             task_type, domain,
         )
+
+        try:
+            from app.models import TaskTypeTelemetry
+            telemetry = TaskTypeTelemetry(
+                raw_prompt=raw_prompt,
+                task_type=task_type,
+                domain=domain,
+                source="haiku_fallback",
+            )
+            db.add(telemetry)
+            logger.debug("Persisted Haiku fallback to TaskTypeTelemetry")
+        except Exception as tel_exc:
+            logger.warning("Failed to persist TaskTypeTelemetry: %s", tel_exc)
+
         return task_type, domain
 
     except Exception:
