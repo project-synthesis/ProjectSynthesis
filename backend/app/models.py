@@ -110,6 +110,17 @@ class Feedback(Base):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class TaskTypeTelemetry(Base):
+    __tablename__ = "task_type_telemetry"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    raw_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    task_type: Mapped[str] = mapped_column(String, nullable=False)
+    domain: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class StrategyAffinity(Base):
     __tablename__ = "strategy_affinities"
 
