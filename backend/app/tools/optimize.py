@@ -164,7 +164,7 @@ async def handle_optimize(
             raise ValueError("Sampling tier selected but no MCP session available")
         from app.providers.sampling import MCPSamplingProvider
         mcp_provider = MCPSamplingProvider(ctx)
-        
+
         provider = mcp_provider
         provider_instances = None
         if decision.providers_by_phase:
@@ -256,7 +256,10 @@ async def handle_optimize(
             "domain_raw": pipeline_result.get("domain_raw", "general"),
             "strategy_used": pipeline_result.get("strategy_used", ""),
             "overall_score": pipeline_result.get("overall_score"),
-            "provider": decision.provider_name if decision.tier == "internal" else ("mcp_sampling" if decision.tier == "sampling" else "unknown"),
+            "provider": (
+                decision.provider_name if decision.tier == "internal"
+                else ("mcp_sampling" if decision.tier == "sampling" else "unknown")
+            ),
             "status": "completed",
         })
 

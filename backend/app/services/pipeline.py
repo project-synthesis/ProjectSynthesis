@@ -638,7 +638,10 @@ class PipelineOrchestrator:
                     request_context={
                         "trace_id": trace_id,
                         "strategy": effective_strategy,
-                        "provider": (provider_instances.get("optimize", provider) if provider_instances else provider).name if provider else None,
+                        "provider": (
+                            (provider_instances.get("optimize", provider) if provider_instances else provider).name
+                            if provider else None
+                        ),
                     },
                 )
             except Exception:

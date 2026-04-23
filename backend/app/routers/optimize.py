@@ -693,15 +693,10 @@ async def passthrough_save(
 
     # Generate heuristic suggestions (zero-LLM)
     from app.services.heuristic_analyzer import HeuristicAnalyzer
-    from starlette.requests import Request
-    _provider = None
-    if opt.routing_tier == "sampling":
-        # It's difficult to get the request routing object deep inside this endpoint 
-        # unless it is passed. Let's just pass `try detect_provider?` NO, that's what we removed.
-        pass
-    
+    _routing_state = getattr(request.app.state, "routing", None)
+    _provider = _routing_state.state.provider if _routing_state else None
     _analyzer = HeuristicAnalyzer()
-    _analysis = await _analyzer.analyze(opt.raw_prompt, db, provider=request.app.state.routing.state.provider if hasattr(request, "app") and hasattr(request.app.state, "routing") and request.app.state.routing else None)
+    _analysis = await _analyzer.analyze(opt.raw_prompt, db, provider=_provider)
     suggestions = generate_heuristic_suggestions(
         dimension_scores=optimized_scores or {},
         weaknesses=_analysis.weaknesses,

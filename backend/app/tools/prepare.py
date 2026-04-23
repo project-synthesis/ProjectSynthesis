@@ -18,7 +18,7 @@ from app.schemas.mcp_models import PrepareOutput
 from app.services.passthrough import assemble_passthrough_prompt
 from app.services.preferences import PreferencesService
 from app.services.project_service import resolve_repo_project
-from app.tools._shared import DATA_DIR, auto_resolve_repo, get_context_service
+from app.tools._shared import DATA_DIR, auto_resolve_repo, get_context_service, get_routing
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ async def handle_prepare(
             mcp_ctx=ctx,
             repo_full_name=effective_repo,
             project_id=_prep_project_id,
-            provider=routing.state.provider,
+            provider=get_routing().state.provider,
         )
 
     # Few-shot retrieval for passthrough (parity with internal/sampling)

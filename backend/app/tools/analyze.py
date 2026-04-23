@@ -52,7 +52,12 @@ async def handle_analyze(
             from app.providers.sampling import MCPSamplingProvider
             provider = MCPSamplingProvider(ctx)
             # Check if hybrid routing provided an internal provider for analyze
-            if decision.providers_by_phase and decision.providers_by_phase.get("analyze") == "internal" and decision.provider:
+            analyze_internal = (
+                decision.providers_by_phase
+                and decision.providers_by_phase.get("analyze") == "internal"
+                and decision.provider
+            )
+            if analyze_internal:
                 provider = decision.provider
         else:
             raise ValueError("Sampling tier selected but no MCP session available")

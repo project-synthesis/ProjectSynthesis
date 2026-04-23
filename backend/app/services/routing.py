@@ -211,10 +211,14 @@ def _resolve_with_fallback(
                         "suggest": "sampling",
                         "optimize": "sampling",
                     }
+            _has_internal = tier == "internal" or (tier == "sampling" and _can_internal(state))
             return RoutingDecision(
                 tier=tier,
-                provider=state.provider if (tier == "internal" or (tier == "sampling" and _can_internal(state))) else None,
-                provider_name=state.provider_name if (tier == "internal" or (tier == "sampling" and _can_internal(state))) else ("mcp_sampling" if tier == "sampling" else None),
+                provider=state.provider if _has_internal else None,
+                provider_name=(
+                    state.provider_name if _has_internal
+                    else ("mcp_sampling" if tier == "sampling" else None)
+                ),
                 reason=reason,
                 degraded_from=label if (tier != requested or always_degraded) else None,
                 providers_by_phase=providers_by_phase,
