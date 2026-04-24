@@ -50,6 +50,7 @@ from app.services.task_type_classifier import (
     check_technical_disambiguation,
     classify_task_type,
     classify_with_llm,
+    extract_first_sentence,
     get_task_type_signals,
     score_category,
     set_task_type_signals,
@@ -250,7 +251,10 @@ class HeuristicAnalyzer:
         # E.2: split on any sentence terminator (. ? !), not just `.` —
         # prompts ending in `?` with no trailing period had first_sentence
         # == whole, so every keyword received the 2x first-sentence boost.
-        first_sentence = re.split(r"[.?!]", prompt_lower, maxsplit=1)[0]
+        # #7: pre-strip code fences and markdown tables so a code block at
+        # the top of the prompt (which has no `.?!` inside) can't drown out
+        # the intent clause that follows it.
+        first_sentence = extract_first_sentence(prompt_lower)
 
         # Resolve task-type signals through the accessor so warm-path refreshes
         # (set_task_type_signals) are picked up without re-import. Import-time

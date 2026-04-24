@@ -195,6 +195,42 @@ _TECHNICAL_NOUNS = frozenset({
 # managed by ``DomainSignalLoader._precompile_patterns()``.
 _KEYWORD_PATTERNS: dict[str, re.Pattern[str]] = {}
 
+# Pre-compiled strippers for ``extract_first_sentence()`` — applied in order
+# before the ``.?!`` terminator split.  Code fences and markdown tables at
+# the top of a prompt would otherwise pollute ``first_sentence`` with
+# technical-noun content that earns the 2x positional boost despite not
+# reflecting the user's intent.  (#7)
+_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`]+`")
+_MD_TABLE_ROW_RE = re.compile(r"(?m)^\s*\|.*\|\s*$")
+
+
+def _strip_code_and_tables(text: str) -> str:
+    """Remove triple-backtick fences, inline-backtick spans, and pipe-
+    delimited markdown table rows.  Replaces each occurrence with a single
+    space so adjacent prose words don't fuse.
+
+    Called before ``re.split(r"[.?!]", ...)`` so the first-sentence boundary
+    is computed on the user's intent prose rather than on code or tabular
+    data that happens to precede it.
+    """
+    text = _CODE_FENCE_RE.sub(" ", text)
+    text = _INLINE_CODE_RE.sub(" ", text)
+    text = _MD_TABLE_ROW_RE.sub(" ", text)
+    return text
+
+
+def extract_first_sentence(prompt_lower: str) -> str:
+    """Return the first sentence of ``prompt_lower`` for keyword-boost scoring.
+
+    Strips code / tables then splits on the first ``.?!`` terminator.
+    Exposed publicly so ``context_enrichment.py`` and any future callers
+    share one boundary semantic with the heuristic classifier.
+    """
+    return re.split(
+        r"[.?!]", _strip_code_and_tables(prompt_lower), maxsplit=1,
+    )[0]
+
 
 def _precompile_keyword_patterns() -> None:
     """Pre-compile regex for all single-word task_type signals at module load."""
@@ -510,6 +546,7 @@ __all__ = [
     "check_technical_disambiguation",
     "classify_task_type",
     "classify_with_llm",
+    "extract_first_sentence",
     "get_static_compound_signals",
     "get_task_type_signals",
     "has_technical_nouns",

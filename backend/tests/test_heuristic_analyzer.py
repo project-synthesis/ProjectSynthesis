@@ -571,6 +571,116 @@ class TestAuditAndFirstSentenceBoundary:
 
 
 # ---------------------------------------------------------------------------
+# E.3: Code-block / markdown-table strip before first-sentence extraction (#7)
+# ---------------------------------------------------------------------------
+
+
+class TestFirstSentenceStripsCodeAndTables:
+    """Keyword-boost on the first sentence was being polluted by code
+    fences and markdown tables at the start of the prompt.
+
+    Example: a prompt leading with a ```python``` code block that
+    contains ``def foo(x): return x + 1`` then "Analyze the function
+    above for O(n²) behavior" had its first-sentence boundary include
+    the code block content (no ``.?!`` inside typical code). The
+    technical nouns inside the code block received the 2x positional
+    boost even though the user's intent was the *analysis* verb in the
+    clause AFTER the code.
+
+    The fix: pre-strip triple-backtick code fences, inline backtick
+    spans, and pipe-delimited markdown table rows BEFORE
+    ``re.split(r"[.?!]", ..., maxsplit=1)``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_code_fence_prefix_does_not_pollute_first_sentence(self, db):
+        """Keywords inside a code fence must not receive the 2x first-sentence
+        positional boost.
+
+        Observation via ``extract_first_sentence()`` (the public helper):
+        without the strip, ``first_sentence`` = the code-fence contents
+        (no ``.?!`` terminator inside typical code), so every matched
+        keyword inside gets 2x.  With the strip, ``first_sentence`` = the
+        intent clause that follows, so only the intent keywords get 2x.
+
+        Direct unit-level assertion on the helper keeps the signal clean;
+        the whole-prompt classifier baseline can still swamp first-
+        sentence boosts in adversarial prompts, but the first-sentence
+        boundary itself is what we own with this fix.
+        """
+        from app.services.task_type_classifier import extract_first_sentence
+
+        prompt_lower = (
+            "```python\n"
+            "def pipeline(x):\n"
+            "    return x.api.endpoint.database.schema\n"
+            "```\n\n"
+            "audit the function above for o(n^2) behavior and performance regressions."
+        )
+        first = extract_first_sentence(prompt_lower)
+        # Must NOT contain any code-fence nouns — they all live inside the
+        # triple-backtick block which the strip has removed.
+        for noun in ("def pipeline", "x.api", "x.endpoint", "x.database", "x.schema"):
+            assert noun not in first, (
+                f"code-fence noun '{noun}' leaked into first_sentence: {first!r}"
+            )
+        # Must contain the real intent verb so it receives the 2x boost.
+        assert "audit" in first, f"intent verb missing from first_sentence: {first!r}"
+
+    @pytest.mark.asyncio
+    async def test_markdown_table_prefix_does_not_pollute_first_sentence(self, db):
+        """Pipe-delimited markdown table rows must be stripped from the
+        first-sentence boundary so their column headers (``pipeline |
+        schema | endpoint``) don't receive the positional boost.
+        """
+        from app.services.task_type_classifier import extract_first_sentence
+
+        prompt_lower = (
+            "| pipeline | schema | endpoint | database |\n"
+            "|----------|--------|----------|----------|\n"
+            "| api      | orm    | graphql  | postgres |\n"
+            "\n"
+            "evaluate the architecture in the table above and identify risks."
+        )
+        first = extract_first_sentence(prompt_lower)
+        # Table column headers live on their own rows — each row matches
+        # the ``^\s*\|.*\|\s*$`` multiline pattern and is removed.
+        for header in ("| pipeline |", "| schema |", "| endpoint |", "| api      |"):
+            assert header not in first, (
+                f"markdown-table row leaked into first_sentence: {header!r} in {first!r}"
+            )
+        assert "evaluate" in first, f"intent verb missing from first_sentence: {first!r}"
+
+    @pytest.mark.asyncio
+    async def test_inline_backticks_stripped_from_first_sentence(self, db):
+        """Inline backtick spans (``like `this` ``) count as code, not prose.
+        Keywords inside them shouldn't receive the first-sentence boost."""
+        analyzer = HeuristicAnalyzer()
+        prompt = (
+            "Using `pipeline.schema.endpoint.database.api` — "
+            "evaluate and audit the approach, then recommend changes."
+        )
+        result = await analyzer.analyze(
+            prompt, db, enable_llm_fallback=False,
+        )
+        assert result.task_type == "analysis"
+
+    @pytest.mark.asyncio
+    async def test_no_code_block_preserves_pre_fix_behavior(self, db):
+        """Prompts without code blocks or tables must classify exactly as
+        they did pre-fix — the helper is a no-op when there's nothing to
+        strip.
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Implement a REST endpoint that handles JWT auth and rate limiting",
+            db,
+            enable_llm_fallback=False,
+        )
+        assert result.task_type == "coding"
+
+
+# ---------------------------------------------------------------------------
 # E.3: Meta-prompt classification (write-a-prompt-that-X)
 # ---------------------------------------------------------------------------
 

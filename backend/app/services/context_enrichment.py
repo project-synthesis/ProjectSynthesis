@@ -42,7 +42,10 @@ from app.services.strategy_intelligence import (
     resolve_performance_signals,
     resolve_strategy_intelligence,
 )
-from app.services.task_type_classifier import has_technical_nouns
+from app.services.task_type_classifier import (
+    extract_first_sentence,
+    has_technical_nouns,
+)
 from app.services.workspace_intelligence import WorkspaceIntelligence
 
 logger = logging.getLogger(__name__)
@@ -482,8 +485,10 @@ class ContextEnrichmentService:
         # B2: compute technical-signal escape so analysis/creative/general
         # prompts about a linked codebase still get code_aware context. The
         # first sentence is extracted the same way the heuristic classifier
-        # does it so signals align with the analyzer's view of the prompt.
-        _first_sentence = re.split(r"[.?!]", raw_prompt.lower(), maxsplit=1)[0]
+        # does it (via the shared ``extract_first_sentence`` helper — code
+        # fences / markdown tables stripped, then ``.?!`` terminator split)
+        # so signals align with the analyzer's view of the prompt.
+        _first_sentence = extract_first_sentence(raw_prompt.lower())
         _tech_signals = has_technical_nouns(_first_sentence)
         profile = select_enrichment_profile(
             task_type or "general",
