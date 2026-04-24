@@ -254,3 +254,63 @@ describe('HistoryPanel — re-entry guard', () => {
     expect(deleteOptimization).toHaveBeenCalledTimes(1);
   }, 15000);
 });
+
+import { deleteOptimizations as bulkDeleteMock } from '$lib/api/optimizations';
+
+describe('HistoryPanel — multi-select + bulk', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (bulkDeleteMock as ReturnType<typeof vi.fn>).mockClear();
+    (bulkDeleteMock as ReturnType<typeof vi.fn>).mockResolvedValue({
+      deleted: 2,
+      requested: 2,
+      affected_cluster_ids: ['c1'],
+      affected_project_ids: [],
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('Select mode toggles checkboxes on every row', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+
+    const selectBtn = screen.getByRole('button', { name: /^select$/i });
+    await fireEvent.click(selectBtn);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+  });
+
+  it('Selection toolbar appears when >= 1 row is checked', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+    await fireEvent.click(screen.getByRole('button', { name: /^select$/i }));
+
+    await fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    expect(screen.getByText(/\bselected\b/i)).toBeInTheDocument();
+  });
+
+  it('Bulk delete opens the confirm modal and fires bulk API on confirm', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+    await fireEvent.click(screen.getByRole('button', { name: /^select$/i }));
+
+    await fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    await fireEvent.click(screen.getAllByRole('checkbox')[1]);
+    await fireEvent.click(screen.getByRole('button', { name: /delete 2/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/delete 2 optimizations/i)).toBeInTheDocument(),
+    );
+
+    await fireEvent.input(screen.getByRole('textbox'), {
+      target: { value: 'DELETE' },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete 2' }));
+
+    await waitFor(() => {
+      expect(bulkDeleteMock).toHaveBeenCalledWith(['opt-1', 'opt-2']);
+    });
+  });
+});
