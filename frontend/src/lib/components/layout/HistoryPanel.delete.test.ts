@@ -84,6 +84,7 @@ vi.mock('$lib/stores/toast.svelte', () => ({
 }));
 
 import { deleteOptimization } from '$lib/api/optimizations';
+import { toastsStore } from '$lib/stores/toasts.svelte';
 
 describe('HistoryPanel — delete flow', () => {
   beforeEach(() => {
@@ -154,4 +155,102 @@ describe('HistoryPanel — delete flow', () => {
     });
     expect(screen.getByText('row A')).toBeInTheDocument();
   });
+});
+
+describe('HistoryPanel — delete error branches', () => {
+  let pushSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (deleteOptimization as ReturnType<typeof vi.fn>).mockReset();
+    pushSpy = vi.spyOn(toastsStore, 'push');
+  });
+  afterEach(() => {
+    pushSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('404 response surfaces "Already deleted elsewhere." toast and resets row state', async () => {
+    const { ApiError } = await import('$lib/api/optimizations');
+    (deleteOptimization as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(404, 'not found'),
+    );
+
+    render(HistoryPanel, { props: { active: true } });
+    await vi.runAllTimersAsync();
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+
+    const rowA = screen.getByText('row A').closest('button')!;
+    await fireEvent.mouseEnter(rowA);
+    const xBtn = rowA.querySelector('[data-testid="row-delete-btn"]') as HTMLElement;
+    await fireEvent.click(xBtn);
+
+    // Let the grace window expire so commit fires
+    await vi.advanceTimersByTimeAsync(5100);
+    await vi.runAllTimersAsync();
+
+    await waitFor(() => {
+      expect(pushSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'error', message: 'Already deleted elsewhere.' }),
+      );
+    });
+  }, 15000);
+
+  it('generic 500 response surfaces "Delete failed." toast', async () => {
+    const { ApiError } = await import('$lib/api/optimizations');
+    (deleteOptimization as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(500, 'server error'),
+    );
+
+    render(HistoryPanel, { props: { active: true } });
+    await vi.runAllTimersAsync();
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+
+    const rowA = screen.getByText('row A').closest('button')!;
+    await fireEvent.mouseEnter(rowA);
+    const xBtn = rowA.querySelector('[data-testid="row-delete-btn"]') as HTMLElement;
+    await fireEvent.click(xBtn);
+
+    await vi.advanceTimersByTimeAsync(5100);
+    await vi.runAllTimersAsync();
+
+    await waitFor(() => {
+      expect(pushSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'error', message: 'Delete failed.' }),
+      );
+    });
+  }, 15000);
+});
+
+describe('HistoryPanel — re-entry guard', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (deleteOptimization as ReturnType<typeof vi.fn>).mockReset();
+    (deleteOptimization as ReturnType<typeof vi.fn>).mockResolvedValue({
+      deleted: 1,
+      requested: 1,
+      affected_cluster_ids: ['c1'],
+      affected_project_ids: [],
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('rapid × clicks only fire the API once (re-entry guard)', async () => {
+    render(HistoryPanel, { props: { active: true } });
+    await vi.runAllTimersAsync();
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+
+    const rowA = screen.getByText('row A').closest('button')!;
+    await fireEvent.mouseEnter(rowA);
+    const xBtn = rowA.querySelector('[data-testid="row-delete-btn"]') as HTMLElement;
+
+    // Rapid double-click
+    await fireEvent.click(xBtn);
+    await fireEvent.click(xBtn);
+
+    await vi.advanceTimersByTimeAsync(5100);
+    await vi.runAllTimersAsync();
+
+    expect(deleteOptimization).toHaveBeenCalledTimes(1);
+  }, 15000);
 });
