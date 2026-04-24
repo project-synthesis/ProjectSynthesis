@@ -14,7 +14,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
