@@ -133,7 +133,12 @@
     </div>
 
     {#if errorMessage !== null}
-      <div class="error-banner" data-testid="confirm-modal-error">
+      <div
+        class="error-banner"
+        data-testid="confirm-modal-error"
+        role="alert"
+        aria-live="polite"
+      >
         <span>{errorMessage}</span>
       </div>
     {/if}
