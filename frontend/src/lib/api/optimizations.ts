@@ -18,6 +18,9 @@ export type DeleteResult = {
 
 export { ApiError };
 
+// Keep in sync with backend/app/routers/history.py :: BulkDeleteRequest.ids
+// (min_length=1, max_length=100). Changing the backend constraint requires
+// mirroring here so the preflight error message stays accurate.
 const MAX_BULK = 100;
 const MIN_BULK = 1;
 
