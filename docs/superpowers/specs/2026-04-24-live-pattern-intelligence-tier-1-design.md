@@ -119,7 +119,7 @@ match_dict["meta_patterns"] = [ ... ]               # existing
 match_dict["similarity"] = result.similarity        # existing
 # NEW — always populated (empty list allowed):
 match_dict["cross_cluster_patterns"] = [ ... ]
-# NEW — one of {"family", "cluster", "candidate"}:
+# NEW — one of {"family", "cluster"} (the engine's internal "none" value short-circuits to match=None):
 match_dict["match_level"] = result.match_level
 ```
 
@@ -144,7 +144,7 @@ All design choices below derive from `.claude/skills/brand-guidelines` loaded at
 | **Zero-effects directive** | No `box-shadow` with blur/spread. No `text-shadow`. No `filter: drop-shadow`. No pulse animations. Active/selected states use 1 px inset contours. |
 | **Neon Tube Model** | Every visible border = 1 px uniform. Domain dot is 6 px solid chip in `taxonomyColor(domain)`. Similarity bar is a 1 px cyan border with opaque fill. |
 | **Ultra-compact density** | Panel header 24 px (`px-1.5`, `text-[11px]` Syne uppercase). Pattern rows 20 px. Padding `p-1.5` everywhere. Gap `gap-1.5`. |
-| **Chromatic encoding** | Domain color (`taxonomyColor(domain)`) drives the panel's left accent rail + domain dot. Match level uses chromatic encoding: `family` = dim text-secondary, `cluster` = neon-cyan, `candidate` = neon-yellow. Cross-cluster patterns carry a 1 px neon-purple left-border indicator (the "elevated/universal" color). |
+| **Chromatic encoding** | Domain color (`taxonomyColor(domain)`) drives the panel's left accent rail + domain dot. Match level uses chromatic encoding: `family` = dim text-secondary, `cluster` = neon-cyan. Cross-cluster patterns carry a 1 px neon-purple left-border indicator (the "elevated/universal" color). |
 | **Space Grotesk + Geist Mono discipline** | Headings in Syne 11 px 700 uppercase + 0.1em tracking. Pattern body text in Space Grotesk 11 px. Similarity percentages + pattern source counts in Geist Mono 10 px (tabular figures). |
 | **Motion** | Panel expansion uses the existing `navSlide` preset (`cubic-bezier(0.16, 1, 0.3, 1)`, 180 ms per `frontend/src/lib/utils/transitions.ts:37`). Pattern-row entry uses `fade-in` 150 ms with the brand spring curve. Checkbox toggle is instant — no transition on the selection state because the brand treats discrete binary states as non-animated. |
 | **Reduced motion** | `@media (prefers-reduced-motion: reduce)` collapses all transitions to 0.01 ms (matches the `app.css` global rule). |
@@ -220,7 +220,7 @@ Two surgical changes to `frontend/src/lib/stores/clusters.svelte.ts`:
 
 1. **Drop the skipped-cluster gate.** The existing `_skippedClusterId` state prevents re-showing a skipped single-cluster banner. Under the persistent panel, every fresh match should surface — the user no longer hits a skip action (they toggle checkboxes instead). Remove the field + the gate in `checkForPatterns`, and delete `dismissSuggestion()`.
 
-2. **Extend `ClusterMatch` type** (re-exported from `frontend/src/lib/api/clusters.ts`) with `cross_cluster_patterns: MetaPatternItem[]` and `match_level: 'family' | 'cluster' | 'candidate'`. Defensive defaults on decode.
+2. **Extend `ClusterMatch` type** (re-exported from `frontend/src/lib/api/clusters.ts`) with `cross_cluster_patterns: MetaPatternItem[]` and `match_level: 'family' | 'cluster'`. Defensive defaults on decode.
 
 `selectedPatternIds` stays **component-local** in `ContextPanel.svelte` — initialized from `forgeStore.appliedPatternIds` on mount via `$effect.root`, no store mutation. Rationale: the data's natural round-trip is `component → forgeStore → pipeline`; adding a third store field just to route through `clustersStore` would double the surface area for no cross-tab benefit. If a future need emerges, promote then.
 
@@ -252,7 +252,7 @@ Two surgical changes to `frontend/src/lib/stores/clusters.svelte.ts`:
 ### Backend
 
 1. `test_clusters_router.py::test_match_includes_cross_cluster_patterns`: seed 1 target cluster + 2 clusters whose meta-patterns have `global_source_count >= 3`; assert both global patterns appear in `cross_cluster_patterns`, disjoint from `meta_patterns`.
-2. `test_clusters_router.py::test_match_includes_match_level_field`: assert `match_level ∈ {"family", "cluster", "candidate"}` for seeded clusters.
+2. `test_clusters_router.py::test_match_includes_match_level_field`: assert `match_level ∈ {"family", "cluster"}` for mocked matches.
 3. Backwards-compat: existing match tests must continue to pass unchanged (the new fields are additive with defaults).
 
 ### Frontend — ContextPanel.test.ts (≥ 12 cases)
