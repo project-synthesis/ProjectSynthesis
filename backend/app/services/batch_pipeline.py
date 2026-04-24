@@ -298,7 +298,7 @@ async def run_single_prompt(
                     routing = get_routing()
                 except Exception:
                     pass
-                
+
                 async with session_factory() as _enrich_db:
                     enrichment = await context_service.enrich(
                         raw_prompt=raw_prompt,

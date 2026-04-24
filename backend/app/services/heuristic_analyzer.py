@@ -358,7 +358,7 @@ class HeuristicAnalyzer:
             )[:3]} if domain_scores else {},
             "loaded" if loader is not None else "absent",
         )
-        
+
         # Apply the A4 fallback domain if the heuristic fell back to general
         if llm_fallback_applied and domain == "general" and _a4_domain != "general":
             domain = _a4_domain

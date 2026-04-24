@@ -712,7 +712,7 @@ class _CapabilityDetectionMiddleware:
                 elif status == 200:
                     get_is_sse = True
                     cls._active_sse_streams += 1
-                    
+
                     if not session_id:
                         resp_headers = dict(
                             (k.decode() if isinstance(k, bytes) else k,
@@ -720,7 +720,7 @@ class _CapabilityDetectionMiddleware:
                             for k, v in message.get("headers", [])
                         )
                         session_id = resp_headers.get("mcp-session-id", "")
-                        
+
                     is_sampling_stream = session_id and session_id in cls._sampling_session_ids
                     if is_sampling_stream:
                         cls._sampling_sse_sessions.add(session_id)
@@ -743,7 +743,7 @@ class _CapabilityDetectionMiddleware:
                         if m:
                             session_id = m.group(1).decode()
                             logger.debug("Extracted session ID from SSE body: %s", session_id[:12])
-                
+
                 is_sampling_stream = session_id and session_id in cls._sampling_session_ids
                 if is_sampling_stream:
                     if session_id not in cls._sampling_sse_sessions:

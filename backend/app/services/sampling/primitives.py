@@ -42,7 +42,6 @@ from pydantic import BaseModel
 from app.providers.base import (
     ProviderError,
     ProviderOverloadedError,
-    ProviderRateLimitError,
 )
 from app.schemas.pipeline_contracts import AnalysisResult
 from app.services.event_notification import notify_event_bus

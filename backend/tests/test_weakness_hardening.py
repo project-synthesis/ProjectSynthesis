@@ -31,7 +31,6 @@ from app.services.weakness_detector import (
     has_keyword_unnegated,
 )
 
-
 # ---- Fixtures ----
 
 _TEST_DOMAIN_SIGNALS: dict[str, list[tuple[str, float]]] = {
