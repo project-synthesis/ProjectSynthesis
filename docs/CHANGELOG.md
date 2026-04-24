@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.2 — 2026-04-23
+
 ### Added
 - **MCP sampling architecture unification + Hybrid Phase Routing** — `MCPSamplingProvider` now encapsulates the IDE LLM sampling protocol as a first-class `LLMProvider`; the 1,700-line redundant sampling pipeline collapses to a thin re-export layer while sampling is routed natively through the primary `PipelineOrchestrator`. Hybrid Execution Routing: fast phases (analyze, score, suggest) stay on the internal provider while optimize routes through the IDE LLM, avoiding the 5-round-trip penalty of the old sampling-only path. MCP transport timeouts + errors now map to the `ProviderError` class so Tenacity exponential backoff retries kick in. Patched `StreamableHTTPServerTransport` to correctly extract the TS SDK `sessionId` from query parameters during handshake.
 - **`TaskTypeTelemetry` model + migration `2f3b0645e24d_add_task_type_telemetry.py`** — records heuristic vs LLM classification events (`raw_prompt`, `task_type`, `domain`, `source`) for drift analysis and A4 confidence-gated fallback tuning. Feeds future classifier calibration without needing to re-run the pipeline.
