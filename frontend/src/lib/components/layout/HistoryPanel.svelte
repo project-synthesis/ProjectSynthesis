@@ -481,6 +481,7 @@
               }}
               aria-label="Delete optimization"
               tabindex="0"
+              use:tooltip={'Delete (5s undo)'}
             >×</span>
           </button>
         {/if}
@@ -827,12 +828,31 @@
     outline-offset: 2px;
   }
 
+  /* Pre-commit grace window — user can still Undo. Soft opacity cue +
+     strike-through on the primary prompt text only; we avoid striking
+     colored badges (score, feedback arrow, cluster id) since struck
+     text overlaps badge color fills and reads as noise. */
   .row-item.pending-delete {
     opacity: 0.4;
+    cursor: default;
+  }
+  .row-item.pending-delete :global(.row-prompt) {
+    text-decoration: line-through;
+    text-decoration-color: var(--color-text-dim);
   }
 
-  .row-item.pending-delete :global(*) {
+  /* Post-commit, pre-SSE-reconcile — API call in flight, undo no
+     longer possible. Cyan left-edge accent signals "action in motion"
+     (brand primary chroma) + the row stays at reduced opacity. */
+  .row-item.deleting {
+    opacity: 0.3;
+    cursor: wait;
+    pointer-events: none;
+    box-shadow: inset 2px 0 0 0 var(--color-neon-cyan);
+  }
+  .row-item.deleting :global(.row-prompt) {
     text-decoration: line-through;
+    text-decoration-color: var(--color-text-dim);
   }
 
   .toast-stack {
@@ -980,7 +1000,14 @@
     font-size: 12px;
   }
   .bulk-preview-list li {
-    padding: 2px 0;
+    padding: 4px 0;
+    color: var(--color-text-primary);
+  }
+  /* Hairline separator between preview rows — matches the brand's
+     "1 px contour" language for ambient separation without adding
+     weight. First row has no top border; last row has no bottom. */
+  .bulk-preview-list li + li {
+    border-top: 1px solid var(--color-border-subtle);
   }
   .bulk-preview-list li.more {
     color: var(--color-text-dim);

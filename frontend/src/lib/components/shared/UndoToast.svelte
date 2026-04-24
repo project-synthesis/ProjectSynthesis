@@ -65,7 +65,9 @@
     toastsStore.dismiss(toast.id);
   }
 
-  const remainingSeconds = $derived(Math.ceil(remainingMs / 1000));
+  // Clamp the displayed countdown at 1s so the transition from "1" → dismiss
+  // doesn't flash "0s" during the final animation frames.
+  const remainingSeconds = $derived(Math.max(1, Math.ceil(remainingMs / 1000)));
   const progressScale = $derived(remainingMs / initialDurationMs);
 </script>
 
@@ -87,7 +89,9 @@
   {/if}
   <div class="row progress-row">
     <div class="progress-bar" style="transform: scaleX({progressScale})"></div>
-    <span class="countdown">{remainingSeconds}s</span>
+    <!-- AT-hidden: live-region announcement of the whole toast on mount is
+         enough; we don't want each second re-announced as state changes. -->
+    <span class="countdown" aria-hidden="true">{remainingSeconds}s</span>
   </div>
 </div>
 
@@ -121,11 +125,15 @@
     font-weight: 400;
   }
   .undo-btn {
+    /* Cyan, not red: Undo is the SAFE primary action inside an already-red
+       destructive context. Clicking Undo rescues data from deletion, so it
+       takes the brand's "primary action" chromatic encoding. The toast's
+       outer red border carries the "destructive context" signal. */
     height: 20px;
     padding: 0 8px;
     background: transparent;
     border: 1px solid transparent;
-    color: var(--color-neon-red);
+    color: var(--color-neon-cyan);
     font-family: var(--font-sans);
     font-size: 10px;
     font-weight: 500;
@@ -134,14 +142,11 @@
     transition: background 200ms var(--ease-spring), border-color 200ms var(--ease-spring);
   }
   .undo-btn:hover {
-    background: color-mix(in srgb, var(--color-neon-red) 12%, transparent);
-    border-color: rgba(255, 51, 102, 0.4);
-  }
-  .undo-btn:active {
-    transform: translateY(0);
+    background: color-mix(in srgb, var(--color-neon-cyan) 12%, transparent);
+    border-color: rgba(0, 229, 255, 0.4);
   }
   .undo-btn:focus-visible {
-    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline: 1px solid rgba(0, 229, 255, 0.4);
     outline-offset: 2px;
   }
   .meta {
@@ -154,11 +159,14 @@
     gap: 6px;
   }
   .progress-bar {
+    /* Countdown visualisation. RAF updates transform each frame via
+       `progressScale` — no CSS transition needed (it would be ~0-ms-
+       effective anyway, but the extra compositor work is avoidable). */
     flex: 1;
     height: 1px;
     background: var(--color-neon-red);
     transform-origin: left center;
-    transition: transform 16ms linear;
+    will-change: transform;
   }
   .countdown {
     font-family: var(--font-mono);
