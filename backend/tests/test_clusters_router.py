@@ -433,6 +433,57 @@ class TestClusterMatch:
         assert resp.status_code == 200
         assert resp.json()["match"]["cross_cluster_patterns"] == []
 
+    @pytest.mark.asyncio
+    async def test_match_response_preserves_existing_fields(self, app_client):
+        """B4: additive delta must not remove or rename any pre-existing field.
+
+        Locks the contract so a future refactor of match_dict assembly can't
+        silently break consumers.
+        """
+        from app.main import app
+        from app.services.taxonomy.matching import PatternMatch
+
+        mock_cluster = MagicMock()
+        mock_cluster.id = "c1"
+        mock_cluster.label = "Test cluster"
+        mock_cluster.domain = "backend"
+        mock_cluster.member_count = 3
+        mock_cluster.task_type = "coding"
+        mock_cluster.usage_count = 0
+        mock_cluster.avg_score = 0.0
+        mock_cluster.created_at = None
+        mock_cluster.color_hex = "#b44aff"
+
+        mock_result = PatternMatch(
+            cluster=mock_cluster, meta_patterns=[], similarity=0.75,
+            match_level="cluster", cross_cluster_patterns=[],
+        )
+        mock_engine = MagicMock()
+        mock_engine.match_prompt = AsyncMock(return_value=mock_result)
+        app.state.taxonomy_engine = mock_engine
+
+        try:
+            resp = await app_client.post(
+                "/api/clusters/match",
+                json={"prompt_text": "write a function that validates email"},
+            )
+        finally:
+            del app.state.taxonomy_engine
+
+        assert resp.status_code == 200
+        match = resp.json()["match"]
+        assert match is not None
+
+        # Pre-existing top-level keys must still be present.
+        assert "cluster" in match
+        assert "meta_patterns" in match
+        assert "similarity" in match
+
+        # Pre-existing cluster sub-keys.
+        cl = match["cluster"]
+        for key in ("id", "label", "domain", "member_count"):
+            assert key in cl, f"missing pre-existing key: {key}"
+
 
 class TestClusterRecluster:
     @pytest.mark.asyncio
