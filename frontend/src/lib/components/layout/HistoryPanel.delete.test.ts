@@ -565,4 +565,42 @@ describe('HistoryPanel — keyboard shortcuts', () => {
     await fireEvent.click(rows[0]); // toggle off
     expect(rows[0].classList.contains('selected')).toBe(false);
   });
+
+  it('Ctrl+click auto-seeds the currently-active row into selection', async () => {
+    // File-manager convention: when a row is already "open" (loaded in the
+    // editor → gets the .history-row--active class), the first ctrl+click
+    // on ANY OTHER row should include the active row in the selection
+    // automatically. Without this, users had to ctrl+click twice —
+    // once to prime select mode, again to add the next row.
+    const { forgeStore } = await import('$lib/stores/forge.svelte');
+    // Mark opt-1 (row A, trace_id 'trace-1') as the currently-loaded row.
+    forgeStore.traceId = 'trace-1';
+
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+
+    // Single ctrl+click on the OTHER row should select BOTH.
+    await fireEvent.click(rows[1], { ctrlKey: true });
+    expect(rows[0].classList.contains('selected')).toBe(true);
+    expect(rows[1].classList.contains('selected')).toBe(true);
+    // Cleanup.
+    forgeStore.traceId = null;
+  });
+
+  it('Shift+click without an anchor uses the active row as the anchor', async () => {
+    const { forgeStore } = await import('$lib/stores/forge.svelte');
+    forgeStore.traceId = 'trace-1';
+
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+
+    // Shift+click on the second row — range fills from active (row A) → B.
+    await fireEvent.click(rows[1], { shiftKey: true });
+    expect(rows[0].classList.contains('selected')).toBe(true);
+    expect(rows[1].classList.contains('selected')).toBe(true);
+    forgeStore.traceId = null;
+  });
 });
