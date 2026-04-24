@@ -123,8 +123,10 @@
         }
         if (type === 'optimization_deleted') {
           // Backend event name is snake_case; frontend CustomEvent is kebab.
-          // Naming bridge matches the existing optimization_analyzed → optimization-event
-          // indirection a few lines above.
+          // Unlike optimization_created/analyzed (consolidated into the generic
+          // 'optimization-event' above for full-list re-fetch), deletion gets
+          // its own dedicated event — HistoryPanel needs the per-row `id` so it
+          // can remove that row surgically without a round-trip.
           window.dispatchEvent(new CustomEvent('optimization-deleted', { detail: data }));
         }
         if (type === 'taxonomy_activity') {
