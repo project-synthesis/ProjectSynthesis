@@ -292,17 +292,26 @@
 
   async function confirmBulk() {
     const ids = [...selectedIds];
-    const res = await deleteOptimizations(ids);
-    bulkModalOpen = false;
-    selectMode = false;
-    selectedIds.clear();
-    if (res.deleted < res.requested) {
-      const missing = res.requested - res.deleted;
-      toastsStore.push({
-        kind: 'info',
-        message: `Deleted ${res.deleted} of ${res.requested}. ${missing} were already gone.`,
-        durationMs: 4000,
-      });
+    try {
+      const res = await deleteOptimizations(ids);
+      // Success: exit selection mode + close modal + clear selection
+      bulkModalOpen = false;
+      selectMode = false;
+      selectedIds.clear();
+      if (res.deleted < res.requested) {
+        const missing = res.requested - res.deleted;
+        toastsStore.push({
+          kind: 'info',
+          message: `Deleted ${res.deleted} of ${res.requested}. ${missing} were already gone.`,
+          durationMs: 4000,
+        });
+      }
+    } catch (e) {
+      // Modal stays open and renders its own error banner via DestructiveConfirmModal's
+      // try/catch on onConfirm. State (bulkModalOpen, selectMode, selectedIds) intentionally
+      // preserved so the user can retry without re-selecting. Re-throw to let the modal
+      // surface the error message.
+      throw e;
     }
   }
 
@@ -497,7 +506,8 @@
 {#snippet bulkBody()}
   <ul class="bulk-preview-list">
     {#each historyItems.filter(i => selectedIds.has(i.id)).slice(0, 3) as opt}
-      <li>{(opt.raw_prompt || opt.intent_label || '').slice(0, 60)}{(opt.raw_prompt?.length || 0) > 60 ? '…' : ''}</li>
+      {@const preview = opt.raw_prompt || opt.intent_label || 'Untitled'}
+      <li>{preview.slice(0, 60)}{preview.length > 60 ? '…' : ''}</li>
     {/each}
     {#if selectedIds.size > 3}
       <li class="more">…and {selectedIds.size - 3} more</li>
