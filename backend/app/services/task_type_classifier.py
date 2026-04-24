@@ -126,6 +126,15 @@ _TASK_TYPE_SIGNALS: dict[str, list[tuple[str, float]]] = {
         ("write instructions", 1.1), ("write a system prompt", 1.4),
         ("craft a prompt", 1.3), ("design a prompt", 1.3),
         ("prompt that", 1.0),
+        # #12 (2026-04-24 A1+A2 audit): "design a system prompt" must win
+        # over the coding compound "design a system" (both 1.3).  Longer
+        # compound at weight 1.5 ensures system wins when the user literally
+        # asks for a system-prompt design — the substring "design a system"
+        # also matches but the longer phrase earns priority via the higher
+        # weight.  Same pattern: "build/create a system prompt".
+        ("design a system prompt", 1.5),
+        ("build a system prompt", 1.5),
+        ("create a system prompt", 1.5),
         # Single-word signals
         ("system prompt", 1.0), ("agent", 0.7), ("workflow", 0.6),
         ("automate", 0.8), ("orchestrate", 0.9), ("configure", 0.7),

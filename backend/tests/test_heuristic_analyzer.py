@@ -1060,3 +1060,117 @@ def test_enrich_domain_qualifier_no_loader_returns_plain():
         result = _enrich_domain_qualifier("saas", "saas metrics dashboard")
 
     assert result == "saas"
+
+
+# ---------------------------------------------------------------------------
+# A1+A2 follow-up — mixed compound + single-word signal interactions (#12)
+# ---------------------------------------------------------------------------
+#
+# Commit 14511cd3 landed A1+A2 follow-up fixes live-audit surfaced. These
+# tests explore the mixed-signal space that emerged from that audit, pinning
+# current behaviour (regression guards) and closing one specific drift case:
+# "design a system prompt" was classified as ``coding`` because
+# "design a system" (coding 1.3) is a left-substring match and the signal
+# table had no longer compound to break the tie. Fix: add
+# "design a system prompt" / "build a system prompt" / "create a system
+# prompt" at weight 1.5 on the ``system`` task_type.
+
+
+class TestA1A2MixedSignalEdgeCases:
+    """Mixed compound + single-word signal interactions across task types.
+
+    Each test pins a specific resolution — if future signal-table edits
+    flip these classifications, the change deserves a deliberate code
+    review, not a silent drift.
+    """
+
+    @pytest.mark.asyncio
+    async def test_design_a_system_prompt_classifies_as_system(self, db):
+        """#12 fix: meta-work with the tokens ``design a system prompt``
+        is prompt-engineering, not backend work.  The longer compound
+        (weight 1.5) beats the shorter ``design a system`` (weight 1.3).
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Design a system prompt for evaluating design systems",
+            db, enable_llm_fallback=False,
+        )
+        assert result.task_type == "system", (
+            f"meta-prompt design work should classify as system, "
+            f"got {result.task_type}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_build_a_system_prompt_classifies_as_system(self, db):
+        """Symmetric fix for the ``build/create`` verb family."""
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Build a system prompt that orchestrates a research agent",
+            db, enable_llm_fallback=False,
+        )
+        assert result.task_type == "system"
+
+    @pytest.mark.asyncio
+    async def test_create_a_system_prompt_classifies_as_system(self, db):
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Create a system prompt that guides a reviewer through an audit",
+            db, enable_llm_fallback=False,
+        )
+        assert result.task_type == "system"
+
+    @pytest.mark.asyncio
+    async def test_design_a_system_without_prompt_still_coding(self, db):
+        """Regression guard: the fix must NOT poach plain ``design a system``
+        prompts (without the ``prompt`` suffix) — those still belong to
+        coding.  The shorter compound (1.3) fires; the longer doesn't.
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Design a system for evaluating design patterns across services",
+            db, enable_llm_fallback=False,
+        )
+        assert result.task_type == "coding", (
+            f"plain 'design a system' should still be coding, "
+            f"got {result.task_type}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_a_prompt_for_debugging_classifies_as_system(self, db):
+        """Meta-prompt compound (``write a prompt``, weight 1.3) must beat
+        the nested ``debug`` analysis verb (weight 0.9).  Established by
+        the E.3 meta-prompt fix; pinned again here against the mixed
+        debug-intent signal.
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Write a prompt for debugging the pipeline orchestration",
+            db, enable_llm_fallback=False,
+        )
+        assert result.task_type == "system"
+
+    @pytest.mark.asyncio
+    async def test_diagnose_and_recommend_classifies_as_analysis(self, db):
+        """A1 single-word coverage — ``diagnose`` (0.9) on the first
+        sentence plus ``analysis`` (from the A8 audit verbs) at single-
+        word weight must win over the single ``pipeline`` coding signal.
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Diagnose pipeline latency and recommend refactors",
+            db, enable_llm_fallback=False,
+        )
+        assert result.task_type == "analysis"
+
+    @pytest.mark.asyncio
+    async def test_design_a_pipeline_classifies_as_coding(self, db):
+        """Regression guard: ``design a pipeline`` (coding 1.2) wins over
+        the single ``evaluate`` analysis verb.  Pipeline design is
+        engineering work; the analysis verb alone doesn't flip it.
+        """
+        analyzer = HeuristicAnalyzer()
+        result = await analyzer.analyze(
+            "Design a pipeline to evaluate the API architecture end-to-end",
+            db, enable_llm_fallback=False,
+        )
+        assert result.task_type == "coding"
