@@ -44,7 +44,13 @@ from app.providers.base import (
     ProviderOverloadedError,
 )
 from app.schemas.pipeline_contracts import AnalysisResult
+from app.services.domain_signal_loader import get_signal_loader
 from app.services.event_notification import notify_event_bus
+from app.services.task_type_classifier import (
+    classify_task_type,
+    extract_first_sentence,
+    get_task_type_signals,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -295,63 +301,44 @@ def build_analysis_from_text(
 ) -> AnalysisResult:
     """Best-effort analysis extraction from free-text LLM response.
 
-    Searches for keywords and patterns to extract task_type, domain,
-    weaknesses, and strengths instead of returning all-"general" defaults.
+    Delegates classification to the organic warm-path pipeline:
+
+    - **Task type** comes from ``classify_task_type()`` using the live
+      ``get_task_type_signals()`` table, so dynamic signals learned by
+      the warm path (compound keywords, A2 verb/noun disambiguation,
+      A8 CLI-family additions) flow through here with zero drift.
+    - **Domain** comes from ``DomainSignalLoader.score()`` + ``classify()``,
+      the single source of truth for organic domain vocabulary.
+
+    Weaknesses / strengths / intent_label continue to use lightweight
+    text scans — those signals are derived from the LLM's analysis
+    rather than from the prompt's classification vocabulary.
 
     Scans BOTH the LLM's analysis text AND the original raw prompt for
     keywords, since the raw prompt is the most reliable signal for
     classification when the LLM response is unparseable.
     """
-    lower = (text + "\n" + raw_prompt).lower()
+    combined = (text + "\n" + raw_prompt).lower()
+    lower = combined  # alias retained for weakness/strength scans below
 
-    task_type = "general"
-    type_keywords = {
-        "coding": ["function", "code", "api", "class", "program", "script", "endpoint", "module",
-                    "implement", "refactor", "debug", "test", "algorithm"],
-        "writing": ["write", "essay", "article", "blog", "content", "copy", "draft",
-                     "documentation", "readme", "tutorial"],
-        "analysis": ["analyze", "evaluate", "assess", "compare", "review", "audit",
-                      "investigate", "diagnose", "benchmark"],
-        "creative": ["creative", "story", "poem", "design", "brainstorm", "imagine",
-                      "generate ideas", "concept"],
-        "data": ["data", "dataset", "sql", "query", "csv", "statistics", "visualization",
-                  "etl", "transform", "aggregate"],
-        "system": ["system", "architecture", "infrastructure", "deploy", "devops", "pipeline",
-                    "microservice", "scalab", "latency", "bottleneck", "load balanc",
-                    "distributed", "high-traffic", "orchestrat"],
-    }
-    best_count = 0
-    for ttype, keywords in type_keywords.items():
-        count = sum(1 for kw in keywords if kw in lower)
-        if count > best_count:
-            best_count = count
-            task_type = ttype
+    # Task type — delegate to the organic classifier. ``classify_task_type``
+    # accepts ``prompt_lower`` and ``first_sentence``; use the shared
+    # helper so the boundary semantic matches the warm path.
+    first_sentence = extract_first_sentence(combined)
+    task_signals = get_task_type_signals()
+    task_type, _task_confidence, _all_scores = classify_task_type(
+        combined, first_sentence, task_signals,
+    )
 
+    # Domain — delegate to DomainSignalLoader. Graceful fallback when the
+    # loader isn't initialised (startup race / test contexts without a
+    # live loader): return ``"general"`` and skip scoring.
     domain = "general"
-    domain_keywords = {
-        "backend": ["backend", "server", "api", "endpoint", "fastapi", "django", "flask",
-                     "express", "rest", "graphql", "microservice", "architecture",
-                     "scalab", "latency", "bottleneck", "high-traffic"],
-        "frontend": ["frontend", "react", "svelte", "vue", "css", "html", "ui", "component",
-                      "browser", "responsive", "tailwind"],
-        "database": ["database", "sql", "query", "schema", "migration", "index",
-                      "postgres", "mysql", "mongo", "redis", "orm"],
-        "security": ["security", "auth", "encryption", "vulnerability", "token",
-                      "oauth", "jwt", "cors", "csrf", "xss"],
-        "devops": ["deploy", "docker", "ci/cd", "kubernetes", "infrastructure",
-                    "terraform", "ansible", "monitoring", "observability", "nginx"],
-        "fullstack": ["fullstack", "full-stack", "full stack", "end-to-end",
-                      "system-wide"],
-        "data": ["data science", "machine learning", "pandas", "numpy", "sklearn",
-                 "dataset", "prediction", "classification", "analytics", "etl",
-                 "jupyter", "notebook", "visualization", "statistics", "regression"],
-    }
-    best_domain_count = 0
-    for dom, keywords in domain_keywords.items():
-        count = sum(1 for kw in keywords if kw in lower)
-        if count > best_domain_count:
-            best_domain_count = count
-            domain = dom
+    loader = get_signal_loader()
+    if loader is not None:
+        words = set(combined.split())
+        scored = loader.score(words)
+        domain = loader.classify(scored)
 
     weaknesses: list[str] = []
     strengths: list[str] = []
