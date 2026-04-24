@@ -23,6 +23,13 @@ from app.tools._shared import DATA_DIR, auto_resolve_repo, get_context_service, 
 logger = logging.getLogger(__name__)
 
 
+def _get_provider_safe():
+    try:
+        return get_routing().state.provider
+    except ValueError:
+        return None
+
+
 async def handle_prepare(
     prompt: str,
     strategy: str | None,
@@ -81,7 +88,7 @@ async def handle_prepare(
             mcp_ctx=ctx,
             repo_full_name=effective_repo,
             project_id=_prep_project_id,
-            provider=get_routing().state.provider,
+            provider=_get_provider_safe(),
         )
 
     # Few-shot retrieval for passthrough (parity with internal/sampling)
