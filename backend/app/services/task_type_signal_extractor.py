@@ -19,6 +19,7 @@ import time
 from collections import Counter
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization
@@ -89,16 +90,36 @@ async def extract_task_type_signals(
             row[0]: row[1] for row in type_counts_q.all()
         }
 
-        # 1b. Count telemetry samples per task type
+        # 1b. Count telemetry samples per task type.
+        #
+        # Defensive: the `task_type_telemetry` table may not exist on legacy
+        # dev DBs that predate the TaskTypeTelemetry model declaration. The
+        # idempotent migration `2f3b0645e24d` handles fresh DBs, and
+        # `Base.metadata.create_all()` at startup covers the typical dev
+        # path, but DBs created in the narrow window between model import
+        # and the migration being applied (or long-running databases where
+        # the backend restarted without re-running `create_all`) can still
+        # be missing the table. Missing → treat as empty telemetry so warm
+        # Phase 4.75 keeps running on optimization counts alone.
         from app.models import TaskTypeTelemetry
-        telemetry_counts_q = await db.execute(
-            select(TaskTypeTelemetry.task_type, func.count(TaskTypeTelemetry.id))
-            .where(TaskTypeTelemetry.task_type.isnot(None))
-            .group_by(TaskTypeTelemetry.task_type)
-        )
-        telemetry_counts: dict[str, int] = {
-            row[0]: row[1] for row in telemetry_counts_q.all()
-        }
+        telemetry_counts: dict[str, int]
+        try:
+            telemetry_counts_q = await db.execute(
+                select(TaskTypeTelemetry.task_type, func.count(TaskTypeTelemetry.id))
+                .where(TaskTypeTelemetry.task_type.isnot(None))
+                .group_by(TaskTypeTelemetry.task_type)
+            )
+            telemetry_counts = {
+                row[0]: row[1] for row in telemetry_counts_q.all()
+            }
+        except OperationalError as op_exc:
+            logger.warning(
+                "extract_task_type_signals: task_type_telemetry read failed "
+                "(%s) — falling back to optimization-only counts. "
+                "Run `alembic upgrade head` or restart to trigger create_all.",
+                op_exc.orig if hasattr(op_exc, "orig") else op_exc,
+            )
+            telemetry_counts = {}
 
         total_samples = sum(type_counts.values()) + sum(telemetry_counts.values())
         all_task_types = set(type_counts.keys()) | set(telemetry_counts.keys())
