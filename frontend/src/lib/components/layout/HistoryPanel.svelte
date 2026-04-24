@@ -245,13 +245,29 @@
         setRowState(item.id, 'deleting');
         try {
           await deleteOptimization(item.id);
-          // SSE surgically removes the row; fallback 2s timeout covers SSE gaps
+          // SSE surgically removes the row; fallback 2s timeout covers SSE gaps.
           scheduleFallbackRemoval(item.id, 2000);
         } catch (e) {
-          setRowState(item.id, 'idle');
           const status = (e as ApiError).status;
-          const msg = status === 404 ? 'Already deleted elsewhere.' : 'Delete failed.';
-          toastsStore.push({ kind: 'error', message: msg, durationMs: 4000 });
+          if (status === 404) {
+            // The row exists in the UI but not in the DB (corrupted / stale
+            // from another-client delete). Reconcile locally — remove the
+            // row from the list + clear state. Soft success, not an error.
+            historyItems = historyItems.filter(i => i.id !== item.id);
+            setRowState(item.id, 'idle');
+            toastsStore.push({
+              kind: 'info',
+              message: 'Already deleted elsewhere.',
+              durationMs: 4000,
+            });
+          } else {
+            setRowState(item.id, 'idle');
+            toastsStore.push({
+              kind: 'error',
+              message: 'Delete failed.',
+              durationMs: 4000,
+            });
+          }
         }
       },
     });
@@ -294,6 +310,35 @@
     bulkModalOpen = true;
   }
 
+  /**
+   * Delete N ids via per-row DELETE /api/optimizations/{id} calls in parallel.
+   * Used as a fallback when the bulk POST endpoint is unreachable (older
+   * backend that predates v0.4.3) and directly for final reconciliation when
+   * the bulk succeeded partially. Returns a breakdown so the caller can
+   * surface an accurate info/error toast.
+   */
+  async function deleteIdsOneByOne(ids: string[]): Promise<{
+    deleted: string[];
+    alreadyGone: string[];
+    failed: Array<{ id: string; status: number | undefined }>;
+  }> {
+    const results = await Promise.allSettled(ids.map(id => deleteOptimization(id)));
+    const deleted: string[] = [];
+    const alreadyGone: string[] = [];
+    const failed: Array<{ id: string; status: number | undefined }> = [];
+    results.forEach((r, i) => {
+      const id = ids[i];
+      if (r.status === 'fulfilled') {
+        deleted.push(id);
+      } else {
+        const err = r.reason as ApiError;
+        if (err?.status === 404) alreadyGone.push(id);
+        else failed.push({ id, status: err?.status });
+      }
+    });
+    return { deleted, alreadyGone, failed };
+  }
+
   async function confirmBulk() {
     const ids = [...selectedIds];
     try {
@@ -303,6 +348,7 @@
       // client, MCP tool, or a corrupted-state cleanup). Treat as successful
       // reconciliation — close the modal and surface a non-alarming info toast.
       if (res.deleted === 0 && res.requested > 0) {
+        historyItems = historyItems.filter(i => !ids.includes(i.id));
         bulkModalOpen = false;
         selectMode = false;
         selectedIds.clear();
@@ -330,17 +376,59 @@
         });
       }
     } catch (e) {
-      // Translate raw HTTP statuses into actionable copy before the modal
-      // renders them in its error banner. Raw "Not Found" / "Internal Server
-      // Error" strings aren't user-facing — they're protocol artefacts.
-      // Modal state (open, selectMode, selectedIds) is intentionally preserved
-      // so the user can retry without re-selecting or retyping DELETE.
       const err = e as { status?: number; message?: string };
       const status = err.status;
-      let friendly: string;
+
+      // Bulk endpoint unreachable (e.g. older backend that predates v0.4.3):
+      // fall back to per-id DELETE /api/optimizations/{id}, which has shipped
+      // since v0.4.2. This keeps the UX working on mismatched deployments and
+      // fully handles corrupted/stale rows because per-id 404 is reconciled
+      // locally rather than surfaced as an error.
       if (status === 404) {
-        friendly = 'Delete endpoint unreachable. Refresh, then retry.';
-      } else if (status === 429) {
+        try {
+          const { deleted, alreadyGone, failed } = await deleteIdsOneByOne(ids);
+          if (failed.length > 0) {
+            const anyNonBenign = failed.some(f => f.status !== undefined && f.status !== 404);
+            throw new Error(
+              anyNonBenign
+                ? `Deleted ${deleted.length}. ${failed.length} failed. Retry.`
+                : 'Delete failed. Retry.',
+            );
+          }
+          // All succeeded or were already-gone — reconcile locally.
+          historyItems = historyItems.filter(i => !ids.includes(i.id));
+          bulkModalOpen = false;
+          selectMode = false;
+          selectedIds.clear();
+          if (deleted.length === 0 && alreadyGone.length > 0) {
+            toastsStore.push({
+              kind: 'info',
+              message:
+                alreadyGone.length === 1
+                  ? 'Already deleted elsewhere.'
+                  : `All ${alreadyGone.length} were already deleted elsewhere.`,
+              durationMs: 4000,
+            });
+          } else if (alreadyGone.length > 0) {
+            toastsStore.push({
+              kind: 'info',
+              message: `Deleted ${deleted.length}. ${alreadyGone.length} were already gone.`,
+              durationMs: 4000,
+            });
+          }
+          return;
+        } catch (fallbackErr) {
+          // If the fallback itself threw, propagate the friendlier message.
+          throw fallbackErr;
+        }
+      }
+
+      // Translate remaining HTTP statuses into actionable copy. Raw
+      // "Not Found" / "Internal Server Error" strings aren't user-facing —
+      // they're protocol artefacts. Modal state (open, selectMode,
+      // selectedIds) is preserved so the user can retry without re-selecting.
+      let friendly: string;
+      if (status === 429) {
         friendly = 'Too many deletes. Wait a moment, then retry.';
       } else if (status !== undefined && status >= 500) {
         friendly = 'Server error. Retry.';
@@ -449,10 +537,17 @@
             class:history-row--active={activeTraceId === item.trace_id}
             class:pending-delete={rowStateOf(item.id) === 'pending-delete'}
             class:deleting={rowStateOf(item.id) === 'deleting'}
+            class:select-mode={selectMode}
             style="--accent: {taxonomyColor(item.domain)};"
             onclick={() => loadHistoryItem(item)}
           >
             {#if selectMode}
+              <!-- Absolute-positioned at vertical center, left-most edge of
+                   the card. .history-row is column-flex, so leaving the
+                   checkbox in the flow puts it above the content (wrong —
+                   it should sit centered beside the two-line card). The row
+                   gets select-mode class which shifts its padding-left to
+                   reserve the 14px checkbox + 8px gap. -->
               <input
                 type="checkbox"
                 class="row-checkbox"
@@ -840,10 +935,12 @@
   /* ── Row delete affordance ─────────────────────────────────────── */
 
   .row-delete-btn {
-    /* Last flex child of .history-meta — sits after row-score / row-feedback.
-       No absolute positioning, so the × lives on the meta line below the
-       prompt text and never overlaps row-time. Width reserved at 14px so
-       hover-reveal doesn't cause layout jitter. */
+    /* Last flex child of .history-meta. `margin-left: auto` pushes the ×
+       to the far-right edge of the meta line, so it sits DIRECTLY BELOW
+       the timestamp on the prompt line above (both pinned to the right
+       edge of the card). Width reserved at 14px so hover-reveal doesn't
+       cause layout jitter. */
+    margin-left: auto;
     width: 14px;
     height: 14px;
     flex-shrink: 0;
@@ -1029,17 +1126,29 @@
 
   /* ── Row checkbox ──────────────────────────────────────────────── */
 
+  /* ── Select-mode row padding shift ─────────────────────────────── */
+
+  /* Reserve 22px of left padding (14px checkbox + 8px gap) when the row
+     is in select mode. Keeps content right-aligned to the checkbox. */
+  .history-row.select-mode {
+    padding-left: 30px;
+  }
+
   .row-checkbox {
     width: 14px;
     height: 14px;
-    margin-right: 6px;
     appearance: none;
     border: 1px solid var(--color-border-subtle);
     /* Flat edges — brand default. */
     border-radius: 0;
     background: transparent;
     cursor: pointer;
-    position: relative;
+    /* Float at center-middle-left of the card, outside the column flow so
+       it doesn't stack on top of the prompt line. */
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
     flex-shrink: 0;
     transition: border-color 200ms var(--ease-spring), background 200ms var(--ease-spring);
   }
