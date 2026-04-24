@@ -1,5 +1,6 @@
-"""Shared test fixtures."""
+"""Shared test fixtures + helpers."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,29 @@ from app.providers.base import LLMProvider
 
 # No custom event_loop fixture needed — pytest-asyncio manages it
 # automatically with asyncio_mode = "auto" in pyproject.toml.
+
+
+def drain_events_nonblocking(queue: asyncio.Queue) -> list[dict]:
+    """Drain all events currently in an ``asyncio.Queue`` without awaiting.
+
+    ``event_bus.publish`` is sync even though subscribers are async — events
+    are already in the queue by the time a sync-style publisher returns, so
+    pulling with ``get_nowait()`` until ``QueueEmpty`` is the deterministic
+    way to collect everything that was emitted during a unit-test arrangement.
+    Callers filter by ``event`` type themselves at the call site.
+
+    Shared helper used by ``test_bulk_delete_router.py`` and
+    ``test_optimization_service_delete.py`` (both subscribe queues directly
+    to ``event_bus._subscribers`` for deterministic registration — see the
+    comment chain in the ``event_bus.subscribe()`` definition for why the
+    public async-generator API would race under test timing).
+    """
+    events: list[dict] = []
+    while True:
+        try:
+            events.append(queue.get_nowait())
+        except asyncio.QueueEmpty:
+            return events
 
 
 @pytest_asyncio.fixture

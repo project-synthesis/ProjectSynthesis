@@ -27,6 +27,7 @@ from app.models import (
 )
 from app.services.event_bus import event_bus
 from app.services.optimization_service import OptimizationService
+from tests.conftest import drain_events_nonblocking
 
 
 @pytest.fixture(autouse=True)
@@ -220,17 +221,10 @@ async def test_emits_event_per_deleted_row(db_session):
         # Drain the queue, filtering for our event type. Other tests may
         # leave the process-level bus in any state, so we tolerate extra
         # event types and only require the two we just produced.
-        delete_events: list[dict] = []
-        # Events were published synchronously inside `delete_optimizations`
-        # (event_bus.publish is sync, not async), so they are already in
-        # the queue by the time we get here — drain without waiting.
-        while True:
-            try:
-                evt = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if evt.get("event") == "optimization_deleted":
-                delete_events.append(evt)
+        delete_events = [
+            e for e in drain_events_nonblocking(queue)
+            if e.get("event") == "optimization_deleted"
+        ]
     finally:
         event_bus._subscribers.discard(queue)
 
@@ -316,14 +310,10 @@ async def test_publishes_taxonomy_changed_on_bulk_delete(db_session):
         )
         assert result.deleted == 2
 
-        taxonomy_events: list[dict] = []
-        while True:
-            try:
-                evt = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if evt.get("event") == "taxonomy_changed":
-                taxonomy_events.append(evt)
+        taxonomy_events = [
+            e for e in drain_events_nonblocking(queue)
+            if e.get("event") == "taxonomy_changed"
+        ]
     finally:
         event_bus._subscribers.discard(queue)
 
@@ -346,14 +336,10 @@ async def test_no_taxonomy_changed_event_when_nothing_deleted(db_session):
         result = await svc.delete_optimizations([str(uuid.uuid4())])
         assert result.deleted == 0
 
-        taxonomy_events = []
-        while True:
-            try:
-                evt = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if evt.get("event") == "taxonomy_changed":
-                taxonomy_events.append(evt)
+        taxonomy_events = [
+            e for e in drain_events_nonblocking(queue)
+            if e.get("event") == "taxonomy_changed"
+        ]
     finally:
         event_bus._subscribers.discard(queue)
 

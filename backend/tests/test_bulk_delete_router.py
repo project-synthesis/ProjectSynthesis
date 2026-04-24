@@ -39,29 +39,18 @@ def _reset_rate_limit_storage():
     """Reset the in-memory rate limit storage before each test to ensure
     isolated rate limit state. The storage is a process-level singleton,
     so prior tests can consume quota from the moving window."""
-    from app.dependencies.rate_limit import _storage
+    from app.dependencies.rate_limit import reset_rate_limit_storage
 
-    _storage.reset()
+    reset_rate_limit_storage()
     yield
-    _storage.reset()
+    reset_rate_limit_storage()
 
 
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _drain_events_nonblocking(queue: asyncio.Queue) -> list[dict]:
-    """Drain all events currently in the queue without awaiting — events
-    are published synchronously inside ``delete_optimizations`` (the
-    publish method itself is sync even though subscribers are async),
-    so they're already in the queue by the time the POST returns.
-    """
-    events: list[dict] = []
-    while True:
-        try:
-            events.append(queue.get_nowait())
-        except asyncio.QueueEmpty:
-            return events
+from tests.conftest import drain_events_nonblocking as _drain_events_nonblocking
 
 
 async def _seed_opt(db_session, *, cluster_id: str | None = None) -> str:
