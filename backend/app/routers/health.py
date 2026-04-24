@@ -91,6 +91,17 @@ class HealthResponse(BaseModel):
     injection_effectiveness: dict | None = Field(
         default=None, description="Score lift: injected vs non-injected optimizations.",
     )
+    enrichment_effectiveness: dict | None = Field(
+        default=None,
+        description=(
+            "E2 (phase-e-observability): per-profile aggregates over recent "
+            "completed optimizations — {count, avg_overall_score, "
+            "avg_improvement_score} keyed by enrichment_profile "
+            "(code_aware / knowledge_work / cold_start). Lets operators "
+            "confirm or disprove the profile-selection hypothesis with live "
+            "data. Null when no rows carry an enrichment_profile."
+        ),
+    )
     recovery: dict | None = Field(default=None, description="Orphan recovery metrics.")
     classification_agreement: dict | None = Field(
         default=None, description="Heuristic vs LLM classification agreement rates.",
@@ -401,6 +412,17 @@ async def health_check(
     except Exception:
         logger.debug("Health check metrics collection failed", exc_info=True)
 
+    # E2: per-profile enrichment effectiveness.  Isolated try/except so a
+    # JSON-extractor hiccup on old rows can't collapse the whole endpoint.
+    enrichment_effectiveness: dict | None = None
+    try:
+        profile_stats = await svc.get_enrichment_profile_effectiveness()
+        # Keep the field null (not ``{}``) when no profile data exists —
+        # matches the frontend pattern for other null-by-default sections.
+        enrichment_effectiveness = profile_stats or None
+    except Exception:
+        logger.debug("Health check enrichment-effectiveness query failed", exc_info=True)
+
     # Injection provenance reliability
     injection_stats: dict[str, int] = {}
     try:
@@ -514,6 +536,7 @@ async def health_check(
         project_count=project_count,
         injection_stats=injection_stats,
         injection_effectiveness=injection_effectiveness,
+        enrichment_effectiveness=enrichment_effectiveness,
         recovery=recovery_metrics,
         classification_agreement=agreement_data,
         qualifier_vocab=qualifier_vocab_stats,

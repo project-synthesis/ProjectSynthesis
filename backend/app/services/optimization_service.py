@@ -391,6 +391,89 @@ class OptimizationService:
     # Per-phase average durations
     # ------------------------------------------------------------------
 
+    async def get_enrichment_profile_effectiveness(
+        self, limit: int = 200,
+    ) -> dict[str, dict[str, float]]:
+        """Aggregate recent completed optimizations by ``enrichment_profile``.
+
+        Surfaces whether the three profiles (``code_aware`` / ``knowledge_work``
+        / ``cold_start``) are delivering their hypothesis — lets an operator
+        compare scoring outcomes per profile with a single health probe.
+
+        Returns a dict keyed by profile name with per-profile aggregates:
+
+        .. code-block:: python
+
+            {
+              "code_aware":      {"count": 150, "avg_overall_score": 7.8,
+                                   "avg_improvement_score": 2.1},
+              "knowledge_work":  {"count":  42, "avg_overall_score": 7.2, ...},
+              "cold_start":      {"count":   7, "avg_overall_score": 6.5, ...},
+            }
+
+        Rows without an ``enrichment_profile`` (e.g. pre-v0.3.30 history) are
+        excluded from the aggregation.  Rows with NULL ``improvement_score``
+        count toward ``count`` and ``avg_overall_score`` but are excluded
+        from ``avg_improvement_score``.
+
+        The profile is read from ``context_sources["enrichment_meta"]
+        ["enrichment_profile"]`` — the JSON nesting means we aggregate
+        Python-side rather than via SQL ``GROUP BY`` (portable across
+        SQLite/PostgreSQL without dialect-specific JSON extractors).
+        """
+        result = await self._session.execute(
+            select(
+                Optimization.context_sources,
+                Optimization.overall_score,
+                Optimization.improvement_score,
+            )
+            .where(
+                Optimization.status == "completed",
+                Optimization.context_sources.isnot(None),
+            )
+            .order_by(desc(Optimization.created_at))
+            .limit(limit)
+        )
+        rows = result.all()
+
+        # Per-profile accumulators.
+        profile_data: dict[str, dict[str, Any]] = {}
+        for context_sources, overall_score, improvement_score in rows:
+            if not isinstance(context_sources, dict):
+                continue
+            meta = context_sources.get("enrichment_meta")
+            if not isinstance(meta, dict):
+                continue
+            profile = meta.get("enrichment_profile")
+            if not isinstance(profile, str) or not profile:
+                continue
+
+            bucket = profile_data.setdefault(profile, {
+                "count": 0,
+                "overall_scores": [],
+                "improvement_scores": [],
+            })
+            bucket["count"] += 1
+            if isinstance(overall_score, (int, float)):
+                bucket["overall_scores"].append(float(overall_score))
+            if isinstance(improvement_score, (int, float)):
+                bucket["improvement_scores"].append(float(improvement_score))
+
+        # Compute aggregates.
+        summary: dict[str, dict[str, float]] = {}
+        for profile, bucket in profile_data.items():
+            overall = bucket["overall_scores"]
+            improvement = bucket["improvement_scores"]
+            entry: dict[str, float] = {"count": bucket["count"]}
+            if overall:
+                entry["avg_overall_score"] = round(sum(overall) / len(overall), 4)
+            if improvement:
+                entry["avg_improvement_score"] = round(
+                    sum(improvement) / len(improvement), 4
+                )
+            summary[profile] = entry
+        return summary
+
     async def get_avg_duration_by_phase(self, limit: int = 50) -> dict[str, int]:
         """Get average per-phase duration from recent completed optimizations.
 

@@ -254,3 +254,120 @@ async def test_score_distribution(
         assert "count" in stats, f"{dim} missing count"
         assert "mean" in stats, f"{dim} missing mean"
         assert "stddev" in stats, f"{dim} missing stddev"
+
+
+# ---------------------------------------------------------------------------
+# get_enrichment_profile_effectiveness (E2 — #9)
+# ---------------------------------------------------------------------------
+
+
+async def test_enrichment_profile_effectiveness_aggregates_by_profile(
+    db_session: AsyncSession,
+) -> None:
+    """Aggregates recent completed optimizations by ``enrichment_profile``
+    and reports per-profile count + avg overall_score + avg improvement_score.
+
+    The profile is nested at ``context_sources["enrichment_meta"]["enrichment_profile"]``
+    so the aggregation is Python-side (portable across SQLite/PostgreSQL
+    without JSON-path extraction dialects).
+    """
+    # 3 code_aware rows
+    for score, improvement in [(8.0, 2.1), (7.5, 1.8), (8.5, 2.5)]:
+        row = _make_opt(
+            status="completed", overall_score=score,
+        )
+        row.improvement_score = improvement
+        row.context_sources = {"enrichment_meta": {"enrichment_profile": "code_aware"}}
+        db_session.add(row)
+    # 2 knowledge_work rows
+    for score, improvement in [(7.0, 1.5), (7.2, 1.7)]:
+        row = _make_opt(
+            status="completed", overall_score=score,
+        )
+        row.improvement_score = improvement
+        row.context_sources = {"enrichment_meta": {"enrichment_profile": "knowledge_work"}}
+        db_session.add(row)
+    # 1 cold_start row
+    row = _make_opt(status="completed", overall_score=6.5)
+    row.improvement_score = 0.9
+    row.context_sources = {"enrichment_meta": {"enrichment_profile": "cold_start"}}
+    db_session.add(row)
+    # 1 row with no profile — must be ignored
+    row = _make_opt(status="completed", overall_score=7.7)
+    row.improvement_score = 2.0
+    row.context_sources = None
+    db_session.add(row)
+    # 1 failed row — must be ignored
+    row = _make_opt(status="failed", overall_score=3.0)
+    row.context_sources = {"enrichment_meta": {"enrichment_profile": "code_aware"}}
+    db_session.add(row)
+    await db_session.commit()
+
+    svc = OptimizationService(db_session)
+    result = await svc.get_enrichment_profile_effectiveness()
+
+    assert set(result.keys()) == {"code_aware", "knowledge_work", "cold_start"}, (
+        f"Unexpected profile set: {set(result.keys())}"
+    )
+
+    # code_aware: 3 rows, avg 8.0, avg improvement 2.133
+    ca = result["code_aware"]
+    assert ca["count"] == 3
+    assert abs(ca["avg_overall_score"] - 8.0) < 1e-6
+    assert abs(ca["avg_improvement_score"] - 2.1333) < 1e-3
+
+    # knowledge_work: 2 rows
+    kw = result["knowledge_work"]
+    assert kw["count"] == 2
+    assert abs(kw["avg_overall_score"] - 7.1) < 1e-6
+
+    # cold_start: 1 row
+    cs = result["cold_start"]
+    assert cs["count"] == 1
+    assert abs(cs["avg_overall_score"] - 6.5) < 1e-6
+
+
+async def test_enrichment_profile_effectiveness_empty_when_no_data(
+    db_session: AsyncSession,
+) -> None:
+    """Returns an empty dict when no optimizations have enrichment_profile."""
+    # One completed row without enrichment_profile
+    row = _make_opt(status="completed", overall_score=7.0)
+    row.context_sources = None
+    db_session.add(row)
+    await db_session.commit()
+
+    svc = OptimizationService(db_session)
+    result = await svc.get_enrichment_profile_effectiveness()
+
+    assert result == {}
+
+
+async def test_enrichment_profile_effectiveness_handles_missing_improvement_score(
+    db_session: AsyncSession,
+) -> None:
+    """Rows with NULL ``improvement_score`` must not crash the aggregation;
+    they contribute to count + avg_overall_score but are excluded from the
+    improvement average.
+    """
+    # 2 rows with improvement_score, 1 without
+    for score, improvement in [(8.0, 2.0), (7.5, 1.5)]:
+        row = _make_opt(status="completed", overall_score=score)
+        row.improvement_score = improvement
+        row.context_sources = {"enrichment_meta": {"enrichment_profile": "code_aware"}}
+        db_session.add(row)
+    row = _make_opt(status="completed", overall_score=7.0)
+    row.improvement_score = None
+    row.context_sources = {"enrichment_meta": {"enrichment_profile": "code_aware"}}
+    db_session.add(row)
+    await db_session.commit()
+
+    svc = OptimizationService(db_session)
+    result = await svc.get_enrichment_profile_effectiveness()
+
+    ca = result["code_aware"]
+    assert ca["count"] == 3
+    # avg_overall_score averages all 3 rows: (8.0 + 7.5 + 7.0) / 3 = 7.5
+    assert abs(ca["avg_overall_score"] - 7.5) < 1e-6
+    # avg_improvement_score averages only the 2 rows with improvement set
+    assert abs(ca["avg_improvement_score"] - 1.75) < 1e-6
