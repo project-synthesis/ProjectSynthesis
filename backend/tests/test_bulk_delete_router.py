@@ -67,3 +67,30 @@ async def test_single_delete_response_includes_requested(app_client, db_session)
     assert body["requested"] == 1
     assert "affected_cluster_ids" in body
     assert "affected_project_ids" in body
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_endpoint_ok(app_client, db_session):
+    """POST /api/optimizations/delete with 3 valid ids returns
+    deleted=3, requested=3, and both affected lists are JSON lists."""
+    ids = [await _seed_opt(db_session) for _ in range(3)]
+
+    resp = await app_client.post(
+        "/api/optimizations/delete",
+        json={"ids": ids, "reason": "user_request"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted"] == 3
+    assert body["requested"] == 3
+    assert isinstance(body["affected_cluster_ids"], list)
+    assert isinstance(body["affected_project_ids"], list)
+
+    # All 3 rows must be gone
+    remaining = (
+        await db_session.execute(
+            select(Optimization.id).where(Optimization.id.in_(ids))
+        )
+    ).scalars().all()
+    assert remaining == []
