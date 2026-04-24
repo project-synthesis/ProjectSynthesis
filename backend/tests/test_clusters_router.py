@@ -340,6 +340,99 @@ class TestClusterMatch:
         assert "match_level" in body["match"], "match_level key missing from response"
         assert body["match"]["match_level"] in {"family", "cluster"}
 
+    @pytest.mark.asyncio
+    async def test_match_response_includes_cross_cluster_patterns(self, app_client):
+        """B1: cross_cluster_patterns surfaces from PatternMatch, disjoint from meta_patterns."""
+        from app.main import app
+        from app.services.taxonomy.matching import PatternMatch
+
+        mock_cluster = MagicMock()
+        mock_cluster.id = "c1"
+        mock_cluster.label = "JWT validation patterns"
+        mock_cluster.domain = "security"
+        mock_cluster.member_count = 4
+        mock_cluster.task_type = "coding"
+        mock_cluster.usage_count = 0
+        mock_cluster.avg_score = 0.0
+        mock_cluster.created_at = None
+        mock_cluster.color_hex = "#ff2255"
+
+        # Meta-pattern on the target cluster.
+        meta_mp = MagicMock()
+        meta_mp.id = "mp-local"
+        meta_mp.pattern_text = "Validate token signature algorithm"
+        meta_mp.source_count = 3
+
+        # Cross-cluster (globally-promoted) patterns from sibling clusters.
+        gp1 = MagicMock(); gp1.id = "gp-1"; gp1.pattern_text = "Universal A"; gp1.source_count = 5
+        gp2 = MagicMock(); gp2.id = "gp-2"; gp2.pattern_text = "Universal B"; gp2.source_count = 4
+
+        mock_result = PatternMatch(
+            cluster=mock_cluster,
+            meta_patterns=[meta_mp],
+            similarity=0.88,
+            match_level="cluster",
+            cross_cluster_patterns=[gp1, gp2],
+        )
+        mock_engine = MagicMock()
+        mock_engine.match_prompt = AsyncMock(return_value=mock_result)
+        app.state.taxonomy_engine = mock_engine
+
+        try:
+            resp = await app_client.post(
+                "/api/clusters/match",
+                json={"prompt_text": "validate jwt for incoming api requests"},
+            )
+        finally:
+            del app.state.taxonomy_engine
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "cross_cluster_patterns" in body["match"], "key missing"
+        assert len(body["match"]["cross_cluster_patterns"]) == 2
+
+        # Disjointness guarantee (engine already enforces this per matching.py:404-457,
+        # but the router must not accidentally merge them).
+        meta_ids = {p["id"] for p in body["match"]["meta_patterns"]}
+        cross_ids = {p["id"] for p in body["match"]["cross_cluster_patterns"]}
+        assert meta_ids.isdisjoint(cross_ids)
+
+    @pytest.mark.asyncio
+    async def test_match_response_empty_cross_cluster_patterns(self, app_client):
+        """B5: cross_cluster_patterns is always present; [] when engine returns no globals."""
+        from app.main import app
+        from app.services.taxonomy.matching import PatternMatch
+
+        mock_cluster = MagicMock()
+        mock_cluster.id = "c1"
+        mock_cluster.label = "Solo cluster"
+        mock_cluster.domain = "backend"
+        mock_cluster.member_count = 2
+        mock_cluster.task_type = "coding"
+        mock_cluster.usage_count = 0
+        mock_cluster.avg_score = 0.0
+        mock_cluster.created_at = None
+        mock_cluster.color_hex = "#b44aff"
+
+        mock_result = PatternMatch(
+            cluster=mock_cluster, meta_patterns=[], similarity=0.7,
+            match_level="cluster", cross_cluster_patterns=[],
+        )
+        mock_engine = MagicMock()
+        mock_engine.match_prompt = AsyncMock(return_value=mock_result)
+        app.state.taxonomy_engine = mock_engine
+
+        try:
+            resp = await app_client.post(
+                "/api/clusters/match",
+                json={"prompt_text": "build a backend service"},
+            )
+        finally:
+            del app.state.taxonomy_engine
+
+        assert resp.status_code == 200
+        assert resp.json()["match"]["cross_cluster_patterns"] == []
+
 
 class TestClusterRecluster:
     @pytest.mark.asyncio
