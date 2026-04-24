@@ -16,18 +16,20 @@
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
   import { toastsStore } from '$lib/stores/toasts.svelte';
-  import { deleteOptimization, ApiError } from '$lib/api/optimizations';
+  import { SvelteSet } from 'svelte/reactivity';
+  import { deleteOptimization, deleteOptimizations, ApiError } from '$lib/api/optimizations';
   import UndoToast from '$lib/components/shared/UndoToast.svelte';
+  import DestructiveConfirmModal from '$lib/components/shared/DestructiveConfirmModal.svelte';
   import { scoreColor, taxonomyColor } from '$lib/utils/colors';
   import { formatScore, formatRelativeTime } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
   import { STRATEGY_TOOLTIPS } from '$lib/utils/ui-tooltips';
 
   interface Props {
-    active: boolean;
+    active?: boolean;
   }
 
-  let { active }: Props = $props();
+  let { active = true }: Props = $props();
 
   const TASK_TYPE_ABBREV: Record<string, string> = {
     coding: 'COD', writing: 'WRT', analysis: 'ANL',
@@ -266,12 +268,81 @@
       fallbackTimers.clear();
     };
   });
+
+  // ── Multi-select + bulk delete ───────────────────────────────────
+
+  let selectMode = $state(false);
+  const selectedIds: SvelteSet<string> = $state(new SvelteSet<string>());
+  let bulkModalOpen = $state(false);
+
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    if (!selectMode) selectedIds.clear();
+  }
+
+  function toggleSelected(id: string, checked: boolean) {
+    if (checked) selectedIds.add(id);
+    else selectedIds.delete(id);
+  }
+
+  function openBulkModal() {
+    if (selectedIds.size === 0) return;
+    bulkModalOpen = true;
+  }
+
+  async function confirmBulk() {
+    const ids = [...selectedIds];
+    const res = await deleteOptimizations(ids);
+    bulkModalOpen = false;
+    selectMode = false;
+    selectedIds.clear();
+    if (res.deleted < res.requested) {
+      const missing = res.requested - res.deleted;
+      toastsStore.push({
+        kind: 'info',
+        message: `Deleted ${res.deleted} of ${res.requested}. ${missing} were already gone.`,
+        durationMs: 4000,
+      });
+    }
+  }
+
+  const selectedClusterCount = $derived.by(() => {
+    const ids = new Set<string>();
+    for (const opt of historyItems) {
+      if (selectedIds.has(opt.id) && opt.cluster_id) ids.add(opt.cluster_id);
+    }
+    return ids.size;
+  });
+  const bulkSideEffectHint = $derived(
+    selectedClusterCount > 0
+      ? `${selectedClusterCount} cluster${selectedClusterCount === 1 ? '' : 's'} will rebalance.`
+      : undefined,
+  );
 </script>
 
 <div class="panel">
   <header class="panel-header">
     <span class="section-heading">History</span>
+    <button
+      type="button"
+      class="select-toggle"
+      onclick={toggleSelectMode}
+    >{selectMode ? 'Cancel' : 'Select'}</button>
   </header>
+  {#if selectMode && selectedIds.size > 0 && !bulkModalOpen}
+    <div class="selection-toolbar" role="toolbar" aria-label="Selected rows">
+      <span class="selection-count">
+        <span class="count-num">{selectedIds.size}</span> selected
+      </span>
+      <div class="toolbar-actions">
+        <button class="btn-cancel-toolbar" onclick={toggleSelectMode}>Cancel</button>
+        <button
+          class="btn-delete-toolbar"
+          onclick={openBulkModal}
+        >Delete {selectedIds.size}</button>
+      </div>
+    </div>
+  {/if}
   <div class="panel-body">
     {#if historyError}
       <p class="empty-note">{historyError}</p>
@@ -329,13 +400,23 @@
             style="--accent: {taxonomyColor(item.domain)};"
             onclick={() => loadHistoryItem(item)}
           >
+            {#if selectMode}
+              <input
+                type="checkbox"
+                class="row-checkbox"
+                checked={selectedIds.has(item.id)}
+                onclick={(e) => e.stopPropagation()}
+                onchange={(e) => toggleSelected(item.id, (e.target as HTMLInputElement).checked)}
+                aria-label="Select {item.intent_label || item.raw_prompt?.slice(0, 40) || 'optimization'}"
+              />
+            {/if}
             <span class="row-prompt-line">
               {#if item.task_type && item.task_type !== 'general' && TASK_TYPE_ABBREV[item.task_type]}
                 <span class="row-type">{TASK_TYPE_ABBREV[item.task_type]}</span>
               {/if}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
               <span
                 class="row-prompt"
-                role="textbox"
                 tabindex="-1"
                 ondblclick={(e) => startOptRename(e, item)}
                 use:tooltip={'Double-click to rename'}
@@ -412,6 +493,27 @@
     <UndoToast toast={t} />
   {/each}
 </div>
+
+{#snippet bulkBody()}
+  <ul class="bulk-preview-list">
+    {#each historyItems.filter(i => selectedIds.has(i.id)).slice(0, 3) as opt}
+      <li>{(opt.raw_prompt || opt.intent_label || '').slice(0, 60)}{(opt.raw_prompt?.length || 0) > 60 ? '…' : ''}</li>
+    {/each}
+    {#if selectedIds.size > 3}
+      <li class="more">…and {selectedIds.size - 3} more</li>
+    {/if}
+  </ul>
+{/snippet}
+
+<DestructiveConfirmModal
+  open={bulkModalOpen}
+  title={`DELETE ${selectedIds.size} OPTIMIZATION${selectedIds.size === 1 ? '' : 'S'}?`}
+  body={bulkBody}
+  sideEffectHint={bulkSideEffectHint}
+  confirmLabel={`Delete ${selectedIds.size}`}
+  onConfirm={confirmBulk}
+  onCancel={() => (bulkModalOpen = false)}
+/>
 
 <style>
   .row-item {
@@ -734,5 +836,140 @@
 
   @media (prefers-reduced-motion: reduce) {
     .row-delete-btn { transition-duration: 0.01ms; }
+  }
+
+  /* ── Panel header layout ───────────────────────────────────────── */
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* ── Select toggle ─────────────────────────────────────────────── */
+
+  .select-toggle {
+    height: 20px;
+    padding: 0 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--color-text-secondary);
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 200ms var(--ease-spring), border-color 200ms var(--ease-spring);
+  }
+  .select-toggle:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-subtle);
+  }
+  .select-toggle:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
+
+  /* ── Selection toolbar ─────────────────────────────────────────── */
+
+  .selection-toolbar {
+    height: 28px;
+    padding: 0 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+  .selection-count {
+    font-family: var(--font-sans);
+    font-size: 11px;
+  }
+  .count-num { font-family: var(--font-mono); }
+  .toolbar-actions { display: flex; gap: 6px; }
+  .btn-cancel-toolbar,
+  .btn-delete-toolbar {
+    height: 20px;
+    padding: 0 8px;
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 200ms var(--ease-spring), border-color 200ms var(--ease-spring);
+  }
+  .btn-cancel-toolbar {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--color-text-secondary);
+  }
+  .btn-cancel-toolbar:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-subtle);
+  }
+  .btn-delete-toolbar {
+    background: transparent;
+    border: 1px solid var(--color-neon-red);
+    color: var(--color-neon-red);
+  }
+  .btn-delete-toolbar:hover {
+    background: color-mix(in srgb, var(--color-neon-red) 12%, transparent);
+  }
+  .btn-cancel-toolbar:focus-visible,
+  .btn-delete-toolbar:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
+
+  /* ── Row checkbox ──────────────────────────────────────────────── */
+
+  .row-checkbox {
+    width: 14px;
+    height: 14px;
+    margin-right: 6px;
+    appearance: none;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 2px;
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .row-checkbox:hover { border-color: rgba(0, 229, 255, 0.3); }
+  .row-checkbox:checked {
+    background: var(--color-neon-cyan);
+    border-color: var(--color-neon-cyan);
+  }
+  .row-checkbox:checked::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid var(--color-bg-primary);
+    border-width: 0 1px 1px 0;
+    transform: rotate(45deg);
+  }
+  .row-checkbox:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
+
+  /* ── Bulk preview list ─────────────────────────────────────────── */
+
+  .bulk-preview-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12px;
+  }
+  .bulk-preview-list li {
+    padding: 2px 0;
+  }
+  .bulk-preview-list li.more {
+    color: var(--color-text-dim);
+    font-size: 10px;
   }
 </style>
