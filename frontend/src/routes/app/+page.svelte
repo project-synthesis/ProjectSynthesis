@@ -121,6 +121,12 @@
           readinessStore.invalidate();
           addToast('created', 'Taxonomy updated');
         }
+        if (type === 'optimization_deleted') {
+          // Backend event name is snake_case; frontend CustomEvent is kebab.
+          // Naming bridge matches the existing optimization_analyzed → optimization-event
+          // indirection a few lines above.
+          window.dispatchEvent(new CustomEvent('optimization-deleted', { detail: data }));
+        }
         if (type === 'taxonomy_activity') {
           clustersStore.pushActivityEvent(data as unknown as import('$lib/api/clusters').TaxonomyActivityEvent);
           // Candidate lifecycle toasts
