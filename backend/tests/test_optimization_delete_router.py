@@ -121,6 +121,11 @@ async def test_delete_publishes_optimization_deleted_event(
     """
     opt_id = await _seed_opt(db_session)
 
+    # Defend against a prior test that may have flipped the process-level
+    # bus into shutdown mode (publish is a no-op while shutting down).
+    # Mirrors the guard in test_optimization_service_delete.
+    event_bus._shutting_down = False  # type: ignore[attr-defined]
+
     queue: asyncio.Queue = asyncio.Queue(maxsize=500)
     event_bus._subscribers.add(queue)
     try:
