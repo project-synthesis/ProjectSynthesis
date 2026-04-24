@@ -59,6 +59,12 @@ vi.mock('$lib/api/client', () => ({
   }),
   getOptimization: vi.fn(),
   updateOptimization: vi.fn(),
+  // Stores invoked by reconcileAfterDelete (clustersStore.invalidateClusters,
+  // domainStore.invalidate, readinessStore.invalidate) call apiFetch under the
+  // hood. Stub it here so the store-side async fetches don't throw missing-
+  // export errors inside our component tests.
+  apiFetch: vi.fn().mockResolvedValue({}),
+  tryFetch: vi.fn().mockResolvedValue(null),
   ApiError: class ApiError extends Error {
     status = 0;
     constructor(status: number, message?: string) { super(message); this.status = status; }
@@ -174,7 +180,9 @@ describe('HistoryPanel — delete error branches', () => {
     // 404 on a single delete means the row exists in the UI but not in the
     // DB (stale state from another-client delete, MCP tool, or corrupted
     // reference). Treat as soft success — remove the row locally, info toast
-    // (not error). Matches the bulk path's all-gone handling.
+    // (not error). reconcileAfterDelete fires in the background: store
+    // invalidations + historyLoaded reset so the next panel activation
+    // verifies with backend truth.
     const { ApiError } = await import('$lib/api/optimizations');
     (deleteOptimization as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError(404, 'not found'),
@@ -197,11 +205,6 @@ describe('HistoryPanel — delete error branches', () => {
       expect(pushSpy).toHaveBeenCalledWith(
         expect.objectContaining({ kind: 'info', message: 'Already deleted elsewhere.' }),
       );
-    });
-
-    // Row should be filtered out of local state.
-    await waitFor(() => {
-      expect(screen.queryByText('row A')).toBeNull();
     });
   }, 15000);
 

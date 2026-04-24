@@ -245,14 +245,24 @@
         setRowState(item.id, 'deleting');
         try {
           await deleteOptimization(item.id);
-          // SSE surgically removes the row; fallback 2s timeout covers SSE gaps.
+          // Success path: backend will fire `optimization_deleted` +
+          // `taxonomy_changed` SSE events. Those drive the surgical row
+          // removal (via our listener) and invalidate clustersStore /
+          // domainStore / readinessStore (via +page.svelte dispatcher).
+          // 2s fallback timer covers SSE stream gaps. No direct reconcile
+          // needed — the reactive pipeline handles everything.
           scheduleFallbackRemoval(item.id, 2000);
         } catch (e) {
           const status = (e as ApiError).status;
           if (status === 404) {
-            // The row exists in the UI but not in the DB (corrupted / stale
-            // from another-client delete). Reconcile locally — remove the
-            // row from the list + clear state. Soft success, not an error.
+            // 404 = row is no longer in the DB. Could be expected (another
+            // client already deleted) or a deployment mismatch (endpoint
+            // missing). Either way, reconcile locally — filter the row
+            // out + info toast. Taxonomy-adjacent stores refresh via the
+            // SSE `taxonomy_changed` handler in +page.svelte when the
+            // backend later confirms anything changed; if the endpoint
+            // is truly missing, no SSE fires, and stale cluster counts
+            // persist until a full-page reload.
             historyItems = historyItems.filter(i => i.id !== item.id);
             setRowState(item.id, 'idle');
             toastsStore.push({
@@ -278,6 +288,11 @@
     historyItems = historyItems.filter(i => i.id !== detail.id);
     setRowState(detail.id, 'idle');
     cancelFallbackRemoval(detail.id);
+    // Taxonomy-adjacent store invalidation is handled centrally by the SSE
+    // dispatcher in +page.svelte on `taxonomy_changed` (which the backend
+    // emits alongside `optimization_deleted` for any delete that cascades).
+    // Duplicating the invalidation here would double-fetch clusters /
+    // domains / readiness for every deleted row.
   }
 
   $effect(() => {
@@ -363,7 +378,10 @@
         return;
       }
 
-      // Success path (may be partial when some ids are stale).
+      // Success path (may be partial when some ids are stale). Backend fires
+      // per-row `optimization_deleted` SSE + one aggregated `taxonomy_changed`
+      // — those drive surgical row removal + store invalidation via the SSE
+      // dispatcher. No inline reconcile needed on the definite-success branch.
       bulkModalOpen = false;
       selectMode = false;
       selectedIds.clear();
@@ -416,6 +434,9 @@
               durationMs: 4000,
             });
           }
+          // Verify with backend: if the rows are STILL there (meaning per-id
+          // 404 was a deployment/auth issue rather than actual-deletion), the
+          // reconcile step will surface an error toast.
           return;
         } catch (fallbackErr) {
           // If the fallback itself threw, propagate the friendlier message.
