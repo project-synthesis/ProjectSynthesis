@@ -173,6 +173,14 @@
     left: 50%;
     transform: translate(-50%, -50%);
     width: 420px;
+    /* Narrow-viewport fallback: keep a 16px gutter on each side so the
+       modal never overflows on small windows / mobile. */
+    max-width: calc(100vw - 32px);
+    /* Full height fallback: tall body content (future consumers with
+       long preview lists) stays scrollable instead of clipping. */
+    max-height: calc(100vh - 48px);
+    display: flex;
+    flex-direction: column;
     background: var(--color-bg-glass);
     backdrop-filter: blur(8px);
     border: 1px solid var(--color-border-subtle);
@@ -208,19 +216,36 @@
   .close-btn {
     height: 20px;
     width: 20px;
-    border: none;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 2px;
     background: transparent;
     color: var(--color-text-secondary);
     font-size: 14px;
+    line-height: 1;
     cursor: pointer;
+    transition: background 200ms var(--ease-spring), border-color 200ms var(--ease-spring), color 200ms var(--ease-spring);
   }
   .close-btn:hover:not(:disabled) {
     color: var(--color-text-primary);
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-subtle);
+  }
+  .close-btn:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
   }
 
   .modal-body {
     padding: 6px;
     font-size: 12px;
+    /* Body is the only growable region; header/footer/gate stay fixed
+       so the confirm controls never scroll out of view. */
+    overflow-y: auto;
+    min-height: 0;
   }
   .side-effect {
     margin-top: 4px;
