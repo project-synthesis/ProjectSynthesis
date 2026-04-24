@@ -129,7 +129,7 @@ class RoutingDecision:
 def _can_sample(state: RoutingState, ctx: RoutingContext) -> bool:
     """Whether sampling is available for the current request."""
     return (
-        ctx.caller in ("mcp", "rest")
+        ctx.caller == "mcp"
         and state.sampling_capable is True
         and state.mcp_connected
     )
@@ -237,8 +237,8 @@ def resolve_route(state: RoutingState, ctx: RoutingContext) -> RoutingDecision:
     Priority chain (highest to lowest):
       1. ``force_passthrough`` — unconditional passthrough
       2. ``force_sampling`` — sampling with fallback to internal → passthrough
-      3. Auto-sampling (if connected and capable)
-      4. Internal provider available
+      3. Internal provider available
+      4. Auto-sampling (MCP caller + sampling capable, when no internal provider)
       5. Passthrough fallback
     """
     pipeline = ctx.preferences.get("pipeline", {})
@@ -258,8 +258,36 @@ def resolve_route(state: RoutingState, ctx: RoutingContext) -> RoutingDecision:
             "sampling", state, ctx, "force_sampling"
         )
 
-    # Tier 3–5: Auto-route prioritizing sampling, then internal, then passthrough
-    return _resolve_with_fallback("sampling", state, ctx, "auto")
+    # Tier 3: internal provider — preferred over auto-sampling
+    if _can_internal(state):
+        return RoutingDecision(
+            tier="internal",
+            provider=state.provider,
+            provider_name=state.provider_name,
+            reason="auto, using internal provider",
+        )
+
+    # Tier 4: auto-sampling (MCP only, when no internal provider)
+    if _can_sample(state, ctx):
+        return RoutingDecision(
+            tier="sampling",
+            provider_name="mcp_sampling",
+            reason="auto, MCP client supports sampling",
+            degraded_from="internal",
+            providers_by_phase={
+                "analyze": "sampling",
+                "score": "sampling",
+                "suggest": "sampling",
+                "optimize": "sampling",
+            },
+        )
+
+    # Tier 5: passthrough fallback (internal was unavailable)
+    return RoutingDecision(
+        tier="passthrough",
+        reason="auto, no provider or sampling available",
+        degraded_from="internal",
+    )
 
 
 # ---------------------------------------------------------------------------

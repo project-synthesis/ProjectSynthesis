@@ -1173,20 +1173,21 @@ class TestWriteOptimisticSession:
         _patch_mcp_data_dir(monkeypatch, tmp_path)
         return tmp_path
 
-    def test_writes_sampling_capable_true(self, data_dir):
-        """Creates mcp_session.json with sampling_capable=True."""
+    def test_writes_session_file(self, data_dir):
+        """Creates mcp_session.json preserving current routing state (False when uninitialized)."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         _CapabilityDetectionMiddleware._write_optimistic_session()
         path = data_dir / "mcp_session.json"
         assert path.exists()
         data = json.loads(path.read_text())
-        assert data["sampling_capable"] is True
+        # Routing singleton is uninitialized in unit tests → preserves False
+        assert data["sampling_capable"] is False
         assert "written_at" in data
         assert "last_activity" in data
 
-    def test_overwrites_existing_false(self, data_dir):
-        """Overwrites an existing file even if it had sampling_capable=False."""
+    def test_preserves_existing_state(self, data_dir):
+        """Preserves the current routing state rather than forcing sampling_capable=True."""
         from app.mcp_server import _CapabilityDetectionMiddleware
 
         path = data_dir / "mcp_session.json"
@@ -1194,7 +1195,8 @@ class TestWriteOptimisticSession:
 
         _CapabilityDetectionMiddleware._write_optimistic_session()
         data = json.loads(path.read_text())
-        assert data["sampling_capable"] is True
+        # Routing singleton uninitialized → state preserved as False (not forced to True)
+        assert data["sampling_capable"] is False
 
     def test_no_crash_on_write_error(self, data_dir, monkeypatch):
         """Doesn't crash on write failure."""
