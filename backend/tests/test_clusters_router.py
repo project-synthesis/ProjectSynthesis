@@ -364,8 +364,14 @@ class TestClusterMatch:
         meta_mp.source_count = 3
 
         # Cross-cluster (globally-promoted) patterns from sibling clusters.
-        gp1 = MagicMock(); gp1.id = "gp-1"; gp1.pattern_text = "Universal A"; gp1.source_count = 5
-        gp2 = MagicMock(); gp2.id = "gp-2"; gp2.pattern_text = "Universal B"; gp2.source_count = 4
+        gp1 = MagicMock()
+        gp1.id = "gp-1"
+        gp1.pattern_text = "Universal A"
+        gp1.source_count = 5
+        gp2 = MagicMock()
+        gp2.id = "gp-2"
+        gp2.pattern_text = "Universal B"
+        gp2.source_count = 4
 
         mock_result = PatternMatch(
             cluster=mock_cluster,
