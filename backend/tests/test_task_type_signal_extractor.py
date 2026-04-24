@@ -147,3 +147,40 @@ class TestTaskTypeSignalExtractor:
             assert not overlap, (
                 f"Stopwords {overlap} found in '{task_type}' signals"
             )
+
+    @pytest.mark.asyncio
+    async def test_missing_task_type_telemetry_table_degrades_gracefully(self):
+        """Legacy dev DBs predate the TaskTypeTelemetry model — if the
+        `task_type_telemetry` table is missing, the extractor must fall
+        back to optimization-only counts rather than bubbling an
+        OperationalError out of warm Phase 4.75. Observed on user DBs
+        where `alembic upgrade head` never ran and the backend never
+        called `Base.metadata.create_all()` after the model was added
+        (rev 2f3b0645e24d)."""
+        from sqlalchemy import text as _text
+        # Build an in-memory DB with all tables EXCEPT task_type_telemetry.
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            # Drop only the telemetry table to simulate the legacy state.
+            await conn.execute(_text("DROP TABLE IF EXISTS task_type_telemetry"))
+        try:
+            async with async_session() as session:
+                # Seed enough coding optimizations to trigger extraction.
+                _seed(session, "coding", [
+                    "Write a Python function to parse JSON data",
+                    "Implement a REST API endpoint for user registration",
+                    "Debug a recursive tree traversal algorithm",
+                    "Build a TypeScript class for form validation",
+                    "Create a database migration for user roles",
+                ] * 3)  # 15 samples — above MIN_SAMPLES threshold
+                await session.commit()
+
+                # Must NOT raise. Telemetry counts default to empty dict;
+                # optimization counts alone carry the task_type through.
+                result = await extract_task_type_signals(session)
+                # Successful extraction — returns a dict keyed on task_type.
+                assert isinstance(result, dict)
+        finally:
+            await engine.dispose()
