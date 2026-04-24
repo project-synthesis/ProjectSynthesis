@@ -224,8 +224,9 @@
     }
   }
 
-  function onRowDelete(item: HistoryItem, ev: MouseEvent) {
+  function onRowDelete(item: HistoryItem, ev: MouseEvent | KeyboardEvent) {
     ev.stopPropagation();
+    if (rowStateOf(item.id) !== 'idle') return;     // re-entry guard: prevents duplicate undo-toasts on rapid clicks
     setRowState(item.id, 'pending-delete');
     const meta = item.cluster_id ? '1 cluster will rebalance.' : undefined;
     toastsStore.push({
@@ -378,9 +379,14 @@
               class="row-delete-btn"
               data-testid="row-delete-btn"
               onclick={(e) => onRowDelete(item, e)}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowDelete(item, e as unknown as MouseEvent); } }}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onRowDelete(item, e);
+                }
+              }}
               aria-label="Delete optimization"
-              tabindex="-1"
+              tabindex="0"
             >×</span>
           </button>
         {/if}
@@ -720,7 +726,10 @@
     display: flex;
     flex-direction: column-reverse;
     gap: 6px;
-    z-index: 800;
+    /* Above modals (900/901) so a pre-commit grace-window toast stays
+       reachable even when a DestructiveConfirmModal is open. Below the
+       top-level CommandPalette tier (9999). */
+    z-index: 1100;
   }
 
   @media (prefers-reduced-motion: reduce) {
