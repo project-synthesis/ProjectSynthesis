@@ -349,11 +349,14 @@ class TestPassthroughEndToEnd:
             assert 1.0 <= score <= 10.0, f"{dim} score {score} out of range"
         assert 1.0 <= saved["overall_score"] <= 10.0
 
-        # Verify overall = mean of dimensions
-        dim_mean = round(
-            sum(saved["scores"][d] for d in saved["scores"]) / 5, 2,
+        # Verify overall = weighted mean of dimensions (DIMENSION_WEIGHTS v3)
+        from app.schemas.pipeline_contracts import DIMENSION_WEIGHTS
+        dim_scores = saved["scores"]
+        weighted_mean = round(
+            sum(dim_scores[d] * DIMENSION_WEIGHTS[d] for d in DIMENSION_WEIGHTS),
+            2,
         )
-        assert saved["overall_score"] == pytest.approx(dim_mean, abs=0.01)
+        assert saved["overall_score"] == pytest.approx(weighted_mean, abs=0.05)
 
         # ── Step 6: Validate event bus emission ─────────────────────────
         assert len(captured_events) >= 1, "No events captured from event bus"

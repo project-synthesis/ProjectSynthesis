@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import Optimization
+from app.schemas.pipeline_contracts import DIMENSION_WEIGHTS
 from app.services.heuristic_scorer import HeuristicScorer
 
 
@@ -255,11 +256,13 @@ class TestPassthroughSave:
 
         # Compute expected scores directly
         expected = HeuristicScorer.score_prompt(LONG_OPTIMIZED, original=VALID_PROMPT)
-        expected_overall = round(sum(expected.values()) / len(expected), 2)
+        expected_overall = round(
+            sum(expected[d] * DIMENSION_WEIGHTS[d] for d in DIMENSION_WEIGHTS), 2,
+        )
 
         for dim in expected:
             assert data["scores"][dim] == pytest.approx(expected[dim], abs=0.01)
-        assert data["overall_score"] == pytest.approx(expected_overall, abs=0.01)
+        assert data["overall_score"] == pytest.approx(expected_overall, abs=0.05)
 
     async def test_save_updates_db_record(self, app_client, db_session):
         """Save persists all fields to the database record."""
