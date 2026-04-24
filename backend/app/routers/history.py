@@ -140,9 +140,14 @@ class DeleteOptimizationResponse(BaseModel):
 
     Mirrors ``DeleteOptimizationsResult`` but with lists (JSON-safe) so
     clients can refresh cluster-scoped UI after the cascade fires.
+    Isomorphic with ``DeleteOptimizationsResponse`` (bulk endpoint) —
+    ``requested`` is always 1 for the single endpoint.
     """
 
     deleted: int = Field(description="Rows removed (1 on success).")
+    requested: int = Field(
+        description="Rows the caller requested to delete (always 1 for this endpoint).",
+    )
     affected_cluster_ids: list[str] = Field(
         default_factory=list,
         description="Cluster ids whose member counts need reconciliation.",
@@ -183,6 +188,7 @@ async def delete_optimization(
     )
     return DeleteOptimizationResponse(
         deleted=result.deleted,
+        requested=1,
         affected_cluster_ids=sorted(result.affected_cluster_ids),
         affected_project_ids=sorted(result.affected_project_ids),
     )
