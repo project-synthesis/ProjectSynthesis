@@ -296,6 +296,50 @@ class TestClusterMatch:
         data = resp.json()
         assert data["match"] is None
 
+    @pytest.mark.asyncio
+    async def test_match_response_includes_match_level(self, app_client):
+        """B2+B3: match response exposes match_level ∈ {'family', 'cluster'}.
+
+        Mocks engine.match_prompt() — the test fixture has no embedding
+        service (conftest.py:114 sets embedding_service=None), so a real
+        similarity match against a seeded cluster isn't achievable.
+        """
+        from app.main import app
+        from app.services.taxonomy.matching import PatternMatch
+
+        mock_cluster = MagicMock()
+        mock_cluster.id = "c1"
+        mock_cluster.label = "API endpoint patterns"
+        mock_cluster.domain = "backend"
+        mock_cluster.member_count = 5
+        mock_cluster.task_type = "coding"
+        mock_cluster.usage_count = 0
+        mock_cluster.avg_score = 0.0
+        mock_cluster.created_at = None
+        mock_cluster.color_hex = "#a855f7"
+
+        mock_result = PatternMatch(
+            cluster=mock_cluster, meta_patterns=[], similarity=0.85,
+            match_level="cluster",
+        )
+        mock_engine = MagicMock()
+        mock_engine.match_prompt = AsyncMock(return_value=mock_result)
+        app.state.taxonomy_engine = mock_engine
+
+        try:
+            resp = await app_client.post(
+                "/api/clusters/match",
+                json={"prompt_text": "this is a test prompt text"},
+            )
+        finally:
+            del app.state.taxonomy_engine
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["match"] is not None
+        assert "match_level" in body["match"], "match_level key missing from response"
+        assert body["match"]["match_level"] in {"family", "cluster"}
+
 
 class TestClusterRecluster:
     @pytest.mark.asyncio
