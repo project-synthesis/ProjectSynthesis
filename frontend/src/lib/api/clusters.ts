@@ -131,6 +131,9 @@ export interface ClusterMatchResponse {
     };
     meta_patterns: MetaPatternItem[];
     similarity: number;
+    // Added in Tier 1 — defensively defaulted for legacy responses
+    cross_cluster_patterns?: MetaPatternItem[];
+    match_level?: 'family' | 'cluster';
   } | null;
 }
 

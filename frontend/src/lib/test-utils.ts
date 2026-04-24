@@ -118,6 +118,8 @@ export function mockClusterMatch(overrides: Record<string, unknown> = {}) {
     },
     meta_patterns: [mockMetaPattern()],
     similarity: 0.85,
+    cross_cluster_patterns: [],
+    match_level: 'cluster' as const,
     ...overrides,
   };
 }

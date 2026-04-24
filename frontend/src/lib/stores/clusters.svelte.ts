@@ -11,6 +11,7 @@ import {
   getClusterActivity, getClusterActivityHistory,
   type ClusterMatchResponse, type ClusterDetail, type ClusterNode, type ClusterStats,
   type SimilarityEdge, type InjectionEdge, type TaxonomyActivityEvent,
+  type MetaPatternItem,
 } from '$lib/api/clusters';
 import { projectStore } from '$lib/stores/project.svelte';
 
@@ -26,7 +27,11 @@ const TYPING_DEBOUNCE_MS = 800;      // longer debounce for keystroke typing
 const MIN_PROMPT_LENGTH = 30;        // don't match fragments shorter than this
 
 /** Shape of a match result from the cluster match endpoint. */
-export type ClusterMatch = NonNullable<ClusterMatchResponse['match']>;
+export type ClusterMatch = NonNullable<ClusterMatchResponse['match']> & {
+  // Narrowed from optional to required after store-side defaulting
+  cross_cluster_patterns: MetaPatternItem[];
+  match_level: 'family' | 'cluster';
+};
 
 export type StateFilter = null | 'active' | 'candidate' | 'mature' | 'archived';
 
@@ -188,7 +193,12 @@ class ClusterStore {
         if (resp.match && resp.match.meta_patterns.length > 0) {
           // Don't re-show a skipped suggestion for the same cluster
           if (this._skippedClusterId === resp.match.cluster.id) return;
-          this.suggestion = resp.match;
+          // Defensive defaults for legacy responses (backwards compat).
+          this.suggestion = {
+            ...resp.match,
+            cross_cluster_patterns: resp.match.cross_cluster_patterns ?? [],
+            match_level: resp.match.match_level ?? 'cluster',
+          };
           this.suggestionVisible = true;
         } else {
           this.suggestion = null;
