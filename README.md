@@ -170,6 +170,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation + phase weight adaptation
 - **Auto-update** — detects new releases on startup (3-tier: git tags, raw fetch, GitHub Releases API). Persistent StatusBar badge, one-click update dialog with changelog, detached HEAD warning, post-update validation. CLI: `./init.sh update [tag]`
 - **API key management** — set/update/remove via UI with Fernet encryption at rest
+- **Destructive-action UX** — 5-second pre-commit grace window for row-level deletes (API call deferred until undo-window closes — click Undo to cancel without a server round-trip) + type-to-confirm bulk-delete modal (case-sensitive `DELETE` literal gate) + `UndoToast` with RAF-driven progress bar, pause-on-hover, and online/offline pause/resume. Reusable primitives (`toastsStore`, `UndoToast.svelte`, `DestructiveConfirmModal.svelte`) so future surfaces (unlink repo, retire template, archive cluster) plug in with zero bespoke styling
+- **History keyboard shortcuts** — file-manager-style selection grammar: `Ctrl/Cmd+Click` toggles row into selection (auto-seeds currently-active row on first modifier-click), `Shift+Click` extends range, `Ctrl+A` selects all, `Esc` exits select mode, `Delete/Backspace` opens bulk-confirm, arrow keys navigate with wrap
 - **Trace logging** — per-phase JSONL traces with daily rotation
 
 ## MCP Integration
@@ -184,7 +186,7 @@ The MCP server provides 14 tools with `synthesis_` prefix on port 8001. All tool
 | `synthesis_analyze` | Read-only analysis diagnostic — task type, weaknesses, strategy recommendation. Does not persist an `Optimization` row or assign a cluster |
 | `synthesis_prepare_optimization` | Assemble prompt + context for your IDE's LLM to process (passthrough step 1) |
 | `synthesis_save_result` | Persist the IDE LLM's result with hybrid scoring (passthrough step 3) |
-| `synthesis_delete` | Bulk-delete optimizations by id with DB cascade + per-row `optimization_deleted` SSE emission + `taxonomy_changed` reconciliation trigger |
+| `synthesis_delete` | Delete a single optimization by id with DB cascade on dependents (`Feedback`, `OptimizationPattern`, `RefinementBranch`, `RefinementTurn`) + `optimization_deleted` SSE emission + `taxonomy_changed` reconciliation trigger. Unknown id returns a `ValueError` instead of a silent no-op |
 
 ### Workflow tools
 
@@ -212,13 +214,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2923 tests)
+# Backend tests (2932 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1335 tests)
+# Frontend tests (1394 tests)
 cd frontend && npm test
 
 # Frontend build
@@ -235,7 +237,8 @@ cd frontend && npm run build
 | `/api/refine/{id}/versions` | GET | List refinement versions |
 | `/api/refine/{id}/rollback` | POST | Fork from a version |
 | `/api/history` | GET | List past optimizations |
-| `/api/optimizations/{id}` | DELETE | Bulk-delete an optimization with DB-cascade on dependents; returns `{deleted, affected_cluster_ids, affected_project_ids}` |
+| `/api/optimizations/{id}` | DELETE | Delete a single optimization with DB-cascade on dependents; returns `{deleted, requested, affected_cluster_ids, affected_project_ids}` (v0.4.2+, always available) |
+| `/api/optimizations/delete` | POST | Bulk-delete up to 100 optimizations in one call (body `{ids: list[str], reason?: str}`, 1≤ids≤100, rate-limited 10/min). Emits one `optimization_deleted` SSE event per row + one aggregated `taxonomy_changed` per call. Returns `{deleted, requested, affected_cluster_ids, affected_project_ids}` — compare `requested - deleted` for partial-match UX (v0.4.3+) |
 | `/api/feedback` | POST/GET | Submit/list feedback |
 | `/api/providers` | GET | Active provider info |
 | `/api/provider/api-key` | GET/PATCH/DELETE | API key management |

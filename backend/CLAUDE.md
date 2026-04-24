@@ -46,7 +46,7 @@ Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MOD
 | Router | Endpoints |
 |--------|-----------|
 | `optimize.py` | `POST /api/optimize` (SSE), `GET /api/optimize/{trace_id}` |
-| `history.py` | `GET /api/history` (sort/filter, pagination envelope), `DELETE /api/optimizations/{id}` |
+| `history.py` | `GET /api/history` (sort/filter, pagination envelope), `DELETE /api/optimizations/{id}` (v0.4.2, always available), `POST /api/optimizations/delete` (v0.4.3, bulk 1–100 ids, rate-limited 10/min, emits one `optimization_deleted` per row + one aggregated `taxonomy_changed`) |
 | `feedback.py` | `POST /api/feedback`, `GET /api/feedback?optimization_id=X` |
 | `refinement.py` | `POST /api/refine` (SSE), `GET /api/refine/{id}/versions`, `POST /api/refine/{id}/rollback` |
 | `providers.py` | `GET /api/providers`, `GET/PATCH/DELETE /api/provider/api-key` |
@@ -75,7 +75,7 @@ Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (i
 - `OptimizationPattern` — join: Optimization→PromptCluster with similarity + relationship type (`source`/`injected`/`global_injected`). `global_pattern_id` nullable FK
 - `LinkedRepo` — GitHub repo link with `project_node_id` FK to PromptCluster (ADR-005)
 - `PromptTemplate` — immutable snapshot forked from a mature cluster's top optimization. Columns: `id`, `source_cluster_id` FK (SET NULL), `source_optimization_id` FK (SET NULL), `project_id` FK, `label`, `prompt`, `strategy`, `score`, `pattern_ids` (JSON), `domain_label`, `promoted_at`, `retired_at`, `retired_reason`, `usage_count`, `last_used_at`. Partial-unique on `(source_cluster_id, source_optimization_id) WHERE retired_at IS NULL` — re-forking returns existing live row
-- `TaskTypeTelemetry` — per-prompt record of heuristic vs LLM classification (`raw_prompt`, `task_type`, `domain`, `source` ∈ `{heuristic, llm}`). Feeds A4 fallback tuning + classifier drift analysis. Migration `2f3b0645e24d_add_task_type_telemetry.py`
+- `TaskTypeTelemetry` — per-prompt record of heuristic vs LLM classification (`raw_prompt`, `task_type`, `domain`, `source` ∈ `{heuristic, llm}`). Feeds A4 fallback tuning + classifier drift analysis. Migration `2f3b0645e24d_add_task_type_telemetry.py`. `task_type_signal_extractor` INSERTs are wrapped in `try/except OperationalError` so unmigrated DBs (warn-log once per cycle) don't abort the warm-path cycle — `ClassificationAgreement` still records the comparison in-process; only the persistent record is skipped
 - `Feedback`, `StrategyAffinity`, `RefinementBranch`, `RefinementTurn`, `GitHubToken`, `RepoFileIndex`, `AuditLog`
 
 ## Pipeline architecture
