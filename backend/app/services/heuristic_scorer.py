@@ -12,6 +12,38 @@ import re
 logger = logging.getLogger(__name__)
 
 
+# Technical-prompt conciseness calibration (#10).
+# Technical specs that repeat domain vocabulary (``pipeline`` / ``schema``
+# / ``service``) have low TTR by construction — that reflects information
+# density, not verbosity.  When ``_count_technical_nouns(prompt)`` meets
+# the threshold, multiply the raw TTR by the multiplier before the band
+# mapping.  Calibration target: a technical prompt and an equivalent-TTR
+# prose prompt should score within ~0.3 points; pre-fix delta was 0.
+TECHNICAL_CONTEXT_THRESHOLD = 3
+TECHNICAL_TTR_MULTIPLIER = 1.15
+
+
+def _count_technical_nouns(prompt: str) -> int:
+    """Count distinct ``_TECHNICAL_NOUNS`` hits in ``prompt``.
+
+    Uses word-boundary matching so ``"backend-api"`` counts both nouns
+    and ``"apply"`` does not match ``"api"``.  Lazy-imports the noun set
+    from ``task_type_classifier`` to avoid a circular import (scorer is
+    imported by every pipeline tier; classifier isn't).
+    """
+    from app.services.task_type_classifier import _TECHNICAL_NOUNS
+
+    prompt_lower = prompt.lower()
+    hits = 0
+    for noun in _TECHNICAL_NOUNS:
+        # Word-boundary match — avoids "apply" triggering on "api".
+        if re.search(rf"\b{re.escape(noun)}\b", prompt_lower):
+            hits += 1
+            if hits >= TECHNICAL_CONTEXT_THRESHOLD:
+                return hits  # short-circuit: only threshold comparison matters
+    return hits
+
+
 
 
 class HeuristicScorer:
@@ -104,6 +136,16 @@ class HeuristicScorer:
         Instead of penalizing length, measures how much of the content
         contributes useful information. A long, structured prompt with
         high information density scores well.
+
+        Technical-prompt calibration (#10): prompts containing
+        ≥``TECHNICAL_CONTEXT_THRESHOLD`` technical nouns from
+        ``_TECHNICAL_NOUNS`` (the canonical coding/system/data vocabulary)
+        receive a ``TECHNICAL_TTR_MULTIPLIER`` boost on the Type-Token
+        Ratio before the score-band mapping.  Rationale: technical specs
+        repeat domain terminology ("pipeline", "schema", "service") —
+        that's information density, not verbosity.  Without the boost,
+        well-structured technical prompts were systematically under-scored
+        relative to prose with identical TTR.
         """
         fillers = [
             r"\bplease note that\b",
@@ -128,6 +170,15 @@ class HeuristicScorer:
 
         unique = len(set(words))
         ttr = unique / total
+
+        # Technical-prompt calibration.  Count distinct technical nouns;
+        # ≥3 hits indicates a technical prompt whose low TTR reflects
+        # domain-vocabulary density, not verbosity.
+        if _count_technical_nouns(prompt) >= TECHNICAL_CONTEXT_THRESHOLD:
+            # Cap at 1.0 so a high-baseline TTR doesn't overflow after
+            # multiplication (would otherwise drive score into the 9-10
+            # band for the wrong reason).
+            ttr = min(1.0, ttr * TECHNICAL_TTR_MULTIPLIER)
 
         # Base 6.0 + TTR adjustment (0.5 midpoint for long prompts)
         score = 6.0 + (ttr - 0.5) * 4.0

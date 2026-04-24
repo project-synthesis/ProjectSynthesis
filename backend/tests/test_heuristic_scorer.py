@@ -212,6 +212,89 @@ def test_conciseness_short_but_dense_still_reasonable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# heuristic_conciseness — technical-prompt calibration (#10)
+# ---------------------------------------------------------------------------
+
+
+def test_conciseness_technical_prompt_with_repeated_jargon_gets_boost() -> None:
+    """Technical prompts with repeated domain vocabulary (low TTR by design)
+    shouldn't be systematically under-scored relative to prose with the same
+    TTR but no technical context.
+
+    The TTR-driven portion of the score is multiplied by 1.15 when the
+    prompt contains ≥3 technical nouns from ``_TECHNICAL_NOUNS`` (the
+    canonical coding/system/data vocabulary registry from
+    ``task_type_classifier``).
+    """
+    # Prompt deliberately repeats "pipeline", "api", "schema", "database",
+    # "service" — the kind of technical-spec vocabulary that tanks TTR
+    # without signalling verbosity.
+    tech_prompt = (
+        "Design a data pipeline that ingests from the API, validates against "
+        "the schema, persists to the database, and exposes a service endpoint. "
+        "The pipeline must handle schema-validation errors, the API must rate-"
+        "limit, the database must replicate, and the service must retry."
+    )
+    tech_score = HeuristicScorer.heuristic_conciseness(tech_prompt)
+
+    # Same length + repetition pattern, zero technical nouns — prose-style
+    # control. Repeats "garden", "flower", "water", "season", "basket".
+    prose_prompt = (
+        "Describe a garden that gathers from the meadow, sorts against the "
+        "season, collects into the basket, and shares the flower arrangement. "
+        "The garden must handle season-bloom timings, the meadow must be rich, "
+        "the basket must stay dry, and the flower must open."
+    )
+    prose_score = HeuristicScorer.heuristic_conciseness(prose_prompt)
+
+    # Technical prompt must not be penalized relative to prose with equal
+    # repetition and length.  Boosted by at least 0.2 points.
+    assert tech_score >= prose_score + 0.2, (
+        f"Technical prompt scored {tech_score}, prose scored {prose_score} "
+        f"(delta {tech_score - prose_score:.2f}) — expected technical "
+        "calibration to lift the score by ≥ 0.2"
+    )
+
+
+def test_conciseness_non_technical_prompt_unchanged() -> None:
+    """The calibration must not disturb non-technical prompt scoring.
+
+    Prompts with zero (or < 3) technical-noun hits must score identically
+    to the pre-calibration formula.
+    """
+    # Zero technical nouns — pure creative writing.
+    prompt = (
+        "Write a short poem about the autumn wind. Use vivid imagery and "
+        "metaphor. The poem should evoke melancholy without stating it."
+    )
+    score = HeuristicScorer.heuristic_conciseness(prompt)
+    # Expected range under pre-fix formula: 6.0-7.5 depending on filler + TTR.
+    # Calibration must NOT push it above the pre-fix ceiling.
+    assert 5.0 <= score <= 7.8, (
+        f"Non-technical prompt scored {score}; calibration leaked into "
+        "non-technical path"
+    )
+
+
+def test_conciseness_technical_boost_respects_ttr_ceiling() -> None:
+    """The 1.15× TTR multiplier must never overflow — cap at 1.0 before the
+    score-band mapping. Otherwise a dense technical prompt with TTR≈0.9
+    could yield ttr_boosted = 1.035 and pin the score at the 10.0 ceiling
+    for the wrong reason.
+    """
+    # Technical + moderately diverse vocabulary (TTR should be ~0.75+).
+    prompt = (
+        "Implement an async pipeline that reads from a PostgreSQL database, "
+        "caches intermediate results in Redis, applies transformations "
+        "through a service layer, and writes structured output to Kafka. "
+        "Handle schema validation, connection pooling, and retry semantics."
+    )
+    score = HeuristicScorer.heuristic_conciseness(prompt)
+    # Must stay in the legal [1, 10] band (no overflow from the boost).
+    assert 1.0 <= score <= 10.0, f"Score {score} out of legal band"
+
+
+# ---------------------------------------------------------------------------
 # heuristic_structure (v2 — XML parity)
 # ---------------------------------------------------------------------------
 
