@@ -15,6 +15,9 @@
   import { projectStore } from '$lib/stores/project.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
+  import { toastsStore } from '$lib/stores/toasts.svelte';
+  import { deleteOptimization, ApiError } from '$lib/api/optimizations';
+  import UndoToast from '$lib/components/shared/UndoToast.svelte';
   import { scoreColor, taxonomyColor } from '$lib/utils/colors';
   import { formatScore, formatRelativeTime } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
@@ -183,6 +186,85 @@
     clustersStore.selectCluster(clusterId);
     window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'clusters' }));
   }
+
+  // ── Row delete state machine ─────────────────────────────────────
+
+  type RowState = 'idle' | 'pending-delete' | 'deleting';
+  const rowStates: Map<string, RowState> = $state(new Map());
+  const fallbackTimers = new Map<string, number>();
+
+  function rowStateOf(id: string): RowState {
+    return rowStates.get(id) ?? 'idle';
+  }
+
+  function setRowState(id: string, state: RowState) {
+    if (state === 'idle') {
+      rowStates.delete(id);
+    } else {
+      rowStates.set(id, state);
+    }
+    // Force Svelte to detect the Map mutation by reassigning via spread
+    rowStates.forEach(() => {});
+  }
+
+  function scheduleFallbackRemoval(id: string, timeoutMs: number) {
+    const handle = window.setTimeout(() => {
+      historyItems = historyItems.filter(i => i.id !== id);
+      setRowState(id, 'idle');
+      fallbackTimers.delete(id);
+    }, timeoutMs);
+    fallbackTimers.set(id, handle);
+  }
+
+  function cancelFallbackRemoval(id: string) {
+    const handle = fallbackTimers.get(id);
+    if (handle !== undefined) {
+      window.clearTimeout(handle);
+      fallbackTimers.delete(id);
+    }
+  }
+
+  function onRowDelete(item: HistoryItem, ev: MouseEvent) {
+    ev.stopPropagation();
+    setRowState(item.id, 'pending-delete');
+    const meta = item.cluster_id ? '1 cluster will rebalance.' : undefined;
+    toastsStore.push({
+      kind: 'undo',
+      message: 'Deleting optimization.',
+      meta,
+      durationMs: 5000,
+      undo: () => setRowState(item.id, 'idle'),
+      commit: async () => {
+        setRowState(item.id, 'deleting');
+        try {
+          await deleteOptimization(item.id);
+          // SSE surgically removes the row; fallback 2s timeout covers SSE gaps
+          scheduleFallbackRemoval(item.id, 2000);
+        } catch (e) {
+          setRowState(item.id, 'idle');
+          const status = (e as ApiError).status;
+          const msg = status === 404 ? 'Already deleted elsewhere.' : 'Delete failed.';
+          toastsStore.push({ kind: 'error', message: msg, durationMs: 4000 });
+        }
+      },
+    });
+  }
+
+  function onOptimizationDeleted(e: Event) {
+    const detail = (e as CustomEvent<{ id: string }>).detail;
+    historyItems = historyItems.filter(i => i.id !== detail.id);
+    setRowState(detail.id, 'idle');
+    cancelFallbackRemoval(detail.id);
+  }
+
+  $effect(() => {
+    window.addEventListener('optimization-deleted', onOptimizationDeleted);
+    return () => {
+      window.removeEventListener('optimization-deleted', onOptimizationDeleted);
+      fallbackTimers.forEach(h => window.clearTimeout(h));
+      fallbackTimers.clear();
+    };
+  });
 </script>
 
 <div class="panel">
@@ -241,6 +323,8 @@
           <button
             class="row-item history-row"
             class:history-row--active={activeTraceId === item.trace_id}
+            class:pending-delete={rowStateOf(item.id) === 'pending-delete'}
+            class:deleting={rowStateOf(item.id) === 'deleting'}
             style="--accent: {taxonomyColor(item.domain)};"
             onclick={() => loadHistoryItem(item)}
           >
@@ -289,6 +373,15 @@
                 >{item.feedback_rating === 'thumbs_up' ? '\u2191' : '\u2193'}</span>
               {/if}
             </div>
+            <span
+              role="button"
+              class="row-delete-btn"
+              data-testid="row-delete-btn"
+              onclick={(e) => onRowDelete(item, e)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowDelete(item, e as unknown as MouseEvent); } }}
+              aria-label="Delete optimization"
+              tabindex="-1"
+            >×</span>
           </button>
         {/if}
       {/each}
@@ -308,8 +401,15 @@
   </div>
 </div>
 
+<div class="toast-stack" aria-live="polite">
+  {#each toastsStore.toasts.filter(t => t.kind === 'undo') as t (t.id)}
+    <UndoToast toast={t} />
+  {/each}
+</div>
+
 <style>
   .row-item {
+    position: relative;
     display: flex;
     align-items: center;
     height: 20px;
@@ -559,5 +659,71 @@
   @keyframes skeleton-pulse {
     0%, 100% { opacity: 0.4; }
     50% { opacity: 1; }
+  }
+
+  /* ── Row delete affordance ─────────────────────────────────────── */
+
+  .row-delete-btn {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--color-neon-red);
+    font-size: 12px;
+    line-height: 1;
+    opacity: 0;
+    pointer-events: none;
+    cursor: pointer;
+    border-radius: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: opacity 200ms var(--ease-spring),
+                background 200ms var(--ease-spring),
+                border-color 200ms var(--ease-spring);
+  }
+
+  .row-item:hover .row-delete-btn,
+  .row-item:focus-within .row-delete-btn {
+    opacity: 0.6;
+    pointer-events: auto;
+  }
+
+  .row-delete-btn:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--color-neon-red) 12%, transparent);
+    border-color: rgba(255, 51, 102, 0.4);
+  }
+
+  .row-delete-btn:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
+
+  .row-item.pending-delete {
+    opacity: 0.4;
+  }
+
+  .row-item.pending-delete :global(*) {
+    text-decoration: line-through;
+  }
+
+  .toast-stack {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 6px;
+    z-index: 800;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row-delete-btn { transition-duration: 0.01ms; }
   }
 </style>
