@@ -309,10 +309,17 @@
   let selectMode = $state(false);
   const selectedIds: SvelteSet<string> = $state(new SvelteSet<string>());
   let bulkModalOpen = $state(false);
+  // Anchor for shift-click range selection. Tracks the index of the last
+  // row the user clicked (with or without ctrl/cmd); shift+click picks the
+  // contiguous range from anchor to current into selectedIds.
+  let rangeAnchorIdx = $state<number | null>(null);
 
   function toggleSelectMode() {
     selectMode = !selectMode;
-    if (!selectMode) selectedIds.clear();
+    if (!selectMode) {
+      selectedIds.clear();
+      rangeAnchorIdx = null;
+    }
   }
 
   function toggleSelected(id: string, checked: boolean) {
@@ -323,6 +330,165 @@
   function openBulkModal() {
     if (selectedIds.size === 0) return;
     bulkModalOpen = true;
+  }
+
+  // ── Modifier-aware row click router ──────────────────────────────
+  //
+  // Routes a row click based on modifier keys + current select-mode:
+  //   - ctrl/cmd+click:  toggle this row's selection; auto-enter select
+  //                      mode if idle; set this row as the range anchor.
+  //   - shift+click:     extend selection from rangeAnchorIdx to clicked
+  //                      row. If no anchor, treat as ctrl+click.
+  //   - plain click:     the default row behaviour — load the optimization
+  //                      into the editor (existing loadHistoryItem path).
+  //
+  // The row wrapper <button> native click semantics still drive keyboard
+  // (Enter/Space) activation; that routes through this handler too, so
+  // keyboard-Enter loads the optimization without modifier handling.
+  function onRowClick(e: MouseEvent, item: HistoryItem, idx: number) {
+    const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+    const toggleKey = isMac ? e.metaKey : e.ctrlKey;
+
+    if (toggleKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!selectMode) selectMode = true;
+      if (selectedIds.has(item.id)) selectedIds.delete(item.id);
+      else selectedIds.add(item.id);
+      rangeAnchorIdx = idx;
+      return;
+    }
+
+    if (e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!selectMode) selectMode = true;
+      if (rangeAnchorIdx === null) {
+        // No anchor yet — treat shift+click as a single toggle and
+        // remember this row as the anchor for the next shift+click.
+        selectedIds.add(item.id);
+        rangeAnchorIdx = idx;
+        return;
+      }
+      const [from, to] = [
+        Math.min(rangeAnchorIdx, idx),
+        Math.max(rangeAnchorIdx, idx),
+      ];
+      for (let i = from; i <= to; i++) {
+        const row = filteredCompletedItems[i];
+        if (row) selectedIds.add(row.id);
+      }
+      return;
+    }
+
+    // Plain click in select mode → toggle selection (matches file-manager
+    // conventions: clicking a row in select mode selects it, not loads it).
+    if (selectMode) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (selectedIds.has(item.id)) selectedIds.delete(item.id);
+      else selectedIds.add(item.id);
+      rangeAnchorIdx = idx;
+      return;
+    }
+
+    // Plain click when not in select mode — the original behaviour:
+    // load this optimization into the editor.
+    loadHistoryItem(item);
+  }
+
+  // ── Panel-level keyboard shortcuts ───────────────────────────────
+  //
+  // Listens on the panel root (not window) so shortcuts don't bleed
+  // into other surfaces. Row-focused shortcuts (Delete, arrows) rely
+  // on `document.activeElement` being inside the panel.
+  function onPanelKeyDown(e: KeyboardEvent) {
+    const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+    const toggleKey = isMac ? e.metaKey : e.ctrlKey;
+    const target = e.target as HTMLElement | null;
+    const inInput =
+      target?.tagName === 'INPUT' ||
+      target?.tagName === 'TEXTAREA' ||
+      target?.isContentEditable;
+    // Don't intercept shortcuts typed inside the rename input or any
+    // future input inside the panel.
+    if (inInput) return;
+
+    // Esc — exit select mode (no-op if idle). Never blocks other Esc
+    // handlers (e.g. modal close); the modal's own listener fires first.
+    if (e.key === 'Escape') {
+      if (bulkModalOpen) return; // let the modal own Esc while open
+      if (selectMode) {
+        e.preventDefault();
+        selectMode = false;
+        selectedIds.clear();
+        rangeAnchorIdx = null;
+      }
+      return;
+    }
+
+    // Ctrl/Cmd+A — select all visible rows (only when already in select mode).
+    if (toggleKey && (e.key === 'a' || e.key === 'A')) {
+      if (!selectMode) return; // don't hijack the browser's select-all elsewhere
+      e.preventDefault();
+      for (const item of filteredCompletedItems) selectedIds.add(item.id);
+      return;
+    }
+
+    // Delete / Backspace on a focused row → trigger that row's delete.
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      const row = findFocusedRow();
+      if (!row) return;
+      const item = historyItems.find(i => i.id === row.dataset.rowId);
+      if (!item) return;
+      if (selectMode) {
+        // In select mode with selection — open bulk confirm.
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          openBulkModal();
+        }
+        return;
+      }
+      // Single-row delete (same code path as clicking ×).
+      if (rowStateOf(item.id) !== 'idle') return;
+      e.preventDefault();
+      onRowDelete(item, e);
+      return;
+    }
+
+    // Arrow keys — move focus between rows.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      const rows = rowButtonElements();
+      if (rows.length === 0) return;
+      const currentIdx = rows.findIndex(r => r === document.activeElement);
+      let nextIdx: number;
+      if (e.key === 'Home') nextIdx = 0;
+      else if (e.key === 'End') nextIdx = rows.length - 1;
+      else if (e.key === 'ArrowDown') nextIdx = currentIdx < 0 ? 0 : Math.min(rows.length - 1, currentIdx + 1);
+      else nextIdx = currentIdx <= 0 ? 0 : currentIdx - 1;
+      if (rows[nextIdx]) {
+        e.preventDefault();
+        rows[nextIdx].focus();
+      }
+    }
+  }
+
+  function rowButtonElements(): HTMLButtonElement[] {
+    if (typeof document === 'undefined') return [];
+    return Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '.history-panel .history-row[data-row-id]',
+      ),
+    );
+  }
+
+  function findFocusedRow(): HTMLButtonElement | null {
+    const el = typeof document !== 'undefined' ? document.activeElement : null;
+    if (!el || !(el instanceof HTMLElement)) return null;
+    // The focused element could be the row button itself or a descendant
+    // (e.g. the × affordance). Walk up to the nearest .history-row.
+    const row = el.closest<HTMLButtonElement>('.history-row[data-row-id]');
+    return row;
   }
 
   /**
@@ -481,13 +647,17 @@
   );
 </script>
 
-<div class="panel">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="panel history-panel" onkeydown={onPanelKeyDown}>
   <header class="panel-header">
     <span class="section-heading">History</span>
     <button
       type="button"
       class="select-toggle"
       onclick={toggleSelectMode}
+      use:tooltip={selectMode
+        ? 'Exit select mode (Esc)'
+        : 'Select — then Ctrl+click to toggle, Shift+click for range, Ctrl+A for all'}
     >{selectMode ? 'Cancel' : 'Select'}</button>
   </header>
   {#if selectMode && selectedIds.size > 0 && !bulkModalOpen}
@@ -517,7 +687,7 @@
     {:else if historyItems.length === 0}
       <p class="empty-note">No optimizations yet.</p>
     {:else}
-      {#each filteredCompletedItems as item (item.id)}
+      {#each filteredCompletedItems as item, idx (item.id)}
         {#if renamingOptId === item.id}
           <div class="row-item history-row" style="--accent: {taxonomyColor(item.domain)};">
             <span class="row-prompt-line">
@@ -559,8 +729,10 @@
             class:pending-delete={rowStateOf(item.id) === 'pending-delete'}
             class:deleting={rowStateOf(item.id) === 'deleting'}
             class:select-mode={selectMode}
+            class:selected={selectedIds.has(item.id)}
+            data-row-id={item.id}
             style="--accent: {taxonomyColor(item.domain)};"
-            onclick={() => loadHistoryItem(item)}
+            onclick={(e) => onRowClick(e, item, idx)}
           >
             {#if selectMode}
               <!-- Absolute-positioned at vertical center, left-most edge of
@@ -766,6 +938,18 @@
 
   .history-row--active .row-prompt {
     color: var(--accent, var(--color-neon-cyan));
+  }
+
+  /* Selected row in select mode — cyan tint to reinforce the checkbox
+     state. Subordinate to --active; when both apply the active state
+     (domain-accent) wins on border/text, the selected state only
+     contributes the surface tint. */
+  .history-row.selected {
+    background: color-mix(in srgb, var(--color-neon-cyan) 6%, transparent);
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 20%, transparent);
+  }
+  .history-row.selected:hover {
+    background: color-mix(in srgb, var(--color-neon-cyan) 10%, transparent);
   }
 
   .load-more-btn {

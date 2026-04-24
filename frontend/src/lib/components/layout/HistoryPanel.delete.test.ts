@@ -410,3 +410,159 @@ describe('HistoryPanel — multi-select + bulk', () => {
     });
   }, 15000);
 });
+
+// ── Keyboard shortcuts ──────────────────────────────────────────
+
+describe('HistoryPanel — keyboard shortcuts', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (deleteOptimization as ReturnType<typeof vi.fn>).mockClear();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  async function getRowButtons(): Promise<HTMLButtonElement[]> {
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+    return Array.from(
+      document.querySelectorAll<HTMLButtonElement>('.history-row[data-row-id]'),
+    );
+  }
+
+  it('Ctrl+click toggles a row into selection and auto-enters select mode', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+
+    // Idle: no Select toggle fired. Ctrl+click should flip into select mode
+    // and select the clicked row.
+    await fireEvent.click(rows[0], { ctrlKey: true });
+    expect(rows[0].classList.contains('selected')).toBe(true);
+    // Selection toolbar now visible with count = 1.
+    expect(screen.getByText(/\bselected\b/i)).toBeInTheDocument();
+
+    // Ctrl+click again on same row → toggles off.
+    await fireEvent.click(rows[0], { ctrlKey: true });
+    expect(rows[0].classList.contains('selected')).toBe(false);
+  });
+
+  it('Shift+click extends selection from anchor to target (range select)', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+
+    // Establish anchor via Ctrl+click on the first row.
+    await fireEvent.click(rows[0], { ctrlKey: true });
+    expect(rows[0].classList.contains('selected')).toBe(true);
+
+    // Shift+click the second row → both selected.
+    await fireEvent.click(rows[1], { shiftKey: true });
+    expect(rows[0].classList.contains('selected')).toBe(true);
+    expect(rows[1].classList.contains('selected')).toBe(true);
+  });
+
+  it('Esc exits select mode and clears selection', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+    await fireEvent.click(rows[0], { ctrlKey: true });
+    expect(screen.getByText(/\bselected\b/i)).toBeInTheDocument();
+
+    // Panel-level keydown — fire on the panel root.
+    const panel = document.querySelector('.history-panel') as HTMLElement;
+    await fireEvent.keyDown(panel, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/\bselected\b/i)).toBeNull();
+    });
+    // `Select` header button should be back (not `Cancel`).
+    expect(screen.getByRole('button', { name: /^select$/i })).toBeInTheDocument();
+  });
+
+  it('Ctrl+A in select mode selects all filtered rows', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+
+    // Enter select mode (via header toggle).
+    await fireEvent.click(screen.getByRole('button', { name: /^select$/i }));
+    const panel = document.querySelector('.history-panel') as HTMLElement;
+    await fireEvent.keyDown(panel, { key: 'a', ctrlKey: true });
+
+    // Both rows should now be selected.
+    expect(rows[0].classList.contains('selected')).toBe(true);
+    expect(rows[1].classList.contains('selected')).toBe(true);
+  });
+
+  it('Ctrl+A outside select mode is a no-op (browser default preserved)', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+
+    const panel = document.querySelector('.history-panel') as HTMLElement;
+    await fireEvent.keyDown(panel, { key: 'a', ctrlKey: true });
+
+    // Not in select mode → nothing selected.
+    expect(rows[0].classList.contains('selected')).toBe(false);
+    expect(rows[1].classList.contains('selected')).toBe(false);
+  });
+
+  it('Delete key on focused row triggers single-row delete grace window', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+
+    rows[0].focus();
+    await fireEvent.keyDown(rows[0], { key: 'Delete' });
+
+    // UndoToast message appears; API call is deferred by the grace window.
+    expect(screen.getByText(/deleting optimization/i)).toBeInTheDocument();
+    expect(deleteOptimization).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(deleteOptimization).toHaveBeenCalledWith('opt-1');
+  }, 15000);
+
+  it('ArrowDown / ArrowUp move keyboard focus between rows', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+
+    rows[0].focus();
+    expect(document.activeElement).toBe(rows[0]);
+
+    const panel = document.querySelector('.history-panel') as HTMLElement;
+    await fireEvent.keyDown(panel, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(rows[1]);
+
+    await fireEvent.keyDown(panel, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(rows[0]);
+  });
+
+  it('Home / End jump focus to first / last row', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+
+    rows[0].focus();
+    const panel = document.querySelector('.history-panel') as HTMLElement;
+    await fireEvent.keyDown(panel, { key: 'End' });
+    expect(document.activeElement).toBe(rows[rows.length - 1]);
+
+    await fireEvent.keyDown(panel, { key: 'Home' });
+    expect(document.activeElement).toBe(rows[0]);
+  });
+
+  it('Plain click in select mode toggles that row (does not load)', async () => {
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    const rows = await getRowButtons();
+
+    // Enter select mode; plain click should TOGGLE not LOAD.
+    await fireEvent.click(screen.getByRole('button', { name: /^select$/i }));
+    await fireEvent.click(rows[0]); // plain click in select mode
+    expect(rows[0].classList.contains('selected')).toBe(true);
+
+    await fireEvent.click(rows[0]); // toggle off
+    expect(rows[0].classList.contains('selected')).toBe(false);
+  });
+});
