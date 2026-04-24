@@ -715,6 +715,7 @@ async def match_cluster(
             for mp in result.meta_patterns
         ]
         match_dict["similarity"] = result.similarity
+        match_dict["match_level"] = result.match_level
 
         return ClusterMatchResponse(match=match_dict)
     except OperationalError as exc:
