@@ -801,7 +801,8 @@
     opacity: 0;
     pointer-events: none;
     cursor: pointer;
-    border-radius: 2px;
+    /* Flat edges — brand default. */
+    border-radius: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -820,7 +821,11 @@
   .row-delete-btn:hover {
     opacity: 1;
     background: color-mix(in srgb, var(--color-neon-red) 12%, transparent);
-    border-color: rgba(255, 51, 102, 0.4);
+    border-color: color-mix(in srgb, var(--color-neon-red) 40%, transparent);
+  }
+  .row-delete-btn:active {
+    /* Brand active state — border contracts toward subtle. */
+    border-color: var(--color-border-subtle);
   }
 
   .row-delete-btn:focus-visible {
@@ -862,15 +867,14 @@
     display: flex;
     flex-direction: column-reverse;
     gap: 6px;
-    /* Above modals (900/901) so a pre-commit grace-window toast stays
-       reachable even when a DestructiveConfirmModal is open. Below the
-       top-level CommandPalette tier (9999). */
-    z-index: 1100;
+    /* Brand z-index tier 100 (Popover) — above modals (tier 50), below
+       the emergency tier (9999) reserved for skip links / CommandPalette.
+       The pre-commit grace-window toast stays reachable even if a
+       DestructiveConfirmModal is open over it. */
+    z-index: 100;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .row-delete-btn { transition-duration: 0.01ms; }
-  }
+  /* Reduced-motion is enforced globally in app.css. */
 
   /* ── Panel header layout ───────────────────────────────────────── */
 
@@ -885,19 +889,24 @@
   .select-toggle {
     height: 20px;
     padding: 0 8px;
+    line-height: 18px;
     background: transparent;
     border: 1px solid transparent;
     color: var(--color-text-secondary);
     font-family: var(--font-sans);
     font-size: 10px;
     font-weight: 500;
-    border-radius: 4px;
+    /* Flat edges — brand default. */
+    border-radius: 0;
     cursor: pointer;
     transition: background 200ms var(--ease-spring), border-color 200ms var(--ease-spring);
   }
   .select-toggle:hover {
     background: var(--color-bg-hover);
     border-color: var(--color-border-subtle);
+  }
+  .select-toggle:active {
+    border-color: transparent;
   }
   .select-toggle:focus-visible {
     outline: 1px solid rgba(0, 229, 255, 0.3);
@@ -926,10 +935,12 @@
   .btn-delete-toolbar {
     height: 20px;
     padding: 0 8px;
+    line-height: 18px;
     font-family: var(--font-sans);
     font-size: 10px;
     font-weight: 500;
-    border-radius: 4px;
+    /* Flat edges — brand default. */
+    border-radius: 0;
     cursor: pointer;
     transition: background 200ms var(--ease-spring), border-color 200ms var(--ease-spring);
   }
@@ -942,6 +953,9 @@
     background: var(--color-bg-hover);
     border-color: var(--color-border-subtle);
   }
+  .btn-cancel-toolbar:active {
+    border-color: transparent;
+  }
   .btn-delete-toolbar {
     background: transparent;
     border: 1px solid var(--color-neon-red);
@@ -949,6 +963,9 @@
   }
   .btn-delete-toolbar:hover {
     background: color-mix(in srgb, var(--color-neon-red) 12%, transparent);
+  }
+  .btn-delete-toolbar:active {
+    border-color: color-mix(in srgb, var(--color-neon-red) 40%, transparent);
   }
   .btn-cancel-toolbar:focus-visible,
   .btn-delete-toolbar:focus-visible {
@@ -964,13 +981,17 @@
     margin-right: 6px;
     appearance: none;
     border: 1px solid var(--color-border-subtle);
-    border-radius: 2px;
+    /* Flat edges — brand default. */
+    border-radius: 0;
     background: transparent;
     cursor: pointer;
     position: relative;
     flex-shrink: 0;
+    transition: border-color 200ms var(--ease-spring), background 200ms var(--ease-spring);
   }
-  .row-checkbox:hover { border-color: rgba(0, 229, 255, 0.3); }
+  .row-checkbox:hover {
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
+  }
   .row-checkbox:checked {
     background: var(--color-neon-cyan);
     border-color: var(--color-neon-cyan);

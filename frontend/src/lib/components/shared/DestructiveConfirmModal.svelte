@@ -163,8 +163,12 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(6, 6, 12, 0.6);
-    z-index: 900;
+    /* Token mix instead of hardcoded rgba so the scrim follows the
+       bg-primary palette if it's ever retuned. */
+    background: color-mix(in srgb, var(--color-bg-primary) 60%, transparent);
+    /* Brand z-index tier 50 (Modal). Source order places scrim below
+       the modal div that follows it in the DOM, so they share the tier. */
+    z-index: 50;
     animation: scrim-in 200ms var(--ease-spring);
   }
   .modal {
@@ -184,25 +188,32 @@
     background: var(--color-bg-glass);
     backdrop-filter: blur(8px);
     border: 1px solid var(--color-border-subtle);
-    border-radius: 6px;
-    z-index: 901;
+    /* Brand: flat edges are the default. */
+    border-radius: 0;
+    /* Modal tier (50). Stacks above scrim via source order. */
+    z-index: 50;
     animation: modal-in 200ms var(--ease-spring);
     font-family: var(--font-sans);
     color: var(--color-text-primary);
   }
   .modal:not(.has-error) {
-    border-color: rgba(255, 51, 102, 0.25);
+    /* Pre-destructive context tint — subtle red suggestion only. */
+    border-color: color-mix(in srgb, var(--color-neon-red) 25%, transparent);
   }
   .modal.has-error {
     border-color: var(--color-neon-red);
   }
 
   .modal-header {
+    /* 28px height + px-1.5 — matches the brand "Toolbar bar" spec so
+       chrome stays consistent with every other horizontal control strip
+       in the app. */
     height: 28px;
-    padding: 0 8px;
+    padding: 0 6px;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 6px;
     border-bottom: 1px solid var(--color-border-subtle);
   }
   .modal-title {
@@ -221,7 +232,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid transparent;
-    border-radius: 2px;
+    border-radius: 0;
     background: transparent;
     color: var(--color-text-secondary);
     font-size: 14px;
@@ -233,6 +244,10 @@
     color: var(--color-text-primary);
     background: var(--color-bg-hover);
     border-color: var(--color-border-subtle);
+  }
+  .close-btn:active:not(:disabled) {
+    /* Contraction — border mutes back toward resting. */
+    border-color: transparent;
   }
   .close-btn:focus-visible {
     outline: 1px solid rgba(0, 229, 255, 0.3);
@@ -270,14 +285,20 @@
   .confirm-input {
     width: 100%;
     height: 20px;
-    padding: 0 6px;
+    /* Brand input spec: px-1 (4px), 11px text. */
+    padding: 0 4px;
     background: var(--color-bg-input);
     border: 1px solid var(--color-border-subtle);
-    border-radius: 2px;
+    border-radius: 0;
     font-family: var(--font-mono);
     font-size: 11px;
     font-weight: 500;
     color: var(--color-text-primary);
+    transition: border-color 200ms var(--ease-spring);
+  }
+  .confirm-input:focus {
+    /* Input focus border — brand uses accent-at-30% for input focus. */
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
   }
   .confirm-input:focus-visible {
     outline: 1px solid rgba(0, 229, 255, 0.3);
@@ -288,16 +309,17 @@
     margin: 0 6px;
     padding: 4px 6px;
     background: color-mix(in srgb, var(--color-neon-red) 12%, transparent);
-    border-top: 1px solid rgba(255, 51, 102, 0.4);
-    border-bottom: 1px solid rgba(255, 51, 102, 0.4);
+    border-top: 1px solid color-mix(in srgb, var(--color-neon-red) 40%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--color-neon-red) 40%, transparent);
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-neon-red);
   }
 
   .modal-footer {
+    /* Matches modal-header spec: toolbar bar conventions. */
     height: 28px;
-    padding: 0 8px;
+    padding: 0 6px;
     display: flex;
     justify-content: flex-end;
     align-items: center;
@@ -308,10 +330,12 @@
   .btn-confirm {
     height: 20px;
     padding: 0 8px;
+    line-height: 18px;
     font-family: var(--font-sans);
     font-size: 10px;
     font-weight: 500;
-    border-radius: 4px;
+    /* Flat edges — brand default. */
+    border-radius: 0;
     cursor: pointer;
     transition: background 200ms var(--ease-spring), border-color 200ms var(--ease-spring);
   }
@@ -324,6 +348,9 @@
     background: var(--color-bg-hover);
     border-color: var(--color-border-subtle);
   }
+  .btn-cancel:active:not(:disabled) {
+    border-color: transparent;
+  }
   .btn-confirm {
     background: transparent;
     border: 1px solid var(--color-neon-red);
@@ -331,6 +358,11 @@
   }
   .btn-confirm:not(:disabled):hover {
     background: color-mix(in srgb, var(--color-neon-red) 12%, transparent);
+  }
+  .btn-confirm:active:not(:disabled) {
+    /* Active contracts toward a muted border while preserving destructive
+       chroma — signals press commitment without amplifying intensity. */
+    border-color: color-mix(in srgb, var(--color-neon-red) 40%, transparent);
   }
   .btn-cancel:disabled,
   .btn-confirm:disabled {
@@ -350,10 +382,6 @@
     to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .scrim, .modal {
-      animation-duration: 0.01ms;
-    }
-    .btn-cancel, .btn-confirm { transition-duration: 0.01ms; }
-  }
+  /* Reduced-motion is enforced globally in app.css with `!important` on
+     the universal selector — no component-local override needed. */
 </style>

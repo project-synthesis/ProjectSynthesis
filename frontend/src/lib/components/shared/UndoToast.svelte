@@ -99,12 +99,15 @@
   .undo-toast {
     position: relative;
     width: 320px;
-    padding: 6px 8px;
+    padding: 6px;
     background: var(--color-bg-glass);
     backdrop-filter: blur(8px);
-    border: 1px solid var(--color-border-subtle);
-    border-color: rgba(255, 51, 102, 0.4);
-    border-radius: 4px;
+    /* Neon tube model: uniform 1px border, single declaration (no double
+       `border` + `border-color` override). Red at 40% alpha signals the
+       pending-destructive surface context. */
+    border: 1px solid color-mix(in srgb, var(--color-neon-red) 40%, transparent);
+    /* Brand: flat edges are the default for everything. */
+    border-radius: 0;
     font-family: var(--font-sans);
     color: var(--color-text-primary);
     display: flex;
@@ -131,22 +134,27 @@
        outer red border carries the "destructive context" signal. */
     height: 20px;
     padding: 0 8px;
+    line-height: 18px;
     background: transparent;
     border: 1px solid transparent;
+    border-radius: 0;
     color: var(--color-neon-cyan);
     font-family: var(--font-sans);
     font-size: 10px;
     font-weight: 500;
-    border-radius: 4px;
     cursor: pointer;
     transition: background 200ms var(--ease-spring), border-color 200ms var(--ease-spring);
   }
   .undo-btn:hover {
     background: color-mix(in srgb, var(--color-neon-cyan) 12%, transparent);
-    border-color: rgba(0, 229, 255, 0.4);
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+  }
+  .undo-btn:active {
+    /* Brand: Active is a contraction — border mutes back toward subtle. */
+    border-color: var(--color-border-subtle);
   }
   .undo-btn:focus-visible {
-    outline: 1px solid rgba(0, 229, 255, 0.4);
+    outline: 1px solid rgba(0, 229, 255, 0.3);
     outline-offset: 2px;
   }
   .meta {
@@ -178,8 +186,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .undo-btn { transition-duration: 0.01ms; }
-    .progress-bar { transition: none; }
-  }
+  /* Reduced-motion is handled globally in app.css via the universal
+     `*` selector with `!important`, so no component-local override
+     is needed — keeping one here would just be dead weight. */
 </style>
