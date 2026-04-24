@@ -34,6 +34,18 @@ def _reset_event_bus_shutdown():
     event_bus._shutting_down = False
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_storage():
+    """Reset the in-memory rate limit storage before each test to ensure
+    isolated rate limit state. The storage is a process-level singleton,
+    so prior tests can consume quota from the moving window."""
+    from app.dependencies.rate_limit import _storage
+
+    _storage.reset()
+    yield
+    _storage.reset()
+
+
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -94,3 +106,60 @@ async def test_bulk_delete_endpoint_ok(app_client, db_session):
         )
     ).scalars().all()
     assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_partial(app_client, db_session):
+    """Mix of real + fake ids → deleted < requested, both envelopes present."""
+    real = [await _seed_opt(db_session) for _ in range(2)]
+    fake = [str(uuid.uuid4()) for _ in range(3)]
+
+    resp = await app_client.post(
+        "/api/optimizations/delete",
+        json={"ids": real + fake},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted"] == 2
+    assert body["requested"] == 5
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_empty_ids_422(app_client):
+    """min_length=1 on ids — empty list rejected at the validation layer."""
+    resp = await app_client.post("/api/optimizations/delete", json={"ids": []})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_oversized_ids_422(app_client):
+    """max_length=100 on ids — 101 ids rejected at the validation layer."""
+    oversized = [str(uuid.uuid4()) for _ in range(101)]
+    resp = await app_client.post(
+        "/api/optimizations/delete", json={"ids": oversized}
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_rate_limit(app_client, db_session):
+    """10/minute limit — 11th call in the same window returns 429.
+
+    The RateLimit dependency uses the limits library's in-memory moving
+    window. Firing 11 valid requests in quick succession must trip the
+    limit on request 11. Empty ids_per_call keeps the DB churn zero.
+    """
+    opt_id = await _seed_opt(db_session)
+    statuses = []
+    for _ in range(11):
+        resp = await app_client.post(
+            "/api/optimizations/delete",
+            json={"ids": [opt_id]},
+        )
+        statuses.append(resp.status_code)
+
+    # First call deletes; next 9 are 200 (deleted=0 because id gone);
+    # 11th is 429 per the 10/minute limit.
+    assert statuses[:10].count(200) == 10
+    assert statuses[10] == 429
