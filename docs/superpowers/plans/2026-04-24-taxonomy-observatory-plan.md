@@ -1462,7 +1462,7 @@ Run: `npm run test -- DomainLifecycleTimeline.test.ts 2>&1 | tail -6`
 
 <style>
   .timeline { padding: 4px 0; }
-  .empty-copy { padding: 8px 6px; color: var(--color-text-dim); font-size: 11px; }
+  .empty-copy { padding: 6px; color: var(--color-text-dim); font-size: 11px; }
 </style>
 ```
 
@@ -1655,7 +1655,24 @@ CSS:
 
 ```css
   .filter-bar { display: flex; gap: 4px; padding: 2px 6px; height: 24px; align-items: center; border-bottom: 1px solid var(--color-border-subtle); }
-  .chip { height: 18px; padding: 0 6px; font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; background: transparent; border: 1px solid var(--color-border-subtle); color: var(--color-text-dim); cursor: pointer; }
+  .chip {
+    height: 18px;
+    line-height: 16px;
+    padding: 0 6px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-dim);
+    cursor: pointer;
+    transition: color var(--duration-hover) var(--ease-spring), border-color var(--duration-hover) var(--ease-spring);
+  }
+  .chip:hover { color: var(--color-text-primary); }
+  .chip:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
   .chip--on { border-color: var(--color-neon-cyan); color: var(--color-neon-cyan); }
 ```
 
@@ -1813,6 +1830,9 @@ CSS:
 
 ```css
   .context-payload { padding: 4px 72px; font-family: var(--font-mono); font-size: 10px; color: var(--color-text-secondary); background: var(--color-bg-card); white-space: pre; overflow: auto; }
+  @media (prefers-reduced-motion: reduce) {
+    .chip { transition-duration: 0.01ms !important; }
+  }
 ```
 
 - [ ] **Step 9.8.4: Run — expect PASS**
@@ -2077,7 +2097,7 @@ Create `frontend/src/lib/components/taxonomy/DomainReadinessAggregate.svelte`:
 
 <style>
   .readiness-aggregate { padding: 6px; }
-  .empty-copy { padding: 12px; font-size: 11px; color: var(--color-text-dim); }
+  .empty-copy { padding: 6px; font-size: 11px; color: var(--color-text-dim); }
   .card-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -2088,9 +2108,13 @@ Create `frontend/src/lib/components/taxonomy/DomainReadinessAggregate.svelte`:
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
     cursor: pointer;
-    transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: border-color var(--duration-hover) var(--ease-spring);
   }
   .readiness-card:hover { border-color: var(--color-neon-cyan); }
+  .readiness-card:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
   .card-header {
     font-family: var(--font-display);
     font-size: 11px;
@@ -2332,24 +2356,37 @@ Run: `npm run test -- PatternDensityHeatmap.test.ts 2>&1 | tail -12`
   }
   .col-domain { font-family: var(--font-sans); font-size: 11px; }
   .col-n { text-align: right; font-variant-numeric: tabular-nums; }
-  .empty-copy { padding: 12px; font-size: 11px; color: var(--color-text-dim); }
+  .empty-copy { padding: 6px; font-size: 11px; color: var(--color-text-dim); }
   .heatmap-error {
-    padding: 12px;
+    padding: 6px;
     box-shadow: inset 0 0 0 1px var(--color-neon-red);
   }
   .heatmap-error button {
     margin-top: 6px;
-    padding: 2px 8px;
+    padding: 0 8px;
     height: 20px;
+    line-height: 18px;
     background: transparent;
     border: 1px solid var(--color-neon-red);
     color: var(--color-neon-red);
     font-family: var(--font-mono);
     font-size: 10px;
     cursor: pointer;
+    transition: background-color var(--duration-hover) var(--ease-spring);
+  }
+  .heatmap-error button:hover {
+    background: color-mix(in srgb, var(--color-neon-red) 6%, transparent);
+  }
+  .heatmap-error button:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
+  .heatmap-body {
+    transition: opacity var(--duration-hover) var(--ease-spring);
   }
   @media (prefers-reduced-motion: reduce) {
-    .heatmap-body { transition-duration: 0.01ms !important; }
+    .heatmap-body,
+    .heatmap-error button { transition-duration: 0.01ms !important; }
   }
 </style>
 ```
@@ -2503,7 +2540,7 @@ Run: `npm run test -- TaxonomyObservatory.test.ts 2>&1 | tail -12`
 
 <style>
   .observatory { display: flex; flex-direction: column; height: 100%; padding: 6px; gap: 6px; }
-  .observatory-shell-header { height: 28px; display: flex; align-items: center; gap: 12px; padding: 0 6px; border-bottom: 1px solid var(--color-border-subtle); }
+  .observatory-shell-header { height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 6px; border-bottom: 1px solid var(--color-border-subtle); }
   .shell-title {
     font-family: var(--font-display);
     font-size: 11px;

@@ -804,7 +804,7 @@ Create `frontend/src/lib/components/editor/ContextPanel.svelte`:
   }
 
   .empty-state {
-    padding: 12px 6px;
+    padding: 6px;
     color: var(--color-text-secondary);
     font-size: 11px;
   }
@@ -1171,6 +1171,10 @@ Append to `<style>`:
     border-color: var(--color-neon-cyan);
     background: color-mix(in srgb, var(--color-neon-cyan) 12%, transparent);
   }
+  .pattern-label input[type="checkbox"]:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
   .pattern-text {
     font-size: 11px;
     color: var(--color-text-primary);
@@ -1435,7 +1439,7 @@ Append to `<style>`:
     background: transparent;
     border: 1px solid var(--color-neon-cyan);
     cursor: pointer;
-    transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all var(--duration-hover) var(--ease-spring);
   }
   .apply-btn:hover:not(:disabled) {
     transform: translateY(-1px);
@@ -1444,6 +1448,10 @@ Append to `<style>`:
   .apply-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+  .apply-btn:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
   }
 ```
 
@@ -1576,8 +1584,13 @@ Append to `<style>`:
     color: var(--color-text-dim);
     cursor: pointer;
     font-family: var(--font-mono);
+    transition: color var(--duration-hover) var(--ease-spring);
   }
   .collapse-btn:hover { color: var(--color-text-primary); }
+  .collapse-btn:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
 ```
 
 - [ ] **Step 11.4: Run the 2 tests to verify PASS**
@@ -1707,7 +1720,8 @@ In the `<style>` block append:
   @media (prefers-reduced-motion: reduce) {
     .context-panel,
     .apply-btn,
-    .collapse-btn {
+    .collapse-btn,
+    .panel-body {
       transition-duration: 0.01ms !important;
       animation-duration: 0.01ms !important;
     }
@@ -1976,7 +1990,7 @@ Append to `<style>`:
     box-shadow: inset 0 0 0 1px var(--color-neon-red);
   }
   .panel-body {
-    transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--duration-hover) var(--ease-spring);
   }
 ```
 
