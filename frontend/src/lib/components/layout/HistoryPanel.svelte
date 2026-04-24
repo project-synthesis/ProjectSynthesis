@@ -298,7 +298,26 @@
     const ids = [...selectedIds];
     try {
       const res = await deleteOptimizations(ids);
-      // Success: exit selection mode + close modal + clear selection
+
+      // All-gone: every selected row was already deleted elsewhere (another
+      // client, MCP tool, or a corrupted-state cleanup). Treat as successful
+      // reconciliation — close the modal and surface a non-alarming info toast.
+      if (res.deleted === 0 && res.requested > 0) {
+        bulkModalOpen = false;
+        selectMode = false;
+        selectedIds.clear();
+        toastsStore.push({
+          kind: 'info',
+          message:
+            res.requested === 1
+              ? 'Already deleted elsewhere.'
+              : `All ${res.requested} were already deleted elsewhere.`,
+          durationMs: 4000,
+        });
+        return;
+      }
+
+      // Success path (may be partial when some ids are stale).
       bulkModalOpen = false;
       selectMode = false;
       selectedIds.clear();
@@ -311,11 +330,31 @@
         });
       }
     } catch (e) {
-      // Modal stays open and renders its own error banner via DestructiveConfirmModal's
-      // try/catch on onConfirm. State (bulkModalOpen, selectMode, selectedIds) intentionally
-      // preserved so the user can retry without re-selecting. Re-throw to let the modal
-      // surface the error message.
-      throw e;
+      // Translate raw HTTP statuses into actionable copy before the modal
+      // renders them in its error banner. Raw "Not Found" / "Internal Server
+      // Error" strings aren't user-facing — they're protocol artefacts.
+      // Modal state (open, selectMode, selectedIds) is intentionally preserved
+      // so the user can retry without re-selecting or retyping DELETE.
+      const err = e as { status?: number; message?: string };
+      const status = err.status;
+      let friendly: string;
+      if (status === 404) {
+        friendly = 'Delete endpoint unreachable. Refresh, then retry.';
+      } else if (status === 429) {
+        friendly = 'Too many deletes. Wait a moment, then retry.';
+      } else if (status !== undefined && status >= 500) {
+        friendly = 'Server error. Retry.';
+      } else if (
+        err.message &&
+        err.message !== 'Not Found' &&
+        err.message !== 'Internal Server Error' &&
+        !err.message.startsWith('HTTP ')
+      ) {
+        friendly = err.message;
+      } else {
+        friendly = 'Delete failed.';
+      }
+      throw new Error(friendly);
     }
   }
 
@@ -467,22 +506,29 @@
                   use:tooltip={item.feedback_rating === 'thumbs_up' ? STRATEGY_TOOLTIPS.feedback_positive : STRATEGY_TOOLTIPS.feedback_negative}
                 >{item.feedback_rating === 'thumbs_up' ? '\u2191' : '\u2193'}</span>
               {/if}
+              {#if !selectMode}
+                <!-- × lives inside history-meta as the last flex child so it
+                     never overlaps row-time (on the line above). Hidden by
+                     default via opacity; reveals on row hover / focus-within.
+                     Hidden entirely in selectMode - the selection toolbar is
+                     the destructive entry point there, not a per-row ×. -->
+                <span
+                  role="button"
+                  class="row-delete-btn"
+                  data-testid="row-delete-btn"
+                  onclick={(e) => onRowDelete(item, e)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onRowDelete(item, e);
+                    }
+                  }}
+                  aria-label="Delete optimization"
+                  tabindex="0"
+                  use:tooltip={'Delete'}
+                >×</span>
+              {/if}
             </div>
-            <span
-              role="button"
-              class="row-delete-btn"
-              data-testid="row-delete-btn"
-              onclick={(e) => onRowDelete(item, e)}
-              onkeydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onRowDelete(item, e);
-                }
-              }}
-              aria-label="Delete optimization"
-              tabindex="0"
-              use:tooltip={'Delete (5s undo)'}
-            >×</span>
           </button>
         {/if}
       {/each}
@@ -512,7 +558,14 @@
   <ul class="bulk-preview-list">
     {#each historyItems.filter(i => selectedIds.has(i.id)).slice(0, 3) as opt}
       {@const preview = opt.raw_prompt || opt.intent_label || 'Untitled'}
-      <li>{preview.slice(0, 60)}{preview.length > 60 ? '…' : ''}</li>
+      {@const truncated = preview.length > 56 ? preview.slice(0, 56) + '…' : preview}
+      <li>
+        <!-- Each preview row pairs prompt text with a mono timestamp so
+             duplicate prompts (common when the same user re-runs the same
+             raw prompt) stay distinguishable in the confirm dialog. -->
+        <span class="bulk-preview-text">{truncated}</span>
+        <span class="bulk-preview-time font-mono">{formatRelativeTime(opt.created_at)}</span>
+      </li>
     {/each}
     {#if selectedIds.size > 3}
       <li class="more">…and {selectedIds.size - 3} more</li>
@@ -787,12 +840,13 @@
   /* ── Row delete affordance ─────────────────────────────────────── */
 
   .row-delete-btn {
-    position: absolute;
-    top: 50%;
-    right: 6px;
-    transform: translateY(-50%);
-    width: 16px;
-    height: 16px;
+    /* Last flex child of .history-meta — sits after row-score / row-feedback.
+       No absolute positioning, so the × lives on the meta line below the
+       prompt text and never overlaps row-time. Width reserved at 14px so
+       hover-reveal doesn't cause layout jitter. */
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
     border: 1px solid transparent;
     background: transparent;
     color: var(--color-neon-red);
@@ -1023,6 +1077,24 @@
   .bulk-preview-list li {
     padding: 4px 0;
     color: var(--color-text-primary);
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  /* Prompt text grows to fill and ellipses if the browser chose to wrap. */
+  .bulk-preview-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Mono timestamp anchored to the right — disambiguates rows that share
+     the same raw prompt text. */
+  .bulk-preview-time {
+    flex-shrink: 0;
+    font-size: 9px;
+    color: var(--color-text-dim);
   }
   /* Hairline separator between preview rows — matches the brand's
      "1 px contour" language for ambient separation without adding
