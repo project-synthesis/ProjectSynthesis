@@ -108,6 +108,41 @@ async def test_prepare_rejects_short_prompt() -> None:
         await synthesis_prepare_optimization(prompt="short")
 
 
+async def test_prepare_loads_preferences_snapshot_once(db_session) -> None:
+    """handle_prepare() should load the preferences snapshot exactly once and
+    reuse it for subsequent ``prefs.get(...)`` calls (parity with optimize.py).
+
+    Regression guard: the pre-refactor code called ``prefs.get("defaults.strategy")``
+    without a snapshot, forcing an extra disk read + legacy-key migration pass.
+    """
+    with (
+        patch("app.tools._shared._context_service", _mock_context_service()),
+        patch("app.tools.prepare.async_session_factory") as mock_factory,
+        patch("app.tools.prepare.PreferencesService") as mock_prefs_cls,
+    ):
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_prefs = MagicMock()
+        mock_prefs.load.return_value = {"defaults": {"strategy": "chain-of-thought"}}
+        mock_prefs.get.return_value = "chain-of-thought"
+        mock_prefs_cls.return_value = mock_prefs
+
+        await synthesis_prepare_optimization(
+            prompt="Write a Python function that validates email addresses using RFC 5322 regex.",
+        )
+
+    # load() should have been called exactly once (the hoisted snapshot).
+    assert mock_prefs.load.call_count == 1, (
+        f"Expected prefs.load() once, got {mock_prefs.load.call_count}"
+    )
+    # All prefs.get(...) calls must pass the snapshot as the second argument.
+    for call in mock_prefs.get.call_args_list:
+        args, _kwargs = call
+        assert len(args) >= 2, (
+            f"prefs.get{args} called without snapshot — parity with optimize.py violated"
+        )
+
+
 # ---------------------------------------------------------------------------
 # synthesis_save_result
 # ---------------------------------------------------------------------------

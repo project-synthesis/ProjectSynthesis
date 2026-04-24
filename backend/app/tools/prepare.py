@@ -62,9 +62,13 @@ async def handle_prepare(
     # ---- Auto-resolve repo from linked repo if not provided ----
     effective_repo = await auto_resolve_repo(repo_full_name)
 
-    # Resolve strategy: explicit param → user preference → auto
+    # ---- Hoist: single PreferencesService + snapshot (parity with optimize.py) ----
+    # Single disk read + migration pass; subsequent prefs.get(...) calls reuse
+    # the in-memory snapshot instead of re-hitting disk and re-running the
+    # legacy-key migration.
     prefs = PreferencesService(DATA_DIR)
-    effective_strategy = strategy or prefs.get("defaults.strategy") or "auto"
+    prefs_snapshot = prefs.load()
+    effective_strategy = strategy or prefs.get("defaults.strategy", prefs_snapshot) or "auto"
 
     logger.info(
         "synthesis_prepare_optimization called: prompt_len=%d strategy=%s",
