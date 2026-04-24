@@ -230,6 +230,10 @@
     ev.stopPropagation();
     if (rowStateOf(item.id) !== 'idle') return;     // re-entry guard: prevents duplicate undo-toasts on rapid clicks
     setRowState(item.id, 'pending-delete');
+    // Single-row delete: cluster_id is a singular FK, so at most one cluster
+    // is affected — the literal "1 cluster" is correct by construction. The
+    // bulk path (confirmBulk → bulkSideEffectHint) instead computes the
+    // distinct count across all selected rows; the asymmetry is intentional.
     const meta = item.cluster_id ? '1 cluster will rebalance.' : undefined;
     toastsStore.push({
       kind: 'undo',
