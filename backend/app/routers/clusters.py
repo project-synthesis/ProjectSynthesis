@@ -716,6 +716,10 @@ async def match_cluster(
         ]
         match_dict["similarity"] = result.similarity
         match_dict["match_level"] = result.match_level
+        match_dict["cross_cluster_patterns"] = [
+            {"id": p.id, "pattern_text": p.pattern_text, "source_count": p.source_count}
+            for p in (result.cross_cluster_patterns or [])
+        ]
 
         return ClusterMatchResponse(match=match_dict)
     except OperationalError as exc:
