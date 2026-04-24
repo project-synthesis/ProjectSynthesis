@@ -374,3 +374,77 @@ describe('ClusterStore', () => {
     });
   });
 });
+
+describe('ClusterMatch type extensions', () => {
+  beforeEach(() => {
+    clustersStore._reset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('carries cross_cluster_patterns through the store (S4)', async () => {
+    mockFetch([
+      {
+        match: '/clusters/match',
+        response: {
+          match: {
+            cluster: { id: 'c1', label: 'L1', domain: 'backend', member_count: 3 },
+            meta_patterns: [{ id: 'mp1', pattern_text: 'p', source_count: 1 }],
+            similarity: 0.9,
+            cross_cluster_patterns: [{ id: 'gp1', pattern_text: 'g', source_count: 5 }],
+            match_level: 'cluster',
+          },
+        },
+      },
+    ]);
+    clustersStore.checkForPatterns('x'.repeat(60));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(clustersStore.suggestion?.cross_cluster_patterns).toEqual([
+      { id: 'gp1', pattern_text: 'g', source_count: 5 },
+    ]);
+  });
+
+  it('carries match_level through the store (S5)', async () => {
+    mockFetch([
+      {
+        match: '/clusters/match',
+        response: {
+          match: {
+            cluster: { id: 'c1', label: 'L1', domain: 'backend', member_count: 3 },
+            meta_patterns: [{ id: 'mp1', pattern_text: 'p', source_count: 1 }],
+            similarity: 0.9,
+            cross_cluster_patterns: [],
+            match_level: 'family',
+          },
+        },
+      },
+    ]);
+    clustersStore.checkForPatterns('x'.repeat(60));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(clustersStore.suggestion?.match_level).toBe('family');
+  });
+
+  it('applies defaults when legacy response omits the new keys (S6)', async () => {
+    mockFetch([
+      {
+        match: '/clusters/match',
+        response: {
+          match: {
+            cluster: { id: 'c1', label: 'L1', domain: 'backend', member_count: 3 },
+            meta_patterns: [{ id: 'mp1', pattern_text: 'p', source_count: 1 }],
+            similarity: 0.9,
+            // cross_cluster_patterns + match_level intentionally omitted
+          },
+        },
+      },
+    ]);
+    clustersStore.checkForPatterns('x'.repeat(60));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(clustersStore.suggestion?.cross_cluster_patterns).toEqual([]);
+    expect(clustersStore.suggestion?.match_level).toBe('cluster');
+  });
+});
