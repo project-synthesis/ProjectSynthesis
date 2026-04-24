@@ -3,12 +3,12 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from app.dependencies.rate_limit import RateLimit
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies.rate_limit import RateLimit
 from app.models import Feedback, Optimization, OptimizationPattern
 from app.services.optimization_service import VALID_SORT_COLUMNS, OptimizationService
 
