@@ -338,9 +338,18 @@
   //   - ctrl/cmd+click:  toggle this row's selection; auto-enter select
   //                      mode if idle; set this row as the range anchor.
   //   - shift+click:     extend selection from rangeAnchorIdx to clicked
-  //                      row. If no anchor, treat as ctrl+click.
+  //                      row. If no anchor, fall back to the currently-
+  //                      active row as the anchor; if there's no active
+  //                      row either, treat as a single-row add.
   //   - plain click:     the default row behaviour — load the optimization
   //                      into the editor (existing loadHistoryItem path).
+  //
+  // File-manager convention: when the user starts a modifier-click flow
+  // from an already-open row (the one loaded in the editor, marked
+  // `.history-row--active`), that row is automatically included in the
+  // selection on the first modifier-click. Without this, users had to
+  // ctrl+click the active row once to "prime" and again to add the next —
+  // contrary to how Finder, Explorer and VS Code behave.
   //
   // The row wrapper <button> native click semantics still drive keyboard
   // (Enter/Space) activation; that routes through this handler too, so
@@ -352,7 +361,26 @@
     if (toggleKey) {
       e.preventDefault();
       e.stopPropagation();
-      if (!selectMode) selectMode = true;
+      // Entering select mode via ctrl/cmd+click — seed with the currently-
+      // active row so a single ctrl+click on a DIFFERENT row produces
+      // BOTH rows selected, not just the clicked one. If the clicked row
+      // IS the active row, nothing to pre-seed (the toggle below handles it).
+      if (!selectMode) {
+        selectMode = true;
+        const activeIdx = filteredCompletedItems.findIndex(
+          i => i.trace_id === activeTraceId,
+        );
+        if (activeIdx >= 0) {
+          const activeItem = filteredCompletedItems[activeIdx];
+          if (activeItem.id !== item.id) {
+            selectedIds.add(activeItem.id);
+            // Use the active row as the seeded anchor so a subsequent
+            // shift+click extends from it; overwritten below to the
+            // just-clicked row (standard ctrl+click anchor semantics).
+            rangeAnchorIdx = activeIdx;
+          }
+        }
+      }
       if (selectedIds.has(item.id)) selectedIds.delete(item.id);
       else selectedIds.add(item.id);
       rangeAnchorIdx = idx;
@@ -362,13 +390,24 @@
     if (e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
+      // Entering select mode via shift+click — if no explicit anchor is
+      // set yet, fall back to the currently-active row. That makes
+      // shift+click from idle behave like "select from the row I'm
+      // looking at, up to the row I clicked". If there's no active
+      // row either, we treat the click as a single-row add and record
+      // it as the anchor for subsequent shift+clicks.
       if (!selectMode) selectMode = true;
       if (rangeAnchorIdx === null) {
-        // No anchor yet — treat shift+click as a single toggle and
-        // remember this row as the anchor for the next shift+click.
-        selectedIds.add(item.id);
-        rangeAnchorIdx = idx;
-        return;
+        const activeIdx = filteredCompletedItems.findIndex(
+          i => i.trace_id === activeTraceId,
+        );
+        if (activeIdx >= 0) {
+          rangeAnchorIdx = activeIdx;
+        } else {
+          selectedIds.add(item.id);
+          rangeAnchorIdx = idx;
+          return;
+        }
       }
       const [from, to] = [
         Math.min(rangeAnchorIdx, idx),
