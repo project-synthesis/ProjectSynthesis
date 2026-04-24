@@ -108,7 +108,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 |---------|------|---------|
 | Backend | 8000 | FastAPI API + pipeline orchestration |
 | Frontend | 5199 | SvelteKit dev server |
-| MCP Server | 8001 | 13-tool MCP server for IDE integration |
+| MCP Server | 8001 | 14-tool MCP server for IDE integration |
 
 ```bash
 ./init.sh start        # start all (provider detection + bridge install + health probes)
@@ -174,16 +174,17 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 
 ## MCP Integration
 
-The MCP server provides 13 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
+The MCP server provides 14 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
 
 ### Core pipeline tools
 
 | Tool | Purpose |
 |------|---------|
 | `synthesis_optimize` | Full pipeline — send a prompt, get back optimized version with scores |
-| `synthesis_analyze` | Analysis + baseline scoring — task type, weaknesses, strategy recommendation |
+| `synthesis_analyze` | Read-only analysis diagnostic — task type, weaknesses, strategy recommendation. Does not persist an `Optimization` row or assign a cluster |
 | `synthesis_prepare_optimization` | Assemble prompt + context for your IDE's LLM to process (passthrough step 1) |
 | `synthesis_save_result` | Persist the IDE LLM's result with hybrid scoring (passthrough step 3) |
+| `synthesis_delete` | Bulk-delete optimizations by id with DB cascade + per-row `optimization_deleted` SSE emission + `taxonomy_changed` reconciliation trigger |
 
 ### Workflow tools
 
@@ -211,13 +212,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2722 tests)
+# Backend tests (2923 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1323 tests)
+# Frontend tests (1335 tests)
 cd frontend && npm test
 
 # Frontend build
@@ -234,6 +235,7 @@ cd frontend && npm run build
 | `/api/refine/{id}/versions` | GET | List refinement versions |
 | `/api/refine/{id}/rollback` | POST | Fork from a version |
 | `/api/history` | GET | List past optimizations |
+| `/api/optimizations/{id}` | DELETE | Bulk-delete an optimization with DB-cascade on dependents; returns `{deleted, affected_cluster_ids, affected_project_ids}` |
 | `/api/feedback` | POST/GET | Submit/list feedback |
 | `/api/providers` | GET | Active provider info |
 | `/api/provider/api-key` | GET/PATCH/DELETE | API key management |
@@ -255,6 +257,7 @@ cd frontend && npm run build
 | `/api/clusters/stats` | GET | Q metrics + sparkline |
 | `/api/clusters/recluster` | POST | Cold-path refit |
 | `/api/clusters/activity` | GET | Taxonomy decision event feed |
+| `/api/taxonomy/reset` | POST | Admin recovery sweep — force-prune archived zero-member clusters + orphan project nodes + stale signal caches, then run warm-path reconciliation synchronously (bypasses 30s debounce). Idempotent |
 | `/api/projects` | GET | List project nodes (hybrid taxonomy, ADR-005) |
 | `/api/projects/migrate` | POST | Bulk-move optimizations between projects (rate-limited) |
 | `/api/templates` | GET | List proven templates (paginated, filter by project) |

@@ -81,7 +81,12 @@ src/lib/components/
                 # TaxonomyHealthPanel [idle Q_health/coherence/separation +
                 # sparkline] — all three Inspector sections co-located in
                 # layout/, not a subfolder), StatusBar
-  editor/       # PromptEdit, ForgeArtifact, PatternSuggestion, PassthroughView
+  editor/       # PromptEdit, ForgeArtifact (ENRICHMENT panel renders analyzer
+                # telemetry — signal source tag [bootstrap/dynamic], TASK-TYPE
+                # SCORES distribution, CONTEXT INJECTION counts, DOMAIN SIGNALS
+                # + RETRIEVAL headings, per-layer skip-reason tags; guards
+                # all-zero score vectors; handles legacy {label: score}
+                # domain_signals shape), PatternSuggestion, PassthroughView
   taxonomy/     # SemanticTopology, TopologyControls (diegetic UI — auto-hide controls,
                 # right-edge hover zone, Q key metrics, inline hint card),
                 # TopologyRenderer (growable halo pool around clusters with
