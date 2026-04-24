@@ -18,6 +18,17 @@ _storage = MemoryStorage()
 _limiter = MovingWindowRateLimiter(_storage)
 
 
+def reset_rate_limit_storage() -> None:
+    """Reset the in-memory moving-window storage. Test-only helper.
+
+    The storage is a process-level singleton, so quotas consumed by one
+    test leak into the next unless the storage is reset between runs.
+    Call from pytest fixtures (autouse or per-test) — never from
+    production code paths.
+    """
+    _storage.reset()
+
+
 class RateLimit:
     """FastAPI dependency for rate limiting.
 
