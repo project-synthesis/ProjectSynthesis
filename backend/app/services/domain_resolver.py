@@ -16,6 +16,8 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+import time
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
@@ -26,6 +28,27 @@ from app.services.pipeline_constants import DOMAIN_CONFIDENCE_GATE
 from app.utils.text_cleanup import parse_domain
 
 logger = logging.getLogger(__name__)
+
+# Confidence-aware cache TTLs (seconds). Low-confidence "general" collapses
+# use a short window so the cache self-heals when the taxonomy engine
+# later promotes the organic label; known-label and high-confidence
+# preserved resolutions are stable and use a longer window.
+CACHE_TTL_LOW_CONFIDENCE = 60.0
+CACHE_TTL_HIGH_CONFIDENCE = 3600.0
+# A subsequent call with confidence at least this much higher than the
+# cached entry's confidence bypasses the cache and re-evaluates. Prevents
+# stale "general" from starving a retry with better signal.
+CACHE_CONFIDENCE_UPGRADE_DELTA = 0.1
+
+
+@dataclass
+class _CacheEntry:
+    """A confidence-tagged resolution cached for ``expires_at - now`` seconds."""
+
+    resolved: str
+    confidence: float
+    expires_at: float  # monotonic timestamp
+
 
 # Module-level singleton — set by main.py lifespan, read by pipeline/tools
 _instance: DomainResolver | None = None
@@ -50,7 +73,7 @@ class DomainResolver:
     def __init__(self) -> None:
         self._domain_labels: set[str] = set()
         self._sub_domain_parent: dict[str, str] = {}  # sub-domain label → parent domain label
-        self._cache: dict[str, str] = {}
+        self._cache: dict[str, _CacheEntry] = {}
         self._signal_loader: Any = None
 
     @property
@@ -127,9 +150,13 @@ class DomainResolver:
                 return "general"
             primary, _ = parse_domain(domain_raw)
 
-            # Cache hit
-            if primary in self._cache:
-                return self._cache[primary]
+            # Cache hit — confidence-aware: a later call with meaningfully
+            # higher confidence bypasses a stale lower-confidence entry so
+            # an A4 retry / Haiku fallback doesn't get starved by a prior
+            # low-confidence "general" collapse.
+            cached = self._cache_get(primary, confidence)
+            if cached is not None:
+                return cached
 
             # Known domain label — accept regardless of confidence.
             # Sub-domain labels are mapped to their parent domain for
@@ -139,7 +166,7 @@ class DomainResolver:
                 # Layer 1: log signal divergence for observability
                 if self._signal_loader and raw_prompt:
                     self._log_signal_divergence(resolved, raw_prompt)
-                self._cache[primary] = resolved
+                self._cache_put(primary, resolved, confidence, CACHE_TTL_HIGH_CONFIDENCE)
                 return resolved
 
             # Unknown domain: blend signal confidence for gate decision.
@@ -160,7 +187,9 @@ class DomainResolver:
                     "Domain confidence gate: unknown '%s' blended=%.2f < %.2f → 'general'",
                     primary, blended, DOMAIN_CONFIDENCE_GATE,
                 )
-                self._cache[primary] = "general"
+                # Short TTL: this is a placeholder, not a stable resolution.
+                # A subsequent call with better signal will replace it.
+                self._cache_put(primary, "general", confidence, CACHE_TTL_LOW_CONFIDENCE)
                 return "general"
 
             # Above the preservation gate: keep primary so organic growth
@@ -173,7 +202,7 @@ class DomainResolver:
                 "Domain preservation: organic label '%s' preserved (blended=%.2f >= %.2f)",
                 primary, blended, DOMAIN_CONFIDENCE_GATE,
             )
-            self._cache[primary] = primary
+            self._cache_put(primary, primary, confidence, CACHE_TTL_HIGH_CONFIDENCE)
             return primary
         except Exception:
             logger.warning(
@@ -181,6 +210,39 @@ class DomainResolver:
                 domain_raw, exc_info=True,
             )
             return "general"
+
+    # ── cache helpers ─────────────────────────────────────────────────
+
+    def _cache_get(self, primary: str, confidence: float) -> str | None:
+        """Return a cached resolution if fresh AND the new call's confidence
+        isn't a meaningful upgrade over the cached entry.  Otherwise evict
+        and return None so the caller re-evaluates.
+        """
+        entry = self._cache.get(primary)
+        if entry is None:
+            return None
+        now = time.monotonic()
+        if now >= entry.expires_at:
+            # Expired — evict and force re-evaluation.
+            del self._cache[primary]
+            return None
+        if confidence >= entry.confidence + CACHE_CONFIDENCE_UPGRADE_DELTA:
+            # Caller has meaningfully better signal — don't serve the
+            # lower-confidence cached verdict.  Evict so the fresh
+            # resolution replaces it.
+            del self._cache[primary]
+            return None
+        return entry.resolved
+
+    def _cache_put(
+        self, primary: str, resolved: str, confidence: float, ttl_seconds: float,
+    ) -> None:
+        """Cache a resolution with the appropriate TTL and confidence tag."""
+        self._cache[primary] = _CacheEntry(
+            resolved=resolved,
+            confidence=confidence,
+            expires_at=time.monotonic() + ttl_seconds,
+        )
 
     def _blend_confidence(self, analyzer_confidence: float, raw_prompt: str) -> float:
         """Blend analyzer confidence with keyword signal confidence."""

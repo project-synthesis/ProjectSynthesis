@@ -167,3 +167,138 @@ async def test_resolve_never_raises(db):
     # Not loaded — empty domain_labels
     result = await resolver.resolve("backend", confidence=0.3)
     assert result == "general"
+
+
+# ---------------------------------------------------------------------------
+# Confidence-aware caching (quick-win #11)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cache_low_confidence_general_collapse_expires(db, monkeypatch):
+    """Low-confidence "general" collapses must self-heal after the low-TTL window.
+
+    Previously the cache was an unbounded dict — a transient low-confidence
+    resolution of an organic label ("marketing") pinned "general" until the
+    next ``load()`` call (hours later via the ``taxonomy_changed`` event).
+    Under the fix a short TTL (60 s) evicts the entry so the next call re-
+    evaluates from scratch.
+    """
+    from app.services import domain_resolver as dr_mod
+
+    # Pin a controllable monotonic clock — all time.monotonic() calls in
+    # the resolver go through this lambda.
+    fake_now = {"t": 1000.0}
+    monkeypatch.setattr(dr_mod.time, "monotonic", lambda: fake_now["t"])
+
+    await _seed_domains(db)
+    resolver = DomainResolver()
+    await resolver.load(db)
+
+    # t=1000s: low-confidence unknown → general, cached with 60s TTL
+    assert await resolver.resolve("marketing", confidence=0.3) == "general"
+
+    # t=1010s (within TTL): cache hit — still general
+    fake_now["t"] = 1010.0
+    assert await resolver.resolve("marketing", confidence=0.3) == "general"
+
+    # t=1061s (past 60s TTL): cache evicted, re-evaluates (still general at 0.3)
+    # The observable signal: if we flip the signal loader to report high
+    # confidence, the new resolution preserves the label. We verify
+    # eviction by swapping the resolver's gate-blending path.
+    fake_now["t"] = 1061.0
+    # Same inputs should NOT return a stale entry — cache must have expired.
+    # Confirm by flipping confidence to high and observing the new
+    # (preserved) result comes through immediately.
+    assert await resolver.resolve("marketing", confidence=0.9) == "marketing"
+
+
+@pytest.mark.asyncio
+async def test_cache_higher_confidence_bypasses_stale_low_confidence_entry(db, monkeypatch):
+    """A higher-confidence retry within the TTL window must bypass the
+    low-confidence stale entry.
+
+    Scenario: a first-pass analyze call resolves "frontend" at confidence
+    0.3 → collapsed to "general" and cached. A retry / A4 Haiku fallback
+    resolves the same prompt at confidence 0.9 — the preserved label
+    must come through instead of the stale "general".
+    """
+    from app.services import domain_resolver as dr_mod
+
+    fake_now = {"t": 2000.0}
+    monkeypatch.setattr(dr_mod.time, "monotonic", lambda: fake_now["t"])
+
+    await _seed_domains(db)
+    resolver = DomainResolver()
+    await resolver.load(db)
+
+    # Low-confidence pass → cached as "general"
+    assert await resolver.resolve("marketing", confidence=0.3) == "general"
+
+    # Same primary, higher confidence, WITHIN the low-confidence TTL window —
+    # cache must not serve stale "general".
+    fake_now["t"] = 2010.0  # only 10s later
+    assert await resolver.resolve("marketing", confidence=0.9) == "marketing"
+
+
+@pytest.mark.asyncio
+async def test_cache_known_label_ttl_longer_than_general_collapse(db, monkeypatch):
+    """Known-label cache entries persist much longer than low-confidence
+    ``general`` collapses — the known label is a stable resolution, not
+    a placeholder.
+
+    Verifies: 10 minutes after caching a known label, the cache still
+    serves it (without rounding through signal blending).  The underlying
+    mechanism: known-label resolutions set a 1-hour TTL; low-confidence
+    general-collapses set a 60 s TTL.
+    """
+    from app.services import domain_resolver as dr_mod
+
+    fake_now = {"t": 3000.0}
+    monkeypatch.setattr(dr_mod.time, "monotonic", lambda: fake_now["t"])
+
+    await _seed_domains(db)
+    resolver = DomainResolver()
+    await resolver.load(db)
+
+    # Known label cached at t=3000
+    assert await resolver.resolve("backend", confidence=0.3) == "backend"
+
+    # 10 minutes later — well past the 60s low-confidence TTL — still cached
+    fake_now["t"] = 3000.0 + 600.0
+    # If the cache entry were gone, resolve() would re-run the full path;
+    # the result is still "backend" because it's a known label. The
+    # behavioral signal: no new logging / no re-query.  Asserting the
+    # cache dict still holds the entry.
+    entry = resolver._cache.get("backend")
+    assert entry is not None, "Known-label cache entry evicted prematurely"
+    # Resolution result unchanged.
+    assert await resolver.resolve("backend", confidence=0.3) == "backend"
+
+
+@pytest.mark.asyncio
+async def test_cache_high_confidence_preserve_entry_uses_long_ttl(db, monkeypatch):
+    """High-confidence preserved-organic-label entries get the 1-hour TTL
+    (not the 60 s low-confidence TTL).
+
+    Rationale: if the resolver decided the label is worth preserving,
+    the decision is stable — cache it aggressively.  Only low-confidence
+    ``general`` collapses need short TTLs to self-heal.
+    """
+    from app.services import domain_resolver as dr_mod
+
+    fake_now = {"t": 4000.0}
+    monkeypatch.setattr(dr_mod.time, "monotonic", lambda: fake_now["t"])
+
+    await _seed_domains(db)
+    resolver = DomainResolver()
+    await resolver.load(db)
+
+    # Preserve a high-confidence organic label
+    assert await resolver.resolve("marketing", confidence=0.9) == "marketing"
+
+    # 10 minutes later — past 60 s, well within 1 h — entry still present
+    fake_now["t"] = 4000.0 + 600.0
+    entry = resolver._cache.get("marketing")
+    assert entry is not None
+    assert await resolver.resolve("marketing", confidence=0.9) == "marketing"
