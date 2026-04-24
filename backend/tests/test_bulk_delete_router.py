@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 
 from app.models import Optimization
 from app.services.event_bus import event_bus
+from tests.conftest import drain_events_nonblocking as _drain_events_nonblocking
 
 
 @pytest.fixture(autouse=True)
@@ -48,9 +49,6 @@ def _reset_rate_limit_storage():
 
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-from tests.conftest import drain_events_nonblocking as _drain_events_nonblocking
 
 
 async def _seed_opt(db_session, *, cluster_id: str | None = None) -> str:
