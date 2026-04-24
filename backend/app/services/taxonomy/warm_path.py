@@ -930,6 +930,29 @@ async def execute_warm_path(
         logger.warning("Phase 4.75 (task-type signals) failed (non-fatal): %s", _tt_exc)
 
     # ------------------------------------------------------------------
+    # Phase 4.76: Active-learning signal adjuster (#3)
+    # Consume TaskTypeTelemetry rows — tokens that recur in Haiku-
+    # classified prompts for the same task_type are merged into the
+    # signal table so the heuristic learns from the ambiguous cases.
+    # Runs AFTER Phase 4.75 so its additions layer on top of the fresh
+    # TF-IDF extraction instead of being overwritten by it.
+    # ------------------------------------------------------------------
+    try:
+        async with session_factory() as db:
+            from app.services.signal_adjuster import adjust_signals_from_telemetry
+            adjust_result = await adjust_signals_from_telemetry(db)
+            if adjust_result.signals_added:
+                logger.info(
+                    "Phase 4.76 (signal adjuster): %d signals added from %d "
+                    "telemetry rows (task_types: %s)",
+                    adjust_result.signals_added,
+                    adjust_result.rows_processed,
+                    sorted(adjust_result.task_types_touched),
+                )
+    except Exception as _adj_exc:
+        logger.warning("Phase 4.76 (signal adjuster) failed (non-fatal): %s", _adj_exc)
+
+    # ------------------------------------------------------------------
     # Maintenance group: Phases 5, 5.5, 6 + snapshot pruning
     # Delegated to execute_maintenance_phases() which handles discovery
     # retry and error isolation independently.
