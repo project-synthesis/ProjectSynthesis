@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from app.dependencies.rate_limit import RateLimit
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -189,6 +190,79 @@ async def delete_optimization(
     return DeleteOptimizationResponse(
         deleted=result.deleted,
         requested=1,
+        affected_cluster_ids=sorted(result.affected_cluster_ids),
+        affected_project_ids=sorted(result.affected_project_ids),
+    )
+
+
+class BulkDeleteRequest(BaseModel):
+    """Request body for POST /api/optimizations/delete.
+
+    Bulk-capable delete endpoint that mirrors the service primitive's
+    bulk semantics. Single-item callers should prefer the single
+    DELETE /api/optimizations/{id} endpoint for REST purity; the UI
+    uses this one uniformly (ids=[id] for single).
+    """
+
+    ids: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Optimization ids to delete (1-100 at a time).",
+    )
+    reason: str = Field(
+        default="user_request",
+        max_length=64,
+        description="Audit-trail reason propagated on the optimization_deleted event.",
+    )
+
+
+class DeleteOptimizationsResponse(BaseModel):
+    """Envelope returned by POST /api/optimizations/delete.
+
+    Isomorphic with DeleteOptimizationResponse (single endpoint). The
+    ``requested`` field lets the UI diff ``deleted`` vs ``requested`` to
+    show 'X deleted, Y were already gone' without a second call.
+    """
+
+    deleted: int = Field(description="Rows actually removed.")
+    requested: int = Field(description="Rows the caller asked to delete.")
+    affected_cluster_ids: list[str] = Field(
+        default_factory=list,
+        description="Cluster ids whose member counts need reconciliation.",
+    )
+    affected_project_ids: list[str] = Field(
+        default_factory=list,
+        description="Project ids whose opt counts need reconciliation.",
+    )
+
+
+@router.post(
+    "/optimizations/delete",
+    response_model=DeleteOptimizationsResponse,
+    dependencies=[Depends(RateLimit(lambda: "10/minute"))],
+)
+async def bulk_delete_optimizations(
+    body: BulkDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DeleteOptimizationsResponse:
+    """Delete 1-100 optimizations in a single call.
+
+    Thin HTTP translator on top of
+    ``OptimizationService.delete_optimizations``. The service emits one
+    ``optimization_deleted`` event per deleted row and a single
+    aggregated ``taxonomy_changed`` event at the end — exactly the
+    behavior the UI needs for surgical SSE updates.
+
+    No 404 translation here (unlike the single endpoint): when some ids
+    don't exist, ``deleted < requested`` and the caller diffs. Matches
+    the service contract.
+    """
+    svc = OptimizationService(db)
+    result = await svc.delete_optimizations(body.ids, reason=body.reason)
+    return DeleteOptimizationsResponse(
+        deleted=result.deleted,
+        requested=len(body.ids),
         affected_cluster_ids=sorted(result.affected_cluster_ids),
         affected_project_ids=sorted(result.affected_project_ids),
     )
