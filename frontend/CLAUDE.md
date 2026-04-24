@@ -70,7 +70,10 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 ```
 src/lib/components/
   layout/       # ActivityBar (sliding tab indicator), Navigator (182-line shell
-                # delegating to 8 focused panels: StrategiesPanel, HistoryPanel,
+                # delegating to 8 focused panels: StrategiesPanel, HistoryPanel
+                # [row × grace-window delete via toastsStore; multi-select +
+                # file-manager keyboard grammar — Ctrl/Cmd+Click auto-seed,
+                # Shift+Click range, Ctrl+A, Esc, Delete/Backspace; bulk 404 fallback],
                 # GitHubPanel, SettingsPanel, ClusterRow, DomainGroup,
                 # StateFilterTabs, TemplatesSection — all Navigator sidebar logic
                 # lives in these panel files), ClusterNavigator (reads
@@ -111,7 +114,9 @@ src/lib/components/
                 # DiffView, Logo, MarkdownRenderer (pseudo-XML sanitizer for
                 # optimizer wrapper tags), PassthroughGuide, SamplingGuide,
                 # InternalGuide, TierGuide, TierBadge, ProviderBadge, ScoreCard,
-                # Toast, UpdateBadge
+                # Toast, UpdateBadge, UndoToast (grace-window toast — RAF progress,
+                # pause-on-hover, commit fires on timer expiry so Undo skips the
+                # round-trip), DestructiveConfirmModal (`DELETE` literal gate)
   landing/      # Navbar, Footer, ContentPage, HeroSection, CardGrid, ProseSection,
                 # CodeBlock, MetricBar, StepFlow, Timeline
 ```
@@ -156,6 +161,7 @@ Events received at `/api/events` via `EventSource`. Types that drive UI reactivi
 | Event | UI Effect |
 |-------|-----------|
 | `optimization_created/analyzed/failed` | History auto-refresh, toast notifications. MCP events auto-load via `forgeStore.loadFromRecord()` |
+| `optimization_deleted` | Root `+page.svelte` bridges to DOM `CustomEvent('optimization-deleted')`; `HistoryPanel` surgically removes the row (no full re-fetch). 2-s fallback timeout covers SSE reconnect gaps. Dedicated event (not bundled into `optimization-event`) so consumers target the specific `id` |
 | `optimization_status/score_card/start` | Routed through `forgeStore.handleExternalEvent()` (single code path for MCP + web) |
 | `feedback_submitted` | Inspector feedback state sync + `editorStore.cacheFeedback()` |
 | `refinement_turn` | Refinement timeline update + `refinementStore.reloadTurns()` for cross-tab sync |
