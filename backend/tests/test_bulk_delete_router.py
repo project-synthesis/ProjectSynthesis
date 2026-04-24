@@ -50,6 +50,20 @@ def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _drain_events_nonblocking(queue: asyncio.Queue) -> list[dict]:
+    """Drain all events currently in the queue without awaiting — events
+    are published synchronously inside ``delete_optimizations`` (the
+    publish method itself is sync even though subscribers are async),
+    so they're already in the queue by the time the POST returns.
+    """
+    events: list[dict] = []
+    while True:
+        try:
+            events.append(queue.get_nowait())
+        except asyncio.QueueEmpty:
+            return events
+
+
 async def _seed_opt(db_session, *, cluster_id: str | None = None) -> str:
     opt_id = str(uuid.uuid4())
     db_session.add(
@@ -163,3 +177,51 @@ async def test_bulk_delete_rate_limit(app_client, db_session):
     # 11th is 429 per the 10/minute limit.
     assert statuses[:10].count(200) == 10
     assert statuses[10] == 429
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_emits_n_optimization_deleted_events(
+    app_client, db_session,
+):
+    """One optimization_deleted event per deleted row."""
+    ids = [await _seed_opt(db_session) for _ in range(3)]
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    event_bus._subscribers.add(queue)
+    try:
+        resp = await app_client.post(
+            "/api/optimizations/delete", json={"ids": ids}
+        )
+        assert resp.status_code == 200
+        events = _drain_events_nonblocking(queue)
+    finally:
+        event_bus._subscribers.discard(queue)
+
+    deleted_events = [e for e in events if e.get("event") == "optimization_deleted"]
+    assert len(deleted_events) == 3
+    for e in deleted_events:
+        assert e["data"]["reason"] == "user_request"
+        assert e["data"]["id"] in ids
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_emits_single_taxonomy_changed_event(
+    app_client, db_session,
+):
+    """Exactly one taxonomy_changed event per bulk call, regardless of N."""
+    ids = [await _seed_opt(db_session) for _ in range(5)]
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    event_bus._subscribers.add(queue)
+    try:
+        resp = await app_client.post(
+            "/api/optimizations/delete", json={"ids": ids}
+        )
+        assert resp.status_code == 200
+        events = _drain_events_nonblocking(queue)
+    finally:
+        event_bus._subscribers.discard(queue)
+
+    taxonomy_events = [e for e in events if e.get("event") == "taxonomy_changed"]
+    assert len(taxonomy_events) == 1
+    assert taxonomy_events[0]["data"].get("trigger") == "bulk_delete"
