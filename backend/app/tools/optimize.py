@@ -21,6 +21,7 @@ from app.services.pipeline import PipelineOrchestrator
 from app.services.preferences import PreferencesService
 from app.services.project_service import resolve_repo_project
 from app.services.routing import RoutingContext
+from app.services.sampling_pipeline import run_sampling_pipeline
 from app.tools._shared import (
     DATA_DIR,
     auto_resolve_repo,
@@ -162,22 +163,30 @@ async def handle_optimize(
         logger.info("synthesis_optimize: tier=sampling reason=%r", decision.reason)
         if not ctx or not hasattr(ctx, "session") or not ctx.session:
             raise ValueError("Sampling tier selected but no MCP session available")
-        from app.providers.sampling import MCPSamplingProvider
-        mcp_provider = MCPSamplingProvider(ctx)
+        try:
+            result = await run_sampling_pipeline(
+                ctx,
+                prompt,
+                effective_strategy if effective_strategy != "auto" else None,
+                repo_full_name=effective_repo,
+                project_id=_effective_project_id,
+                applied_pattern_ids=applied_pattern_ids,
+                codebase_context=enrichment.codebase_context,
+                heuristic_task_type=enrichment.task_type,
+                heuristic_domain=enrichment.domain_value,
+                divergence_alerts=enrichment.divergence_alerts,
+                pre_resolved_strategy_intelligence=enrichment.strategy_intelligence,
+                enrichment_profile=enrichment.enrichment_meta.get("enrichment_profile"),
+            )
+        except Exception as exc:
+            logger.error("synthesis_optimize sampling pipeline error: %s", exc)
+            await _persist_sampling_failure(prompt, effective_strategy, exc)
+            raise ValueError(str(exc)) from exc
+        return _sampling_result_to_output(result)
 
-        provider = mcp_provider
-        provider_instances = None
-        if decision.providers_by_phase:
-            provider_instances = {}
-            for phase, p_tier in decision.providers_by_phase.items():
-                if p_tier == "sampling":
-                    provider_instances[phase] = mcp_provider
-                elif p_tier == "internal" and decision.provider:
-                    provider_instances[phase] = decision.provider
-    else:
-        logger.info("synthesis_optimize: tier=internal provider=%s reason=%r", decision.provider_name, decision.reason)
-        provider = decision.provider
-        provider_instances = None
+    logger.info("synthesis_optimize: tier=internal provider=%s reason=%r", decision.provider_name, decision.reason)
+    provider = decision.provider
+    provider_instances = None
 
     start = time.monotonic()
 

@@ -18,6 +18,7 @@ from app.services.heuristic_scorer import HeuristicScorer
 from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.routing import RoutingContext
+from app.services.sampling.analyze import run_sampling_analyze
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
 from app.tools._shared import DATA_DIR, get_domain_resolver, get_routing
@@ -44,26 +45,31 @@ async def handle_analyze(
     provider = decision.provider
 
     if decision.tier not in ("internal", "sampling"):
-        raise ValueError(f"Unsupported tier: {decision.tier}")
+        raise ValueError("synthesis_analyze requires a local provider or MCP sampling")
 
     if decision.tier == "sampling":
         logger.info("synthesis_analyze: tier=sampling prompt_len=%d reason=%r", len(prompt), decision.reason)
-        if ctx and hasattr(ctx, "session") and ctx.session:
-            from app.providers.sampling import MCPSamplingProvider
-            provider = MCPSamplingProvider(ctx)
-            # Check if hybrid routing provided an internal provider for analyze
-            analyze_internal = (
-                decision.providers_by_phase
-                and decision.providers_by_phase.get("analyze") == "internal"
-                and decision.provider
-            )
-            if analyze_internal:
-                provider = decision.provider
-        else:
+        if not (ctx and hasattr(ctx, "session") and ctx.session):
             raise ValueError("Sampling tier selected but no MCP session available")
-    elif decision.tier == "internal":
-        provider = decision.provider
+        raw = await run_sampling_analyze(ctx, prompt)
+        return AnalyzeOutput(
+            optimization_id=raw.get("optimization_id"),
+            task_type=raw.get("task_type", "general"),
+            weaknesses=raw.get("weaknesses", []),
+            strengths=raw.get("strengths", []),
+            selected_strategy=raw.get("selected_strategy", "auto"),
+            strategy_rationale=raw.get("strategy_rationale", ""),
+            confidence=float(raw.get("confidence", 0.7)),
+            baseline_scores=raw.get("baseline_scores", {}),
+            overall_score=float(raw.get("overall_score", 5.0)),
+            duration_ms=int(raw.get("duration_ms", 0)),
+            next_steps=raw.get("next_steps", []),
+            optimization_ready=raw.get("optimization_ready", {"strategy": raw.get("selected_strategy", "auto")}),
+            intent_label=raw.get("intent_label") or "general",
+            domain=raw.get("domain") or "general",
+        )
 
+    provider = decision.provider
     if provider is None:
         raise ValueError("No LLM provider available.")
 
