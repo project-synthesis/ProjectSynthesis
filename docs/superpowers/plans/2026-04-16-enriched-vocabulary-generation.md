@@ -1,5 +1,7 @@
 # Enriched Vocabulary Generation Implementation Plan
 
+**Status:** Shipped (v0.3.34). `generate_qualifier_vocabulary()` receives `ClusterVocabContext` dataclass with per-cluster centroid similarity matrix (`_VOCAB_SIM_HIGH=0.7`/`_VOCAB_SIM_LOW=0.3`, `None` for unknown pairs), intent labels, and `domain_raw` qualifier distribution. Quality metric emitted via `vocab_generated_enriched` event; `avg_vocab_quality` surfaced in `/api/health`. Historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Enrich Haiku's vocabulary generation input with cluster centroid similarity matrix, member intent_labels, and domain_raw qualifier distribution so it produces naturally discriminative keyword groups in a single LLM call.

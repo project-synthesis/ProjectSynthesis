@@ -1,5 +1,7 @@
 # Unified Taxonomy Lifecycle Implementation Plan
 
+**Status:** Shipped (v0.3.35). `_dissolve_node()` shared primitive for both domain and sub-domain dissolution (reparent, merge meta-patterns, archive, clear indices + resolver + signal loader). `_reevaluate_domains()` + `_reevaluate_sub_domains()` + `dissolved_this_cycle` flip-flop guard. Historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Unify domain and sub-domain lifecycle with shared dissolution core, domain re-evaluation, bottom-up sub-domain anchoring, and seed domain protection removal.

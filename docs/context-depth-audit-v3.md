@@ -2,7 +2,7 @@
 
 **Predecessors**: V1 (retrieval pipeline tuning), V2 (agentic executor analysis + signal matrix)
 **Date**: 2026-04-11
-**Status**: Baseline established. Ready for Phase 2 (exemplar retrieval) and diverse prompt validation.
+**Status**: Historical — baseline snapshot from 2026-04-11. The Phase 2 observability items (`ContextDiagnostic` panel) landed in v0.3.27; the broader enrichment pipeline consolidated in v0.3.30 (see `docs/enrichment-consolidation-action-items.md`). For current live architecture refer to `backend/CLAUDE.md` → "Codebase context" + "Context enrichment".
 
 ## Current System State
 

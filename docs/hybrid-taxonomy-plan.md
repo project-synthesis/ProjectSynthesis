@@ -1,6 +1,8 @@
 # Hybrid Taxonomy Architecture — Implementation Plan
 
-_Date: 2026-04-19 — decisions locked, execution in progress_
+_Date: 2026-04-19 — decisions locked, execution shipped in v0.4.0 (2026-04-19)_
+
+**Status:** Implemented. This doc is retained as the canonical locked-decision record linked from ADR-005 Amendment (2026-04-19). See `backend/alembic/versions/d9e0f1a2b3c4_add_dominant_project_id_to_prompt_cluster.py` for the schema migration, `VISIBILITY_THRESHOLD_FRACTION` in `pipeline_constants.py:52`, `scripts/taxonomy-reset.sh`, and the CHANGELOG entry for v0.4.0 "ADR-005 Hybrid Taxonomy — projects as sibling roots" for the full shipped surface.
 
 ## Context
 

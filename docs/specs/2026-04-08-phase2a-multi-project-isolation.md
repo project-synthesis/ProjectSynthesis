@@ -3,7 +3,7 @@
 **Date:** 2026-04-08
 **ADR:** [ADR-005](../adr/ADR-005-taxonomy-scaling-architecture.md) (Phase 2, items 1-3, 5)
 **Depends on:** Phase 1 (complete) — EXCLUDED_STRUCTURAL_STATES, Legacy project node, project_id on Optimization, dirty-set, EmbeddingIndex project_filter
-**Status:** Approved design, pending implementation
+**Status:** Superseded — the original "project as tree parent" model was revised to the Hybrid Taxonomy (projects as sibling roots at `parent_id=NULL`) in ADR-005 Amendment 2026-04-19, shipped as v0.4.0 (commit range `ab07fd30…c1ab12f7`). Scope items 1–3 + 5 shipped under the amended model. This spec is retained as the Phase 2A historical record; the live architecture lives in `docs/hybrid-taxonomy-plan.md` and ADR-005 Amendment.
 
 **Scope note:** GlobalPattern lifecycle (ADR-005 Phase 2 item 4) is in a separate spec: Phase 2B.
 

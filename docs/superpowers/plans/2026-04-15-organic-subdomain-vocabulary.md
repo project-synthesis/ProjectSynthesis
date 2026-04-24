@@ -1,5 +1,7 @@
 # Organic Sub-Domain Vocabulary Implementation Plan
 
+**Status:** Shipped (v0.3.32). Static `_DOMAIN_QUALIFIERS` removed; Haiku-generated vocabulary (`generated_qualifiers` in domain node metadata) is now primary, with TF-IDF `signal_keywords` as fallback. `DomainSignalLoader` caches + serves the organic vocabulary. Historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the static `_DOMAIN_QUALIFIERS` dict with fully organic LLM-generated vocabulary so all domains discover sub-domains through the same pipeline.

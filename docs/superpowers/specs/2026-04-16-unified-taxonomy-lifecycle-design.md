@@ -1,5 +1,7 @@
 # Unified Taxonomy Lifecycle: Domain + Sub-Domain Discovery and Dissolution
 
+**Status:** Shipped (v0.3.35). Shared `_dissolve_node()` primitive handles both domain and sub-domain dissolution. `_reevaluate_domains()` (5 guards: general permanent, sub-domain anchor, ≥48h age, ≤5 member ceiling, Source-1 consistency <15% with 45-pt hysteresis) + `_reevaluate_sub_domains()` (consistency < 0.25 floor). Seed domains have no special protection per ADR-006. `dissolved_this_cycle` flip-flop guard. Historical record.
+
 **Goal:** Unify domain and sub-domain lifecycle into a shared organic system with re-evaluation and graceful dissolution at both hierarchy levels. Remove seed domain protection so the taxonomy is fully organic from day one. Aligns with ADR-006 (Universal Prompt Engine).
 
 **Problem:** Domain discovery and sub-domain discovery are currently separate mechanisms with different signal sources, different lifecycle rules, and asymmetric behavior. Domains are created from "general" using only `domain_raw` primary labels, never re-evaluated, never dissolved, and seed domains are permanently protected. This means:

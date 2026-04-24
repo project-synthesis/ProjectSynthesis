@@ -1,5 +1,7 @@
 # Enriched Vocabulary Generation with Embedding-Aware Context
 
+**Status:** Shipped (v0.3.34). `generate_qualifier_vocabulary()` accepts `ClusterVocabContext` dataclass containing per-cluster centroid similarity matrix (`None` for unknown cells), intent labels, `domain_raw` qualifier distribution. Quality metric emitted via `vocab_generated_enriched` event. Historical record.
+
 **Goal:** Give Haiku the embedding geometry, member intents, and existing domain_raw qualifier distribution as input context when generating qualifier vocabulary, so it produces naturally discriminative keyword groups aligned with actual cluster boundaries — in a single LLM call.
 
 **Problem:** Haiku currently generates qualifier vocabulary from cluster labels alone (3-5 word summaries). It has no visibility into:

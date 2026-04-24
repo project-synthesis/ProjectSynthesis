@@ -6,15 +6,25 @@
 
 | Phase | Description | Status |
 |-------|------------|--------|
-| Phase 1 | Task-gated curated retrieval | **Shipped** |
-| Phase 2 | Strategy intelligence consolidation (merge L4+L6) | **Shipped** |
-| Phase 3 | Workspace guidance collapse into codebase context | **Shipped** |
-| Phase 4 | Enrichment profiles A/B/C | **Shipped** |
-| Phase 5 | Cleanup and documentation | **Shipped** |
-| Sprint 1 | A1 compound keywords + A2 verb disambiguation | **Shipped** |
-| Sprint 2 | C1+E1+B1+B2+A3+A4 (6 items) | **Shipped** |
+| Phase 1 | Task-gated curated retrieval | **Shipped** (v0.3.30) |
+| Phase 2 | Strategy intelligence consolidation (merge L4+L6) | **Shipped** (v0.3.30) |
+| Phase 3 | Workspace guidance collapse into codebase context | **Shipped** (v0.3.30) |
+| Phase 4 | Enrichment profiles A/B/C | **Shipped** (v0.3.30) |
+| Phase 5 | Cleanup and documentation | **Shipped** (v0.3.30) |
+| Sprint 1 | A1 compound keywords + A2 verb disambiguation | **Shipped** (v0.3.30) |
+| Sprint 2 | C1+E1+B1+B2+A3+A4 (6 items) | **Shipped** (v0.3.30) |
+| Hardening | Negation-aware weakness detection + structural density guard | **Shipped** (v0.4.2) |
+| Hardening | Intent-label strategy routing (audit/debug/extract intents) | **Shipped** (v0.4.2) |
+| Hardening | `reconcile_domain_signals()` + runner-up suppression | **Shipped** (v0.4.2) |
+| Hardening | Analyze effort ceiling (`ANALYZE_EFFORT_CEILING='high'`) | **Shipped** (v0.4.2) |
+| Hardening | A4 LLM classification retry wrapping | **Shipped** (v0.4.0) |
+| Hardening | `TaskTypeTelemetry` persistent record | **Shipped** (v0.4.2) |
+| C2 | Heuristic-to-LLM signal-weight adjuster from telemetry | **Open** — see ROADMAP "LLM domain classification — remaining optimizations" |
+| E1b | Cross-process heuristic-vs-LLM agreement bridge | **Open** (telemetry persisted; HTTP forwarding not yet wired) |
 
-**Test coverage** (v0.3.30, 2026-04-13): 2107 backend tests, 1038 frontend tests, 0 errors, 0 warnings.
+**Test coverage** at v0.3.30 baseline: 2107 backend tests, 1038 frontend tests.
+
+**Test coverage** at v0.4.3 (2026-04-24): 194 backend test files / ~2,855 test functions; 87 frontend test files / ~1,379 test cases.
 
 ---
 

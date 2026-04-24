@@ -1,5 +1,7 @@
 # Warm Path Maintenance Decoupling Implementation Plan
 
+**Status:** Shipped. Two warm-path execution groups: lifecycle (Phases 0–4, dirty-cluster-gated) + maintenance (Phases 5–6, cadence-gated via `MAINTENANCE_CYCLE_INTERVAL=6` + `_maintenance_pending` retry flag). `execute_maintenance_phases()` runs independently of dirty clusters; each sub-step in Phase 4.5 wraps `begin_nested()` so transient failures don't poison the transaction. Historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Decouple maintenance phases (discovery, archival, audit) from the dirty-cluster gate so they run on their own cadence, surviving transient errors and idle periods.

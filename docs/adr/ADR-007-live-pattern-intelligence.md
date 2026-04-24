@@ -1,6 +1,6 @@
 # ADR-007: Live Pattern Intelligence — Real-Time Context Awareness During Prompt Authoring
 
-**Status:** Accepted (design — pre-implementation)
+**Status:** Accepted (design — pre-implementation). Confirmed still unshipped as of v0.4.3 (2026-04-24). None of Tiers 1–3 (live pattern matching, enrichment preview, proactive hints) nor the `POST /api/clusters/preview-enrichment` endpoint nor the `ContextPanel.svelte` sidebar exist in the codebase. Tracked on the ROADMAP under "Live pattern intelligence".
 **Date:** 2026-04-13
 **Authors:** Human + Claude Opus 4.6
 

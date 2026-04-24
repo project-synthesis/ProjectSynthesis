@@ -1,6 +1,10 @@
 # Heuristic Analyzer Audit Report
 
+_Last reviewed: 2026-04-24. Reflects the `task_type_classifier.py` + `domain_detector.py` + `weakness_detector.py` split shipped in v0.4.1 (Phase 3F)._
+
 This document outlines the architecture, integration points, and business logic of the `HeuristicAnalyzer` across the Project Synthesis codebase. It specifically details where the heuristic analysis operates completely autonomously and where it interfaces with internal LLMs (Haiku) to fall back or enrich its context.
+
+As of v0.4.1, `heuristic_analyzer.py` is a thin orchestrator (~715 lines) that delegates to three sub-modules: `task_type_classifier.py` (A1 compound keywords, A2 verb/noun disambiguation, A4 Haiku LLM fallback, `_TASK_TYPE_SIGNALS` / `_STATIC_SINGLE_SIGNALS` / `_TASK_TYPE_EXTRACTED` registries, `has_technical_nouns()` B2 rescue-path helper), `domain_detector.py` (`DomainSignalLoader` shim, `classify_domain`, `enrich_domain_qualifier`), and `weakness_detector.py` (`_is_negated()` + `_compute_structural_density()` aware pattern detection).
 
 ## 1. Core Architecture & Responsibilities
 
@@ -48,14 +52,14 @@ Then the system triggers `classify_with_llm()`, an orchestrated call to the loca
 ### Why Haiku?
 Haiku is optimized for ultra-low latency categorization. The orchestrator uses Haiku to quickly review the prompt and return a structured classification string containing a forced `task_type` and `domain`. Because this happens before optimization begins, relying on Haiku prevents high latency penalties from propagating into the core prompt-engineering pipeline.
 
-## 4. Sub-Domain Taxonomy Operations (Background Haiku Usage)
+## 4. Sub-Domain Taxonomy Operations (Background LLM Usage)
 
-Outside the request lifecycle, the `HeuristicAnalyzer` shares deep integration overlaps with the **Taxonomy/Clustering layer** where Haiku plays a dominant role.
+Outside the request lifecycle, the `HeuristicAnalyzer` shares deep integration overlaps with the **Taxonomy/Clustering layer** where background LLM calls dominate.
 
-- **Vocabulary Generation (`labeling.py` & `domain_detector.py`)**: During Phase 5 of the Warm Path background maintenance cycles, Haiku generates new taxonomical labels and vocabulary based on growing cluster centroids. 
-- **`DomainSignalLoader`**: Organically digests the Haiku labels into heuristic signals which the `HeuristicAnalyzer` then relies upon in real-time. This essentially creates a self-healing taxonomy loop: Haiku clusters and defines terms asynchronously in the backend -> The Analyzer uses those terms to route live traffic instantly via regex/signals.
-- **Pattern Extraction (`family_ops.py`)**: Haiku extracts meta-patterns from completed pipelines to seed future heuristic associations.
-- **Codebase Exploration (`codebase_explorer.py`)**: Background generation of architectural `.md` summaries.
+- **Vocabulary Generation (`taxonomy/labeling.py::generate_qualifier_vocabulary()`)**: During warm-path Phase 4.95 and Phase 5, Haiku generates organic qualifier vocabularies per domain from cluster labels + centroid similarity matrix + intent labels + `domain_raw` qualifier distribution (structured as `ClusterVocabContext`). Output is cached in the domain node's `cluster_metadata["generated_qualifiers"]` and consumed via `DomainSignalLoader`. Quality metric emitted via `vocab_generated_enriched` event; `avg_vocab_quality` is surfaced in `/api/health`.
+- **`DomainSignalLoader`**: Organically digests the Haiku-generated vocabularies + TF-IDF signal keywords + static `signal_keywords` metadata into heuristic signals which `domain_detector.classify_domain()` then relies upon in real-time. This creates a self-healing taxonomy loop: Haiku clusters and enriches vocabularies asynchronously in the background → the analyzer uses those terms to route live traffic instantly.
+- **Pattern Extraction (`family_ops.py` + `extract_patterns.md` template)**: Haiku extracts meta-patterns from completed pipelines to seed future pattern injection. Cross-cluster promotions surface via `GlobalPattern` (cross-project gate enforced).
+- **Codebase Exploration (`codebase_explorer.py`)**: Background generation of architectural explore syntheses — routed to **Sonnet** as of v0.4.0 (long-context reading favors Sonnet; Haiku 4.5 truncates early on 30-80K-char file payloads). Output cached in `RepoIndexMeta.explore_synthesis` per repo/branch/SHA, so Sonnet runs ~once per link rather than per request. Per-run JSONL trace emitted via `phase="explore_synthesis"`.
 
 ## Summary
 The `HeuristicAnalyzer` effectively functions as the primary **CPU-bound gateway**, gating the expensive, token-heavy LLM calls. It only yields its classification responsibilities to Haiku precisely when inputs violate structural assumptions (the A4 hook). This dual system ensures semantic correctness while maintaining optimal runtime velocity.

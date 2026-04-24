@@ -2,7 +2,7 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.4.1-dev (latest release: v0.4.0). Reflects shipped state as of 2026-04-19.
+**Snapshot:** v0.4.4-dev (latest release: v0.4.3). Reflects shipped state as of 2026-04-24.
 
 ## Conventions
 
@@ -167,28 +167,27 @@ Living document tracking planned improvements. Items are prioritized but not sch
 ---
 
 ### MCP routing fallback — per-client capability awareness
-**Status:** Planned
-**Context:** MCP tool calls from non-sampling clients (e.g., Claude Code) are routed to the sampling tier when a sampling-capable client (VS Code bridge) is also connected. The call fails with "Method not found" because the calling client doesn't support `sampling/createMessage`. The internal provider is available but bypassed because `caller="mcp"` + `sampling_capable=true` (global flag) routes to sampling.
+**Status:** Deferred — partially mitigated by v0.4.2 Hybrid Phase Routing + priority reshuffle
+**Context:** Historically, MCP tool calls from non-sampling clients (e.g., Claude Code) were routed to the sampling tier when a sampling-capable client (VS Code bridge) was also connected, failing with "Method not found" because the calling client didn't support `sampling/createMessage`. v0.4.2 landed two related fixes that substantially reduce blast radius: (1) `resolve_route()` now tries tier 3 `internal` before tier 4 `auto_sampling`, so whenever a provider is detected the auto path prefers internal even if `sampling_capable=True`; (2) Hybrid Phase Routing means fast phases (analyze/score/suggest) always run on the internal provider — sampling is only invoked for the optimize phase when the caller is sampling-capable. `_write_optimistic_session` also no longer forces `sampling_capable=True` on session-less reconnects.
 
-**Root cause:** The routing resolver checks global `sampling_capable` state, not per-client capabilities.
+**Remaining work:** The `RoutingManager` still tracks `sampling_capable` as a single process-global flag, so a true per-client capability registry is not yet in place. The remaining sharp edge is `force_sampling=True` from a non-sampling MCP caller while another sampling-capable session exists — that path still routes to sampling and fails. Revisit when the issue re-emerges.
 
-**Proposed approaches:**
+**Proposed approaches (when revisiting):**
 1. **Per-client capability tagging** — track each MCP session's declared capabilities from `initialize`. Route based on the calling session's sampling support, not the global flag.
 2. **Internal fallback for MCP** — if sampling fails for an MCP caller, retry on internal pipeline when a provider exists. Simpler but reactive.
-3. **Prefer internal for non-interactive MCP** — default MCP tool calls to internal when a provider exists. Only use sampling when explicitly requested. Preserves IDE LLM quota.
 
 **Files:** `services/routing.py` (resolve_route), `mcp_server.py` (capability middleware), `tools/optimize.py` (context construction)
 
 ---
 
 ### REST-to-sampling proxy via IDE session registry
-**Status:** Planned
-**Context:** The web UI cannot perform MCP sampling because `POST /api/optimize` uses `caller="rest"`, which routing correctly blocks from sampling. A previous sampling proxy was removed in v0.3.16-dev because it was architecturally broken: the proxy opened a new MCP session with no sampling handler.
+**Status:** Deferred — scope narrowed by v0.4.2 routing changes
+**Context:** The web UI cannot perform MCP sampling because `POST /api/optimize` uses `caller="rest"`, which routing correctly blocks from sampling. A previous sampling proxy was removed in v0.3.16-dev because it was architecturally broken: the proxy opened a new MCP session with no sampling handler. In v0.4.2, `_can_sample()` was narrowed from `ctx.caller in ("mcp", "rest")` to `ctx.caller == "mcp"`, formalizing the REST exclusion.
 
 **Root cause:** MCP's `create_message()` is a server-to-client request that goes to the session that made the tool call. No mechanism exists to route a sampling request through a *different* client's session.
 
-**Proposed solution:** The MCP server maintains a session registry mapping session IDs to declared capabilities. When a non-sampling client calls `synthesis_optimize` and routing selects sampling tier:
-1. Tool handler queries the registry for any active sampling-capable session
+**Proposed solution (if revisited):** The MCP server maintains a session registry mapping session IDs to declared capabilities. When a REST caller invokes the optimize endpoint and the user wants to use their IDE LLM:
+1. Handler queries the registry for any active sampling-capable session
 2. If found, borrows that session's `create_message()` channel
 3. Original caller receives the result when the IDE completes sampling
 4. If no sampling session exists, falls back to internal/passthrough with clear error
@@ -299,7 +298,7 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ### ADR-005 Phase 3 — HNSW + round-robin at scale
 **Status:** Deferred (trigger-gated)
-**Context:** ADR-005's Phase 3 work is partially shipped (`_HnswBackend` exists in `backend/app/services/taxonomy/embedding_index.py`, activated at `HNSW_CLUSTER_THRESHOLD=1000`; `AdaptiveScheduler` shipped as part of B-layer). The deferred piece is large-corpus stress validation — trigger condition (≥1000 clusters sustained across warm cycles) has not been reached at current v0.3.41-dev scale.
+**Context:** ADR-005's Phase 3 work is partially shipped (`_HnswBackend` exists in `backend/app/services/taxonomy/embedding_index.py`, activated at `HNSW_CLUSTER_THRESHOLD=1000`; `AdaptiveScheduler` shipped as part of B-layer). The deferred piece is large-corpus stress validation — trigger condition (≥1000 clusters sustained across warm cycles) has not been reached at current v0.4.4-dev scale.
 
 **Trigger:** When a real corpus crosses the 1000-cluster threshold for multiple consecutive warm cycles, amend ADR-005 with validation results and any scheduler tuning that proves necessary at scale.
 
@@ -309,24 +308,68 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ## Completed (recent)
 
-### v0.3.41-dev (in flight)
-- **Opus 4.7 feature surface** — `xhigh` effort level, `display: "summarized"` adaptive thinking, Task Budgets beta, Compaction beta. Wired through `LLMProvider` ABC (`backend/app/providers/base.py`), `AnthropicAPIProvider`, `ClaudeCLIProvider`, preferences validation, Navigator effort selector. 11 new provider tests + 3 preferences tests.
-- **Phase 0 orphan-structural-node sweep** — warm path reconciles empty domain / sub-domain nodes with 0 children + 0 opt references (≥24h age gate). Fixes zero-prompt "ghost Legacy" visibility bug. 5 RED→GREEN tests.
-- **Heuristic classifier audit verbs + sentence boundary fix** — `audit`/`diagnose`/`inspect` verbs added to analysis signals; first-sentence boundary now handles `?` / `!` terminators.
-- **B0 repo-relevance gate false-positive fix** — domain vocabulary overlap evaluated before cosine floor short-circuit. Prompts targeting subsystems of broad repos now receive codebase context.
-- **Background task strong-ref holder** — `asyncio.create_task` calls in `link_repo` / `reindex` now held in module-level set to prevent GC mid-flight (was silently killing `synthesis_status='running'` jobs).
-- **Inspector "no codebase context" warning chip** — surfaces when optimization ran against linked repo but B0 gate fired or index wasn't ready.
-- **MBR column semantic suffix** — navigator member_count now renders as `Nd` (domains), `Nc` (clusters), `Nm` (members) per node type.
+### v0.4.3 — 2026-04-24
+- **Bulk delete REST + History UX** — `POST /api/optimizations/delete` (1-100 ids, 10/min rate-limited, `DeleteOptimizationsResponse` envelope) + single-row `DELETE /api/optimizations/{id}` both route through `OptimizationService.delete_optimizations()`. Frontend: hover × with 5 s `UndoToast` grace window (commit deferred until timer expires), opt-in multi-select mode with `Select`/`Cancel`/`Delete N` toolbar, `DestructiveConfirmModal` with type-to-confirm (`DELETE` literal), keyboard shortcuts (Ctrl/Cmd+Click auto-seed, Shift+Click range, Ctrl+A, Esc, Delete/Backspace, arrow nav), bulk-to-single graceful fallback.
+- **Reusable destructive-action primitives** — `toastsStore` singleton with pre-commit grace hook (`commit?: () => Promise<void>`), `UndoToast` (`scaleX` transform for compositor-only RAF repaints, pause-on-hover, `aria-live="polite"`), `DestructiveConfirmModal` (glass panel, `role="dialog"`, case-sensitive literal gate, focus return on cancel). All respect the brand zero-effects directive + `prefers-reduced-motion`.
+- **Frontend brand-guidelines strict audit — zero violations** — removed stray `text-shadow` rules, consolidated remaining `border-radius: 4px` surfaces to `0`, replaced `box-shadow` with 1px inset contour, purged `--glow-*` refs from legacy comments.
+- **Frontend consumes `optimization_deleted` SSE** — event has shipped since v0.4.2 but had no UI handler; `+page.svelte` bridges to `CustomEvent('optimization-deleted')`, `HistoryPanel` removes matching row surgically (no full re-fetch), 2 s fallback timeout covers SSE reconnect gaps.
+- **Delete endpoints use `BASE_URL`** — `frontend/src/lib/api/optimizations.ts` routes through shared `apiFetch` so dev→prod port drift doesn't silently 404 the delete surface.
+- **`task_type_signal_extractor` graceful degradation** — INSERT into `task_type_telemetry` wrapped in `try/except OperationalError`; unmigrated DBs get warn-log once/cycle instead of crashing the warm path (was leaving `member_count` stale on domain nodes after deletes).
+- **Test isolation helpers** — public `reset_rate_limit_storage()` + shared `drain_events_nonblocking()` promoted from per-file spelunking to `conftest.py` / `dependencies/rate_limit.py`.
 
-### ADR-005 Multi-project hybrid taxonomy (v0.3.27 → v0.3.41-dev)
-- **S1 schema migration** — `dominant_project_id` FK on `PromptCluster` (`backend/alembic/versions/d9e0f1a2b3c4_add_dominant_project_id_to_prompt_cluster.py`)
-- **B1 pipeline** — explicit `project_id` in all optimize/refine/sampling/batch pipelines; Legacy cache in both backend and MCP lifespans
-- **B2-B5 migration + link/unlink contract** — `POST /api/projects/migrate` rate-limited router; `link_repo` returns `migration_candidates`; `unlink_repo?mode=keep|rehome`
-- **B6 hybrid tree/stats scope** — `/api/clusters/tree`, `/stats`, `/similarity-edges` accept `?project_id=X` + `?scope=all`; engine `_stats_cache` keyed per-project
-- **B7-B8 patterns** — `auto_inject_patterns(project_id=None)` threads `project_filter`; `GlobalPattern` requires `distinct_project_count >= GLOBAL_PATTERN_MIN_PROJECTS`
-- **C1a-C1c warm/cold maintenance** — Phase 0 + cold path write `dominant_project_id`; `_reassign_to_active()` prefers same-project target with `CROSS_PROJECT_REASSIGN_MARGIN=0.10` cosine margin
-- **F1-F5 frontend** — `projectStore`, project selector dropdown, explicit `project_id` in all mutating calls, tree/topology/pattern consumer re-fetch on store change, link/unlink transition toasts with `addWithActions()`, per-project Inspector breakdown, empty-state panel
-- **See:** [`docs/adr/ADR-005-taxonomy-scaling-architecture.md`](adr/ADR-005-taxonomy-scaling-architecture.md) (Amendment 2026-04-19), `docs/hybrid-taxonomy-plan.md`
+### v0.4.2 — 2026-04-23
+- **MCP sampling architecture unification + Hybrid Phase Routing** — `MCPSamplingProvider` now a first-class `LLMProvider`; 1,700-line redundant sampling pipeline collapsed to re-export layer over the primary orchestrator. Hybrid Execution Routing: fast phases (analyze, score, suggest) stay on internal provider; optimize routes through the IDE LLM. MCP transport errors map to `ProviderError` so Tenacity retries apply. `StreamableHTTPServerTransport` patched to extract TS SDK `sessionId` from query params.
+- **`TaskTypeTelemetry` model + migration `2f3b0645e24d`** — records heuristic vs LLM classification events (`raw_prompt`, `task_type`, `domain`, `source`) for drift analysis + A4 tuning.
+- **Inspector analyzer telemetry rendering (UI2)** — ENRICHMENT panel surfaces signal-source tag (bootstrap/dynamic), TASK-TYPE SCORES distribution, CONTEXT INJECTION counts. `build_pipeline_result()` propagates `inputs.repo_full_name` into `PipelineResult.repo_full_name`.
+- **`enrichment_meta.injection_stats` uniform emission (UI1) + AA1 auto-bind** — every tier emits `{patterns_injected, injection_clusters, has_explicit_patterns}`. `project_service.resolve_effective_repo()` resolves repo via explicit → session-cookie → most-recently-linked cascade so curl / session-less API callers bind to the live `LinkedRepo`'s project instead of falling through to Legacy.
+- **Explicit DOMAIN SIGNALS + RETRIEVAL headings + CLI-family classifier coverage (A8)** — `cli`/`daemon`/`binary` added to `_TECHNICAL_NOUNS` (A2) and coding-signal keywords at moderate weights.
+- **`DELETE /api/optimizations/{id}` REST + `synthesis_delete` MCP tool (audit #3 + #4)** — thin wrapper over long-existing `delete_optimizations()` primitive; unknown id now 404s.
+- **`POST /api/taxonomy/reset` admin recovery (I-0)** — force-prunes archived zero-member clusters + delegates to `run_warm_path` synchronously; idempotent.
+- **`taxonomy_changed` SSE publish on bulk delete (I-0)** — cross-process dirty-set bridge fires warm Phase 0 immediately instead of waiting for 30 s debounce.
+- **Inspector per-layer enrichment skip reason (I-9)** — renders right-aligned reason tags ("skipped — cold start profile", "deferred to pipeline").
+- **Tree integrity repair SSE events (I-8)** — `tree_integrity_repair` emits per repair with `{violation_type, action, label}`.
+- **`OptimizationService.delete_optimizations(ids, *, reason)` bulk primitive** — relies on DB `ondelete="CASCADE"` (migration `a2f6d8e31b09`), emits per-row `optimization_deleted` events + aggregated `taxonomy_changed`. Migration `b3a7e9f4c2d1` dedupes orphan unnamed FKs.
+- **Warm Phase 0 clears stale `learned_phase_weights` on empty clusters** — prevents "phantom learning" if cluster id is reused within 24h archival window.
+- **Provider threaded through enrichment + tool handlers** — `HeuristicAnalyzer.analyze()` + `ContextEnrichmentService.enrich()` accept `provider` kwarg at every call site; A4 Haiku fallback resolves without global lookup.
+- **Negation-aware weakness detection + signal-source accuracy** — `_is_negated()` + `_compute_structural_density()`; `_TASK_TYPE_EXTRACTED` set distinguishes `bootstrap` from `dynamic` honestly. Legacy `static` value accepted as read-compat synonym for one release cycle.
+- **Analyze phase effort clamp to `high` ceiling (A3)** — `ANALYZE_EFFORT_CEILING='high'` applied at all three analyze call sites; `max`/`xhigh` downshift to `high`. Does NOT apply to optimize/score. Expected drop: 200+s → 30–60s.
+- **`auto → strategy` routed by `intent_label` (A2)** — new step 5b in `resolve_effective_strategy` inspects `intent_label` for chain-of-thought (audit/debug/diagnose), structured-output (extract/classify/list), role-playing (story/poem/narrative) keywords. Fires when current strategy equals the task-type default too (not only literal `"auto"`).
+- **`enrichment_meta.domain_signals` shape — `{resolved, score, runner_up}`** — winner named explicitly; `reconcile_domain_signals()` rebuilds after pipeline finalizes domain; runner_up emits only when `best_runner <= top_score AND > 0`.
+- **`/api/health` surfaces `taxonomy_index_size` + `avg_vocab_quality`** — Plan I-1 wired boot logging but health fields were stuck at `None`; now pulled off `app.state.taxonomy_engine`.
+- **`Q_system` / `Q_health` return `None` with fewer than 2 active clusters (A5)** — single-node taxonomies no longer report perfect scores; Q-gates treat transitions as growth/destruction/no-progress.
+- **Routing: REST callers excluded from sampling, internal beats auto-sampling** — `_can_sample()` narrowed to `caller == "mcp"`; auto path tries tier 3 internal before tier 4 auto-sampling.
+- **`_write_optimistic_session` preserves `sampling_capable`** — no longer forces `True` on session-less reconnects from plain Claude Code.
+- **Cross-process `taxonomy_changed` bridged into engine dirty_set** — `_apply_cross_process_dirty_marks(engine, event_data)` runs before `_warm_path_pending.set()` so MCP/CLI deletes reconcile immediately.
+- **Classifier B1/B2/B6 fixes** — SQLAlchemy/FastAPI/Django nouns added to coding signals + `_TECHNICAL_NOUNS`; `has_technical_nouns(first_sentence)` rescues any task_type to `code_aware` when repo linked; `_STATIC_SINGLE_SIGNALS` preserves single-word defaults through dynamic merges.
+- **Pattern injection — unscoped clusters visible inside project filter (A10)** — `embedding_index.search()` treats `project_ids[label]=None` as "unreconciled, visible within any scope" (brand-new pre-Phase-0 clusters).
+- **Pattern injection provenance — `begin_nested()` SAVEPOINT** — replaces manual expunge; prevents `PendingRollbackError` from cascading into subsequent pipeline phases on FK IntegrityError.
+
+### v0.4.1 — 2026-04-20
+- **Sidebar brand audit finale — Navigator 2,692 → 182 lines** — 8-panel extraction (`StrategiesPanel`, `HistoryPanel`, `GitHubPanel`, `SettingsPanel`, `ClusterRow`, `DomainGroup`, `StateFilterTabs`, `TemplatesSection`). `CollapsibleSectionHeader` gains Snippet-based whole-bar/split modes. `ActivityBar` sliding indicator, Inspector phase-dot.
+- **Inspector.svelte split — 3 sections extracted** — `ClusterPatternsSection` (103 l), `ClusterTemplatesSection` (70 l, disambiguated from Navigator's proven-templates section), `TaxonomyHealthPanel` (123 l). Inspector 1,404 → 1,165 l.
+- **Backend Phase 3 refactor split (A-F)** — six module-boundary extractions: Phase 3A (`context_enrichment.py` 1,394 → 3 modules: `repo_relevance.py`, `divergence_detector.py`, `strategy_intelligence.py`), Phase 3B (`sampling_pipeline.py` 1,705 → 3 sub-modules: `sampling/primitives.py`, `sampling/persistence.py`, `sampling/analyze.py`), Phase 3C (`repo_index_service.py` 1,676 → `repo_index_outlines.py`, `repo_index_file_reader.py`, `repo_index_query.py`), Phase 3D (`pipeline.py` 1,146 → 610, 12 pure helpers in `pipeline_phases.py`), Phase 3E (`batch_pipeline.py` 1,077 → `batch_orchestrator.py` + `batch_persistence.py`), Phase 3F (`heuristic_analyzer.py` 929 → thin orchestrator + `task_type_classifier.py` + `domain_detector.py` + `weakness_detector.py`). All preserve public API via re-exports.
+- **UI persistence through stores (code-quality sweep Phase 2)** — `githubStore.uiTab`, `stores/hints.svelte.ts`, `stores/topology-cache.svelte.ts` replace ad-hoc `$effect` + direct localStorage in `GitHubPanel`, `TopologyControls`, `SemanticTopology`. One-shot migration shims preserve user state.
+- **`utils/keyboard.ts` + `utils/transitions.ts`** — pure `nextTablistValue()` + `handleTablistArrowKeys()` for tablist arrow-key nav; `navSlide`/`navFade` presets driven by inline 8-iteration Newton-Raphson bezier solver matching `--ease-spring` exactly (Svelte's built-in `cubicOut` drifted visibly).
+- **PRAGMA event hook on every pool checkout** — `@event.listens_for(engine.sync_engine, "connect")` applies WAL + busy_timeout + synchronous + cache_size + foreign_keys to every SQLite pool connection. Replaces throwaway single-connection aiosqlite block. `pool_pre_ping=True` + `pool_recycle=3600` restored.
+- **Recurring GC sweep — hourly expired-token + orphan-repo cleanup** — `run_recurring_gc()` + `_recurring_gc_task` scheduled in lifespan. Sweeps expired `GitHubToken` (24 h grace) + orphan `LinkedRepo` rows. Previously accumulated indefinitely between restarts.
+- **Hotpath indices migration `cc9c44e78f78`** — seven single-column indices on `optimizations` + composite `ix_optimizations_project_created(project_id, created_at DESC)` + `ix_feedbacks_optimization_id`.
+- **Soft-delete retirement documented** — v2 rebuild excised the `deleted_at` column set; archive-as-soft-delete via `cluster.state='archived'` covers legitimate undelete cases; hard-delete simpler for GDPR.
+
+### v0.4.0 — 2026-04-19
+- **ADR-005 Hybrid Taxonomy — projects as sibling roots (8-commit shipment)** — supersedes original "project as tree parent" data model. Projects at `parent_id IS NULL` alongside domain nodes; clusters parent to domains and carry `dominant_project_id` FK. S1 migration + B1 pipeline freezes `project_id` at request time via `resolve_project_id()` + B2-B5 `POST /api/projects/migrate` rate-limited + link/unlink `mode=keep|rehome` + B6 tree/stats SQL-scoped by `dominant_project_id` + B7-B8 pattern filtering + dual-gate global promotion (`GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS=5` + `MIN_PROJECTS=2`) + C1 warm/cold maintenance + F1-F5 frontend (projectStore, project selector, explicit `project_id` threading, transition toasts, per-project Inspector breakdown). Locked-decision record: `docs/hybrid-taxonomy-plan.md`. ADR-005 Amendment 2026-04-19 links out. Phase 3 HNSW stays trigger-gated.
+- **Opus 4.7 provider feature surface** — `xhigh` effort level (Opus 4.7 only, `xhigh → high` downgrade with warning on other models), `display: "summarized"` adaptive thinking (was silent on Opus 4.7 which defaults to `omitted`), Task Budgets beta (`task_budget: int | None`, 20k min clamp, `task-budgets-2026-03-13` header), Compaction beta (`compaction: bool`, Opus 4.7/4.6 + Sonnet 4.6 only, `compact-2026-01-12` header). Combined betas comma-joined into single `extra_headers["anthropic-beta"]`. `ClaudeCLIProvider` accepts both as documented no-ops for ABC uniformity. `LLMProvider.supports_xhigh_effort(model)` static helper centralizes the gate. 11 new provider tests + 3 preferences tests.
+- **`synthesis_health` `linked_repo` block** — returns `full_name`, `branch`, `language`, `index_status`, `index_phase`, `files_indexed`, `synthesis_ready` for the active linked repo. Single MCP health call now confirms codebase-context availability end-to-end.
+- **Per-agent seed model override + per-dispatch JSONL trace** — seed agents default to Haiku; can opt into Sonnet/Opus via YAML frontmatter `model:`. `SeedAgent.model` added; `_resolve_agent_model()` maps frontmatter → `settings.MODEL_*`. Each dispatch emits `phase="seed_agent"` trace with `trace_id="seed:{batch_id}:{agent}"`, duration, tokens, resolved model.
+- **Explore synthesis routed to Sonnet + JSONL trace** — `CodebaseExplorer._explore_inner` synthesizes 30-80K-token file payloads; long-context reading favors Sonnet. Cached per repo/branch/SHA in `RepoIndexMeta.explore_synthesis` so cost delta is negligible. Per-run `phase="explore_synthesis"` trace.
+- **Phase 0 orphan-structural-node sweep** — warm-path reconciles empty domain / sub-domain nodes with 0 active-cluster children AND 0 sub-domain children AND 0 optimization references, gated on `ORPHAN_STRUCTURAL_GRACE_HOURS=24`. Fixes "ghost Legacy 1m 0 --" visibility bug where ADR-005 migration left empty `general` domain inflating `member_count=1` forever. 5 RED→GREEN tests.
+- **Heuristic classifier — audit verbs + sentence boundary + compound keywords** — added `audit`/`diagnose`/`inspect` to analysis signals; first-sentence boundary uses `re.split(r"[.?!]", ...)` (was `.split(".")`); compound-phrase signals (`"write a prompt"` → system, `"audits the"` → analysis) outweigh single-word collisions.
+- **B0 repo-relevance gate — project-anchored synthesis + path-enriched anchor** — anchor embedding prepends `Project: {repo_full_name}\n` + appends up to 500 indexed file paths as `Components:` block (stride-sampled at 100 for MiniLM 512-tok window). `REPO_RELEVANCE_FLOOR` 0.20 → 0.15; `REPO_DOMAIN_MIN_OVERLAP` removed. Reason codes collapse to `{above_floor, below_floor}`. Same-stack-different-project separation rides on project-name signal, not vocabulary overlap. `extract_domain_vocab()` retained for UI attribution only.
+- **Background task GC race fix — strong-ref holder** — `_background_tasks: set[asyncio.Task]` + `_spawn_bg_task()` helper prevents weak-ref GC mid-await on `link_repo` / `reindex` (was silently killing `synthesis_status='running'` jobs).
+- **Inspector "no codebase context" warning chip** — yellow chip renders when `activeResult.repo_full_name` is set AND `context_sources.codebase_context === false`. Recommends reindex + rerun.
+- **Cluster navigator MBR column semantic suffix** — `Nd` (domains, project rows), `Nc` (clusters, domain rows), `Nm` (members, cluster rows). `member_count` is semantically overloaded across node types.
+- **`DomainResolver` preserve high-confidence unknown labels + gate lowered 0.6 → 0.5** — resolver no longer collapses unknowns to `general` pre-emptively; warm-path domain discovery depends on organic labels reaching the engine.
+- **Seed palette preservation on domain re-promotion** — `SEED_PALETTE` mirrors alembic `SEED_DOMAINS`; `engine._create_domain_node()` restores canonical color on re-promotion if not already in use. Empty seed domains still dissolve per ADR-006, but "Backend is purple" survives dissolution cycles.
+- **A4 LLM classification wrapped in retry** — wrapped with `call_provider_with_retry` so transient rate-limit/overload errors retry before degrading to heuristic result.
 
 ### Templates entity + fork-on-promotion (v0.3.39)
 Immutable `PromptTemplate` rows forked from mature clusters crossing fork thresholds. Source cluster stays `mature` and keeps learning. Warm Phase 0 reconciles `template_count` + auto-retires templates whose source degrades (avg_score < 6.0) or is archived. Templates router (`GET /api/templates`, `POST /api/clusters/{id}/fork-template`, `POST /api/templates/{id}/retire`, `POST /api/templates/{id}/use`). Partial-unique constraint on `(source_cluster_id, source_optimization_id) WHERE retired_at IS NULL`. Halo rendering on 3D topology (`template_count > 0` → 1px contour ring). Navigator PROVEN TEMPLATES group + Inspector collapsible section. `.claude/hooks/pre-pr-template-guard.sh` blocks residual `state='template'` literals. Deprecates the old `state='template'` enum path (410/400 on legacy routes).

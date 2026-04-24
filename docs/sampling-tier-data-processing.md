@@ -1,11 +1,18 @@
 # MCP Sampling Tier Data Processing Chain
 
+_Last reviewed: 2026-04-24 (reflects Hybrid Phase Routing shipped in v0.4.2)._
+
 This document defines the data processing life cycle of an optimization request when routed through the **MCP Sampling Tier** (i.e. utilizing a connected IDE's LLM, such as VS Code Copilot).
 
-The design intent of the sampling tier is to offload all heavy generative AI operations directly to the client IDE while keeping the orchestrating logic, heuristics, and taxonomy clustering local and fast. 
+The design intent of the sampling tier is to offload the heaviest generative AI operations directly to the client IDE while keeping the orchestrating logic, heuristics, and taxonomy clustering local and fast.
 
-## At a Glance: Does the Sampling Tier use Internal LLMs? 
-**No.** All synchronous generative operations in the critical path (Analyze, Optimize, Score) are delegated to the IDE's LLM via the MCP `createMessage` protocol. Zero "internal" LLM API calls (e.g. Anthropic/Claude CLI) are made during the live request latency window, with one highly specific, configurable exception (the A4 Haiku classification fallback).
+## At a Glance: Does the Sampling Tier use Internal LLMs?
+
+**Yes — selectively, via Hybrid Phase Routing.** As of v0.4.2, when the sampling tier is selected and an internal provider (Claude CLI or Anthropic API) is also available, the pipeline runs the **fast phases (analyze, score, suggest) on the internal provider** and routes only the **optimize phase** through the IDE LLM. The decision is encoded in `RoutingDecision.providers_by_phase` from `services/routing.py`. If no internal provider is available (force_sampling on a raw environment), every phase falls back to sampling and `providers_by_phase={analyze: sampling, score: sampling, suggest: sampling, optimize: sampling}`.
+
+Why: analyze/score/suggest produce small structured JSON that doesn't benefit from the user's IDE model but previously cost one full IDE round-trip each (5-12 s on Sonnet 4.6 sampling), blocking perceived latency. Rewriting a prompt does benefit from the user's chosen model, so optimize stays on sampling.
+
+The A4 Haiku classification fallback still applies to the heuristic pre-processing stage and is gated by the `enable_llm_classification_fallback` preference — independent of tier.
 
 Below is the chronological step-by-step data processing chain.
 
@@ -22,17 +29,23 @@ When the `synthesis_optimize` workflow is triggered, the `ContextEnrichmentServi
 - **Divergence Detection:** Discrepancies between the prompt's tech stack and the codebase's tech stack are flagged locally using string overlap and heuristic checks.
 - **Strategy & Pattern Injection:** Historical successful patterns and the ideal PromptForge strategy are selected by comparing the prompt's local embedding against the Taxonomy Engine (`PromptCluster` centroids). *No LLM call.*
 
-## 2. The 3-Phase Execution (The Generative Path)
-*Delegated entirely to the IDE's LLM.*
+## 2. The Generative Path (Hybrid Phase Routing)
+*Internal provider handles fast phases; IDE LLM handles optimize.*
 
-The pipeline orchestrator hands off the assembled contexts to the `MCPSamplingProvider`. This specialized provider translates standard LLM generation requests into MCP `createMessage` JSON-RPC payloads. 
+Under Hybrid Phase Routing (v0.4.2), the pipeline orchestrator dispatches each phase according to `RoutingDecision.providers_by_phase`:
 
-VS Code intercepts these payloads, opens a background Copilot thread, and processes the text:
-1. **Analyze Phase:** The server sends the `analyze.md` template. Copilot evaluates the prompt weaknesses and intent, returning structured diagnostics.
-2. **Optimize Phase:** The server injects the results from the Analyze phase alongside the context into the `optimize.md` template. Copilot rewrites the prompt according to the selected strategy. 
-3. **Score Phase:** The server tasks Copilot with self-evaluating the newly optimized prompt across 5 dimensions using the `scoring.md` rubric.
+| Phase | Provider (sampling tier, internal available) | Provider (sampling tier, no internal) | Template |
+|-------|----------------------------------------------|---------------------------------------|----------|
+| Analyze | Internal (Claude CLI or Anthropic API, typically Haiku) | IDE LLM via `MCPSamplingProvider` | `analyze.md` |
+| Optimize | IDE LLM via `MCPSamplingProvider` | IDE LLM via `MCPSamplingProvider` | `optimize.md` |
+| Score | Internal (Haiku by default) | IDE LLM via `MCPSamplingProvider` | `scoring.md` |
+| Suggest (post-score) | Internal | IDE LLM via `MCPSamplingProvider` | `suggest.md` |
 
-*At all three steps, the server sits asynchronously idle waiting for the IDE's MCP client to respond with the completed text.*
+`MCPSamplingProvider` is a first-class `LLMProvider` (see `backend/app/providers/sampling.py`) that translates standard generation requests into MCP `createMessage` JSON-RPC payloads. MCP transport timeouts and errors map to the `ProviderError` hierarchy so Tenacity exponential backoff retries apply uniformly with the internal providers.
+
+For the optimize phase (and any phase falling back to sampling), the server sits asynchronously idle waiting for the IDE's MCP client to respond. VS Code intercepts the `createMessage` request, opens a background Copilot thread, and returns the completion text.
+
+**Structured output fallback** (sampling-only): if the IDE returns tool-calling errors, the server inlines the JSON schema into the prompt and falls back to text parsing (direct JSON → code block → brace-depth). Analyze-only has a final keyword-classification fallback (`_build_analysis_from_text()`).
 
 ## 3. Post-Processing & Hybrid Scoring
 *Executed entirely locally on the server.*

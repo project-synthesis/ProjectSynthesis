@@ -1,6 +1,10 @@
 # Sub-Domain Discovery Architecture
 
+_Last reviewed: 2026-04-24. Reflects the fully-organic vocabulary pivot shipped across v0.3.32 → v0.3.38 and the re-evaluation / dissolution lifecycle from v0.3.37._
+
 How sub-domains are organically discovered in the taxonomy engine.
+
+> **Vocabulary tier note.** The Tier 1 "static `_DOMAIN_QUALIFIERS`" vocabulary described below has been **removed**. Sub-domain discovery is now fully organic: the primary vocabulary source is Haiku-generated enriched vocabulary (the former Tier 2, now **Tier 1**), with dynamic TF-IDF keywords as fallback. The three-source *signal* pipeline (domain_raw → intent_label → TF-IDF keywords) is unchanged. See the "Vocabulary: Current Architecture" section below for the live design; the "Why business domains need vocabulary" discussion is retained as the motivation record.
 
 ## The Three-Source Signal Pipeline
 
@@ -47,38 +51,39 @@ Sub-domains form when a specialization signal crosses an adaptive consistency th
                     +-------------+
 ```
 
-## Vocabulary: The Three Tiers
+## Vocabulary: Current Architecture
 
 Sub-domain discovery needs a **qualifier vocabulary** — a mapping of qualifier names to keyword groups (e.g., `"growth": ["metrics", "kpi", "dashboard", ...]`). This vocabulary tells the system what specializations to look for within a domain.
 
-Three tiers provide vocabulary, tried in order:
+Two tiers provide vocabulary, tried in order:
 
 ```
-Tier 1: Static vocabulary (_DOMAIN_QUALIFIERS)
-  |  Hand-curated keyword groups for known domains
-  |  Defined in heuristic_analyzer.py
-  |  Covers: backend, frontend, devops, saas, database, security, fullstack, data
+Tier 1: LLM-generated enriched vocabulary (primary, organic)
+  |  Haiku analyzes each domain's cluster labels + per-cluster centroid
+  |  similarity matrix + intent labels + domain_raw qualifier distribution
+  |  (ClusterVocabContext dataclass), generating groups in one call per domain.
+  |  Cached in cluster_metadata["generated_qualifiers"] on the domain node.
+  |  Refreshed when cluster count changes by ≥30% OR when Phase 4.95 runs
+  |  vocab_only=True in an isolated DB session.
+  |  Quality metric emitted via vocab_generated_enriched event;
+  |  avg_vocab_quality surfaced in /api/health.
   |
-  v  Not in static vocab?
-Tier 2: LLM-generated vocabulary
-  |  Haiku analyzes the domain's cluster labels and generates
-  |  qualifier groups automatically. One LLM call per domain.
-  |  Cached in cluster_metadata["generated_qualifiers"]
-  |  Refreshed when cluster count changes by ≥30%
-  |
-  v  No LLM provider available?
-Tier 3: Dynamic TF-IDF keywords (signal_keywords)
-  |  Individual keywords from TF-IDF extraction, already
-  |  stored on every domain node. No grouping — each keyword
-  |  is a standalone qualifier. Weight ≥0.5 required.
+  v  No generated vocabulary yet / LLM unavailable?
+Tier 2: Dynamic TF-IDF keywords (fallback)
+  |  Every domain node has signal_keywords extracted by the warm path's
+  |  TF-IDF pipeline. Individual discriminative keywords (not grouped),
+  |  each becomes a standalone qualifier. Weight ≥0.5 required.
   |  Works best for technical domains with specific jargon.
 ```
 
 ### How each tier works
 
-**Tier 1 (Static)** provides the highest-quality qualifiers. Each entry groups 5-10 semantically related keywords under a qualifier name. These groups are curated for precision — "auth" includes "jwt", "token", "oauth", "session" because a human knows these are the same specialization. The static vocabulary also powers Source 1 enrichment: `_enrich_domain_qualifier()` in the heuristic analyzer scans prompts against the vocabulary and appends qualifiers to `domain_raw` (e.g., "backend" → "backend: auth"). This means future warm cycles have richer Source 1 signal.
+**Tier 1 (LLM-generated enriched)** is the primary and preferred source. `generate_qualifier_vocabulary()` in `taxonomy/labeling.py` receives a structured `ClusterVocabContext` dataclass containing:
+- Per-cluster centroid similarity matrix (cells marked `None` for unknown / not-yet-computed pairs; `_VOCAB_SIM_HIGH=0.7` flags "merge candidates", `_VOCAB_SIM_LOW=0.3` flags "truly distinct")
+- Intent labels (concentrated topic signals, 3-6 words each)
+- `domain_raw` qualifier distribution (what users are already saying this domain is about)
 
-**Tier 2 (LLM-generated)** bridges the gap for domains without static entries. When a domain first becomes eligible for sub-domain discovery and has no static vocabulary, the system sends its cluster labels to Haiku:
+Haiku produces qualifier groups where each group's keywords are semantically coherent within the domain's actual content. Example output:
 
 ```
 Input:  Domain "ci-cd" with clusters:
@@ -95,9 +100,11 @@ Output: {
         }
 ```
 
-The generated vocabulary is cached in `cluster_metadata["generated_qualifiers"]` and reused on subsequent warm cycles. It's refreshed when the domain's cluster count changes by ≥30% (meaning the domain's structure has shifted enough to warrant new groupings). This tier requires zero manual intervention — new domains that emerge organically get vocabulary automatically.
+The generated vocabulary is cached in `cluster_metadata["generated_qualifiers"]` and reused on subsequent warm cycles. It's also consumed by `_enrich_domain_qualifier()` in `domain_detector.py` for live qualifier enrichment (appends sub-qualifiers to `domain_raw` — e.g., "backend" → "backend: auth" — so Source 1 has richer signal on future cycles).
 
-**Tier 3 (Dynamic TF-IDF)** is the final fallback. Every domain node has `signal_keywords` extracted by the warm path's TF-IDF pipeline. These are individual discriminative keywords (not grouped), and each one becomes a standalone qualifier. This works well for technical domains where keywords like "jwt" (0.9 weight) or "encryption" (1.0 weight) are strongly specific. It fails for business domains where keywords like "need" (0.23) and "product" (0.17) are too generic — the 0.5 weight threshold filters them out.
+**Tier 2 (Dynamic TF-IDF)** is the fallback when no enriched vocabulary exists yet. `signal_keywords` on the domain node become standalone single-keyword qualifiers. This works well for technical domains where keywords like "jwt" (0.9 weight) or "encryption" (1.0 weight) are strongly specific. It fails for business domains where keywords like "need" (0.23) and "product" (0.17) are too generic — the 0.5 weight threshold filters them out.
+
+The three-source qualifier *signal* cascade is extracted into a shared pure primitive `compute_qualifier_cascade()` in `sub_domain_readiness.py`, consumed by both `_propose_sub_domains()` and `GET /api/domains/readiness` — zero-drift by construction.
 
 ### Why business domains need vocabulary
 
@@ -124,7 +131,7 @@ When the heuristic analyzer classifies a prompt, it may emit a qualified domain 
 
 **Coverage without enrichment**: ~4% of prompts (only when the LLM naturally produces a qualified classification).
 
-**With enrichment**: `_enrich_domain_qualifier()` scans the prompt against the Tier 1 static vocabulary and appends a qualifier. Boosts coverage to ~30% for domains with static entries.
+**With enrichment**: `_enrich_domain_qualifier()` (in `domain_detector.py`) scans the prompt against `DomainSignalLoader.generated_qualifiers` + static signal keywords and appends a qualifier. Boosts coverage to ~30% for domains with populated enriched vocabulary.
 
 **Noise filtering**: LLM-generated qualifiers like "backend auth middleware" are validated against the known vocabulary (static + dynamic keywords). Unknown qualifiers are dropped to prevent count fragmentation.
 
@@ -164,7 +171,8 @@ The logic: small domains need a higher bar because a few outlier prompts can ske
 
 - **Minimum 5 optimizations** with the qualifier (statistical significance)
 - **Minimum 2 distinct clusters** with the qualifier (prevents 1:1 wrapper sub-domains where a single cluster gets wrapped in a sub-domain node for no navigational value)
-- **Domain must not already have sub-domains** (idempotency guard — prevents re-evaluation when sub-domains already exist)
+- **No permanent idempotency lock** (changed v0.3.37): domains with existing sub-domains are re-evaluated each Phase 5. New sub-domains form alongside existing ones as signal emerges. Sub-domains are lightweight and expendable — they can be dissolved and re-created organically (see Lifecycle below).
+- **`dissolved_this_cycle` flip-flop guard**: a sub-domain dissolved in the current cycle is excluded from re-creation until the next cycle, preventing oscillation.
 
 ## Sub-Domain Readiness
 
@@ -189,22 +197,31 @@ Each progress bar shows how much signal has accumulated toward the threshold. Th
 ## Lifecycle
 
 ```
- Discovery            Archival              Re-discovery
- (Phase 5)            (Phase 5.5)           (Phase 5, next cycle)
-     |                    |                       |
-     v                    v                       v
- Signal scan  -->  0 children? Archive  -->  Signal still strong?
- Threshold?        1 child? Archive +       2+ clusters? Create
- 2+ clusters?      reparent child           Stable qualifier label
-     |
-     v
- Create sub-domain
- Reparent clusters
- Set UMAP position
- Update resolver
+ Sub-domain          Sub-domain          Sub-domain           Re-discovery
+ discovery           re-evaluation       archival             (Phase 5, next cycle)
+ (Phase 5)           (Phase 5,           (Phase 5.5)
+                      consistency drop)
+     |                   |                    |                    |
+     v                   v                    v                    v
+ Signal scan  -->  Consistency < 0.25? --> 0 children? Archive --> Signal returns?
+ Threshold?        _dissolve_node():       1 child? Archive +      Create (skipped
+ 2+ clusters?      reparent children       reparent child          if on dissolved_
+     |             to top-level domain,    clear resolver labels   this_cycle set)
+     v             merge meta-patterns,    + all four indices
+ Create sub-domain archive, clear labels
+ Reparent clusters from resolver +
+ Set UMAP position signal_loader +
+ Update resolver   embedding/qualifier/
+                   transformation/optimized
+                   indices
 ```
 
-Sub-domains are lightweight and expendable. They are archived when their children dissolve or get reassigned, and re-created when the signal re-emerges. The qualifier-based label ensures stability — "jwt" is always "jwt", unlike the old HDBSCAN labels that changed every cycle ("async-resilience-patterns" → "rate-limiting-&-retry-patterns" → "warm-path-taxonomy-concurrency").
+Sub-domains are lightweight and expendable. Three dissolution paths:
+1. **Consistency collapse** (`_reevaluate_sub_domains()`): when `consistency < SUB_DOMAIN_DISSOLUTION_CONSISTYNCY_FLOOR = 0.25` (hysteresis gap vs the 0.40–0.60 creation band). Invokes the shared `_dissolve_node()` primitive: reparents clusters to the top-level domain, merges meta-patterns into the parent (prompts never lost), archives the sub-domain, clears resolver labels, clears all four in-memory indices.
+2. **Empty / near-empty** (`phase_archive_empty_sub_domains()` in Phase 5.5): when the sub-domain has 0 active-cluster children OR 1 child that dissolved. The single child is reparented to the top-level domain.
+3. **Flip-flop prevention**: a sub-domain dissolved in the current cycle is added to `dissolved_this_cycle`; Phase 5 re-discovery skips labels in this set until the next cycle.
+
+The qualifier-based label ensures stability — "jwt" is always "jwt", unlike the old HDBSCAN labels that changed every cycle ("async-resilience-patterns" → "rate-limiting-&-retry-patterns" → "warm-path-taxonomy-concurrency"). A re-discovered sub-domain receives the same label as the one that was dissolved, so UI continuity is preserved across the dissolution cycle.
 
 ## Observability
 
@@ -227,11 +244,14 @@ These events are written to `data/taxonomy_events/decisions-YYYY-MM-DD.jsonl` an
 
 | File | Role |
 |---|---|
-| `heuristic_analyzer.py` | `_DOMAIN_QUALIFIERS` static vocabulary, `_enrich_domain_qualifier()` enrichment |
-| `labeling.py` | `generate_qualifier_vocabulary()` LLM-based vocabulary generation |
-| `engine.py` | `_propose_sub_domains()` three-source pipeline with vocabulary tiering |
-| `warm_phases.py` | `phase_archive_empty_sub_domains()` cleanup of empty/single-child sub-domains |
-| `_constants.py` | Thresholds: `SUB_DOMAIN_QUALIFIER_*`, `SUB_DOMAIN_ARCHIVAL_IDLE_HOURS` |
-| `cold_path.py` | Step 12: sub-domain parent preservation during cold path refit |
-| `domain_signal_loader.py` | Loads `signal_keywords` for Tier 3 dynamic keywords |
-| `cluster_meta.py` | `read_meta()`/`write_meta()` for cached vocabulary in `cluster_metadata` |
+| `services/domain_detector.py` | `_enrich_domain_qualifier()` enrichment using `DomainSignalLoader.generated_qualifiers` |
+| `services/domain_signal_loader.py` | Loads enriched vocabulary (`generated_qualifiers`) + `signal_keywords` for TF-IDF fallback |
+| `services/taxonomy/labeling.py` | `generate_qualifier_vocabulary()` LLM-based vocabulary generation (receives `ClusterVocabContext` dataclass) |
+| `services/taxonomy/sub_domain_readiness.py` | Shared `compute_qualifier_cascade()` primitive (consumed by both discovery + `/api/domains/readiness`), `compute_domain_stability()`, `compute_sub_domain_emergence()`, `compute_domain_readiness()`, tier-crossing detector |
+| `services/taxonomy/engine.py` | `_propose_sub_domains()` three-source pipeline with vocabulary tiering, `_reevaluate_sub_domains()` dissolution, shared `_dissolve_node()` primitive |
+| `services/taxonomy/warm_phases.py` | Phase 5 sub-domain discovery + re-evaluation, Phase 5.5 archival, Phase 4.95 vocab-only pass in isolated DB session |
+| `services/taxonomy/_constants.py` | Thresholds: `SUB_DOMAIN_QUALIFIER_*`, `SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR`, `SUB_DOMAIN_ARCHIVAL_IDLE_HOURS`, `_VOCAB_SIM_HIGH`/`_VOCAB_SIM_LOW` |
+| `services/taxonomy/cold_path.py` | Sub-domain parent preservation during cold path refit |
+| `services/taxonomy/readiness_history.py` | JSONL snapshot writer (30-day retention, hourly buckets) backing `/api/domains/{id}/readiness/history` |
+| `services/taxonomy/cluster_meta.py` | `read_meta()`/`write_meta()` for cached vocabulary in `cluster_metadata` |
+| `routers/domains.py` | `GET /api/domains/readiness`, `GET /api/domains/{id}/readiness` (`?fresh=true` bypass), `GET /api/domains/{id}/readiness/history` (`?hours=`) |

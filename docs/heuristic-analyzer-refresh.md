@@ -2,6 +2,8 @@
 
 > Audit and improvement plan for the zero-LLM classifier that drives enrichment profile selection, strategy intelligence queries, and curated retrieval gating. Spawned from the [Context Injection Use-Case Matrix](context-injection-use-case-matrix.md) consolidation work (2026-04-12).
 
+**Implementation status (updated 2026-04-24):** Tier 1 Quick Wins all shipped in v0.3.30 as the A1/A2/A3/A4 + B1/B2 accuracy pipeline. Subsequent refinements (negation-aware weakness detection, `_compute_structural_density()`, intent-label strategy override, classifier B1/B2/B6 noun coverage + rescue path, `_STATIC_SINGLE_SIGNALS` preservation, audit-verb signals) landed across v0.3.30 → v0.4.2. Remaining items below are flagged per-section with current status. The live architecture is described in `backend/CLAUDE.md` under Analysis services — treat this document as the original design record, not the source of truth for current behavior.
+
 ## Problem Statement
 
 The heuristic analyzer (`backend/app/services/heuristic_analyzer.py`) is the first classification step in the enrichment pipeline. Every downstream layer depends on its `task_type` and `domain` output:

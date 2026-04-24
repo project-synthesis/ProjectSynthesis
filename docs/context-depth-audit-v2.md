@@ -1,7 +1,7 @@
 # Context Depth Audit V2: Agentic Executor Analysis
 
 **Predecessor**: `context-depth-audit.md` (V1 — retrieval pipeline tuning, 13 experimental runs)
-**Status**: Active investigation
+**Status**: Historical investigation — superseded by V3 (`context-depth-audit-v3.md`) and by the shipped enrichment-consolidation work in v0.3.30 (see `docs/enrichment-consolidation-action-items.md` for final status). Retained as the 2026-04-11 decision record for agentic-executor-aware curation.
 **Date**: 2026-04-11
 **Focus**: Optimizing prompt content for agentic LLM executors that have their own codebase access
 

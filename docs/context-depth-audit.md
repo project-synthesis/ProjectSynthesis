@@ -1,6 +1,6 @@
 # Context Depth Audit: Curated Codebase Retrieval
 
-**Status**: Active investigation
+**Status**: Historical investigation (V1) — superseded by V2 (`context-depth-audit-v2.md`) and V3 (`context-depth-audit-v3.md`). Retained as a snapshot of retrieval-pipeline tuning from 2026-04-10. Curated retrieval shipped in v0.3.27; upgraded in v0.4.0 with project-anchored synthesis + path-enriched B0 repo-relevance gate. Live architecture lives in `backend/CLAUDE.md` → "Codebase context".
 **Started**: 2026-04-10
 **Baseline prompt**: "Implement a background task that detects stale RepoFileIndex entries by comparing each entry's file_sha against the current HEAD tree, then marks changed files for re-embedding without triggering a full reindex"
 **Repo**: project-synthesis/ProjectSynthesis (340 source files, 3.0MB)

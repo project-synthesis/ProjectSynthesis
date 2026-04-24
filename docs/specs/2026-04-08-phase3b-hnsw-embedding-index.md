@@ -3,7 +3,7 @@
 **Date:** 2026-04-08
 **ADR:** [ADR-005](../adr/ADR-005-taxonomy-scaling-architecture.md) (Phase 3, item 2 — Section 5)
 **Depends on:** Phase 1 (EmbeddingIndex project_filter, _project_ids array), Phase 2A (project_ids populated on vectors)
-**Status:** Approved design, pending implementation
+**Status:** Shipped but dormant. `EmbeddingIndex` now ships with both `_NumpyBackend` (primary) and `_HnswBackend` (trigger-gated at `HNSW_CLUSTER_THRESHOLD=1000`) with automatic fallback to numpy on HNSW failure. Trigger condition — ≥1000 clusters sustained across warm cycles — has not been reached at current scale, so the numpy backend is always active in production. Large-corpus stress validation is Deferred on the ROADMAP.
 
 ## Problem
 

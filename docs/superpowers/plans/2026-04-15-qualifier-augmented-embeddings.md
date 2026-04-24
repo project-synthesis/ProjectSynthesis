@@ -1,5 +1,7 @@
 # Qualifier-Augmented Embeddings Implementation Plan
 
+**Status:** Shipped (v0.3.32). `Optimization.qualifier_embedding` (384-dim) + `QualifierIndex` per-cluster centroid + `w_qualifier` as the fifth signal in `PhaseWeights` composite fusion. Blend weight `CLUSTERING_BLEND_W_QUALIFIER = 0.10` in HDBSCAN clustering. Historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a fourth embedding signal from organic qualifier vocabulary, enabling qualifier-aware clustering that improves cross-project pattern discovery and sub-domain formation.

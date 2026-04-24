@@ -1,5 +1,7 @@
 # Fully Organic Sub-Domain Vocabulary
 
+**Status:** Shipped (v0.3.32). `_DOMAIN_QUALIFIERS` removed; `generated_qualifiers` Haiku-generated vocabulary is primary, TF-IDF signal keywords as fallback. Historical record.
+
 **Goal:** Replace the static `_DOMAIN_QUALIFIERS` dict with fully organic LLM-generated vocabulary so all domains — including SaaS, backend, database — discover sub-domains through the same organic pipeline that new domains use.
 
 **Problem:** The static vocabulary in `heuristic_analyzer.py` gates out organic LLM-generated vocabulary for any domain that has a curated entry (`if not domain_qualifiers:` at engine.py:1835). This means:

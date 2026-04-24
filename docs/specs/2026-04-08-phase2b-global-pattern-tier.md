@@ -3,7 +3,7 @@
 **Date:** 2026-04-08
 **ADR:** [ADR-005](../adr/ADR-005-taxonomy-scaling-architecture.md) (Phase 2, item 4 — Section 6)
 **Depends on:** Phase 2A (multi-project isolation) — project nodes exist, project_id populated on Optimization, cross-project clusters possible
-**Status:** Approved design, pending implementation
+**Status:** Shipped (v0.4.0, B8 ). `GlobalPattern` model + `global_patterns.py` service (promotion / validation / retire lifecycle) + 500-row cap with LRU eviction + dual-gate promotion (`GLOBAL_PATTERN_PROMOTION_MIN_CLUSTERS=5` + `MIN_PROJECTS=2`) + 1.3x injection boost + every-10-cycle validation all live. `GlobalPattern.state` hysteresis (demote <5.0, re-promote ≥6.0 with 1.0-pt gap). `OptimizationPattern.global_pattern_id` FK for provenance.
 
 ## Problem
 

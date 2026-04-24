@@ -32,21 +32,24 @@ The enrichment engine consolidated 7 layers into 4 active context sources, gated
 | L6 | Performance Signals | Low (DB aggregate) | No | Optimization history (3+ per strategy) | **Merged into strategy_intelligence** |
 | L7 | Few-shot Examples | Medium (dual embedding search) | No | Optimization history (score >= 7.5) | Active (within L5 pipeline) |
 
-### 1.2 Embedding Dimensions (Current: 4 fusion signals)
+### 1.2 Embedding Dimensions (Current: 5 fusion signals)
 
 | Signal | Source | Bootstrap Requirement |
 |--------|--------|----------------------|
 | Topic (raw) | `embed(raw_prompt)` | None — always available |
 | Transformation | `mean(embed(opt) - embed(raw))` per cluster | 2+ optimizations per cluster |
 | Output (optimized) | `mean(embed(optimized))` per cluster | 2+ optimizations per cluster |
-| Pattern (global) | GlobalPattern embeddings | 5+ clusters with avg_score >= 6.0 |
+| Pattern (global) | GlobalPattern embeddings | 5+ clusters with avg_score >= 6.0, ≥ 2 distinct source projects (`GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS`) |
+| Qualifier | `QualifierIndex` per-cluster qualifier centroids (organic vocabulary from `DomainSignalLoader.generated_qualifiers`) | Enriched vocabulary generation during warm Phase 4.95 + 5 |
+
+Weight profiles in `services/taxonomy/fusion.py:_DEFAULT_PROFILES`. Pre-qualifier stored profiles default `w_qualifier=0.0` via `PhaseWeights.from_dict()` backward-compat.
 
 ### 1.3 Execution Tiers
 
 | Tier | LLM Location | Caller Gate | Full Pipeline | Context Sources |
 |------|-------------|-------------|---------------|-----------------|
 | **Internal** | Local (CLI/API key) | REST or MCP | Yes (3 phases) | 4 (profile-gated) |
-| **Sampling** | IDE LLM via MCP | MCP only | Yes (3 phases via tool calling) | 4 (profile-gated) |
+| **Sampling** | Hybrid Phase Routing (v0.4.2): analyze/score/suggest on internal; optimize via IDE LLM MCP sampling. Falls back to all-sampling when no internal provider. | MCP only (`_can_sample()` enforces `caller == "mcp"`) | Yes (3 phases) | 4 (profile-gated) |
 | **Passthrough** | External (user's LLM) | REST or MCP | No (assembled template returned) | 4 (embedded in template) |
 
 ### 1.4 Entry Points

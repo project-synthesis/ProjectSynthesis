@@ -1,5 +1,7 @@
 # Qualifier-Augmented Embeddings
 
+**Status:** Shipped (v0.3.32). `Optimization.qualifier_embedding` + `QualifierIndex` + 5-signal `PhaseWeights` fusion with `w_qualifier` + `CLUSTERING_BLEND_W_QUALIFIER=0.10` blend weight in HDBSCAN clustering. Historical record.
+
 **Goal:** Add organic qualifier vocabulary as a fourth embedding signal in the multi-embedding pipeline, enabling qualifier-aware clustering that improves cross-project pattern discovery and sub-domain formation.
 
 **Problem:** The current embedding pipeline uses `all-MiniLM-L6-v2` (384-dim) which encodes general semantic similarity. Prompts about "subscription billing" and "churn win-back campaigns" are both SaaS but embed close together despite being different specializations (revenue vs retention). The organic qualifier vocabulary (Haiku-generated from cluster labels) knows this distinction but only influences Phase 5 sub-domain discovery — it doesn't shape the embedding space itself. Cross-project learning suffers because qualifier-aware clustering would let a new project immediately find mature clusters from another project that share the same specialization.

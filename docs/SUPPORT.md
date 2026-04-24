@@ -24,7 +24,7 @@ Include:
 
 ## Terms of Use
 
-Project Synthesis is free for personal and organizational use with no paid tier. There is no SLA or vendor relationship — support is community best-effort. See [TERMS.md](TERMS.md) for the full usage policy (in this directory).
+Project Synthesis is free for personal and organizational use with no paid tier. There is no SLA or vendor relationship — support is community best-effort. See [LICENSE](../LICENSE) for the full license terms.
 
 ## Out of scope for issues
 

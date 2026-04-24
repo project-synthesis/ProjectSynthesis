@@ -6,16 +6,17 @@ Comprehensive reference for the intelligent routing system that directs optimiza
 
 1. [Overview](#overview)
 2. [Tier Priority Chain](#tier-priority-chain)
-3. [System Architecture](#system-architecture)
-4. [Component Deep Dive](#component-deep-dive)
-5. [State Machine](#state-machine)
-6. [Multi-Client Coordination](#multi-client-coordination)
-7. [Disconnect Detection](#disconnect-detection)
-8. [Cross-Process Communication](#cross-process-communication)
-9. [Persistence and Recovery](#persistence-and-recovery)
-10. [Common Scenarios](#common-scenarios)
-11. [Failure Modes and Mitigations](#failure-modes-and-mitigations)
-12. [Configuration Reference](#configuration-reference)
+3. [Hybrid Phase Routing](#hybrid-phase-routing)
+4. [System Architecture](#system-architecture)
+5. [Component Deep Dive](#component-deep-dive)
+6. [State Machine](#state-machine)
+7. [Multi-Client Coordination](#multi-client-coordination)
+8. [Disconnect Detection](#disconnect-detection)
+9. [Cross-Process Communication](#cross-process-communication)
+10. [Persistence and Recovery](#persistence-and-recovery)
+11. [Common Scenarios](#common-scenarios)
+12. [Failure Modes and Mitigations](#failure-modes-and-mitigations)
+13. [Configuration Reference](#configuration-reference)
 
 ---
 
@@ -76,9 +77,38 @@ A pure function `resolve_route()` determines the tier. It takes an immutable sta
                     └─────────────────────────────────────────────┘
 ```
 
-**Caller gating:** Only MCP tool invocations (`caller="mcp"`) can reach sampling tiers. REST API calls (`caller="rest"`) skip tiers 2 and 4 because the sampling request must flow back through the MCP session to the IDE — a REST caller has no MCP session to sample through.
+**Caller gating:** Only MCP tool invocations (`caller="mcp"`) can reach sampling tiers. REST API calls (`caller="rest"`) skip tiers 2 and 4 because the sampling request must flow back through the MCP session to the IDE — a REST caller has no MCP session to sample through. (`_can_sample()` enforces `ctx.caller == "mcp"` as of v0.4.2.)
 
-**Degradation:** When a preferred tier is unavailable, the system degrades gracefully. `RoutingDecision.degraded_from` records what tier was originally requested, allowing the UI to show informative messages (e.g., "sampling unavailable, using internal provider").
+**Degradation:** When a preferred tier is unavailable, the system degrades gracefully. `RoutingDecision.degraded_from` records what tier was originally requested, allowing the UI to show informative messages (e.g., "sampling unavailable, using internal provider"). Tier 4 auto-sampling (MCP caller, sampling capable, no internal provider) and tier 5 passthrough fallback both set `degraded_from="internal"` — internal is the natural tier, not sampling.
+
+---
+
+## Hybrid Phase Routing
+
+**Shipped:** v0.4.2 (2026-04-23). See [CHANGELOG](CHANGELOG.md#v042--2026-04-23).
+
+The pipeline runs four LLM-facing phases: `analyze`, `optimize`, `score`, `suggest`. Historically, when routing resolved to `sampling`, every phase was dispatched through the IDE's `sampling/createMessage` channel — five IDE round-trips per request. The fast phases (analyze, score, suggest) produce small structured JSON and dominated latency without benefiting from the user's IDE model.
+
+Hybrid Phase Routing breaks the tier choice into per-phase decisions encoded in `RoutingDecision.providers_by_phase`:
+
+```python
+providers_by_phase: dict[str, str] | None  # e.g., {"analyze": "internal", "optimize": "sampling", "score": "internal", "suggest": "internal"}
+```
+
+**Resolution rules (from `_resolve_with_fallback` in `routing.py:154`):**
+
+| `tier` | Internal provider available? | `providers_by_phase` |
+|--------|------------------------------|----------------------|
+| `internal` | — | `None` (all phases run on internal) |
+| `sampling` | Yes | `{analyze: internal, score: internal, suggest: internal, optimize: sampling}` |
+| `sampling` | No (force_sampling with no internal) | `{analyze: sampling, score: sampling, suggest: sampling, optimize: sampling}` |
+| `passthrough` | — | `None` (no LLM calls — prompt assembled and returned) |
+
+Tier 4 auto-sampling (MCP caller + capable + no internal provider) also emits all-sampling `providers_by_phase`. The concrete effect: when a provider *is* detected and the user is sampling-capable, `resolve_route()` returns tier 3 `internal` (via the "internal beats auto-sampling" priority), so the all-sampling path only triggers under `force_sampling` or when truly no provider exists.
+
+**Consumers:** `MCPSamplingProvider` (the MCP-sampling-as-LLMProvider wrapper introduced in v0.4.2) reads `providers_by_phase` when dispatching each phase, so the primary `PipelineOrchestrator` can orchestrate all three tiers with one code path. The legacy dedicated `sampling_pipeline.run_sampling_pipeline()` + `run_sampling_analyze()` entry points are retained for analyze-only diagnostics and for legacy MCP tool call sites that delegate on `tier=="sampling"`.
+
+**Latency impact:** Typical `analyze + score + suggest` roundtrip drops from 3 × IDE-sampling-latency to 3 × internal-provider-latency (CLI or API); `optimize` still pays one sampling roundtrip. At Sonnet 4.6 IDE sampling latency ~5-12 s and local Haiku 4.5 analyze ~1-3 s, that's a 15-30 s net win per request.
 
 ---
 
@@ -170,10 +200,15 @@ class RoutingContext:
 @dataclass(frozen=True)
 class RoutingDecision:
     tier: Literal["internal", "sampling", "passthrough"]
-    provider: LLMProvider | None       # Set only for tier=internal
+    provider: LLMProvider | None       # Set when the internal provider is used
+                                       # (tier=internal, OR tier=sampling under Hybrid Phase Routing)
     provider_name: str | None
     reason: str                        # Human-readable explanation
-    degraded_from: str | None          # Original tier if degraded
+    degraded_from: str | None          # Original tier if degraded (auto-sampling + passthrough
+                                       # fallback set "internal" because internal is the natural tier)
+    providers_by_phase: dict[str, str] | None  # Hybrid Phase Routing (v0.4.2):
+                                       # per-phase provider selection when tier=sampling
+                                       # (None for tier=internal and tier=passthrough)
 ```
 
 ### RoutingManager
@@ -380,7 +415,7 @@ RoutingStatePayload = {
 |--------|--------|------|
 | `RoutingManager._persist()` | `write_session()` (full rewrite) | On any state change (sampling init, disconnect, etc.) |
 | Middleware `_touch_session_file()` | `write()` (update last_activity + sse_streams) | Every 10s from any client POST/SSE |
-| Middleware `_write_optimistic_session()` | `write_session(True)` | Session-less GET reconnection |
+| Middleware `_write_optimistic_session()` | `write_session(current_sampling)` | Session-less GET reconnection — preserves current `sampling_capable` and calls `on_mcp_activity()`. Since v0.4.2, does **not** force `sampling_capable=True`: both the VS Code bridge (sampling) and plain Claude Code (non-sampling) send session-less reconnects, and assuming `True` for all of them produced a stuck `sampling_capable=True` after the bridge disconnected. The authoritative value is set by the real `initialize` handshake that follows within milliseconds. |
 
 ### Recovery on startup
 

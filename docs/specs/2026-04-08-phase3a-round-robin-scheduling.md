@@ -3,7 +3,7 @@
 **Date:** 2026-04-08
 **ADR:** [ADR-005](../adr/ADR-005-taxonomy-scaling-architecture.md) (Phase 3, item 1 — Section 3)
 **Depends on:** Phase 1 (dirty-set, AdaptiveScheduler measurement), Phase 2A (multi-project, per-project Q metrics, `_cluster_project_cache`)
-**Status:** Approved design, pending implementation
+**Status:** Shipped (core) — `AdaptiveScheduler` shipped as part of the B-layer work in v0.4.0 with linear regression boundary + all-dirty vs per-project budget modes + proportional quotas + `_MIN_QUOTA=3` floor + per-project starvation guard (3-cycle counter). Large-corpus stress validation (≥1000 clusters sustained across cycles) is Deferred on the ROADMAP, but the scheduler's self-tuning behavior is live.
 
 ## Problem
 
