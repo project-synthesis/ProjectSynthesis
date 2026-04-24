@@ -170,7 +170,11 @@ describe('HistoryPanel — delete error branches', () => {
     vi.useRealTimers();
   });
 
-  it('404 response surfaces "Already deleted elsewhere." toast and resets row state', async () => {
+  it('404 response reconciles locally and surfaces "Already deleted elsewhere." info toast', async () => {
+    // 404 on a single delete means the row exists in the UI but not in the
+    // DB (stale state from another-client delete, MCP tool, or corrupted
+    // reference). Treat as soft success — remove the row locally, info toast
+    // (not error). Matches the bulk path's all-gone handling.
     const { ApiError } = await import('$lib/api/optimizations');
     (deleteOptimization as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError(404, 'not found'),
@@ -191,8 +195,13 @@ describe('HistoryPanel — delete error branches', () => {
 
     await waitFor(() => {
       expect(pushSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: 'error', message: 'Already deleted elsewhere.' }),
+        expect.objectContaining({ kind: 'info', message: 'Already deleted elsewhere.' }),
       );
+    });
+
+    // Row should be filtered out of local state.
+    await waitFor(() => {
+      expect(screen.queryByText('row A')).toBeNull();
     });
   }, 15000);
 
@@ -258,17 +267,24 @@ describe('HistoryPanel — re-entry guard', () => {
 import { deleteOptimizations as bulkDeleteMock } from '$lib/api/optimizations';
 
 describe('HistoryPanel — multi-select + bulk', () => {
+  let pushSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.useFakeTimers();
     (bulkDeleteMock as ReturnType<typeof vi.fn>).mockClear();
+    (deleteOptimization as ReturnType<typeof vi.fn>).mockClear();
     (bulkDeleteMock as ReturnType<typeof vi.fn>).mockResolvedValue({
       deleted: 2,
       requested: 2,
       affected_cluster_ids: ['c1'],
       affected_project_ids: [],
     });
+    pushSpy = vi.spyOn(toastsStore, 'push');
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    pushSpy.mockRestore();
+    vi.useRealTimers();
+  });
 
   it('Select mode toggles checkboxes on every row', async () => {
     render(HistoryPanel);
@@ -313,4 +329,81 @@ describe('HistoryPanel — multi-select + bulk', () => {
       expect(bulkDeleteMock).toHaveBeenCalledWith(['opt-1', 'opt-2']);
     });
   });
+
+  it('Bulk 404 falls back to per-id DELETE and reconciles already-gone rows', async () => {
+    // Simulates a deployment where the bulk endpoint isn't available yet
+    // (e.g. older backend that predates v0.4.3). The UI should fall back to
+    // the per-row DELETE /api/optimizations/{id} endpoint (shipped in v0.4.2)
+    // and treat 404s on those as "already gone" — soft success, info toast,
+    // modal closes, rows removed locally.
+    const { ApiError } = await import('$lib/api/optimizations');
+    (bulkDeleteMock as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ApiError(404, 'not found'),
+    );
+    // Per-id delete fallback: one succeeds, one is already gone (404).
+    (deleteOptimization as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        deleted: 1, requested: 1, affected_cluster_ids: [], affected_project_ids: [],
+      })
+      .mockRejectedValueOnce(new ApiError(404, 'not found'));
+
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+    await fireEvent.click(screen.getByRole('button', { name: /^select$/i }));
+    await fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    await fireEvent.click(screen.getAllByRole('checkbox')[1]);
+    await fireEvent.click(screen.getByRole('button', { name: /delete 2/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/delete 2 optimizations/i)).toBeInTheDocument(),
+    );
+    await fireEvent.input(screen.getByRole('textbox'), {
+      target: { value: 'DELETE' },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete 2' }));
+
+    // Fallback fires per-id DELETE twice (once per selected id).
+    await waitFor(() => {
+      expect(deleteOptimization).toHaveBeenCalledTimes(2);
+    });
+    // Info toast reports the mixed result ("Deleted 1. 1 were already gone.").
+    await waitFor(() => {
+      expect(pushSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'info', message: expect.stringMatching(/already gone/i) }),
+      );
+    });
+  }, 15000);
+
+  it('Bulk 404 with all-gone falls back to singles and shows "Already deleted elsewhere"', async () => {
+    const { ApiError } = await import('$lib/api/optimizations');
+    (bulkDeleteMock as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ApiError(404, 'not found'),
+    );
+    (deleteOptimization as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new ApiError(404, 'not found'))
+      .mockRejectedValueOnce(new ApiError(404, 'not found'));
+
+    render(HistoryPanel);
+    await vi.runAllTimersAsync();
+    await waitFor(() => expect(screen.queryByText('row A')).not.toBeNull());
+    await fireEvent.click(screen.getByRole('button', { name: /^select$/i }));
+    await fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    await fireEvent.click(screen.getAllByRole('checkbox')[1]);
+    await fireEvent.click(screen.getByRole('button', { name: /delete 2/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/delete 2 optimizations/i)).toBeInTheDocument(),
+    );
+    await fireEvent.input(screen.getByRole('textbox'), { target: { value: 'DELETE' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete 2' }));
+
+    await waitFor(() => {
+      expect(pushSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'info',
+          message: expect.stringMatching(/All 2 were already deleted elsewhere/i),
+        }),
+      );
+    });
+  }, 15000);
 });
