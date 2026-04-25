@@ -469,6 +469,167 @@ class TestHasTechnicalNouns:
         )
 
 
+class TestRescueTaskTypeViaStructuralEvidence:
+    """Creative/writing → coding rescue when first sentence has code evidence.
+
+    Cycle-3/4 evidence (2026-04-25): user reported intermittent
+    ``"Background Task Lifecycle Tracking"`` and similar code-aware
+    intent labels classifying as ``creative`` because of the broad
+    semantic signals (``"create" 0.5``, ``"design" 0.7``,
+    ``"concept" 0.6``). The rescue applies the same B2 structural-
+    evidence rule the enrichment-profile selector uses.
+    """
+
+    def test_creative_with_snake_case_identifier_rescued(self):
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = (
+            "Build a tracing helper for the _spawn_bg_task lifecycle — "
+            "emit a span at create + span at completion."
+        )
+        rescued, reason = rescue_task_type_via_structural_evidence("creative", prompt)
+        assert rescued == "coding"
+        assert reason is not None
+        assert "snake_case" in reason
+        assert "_spawn_bg_task" in reason
+
+    def test_creative_with_pascal_dotted_identifier_rescued(self):
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = (
+            "Design a wrapper around EmbeddingService.embed_single to "
+            "track lifecycle events."
+        )
+        rescued, reason = rescue_task_type_via_structural_evidence("creative", prompt)
+        assert rescued == "coding"
+        assert reason is not None
+        # Either the snake_case piece (embed_single) or the PascalCase piece
+        # (EmbeddingService) of the dotted identifier may be reported as the
+        # rescue reason — both are valid syntactic evidence. Just confirm the
+        # reason names a syntactic identifier rather than a vocabulary noun.
+        assert "snake_case" in reason or "PascalCase" in reason
+
+    def test_creative_with_bare_pascal_dotted_identifier_rescued(self):
+        """When the only identifier evidence is PascalCase + dot, the
+        reason should specifically identify the PascalCase piece —
+        nothing in the prompt has snake_case or technical-noun fallback.
+        """
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = "Wrap CacheManager.invalidate so the call tree reads cleanly."
+        rescued, reason = rescue_task_type_via_structural_evidence("creative", prompt)
+        assert rescued == "coding"
+        assert reason is not None
+        assert "PascalCase" in reason
+        assert "CacheManager" in reason
+
+    def test_writing_with_technical_noun_rescued(self):
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = "Write up the asyncio coroutine pattern we discussed yesterday."
+        rescued, reason = rescue_task_type_via_structural_evidence("writing", prompt)
+        assert rescued == "coding"
+        assert reason is not None
+
+    def test_pure_creative_prose_not_rescued(self):
+        """No code evidence → no rescue, even when prompt is verbose."""
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = "Brainstorm a campaign concept that feels playful and inviting."
+        rescued, reason = rescue_task_type_via_structural_evidence("creative", prompt)
+        assert rescued == "creative"
+        assert reason is None
+
+    def test_pure_writing_prose_not_rescued(self):
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = "Write a heartfelt letter to my grandfather about his recipe."
+        rescued, reason = rescue_task_type_via_structural_evidence("writing", prompt)
+        assert rescued == "writing"
+        assert reason is None
+
+    def test_already_coding_passes_through_unchanged(self):
+        """Idempotency — re-running on already-coding result is a no-op."""
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = "Refactor the _spawn_bg_task helper for clarity."
+        rescued, reason = rescue_task_type_via_structural_evidence("coding", prompt)
+        assert rescued == "coding"
+        assert reason is None
+
+    def test_analysis_not_rescued_to_coding_even_with_identifiers(self):
+        """Analysis tasks legitimately co-occur with code identifiers
+        (auditing a function, profiling a class) and should NOT be
+        silently rewritten — only the demonstrably-broad creative/
+        writing signals warrant the override.
+        """
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = "Audit the _spawn_bg_task lifecycle for race conditions."
+        rescued, reason = rescue_task_type_via_structural_evidence("analysis", prompt)
+        assert rescued == "analysis"
+        assert reason is None
+
+    def test_data_not_rescued_to_coding_even_with_identifiers(self):
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = "Extract the request_id column from the auditlog dataframe."
+        rescued, reason = rescue_task_type_via_structural_evidence("data", prompt)
+        assert rescued == "data"
+        assert reason is None
+
+    def test_empty_prompt_returns_unchanged(self):
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        rescued, reason = rescue_task_type_via_structural_evidence("creative", "")
+        assert rescued == "creative"
+        assert reason is None
+
+    def test_creative_lifecycle_intent_matching_user_report(self):
+        """Pinned regression for the user-reported case (2026-04-25):
+        ``Background Task Lifecycle Tracking``-style prompts.
+
+        The keyword ``"create"`` + the abstract noun ``"lifecycle"`` +
+        ``"concept"``-adjacent verbs were what made the classifier
+        vote creative. Now: the syntactic identifier ``_spawn_bg_task``
+        is unambiguous evidence the prompt is about code, regardless
+        of the semantic surface.
+        """
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = (
+            "Create a background task lifecycle tracker for the "
+            "_spawn_bg_task helper — emit a span at start + span at "
+            "completion so weak-ref-collected tasks become visible."
+        )
+        rescued, reason = rescue_task_type_via_structural_evidence("creative", prompt)
+        assert rescued == "coding"
+        assert reason is not None
+        assert "_spawn_bg_task" in reason
+
+
 class TestStaticSingleSignalsSurviveDynamicMerge:
     """B6: `set_task_type_signals()` must not wipe the default single-word
     signals when a dynamic payload is missing them.
