@@ -169,6 +169,26 @@ PROMPT_SETS = {
         "Find the race between alembic upgrade and lifespan startup where _gc_orphan_meta_patterns runs against an unmigrated DB.",
         "Audit the asyncio.gather + return_exceptions=True call in batch_orchestrator — confirm partial failure does not leave the dirty_set inconsistent.",
     ],
+    # Cycle 3: tracing / instrumentation sub-domain — drive a SECOND organic
+    # sub-domain emergence under `backend`, alongside the existing `audit` one.
+    # Strategy: every first-sentence verb is implementation/instrumentation
+    # (not audit/diagnose), and every prompt mentions `tracing`,
+    # `instrumentation`, `monitoring`, `metrics`, or `observability` —
+    # the Haiku-generated keyword set for backend's `tracing` qualifier.
+    # Identifier syntax (snake_case + Module.method) keeps `code_aware`
+    # locked in via the v0.4.5 has_technical_nouns fix.
+    "cycle-3-tracing-instrumentation": [
+        "Implement a Prometheus metrics exporter for warm-path Phase 4 timings — instrumentation layer using prometheus_client.Histogram with p50/p95/p99 buckets keyed by phase_name.",
+        "Add OpenTelemetry tracing around ContextEnrichmentService.enrich() — wrap each profile-gated layer in its own span so the trace flame graph reveals which layer dominates request latency.",
+        "Build a structured debug logger for TaxonomyEventLogger.log_decision — emit duration_ms + caller frame + correlated trace_id alongside the existing op/decision/path fields.",
+        "Instrument the EmbeddingIndex.search hot loop with prometheus_client histograms — separate buckets for numpy backend vs HNSW backend so we see backend-swap latency cliffs.",
+        "Add tracing to the warm-path timer fire path — capture the time from taxonomy_changed event through _apply_cross_process_dirty_marks through Phase 0 entry as a continuous span chain.",
+        "Implement SSE event-bus instrumentation — emit per-subscriber processing time via prometheus_client.Summary so we can correlate backpressure with subscriber count.",
+        "Build a tracing wrapper around match_prompt — log the family-vs-cluster threshold cascade decision at each level so investigators see where a non-match dropped out without grepping diagnostic logs.",
+        "Add execution-path instrumentation to the auto_inject_patterns flow — record the per-call (cluster_count, pattern_count, similarity_distribution) trio as a structured monitoring event.",
+        "Implement metrics export for the qualifier embedding cache — instrumentation showing hit_rate, miss_rate, and eviction_count from DomainSignalLoader's qualifier_embeddings_generated counter.",
+        "Build a tracing helper for the _spawn_bg_task lifecycle — emit a span at create + span at completion so weak-ref-collected tasks become visible as orphan spans in the trace graph.",
+    ],
     # Cycle 2: embedding/RAG sub-domain — meta-prompt the system about its own embedding stack.
     # All 10 prompts target backend code paths in `backend/app/services/embedding_service.py` +
     # `backend/app/services/taxonomy/{embedding_index,fusion,matching,qualifier_index,

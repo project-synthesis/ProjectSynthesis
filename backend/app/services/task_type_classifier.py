@@ -479,19 +479,37 @@ def _looks_like_identifier(token: str) -> bool:
 
     Splits on interior `.` so module-method tokens
     (``TaxonomyEngine.persist_optimization``) match either component.
-    Conservative on the snake side (requires at least one underscore +
-    one trailing segment) and Pascal side (requires 2+ capitalized words)
-    so common prose tokens (``re-route``, ``Today``) don't trip.
 
-    Token comes in as the ORIGINAL whitespace-bounded chunk — callers
-    that lowercase it first will defeat the Pascal check.
+    snake_case (e.g. ``link_repo``, ``_spawn_bg_task``) requires
+    underscores by definition — these are zero-non-code-legitimacy
+    syntactic markers and always count.
+
+    PascalCase (e.g. ``EmbeddingService``, ``TaxonomyEngine``) is
+    syntactically just two capital-led words concatenated, which also
+    matches plain prose brand names (``JavaScript``, ``TypeScript``,
+    ``GitHub``, ``YouTube``, ``McDonalds``, ``PostScript``…). To avoid
+    false positives on prose mentions of those brands, PascalCase
+    counts only when the ORIGINAL whitespace token carries a
+    **structural marker** (``.``, ``-``, ``/``) signalling actual code
+    context — ``EmbeddingService.embed_single`` fires (dot present),
+    ``backend/app/EmbeddingService`` fires (slash present), but bare
+    ``JavaScript`` does not.
+
+    Conservative on Pascal (requires 2+ capitalized words) so
+    sentence-start single-capital words (``Today``) are out by
+    construction. The B2 rescue path is further gated by
+    ``repo_linked=True`` at the call site, bounding the blast radius
+    of any remaining marginal false positive.
     """
     if not token:
         return False
+    has_struct_marker = any(c in "._-/" for c in token)
     for piece in token.split("."):
         if not piece:
             continue
-        if _SNAKE_CASE_RE.match(piece) or _PASCAL_CASE_RE.match(piece):
+        if _SNAKE_CASE_RE.match(piece):
+            return True
+        if _PASCAL_CASE_RE.match(piece) and has_struct_marker:
             return True
     return False
 
@@ -527,11 +545,14 @@ def has_technical_nouns(first_sentence: str) -> bool:
     for raw in first_sentence.split():
         if _looks_like_identifier(raw.strip(".,;:!?()[]{}\"'")):
             has_identifier = True
-        # Vocabulary path: lowercase + strip + interior dot/hyphen split.
+        # Vocabulary path: lowercase + strip + interior `.`/`-`/`/` split
+        # so file paths (``backend/app/services/...``), kebab-case
+        # (``cache-aware``), and module-method tokens (``asyncio.gather``)
+        # all contribute their constituent tokens to the noun match.
         word = raw.lower().strip(".,;:!?()[]{}\"'")
         if word:
             expanded.append(word)
-        for sub in re.split(r"[.\-]", word):
+        for sub in re.split(r"[.\-/]", word):
             if sub and sub != word:
                 expanded.append(sub)
     if has_identifier:

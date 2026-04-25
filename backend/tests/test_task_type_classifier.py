@@ -353,9 +353,13 @@ class TestHasTechnicalNouns:
         )
         # Plain snake_case (3+ words / 2+ underscores).
         assert ttc.has_technical_nouns("trace link_repo reindex flow")
-        # PascalCase compound (2+ capital-led words concatenated).
+        # PascalCase + structural marker (dotted method) → fires.
+        # Bare PascalCase like ``EmbeddingService`` ALONE is treated as
+        # potentially-a-brand-name (JavaScript/TypeScript/GitHub) and is
+        # rejected by the structural-marker guard added in B5; with the
+        # ``.method()`` companion, structural context is unambiguous.
         assert ttc.has_technical_nouns(
-            "review EmbeddingService for batch encoding"
+            "review EmbeddingService.encode_batch for throughput"
         )
         # Mixed — identifier + module path.
         assert ttc.has_technical_nouns(
@@ -377,6 +381,57 @@ class TestHasTechnicalNouns:
         assert not ttc.has_technical_nouns("Write a poem titled Tale of Two Cities")
         # Quoted prose — straight punctuation only.
         assert not ttc.has_technical_nouns("Tell me about machine learning")
+
+    def test_pascal_case_brand_names_alone_do_not_trip_identifier_signal(self):
+        """B5 (2026-04-25 reviewer catch): bare PascalCase brand names
+        (JavaScript, TypeScript, GitHub, YouTube, EmbeddingService,
+        PostScript, McDonalds, ...) match ``_PASCAL_CASE_RE`` because
+        they are syntactically two capital-led words concatenated.
+        Without this guard, a prose prompt like ``Write a tutorial about
+        JavaScript for beginners`` with a repo linked falsely upgrades
+        to ``code_aware``.
+
+        Fix: PascalCase counts only when the original whitespace token
+        carries a structural marker (``.``, ``-``, ``/``) signalling
+        actual code context — bare brand names are pure-alphabetic and
+        skip the rescue. snake_case (which by definition contains
+        ``_``) is unaffected.
+
+        Note: the B2 rescue path requires ``repo_linked=True`` at the
+        call site, so blast radius is bounded — but the regression test
+        here is the only way to keep future heuristic tweaks honest.
+        """
+        # Pure-alphabetic brand names — no structural marker → reject.
+        # Care taken to choose prose contexts that don't accidentally include
+        # a ``_TECHNICAL_NOUNS`` word (``model``, ``api``, ``framework``,
+        # ``service``, ``schema``…) which would fire via the vocabulary
+        # path independent of the identifier check.
+        assert not ttc.has_technical_nouns("Write a tutorial about JavaScript for beginners")
+        assert not ttc.has_technical_nouns("compare TypeScript to JavaScript")
+        assert not ttc.has_technical_nouns("post a status update on GitHub")
+        assert not ttc.has_technical_nouns("watch this YouTube video about cooking")
+        assert not ttc.has_technical_nouns("the McDonalds franchise reach")
+        assert not ttc.has_technical_nouns("PostScript was developed in the 1980s")
+
+    def test_pascal_case_with_structural_marker_still_fires(self):
+        """The structural-marker guard for PascalCase MUST NOT block
+        legitimate code references — those have a ``.`` or ``/`` near
+        the PascalCase token. Live cycle 2 reference:
+        ``Audit EmbeddingService.embed_single`` should still fire.
+        """
+        # PascalCase with `.method` → structural marker present → fires.
+        assert ttc.has_technical_nouns(
+            "audit EmbeddingService.embed_single in backend/app/services"
+        )
+        # PascalCase + path separator → fires.
+        assert ttc.has_technical_nouns(
+            "review TaxonomyEngine usage in backend/app/services/taxonomy/engine.py"
+        )
+        # Bare PascalCase WITH a snake_case sibling token in same sentence → fires
+        # via the snake_case path (independent of PascalCase guard).
+        assert ttc.has_technical_nouns(
+            "diagnose the EmbeddingService and the link_repo handler"
+        )
 
     def test_extract_first_sentence_does_not_split_on_identifier_dots(self):
         """B5 (2026-04-25 cycle 2): ``EmbeddingService.embed_single`` and
