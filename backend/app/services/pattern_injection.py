@@ -145,6 +145,115 @@ def format_injected_patterns(
     return text
 
 
+async def record_injection_provenance(
+    db: AsyncSession,
+    *,
+    optimization_id: str,
+    cluster_ids: list[str],
+    injected: list[InjectedPattern],
+    similarity_map: dict[str, float] | None = None,
+    trace_id: str | None = None,
+) -> tuple[int, int]:
+    """Persist ``OptimizationPattern`` provenance rows for an injection.
+
+    Three provenance kinds are recorded:
+
+    1. **Topic** — one row per cluster id surfaced by the embedding-index
+       search (`relationship="injected"`, no `meta_pattern_id`).
+    2. **Global** — one row per injected pattern with ``source="global"``
+       (`relationship="global_injected"`, with `global_pattern_id`).
+    3. **Cross-cluster** — one row per injected pattern from a cluster
+       NOT already in `cluster_ids` (`relationship="injected"`, with
+       `meta_pattern_id`).
+
+    Each kind writes inside its own ``begin_nested()`` SAVEPOINT so a
+    transient failure on one row class doesn't prevent the others.
+    Returns ``(successes, failures)`` for telemetry; the global counters
+    in :func:`get_injection_stats` are updated as a side effect.
+
+    Must be called AFTER the parent ``Optimization`` row has been
+    committed — otherwise the FK to optimization fires inside the
+    SAVEPOINT and rolls every kind back. Internal/sampling pipelines
+    call this from `persist_and_propagate` after `db.commit()`;
+    passthrough/refine pass `record_provenance=True` to
+    :func:`auto_inject_patterns` which invokes us in-line because their
+    parent row is already written by the time they call.
+    """
+    from app.models import OptimizationPattern
+
+    global _injection_provenance_successes  # noqa: PLW0603
+    global _injection_provenance_failures  # noqa: PLW0603
+    _prov_ok = 0
+    _prov_fail = 0
+    sim_map = similarity_map or {}
+
+    if cluster_ids:
+        try:
+            async with db.begin_nested():
+                for cid in cluster_ids:
+                    db.add(OptimizationPattern(
+                        optimization_id=optimization_id,
+                        cluster_id=cid,
+                        relationship="injected",
+                        similarity=sim_map.get(cid),
+                    ))
+                await db.flush()
+            _prov_ok += len(cluster_ids)
+        except Exception as exc:
+            _prov_fail += 1
+            logger.warning(
+                "Topic provenance failed (savepoint rolled back): %s trace_id=%s",
+                exc, trace_id,
+            )
+
+    for ip in injected:
+        if ip.source == "global" and ip.source_id:
+            try:
+                async with db.begin_nested():
+                    db.add(OptimizationPattern(
+                        optimization_id=optimization_id,
+                        cluster_id=ip.cluster_id or "unknown",
+                        global_pattern_id=ip.source_id,
+                        relationship="global_injected",
+                        similarity=ip.similarity,
+                    ))
+                    await db.flush()
+                _prov_ok += 1
+            except Exception as prov_exc:
+                _prov_fail += 1
+                logger.warning(
+                    "GlobalPattern provenance failed (savepoint rolled back): %s",
+                    prov_exc,
+                )
+        elif ip.source_id and ip.cluster_id not in cluster_ids:
+            try:
+                async with db.begin_nested():
+                    db.add(OptimizationPattern(
+                        optimization_id=optimization_id,
+                        cluster_id=ip.cluster_id,
+                        meta_pattern_id=ip.source_id,
+                        relationship="injected",
+                        similarity=ip.similarity,
+                    ))
+                    await db.flush()
+                _prov_ok += 1
+            except Exception as cc_prov_exc:
+                _prov_fail += 1
+                logger.warning(
+                    "Cross-cluster provenance failed (savepoint rolled back): %s",
+                    cc_prov_exc,
+                )
+
+    _injection_provenance_successes += _prov_ok
+    _injection_provenance_failures += _prov_fail
+    if _prov_ok:
+        logger.info(
+            "Injection provenance: %d records for opt=%s. trace_id=%s",
+            _prov_ok, optimization_id[:8], trace_id,
+        )
+    return _prov_ok, _prov_fail
+
+
 async def auto_inject_patterns(
     raw_prompt: str,
     taxonomy_engine: Any,
@@ -152,6 +261,8 @@ async def auto_inject_patterns(
     trace_id: str,
     optimization_id: str | None = None,
     project_id: str | None = None,
+    *,
+    record_provenance: bool = True,
 ) -> tuple[list[InjectedPattern], list[str]]:
     """Auto-inject cluster meta-patterns based on prompt embedding similarity.
 
@@ -173,6 +284,14 @@ async def auto_inject_patterns(
             ``enable_cross_project_injection`` preference (default OFF ⇒
             scope applies). ``GlobalPattern`` injection is *not* scoped —
             cross-project is the whole point of the global tier.
+        record_provenance: When True (default, legacy callers like passthrough
+            and refine), writes ``OptimizationPattern`` rows in-line via
+            ``begin_nested()`` SAVEPOINTs. The internal/sampling pipelines
+            now pass ``False`` because they call this function BEFORE the
+            parent ``Optimization`` row is committed — the FK check fails
+            every single time and the SAVEPOINT silently rolls back. Those
+            callers invoke :func:`record_injection_provenance` from the
+            persist phase instead, after the parent row is durable.
 
     Returns:
         ``(injected_patterns, cluster_ids)`` — both empty lists if no match or error.
@@ -431,94 +550,24 @@ async def auto_inject_patterns(
         logger.warning("GlobalPattern injection failed (non-fatal): %s trace_id=%s", gp_exc, trace_id)
 
     # ------------------------------------------------------------------
-    # Persist injection provenance when optimization_id is available.
-    # Three provenance types: topic-based, cross-cluster, and global.
-    # Uses flush() to eagerly detect constraint violations — if provenance
-    # fails, the pending objects are expunged so the main Optimization
-    # commit is not affected.
+    # Persist injection provenance when optimization_id is available AND
+    # the caller is recording in-line. Internal/sampling pipelines call
+    # us BEFORE the parent Optimization is committed (the patterns need
+    # to flow into the optimizer prompt) and pass ``record_provenance=False``
+    # — they invoke :func:`record_injection_provenance` from the persist
+    # phase instead, after the parent row is durable. Only passthrough
+    # and refine reach this branch in-line; both run after the parent
+    # row is already written.
     # ------------------------------------------------------------------
-    if optimization_id:
-        from app.models import OptimizationPattern
-
-        global _injection_provenance_successes  # noqa: PLW0603
-        global _injection_provenance_failures  # noqa: PLW0603
-        _prov_ok = 0
-        _prov_fail = 0
-
-        # 1. Topic-based provenance (cluster matches from embedding index)
-        # Each block uses begin_nested() (SAVEPOINT) so an FK IntegrityError
-        # (optimization row not yet committed) only rolls back the savepoint,
-        # leaving the outer AsyncSession usable for subsequent pipeline phases.
-        if cluster_ids:
-            try:
-                async with db.begin_nested():
-                    for cid in cluster_ids:
-                        record = OptimizationPattern(
-                            optimization_id=optimization_id,
-                            cluster_id=cid,
-                            relationship="injected",
-                            similarity=similarity_map.get(cid),
-                        )
-                        db.add(record)
-                    await db.flush()
-                _prov_ok += len(cluster_ids)
-            except Exception as exc:
-                _prov_fail += 1
-                logger.warning(
-                    "Topic provenance failed (savepoint rolled back): %s trace_id=%s",
-                    exc, trace_id,
-                )
-
-        # 2. Cross-cluster + global provenance (from injected patterns list)
-        for ip in injected:
-            if ip.source == "global" and ip.source_id:
-                # GlobalPattern injection
-                try:
-                    async with db.begin_nested():
-                        prov = OptimizationPattern(
-                            optimization_id=optimization_id,
-                            cluster_id=ip.cluster_id or "unknown",
-                            global_pattern_id=ip.source_id,
-                            relationship="global_injected",
-                            similarity=ip.similarity,
-                        )
-                        db.add(prov)
-                        await db.flush()
-                    _prov_ok += 1
-                except Exception as prov_exc:
-                    _prov_fail += 1
-                    logger.warning(
-                        "GlobalPattern provenance failed (savepoint rolled back): %s",
-                        prov_exc,
-                    )
-            elif ip.source_id and ip.cluster_id not in cluster_ids:
-                # Cross-cluster injection (not already covered by topic provenance)
-                try:
-                    async with db.begin_nested():
-                        cc_prov = OptimizationPattern(
-                            optimization_id=optimization_id,
-                            cluster_id=ip.cluster_id,
-                            meta_pattern_id=ip.source_id,
-                            relationship="injected",
-                            similarity=ip.similarity,
-                        )
-                        db.add(cc_prov)
-                        await db.flush()
-                    _prov_ok += 1
-                except Exception as cc_prov_exc:
-                    _prov_fail += 1
-                    logger.warning(
-                        "Cross-cluster provenance failed (savepoint rolled back): %s",
-                        cc_prov_exc,
-                    )
-
-        _injection_provenance_successes += _prov_ok
-        _injection_provenance_failures += _prov_fail
-        if _prov_ok:
-            logger.info(
-                "Injection provenance: %d records for opt=%s. trace_id=%s",
-                _prov_ok, optimization_id[:8], trace_id,
-            )
+    if optimization_id and record_provenance:
+        await record_injection_provenance(
+            db,
+            optimization_id=optimization_id,
+            cluster_ids=cluster_ids,
+            injected=injected,
+            similarity_map=similarity_map,
+            trace_id=trace_id,
+        )
 
     # Detailed injection chain log for observability
     if cluster_meta:

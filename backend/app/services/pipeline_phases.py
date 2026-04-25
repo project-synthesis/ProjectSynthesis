@@ -754,6 +754,11 @@ class PersistenceInputs:
     auto_injected_cluster_ids: list[str]
     taxonomy_engine: Any | None
     divergence_flags: list[str] = field(default_factory=list)
+    # ``list[InjectedPattern]`` from auto_inject_patterns. Untyped here to
+    # keep the contract module-import-light; persist_and_propagate calls
+    # ``record_injection_provenance`` post-commit, which is the only
+    # consumer.
+    auto_injected_patterns: list[Any] = field(default_factory=list)
 
 
 async def persist_and_propagate(
@@ -840,6 +845,30 @@ async def persist_and_propagate(
             logger.warning("Failed to track applied patterns: %s", exc)
 
     await db.commit()
+
+    # Post-persist injection provenance.  ``auto_inject_patterns`` ran
+    # PRE-persist (the patterns had to flow into the optimizer prompt)
+    # with ``record_provenance=False`` so the FK-on-Optimization check
+    # would not fire inside a SAVEPOINT and silently rollback every
+    # ``relationship='injected'`` row.  Now that the parent row is
+    # committed, we can write provenance cleanly.
+    if inputs.auto_injected_cluster_ids or inputs.auto_injected_patterns:
+        try:
+            from app.services.pattern_injection import record_injection_provenance
+
+            await record_injection_provenance(
+                db,
+                optimization_id=inputs.opt_id,
+                cluster_ids=list(inputs.auto_injected_cluster_ids),
+                injected=list(inputs.auto_injected_patterns),
+                trace_id=inputs.trace_id,
+            )
+            await db.commit()
+        except Exception as prov_exc:
+            logger.warning(
+                "Post-persist injection provenance write failed (non-fatal): %s",
+                prov_exc,
+            )
 
     # Include auto-injected cluster IDs in usage propagation
     if inputs.auto_injected_cluster_ids:
