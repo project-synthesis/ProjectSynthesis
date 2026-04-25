@@ -92,6 +92,43 @@
     const target = Math.max(report.threshold * 1.5, 0.01);
     return Math.min(100, Math.round((report.threshold / target) * 100));
   }
+
+  // Source breakdown — render the qualifier-cascade pipeline contribution
+  // as three sibling chips so the operator can diagnose which signal
+  // pipeline is feeding the qualifier count. Cycle-3 incident
+  // (2026-04-25): all qualifier counts came from intent_label fallback
+  // because domain_raw had no qualifier syntax. Visible breakdown turns
+  // that diagnosis from "query the API" into "glance at the card."
+  const SOURCE_ORDER: QualifierSource[] = [
+    'domain_raw',
+    'intent_label',
+    'tf_idf',
+  ];
+
+  function breakdownEntries(c: QualifierCandidate): {
+    source: QualifierSource;
+    count: number;
+  }[] {
+    const sb = c.source_breakdown ?? {};
+    return SOURCE_ORDER.map((s) => ({ source: s, count: sb[s] ?? 0 }));
+  }
+
+  function breakdownTooltip(c: QualifierCandidate): string {
+    const entries = breakdownEntries(c)
+      .map((e) => `${e.source}: ${e.count}`)
+      .join(' · ');
+    return `Qualifier-cascade source contribution — ${entries}`;
+  }
+
+  // Sign-convention friendly gap formatter for tooltip use.
+  function gapTooltip(gap: number | null): string {
+    if (gap == null) return '';
+    const pts = gap * 100;
+    if (pts <= 0) {
+      return `Consistency exceeds threshold by ${(-pts).toFixed(1)} percentage points (above the bar — emergence enabled if member floor met).`;
+    }
+    return `Consistency is ${pts.toFixed(1)} percentage points below threshold (below the bar — qualifier signal must intensify before emergence is possible).`;
+  }
 </script>
 
 <div class="sel">
@@ -136,7 +173,28 @@
       </div>
       <div class="sel-numerics">
         <span class="sel-consistency">{consistencyPct(top)}%</span>
-        <span class="sel-gap" style="color: {tierColor}">{formatGap(report.gap_to_threshold)}</span>
+        <span
+          class="sel-gap"
+          style="color: {tierColor}"
+          use:tooltip={gapTooltip(report.gap_to_threshold)}
+        >{formatGap(report.gap_to_threshold)}</span>
+      </div>
+      <div
+        class="sel-breakdown"
+        aria-label="Qualifier source breakdown"
+        use:tooltip={breakdownTooltip(top)}
+      >
+        {#each breakdownEntries(top) as entry (entry.source)}
+          <span
+            class="sel-breakdown-chip"
+            class:active={entry.count > 0}
+            class:dominant={entry.source === top.dominant_source && entry.count > 0}
+            style="--chip-color: {sourceColor(entry.source)}"
+          >
+            <span class="sel-breakdown-source">{sourceShort(entry.source)}</span>
+            <span class="sel-breakdown-count">{entry.count}</span>
+          </span>
+        {/each}
       </div>
     </div>
   {/if}
@@ -314,6 +372,48 @@
     font-size: 10px;
     color: var(--color-text-dim);
     padding: 2px 0;
+  }
+
+  .sel-breakdown {
+    display: flex;
+    gap: 3px;
+    margin-top: 2px;
+  }
+
+  .sel-breakdown-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 2px;
+    padding: 0 3px;
+    height: 14px;
+    line-height: 14px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-input);
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    flex: 1;
+    min-width: 0;
+  }
+
+  .sel-breakdown-chip.active {
+    color: var(--chip-color);
+    border-color: color-mix(in srgb, var(--chip-color) 30%, transparent);
+  }
+
+  .sel-breakdown-chip.dominant {
+    background: color-mix(in srgb, var(--chip-color) 8%, var(--color-bg-input));
+    border-color: color-mix(in srgb, var(--chip-color) 50%, transparent);
+  }
+
+  .sel-breakdown-source {
+    font-size: 8px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+  }
+
+  .sel-breakdown-count {
+    font-size: 9px;
+    font-weight: 700;
   }
 
   .sel-runners {
