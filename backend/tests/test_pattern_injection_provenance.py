@@ -531,16 +531,16 @@ class TestRecordInjectionProvenancePostCommit:
         # Find each kind by relationship.
         topic = [r for r in added if r.relationship == "injected" and not getattr(r, "meta_pattern_id", None)]
         cross = [r for r in added if r.relationship == "injected" and getattr(r, "meta_pattern_id", None)]
-        gloval = [r for r in added if r.relationship == "global_injected"]
+        global_rows = [r for r in added if r.relationship == "global_injected"]
         assert len(topic) == 1
         assert topic[0].cluster_id == "c-topic"
         assert topic[0].similarity == 0.95
         assert len(cross) == 1
         assert cross[0].cluster_id == "cc-cluster"
         assert cross[0].meta_pattern_id == "mp-002"
-        assert len(gloval) == 1
-        assert gloval[0].cluster_id == "gp-cluster"
-        assert gloval[0].global_pattern_id == "gp-001"
+        assert len(global_rows) == 1
+        assert global_rows[0].cluster_id == "gp-cluster"
+        assert global_rows[0].global_pattern_id == "gp-001"
 
     @pytest.mark.asyncio
     async def test_record_injection_provenance_skips_cross_cluster_already_in_topic(self):
