@@ -118,18 +118,35 @@ class UpdateStore {
 
   /** Fetch the pre-flight readiness probe — must be called before
    * showing the apply dialog so dirty files / divergence / in-flight
-   * optimizations are surfaced before the user clicks. */
+   * optimizations are surfaced before the user clicks.
+   *
+   * Race guard: if the user opens the dialog twice in rapid succession,
+   * a stale response from the slower call would otherwise overwrite a
+   * fresher one. The generation counter discards out-of-order
+   * responses (only the latest call's response is applied to state). */
+  private _preflightGen = 0;
+
   async loadPreflight(): Promise<void> {
     if (!this.latestTag) return;
+    this._preflightGen += 1;
+    const myGen = this._preflightGen;
     this.preflightLoading = true;
     this.preflightError = null;
     try {
-      this.preflight = await getUpdatePreflight(this.latestTag);
+      const result = await getUpdatePreflight(this.latestTag);
+      if (myGen !== this._preflightGen) {
+        // A newer call superseded us — drop this response.
+        return;
+      }
+      this.preflight = result;
     } catch (err) {
+      if (myGen !== this._preflightGen) return;
       this.preflightError = err instanceof Error ? err.message : 'Pre-flight failed';
       this.preflight = null;
     } finally {
-      this.preflightLoading = false;
+      if (myGen === this._preflightGen) {
+        this.preflightLoading = false;
+      }
     }
   }
 
