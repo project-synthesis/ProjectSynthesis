@@ -1,10 +1,10 @@
 # Heuristic Analyzer Audit Report
 
-_Last reviewed: 2026-04-24. Reflects the `task_type_classifier.py` + `domain_detector.py` + `weakness_detector.py` split shipped in v0.4.1 (Phase 3F)._
+_Last reviewed: 2026-04-25. Reflects the `task_type_classifier.py` + `domain_detector.py` + `weakness_detector.py` split shipped in v0.4.1 (Phase 3F), plus v0.4.5 (PR #55) post-LLM domain reconciliation + structural task-type rescue._
 
 This document outlines the architecture, integration points, and business logic of the `HeuristicAnalyzer` across the Project Synthesis codebase. It specifically details where the heuristic analysis operates completely autonomously and where it interfaces with internal LLMs (Haiku) to fall back or enrich its context.
 
-As of v0.4.1, `heuristic_analyzer.py` is a thin orchestrator (~715 lines) that delegates to three sub-modules: `task_type_classifier.py` (A1 compound keywords, A2 verb/noun disambiguation, A4 Haiku LLM fallback, `_TASK_TYPE_SIGNALS` / `_STATIC_SINGLE_SIGNALS` / `_TASK_TYPE_EXTRACTED` registries, `has_technical_nouns()` B2 rescue-path helper), `domain_detector.py` (`DomainSignalLoader` shim, `classify_domain`, `enrich_domain_qualifier`), and `weakness_detector.py` (`_is_negated()` + `_compute_structural_density()` aware pattern detection).
+As of v0.4.5, `heuristic_analyzer.py` is a thin orchestrator (~715 lines) that delegates to three sub-modules: `task_type_classifier.py` (A1 compound keywords, A2 verb/noun disambiguation, A4 Haiku LLM fallback, `_TASK_TYPE_SIGNALS` / `_STATIC_SINGLE_SIGNALS` / `_TASK_TYPE_EXTRACTED` registries, `has_technical_nouns()` B2 rescue-path helper [v0.4.5 expanded with async/concurrency vocab + interior dot/hyphen/slash split + `_looks_like_identifier` snake_case + PascalCase-with-struct-marker detection], `rescue_task_type_via_structural_evidence()` v0.4.5 — overrides creative/writing → coding when first sentence has structural code evidence, scope-guarded against analysis/data), `domain_detector.py` (`DomainSignalLoader` shim, `classify_domain`, `enrich_domain_qualifier` — v0.4.5 also runs **post-LLM** in `pipeline_phases.resolve_post_analyze_state` BEFORE `domain_resolver.resolve()` so resolver sees canonical form; paired with `_normalize_llm_domain` hyphen→colon syntax fix), and `weakness_detector.py` (`_is_negated()` + `_compute_structural_density()` aware pattern detection).
 
 ## 1. Core Architecture & Responsibilities
 
