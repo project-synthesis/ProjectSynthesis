@@ -271,4 +271,40 @@ describe('ContextPanel', () => {
       expect(panel === null || panel.getAttribute('aria-hidden') === 'true').toBe(true);
     });
   });
+
+  describe('accessibility', () => {
+    it('panel has role=complementary + aria-label (C24)', () => {
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel);
+      const panel = container.querySelector('[role="complementary"]');
+      expect(panel).not.toBeNull();
+      expect(panel!.getAttribute('aria-label')).toBe('Pattern context');
+    });
+
+    it('collapse button has aria-expanded and aria-controls (C25)', () => {
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      render(ContextPanel);
+      const btn = screen.getByRole('button', { name: /collapse|expand/i });
+      expect(btn.getAttribute('aria-expanded')).toMatch(/true|false/);
+      expect(btn.getAttribute('aria-controls')).toBe('context-panel-body');
+    });
+
+    it('respects prefers-reduced-motion (C23)', async () => {
+      // Svelte's compile-time scoped CSS isn't injected into <style> tags in
+      // the vitest runner, so we read the .svelte source directly and assert
+      // the @media (prefers-reduced-motion: reduce) block is present. This
+      // matches the C8 strategy — source-locked contract, brand-grep at
+      // Task 18 catches drift.
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const src = await fs.readFile(
+        path.resolve(__dirname, 'ContextPanel.svelte'),
+        'utf-8',
+      );
+      expect(src).toContain('prefers-reduced-motion: reduce');
+      expect(src).toMatch(/transition-duration:\s*0\.01ms/);
+    });
+  });
 });
