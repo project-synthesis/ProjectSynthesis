@@ -249,4 +249,15 @@ describe('EditorGroups', () => {
     const panel = container.querySelector('[data-test="context-panel"]');
     expect(panel?.getAttribute('data-collapsed')).toBe('true');
   });
+
+  it('hides ContextPanel when active tab is not "prompt" (result/diff/mindmap views)', () => {
+    // ContextPanel surfaces patterns relevant to the LIVE prompt being
+    // edited. On a result/diff/mindmap view there's no live prompt, so
+    // the rail would be visual noise next to the Inspector. Mount-gate
+    // on activeTab.type === 'prompt'.
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1500 });
+    editorStore.openResult('opt-1');  // switches to result tab
+    const { container } = render(EditorGroups);
+    expect(container.querySelector('[data-test="context-panel"]')).toBeNull();
+  });
 });

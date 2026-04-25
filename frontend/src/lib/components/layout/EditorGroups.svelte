@@ -57,6 +57,11 @@
     return () => window.removeEventListener('resize', handler);
   });
   const narrowViewport = $derived(innerWidth < 1400);
+
+  // Only mount ContextPanel when the user is actively editing a prompt.
+  // On result/diff/mindmap tabs there's no live prompt to surface patterns
+  // for, so the rail would just take horizontal space without information.
+  const showContextPanel = $derived(editorStore.activeTab?.type === 'prompt');
 </script>
 
 <div class="editor-shell">
@@ -161,7 +166,9 @@
     {/if}
   </div>
 </div>
-<ContextPanel forceCollapsed={narrowViewport} />
+{#if showContextPanel}
+  <ContextPanel forceCollapsed={narrowViewport} />
+{/if}
 </div>
 
 <style>
