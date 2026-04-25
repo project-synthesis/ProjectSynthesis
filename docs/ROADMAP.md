@@ -2,7 +2,7 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.4.4-dev (latest release: v0.4.3). Reflects shipped state as of 2026-04-24.
+**Snapshot:** v0.4.4 (released 2026-04-25). Reflects shipped state as of 2026-04-25.
 
 ## Conventions
 
@@ -16,7 +16,7 @@ Living document tracking planned improvements. Items are prioritized but not sch
 ## Immediate
 
 ### Taxonomy observatory — live domain & sub-domain lifecycle dashboard
-**Status:** Tier 1 Shipped (`feat/taxonomy-observatory-tier-1` branch — three-panel shell + pinned `OBSERVATORY` tab; period-aware Timeline + Heatmap, current-state Readiness Aggregate). Tier 2+ (steering suggestions, vocabulary transparency, cross-domain pattern flow) remains Exploring.
+**Status:** Tier 1 Shipped (v0.4.4, merged to main — three-panel shell + pinned `OBSERVATORY` tab; period-aware Timeline + Heatmap, current-state Readiness Aggregate). Tier 2+ (steering suggestions, vocabulary transparency, cross-domain pattern flow) remains Exploring.
 **Spec:** [docs/superpowers/specs/2026-04-24-taxonomy-observatory-design.md](superpowers/specs/2026-04-24-taxonomy-observatory-design.md)
 **Plan:** [docs/superpowers/plans/2026-04-24-taxonomy-observatory-plan.md](superpowers/plans/2026-04-24-taxonomy-observatory-plan.md)
 **Context:** The taxonomy engine now discovers domains and sub-domains organically from user activity through a three-source signal pipeline (domain_raw qualifiers, Haiku-generated vocabulary, dynamic TF-IDF keywords). The warm path runs every 5 minutes, making discovery decisions with full observability events logged to JSONL. Readiness endpoints + sparklines + topology overlay shipped in v0.3.37–v0.3.38 cover the per-domain lifecycle surface; the Observatory extends that into a first-class panel with cross-domain trajectories.
@@ -60,15 +60,13 @@ Living document tracking planned improvements. Items are prioritized but not sch
 ## Planned
 
 ### Live pattern intelligence — real-time context awareness during prompt authoring
-**Status:** Planned (design phase — pre-implementation)
-**Spec:** [ADR-007](adr/ADR-007-live-pattern-intelligence.md)
-**Context:** The pattern suggestion system only triggers on paste events (50+ char delta). Users typing prompts keystroke-by-keystroke receive zero guidance from the taxonomy's accumulated knowledge until they submit. The backend has every capability needed — embedding search (~200ms), heuristic classification (~30ms), strategy intelligence (~100ms).
+**Status:** Tier 1 Shipped (v0.4.4) — `ContextPanel.svelte` sidebar + `match_level` / `cross_cluster_patterns` additive keys on `POST /api/clusters/match`. Two-path detection (typing 800 ms + paste 300 ms) with multi-pattern selection committing to `forgeStore.appliedPatternIds`. Single-banner `PatternSuggestion.svelte` retired. Tier 2 (enrichment preview via `POST /api/clusters/preview-enrichment`) and Tier 3 (proactive inline hints) remain Planned.
+**Spec:** [ADR-007](adr/ADR-007-live-pattern-intelligence.md), [Tier 1 design spec](superpowers/specs/2026-04-24-live-pattern-intelligence-tier-1-design.md)
+**Context:** Tier 1 closes the authoring-phase visibility gap — users see matched cluster identity, top meta-patterns, and cross-cluster patterns continuously as they type rather than only on paste. Backend primitives were already in place (embedding search ~200 ms, heuristic classification ~30 ms, strategy intelligence ~100 ms); the work was UI orchestration plus two additive response keys.
 
-**Scope:** 3-tier progressive intelligence: (1) live pattern matching as the user types (replaces paste-only detection), (2) enrichment preview showing classification, weaknesses, and strategy recommendations before submission, (3) proactive inline hints for strategy mismatches, missing repo context, and refinement opportunities. New `POST /api/clusters/preview-enrichment` endpoint, new `ContextPanel.svelte` sidebar, deprecation of single-banner `PatternSuggestion.svelte`. Each tier is independently shippable.
+**Tier 2 — Enrichment preview**: lightweight `POST /api/clusters/preview-enrichment` returns analyze + strategy intelligence preview without running the full optimization. Surface in the ContextPanel as a second section below the patterns list. No LLM calls; reuses `HeuristicAnalyzer` + `resolve_strategy_intelligence`.
 
-**Implementation status:** None of phases A–E shipped as of 2026-04-19. All composed primitives are in place — work is UI orchestration.
-
-**Impact:** Transforms optimization from a black box into a transparent authoring partner.
+**Tier 3 — Proactive inline hints**: tech-stack divergence alerts, strategy mismatches, refinement opportunities surfaced inline in the ContextPanel as the user types. Ranked by relevance to the current prompt + project.
 
 ---
 
@@ -310,9 +308,15 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ## Completed (recent)
 
-### v0.4.4-dev (in flight — post-v0.4.3 work on main)
+### v0.4.4 — 2026-04-25
 
-Nine audit-follow-up + roadmap-debt items shipped after the v0.4.3 cut, alongside the full documentation audit. Each landed as a standalone RED→GREEN-tested commit on `main`.
+Shipped: ADR-007 Live Pattern Intelligence Tier 1, Taxonomy Observatory Tier 1, `since`/`until` activity-history range variant, `/api/taxonomy/pattern-density` aggregator, plus the nine audit-follow-up + roadmap-debt items below. Two PRs (#50 ContextPanel + #51 Observatory) merged to `main` as feature work; the audit follow-up landed as standalone RED→GREEN-tested commits.
+
+- **ADR-007 Tier 1 — Live Pattern Intelligence (`ContextPanel.svelte`)** — replaces the legacy `PatternSuggestion.svelte` banner with a persistent sidebar mounted by `EditorGroups`. Cluster identity row + meta-patterns checkboxes + neon-purple-bordered GLOBAL section for cross-cluster patterns. APPLY commits multi-pattern selection to `forgeStore.appliedPatternIds`. Mount-gated to the prompt tab, hidden during synthesis, full a11y. Backend `POST /api/clusters/match` response gains additive `match_level` + `cross_cluster_patterns` keys (no schema migration). Spec: [docs/superpowers/specs/2026-04-24-live-pattern-intelligence-tier-1-design.md](superpowers/specs/2026-04-24-live-pattern-intelligence-tier-1-design.md). PR #50.
+- **Taxonomy Observatory Tier 1 — three-panel observability tab** — pinned `OBSERVATORY` workbench tab mounting `TaxonomyObservatory.svelte`. Three panels: `DomainLifecycleTimeline` (reverse-chrono SSE-live + JSONL backfill), `DomainReadinessAggregate` (composes existing meter+emergence per domain), `PatternDensityHeatmap` (read-only data grid with hover tooltip). Period selector (`24h | 7d | 30d`) drives Timeline + Heatmap via `observatoryStore`. Backend additions: `since`/`until` range variant on `GET /api/clusters/activity/history`, new `GET /api/taxonomy/pattern-density` aggregator, `taxonomy_insights.py` service + router + Pydantic schemas. Spec: [docs/superpowers/specs/2026-04-24-taxonomy-observatory-design.md](superpowers/specs/2026-04-24-taxonomy-observatory-design.md). PR #51.
+- **Post-merge spec compliance audit (PRs #50 + #51)** — five spec gaps caught during a full re-read: (1) `getClusterActivityHistory` API client missing `since`/`until` range params, (2) Timeline period chips were no-op for the Timeline panel, (3) `DomainReadinessAggregate` cards missing 6 px chromatic dot, (4) `PatternDensityHeatmap` rows missing hover affordance + tooltip, (5) Activity-history within-day events emitted oldest-first in both single-day and range modes. Each fix lands with a regression test source-locked against the contract.
+
+The remaining v0.4.4 work shipped to `main` after the v0.4.3 cut as standalone RED→GREEN-tested commits:
 
 - **Full doc audit against v0.4.4-dev state** — every document under `docs/` (excluding `CHANGELOG.md`) cross-referenced against the current codebase. ROADMAP, routing-architecture, embedding-architecture, sub-domain-discovery, context-injection-use-case-matrix, sampling-tier-data-processing, hybrid-taxonomy-plan, SUPPORT, the three heuristic-analyzer docs, enrichment-consolidation-action-items, the three context-depth-audit iterations, ADR-001, ADR-007 — all updated with current-state facts + version markers + (for historical records) status banners. 30 files touched, 320 insertions / 152 deletions.
 - **#8 `prepare.py` preferences snapshot parity with `optimize.py`** — hoist `prefs_snapshot = prefs.load()` once and thread into every `prefs.get(key, snapshot)` call. Eliminates the redundant disk I/O + legacy-key-migration pass per `synthesis_prepare_optimization` invocation. Regression-guard test in `test_mcp_tools.py` asserts `load()` is called exactly once per call and every `prefs.get` passes the snapshot as second arg. (Commit `48c82a9d`.)

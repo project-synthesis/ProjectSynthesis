@@ -165,7 +165,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Real-time events** — SSE-based event bus with toast notifications (add/success/info/warning/error), connection health monitoring (latency percentiles, degradation detection, exponential backoff reconnection)
 - **Readiness notifications** — `domain_readiness_changed` SSE events dispatched as severity-mapped toasts; per-row mute toggle + global `domain_readiness_notifications` preference
 - **Taxonomy Activity panel** — live feed of all taxonomy decision events with filters and expandable context
-- **Live pattern detection** — two-path system (typing: 800ms debounce + paste: 300ms) cosine-searches active clusters, suggests matches with 1-click apply. Zero-pattern matches suppressed
+- **Live pattern detection — `ContextPanel` sidebar (ADR-007 Tier 1)** — two-path detection (typing: 800 ms debounce + paste: 300 ms) cosine-searches active clusters and renders matches in a persistent sidebar mounted by `EditorGroups` alongside the prompt editor. Multi-pattern selection with checkboxes; APPLY commits to `forgeStore.appliedPatternIds`. Cluster identity row + meta-patterns + neon-purple-bordered GLOBAL section for cross-cluster patterns. Mount-gated to the prompt tab, hidden during synthesis, full a11y + `prefers-reduced-motion`. Collapse/expand chevron persists to `localStorage['synthesis:context_panel_open']`. At < 1400 px viewport defaults to a 28 px rail (user can expand — choice persists)
+- **Taxonomy Observatory — pinned three-panel observability tab** — workbench tab mounting `TaxonomyObservatory.svelte`, a flex-grid shell composing **Domain Lifecycle Timeline** (reverse-chrono activity stream + JSONL backfill via `/api/clusters/activity/history?since=...&until=...` with path/family/errors filter chips and click-to-expand context payload), **Domain Readiness Aggregate** (`auto-fill, minmax(280px, 1fr)` card grid composing existing `DomainStabilityMeter` + `SubDomainEmergenceList` per domain, sorted critical → guarded → healthy with chromatic 6 px domain dot, `domain:select` CustomEvent on click), and **Pattern Density Heatmap** (read-only data grid backed by `/api/taxonomy/pattern-density`, row backgrounds tinted with `taxonomyColor(domain)` opacity-scaled to meta-pattern count, hover surfaces 1 px inset cyan contour + tooltip with absolute counts). LocalStorage-persisted `period` (`24h | 7d | 30d`, default `7d`) drives Timeline + Heatmap via `observatoryStore`
 - **Tier-aware UI** — accent color adapts to active routing tier (CLI/API, sampling, passthrough)
 - **Feedback loop** — thumbs up/down drives strategy affinity adaptation + phase weight adaptation
 - **Auto-update** — detects new releases on startup (3-tier: git tags, raw fetch, GitHub Releases API). Persistent StatusBar badge, one-click update dialog with changelog, detached HEAD warning, post-update validation. CLI: `./init.sh update [tag]`
@@ -214,13 +215,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2932 tests)
+# Backend tests (2994 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1394 tests)
+# Frontend tests (1477 tests)
 cd frontend && npm test
 
 # Frontend build
@@ -259,7 +260,9 @@ cd frontend && npm run build
 | `/api/clusters/tree` | GET | Flat node list for 3D viz (`?project_id=` for project subtree) |
 | `/api/clusters/stats` | GET | Q metrics + sparkline |
 | `/api/clusters/recluster` | POST | Cold-path refit |
-| `/api/clusters/activity` | GET | Taxonomy decision event feed |
+| `/api/clusters/activity` | GET | Taxonomy decision event feed (ring buffer, live) |
+| `/api/clusters/activity/history` | GET | JSONL-backed activity history. Single-day via `?date=YYYY-MM-DD` OR range via `?since=YYYY-MM-DD&until=YYYY-MM-DD` (mutually exclusive, 30-day cap; `since`-only defaults `until=today`). Reverse-chronological at every level (across days AND within each day) |
+| `/api/taxonomy/pattern-density` | GET | Per-domain pattern-density rollup (`?period=24h\|7d\|30d`, default `7d`). One row per active domain node with `cluster_count`, `meta_pattern_count`, `meta_pattern_avg_score`, `global_pattern_count` (Python-side `source_cluster_ids` containment), `cross_cluster_injection_rate`. Backs the Observatory's Pattern Density Heatmap |
 | `/api/taxonomy/reset` | POST | Admin recovery sweep — force-prune archived zero-member clusters + orphan project nodes + stale signal caches, then run warm-path reconciliation synchronously (bypasses 30s debounce). Idempotent |
 | `/api/projects` | GET | List project nodes (hybrid taxonomy, ADR-005) |
 | `/api/projects/migrate` | POST | Bulk-move optimizations between projects (rate-limited) |
