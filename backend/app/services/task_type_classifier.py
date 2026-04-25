@@ -246,12 +246,18 @@ def _strip_code_and_tables(text: str) -> str:
 def extract_first_sentence(prompt_lower: str) -> str:
     """Return the first sentence of ``prompt_lower`` for keyword-boost scoring.
 
-    Strips code / tables then splits on the first ``.?!`` terminator.
+    Strips code / tables then splits on the first ``.?!`` terminator that is
+    followed by whitespace or end-of-string. The trailing-whitespace lookahead
+    distinguishes sentence terminators from interior dots in identifier
+    syntax (``EmbeddingService.embed_single``, ``main.py``, ``module.method()``)
+    which previously truncated the boundary at the first dot — losing every
+    downstream technical noun.
+
     Exposed publicly so ``context_enrichment.py`` and any future callers
     share one boundary semantic with the heuristic classifier.
     """
     return re.split(
-        r"[.?!]", _strip_code_and_tables(prompt_lower), maxsplit=1,
+        r"[.?!](?=\s|$)", _strip_code_and_tables(prompt_lower), maxsplit=1,
     )[0]
 
 
@@ -453,8 +459,46 @@ def check_technical_disambiguation(first_sentence: str) -> bool:
     return False
 
 
+# B4 (2026-04-25 cycle 2): Python-identifier-syntax patterns. snake_case
+# (``link_repo``, ``_spawn_bg_task``, ``persist_optimization``) and
+# PascalCase compounds (``EmbeddingService``, ``TaxonomyEngine``) carry
+# zero non-code legitimacy — natural prose never produces these forms.
+# Match on the ORIGINAL (un-lowercased) whitespace token so casing
+# stays intact for the Pascal check.
+_SNAKE_CASE_RE = re.compile(r"^_?[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")
+# Any leading ``_``, lowercase root, and 1+ underscore-prefixed
+# alphanumeric segments — so ``link_repo`` (1 separator) AND
+# ``_spawn_bg_task`` (3 separators) both qualify.
+_PASCAL_CASE_RE = re.compile(r"^[A-Z][a-z]+(?:[A-Z][a-z]+){1,}$")
+# Two+ adjacent capital-led words (``EmbeddingService``, ``TaxonomyEngine``)
+# — sentence-start single-capital words (``Today``) intentionally excluded.
+
+
+def _looks_like_identifier(token: str) -> bool:
+    """Return True for tokens that match Python identifier syntax.
+
+    Splits on interior `.` so module-method tokens
+    (``TaxonomyEngine.persist_optimization``) match either component.
+    Conservative on the snake side (requires at least one underscore +
+    one trailing segment) and Pascal side (requires 2+ capitalized words)
+    so common prose tokens (``re-route``, ``Today``) don't trip.
+
+    Token comes in as the ORIGINAL whitespace-bounded chunk — callers
+    that lowercase it first will defeat the Pascal check.
+    """
+    if not token:
+        return False
+    for piece in token.split("."):
+        if not piece:
+            continue
+        if _SNAKE_CASE_RE.match(piece) or _PASCAL_CASE_RE.match(piece):
+            return True
+    return False
+
+
 def has_technical_nouns(first_sentence: str) -> bool:
-    """Return True if the first sentence contains any ``_TECHNICAL_NOUNS`` word.
+    """Return True if the first sentence contains any ``_TECHNICAL_NOUNS`` word
+    OR any token matching Python identifier syntax (snake_case / PascalCase).
 
     Looser signal than :func:`check_technical_disambiguation` — does NOT
     require a paired technical verb. Used by the B2 enrichment-profile
@@ -464,24 +508,34 @@ def has_technical_nouns(first_sentence: str) -> bool:
     codebase and should get ``code_aware`` context even though the
     task_type stays non-coding.
 
-    Words are lowercased, stripped of trailing punctuation, and SPLIT on
-    interior dots / hyphens so module-method tokens (``asyncio.gather``,
-    ``db.execute``) and kebab-case identifiers (``warm-path``,
-    ``meta-pattern``) match their constituent technical noun. Without the
-    split, ``asyncio.gather`` was one whitespace-token, didn't strip its
-    interior dot, and missed the ``asyncio`` noun (B3, 2026-04-25).
+    Two parallel signals fire here:
+
+    1. **Vocabulary hit.** Words are lowercased, stripped of trailing
+       punctuation, and SPLIT on interior dots / hyphens so module-method
+       tokens (``asyncio.gather``) and kebab-case identifiers
+       (``async-session``) match their constituent technical noun.
+
+    2. **Identifier syntax.** Multi-segment snake_case (``_spawn_bg_task``,
+       ``link_repo_callback``) and PascalCase compounds (``EmbeddingService``)
+       are zero-non-code-legitimacy markers — natural prose never produces
+       them. Catches the live regression where a prompt about a linked
+       codebase used ONLY identifier names without any nouns from the
+       keyword set, demoting to ``knowledge_work``.
     """
-    lowered = first_sentence.lower()
     expanded: list[str] = []
-    for raw in lowered.split():
-        word = raw.strip(".,;:!?()[]{}\"'")
+    has_identifier = False
+    for raw in first_sentence.split():
+        if _looks_like_identifier(raw.strip(".,;:!?()[]{}\"'")):
+            has_identifier = True
+        # Vocabulary path: lowercase + strip + interior dot/hyphen split.
+        word = raw.lower().strip(".,;:!?()[]{}\"'")
         if word:
             expanded.append(word)
-        # Expand interior `.` / `-` so module.method and kebab-case
-        # identifiers contribute their parts.
         for sub in re.split(r"[.\-]", word):
             if sub and sub != word:
                 expanded.append(sub)
+    if has_identifier:
+        return True
     return any(w in _TECHNICAL_NOUNS for w in expanded)
 
 

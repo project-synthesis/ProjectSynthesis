@@ -15,6 +15,12 @@ Optimize the prompt by making its structure and intent more explicit to the AI.
 - Specify the audience: "Write for developers who are familiar with..."
 - Add quality criteria the response should meet
 
+## Voice discipline (avoid optimizer-thinking leakage)
+
+Every instruction must use **imperative voice** — directives addressed to the executor, never questions the optimizer is asking itself. When decomposing audits / investigations into a closed taxonomy of failure modes or numbered checks, each item ends as an imperative ("Identify X", "Confirm Y", "Find Z", "Distinguish A from B"), not a rhetorical question ("Does X happen?", "Where is Y called?", "Is Z guarded?").
+
+A trailing `?` in an instruction list is the most common leakage pattern: it signals the optimizer was reasoning through possibilities and forgot to convert them into directives. Such reasoning belongs in `changes_summary`, not in the deliverable prompt.
+
 ## When to Use
 - General-purpose improvement when no specific strategy fits
 - Prompts that are unclear about what they want

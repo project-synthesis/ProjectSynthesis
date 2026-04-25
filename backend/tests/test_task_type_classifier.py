@@ -334,6 +334,85 @@ class TestHasTechnicalNouns:
         assert ttc.has_technical_nouns("review the async-session lifecycle")
         assert ttc.has_technical_nouns("optimize the cache-aware fetch loop")
 
+    def test_python_identifier_syntax_signals_technical(self):
+        """B4 (2026-04-25 cycle 2): snake_case + PascalCase identifier syntax
+        is a zero-non-code-legitimacy signal, even when no explicit noun from
+        the keyword set appears.
+
+        Live regression: ``Audit our background task GC in main.py — find
+        weak-ref races where _spawn_bg_task lets link_repo / reindex jobs
+        disappear mid-await.`` matched no technical nouns and was demoted
+        to ``knowledge_work`` despite obviously addressing a backend
+        codebase. Multi-segment snake_case (``_spawn_bg_task``,
+        ``link_repo``) and PascalCase compounds (``EmbeddingService``)
+        carry zero prose meaning — they're code identifiers by syntax.
+        """
+        # Snake_case private identifier (leading underscore + 2+ underscores).
+        assert ttc.has_technical_nouns(
+            "audit _spawn_bg_task in main.py for weak-ref races"
+        )
+        # Plain snake_case (3+ words / 2+ underscores).
+        assert ttc.has_technical_nouns("trace link_repo reindex flow")
+        # PascalCase compound (2+ capital-led words concatenated).
+        assert ttc.has_technical_nouns(
+            "review EmbeddingService for batch encoding"
+        )
+        # Mixed — identifier + module path.
+        assert ttc.has_technical_nouns(
+            "diagnose TaxonomyEngine.persist_optimization concurrency"
+        )
+
+    def test_identifier_heuristic_does_not_false_positive_on_prose(self):
+        """The identifier heuristic must NOT trip on plain prose without
+        snake_case or PascalCase syntax markers. The B2 rescue path is
+        further gated by ``repo_linked=True`` at the call site, so even
+        a marginal false positive here is contained to users who have
+        already linked a codebase.
+        """
+        assert not ttc.has_technical_nouns("write a poem about gardens")
+        assert not ttc.has_technical_nouns("draft a story for the kids")
+        # Single capitalized word (sentence start) — not PascalCase compound.
+        assert not ttc.has_technical_nouns("Today is a beautiful day")
+        # Hyphenation + capitalization without underscores — book titles, etc.
+        assert not ttc.has_technical_nouns("Write a poem titled Tale of Two Cities")
+        # Quoted prose — straight punctuation only.
+        assert not ttc.has_technical_nouns("Tell me about machine learning")
+
+    def test_extract_first_sentence_does_not_split_on_identifier_dots(self):
+        """B5 (2026-04-25 cycle 2): ``EmbeddingService.embed_single`` and
+        ``main.py`` contain dots, but the dot is NOT a sentence terminator
+        — sentence terminators always have whitespace (or end-of-string)
+        following the punctuation. Pre-fix: ``Audit EmbeddingService.embed_single
+        in main.py — model.encode() is called...`` had its first sentence
+        truncated to ``audit embeddingservice`` (split at the first dot
+        in ``EmbeddingService.embed_single``), losing every downstream
+        technical noun including ``model`` and ``backend``.
+        """
+        first = ttc.extract_first_sentence(
+            "audit embeddingservice.embed_single in backend/app/services/embedding_service.py — "
+            "model.encode() is called without normalize_embeddings=true"
+        )
+        # The sentence should extend at least through "model.encode()" — i.e.
+        # NOT truncated at the first dot in EmbeddingService.embed_single.
+        assert "model" in first, f"first sentence got truncated to {first!r}"
+        # And the dot at the end is fine — but we don't supply one here, so
+        # the whole prose is the first sentence.
+
+    def test_extract_first_sentence_still_terminates_at_real_sentence_end(self):
+        """Sentence boundary must still fire on ``.?!`` followed by whitespace
+        or end-of-string. The fix narrows the splitter — it does NOT remove it.
+        """
+        first = ttc.extract_first_sentence(
+            "this is the first sentence. this is the second."
+        )
+        assert "first" in first
+        assert "second" not in first
+        # End-of-string period also terminates.
+        first2 = ttc.extract_first_sentence("only one sentence ending here.")
+        assert first2.strip() in (
+            "only one sentence ending here", "only one sentence ending here.",
+        )
+
 
 class TestStaticSingleSignalsSurviveDynamicMerge:
     """B6: `set_task_type_signals()` must not wipe the default single-word
