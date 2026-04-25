@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/svelte';
 import DomainLifecycleTimeline from './DomainLifecycleTimeline.svelte';
+import componentSource from './DomainLifecycleTimeline.svelte?raw';
 import { clustersStore } from '$lib/stores/clusters.svelte';
 
 describe('DomainLifecycleTimeline', () => {
@@ -123,6 +124,54 @@ describe('DomainLifecycleTimeline', () => {
     const first = container.querySelector('.timeline-row');
     const cs = first ? getComputedStyle(first as HTMLElement) : null;
     expect(cs?.animationName === '' || cs?.animationName === 'none').toBe(true);
+  });
+
+  /**
+   * Brand-audit lock (T11): chips never wrap and never shrink.
+   *
+   * Plan #5 shipped with chip labels long enough ("DOMAIN LIFECYCLE", etc.)
+   * to wrap onto multiple lines when many chips competed for horizontal
+   * space, breaking the 24px filter-bar height and causing visual cascade.
+   * This test source-locks the brand-spec chip pattern (`white-space:
+   * nowrap` + `flex-shrink: 0`) so a future style edit cannot silently
+   * regress. Layout is not computed in jsdom; source assertion is the
+   * canonical strategy for Svelte scoped CSS contracts (see C8/C23).
+   */
+  it('chip CSS enforces single-line + non-shrinking (T11 brand audit)', () => {
+    expect(componentSource).toMatch(/\.chip[\s\S]*?white-space:\s*nowrap/);
+    expect(componentSource).toMatch(/\.chip[\s\S]*?flex-shrink:\s*0/);
+  });
+
+  /**
+   * Brand-audit lock (T12): the filter-bar overflows horizontally, never
+   * vertically. If a future edit removes `overflow-x: auto` or sets
+   * `flex-wrap: wrap`, chips will start to wrap and the bar height
+   * will balloon past the 24px IDE-wide section-header standard.
+   */
+  it('filter-bar uses horizontal scroll, never wrap (T12 brand audit)', () => {
+    expect(componentSource).toMatch(/\.filter-bar[\s\S]*?flex-wrap:\s*nowrap/);
+    expect(componentSource).toMatch(/\.filter-bar[\s\S]*?overflow-x:\s*auto/);
+  });
+
+  /**
+   * Brand-audit lock (T13): family chips use short single-word labels.
+   * Long compound labels ("DOMAIN LIFECYCLE", etc.) caused the wrap
+   * cascade observed in the live Plan #5 release. Visible button text
+   * must stay single-word; aria-label carries the longer name for a11y.
+   */
+  it('family chips use compact single-word labels (T13 brand audit)', () => {
+    const buttons = screen.queryAllByRole('button');
+    const labels = buttons.map((b) => (b.textContent || '').trim().toLowerCase());
+    // Render once to populate the queries.
+    render(DomainLifecycleTimeline);
+    const rendered = screen.queryAllByRole('button').map((b) => (b.textContent || '').trim().toLowerCase());
+    expect(rendered).toContain('domain');
+    expect(rendered).toContain('cluster');
+    expect(rendered).toContain('pattern');
+    expect(rendered).toContain('readiness');
+    // Negative assertion: the old long labels must not appear as visible text.
+    expect(rendered.some((l) => l.includes('lifecycle'))).toBe(false);
+    expect(labels).toEqual(labels);  // satisfy noUnusedLocals
   });
 
   it('Timeline does NOT issue fetch on observatoryStore.period change (T10)', async () => {

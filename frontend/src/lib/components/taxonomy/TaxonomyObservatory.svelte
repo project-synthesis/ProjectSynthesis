@@ -77,12 +77,22 @@
     padding: 6px;
     gap: 6px;
   }
+  /*
+   * Brand spec (24px sidebar section header). The shell header allows the
+   * legend to wrap onto a second line when horizontal space is tight rather
+   * than getting clipped at the right edge. `flex-wrap: wrap` keeps the
+   * title left-aligned and the legend trails directly below if needed —
+   * a single auto-min-content row when wide, two rows when narrow.
+   * `min-height: 24px` + auto height honors the IDE-wide standard while
+   * accommodating the wrapped state.
+   */
   .observatory-shell-header {
-    height: 28px;
+    min-height: 24px;
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
+    align-items: baseline;
     gap: 6px;
-    padding: 0 6px;
+    padding: 4px 6px;
     border-bottom: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
   }
@@ -94,11 +104,24 @@
     letter-spacing: 0.1em;
     color: var(--color-text-primary);
     margin: 0;
+    flex-shrink: 0;
   }
+  /*
+   * Brand spec (compact label). Smaller (10px), dim, italic-ish via lower
+   * contrast — visually subordinated below the Syne title without resorting
+   * to actual italic (which fights the geometric sans-serif character).
+   * `min-width: 0` permits the legend to shrink before forcing the title
+   * to break; `flex: 1 1 auto` lets it consume remaining horizontal space
+   * when wide and wrap to a second line when narrow.
+   */
   .observatory-legend {
+    font-family: var(--font-sans);
     font-size: 10px;
+    line-height: 14px;
     color: var(--color-text-dim);
     margin: 0;
+    flex: 1 1 auto;
+    min-width: 0;
   }
   .panel-grid {
     flex: 1;

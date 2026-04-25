@@ -124,15 +124,51 @@
         class="chip"
         class:chip--on={activePaths.has(p as ActivityPath)}
         onclick={() => togglePath(p as ActivityPath)}
+        title="{p} path events"
       >{p}</button>
     {/each}
     <span class="filter-sep" aria-hidden="true">·</span>
-    <button type="button" class="chip" class:chip--on={activeFamilies.has('domain')} onclick={() => toggleFamily('domain')}>domain lifecycle</button>
-    <button type="button" class="chip" class:chip--on={activeFamilies.has('cluster')} onclick={() => toggleFamily('cluster')}>cluster lifecycle</button>
-    <button type="button" class="chip" class:chip--on={activeFamilies.has('pattern')} onclick={() => toggleFamily('pattern')}>pattern lifecycle</button>
-    <button type="button" class="chip" class:chip--on={activeFamilies.has('readiness')} onclick={() => toggleFamily('readiness')}>readiness</button>
+    <button
+      type="button"
+      class="chip"
+      class:chip--on={activeFamilies.has('domain')}
+      onclick={() => toggleFamily('domain')}
+      title="Domain lifecycle (discover, reevaluate, dissolve)"
+      aria-label="Domain lifecycle"
+    >domain</button>
+    <button
+      type="button"
+      class="chip"
+      class:chip--on={activeFamilies.has('cluster')}
+      onclick={() => toggleFamily('cluster')}
+      title="Cluster lifecycle (split, merge, retire)"
+      aria-label="Cluster lifecycle"
+    >cluster</button>
+    <button
+      type="button"
+      class="chip"
+      class:chip--on={activeFamilies.has('pattern')}
+      onclick={() => toggleFamily('pattern')}
+      title="Pattern lifecycle (promote, demote, retire)"
+      aria-label="Pattern lifecycle"
+    >pattern</button>
+    <button
+      type="button"
+      class="chip"
+      class:chip--on={activeFamilies.has('readiness')}
+      onclick={() => toggleFamily('readiness')}
+      title="Readiness signals (stability, emergence)"
+      aria-label="Readiness"
+    >readiness</button>
     <span class="filter-sep" aria-hidden="true">·</span>
-    <button type="button" class="chip" class:chip--on={errorsOnly} onclick={() => errorsOnly = !errorsOnly}>errors only</button>
+    <button
+      type="button"
+      class="chip"
+      class:chip--on={errorsOnly}
+      onclick={() => errorsOnly = !errorsOnly}
+      title="Show only error/failed/rejected events"
+      aria-label="Errors only"
+    >errors</button>
     <span class="filter-spacer" aria-hidden="true"></span>
     {#each PERIODS as p (p)}
       <button
@@ -143,6 +179,7 @@
         aria-pressed={observatoryStore.period === p}
         class:chip--on={observatoryStore.period === p}
         onclick={() => observatoryStore.setPeriod(p)}
+        title="Window: last {p}"
       >{p}</button>
     {/each}
   </nav>
@@ -175,17 +212,38 @@
 
 <style>
   .timeline { padding: 0; display: flex; flex-direction: column; min-height: 0; }
+  /*
+   * Brand spec: Ultra-compact density (24px header). The filter-bar must
+   * never wrap — chips with horizontally-scrollable overflow keep the row
+   * at a fixed 24px even when many chips are present, preserving the
+   * IDE-wide layout standard. `flex-wrap: nowrap` + per-chip `flex-shrink: 0`
+   * + `overflow-x: auto` is the canonical pattern.
+   */
   .filter-bar {
     display: flex;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 4px;
     padding: 2px 6px;
     height: 24px;
     border-bottom: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
   }
-  .filter-sep { color: var(--color-text-dim); font-size: 10px; }
-  .filter-spacer { flex: 1; }
+  .filter-bar::-webkit-scrollbar { display: none; }
+  .filter-sep {
+    color: var(--color-text-dim);
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+  .filter-spacer { flex: 1; min-width: 0; }
+  /*
+   * Brand spec (chip pattern): 18px height, 16px line-height, 0 6px padding,
+   * 10px Geist Mono uppercase. `white-space: nowrap` + `flex-shrink: 0`
+   * prevent multi-line cascade when many chips compete for horizontal space.
+   */
   .chip {
     height: 18px;
     line-height: 16px;
@@ -193,6 +251,8 @@
     font-size: 10px;
     font-family: var(--font-mono);
     text-transform: uppercase;
+    white-space: nowrap;
+    flex-shrink: 0;
     background: transparent;
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-dim);

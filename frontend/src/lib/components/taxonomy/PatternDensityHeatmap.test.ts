@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/svelte';
 import PatternDensityHeatmap from './PatternDensityHeatmap.svelte';
+import componentSource from './PatternDensityHeatmap.svelte?raw';
 import { observatoryStore } from '$lib/stores/observatory.svelte';
 import type { PatternDensityRow } from '$lib/api/observatory';
 
@@ -139,6 +140,41 @@ describe('PatternDensityHeatmap', () => {
     observatoryStore.patternDensityError = 'fetch-failed';
     render(PatternDensityHeatmap);
     expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Brand-audit lock (H9): row backgrounds must mix INTO `--color-bg-card`
+   * (the actual surface), NOT into `transparent`. Mixing a vivid neon
+   * (e.g. backend=#b44aff) into `transparent` over a near-black page
+   * background lets the chromatic shift read sharply against the dark,
+   * making "subtle" tints look saturated. Plan #5 shipped with the
+   * `transparent` mix and a 22% ceiling — the live UI looked like a
+   * sea of bright violet on the backend row at max density. Mixing into
+   * the card token composes the row as a tinted card surface (brand
+   * hierarchy tier).
+   */
+  it('row backgrounds mix into bg-card token, never transparent (H9 brand audit)', () => {
+    expect(componentSource).toMatch(
+      /color-mix\(in srgb,\s*\{taxonomyColor\([^)]+\)\}\s*\{heatPct\([^)]+\)\}%,\s*var\(--color-bg-card\)\)/,
+    );
+    // Negative assertion: the old transparent-mix path must not return.
+    expect(componentSource).not.toMatch(
+      /color-mix\(in srgb,\s*\{taxonomyColor\([^)]+\)\}\s*\{heatPct\([^)]+\)\}%,\s*transparent\)/,
+    );
+  });
+
+  /**
+   * Brand-audit lock (H10): the empirical opacity ceiling stays at or
+   * below 14%. Pushed higher, the brightest row begins to dominate the
+   * panel rather than encoding a quiet density signal — the eye reads
+   * the row as a "selected" or "alerted" state when both are wrong.
+   */
+  it('opacity ceiling stays brand-subtle (≤14%) (H10 brand audit)', () => {
+    const match = componentSource.match(/HEAT_MAX_PCT\s*=\s*(\d+)/);
+    expect(match).not.toBeNull();
+    const ceiling = Number(match?.[1] ?? 0);
+    expect(ceiling).toBeGreaterThan(0);
+    expect(ceiling).toBeLessThanOrEqual(14);
   });
 
   it('zero counts render as "0", not "—" (REFACTOR regression)', () => {

@@ -37,11 +37,19 @@
     }
   });
 
-  // Empirical opacity ceiling: 22% keeps row text readable against the
-  // tinted background while still encoding the density signal. Pushed
-  // higher (>30%) the foreground hex contrast collapses below WCAG AA
-  // for the dimmer domain hues (e.g. data=#b49982).
-  const HEAT_MAX_PCT = 22;
+  // Brand spec: heatmap row tints must be SUBTLE, not saturated. The neon
+  // domain palette (e.g. backend=#b44aff, frontend=#ff4895) renders
+  // visually loud even at low percentages when mixed with pure transparent
+  // over a dark page background — the eye reads the chromatic shift sharply
+  // against near-black. Two combined mitigations:
+  //   1. Drop the empirical ceiling from 22% → 14% so even the brightest
+  //      row stays a quiet tint rather than a shouting fill.
+  //   2. Mix INTO `--color-bg-card` (#11111e) instead of `transparent` —
+  //      this composes the row as a tinted card surface (brand hierarchy
+  //      tier) rather than a translucent overlay, keeping the row visually
+  //      flush with sibling panels and preserving WCAG AA contrast for
+  //      the dimmer domain hues (e.g. data=#b49982 warm taupe).
+  const HEAT_MAX_PCT = 14;
 
   const maxCount = $derived(Math.max(1, ...rows.map((r) => r.meta_pattern_count)));
 
@@ -87,7 +95,7 @@
         <div
           class="density-row"
           data-test="density-row"
-          style="background-color: color-mix(in srgb, {taxonomyColor(row.domain_label)} {heatPct(row.meta_pattern_count)}%, transparent);"
+          style="background-color: color-mix(in srgb, {taxonomyColor(row.domain_label)} {heatPct(row.meta_pattern_count)}%, var(--color-bg-card));"
         >
           <span class="col col-domain">{row.domain_label}</span>
           <span class="col col-n">{fmtCount(row.cluster_count)}</span>
