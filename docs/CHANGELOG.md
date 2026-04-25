@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.4 — 2026-04-25
+
 ### Fixed
 - **Live Pattern Intelligence + Taxonomy Observatory — post-merge spec compliance audit (PRs #50 + #51 follow-up)** — sweep of both Tier 1 implementations against their original design specs caught five spec gaps; each is now closed and locked behind a regression test:
   - **`getClusterActivityHistory` API client** never exposed the `since`/`until` range variant the AH1–AH5 backend cycle introduced — the typed wrapper only accepted `date`. Unioned-shape `ActivityHistoryParams` now models the mutex contract (single-day vs range) at the type level so callers can't accidentally pass both. (`frontend/src/lib/api/clusters.ts`)
