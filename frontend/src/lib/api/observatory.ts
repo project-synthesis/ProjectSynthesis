@@ -1,6 +1,6 @@
 /**
  * Observatory API client — typed wrapper around the taxonomy observatory
- * endpoints. Backed by `backend/app/routers/taxonomy.py::pattern_density`.
+ * endpoints. Backed by `backend/app/routers/taxonomy_insights.py::get_pattern_density`.
  */
 
 import { apiFetch } from './client';

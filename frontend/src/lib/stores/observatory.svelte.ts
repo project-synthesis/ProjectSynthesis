@@ -6,8 +6,8 @@
  * for the active window. `setPeriod()` debounces re-fetch by 1 s so rapid
  * tab-flick interactions collapse into a single network round-trip.
  *
- * Backend contract: `backend/app/services/taxonomy_observatory.py` +
- * `backend/app/routers/taxonomy.py::pattern_density`.
+ * Backend contract: `backend/app/services/taxonomy_insights.py` +
+ * `backend/app/routers/taxonomy_insights.py::get_pattern_density`.
  */
 
 import {
