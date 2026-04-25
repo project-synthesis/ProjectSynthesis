@@ -4,7 +4,6 @@
   import { clustersStore } from '$lib/stores/clusters.svelte';
 
   import { getStrategies } from '$lib/api/client';
-  import PatternSuggestion from './PatternSuggestion.svelte';
   import { getPhaseLabel } from '$lib/utils/dimensions';
   import { strategyListToOptions, type StrategyOption } from '$lib/utils/strategies';
 
@@ -125,10 +124,6 @@
 <div class="prompt-edit">
   <!-- Editor area (top — takes all available space) -->
   <div class="editor-area">
-    <PatternSuggestion onApply={(result) => {
-      forgeStore.appliedPatternIds = result.ids;
-      forgeStore.appliedPatternLabel = result.clusterLabel;
-    }} />
     <textarea
       class="prompt-textarea"
       placeholder="Enter your prompt here..."

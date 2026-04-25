@@ -127,7 +127,6 @@ class ClusterStore {
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _lastLength = 0;
   private _lastMatchedText = '';        // avoid re-matching identical content
-  private _skippedClusterId: string | null = null;  // prevent re-showing skipped suggestion
   private _matchAbort: AbortController | null = null;  // cancel in-flight match requests
   private _loadGeneration = 0;
   private _clusterGeneration = 0;
@@ -191,8 +190,6 @@ class ClusterStore {
         this._lastMatchedText = trimmed;
 
         if (resp.match && resp.match.meta_patterns.length > 0) {
-          // Don't re-show a skipped suggestion for the same cluster
-          if (this._skippedClusterId === resp.match.cluster.id) return;
           // Defensive defaults for legacy responses (backwards compat).
           this.suggestion = {
             ...resp.match,
@@ -214,26 +211,16 @@ class ClusterStore {
   /**
    * User clicked [Apply] — returns the meta-pattern IDs + cluster label
    * for pipeline injection and UI confirmation chip.
+   *
+   * Tier 1: panel stays visible after apply; selection state is owned
+   * by ContextPanel via forgeStore.appliedPatternIds. The store no
+   * longer dismisses or hides the suggestion.
    */
   applySuggestion(): { ids: string[]; clusterLabel: string } | null {
     if (!this.suggestion) return null;
     const ids = this.suggestion.meta_patterns.map(mp => mp.id);
     const clusterLabel = this.suggestion.cluster.label;
-    this._skippedClusterId = null;  // clear skip on apply
-    this.dismissSuggestion();
     return { ids, clusterLabel };
-  }
-
-  /**
-   * User clicked [Skip] — hides suggestion and prevents re-showing
-   * the same cluster until a new match fires.
-   */
-  dismissSuggestion(): void {
-    if (this.suggestion) {
-      this._skippedClusterId = this.suggestion.cluster.id;
-    }
-    this.suggestion = null;
-    this.suggestionVisible = false;
   }
 
   async loadTree(): Promise<void> {
@@ -444,7 +431,6 @@ class ClusterStore {
     this._matchAbort = null;
     this._lastLength = 0;
     this._lastMatchedText = '';
-    this._skippedClusterId = null;
     this._loadGeneration = 0;
     this._clusterGeneration = 0;
   }

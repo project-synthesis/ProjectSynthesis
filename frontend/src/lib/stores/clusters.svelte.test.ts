@@ -142,44 +142,17 @@ describe('ClusterStore', () => {
       expect(result).toEqual({ ids: ['mp-1', 'mp-2'], clusterLabel: 'Test Cluster' });
     });
 
-    it('clears suggestion after apply', () => {
+    it('Tier 1: leaves suggestion intact after apply (panel stays visible)', () => {
       clustersStore.suggestion = mockClusterMatch() as any;
       clustersStore.suggestionVisible = true;
       clustersStore.applySuggestion();
-      expect(clustersStore.suggestion).toBeNull();
-      expect(clustersStore.suggestionVisible).toBe(false);
+      // Panel ownership moved to ContextPanel — store no longer dismisses.
+      expect(clustersStore.suggestion).not.toBeNull();
+      expect(clustersStore.suggestionVisible).toBe(true);
     });
 
     it('returns null when no suggestion', () => {
       expect(clustersStore.applySuggestion()).toBeNull();
-    });
-  });
-
-  describe('dismissSuggestion', () => {
-    it('clears suggestion and hides it', () => {
-      clustersStore.suggestion = mockClusterMatch() as any;
-      clustersStore.suggestionVisible = true;
-      clustersStore.dismissSuggestion();
-      expect(clustersStore.suggestion).toBeNull();
-      expect(clustersStore.suggestionVisible).toBe(false);
-    });
-
-    it('cancels the dismiss timer so it does not re-fire', async () => {
-      const clusterMatch = mockClusterMatch();
-      mockFetch([
-        { match: '/clusters/match', response: { match: clusterMatch } },
-      ]);
-      clustersStore.checkForPatterns('A'.repeat(60));
-      await flushAll();
-      expect(clustersStore.suggestionVisible).toBe(true);
-
-      // Manually dismiss — this should cancel the auto-dismiss timer
-      clustersStore.dismissSuggestion();
-      expect(clustersStore.suggestion).toBeNull();
-
-      // Advance past the dismiss timer — should not cause any side effects
-      vi.advanceTimersByTime(10_000);
-      expect(clustersStore.suggestion).toBeNull();
     });
   });
 
@@ -446,5 +419,19 @@ describe('ClusterMatch type extensions', () => {
     await vi.advanceTimersByTimeAsync(900);
     expect(clustersStore.suggestion?.cross_cluster_patterns).toEqual([]);
     expect(clustersStore.suggestion?.match_level).toBe('cluster');
+  });
+});
+
+describe('skipped-cluster state removal (Tier 1)', () => {
+  beforeEach(() => {
+    clustersStore._reset();
+  });
+
+  it('has no _skippedClusterId field (S1)', () => {
+    expect('_skippedClusterId' in clustersStore).toBe(false);
+  });
+
+  it('has no dismissSuggestion method (S2)', () => {
+    expect(typeof (clustersStore as unknown as Record<string, unknown>).dismissSuggestion).toBe('undefined');
   });
 });
