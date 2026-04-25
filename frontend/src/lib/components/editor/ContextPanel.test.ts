@@ -242,10 +242,10 @@ describe('ContextPanel', () => {
     });
   });
 
-  describe('forceCollapsed prop', () => {
-    it('forceCollapsed=true sets data-collapsed regardless of localStorage (Tier 1 viewport rail)', () => {
-      // Even with localStorage saying open=true, the prop forces collapse.
-      localStorage.setItem('synthesis:context_panel_open', 'true');
+  describe('forceCollapsed prop (initial-default-only)', () => {
+    it('forceCollapsed=true defaults isOpen=false when no localStorage entry exists', () => {
+      // Fresh user, narrow viewport: panel should mount as the 28px rail.
+      localStorage.removeItem('synthesis:context_panel_open');
       clustersStore.suggestion = mockClusterMatch();
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel, { props: { forceCollapsed: true } });
@@ -253,8 +253,9 @@ describe('ContextPanel', () => {
       expect(panel.getAttribute('data-collapsed')).toBe('true');
     });
 
-    it('forceCollapsed=false defers to localStorage (default behaviour preserved)', () => {
-      localStorage.setItem('synthesis:context_panel_open', 'true');
+    it('forceCollapsed=false defaults isOpen=true when no localStorage entry exists', () => {
+      // Fresh user, wide viewport: panel mounts open.
+      localStorage.removeItem('synthesis:context_panel_open');
       clustersStore.suggestion = mockClusterMatch();
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel, { props: { forceCollapsed: false } });
@@ -262,18 +263,33 @@ describe('ContextPanel', () => {
       expect(panel.getAttribute('data-collapsed')).toBe('false');
     });
 
-    it('forceCollapsed=true HIDES the body even when localStorage says open=true', () => {
-      // Regression lock for the live-render bug where the empty-state copy
-      // bled through the 28px collapsed rail and rendered vertically. Body
-      // must carry the hidden attribute when forceCollapsed is true,
-      // independent of the user's localStorage preference.
+    it('localStorage preference always wins over forceCollapsed (user toggle persists)', () => {
+      // User explicitly expanded at narrow viewport — their choice survives
+      // the next mount even if forceCollapsed=true. This is the contract
+      // that fixes the "chevron does nothing" bug at narrow viewport.
       localStorage.setItem('synthesis:context_panel_open', 'true');
-      clustersStore.suggestion = null;
-      clustersStore.suggestionVisible = false;
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel, { props: { forceCollapsed: true } });
-      const body = container.querySelector('[data-test="panel-body"]') as HTMLElement;
-      expect(body).not.toBeNull();
-      expect(body.hasAttribute('hidden')).toBe(true);
+      const panel = container.querySelector('[data-test="context-panel"]') as HTMLElement;
+      expect(panel.getAttribute('data-collapsed')).toBe('false');
+    });
+
+    it('chevron toggle works at narrow viewport (regression: forceCollapsed must not block toggle)', async () => {
+      const userEvent = (await import('@testing-library/user-event')).default;
+      localStorage.removeItem('synthesis:context_panel_open');
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel, { props: { forceCollapsed: true } });
+      const user = userEvent.setup();
+      const panel = container.querySelector('[data-test="context-panel"]') as HTMLElement;
+      // Initially collapsed (rail).
+      expect(panel.getAttribute('data-collapsed')).toBe('true');
+      // Click expand chevron — should expand even though forceCollapsed=true.
+      await user.click(screen.getByRole('button', { name: /expand/i }));
+      expect(panel.getAttribute('data-collapsed')).toBe('false');
+      // localStorage now persists the user's explicit choice.
+      expect(localStorage.getItem('synthesis:context_panel_open')).toBe('true');
     });
   });
 
