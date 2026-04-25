@@ -313,10 +313,17 @@ async def resolve_post_analyze_state(
     # canonical ``"backend: instrumentation"`` / ``"backend: tracing"``
     # qualifier syntax flows into ``domain_raw`` for free.
     if domain_resolver is not None:
-        analysis.domain = _normalize_llm_domain(
-            analysis.domain or "general",
+        original_domain = analysis.domain or "general"
+        normalized = _normalize_llm_domain(
+            original_domain,
             domain_resolver.domain_labels,
         )
+        if normalized != original_domain:
+            logger.info(
+                "Hyphenated sub-domain normalized: '%s' → '%s' trace_id=%s",
+                original_domain, normalized, trace_id,
+            )
+        analysis.domain = normalized
     if analysis.domain and ":" not in analysis.domain:
         try:
             from app.services.domain_detector import enrich_domain_qualifier
