@@ -22,10 +22,10 @@ from app.models import Base, GlobalPattern, MetaPattern, Optimization, Optimizat
 @pytest_asyncio.fixture
 async def db():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    SessionMaker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    async with SessionMaker() as session:
+    async with session_maker() as session:
         yield session
     await engine.dispose()
 
@@ -94,29 +94,31 @@ async def test_meta_pattern_count_and_avg_score(db: AsyncSession):
         created_at=datetime.now(timezone.utc),
     )
     db.add(dom)
-    cA = PromptCluster(
+    cluster_a = PromptCluster(
         id=str(uuid.uuid4()), label="cA", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=6, usage_count=1, prune_flag_count=0, avg_score=7.0,
         centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
-    cB = PromptCluster(
+    cluster_b = PromptCluster(
         id=str(uuid.uuid4()), label="cB", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=4, usage_count=1, prune_flag_count=0, avg_score=8.0,
         centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
-    cC = PromptCluster(
+    cluster_c = PromptCluster(
         id=str(uuid.uuid4()), label="cC", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=1, usage_count=0, prune_flag_count=0, avg_score=1.0,
         centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
-    db.add(cA); db.add(cB); db.add(cC)
-    for cluster_id in (cA.id, cA.id, cB.id):
+    db.add(cluster_a)
+    db.add(cluster_b)
+    db.add(cluster_c)
+    for cluster_id in (cluster_a.id, cluster_a.id, cluster_b.id):
         db.add(MetaPattern(
             id=str(uuid.uuid4()), cluster_id=cluster_id,
             pattern_text="p", source_count=1, global_source_count=0,
@@ -159,7 +161,8 @@ async def test_global_pattern_count_via_containment(db: AsyncSession):
         centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
-    db.add(c1); db.add(c2)
+    db.add(c1)
+    db.add(c2)
     db.add(GlobalPattern(
         id=str(uuid.uuid4()), pattern_text="gp1",
         source_cluster_ids=[c1.id], source_project_ids=[],
@@ -205,7 +208,8 @@ async def test_injection_rate_filters_to_period(db: AsyncSession):
         centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
-    db.add(dom); db.add(child)
+    db.add(dom)
+    db.add(child)
     opt_id = str(uuid.uuid4())
     db.add(Optimization(
         id=opt_id, raw_prompt="x", status="completed",
