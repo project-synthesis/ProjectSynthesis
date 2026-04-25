@@ -169,6 +169,25 @@ PROMPT_SETS = {
         "Find the race between alembic upgrade and lifespan startup where _gc_orphan_meta_patterns runs against an unmigrated DB.",
         "Audit the asyncio.gather + return_exceptions=True call in batch_orchestrator — confirm partial failure does not leave the dirty_set inconsistent.",
     ],
+    # Cycle 2: embedding/RAG sub-domain — meta-prompt the system about its own embedding stack.
+    # All 10 prompts target backend code paths in `backend/app/services/embedding_service.py` +
+    # `backend/app/services/taxonomy/{embedding_index,fusion,matching,qualifier_index,
+    # transformation_index,optimized_index}.py`. Tight semantic neighborhood + codebase
+    # vocabulary should drive (a) backend domain growth past the sub-domain emergence
+    # threshold, (b) a coherent "embedding" qualifier appearing in domain_raw, and (c) the
+    # optimized output of every prompt acting as a concrete recommendation back to the user.
+    "cycle-2-embedding-rag": [
+        "Audit EmbeddingService.embed_single in backend/app/services/embedding_service.py — model.encode() is called without normalize_embeddings=True so every cosine_search downstream re-normalizes via np.linalg.norm. Is the redundant work hot enough to matter for match_prompt latency?",
+        "Diagnose the lifespan startup in main.py — there is no warmup pass on the all-MiniLM-L6-v2 SentenceTransformer model. First request after restart pays load + dimension probe + cold encode. Quantify the latency overhead and propose a safe warmup hook.",
+        "Optimize the hot-path embed sequence in TaxonomyEngine — engine.py:599-633 calls aembed_single three times sequentially for raw_prompt, optimized_prompt, qualifier_text. Could be one aembed_texts batched call. Walk the safety implications around the qualifier cache short-circuit.",
+        "Trace the 5-signal composite fusion in services/taxonomy/fusion.py — PhaseWeights blends raw + optimized + transformation + pattern + qualifier with adaptive weights and L2-normalizes the result. Audit blend_embeddings for numerical stability when one signal vector is degenerate (zero norm or NaN).",
+        "Review EmbeddingIndex dual-backend in services/taxonomy/embedding_index.py — numpy default flips to HNSW at HNSW_CLUSTER_THRESHOLD=1000, with fallback to numpy on HNSW failure. Audit the upsert path for label-mapping drift across the backend swap and stale tombstones.",
+        "Diagnose the QualifierIndex centroid lifecycle in services/taxonomy/qualifier_index.py — per-cluster qualifier centroids drive sub-domain emergence. Find the cases where a stale centroid survives past dissolution and flag the invariant repair.",
+        "Audit the TransformationIndex direction vector compute in services/taxonomy/transformation_index.py — engine.py:608 stores (optimized − raw) / ||transform|| as the direction-of-improvement vector. When the optimized_prompt is shorter than raw_prompt, magnitude collapses; verify the t_norm > 1e-9 gate handles the edge cleanly.",
+        "Review match_prompt in services/taxonomy/matching.py — uses raw embeddings (no composite fusion) for cross-process consistency. Check the 50-entry LRU embedding cache TTL, family-vs-cluster threshold cascade (0.55 / 0.45 / 0.65), and the diagnostic logging on no-match.",
+        "Audit the EmbeddingService.cosine_search staticmethod — embedding_service.py:140-167 is O(N) over the corpus, redundant with EmbeddingIndex's numpy/HNSW path. Either it serves a real purpose for tests/utilities or it's legacy — make the case and propose the disposition.",
+        "Trace qualifier embedding caching through DomainSignalLoader.get_cached_qualifier_embedding — engine.py:625-632 checks the cache before computing aembed_single(qualifier_text). Audit the cache key composition (sorted-pipe-joined keywords), miss path, and emission of qualifier_embeddings_generated counter.",
+    ],
 }
 
 
