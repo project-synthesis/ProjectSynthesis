@@ -2,53 +2,60 @@
   /**
    * DomainLifecycleTimeline — Observatory tier-1 surface for taxonomy activity.
    *
-   * Renders `clustersStore.activityEvents` as a chronological row list with
-   * three filter dimensions: hot/warm/cold execution path, op-family
-   * (domain | cluster | pattern | readiness), and an `errors only` toggle.
-   * Rows expand to reveal the raw context payload. Period changes on
-   * `observatoryStore` trigger a backfill against `/clusters/activity/history`
-   * so the panel stays consistent with the global window selector.
+   * Renders a merged view from two stores:
+   *   - `observatoryStore.historicalEvents` — period-scoped JSONL backfill,
+   *     refreshed when the user picks a chip (24h / 7d / 30d).
+   *   - `clustersStore.activityEvents` — live SSE ring shared with the
+   *     ActivityPanel terminal in the topology view; prepends new events
+   *     via `pushActivityEvent` as warm-path / hot-path operations fire.
    *
-   * Op→family mapping is 1-to-1 by intent: `promote` belongs to the pattern
-   * family per ADR-005 ("global pattern promotion"); cluster lifecycle uses
-   * `split`/`merge`/`retire`. Uncategorised ops surface only when every
-   * family chip is on, matching ActivityPanel's "no filter = show all" UX.
+   * The split is deliberate: writing into the SSE ring from a period chip
+   * silently disturbed the ActivityPanel — we now own our own buffer and
+   * merge at render time, deduping by `ts|op|decision` and capping at 200.
+   *
+   * Three filter dimensions: hot/warm/cold execution path, op-family
+   * (domain | cluster | pattern | readiness), and an `errors only` toggle.
+   * Rows expand to reveal the raw context payload + a one-line `keyMetric`
+   * summary (shared with ActivityPanel via `$lib/utils/activity-summary.ts`).
    */
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { observatoryStore } from '$lib/stores/observatory.svelte';
   import { pathColor, type ActivityPath } from '$lib/utils/activity-colors';
+  import { isErrorEvent, opFamily, type OpFamily } from '$lib/utils/activity-filters';
+  import { keyMetric } from '$lib/utils/activity-summary';
+  import type { TaxonomyActivityEvent } from '$lib/api/clusters';
   import type { ObservatoryPeriod } from '$lib/api/observatory';
-
-  type OpFamily = 'domain' | 'cluster' | 'pattern' | 'readiness';
 
   // Period chips live in this filter-bar (NOT in TaxonomyObservatory's shell
   // header) because Readiness is current-state and the asymmetry is owned
   // by the period-aware panels. See TaxonomyObservatory legend (TO3).
   const PERIODS: readonly ObservatoryPeriod[] = ['24h', '7d', '30d'];
+  const ALL_FAMILIES: readonly OpFamily[] = ['domain', 'cluster', 'pattern', 'readiness'];
+  const TIMELINE_EVENT_CAP = 200;
 
-  // 1-to-1 op→family lookup. Each backend op key maps to exactly one family
-  // so toggling a chip never produces overlap (e.g. `promote` is pattern-only,
-  // matching its sole hot-path emitter `global_pattern_promoted`). Ops not
-  // present here fall through to the "uncategorised" bucket and only render
-  // when every family chip is active (default state).
-  const OP_TO_FAMILY: Record<string, OpFamily> = {
-    discover: 'domain',
-    reevaluate: 'domain',
-    dissolve: 'domain',
-    split: 'cluster',
-    merge: 'cluster',
-    retire: 'cluster',
-    promote: 'pattern',
-    demote: 'pattern',
-    re_promote: 'pattern',
-    retired: 'pattern',
-    global_pattern: 'pattern',
-    meta_pattern: 'pattern',
-    readiness: 'readiness',
-    signal_adjuster: 'readiness',
-  };
-
-  const events = $derived(clustersStore.activityEvents);
+  /**
+   * Merge live SSE ring + Observatory historical buffer.
+   *
+   * Live events take priority on collision (same `ts|op|decision` key)
+   * because they are the freshest source — duplicates are filtered out
+   * of the historical buffer when present in the ring. Output is sorted
+   * newest-first to match the `ActivityPanel` ordering convention.
+   */
+  const events = $derived.by<TaxonomyActivityEvent[]>(() => {
+    const seen = new Set<string>();
+    const merged: TaxonomyActivityEvent[] = [];
+    const eventKey = (e: TaxonomyActivityEvent) => `${e.ts}|${e.op}|${e.decision}`;
+    for (const e of clustersStore.activityEvents) {
+      const k = eventKey(e);
+      if (!seen.has(k)) { seen.add(k); merged.push(e); }
+    }
+    for (const e of observatoryStore.historicalEvents) {
+      const k = eventKey(e);
+      if (!seen.has(k)) { seen.add(k); merged.push(e); }
+    }
+    merged.sort((a, b) => (b.ts ?? '').localeCompare(a.ts ?? ''));
+    return merged.slice(0, TIMELINE_EVENT_CAP);
+  });
 
   let activePaths = $state<Set<ActivityPath>>(new Set(['hot', 'warm', 'cold']));
   let activeFamilies = $state<Set<OpFamily>>(new Set(['domain', 'cluster', 'pattern', 'readiness']));
@@ -69,10 +76,6 @@
     expandedId = expandedId === id ? null : id;
   }
 
-  function isErrorEvent(e: { op: string; decision: string }): boolean {
-    return e.op === 'error' || e.decision === 'rejected' || e.decision === 'failed';
-  }
-
   /**
    * Stable per-row key for #each blocks.
    *
@@ -87,47 +90,37 @@
     return `${e.ts}::${e.op}::${e.decision}::${e.cluster_id ?? ''}`;
   }
 
-  const ALL_FAMILIES: readonly OpFamily[] = ['domain', 'cluster', 'pattern', 'readiness'];
-
-  function eventFamily(op: string): OpFamily | null {
-    // 1-to-1 lookup; falls back to readiness sub-paths via prefix.
-    if (op in OP_TO_FAMILY) return OP_TO_FAMILY[op];
-    if (op.startsWith('readiness/')) return 'readiness';
-    return null;
-  }
-
   const visibleEvents = $derived(events.filter((e) => {
     if (errorsOnly) return isErrorEvent(e);
     if (!activePaths.has(e.path as ActivityPath)) return false;
     // 'error' op is included whenever any family is active.
     if (e.op === 'error') return activeFamilies.size > 0;
-    const fam = eventFamily(e.op);
+    const fam = opFamily(e.op, e.decision);
     // Uncategorised events show only when every family chip is on (default state).
     if (fam === null) return activeFamilies.size === ALL_FAMILIES.length;
     return activeFamilies.has(fam);
   }));
 
-  // Period chips drive BOTH panels:
-  //   - Heatmap window: `observatoryStore.refreshPatternDensity()` (debounced 1s)
-  //   - Timeline backfill: `clustersStore.loadActivityForPeriod(period)`
-  //     hydrates the JSONL range so the visible window matches the chip.
-  //     Live SSE events continue to prepend via `pushActivityEvent` so the
-  //     timeline stays current without losing the historical baseline.
+  // Period chips drive BOTH panels via `observatoryStore.setPeriod()`:
+  //   - Heatmap window: `refreshPatternDensity()` (debounced 1s).
+  //   - Timeline backfill: `loadTimelineEvents()` (debounced 1s).
   //
-  // Initial mount triggers a backfill once per session via the
-  // `_periodBackfillTriggered` flag — `_reset()` clears it for tests.
+  // First mount triggers a backfill once per session via the
+  // `_periodBackfillTriggered` flag — `observatoryStore._reset()` resets
+  // generation counters, the component-local flag prevents a second
+  // unconditional fetch on remount.
   let _periodBackfillTriggered = false;
   $effect(() => {
-    const p = observatoryStore.period;
+    const _p = observatoryStore.period;  // subscribe — re-fire on period change
     if (_periodBackfillTriggered) {
-      void clustersStore.loadActivityForPeriod(p);
+      void observatoryStore.loadTimelineEvents();
       return;
     }
     _periodBackfillTriggered = true;
-    // Only backfill on first mount when activityEvents is sparse — avoid
-    // clobbering the SSE-live ring under a refresh storm.
-    if (clustersStore.activityEvents.length < 20) {
-      void clustersStore.loadActivityForPeriod(p);
+    // Only backfill on first mount when both buffers are empty — avoid
+    // clobbering an already-warm SSE ring under a refresh storm.
+    if (clustersStore.activityEvents.length < 20 && observatoryStore.historicalEvents.length === 0) {
+      void observatoryStore.loadTimelineEvents();
     }
   });
 </script>
@@ -205,6 +198,7 @@
   {:else}
     <ul class="timeline-list">
       {#each visibleEvents as evt (eventKey(evt))}
+        {@const summary = keyMetric(evt)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <li
@@ -217,6 +211,9 @@
           <span class="path-badge" style="background-color: {pathColor(evt.path as ActivityPath)};">{evt.path}</span>
           <span class="op">{evt.op}</span>
           <span class="decision">{evt.decision}</span>
+          {#if summary}
+            <span class="metric" data-test="row-metric">{summary}</span>
+          {/if}
         </li>
         {#if expandedId === eventKey(evt)}
           <li class="context-payload">{JSON.stringify(evt.context, null, 2)}</li>
@@ -318,9 +315,23 @@
   .decision {
     font-size: 11px;
     color: var(--color-text-secondary);
+    flex-shrink: 0;
+  }
+  /*
+   * One-line summary surfaced from `activity-summary.ts::keyMetric()`.
+   * Geist Mono 10px text-dim — visually subordinated to the op/decision
+   * pair so the eye still reads "lifecycle event" first, summary second.
+   * Truncates with ellipsis when long.
+   */
+  .metric {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-dim);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
+    flex: 1 1 auto;
   }
 
   .context-payload {
