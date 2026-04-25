@@ -8,7 +8,8 @@ describe('EditorStore', () => {
   });
 
   it('starts with prompt tab active', () => {
-    expect(editorStore.tabs).toHaveLength(1);
+    // Two pinned tabs seeded: Prompt + Observatory
+    expect(editorStore.tabs).toHaveLength(2);
     expect(editorStore.tabs[0].id).toBe(PROMPT_TAB_ID);
     expect(editorStore.activeTabId).toBe(PROMPT_TAB_ID);
   });
@@ -20,14 +21,16 @@ describe('EditorStore', () => {
   describe('openTab', () => {
     it('adds a new tab and activates it', () => {
       editorStore.openTab({ id: 'result-1', title: 'Result', type: 'result', optimizationId: 'opt-1' });
-      expect(editorStore.tabs).toHaveLength(2);
+      // Prompt + Observatory + result-1
+      expect(editorStore.tabs).toHaveLength(3);
       expect(editorStore.activeTabId).toBe('result-1');
     });
 
     it('activates existing tab instead of duplicating', () => {
       editorStore.openTab({ id: 'result-1', title: 'Result', type: 'result' });
       editorStore.openTab({ id: 'result-1', title: 'Result', type: 'result' });
-      expect(editorStore.tabs).toHaveLength(2); // prompt + result-1
+      // Prompt + Observatory + result-1 (no duplication)
+      expect(editorStore.tabs).toHaveLength(3);
     });
   });
 
@@ -35,7 +38,8 @@ describe('EditorStore', () => {
     it('removes the tab', () => {
       editorStore.openTab({ id: 'result-1', title: 'Result', type: 'result' });
       editorStore.closeTab('result-1');
-      expect(editorStore.tabs).toHaveLength(1);
+      // Both pinned tabs remain (Prompt + Observatory)
+      expect(editorStore.tabs).toHaveLength(2);
     });
 
     it('activates prompt tab when closing active tab', () => {
@@ -46,7 +50,8 @@ describe('EditorStore', () => {
 
     it('does not close pinned prompt tab', () => {
       editorStore.closeTab(PROMPT_TAB_ID);
-      expect(editorStore.tabs).toHaveLength(1);
+      // Prompt + Observatory both pinned, count unchanged
+      expect(editorStore.tabs).toHaveLength(2);
     });
   });
 
@@ -107,11 +112,12 @@ describe('EditorStore', () => {
   });
 
   describe('closeAllResults', () => {
-    it('removes all non-prompt tabs', () => {
+    it('removes all non-pinned tabs', () => {
       editorStore.openResult('opt-1');
       editorStore.openDiff('opt-2');
       editorStore.closeAllResults();
-      expect(editorStore.tabs).toHaveLength(1);
+      // Both pinned tabs remain (Prompt + Observatory)
+      expect(editorStore.tabs).toHaveLength(2);
       expect(editorStore.tabs[0].id).toBe(PROMPT_TAB_ID);
     });
   });

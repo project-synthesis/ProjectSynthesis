@@ -9,6 +9,7 @@
   import DiffView from '$lib/components/shared/DiffView.svelte';
   import RefinementTimeline from '$lib/components/refinement/RefinementTimeline.svelte';
   import SemanticTopology from '$lib/components/taxonomy/SemanticTopology.svelte';
+  import TaxonomyObservatory from '$lib/components/taxonomy/TaxonomyObservatory.svelte';
   import ContextPanel from '$lib/components/editor/ContextPanel.svelte';
   import { isPassthroughResult } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
@@ -155,6 +156,8 @@
           {/if}
         {:else if tab.type === 'mindmap'}
           <SemanticTopology />
+        {:else if tab.type === 'observatory'}
+          <TaxonomyObservatory />
         {/if}
       </div>
     {/each}
