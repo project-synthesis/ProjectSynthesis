@@ -372,3 +372,107 @@ async def test_warning_when_custom_label_not_in_bootstrap(db, caplog):
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert warnings, "Expected warning for custom label not covered by bootstrap"
     assert any("customdomain" in r.getMessage() or "1" in r.getMessage() for r in warnings)
+
+
+# ---------------------------------------------------------------------------
+# find_best_qualifier — name-match tiebreaker (v0.4.5)
+# ---------------------------------------------------------------------------
+#
+# Cycle-3 incident (2026-04-25): a tracing-themed prompt hit three
+# qualifier groups (``embedding``, ``metrics``, ``tracing``) with exactly
+# one keyword each. Without a tiebreaker, dict insertion order picked
+# ``embedding`` (the wrong group) over ``tracing`` (whose name appears
+# verbatim in the prompt). The fix prefers a qualifier whose NAME is in
+# the text on hit-count ties.
+
+
+class TestFindBestQualifierTiebreaker:
+    """Qualifier-name match wins on hit-count ties; stable otherwise."""
+
+    def test_name_in_text_wins_on_tie(self):
+        """``tracing`` wins when all groups tie at 1 hit and only its name appears."""
+        qualifiers = {
+            "embedding": ["embedding", "latency", "warmup"],
+            "metrics": ["prometheus", "telemetry", "monitoring"],
+            "tracing": ["tracing", "span", "trace"],
+        }
+        text = (
+            "add opentelemetry tracing around enrich() — wrap each layer in "
+            "a span so the flame graph reveals which layer dominates request latency."
+        )
+        # Hits per group: embedding(latency)=1, metrics(telemetry)=1, tracing(tracing+span)=2
+        # tracing wins by hit count, but also by name match — pin both.
+        best, hits = DomainSignalLoader.find_best_qualifier(text, qualifiers)
+        assert best == "tracing"
+        assert hits >= 1
+
+    def test_pure_name_tiebreaker_at_one_hit(self):
+        """Synthetic 1-hit-each case — name-match decides without higher count."""
+        qualifiers = {
+            "embedding": ["latency"],   # 1 hit (latency)
+            "metrics": ["telemetry"],   # 1 hit (telemetry)
+            "tracing": ["tracing"],     # 1 hit (tracing) — name also in text
+        }
+        text = "add opentelemetry tracing for latency monitoring telemetry"
+        best, hits = DomainSignalLoader.find_best_qualifier(text, qualifiers)
+        # All three hit exactly 1. Without the tiebreaker `embedding` wins
+        # by insertion order. With the tiebreaker, `tracing` wins because
+        # the literal token "tracing" appears in the text.
+        assert best == "tracing"
+        assert hits == 1
+
+    def test_higher_hits_still_wins_over_name_match(self):
+        """Hit count dominates name match — semantic relevance > lexical hit."""
+        qualifiers = {
+            "tracing": ["tracing"],                       # 1 hit
+            "embedding": ["embedding", "latency", "vector"],  # 3 hits
+        }
+        text = "tracing embedding latency vector"  # all 4 tokens present
+        best, hits = DomainSignalLoader.find_best_qualifier(text, qualifiers)
+        assert best == "embedding"  # 3 > 1, takes precedence
+        assert hits == 3
+
+    def test_no_hits_returns_none(self):
+        qualifiers = {
+            "tracing": ["tracing", "span"],
+            "embedding": ["embedding", "vector"],
+        }
+        text = "completely unrelated content about marketing"
+        best, hits = DomainSignalLoader.find_best_qualifier(text, qualifiers)
+        assert best is None
+        assert hits == 0
+
+    def test_zero_hit_groups_skipped(self):
+        """A group with 0 hits never wins, even if its name is in the text."""
+        qualifiers = {
+            # Name appears in text, but no keyword does.
+            "marketing": ["growth", "funnel"],
+            # Name does NOT appear in text, but 1 keyword does.
+            "embedding": ["latency"],
+        }
+        text = "marketing strategy and latency monitoring"
+        best, hits = DomainSignalLoader.find_best_qualifier(text, qualifiers)
+        assert best == "embedding"
+        assert hits == 1
+
+    def test_neither_name_in_text_falls_back_to_insertion_order(self):
+        """Pure tie with neither name in text — first-seen wins (deterministic)."""
+        qualifiers = {
+            "alpha": ["foo"],
+            "beta": ["bar"],
+        }
+        text = "foo bar baz"
+        best, hits = DomainSignalLoader.find_best_qualifier(text, qualifiers)
+        assert best == "alpha"  # first wins on full tie
+        assert hits == 1
+
+    def test_deterministic_under_dict_reorder(self):
+        """Same logical input + permuted insertion order → same result."""
+        qualifiers_a = {"embedding": ["latency"], "tracing": ["tracing"]}
+        qualifiers_b = {"tracing": ["tracing"], "embedding": ["latency"]}
+        text = "tracing latency layers"
+        a_best, _ = DomainSignalLoader.find_best_qualifier(text, qualifiers_a)
+        b_best, _ = DomainSignalLoader.find_best_qualifier(text, qualifiers_b)
+        # Both pick `tracing` (name-in-text wins over insertion order).
+        assert a_best == "tracing"
+        assert b_best == "tracing"
