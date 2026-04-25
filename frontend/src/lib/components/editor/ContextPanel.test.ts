@@ -29,4 +29,45 @@ describe('ContextPanel', () => {
       expect(screen.getByText(/waiting for prompt/i)).toBeTruthy();
     });
   });
+
+  describe('cluster identity row', () => {
+    function makeSuggestion(overrides: Record<string, unknown> = {}) {
+      return mockClusterMatch(overrides);
+    }
+
+    it('renders the cluster label (C2)', () => {
+      clustersStore.suggestion = makeSuggestion({
+        cluster: { id: 'c1', label: 'API endpoint patterns', domain: 'backend', member_count: 5 },
+      }) as never;
+      clustersStore.suggestionVisible = true;
+      render(ContextPanel);
+      expect(screen.getByText('API endpoint patterns')).toBeTruthy();
+    });
+
+    it('renders similarity as an integer percentage (C3)', () => {
+      clustersStore.suggestion = makeSuggestion({ similarity: 0.842 }) as never;
+      clustersStore.suggestionVisible = true;
+      render(ContextPanel);
+      expect(screen.getByText(/84%/)).toBeTruthy();
+    });
+
+    it('renders the match_level (C4)', () => {
+      clustersStore.suggestion = makeSuggestion({ match_level: 'family' }) as never;
+      clustersStore.suggestionVisible = true;
+      render(ContextPanel);
+      expect(screen.getByText(/family/i)).toBeTruthy();
+    });
+
+    it('renders a domain dot styled with taxonomyColor (C5)', () => {
+      clustersStore.suggestion = makeSuggestion({
+        cluster: { id: 'c1', label: 'x', domain: 'backend', member_count: 2 },
+      }) as never;
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel);
+      const dot = container.querySelector('[data-test="domain-dot"]') as HTMLElement | null;
+      expect(dot).not.toBeNull();
+      // taxonomyColor('backend') resolves to a neon-violet hex; assert non-empty bg.
+      expect(dot!.style.backgroundColor || dot!.getAttribute('style')).toMatch(/#|rgb/);
+    });
+  });
 });
