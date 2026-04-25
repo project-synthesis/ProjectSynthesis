@@ -169,4 +169,71 @@ describe('ContextPanel', () => {
       expect(global.classList.contains('pattern-section--global')).toBe(true);
     });
   });
+
+  describe('apply button', () => {
+    function mountWithThreeMeta() {
+      clustersStore.suggestion = mockClusterMatch({
+        cluster: { id: 'c1', label: 'API endpoint patterns', domain: 'backend', member_count: 3 },
+        meta_patterns: [
+          mockMetaPattern({ id: 'mp1', pattern_text: 'A', source_count: 1 }),
+          mockMetaPattern({ id: 'mp2', pattern_text: 'B', source_count: 1 }),
+          mockMetaPattern({ id: 'mp3', pattern_text: 'C', source_count: 1 }),
+        ],
+      }) as never;
+      clustersStore.suggestionVisible = true;
+    }
+
+    it('apply button disabled when selection is empty (C12)', () => {
+      mountWithThreeMeta();
+      render(ContextPanel);
+      const btn = screen.getByRole('button', { name: /apply/i });
+      expect((btn as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('apply button label reflects selection count (C13)', async () => {
+      const userEvent = (await import('@testing-library/user-event')).default;
+      mountWithThreeMeta();
+      const { container } = render(ContextPanel);
+      const user = userEvent.setup();
+      const checkboxes = container.querySelectorAll('[data-test="meta-section"] input[type="checkbox"]');
+      await user.click(checkboxes[0] as HTMLElement);
+      await user.click(checkboxes[1] as HTMLElement);
+      expect(screen.getByRole('button', { name: /apply 2/i })).toBeTruthy();
+    });
+
+    it('apply click populates forgeStore.appliedPatternIds (C14)', async () => {
+      const userEvent = (await import('@testing-library/user-event')).default;
+      mountWithThreeMeta();
+      const { container } = render(ContextPanel);
+      const user = userEvent.setup();
+      const checkboxes = container.querySelectorAll('[data-test="meta-section"] input[type="checkbox"]');
+      await user.click(checkboxes[0] as HTMLElement);
+      await user.click(checkboxes[2] as HTMLElement);
+      await user.click(screen.getByRole('button', { name: /apply 2/i }));
+      expect(forgeStore.appliedPatternIds?.sort()).toEqual(['mp1', 'mp3']);
+    });
+
+    it('apply click sets appliedPatternLabel to "cluster (N)" (C15)', async () => {
+      const userEvent = (await import('@testing-library/user-event')).default;
+      mountWithThreeMeta();
+      const { container } = render(ContextPanel);
+      const user = userEvent.setup();
+      const checkboxes = container.querySelectorAll('[data-test="meta-section"] input[type="checkbox"]');
+      await user.click(checkboxes[0] as HTMLElement);
+      await user.click(checkboxes[1] as HTMLElement);
+      await user.click(screen.getByRole('button', { name: /apply 2/i }));
+      expect(forgeStore.appliedPatternLabel).toBe('API endpoint patterns (2)');
+    });
+
+    it('apply click does not clear selection — panel remains visible with checkboxes locked (C16)', async () => {
+      const userEvent = (await import('@testing-library/user-event')).default;
+      mountWithThreeMeta();
+      const { container } = render(ContextPanel);
+      const user = userEvent.setup();
+      const checkboxes = container.querySelectorAll('[data-test="meta-section"] input[type="checkbox"]');
+      await user.click(checkboxes[0] as HTMLElement);
+      await user.click(screen.getByRole('button', { name: /apply 1/i }));
+      expect((checkboxes[0] as HTMLInputElement).checked).toBe(true);
+    });
+  });
 });
