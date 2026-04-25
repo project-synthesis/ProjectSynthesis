@@ -1,0 +1,131 @@
+<script lang="ts">
+  /**
+   * PatternDensityHeatmap — observatory data grid.
+   *
+   * "Heatmap" = grid where row backgrounds are tinted with the domain's
+   * taxonomy colour, opacity-scaled to meta_pattern_count. Read-only;
+   * rows have no role/tabindex. Loading dims body to 0.5 opacity; error
+   * surfaces a retry button. Empty state is factual.
+   */
+  import { observatoryStore } from '$lib/stores/observatory.svelte';
+  import { taxonomyColor } from '$lib/utils/colors';
+
+  const rows = $derived(observatoryStore.patternDensity ?? []);
+  const loading = $derived(observatoryStore.patternDensityLoading);
+  const error = $derived(observatoryStore.patternDensityError);
+
+  const maxCount = $derived(Math.max(1, ...rows.map((r) => r.meta_pattern_count)));
+
+  function heatPct(count: number): number {
+    return Math.round((count / maxCount) * 22);
+  }
+
+  function fmt(value: number | null, digits = 2): string {
+    return value === null ? '—' : value.toFixed(digits);
+  }
+</script>
+
+<section class="heatmap" aria-label="Pattern density heatmap">
+  <header class="heatmap-header">
+    <span class="col col-domain">domain</span>
+    <span class="col col-n">clusters</span>
+    <span class="col col-n">meta</span>
+    <span class="col col-n">avg score</span>
+    <span class="col col-n">global</span>
+    <span class="col col-n">x-cluster inj. rate</span>
+  </header>
+
+  {#if error}
+    <div class="heatmap-error" data-test="heatmap-error">
+      <p>Pattern density could not be loaded.</p>
+      <button type="button" onclick={() => observatoryStore.refreshPatternDensity()}>Retry</button>
+    </div>
+  {:else if rows.length === 0 && !loading}
+    <p class="empty-copy">Pattern library is empty. Run <code>POST /api/seed</code> or start optimizing prompts.</p>
+  {:else}
+    <div class="heatmap-body" data-test="heatmap-body" style="opacity: {loading ? 0.5 : 1};">
+      {#each rows as row (row.domain_id)}
+        <div
+          class="density-row"
+          data-test="density-row"
+          style="background-color: color-mix(in srgb, {taxonomyColor(row.domain_label)} {heatPct(row.meta_pattern_count)}%, transparent);"
+        >
+          <span class="col col-domain">{row.domain_label}</span>
+          <span class="col col-n">{row.cluster_count || '—'}</span>
+          <span class="col col-n">{row.meta_pattern_count || '—'}</span>
+          <span class="col col-n">{fmt(row.meta_pattern_avg_score, 1)}</span>
+          <span class="col col-n">{row.global_pattern_count || '—'}</span>
+          <span class="col col-n">{row.cross_cluster_injection_rate ? (row.cross_cluster_injection_rate * 100).toFixed(0) + '%' : '—'}</span>
+        </div>
+      {/each}
+    </div>
+  {/if}
+</section>
+
+<style>
+  .heatmap { padding: 6px; }
+  .heatmap-header {
+    display: grid;
+    grid-template-columns: 1.5fr repeat(5, 1fr);
+    gap: 4px;
+    height: 20px;
+    align-items: center;
+    font-family: var(--font-display);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-text-dim);
+    border-bottom: 1px solid var(--color-border-subtle);
+    padding: 0 6px;
+  }
+  .density-row {
+    display: grid;
+    grid-template-columns: 1.5fr repeat(5, 1fr);
+    gap: 4px;
+    height: 20px;
+    align-items: center;
+    padding: 0 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-primary);
+    border-top: 1px solid var(--color-border-subtle);
+  }
+  .col-domain { font-family: var(--font-sans); font-size: 11px; }
+  .col-n { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty-copy { padding: 6px; font-size: 11px; color: var(--color-text-dim); margin: 0; }
+
+  .heatmap-error {
+    padding: 6px;
+    box-shadow: inset 0 0 0 1px var(--color-neon-red);
+  }
+  .heatmap-error button {
+    margin-top: 6px;
+    padding: 0 8px;
+    height: 20px;
+    line-height: 18px;
+    background: transparent;
+    border: 1px solid var(--color-neon-red);
+    color: var(--color-neon-red);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: pointer;
+    transition: background-color var(--duration-hover) var(--ease-spring);
+  }
+  .heatmap-error button:hover {
+    background: color-mix(in srgb, var(--color-neon-red) 6%, transparent);
+  }
+  .heatmap-error button:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
+
+  .heatmap-body {
+    transition: opacity var(--duration-hover) var(--ease-spring);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .heatmap-body,
+    .heatmap-error button { transition-duration: 0.01ms !important; }
+  }
+</style>
