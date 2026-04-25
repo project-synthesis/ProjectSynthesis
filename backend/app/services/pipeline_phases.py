@@ -67,6 +67,45 @@ from app.utils.text_cleanup import title_case_label, validate_intent_label
 logger = logging.getLogger(__name__)
 
 
+def _normalize_llm_domain(domain: str, known_primaries: set[str]) -> str:
+    """Reconcile LLM-output domain styles into canonical ``primary: qualifier``.
+
+    The analyze.md prompt instructs the LLM in two parallel ways:
+      - ``primary: qualifier`` colon syntax for cross-cutting concerns on a
+        known domain (``"backend: auth middleware"``).
+      - ``primary-qualifier`` hyphen syntax for invented sub-domains
+        (``"backend-auth"``, ``"data-ml"``).
+
+    The hyphen variant is misparsed downstream because :func:`parse_domain`
+    splits only on ``:``, so ``"backend-observability"`` becomes a brand-new
+    primary instead of a backend qualifier. This caused cycle-3 prompt #7
+    (score 9.0) to land under ``general`` with the never-before-seen
+    ``backend-observability`` domain string instead of joining the existing
+    backend subtree.
+
+    Resolution: when a hyphen is present and the prefix matches a known
+    primary domain (registered in :class:`DomainResolver`), rewrite to
+    canonical colon syntax. Untouched if no hyphen, prefix unknown, or
+    colon is already present.
+
+    Args:
+        domain: LLM-output domain string.
+        known_primaries: Set of currently-registered top-level domain
+            labels (lower-case) from :attr:`DomainResolver.domain_labels`.
+
+    Returns:
+        Canonicalized domain string. Idempotent.
+    """
+    if not domain or ":" in domain or "-" not in domain:
+        return domain
+    primary, _, qualifier = domain.partition("-")
+    primary = primary.strip().lower()
+    qualifier = qualifier.strip()
+    if primary in known_primaries and qualifier:
+        return f"{primary}: {qualifier}"
+    return domain
+
+
 # ---------------------------------------------------------------------------
 # Shared phase result dataclasses
 # ---------------------------------------------------------------------------
@@ -252,7 +291,52 @@ async def resolve_post_analyze_state(
         except Exception:
             logger.debug("Classification agreement tracking failed", exc_info=True)
 
-    # Phase 1.5: Domain mapping via taxonomy engine
+    # Phase 1.5: Post-LLM domain reconciliation.
+    #
+    # The LLM's analyze-phase output (``analysis.domain``) is the single
+    # source of truth for ``domain_raw``, but its style is inconsistent:
+    #
+    #   1. Hyphen-style sub-domains (``"backend-observability"``) get
+    #      misparsed by :func:`parse_domain` as new primaries — caught here
+    #      by :func:`_normalize_llm_domain` against the live domain registry.
+    #   2. The LLM frequently returns a bare primary (``"backend"``) even
+    #      when tracing/instrumentation/observability dominate the prompt's
+    #      first sentence. Reason: the LLM hasn't seen the organic
+    #      Haiku-generated qualifier vocabulary; the heuristic analyzer has,
+    #      but its qualifier-enriched output was previously discarded.
+    #
+    # Both gaps were observed empirically during the 2026-04-25 cycle-3
+    # validation run: 11/13 cycle-3 prompts emitted bare ``"backend"`` even
+    # though their first sentence had >=2 keyword hits in the cached vocab
+    # (``backend.instrumentation`` for #1/#6/#8/#9, ``backend.tracing`` for
+    # #2/#3/#5/#7/#10, ``backend.embeddings`` for #4). After this fix the
+    # canonical ``"backend: instrumentation"`` / ``"backend: tracing"``
+    # qualifier syntax flows into ``domain_raw`` for free.
+    if domain_resolver is not None:
+        analysis.domain = _normalize_llm_domain(
+            analysis.domain or "general",
+            domain_resolver.domain_labels,
+        )
+    if analysis.domain and ":" not in analysis.domain:
+        try:
+            from app.services.domain_detector import enrich_domain_qualifier
+
+            enriched = enrich_domain_qualifier(
+                analysis.domain, raw_prompt.lower(),
+            )
+            if enriched != analysis.domain:
+                logger.info(
+                    "Post-LLM qualifier enrichment: '%s' → '%s' trace_id=%s",
+                    analysis.domain, enriched, trace_id,
+                )
+                analysis.domain = enriched
+        except Exception:
+            logger.debug(
+                "Post-LLM qualifier enrichment failed (non-fatal) trace_id=%s",
+                trace_id, exc_info=True,
+            )
+
+    # Phase 1.5b: Domain mapping via taxonomy engine
     domain_raw = (analysis.domain or "general")[:MAX_DOMAIN_RAW_LENGTH]
     cluster_id: str | None = None
     taxonomy_label: str | None = None
