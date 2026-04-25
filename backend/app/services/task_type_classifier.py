@@ -560,6 +560,120 @@ def has_technical_nouns(first_sentence: str) -> bool:
     return any(w in _TECHNICAL_NOUNS for w in expanded)
 
 
+# Task types where structural code evidence in the prompt should override
+# semantically-vague signals like "create"/"design"/"concept" that bias the
+# classifier toward ``creative``/``writing``. The rescue intentionally
+# does NOT cover ``analysis`` or ``data`` — those types frequently
+# co-occur with code identifiers in legitimate ways (auditing a function,
+# extracting a column, etc.) and shouldn't be silently rewritten.
+_TASK_TYPE_RESCUE_TARGETS: frozenset[str] = frozenset({"creative", "writing"})
+
+
+def rescue_task_type_via_structural_evidence(
+    task_type: str, raw_prompt: str,
+) -> tuple[str, str | None]:
+    """Override ``creative``/``writing`` with ``coding`` when structural code evidence is present.
+
+    Mirrors the B2 enrichment-profile rescue (``code_aware`` profile when
+    ``has_technical_nouns(first_sentence)`` returns True on a linked-repo
+    prompt) but applies to ``task_type`` itself. The classifier's
+    ``creative`` signals (``"create" 0.5``, ``"design" 0.7``,
+    ``"concept" 0.6``) are deliberately broad so that prose prompts about
+    invention/concepts route correctly — but they collide with
+    code-aware vocabulary like ``"create a class"``, ``"design the
+    schema"``, ``"the lifecycle concept"``. When the prompt's first
+    sentence carries unambiguous syntactic markers of code
+    (snake_case identifiers, PascalCase classes with structural
+    separators, dotted module-method tokens), structural evidence
+    should beat semantic vibes.
+
+    Cycle-3/4 evidence (2026-04-25): user reported intermittent
+    ``"Background Task Lifecycle Tracking"``-style intent labels
+    landing under ``creative`` despite obvious code intent. The
+    pattern is reproducible whenever a prompt's verbs lean toward
+    ``"design"``/``"create"`` AND the surface text doesn't include
+    enough strong coding compound signals to outweigh the creative
+    score.
+
+    Args:
+        task_type: The classifier's current task type (heuristic or
+            LLM-returned).
+        raw_prompt: The full prompt text. Only the first sentence is
+            inspected — that's the convention shared with
+            ``has_technical_nouns`` and ``select_enrichment_profile``.
+
+    Returns:
+        Tuple of ``(possibly_overridden_task_type, rescue_reason)``.
+        ``rescue_reason`` is non-None only when an override fired,
+        suitable for logging and observability tagging. The reason
+        names the trigger (``"snake_case identifier"``,
+        ``"PascalCase identifier"``, ``"technical noun"``) so
+        downstream traces can audit the rescue cleanly.
+    """
+    if task_type not in _TASK_TYPE_RESCUE_TARGETS:
+        return (task_type, None)
+
+    # Important: extract the first sentence from the ORIGINAL prompt
+    # (case-preserving) — ``_looks_like_identifier()`` needs the original
+    # casing to detect PascalCase. The shared ``extract_first_sentence``
+    # helper expects an already-lowercased input by name; using it on
+    # the raw prompt works because the boundary regex only inspects
+    # punctuation, not letter case. (The pre-existing
+    # ``has_technical_nouns`` codepath does lowercase first and so silently
+    # loses PascalCase detection — we don't share its caller pattern here.)
+    first_sentence_original = extract_first_sentence(raw_prompt)
+    if not first_sentence_original:
+        return (task_type, None)
+    first_sentence_lower = first_sentence_original.lower()
+
+    # Layer 1: syntactic identifier scan on ORIGINAL-case tokens.
+    syntactic_reason: str | None = None
+    for raw in first_sentence_original.split():
+        token = raw.strip(".,;:!?()[]{}\"'")
+        if not token:
+            continue
+        has_struct_marker = any(c in "._-/" for c in token)
+        for piece in token.split("."):
+            if not piece:
+                continue
+            if _SNAKE_CASE_RE.match(piece):
+                syntactic_reason = f"snake_case identifier '{piece}'"
+                break
+            if _PASCAL_CASE_RE.match(piece) and has_struct_marker:
+                syntactic_reason = (
+                    f"PascalCase identifier '{piece}' with structural marker"
+                )
+                break
+        if syntactic_reason:
+            break
+
+    if syntactic_reason:
+        return ("coding", f"{task_type}→coding rescue ({syntactic_reason})")
+
+    # Layer 2: technical-noun vocabulary scan on lowered-case tokens.
+    # Mirrors the vocab path inside ``has_technical_nouns`` (lowercase +
+    # strip + interior `.`/`-`/`/` split), without conflating with the
+    # syntactic check above.
+    expanded: list[str] = []
+    for raw in first_sentence_lower.split():
+        word = raw.strip(".,;:!?()[]{}\"'")
+        if word:
+            expanded.append(word)
+        for sub in re.split(r"[.\-/]", word):
+            if sub and sub != word:
+                expanded.append(sub)
+    matched_noun = next(
+        (w for w in expanded if w in _TECHNICAL_NOUNS), None,
+    )
+    if matched_noun:
+        return (
+            "coding",
+            f"{task_type}→coding rescue (technical noun '{matched_noun}')",
+        )
+
+    return (task_type, None)
+
+
 async def classify_with_llm(
     raw_prompt: str,
     db: AsyncSession,

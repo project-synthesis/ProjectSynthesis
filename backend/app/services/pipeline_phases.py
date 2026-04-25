@@ -261,6 +261,34 @@ async def resolve_post_analyze_state(
     if effective_task_type != analysis.task_type:
         analysis.task_type = effective_task_type  # type: ignore[assignment]
 
+    # Rescue creative/writing → coding when the prompt has structural code
+    # evidence (snake_case, PascalCase+separator, technical nouns). The
+    # classifier's `creative` signals (`create:0.5`, `design:0.7`,
+    # `concept:0.6`) are deliberately broad so prose creativity prompts route
+    # correctly, but they collide with code vocabulary. Structural evidence
+    # in the first sentence beats semantic vibes — same B2 philosophy used by
+    # the enrichment-profile rescue.
+    try:
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        rescued, reason = rescue_task_type_via_structural_evidence(
+            analysis.task_type, raw_prompt,
+        )
+        if reason:
+            logger.info(
+                "Task-type rescue: %s trace_id=%s",
+                reason, trace_id,
+            )
+            analysis.task_type = rescued  # type: ignore[assignment]
+            effective_task_type = rescued
+    except Exception:
+        logger.debug(
+            "Task-type rescue failed (non-fatal) trace_id=%s",
+            trace_id, exc_info=True,
+        )
+
     logger.info(
         "Domain resolution: raw='%s' confidence=%.2f (analyzer=%.2f) trace_id=%s",
         analysis.domain, confidence, analysis.confidence, trace_id,
