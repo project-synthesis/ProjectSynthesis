@@ -8,7 +8,10 @@
 
   let selectedIds = $state<Set<string>>(new Set());
 
-  // Seed selection from forgeStore on mount / when suggestion changes.
+  // Re-seed selection whenever forgeStore.appliedPatternIds changes (mount +
+  // post-apply round-trip). Selection does NOT reset on a new suggestion —
+  // the user's toggles carry forward across cluster matches until APPLY
+  // commits them, matching the C16 panel-persistence contract.
   $effect(() => {
     const initial = forgeStore.appliedPatternIds ?? [];
     selectedIds = new Set(initial);
