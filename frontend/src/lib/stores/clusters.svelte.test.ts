@@ -502,3 +502,85 @@ describe('transient fetch flags (Tier 1)', () => {
     expect(clustersStore._lastMatchedText).not.toBe('');
   });
 });
+
+describe('loadActivityForPeriod (Observatory wiring)', () => {
+  beforeEach(() => {
+    clustersStore._reset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * AP1: 24h period emits a single-day range request (since == until == today).
+   *
+   * The Observatory uses calendar-day granularity for JSONL files. A 24h
+   * window collapses to today's bucket — that's the canonical "now" view.
+   */
+  it('24h period collapses to a single-day range (AP1)', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/clusters/activity/history')) {
+        return { ok: true, status: 200, json: async () => ({ events: [], total: 0, has_more: false }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ events: [], total_in_buffer: 0, oldest_ts: null }) };
+    });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+    await clustersStore.loadActivityForPeriod('24h');
+    const historyCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('activity/history'));
+    expect(historyCall).toBeDefined();
+    const url = String(historyCall![0]);
+    expect(url).toContain(`since=${today}`);
+    expect(url).toContain(`until=${today}`);
+  });
+
+  /**
+   * AP2: 7d window spans 7 days inclusive (since = today − 6, until = today).
+   *
+   * Day-1 of "7d" must include today; the bucket count is six prior days
+   * plus today. Spec line 105: "period selector (24h/7d/30d) bound to
+   * `since`".
+   */
+  it('7d period requests since = today − 6 days (AP2)', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/clusters/activity/history')) {
+        return { ok: true, status: 200, json: async () => ({ events: [], total: 0, has_more: false }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ events: [], total_in_buffer: 0, oldest_ts: null }) };
+    });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+    await clustersStore.loadActivityForPeriod('7d');
+    const historyCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('activity/history'));
+    const url = String(historyCall![0]);
+    const sinceMatch = url.match(/since=(\d{4}-\d{2}-\d{2})/);
+    expect(sinceMatch).not.toBeNull();
+    const sinceDate = new Date(sinceMatch![1]);
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const diffDays = Math.round((today.getTime() - sinceDate.getTime()) / 86_400_000);
+    expect(diffDays).toBe(6);
+  });
+
+  /**
+   * AP3: ring buffer + JSONL events merge with key-based dedup
+   * (`ts|op|decision`); the merged stream is newest-first sorted and
+   * capped at 200 events.
+   */
+  it('merges ring + JSONL with dedup, newest-first, 200 cap (AP3)', async () => {
+    const ringEvent = { ts: '2026-04-25T12:00:00Z', path: 'warm', op: 'discover', decision: 'd', cluster_id: null, optimization_id: null, duration_ms: null, context: {} };
+    const jsonlOlder = { ts: '2026-04-25T08:00:00Z', path: 'warm', op: 'split', decision: 's', cluster_id: null, optimization_id: null, duration_ms: null, context: {} };
+    const jsonlDup = { ...ringEvent }; // identical key — must be deduped
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/clusters/activity/history')) {
+        return { ok: true, status: 200, json: async () => ({ events: [jsonlOlder, jsonlDup], total: 2, has_more: false }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ events: [ringEvent], total_in_buffer: 1, oldest_ts: ringEvent.ts }) };
+    });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+    await clustersStore.loadActivityForPeriod('24h');
+    expect(clustersStore.activityEvents.length).toBe(2);
+    // Newest first.
+    expect(clustersStore.activityEvents[0].ts).toBe('2026-04-25T12:00:00Z');
+    expect(clustersStore.activityEvents[1].ts).toBe('2026-04-25T08:00:00Z');
+  });
+});

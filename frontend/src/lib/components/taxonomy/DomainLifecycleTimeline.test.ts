@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/svelte';
+import { flushSync } from 'svelte';
 import DomainLifecycleTimeline from './DomainLifecycleTimeline.svelte';
 import componentSource from './DomainLifecycleTimeline.svelte?raw';
 import { clustersStore } from '$lib/stores/clusters.svelte';
@@ -8,6 +9,12 @@ describe('DomainLifecycleTimeline', () => {
   beforeEach(() => {
     clustersStore._reset();
     vi.restoreAllMocks();
+    // The Timeline's mount-time backfill calls `loadActivityForPeriod()`
+    // which would replace `activityEvents` mid-test as the async chain
+    // resolves through user-event microtask flushes. Stub it by default;
+    // the T10/T10b period-wiring tests re-stub explicitly when they need
+    // to assert on the call.
+    vi.spyOn(clustersStore, 'loadActivityForPeriod').mockResolvedValue();
   });
   afterEach(() => cleanup());
 
@@ -174,29 +181,54 @@ describe('DomainLifecycleTimeline', () => {
     expect(labels).toEqual(labels);  // satisfy noUnusedLocals
   });
 
-  it('Timeline does NOT issue fetch on observatoryStore.period change (T10)', async () => {
-    // Wiring fix: the prior period→fetch backfill silently discarded the
-    // response (no merge path into clustersStore.activityEvents), making
-    // the period chips a no-op for Timeline. Period chips drive Heatmap
-    // only — Timeline is SSE-live. Asserting the fetch is gone prevents
-    // the dead path from re-emerging.
+  it('Timeline calls loadActivityForPeriod on observatoryStore.period change (T10)', async () => {
+    // Spec: period chips apply to BOTH the Heatmap (via observatoryStore
+    // refresh) and the Timeline (via the JSONL since/until range variant).
+    // The previous build skipped the Timeline backfill — chips were no-op
+    // for this panel — and locked that deviation in T10. The wiring is
+    // now restored: this test asserts the period change triggers the
+    // store method that hydrates `activityEvents` from the JSONL range.
     const { observatoryStore } = await import('$lib/stores/observatory.svelte');
     observatoryStore._reset?.();
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ events: [], total: 0, has_more: false }),
-    });
-    vi.stubGlobal('fetch', fetchSpy);
-    vi.useFakeTimers();
+    const loadSpy = vi
+      .spyOn(clustersStore, 'loadActivityForPeriod')
+      .mockResolvedValue();
+    // Seed enough events to skip the initial-mount sparse-only backfill
+    // — that path is covered by T10b.
+    clustersStore.activityEvents = Array.from({ length: 25 }, (_, i) => ({
+      id: `seed-${i}`,
+      ts: `2026-04-25T0${i % 10}:00:00Z`,
+      path: 'warm',
+      op: 'discover',
+      decision: 'd',
+      cluster_id: null,
+      optimization_id: null,
+      duration_ms: null,
+      context: {},
+    })) as unknown as typeof clustersStore.activityEvents;
     render(DomainLifecycleTimeline);
-    fetchSpy.mockClear();
+    // Effects run asynchronously after mount — settle them, then clear
+    // the spy so we only assert on the post-setPeriod call.
+    flushSync();
+    loadSpy.mockClear();
     observatoryStore.setPeriod('24h');
-    await vi.advanceTimersByTimeAsync(1100);
-    const historyCalls = fetchSpy.mock.calls
-      .map((c) => String(c[0]))
-      .filter((u) => u.includes('activity/history'));
-    expect(historyCalls.length).toBe(0);
-    vi.useRealTimers();
+    flushSync();
+    expect(loadSpy).toHaveBeenCalledWith('24h');
+  });
+
+  it('Timeline backfills initial period on mount when activityEvents sparse (T10b)', async () => {
+    // First mount + sparse ring buffer (< 20 events) hydrates the JSONL
+    // range immediately so the panel never renders the empty-state copy
+    // when there IS history available. Once seeded, subsequent period
+    // chips drive a fresh backfill (T10).
+    const { observatoryStore } = await import('$lib/stores/observatory.svelte');
+    observatoryStore._reset?.();
+    clustersStore.activityEvents = []; // sparse
+    const loadSpy = vi
+      .spyOn(clustersStore, 'loadActivityForPeriod')
+      .mockResolvedValue();
+    render(DomainLifecycleTimeline);
+    flushSync();
+    expect(loadSpy).toHaveBeenCalledWith(observatoryStore.period);
   });
 });

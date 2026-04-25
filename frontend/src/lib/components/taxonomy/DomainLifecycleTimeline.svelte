@@ -107,13 +107,29 @@
     return activeFamilies.has(fam);
   }));
 
-  // Period chips drive the Heatmap window only; Timeline is SSE-live and
-  // shows whatever is currently in `clustersStore.activityEvents`. The prior
-  // period→`/clusters/activity/history` backfill silently discarded its
-  // response (no merge into activityEvents), making the chips a no-op for
-  // this panel — see TaxonomyObservatory legend (TO3) and the wiring-fix
-  // audit. If a windowed Timeline is re-introduced, route the response
-  // through `clustersStore` so the events actually become visible.
+  // Period chips drive BOTH panels:
+  //   - Heatmap window: `observatoryStore.refreshPatternDensity()` (debounced 1s)
+  //   - Timeline backfill: `clustersStore.loadActivityForPeriod(period)`
+  //     hydrates the JSONL range so the visible window matches the chip.
+  //     Live SSE events continue to prepend via `pushActivityEvent` so the
+  //     timeline stays current without losing the historical baseline.
+  //
+  // Initial mount triggers a backfill once per session via the
+  // `_periodBackfillTriggered` flag — `_reset()` clears it for tests.
+  let _periodBackfillTriggered = false;
+  $effect(() => {
+    const p = observatoryStore.period;
+    if (_periodBackfillTriggered) {
+      void clustersStore.loadActivityForPeriod(p);
+      return;
+    }
+    _periodBackfillTriggered = true;
+    // Only backfill on first mount when activityEvents is sparse — avoid
+    // clobbering the SSE-live ring under a refresh storm.
+    if (clustersStore.activityEvents.length < 20) {
+      void clustersStore.loadActivityForPeriod(p);
+    }
+  });
 </script>
 
 <section class="timeline" data-test="lifecycle-timeline" aria-label="Domain lifecycle timeline">

@@ -452,9 +452,13 @@ async def get_cluster_activity_history(
             assert start_dt is not None and end_dt is not None
             events: list[dict] = []
             cursor = end_dt
+            # Walk newest day → oldest. Within each day the JSONL is
+            # chronological (oldest first), so reverse per-day to keep the
+            # whole stream newest-first as documented in the spec.
             while cursor >= start_dt:
                 day = cursor.strftime("%Y-%m-%d")
-                events.extend(tel.get_history(date=day, limit=limit + 1, offset=0))
+                day_events = tel.get_history(date=day, limit=limit + 1, offset=0)
+                events.extend(reversed(day_events))
                 cursor -= timedelta(days=1)
 
             events = events[offset : offset + limit + 1]
@@ -470,6 +474,11 @@ async def get_cluster_activity_history(
         raw = tel.get_history(date=date, limit=limit + 1, offset=offset)
         has_more = len(raw) > limit
         raw = raw[:limit]
+        # Single-day mode also emits newest-first to honour the
+        # Observatory contract uniformly (range_mode does the same).
+        # Sole consumer (`clustersStore.loadActivity`) previously reversed
+        # client-side; that reversal has been dropped.
+        raw = list(reversed(raw))
         events = [TaxonomyActivityEvent(**e) for e in raw]
         return ActivityHistoryResponse(
             events=events,

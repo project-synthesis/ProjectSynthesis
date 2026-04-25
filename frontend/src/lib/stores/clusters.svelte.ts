@@ -391,7 +391,9 @@ class ClusterStore {
         // exist) — merge with today's JSONL for meaningful context.
         const today = new Date().toISOString().slice(0, 10);
         const hist = await getClusterActivityHistory({ date: today, limit: 200 });
-        const jsonlEvents = hist.events.reverse(); // newest first
+        // Backend now emits the range/date response newest-first within
+        // each day; no client-side reverse required.
+        const jsonlEvents = hist.events;
 
         // Merge: ring buffer is authoritative for recent, dedupe by key
         const seen = new Set(resp.events.map(
@@ -410,6 +412,52 @@ class ClusterStore {
       }
     } catch (err) {
       console.warn('Activity load failed:', err);
+    } finally {
+      this.activityLoading = false;
+    }
+  }
+
+  /**
+   * Hydrate `activityEvents` for an Observatory time window.
+   *
+   * Calls the JSONL `since`/`until` range variant and merges the response
+   * with the in-memory ring buffer. Live SSE events continue to prepend
+   * via `pushActivityEvent`, so the timeline stays current without losing
+   * the historical baseline.
+   *
+   * `period` accepts the Observatory canonical values (`24h | 7d | 30d`).
+   * Caps at 200 events to keep render cheap; the Timeline shows
+   * newest-first which matches user intent for an overview surface.
+   */
+  async loadActivityForPeriod(period: '24h' | '7d' | '30d'): Promise<void> {
+    const PERIOD_DAYS: Record<typeof period, number> = { '24h': 1, '7d': 7, '30d': 30 };
+    const today = new Date();
+    const until = today.toISOString().slice(0, 10);
+    const sinceDate = new Date(today.getTime() - (PERIOD_DAYS[period] - 1) * 86_400_000);
+    const since = sinceDate.toISOString().slice(0, 10);
+
+    this.activityLoading = true;
+    try {
+      const [ring, hist] = await Promise.all([
+        getClusterActivity({ limit: 200 }),
+        getClusterActivityHistory({ since, until, limit: 200 }),
+      ]);
+
+      const seen = new Set(ring.events.map(
+        (e: TaxonomyActivityEvent) => `${e.ts}|${e.op}|${e.decision}`
+      ));
+      const merged: TaxonomyActivityEvent[] = [...ring.events];
+      for (const e of hist.events) {
+        const key = `${e.ts}|${e.op}|${e.decision}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push(e);
+        }
+      }
+      merged.sort((a, b) => (b.ts ?? '').localeCompare(a.ts ?? ''));
+      this.activityEvents = merged.slice(0, 200);
+    } catch (err) {
+      console.warn('Activity period load failed:', err);
     } finally {
       this.activityLoading = false;
     }

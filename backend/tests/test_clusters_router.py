@@ -976,3 +976,76 @@ class TestClusterActivityHistory:
             )
         assert resp.status_code == 200
         assert today in dates_called
+
+    @pytest.mark.asyncio
+    async def test_activity_history_single_day_reverse_chrono(self, app_client):
+        """AH7: single-day mode also emits newest-first.
+
+        The Observatory contract is reverse-chronological at every level.
+        Single-day mode previously returned events in append (chronological)
+        order, forcing the sole consumer (`clustersStore.loadActivity`) to
+        reverse client-side. The contract is now uniform across `date` and
+        `since`/`until` modes — the frontend reversal has been dropped.
+        """
+        from unittest.mock import patch
+
+        mock_logger = MagicMock()
+        mock_logger.get_history = MagicMock(return_value=[
+            {"ts": "2026-04-24T08:00Z", "path": "warm", "op": "discover", "decision": "first"},
+            {"ts": "2026-04-24T09:00Z", "path": "warm", "op": "discover", "decision": "second"},
+            {"ts": "2026-04-24T10:00Z", "path": "warm", "op": "discover", "decision": "third"},
+        ])
+
+        with patch("app.routers.clusters.get_event_logger", return_value=mock_logger):
+            resp = await app_client.get(
+                "/api/clusters/activity/history",
+                params={"date": "2026-04-24"},
+            )
+        assert resp.status_code == 200
+        timestamps = [e["ts"] for e in resp.json()["events"]]
+        assert timestamps == [
+            "2026-04-24T10:00Z",
+            "2026-04-24T09:00Z",
+            "2026-04-24T08:00Z",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_activity_history_range_within_day_reverse_chrono(self, app_client):
+        """AH6: within each day, events surface newest-first (regression).
+
+        The JSONL store appends events chronologically (oldest first). The
+        Observatory contract is reverse-chronological at every level — across
+        days AND within each day. Without the per-day reversal, two events
+        from the same day surface in append order while events across days
+        are correctly newest-first, producing a mixed-order stream.
+        """
+        from unittest.mock import patch
+
+        mock_logger = MagicMock()
+
+        def _get_history(date, limit, offset):
+            if date == "2026-04-24":
+                # JSONL append order — oldest first.
+                return [
+                    {"ts": "2026-04-24T08:00Z", "path": "warm", "op": "discover", "decision": "first"},
+                    {"ts": "2026-04-24T09:00Z", "path": "warm", "op": "discover", "decision": "second"},
+                    {"ts": "2026-04-24T10:00Z", "path": "warm", "op": "discover", "decision": "third"},
+                ]
+            return []
+
+        mock_logger.get_history = _get_history
+
+        with patch("app.routers.clusters.get_event_logger", return_value=mock_logger):
+            resp = await app_client.get(
+                "/api/clusters/activity/history",
+                params={"since": "2026-04-24", "until": "2026-04-24"},
+            )
+        assert resp.status_code == 200
+        events = resp.json()["events"]
+        timestamps = [e["ts"] for e in events]
+        # Newest first within the day.
+        assert timestamps == [
+            "2026-04-24T10:00Z",
+            "2026-04-24T09:00Z",
+            "2026-04-24T08:00Z",
+        ]

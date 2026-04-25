@@ -177,6 +177,61 @@ describe('PatternDensityHeatmap', () => {
     expect(ceiling).toBeLessThanOrEqual(14);
   });
 
+  /**
+   * Spec lock (H11): rows expose absolute counts + window endpoint through
+   * the brand `use:tooltip` action (`actions/tooltip.ts`). Spec line 277:
+   * "Hover row: 1 px inset cyan contour + tooltip with the absolute counts
+   * + timestamp of the last update."
+   *
+   * The action attaches mouseenter/focus listeners and renders a branded
+   * overlay (`.synthesis-tooltip`) into `document.body` after a 400 ms
+   * delay. We dispatch `mouseenter`, advance timers past the delay, and
+   * assert the rendered tooltip contains the canonical fields. This locks
+   * the integration end-to-end: the `tooltipFor()` formatter, the action
+   * wiring, AND the brand-grammar overlay class.
+   */
+  it('row tooltip surfaces absolute counts on hover (H11 spec)', () => {
+    vi.useFakeTimers();
+    observatoryStore.patternDensity = [
+      makeRow({
+        domain_label: 'backend',
+        cluster_count: 3,
+        meta_pattern_count: 5,
+        meta_pattern_avg_score: 7.83,
+        global_pattern_count: 2,
+        cross_cluster_injection_rate: 0.213,
+        period_end: '2026-04-25T01:30:00Z',
+      }),
+    ];
+    const { container } = render(PatternDensityHeatmap);
+    const row = container.querySelector('[data-test="density-row"]') as HTMLElement;
+    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    vi.advanceTimersByTime(450); // > SHOW_DELAY_MS (400)
+    const overlay = document.body.querySelector('.synthesis-tooltip') as HTMLElement | null;
+    expect(overlay).not.toBeNull();
+    const text = overlay?.textContent ?? '';
+    expect(text).toContain('Domain: backend');
+    expect(text).toContain('Clusters: 3');
+    expect(text).toContain('Meta-patterns: 5');
+    expect(text).toContain('avg 7.83');
+    expect(text).toContain('Global patterns: 2');
+    expect(text).toContain('21.3%');
+    expect(text).toContain('2026-04-25 01:30 UTC');
+    vi.useRealTimers();
+  });
+
+  /**
+   * Spec lock (H12): row hover surfaces a 1px inset cyan contour. The
+   * brand grammar's interactive-state cue must read on the panel's
+   * read-only data grid without violating H5 (no role/tabindex). Source-
+   * locked because Svelte's scoped CSS isn't injected at test time.
+   */
+  it('row hover paints a 1px inset cyan contour (H12 spec)', () => {
+    expect(componentSource).toMatch(
+      /\.density-row:hover\s*\{[^}]*box-shadow:\s*inset\s+0\s+0\s+0\s+1px\s+var\(--color-neon-cyan\)/,
+    );
+  });
+
   it('zero counts render as "0", not "—" (REFACTOR regression)', () => {
     // Schema: cluster_count, meta_pattern_count, global_pattern_count are
     // non-nullable numbers. 0 means "none observed yet" — a meaningful

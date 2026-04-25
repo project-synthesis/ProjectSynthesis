@@ -152,4 +152,30 @@ describe('DomainReadinessAggregate', () => {
     // scoped CSS isn't injected at test time — same C8/C23 strategy from Plan #4).
     expect(componentSource).toContain('prefers-reduced-motion: reduce');
   });
+
+  /**
+   * Spec lock (R8): each card header carries a 6px chromatic dot resolved
+   * via `taxonomyColor(domain_label)`. The dot is the chromatic channel
+   * for the domain identity in the brand grammar — without it, the
+   * Observatory's readiness panel diverges from the navigator + topology
+   * surfaces that all show domain identity through colour.
+   */
+  it('renders a 6px chromatic dot per card via taxonomyColor (R8)', () => {
+    readinessStore.reports = [
+      makeReport({ domain_id: 'd1', domain_label: 'backend' }),
+      makeReport({ domain_id: 'd2', domain_label: 'frontend' }),
+    ];
+    const { container } = render(DomainReadinessAggregate);
+    const dots = container.querySelectorAll('[data-test="domain-dot"]');
+    expect(dots.length).toBe(2);
+    for (const dot of Array.from(dots) as HTMLElement[]) {
+      const style = dot.getAttribute('style') || '';
+      // Resolved colour must be inline-set (taxonomyColor returns hex/rgb).
+      expect(style).toMatch(/background-color:\s*(#|rgb)/i);
+    }
+    // Source-locked: 6px solid contour in the brand grammar.
+    expect(componentSource).toMatch(
+      /\.domain-dot\s*\{[^}]*width:\s*6px[^}]*height:\s*6px/,
+    );
+  });
 });

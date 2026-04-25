@@ -9,6 +9,8 @@
    */
   import { observatoryStore } from '$lib/stores/observatory.svelte';
   import { taxonomyColor } from '$lib/utils/colors';
+  import { tooltip } from '$lib/actions/tooltip';
+  import type { PatternDensityRow } from '$lib/api/observatory';
 
   const rows = $derived(observatoryStore.patternDensity ?? []);
   const loading = $derived(observatoryStore.patternDensityLoading);
@@ -70,6 +72,30 @@
   function fmtRate(value: number): string {
     return `${(value * 100).toFixed(0)}%`;
   }
+
+  /**
+   * Build the hover tooltip with absolute counts + window endpoints.
+   *
+   * Spec line 277: "Hover row: 1 px inset cyan contour + tooltip with the
+   * absolute counts + timestamp of the last update." The `period_end`
+   * field on each row is the canonical window endpoint and acts as the
+   * "last update" marker since the aggregator queries live at request
+   * time. Format: `YYYY-MM-DD HH:MM UTC`.
+   */
+  function tooltipFor(row: PatternDensityRow): string {
+    const avg = row.meta_pattern_avg_score === null
+      ? '—'
+      : row.meta_pattern_avg_score.toFixed(2);
+    const updated = row.period_end.slice(0, 16).replace('T', ' ');
+    return [
+      `Domain: ${row.domain_label}`,
+      `Clusters: ${row.cluster_count}`,
+      `Meta-patterns: ${row.meta_pattern_count} (avg ${avg})`,
+      `Global patterns: ${row.global_pattern_count}`,
+      `Cross-cluster injection: ${(row.cross_cluster_injection_rate * 100).toFixed(1)}%`,
+      `Updated: ${updated} UTC`,
+    ].join('\n');
+  }
 </script>
 
 <section class="heatmap" aria-label="Pattern density heatmap">
@@ -96,6 +122,7 @@
           class="density-row"
           data-test="density-row"
           style="background-color: color-mix(in srgb, {taxonomyColor(row.domain_label)} {heatPct(row.meta_pattern_count)}%, var(--color-bg-card));"
+          use:tooltip={tooltipFor(row)}
         >
           <span class="col col-domain">{row.domain_label}</span>
           <span class="col col-n">{fmtCount(row.cluster_count)}</span>
@@ -137,6 +164,17 @@
     font-size: 10px;
     color: var(--color-text-primary);
     border-top: 1px solid var(--color-border-subtle);
+    transition: box-shadow var(--duration-hover) var(--ease-spring);
+  }
+  /*
+   * Brand spec (line 277): hover surfaces a 1px inset cyan contour to
+   * mark the row as the active read target for the tooltip overlay.
+   * Contour is the brand's interactive-state grammar — zero blur, zero
+   * spread, single 1px line. Read-only (no role/cursor) is preserved
+   * by H5; this is purely a focus-of-attention cue.
+   */
+  .density-row:hover {
+    box-shadow: inset 0 0 0 1px var(--color-neon-cyan);
   }
   .col-domain { font-family: var(--font-sans); font-size: 11px; }
   .col-n { text-align: right; font-variant-numeric: tabular-nums; }
@@ -173,6 +211,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .heatmap-body,
-    .heatmap-error button { transition-duration: 0.01ms !important; }
+    .heatmap-error button,
+    .density-row { transition-duration: 0.01ms !important; }
   }
 </style>

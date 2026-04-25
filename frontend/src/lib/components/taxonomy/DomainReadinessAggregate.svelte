@@ -22,6 +22,7 @@
    */
   import type { DomainReadinessReport, StabilityTier } from '$lib/api/readiness';
   import { readinessStore } from '$lib/stores/readiness.svelte';
+  import { taxonomyColor } from '$lib/utils/colors';
   import DomainStabilityMeter from './DomainStabilityMeter.svelte';
   import SubDomainEmergenceList from './SubDomainEmergenceList.svelte';
 
@@ -88,7 +89,15 @@
           onkeydown={(e) => handleCardKey(e, report)}
         >
           <header class="card-header">
-            <span class="domain-label">{report.domain_label}</span>
+            <span class="header-primary">
+              <span
+                class="domain-dot"
+                data-test="domain-dot"
+                style="background-color: {taxonomyColor(report.domain_label)};"
+                aria-hidden="true"
+              ></span>
+              <span class="domain-label">{report.domain_label}</span>
+            </span>
             <span class="card-meta">{report.member_count}m</span>
           </header>
           <DomainStabilityMeter report={report.stability} />
@@ -139,7 +148,7 @@
   }
   .card-header {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 4px;
     font-family: var(--font-display);
@@ -150,6 +159,29 @@
     color: var(--color-text-primary);
     padding-bottom: 4px;
     border-bottom: 1px solid var(--color-border-subtle);
+  }
+  .header-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .domain-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /*
+   * Brand spec: 6px solid chip in the header row encodes the chromatic
+   * channel for the domain. Pure 1px-tube model (zero blur, zero spread,
+   * uniform width) — `flex-shrink: 0` keeps the dot at fixed size when
+   * the label truncates.
+   */
+  .domain-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
   }
   .card-meta {
     font-family: var(--font-mono);

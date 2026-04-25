@@ -293,14 +293,35 @@ export async function getClusterActivity(params?: {
   return apiFetch<ActivityResponse>(`/clusters/activity${qs ? '?' + qs : ''}`);
 }
 
-export async function getClusterActivityHistory(params: {
-  date: string;
-  limit?: number;
-  offset?: number;
-}): Promise<ActivityHistoryResponse> {
-  const search = new URLSearchParams({ date: params.date });
+/**
+ * Fetch JSONL activity history.
+ *
+ * Two mutually exclusive modes (validated server-side, 422 on conflict):
+ *   - **Single day**: pass `{ date: "YYYY-MM-DD" }`.
+ *   - **Range**:      pass `{ since: "YYYY-MM-DD", until?: "YYYY-MM-DD" }`.
+ *     `until` defaults to today UTC; range cap is 30 days.
+ *
+ * All dates are UTC ISO `YYYY-MM-DD`. Response is reverse-chronological
+ * across days AND within each day (matches the Observatory contract).
+ */
+export type ActivityHistoryParams =
+  | { date: string; since?: never; until?: never; limit?: number; offset?: number }
+  | { date?: never; since: string; until?: string; limit?: number; offset?: number };
+
+export async function getClusterActivityHistory(
+  params: ActivityHistoryParams,
+): Promise<ActivityHistoryResponse> {
+  const search = new URLSearchParams();
+  if ('date' in params && params.date) {
+    search.set('date', params.date);
+  } else if ('since' in params && params.since) {
+    search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+  }
   if (params.limit != null) search.set('limit', String(params.limit));
   if (params.offset != null) search.set('offset', String(params.offset));
-  return apiFetch<ActivityHistoryResponse>(`/clusters/activity/history?${search.toString()}`);
+  return apiFetch<ActivityHistoryResponse>(
+    `/clusters/activity/history?${search.toString()}`,
+  );
 }
 
