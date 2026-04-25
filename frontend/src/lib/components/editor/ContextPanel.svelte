@@ -63,7 +63,10 @@
     }
   }
 
-  const SYNTHESIS_STATES = new Set(['analyzing', 'optimizing', 'scoring', 'forging']);
+  // Mirror ForgeStatus pipeline-active states from forge.svelte.ts. The plan
+  // originally listed 'forging' too, but no such status exists on the type
+  // — dropped to keep the gate honest.
+  const SYNTHESIS_STATES = new Set(['analyzing', 'optimizing', 'scoring']);
   const isSynthesizing = $derived(SYNTHESIS_STATES.has(forgeStore.status));
 </script>
 
@@ -336,6 +339,7 @@
   }
 
   .context-panel--collapsed { width: 28px; }
+  .context-panel--collapsed .panel-title { display: none; }
   .collapse-btn {
     height: 20px;
     padding: 0 4px;
