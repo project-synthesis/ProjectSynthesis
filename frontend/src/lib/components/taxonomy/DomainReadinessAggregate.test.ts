@@ -3,14 +3,71 @@ import { render, screen, cleanup } from '@testing-library/svelte';
 import DomainReadinessAggregate from './DomainReadinessAggregate.svelte';
 import componentSource from './DomainReadinessAggregate.svelte?raw';
 import { readinessStore } from '$lib/stores/readiness.svelte';
+import type {
+  DomainReadinessReport,
+  DomainStabilityReport,
+  SubDomainEmergenceReport,
+} from '$lib/api/readiness';
 
-function makeReport(overrides: Record<string, unknown> = {}) {
+/**
+ * Build a complete `DomainReadinessReport` matching the backend contract in
+ * `backend/app/schemas/sub_domain_readiness.py`. Tests can shallow-merge any
+ * field via `overrides`; nested overrides for `stability` / `emergence` are
+ * spread on top of the defaults so callers only specify what they care about.
+ *
+ * Keeping fixtures contract-complete lets the panel mount the real
+ * `DomainStabilityMeter` + `SubDomainEmergenceList` children rather than
+ * stubbing them — a regression here will surface as a runtime prop mismatch
+ * rather than a silently-empty card.
+ */
+type ReportOverrides = Omit<Partial<DomainReadinessReport>, 'stability' | 'emergence'> & {
+  stability?: Partial<DomainStabilityReport>;
+  emergence?: Partial<SubDomainEmergenceReport>;
+};
+
+function makeReport(overrides: ReportOverrides = {}): DomainReadinessReport {
+  const baseStability: DomainStabilityReport = {
+    consistency: 0.65,
+    dissolution_floor: 0.15,
+    hysteresis_creation_threshold: 0.6,
+    age_hours: 72,
+    min_age_hours: 48,
+    member_count: 20,
+    member_ceiling: 5,
+    sub_domain_count: 0,
+    total_opts: 80,
+    guards: {
+      general_protected: false,
+      has_sub_domain_anchor: false,
+      age_eligible: true,
+      above_member_ceiling: true,
+      consistency_above_floor: true,
+    },
+    tier: 'healthy',
+    dissolution_risk: 0.05,
+    would_dissolve: false,
+  };
+  const baseEmergence: SubDomainEmergenceReport = {
+    threshold: 0.55,
+    threshold_formula: 'max(0.40, 0.60 - 0.004 * 20) = 0.52',
+    min_member_count: 5,
+    total_opts: 80,
+    top_candidate: null,
+    gap_to_threshold: 0.15,
+    ready: false,
+    blocked_reason: 'no_candidates',
+    runner_ups: [],
+    tier: 'warming',
+  };
+  const { stability: stabilityOverrides, emergence: emergenceOverrides, ...rest } = overrides;
   return {
     domain_id: 'd1',
     domain_label: 'backend',
-    stability: { tier: 'healthy', consistency: 0.65, age_hours: 72, member_count: 20 },
-    emergence: { tier: 'warming', total_opts: 80, gap_to_threshold: 15, consistency_pct: 25, emerging_sub_domains: [] },
-    ...overrides,
+    member_count: 20,
+    stability: { ...baseStability, ...stabilityOverrides },
+    emergence: { ...baseEmergence, ...emergenceOverrides },
+    computed_at: '2026-04-25T00:00:00Z',
+    ...rest,
   };
 }
 
@@ -31,7 +88,7 @@ describe('DomainReadinessAggregate', () => {
       makeReport({ domain_id: 'd1', domain_label: 'backend' }),
       makeReport({ domain_id: 'd2', domain_label: 'frontend' }),
       makeReport({ domain_id: 'd3', domain_label: 'database' }),
-    ] as unknown as typeof readinessStore.reports;
+    ];
     const { container } = render(DomainReadinessAggregate);
     expect(container.querySelectorAll('.readiness-card').length).toBe(3);
   });
@@ -41,7 +98,7 @@ describe('DomainReadinessAggregate', () => {
       makeReport({ domain_id: 'd-h', domain_label: 'healthy-one', stability: { tier: 'healthy', consistency: 0.7, age_hours: 200, member_count: 50 } }),
       makeReport({ domain_id: 'd-c', domain_label: 'critical-one', stability: { tier: 'critical', consistency: 0.1, age_hours: 10, member_count: 3 } }),
       makeReport({ domain_id: 'd-g', domain_label: 'guarded-one', stability: { tier: 'guarded', consistency: 0.4, age_hours: 60, member_count: 12 } }),
-    ] as unknown as typeof readinessStore.reports;
+    ];
     const { container } = render(DomainReadinessAggregate);
     const firstCard = container.querySelector('.readiness-card') as HTMLElement;
     expect(firstCard.getAttribute('data-tier')).toBe('critical');
@@ -49,7 +106,7 @@ describe('DomainReadinessAggregate', () => {
 
   it('card click dispatches domain:select CustomEvent with domain_id (R4)', async () => {
     const userEvent = (await import('@testing-library/user-event')).default;
-    readinessStore.reports = [makeReport({ domain_id: 'd-abc', domain_label: 'X' })] as unknown as typeof readinessStore.reports;
+    readinessStore.reports = [makeReport({ domain_id: 'd-abc', domain_label: 'X' })];
     const { container } = render(DomainReadinessAggregate);
     const user = userEvent.setup();
     let receivedId: string | null = null;
@@ -65,9 +122,9 @@ describe('DomainReadinessAggregate', () => {
     readinessStore.reports = [
       makeReport({
         domain_id: 'd1', domain_label: 'solo',
-        emergence: { tier: 'cold', total_opts: 5, gap_to_threshold: 50, consistency_pct: 0, emerging_sub_domains: [] },
+        emergence: { tier: 'inert', total_opts: 5, gap_to_threshold: 0.5, blocked_reason: 'no_candidates', runner_ups: [] },
       }),
-    ] as unknown as typeof readinessStore.reports;
+    ];
     const { container } = render(DomainReadinessAggregate);
     const card = container.querySelector('.readiness-card');
     expect(card?.querySelector('.emergence-empty-placeholder')).toBeNull();
@@ -75,7 +132,7 @@ describe('DomainReadinessAggregate', () => {
 
   it('mid-session dissolution: click on a card whose domain is gone is a no-op (R6)', async () => {
     const userEvent = (await import('@testing-library/user-event')).default;
-    readinessStore.reports = [makeReport({ domain_id: 'd-gone', domain_label: 'was-here' })] as unknown as typeof readinessStore.reports;
+    readinessStore.reports = [makeReport({ domain_id: 'd-gone', domain_label: 'was-here' })];
     const { container } = render(DomainReadinessAggregate);
     const user = userEvent.setup();
     vi.spyOn(readinessStore, 'byDomain').mockReturnValue(null);
@@ -89,7 +146,7 @@ describe('DomainReadinessAggregate', () => {
   });
 
   it('respects prefers-reduced-motion (R7)', () => {
-    readinessStore.reports = [makeReport()] as unknown as typeof readinessStore.reports;
+    readinessStore.reports = [makeReport()];
     render(DomainReadinessAggregate);
     // Source-locked: assert the @media block lives in the .svelte file (Svelte's
     // scoped CSS isn't injected at test time — same C8/C23 strategy from Plan #4).
