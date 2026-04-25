@@ -63,4 +63,21 @@ describe('TaxonomyObservatory', () => {
     unmount();
     expect(Array.isArray(clustersStore.activityEvents)).toBe(true);
   });
+
+  it('routes domain:select CustomEvent from Aggregate panel to clustersStore.selectCluster (TO7)', () => {
+    const selectSpy = vi
+      .spyOn(clustersStore, 'selectCluster')
+      .mockImplementation(() => {});
+    const { container } = render(TaxonomyObservatory);
+    const root = container.querySelector(
+      '[data-test="taxonomy-observatory"]',
+    ) as HTMLElement;
+    root.dispatchEvent(
+      new CustomEvent('domain:select', {
+        detail: { domain_id: 'd-test-id' },
+        bubbles: true,
+      }),
+    );
+    expect(selectSpy).toHaveBeenCalledWith('d-test-id');
+  });
 });

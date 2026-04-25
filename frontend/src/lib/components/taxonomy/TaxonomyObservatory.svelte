@@ -12,9 +12,39 @@
   import DomainReadinessAggregate from './DomainReadinessAggregate.svelte';
   import PatternDensityHeatmap from './PatternDensityHeatmap.svelte';
   import { observatoryStore } from '$lib/stores/observatory.svelte';
+  import { clustersStore } from '$lib/stores/clusters.svelte';
+
+  let rootEl: HTMLDivElement | undefined = $state();
+
+  /**
+   * `DomainReadinessAggregate` cards bubble a `domain:select` CustomEvent
+   * with `{ detail: { domain_id } }` when clicked. Without a listener the
+   * click is silently absorbed; route it into the cluster store's selection
+   * so the Inspector + topology focus the chosen domain — matching the
+   * existing DomainReadinessPanel sidebar behavior. CustomEvents with a
+   * colon in the name aren't expressible via Svelte's `on*` directive; we
+   * register the listener directly on the bound root element instead.
+   */
+  $effect(() => {
+    if (!rootEl) return;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ domain_id?: string }>).detail;
+      const id = detail?.domain_id;
+      if (typeof id === 'string' && id.length > 0) {
+        clustersStore.selectCluster(id);
+      }
+    };
+    rootEl.addEventListener('domain:select', handler);
+    return () => rootEl?.removeEventListener('domain:select', handler);
+  });
 </script>
 
-<div class="observatory" data-test="taxonomy-observatory" role="tabpanel">
+<div
+  class="observatory"
+  data-test="taxonomy-observatory"
+  role="tabpanel"
+  bind:this={rootEl}
+>
   <header class="observatory-shell-header" data-test="observatory-shell-header">
     <h2 class="shell-title">OBSERVATORY</h2>
     <p class="observatory-legend" data-test="observatory-legend">
