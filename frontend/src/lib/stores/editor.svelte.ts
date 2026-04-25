@@ -110,7 +110,10 @@ class EditorStore {
     if (this.activeTabId === id) {
       // Prefer the Prompt tab as the natural fallback so closing a result
       // returns the user to the editor — not to a sibling pinned tab like
-      // the Observatory which lives on the same level.
+      // the Observatory which lives on the same level. The Prompt tab is
+      // pinned so the lookup is effectively guaranteed; the fallback chain
+      // (last tab → PROMPT_TAB_ID literal) is purely defensive in case
+      // future code paths remove pinned tabs.
       const promptTab = this.tabs.find((t) => t.id === PROMPT_TAB_ID);
       if (promptTab) {
         this.activeTabId = PROMPT_TAB_ID;

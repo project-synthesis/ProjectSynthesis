@@ -2,9 +2,11 @@
   /**
    * TaxonomyObservatory — three-panel shell composing Timeline + Readiness + Heatmap.
    *
-   * Period selector lives inside Timeline + Heatmap panel headers (NOT in this
-   * shell header), because Readiness is current-state data with no period
-   * applied. The shell legend explains the asymmetry.
+   * Period selector lives inside the Timeline panel filter-bar (NOT in this
+   * shell header) because Readiness is current-state data with no period
+   * applied. The Heatmap also reacts to `observatoryStore.period` via the
+   * store's debounced refresh, so a single set of chips drives both
+   * period-aware panels. The shell legend explains the asymmetry.
    */
   import DomainLifecycleTimeline from './DomainLifecycleTimeline.svelte';
   import DomainReadinessAggregate from './DomainReadinessAggregate.svelte';
