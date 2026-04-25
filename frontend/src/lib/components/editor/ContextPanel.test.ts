@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/svelte';
 import ContextPanel from './ContextPanel.svelte';
+// Vite's ?raw query yields the raw source as a string — the brand-CSS
+// contract assertions (C8 marker class, C23 reduced-motion media query)
+// can't rely on Svelte's compile-time scoped CSS being injected at test
+// time, so we lock them against the source directly.
+import contextPanelSource from './ContextPanel.svelte?raw';
 import { clustersStore } from '$lib/stores/clusters.svelte';
 import { forgeStore } from '$lib/stores/forge.svelte';
 import { mockClusterMatch, mockMetaPattern } from '$lib/test-utils';
@@ -159,14 +164,14 @@ describe('ContextPanel', () => {
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel);
       const global = container.querySelector('[data-test="global-section"]') as HTMLElement;
-      // jsdom does not resolve scoped CSS variables in getComputedStyle and
-      // Svelte's compile-time scoped CSS isn't injected into <style> tags in
-      // the vitest runner — so the brand contract (1px solid neon-purple
-      // border-left) is asserted via the marker class that owns the rule.
-      // The CSS source (pattern-section--global { border-left: 1px solid
-      // var(--color-neon-purple) }) is locked in the component's <style>
-      // block — Task 18's brand-guideline grep catches any drift.
+      // Marker class on the DOM (consumer-side contract).
       expect(global.classList.contains('pattern-section--global')).toBe(true);
+      // Source-side rule lock (brand contract). Svelte's scoped CSS isn't
+      // injected at test time — assert the rule lives in the source. Brand-
+      // grep at Task 18 catches drift across the wider component tree.
+      expect(contextPanelSource).toMatch(
+        /\.pattern-section--global\s*\{[^}]*border-left:\s*1px\s+solid\s+var\(--color-neon-purple\)/,
+      );
     });
   });
 
@@ -291,20 +296,13 @@ describe('ContextPanel', () => {
       expect(btn.getAttribute('aria-controls')).toBe('context-panel-body');
     });
 
-    it('respects prefers-reduced-motion (C23)', async () => {
-      // Svelte's compile-time scoped CSS isn't injected into <style> tags in
-      // the vitest runner, so we read the .svelte source directly and assert
-      // the @media (prefers-reduced-motion: reduce) block is present. This
-      // matches the C8 strategy — source-locked contract, brand-grep at
+    it('respects prefers-reduced-motion (C23)', () => {
+      // Source-locked: assert the @media block lives in the .svelte file.
+      // Same rationale as C8 — Svelte's compile-time scoped CSS isn't
+      // injected into <style> tags in the vitest runner. Brand-grep at
       // Task 18 catches drift.
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-      const src = await fs.readFile(
-        path.resolve(__dirname, 'ContextPanel.svelte'),
-        'utf-8',
-      );
-      expect(src).toContain('prefers-reduced-motion: reduce');
-      expect(src).toMatch(/transition-duration:\s*0\.01ms/);
+      expect(contextPanelSource).toContain('prefers-reduced-motion: reduce');
+      expect(contextPanelSource).toMatch(/transition-duration:\s*0\.01ms/);
     });
   });
 });
