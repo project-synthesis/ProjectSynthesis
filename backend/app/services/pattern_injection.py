@@ -185,7 +185,21 @@ async def record_injection_provenance(
     global _injection_provenance_failures  # noqa: PLW0603
     _prov_ok = 0
     _prov_fail = 0
-    sim_map = similarity_map or {}
+    # Topic-row similarity comes from one of two sources:
+    #   1. ``similarity_map`` argument — passed by callers that have the
+    #      raw embedding-search results (legacy in-line path).
+    #   2. Per-pattern ``InjectedPattern.similarity`` — derived from the
+    #      injected list when the caller flips ``record_provenance=False``
+    #      and ships only the parent ``InjectedPattern`` rows. Each
+    #      pattern carries its cluster's similarity, so the derived map
+    #      is sound.
+    # Without this fallback, post-commit topic rows landed with
+    # ``similarity=NULL`` (cycle-3 review SEV-MEDIUM).
+    sim_map: dict[str, float] = dict(similarity_map or {})
+    if not sim_map and injected:
+        for _ip in injected:
+            if _ip.cluster_id and _ip.cluster_id not in sim_map:
+                sim_map[_ip.cluster_id] = _ip.similarity
 
     if cluster_ids:
         try:
