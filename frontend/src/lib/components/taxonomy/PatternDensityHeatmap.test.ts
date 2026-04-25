@@ -100,4 +100,29 @@ describe('PatternDensityHeatmap', () => {
     render(PatternDensityHeatmap);
     expect(screen.getByText(/pattern library is empty/i)).toBeTruthy();
   });
+
+  it('zero counts render as "0", not "—" (REFACTOR regression)', () => {
+    // Schema: cluster_count, meta_pattern_count, global_pattern_count are
+    // non-nullable numbers. 0 means "none observed yet" — a meaningful
+    // signal — and must render explicitly. '—' is reserved for null
+    // (avg-score not yet computed) and would mislead the reader.
+    observatoryStore.patternDensity = [
+      makeRow({
+        cluster_count: 0,
+        meta_pattern_count: 0,
+        global_pattern_count: 0,
+        cross_cluster_injection_rate: 0,
+        meta_pattern_avg_score: null,
+      }),
+    ];
+    const { container } = render(PatternDensityHeatmap);
+    const cells = container.querySelectorAll('[data-test="density-row"] .col-n');
+    // 5 numeric cells: clusters, meta, avg score, global, x-cluster rate.
+    expect(cells.length).toBe(5);
+    expect(cells[0].textContent).toBe('0');       // cluster_count
+    expect(cells[1].textContent).toBe('0');       // meta_pattern_count
+    expect(cells[2].textContent).toBe('—');       // null avg score
+    expect(cells[3].textContent).toBe('0');       // global_pattern_count
+    expect(cells[4].textContent).toBe('0%');      // x-cluster rate
+  });
 });

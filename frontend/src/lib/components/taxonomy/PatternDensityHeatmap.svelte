@@ -14,14 +14,30 @@
   const loading = $derived(observatoryStore.patternDensityLoading);
   const error = $derived(observatoryStore.patternDensityError);
 
+  // Empirical opacity ceiling: 22% keeps row text readable against the
+  // tinted background while still encoding the density signal. Pushed
+  // higher (>30%) the foreground hex contrast collapses below WCAG AA
+  // for the dimmer domain hues (e.g. data=#b49982).
+  const HEAT_MAX_PCT = 22;
+
   const maxCount = $derived(Math.max(1, ...rows.map((r) => r.meta_pattern_count)));
 
   function heatPct(count: number): number {
-    return Math.round((count / maxCount) * 22);
+    return Math.round((count / maxCount) * HEAT_MAX_PCT);
   }
 
   function fmt(value: number | null, digits = 2): string {
     return value === null ? '—' : value.toFixed(digits);
+  }
+
+  // 0 is a valid count meaning "none observed yet" — render it explicitly
+  // rather than collapsing to '—' (which we reserve for "no data" / null).
+  function fmtCount(value: number): string {
+    return String(value);
+  }
+
+  function fmtRate(value: number): string {
+    return `${(value * 100).toFixed(0)}%`;
   }
 </script>
 
@@ -51,11 +67,11 @@
           style="background-color: color-mix(in srgb, {taxonomyColor(row.domain_label)} {heatPct(row.meta_pattern_count)}%, transparent);"
         >
           <span class="col col-domain">{row.domain_label}</span>
-          <span class="col col-n">{row.cluster_count || '—'}</span>
-          <span class="col col-n">{row.meta_pattern_count || '—'}</span>
+          <span class="col col-n">{fmtCount(row.cluster_count)}</span>
+          <span class="col col-n">{fmtCount(row.meta_pattern_count)}</span>
           <span class="col col-n">{fmt(row.meta_pattern_avg_score, 1)}</span>
-          <span class="col col-n">{row.global_pattern_count || '—'}</span>
-          <span class="col col-n">{row.cross_cluster_injection_rate ? (row.cross_cluster_injection_rate * 100).toFixed(0) + '%' : '—'}</span>
+          <span class="col col-n">{fmtCount(row.global_pattern_count)}</span>
+          <span class="col col-n">{fmtRate(row.cross_cluster_injection_rate)}</span>
         </div>
       {/each}
     </div>
