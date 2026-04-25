@@ -1,6 +1,7 @@
 """Tests for app.utils.text_cleanup — LLM output normalization utilities."""
 
 from app.utils.text_cleanup import (
+    normalize_sub_domain_label,
     parse_domain,
     sanitize_optimization_result,
     split_prompt_and_changes,
@@ -339,3 +340,134 @@ class TestValidateIntentLabel:
         result = validate_intent_label("General", "Build REST API with JWT authentication")
         # The fallback should go through title_case_label which preserves acronyms
         assert "REST" in result or "JWT" in result or "API" in result
+
+
+# ---------------------------------------------------------------------------
+# normalize_sub_domain_label
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeSubDomainLabel:
+    """Single source of truth for sub-domain label canonicalization.
+
+    Cycle-3/4 evidence (2026-04-25): the engine's inline rule
+    ``qualifier.lower().replace(" ", "-")[:30]`` and labeling.py's inline
+    rule ``group.name.strip().lower().replace(" ", "-")[:20]`` had two
+    drift risks: (1) different length limits, and (2) no defensive
+    handling for underscore-separated names like ``"embedding_health"``.
+    Live evidence of the second drift: ``pattern-instrumentat`` —
+    truncated mid-word at 20 chars from a Haiku-emitted
+    ``"pattern instrumentation"``.
+
+    The shared helper applies one rule everywhere with word-boundary
+    truncation.
+    """
+
+    def test_simple_one_word_unchanged(self) -> None:
+        assert normalize_sub_domain_label("audit") == "audit"
+
+    def test_already_canonical_kebab_unchanged(self) -> None:
+        assert normalize_sub_domain_label("embedding-health") == "embedding-health"
+
+    def test_uppercase_lowercased(self) -> None:
+        assert normalize_sub_domain_label("Audit") == "audit"
+        assert normalize_sub_domain_label("EmbeddingHealth") == "embeddinghealth"
+
+    def test_space_converted_to_hyphen(self) -> None:
+        assert normalize_sub_domain_label("embedding health") == "embedding-health"
+
+    def test_underscore_converted_to_hyphen(self) -> None:
+        """Hardens against Haiku quirks like ``embedding_health``."""
+        assert normalize_sub_domain_label("embedding_health") == "embedding-health"
+
+    def test_mixed_separators_unified(self) -> None:
+        assert normalize_sub_domain_label("async session_pool") == "async-session-pool"
+        assert normalize_sub_domain_label("a_b c-d") == "a-b-c-d"
+
+    def test_multiple_hyphens_collapsed(self) -> None:
+        assert normalize_sub_domain_label("embedding--health") == "embedding-health"
+        assert normalize_sub_domain_label("a---b") == "a-b"
+
+    def test_whitespace_stripped(self) -> None:
+        assert normalize_sub_domain_label("  audit  ") == "audit"
+        assert normalize_sub_domain_label("\t\nembedding-health\n\t") == "embedding-health"
+
+    def test_leading_trailing_hyphens_stripped(self) -> None:
+        assert normalize_sub_domain_label("-audit-") == "audit"
+        assert normalize_sub_domain_label("---") == ""
+
+    def test_empty_input_returns_empty(self) -> None:
+        assert normalize_sub_domain_label("") == ""
+        assert normalize_sub_domain_label("   ") == ""
+
+    def test_pattern_instrumentation_word_boundary_truncation(self) -> None:
+        """Live cycle-4 regression: ``pattern instrumentation`` (23 chars
+        kebab) used to truncate to ``pattern-instrumentat`` mid-word
+        because the labeling.py limit was 20. With the new helper at
+        max_len=30, the full word survives.
+        """
+        assert (
+            normalize_sub_domain_label("pattern instrumentation")
+            == "pattern-instrumentation"
+        )
+
+    def test_long_phrase_truncates_at_word_boundary(self) -> None:
+        """4-word phrase that exceeds 30 chars cuts cleanly."""
+        # "async session management pool" → 30 chars. fits.
+        assert (
+            normalize_sub_domain_label("async session management pool")
+            == "async-session-management-pool"
+        )
+
+    def test_long_phrase_with_overflow_cuts_at_last_hyphen(self) -> None:
+        # "async-session-management-pool-extra" = 35 chars. The first 30
+        # chars are "async-session-management-pool-". The last hyphen
+        # in that window is at position 29 (the trailing one), so the
+        # truncation strips back to "async-session-management-pool"
+        # (29 chars) — preserving as much intact word content as fits.
+        result = normalize_sub_domain_label("async-session-management-pool-extra")
+        assert result == "async-session-management-pool"
+        assert len(result) <= 30
+        # Importantly: never a mid-word slice like "async-session-management-pool-e"
+        assert not result.endswith("-")
+        # And every word in the result is whole, not a fragment of the input.
+        for word in result.split("-"):
+            assert word in {"async", "session", "management", "pool"}
+
+    def test_single_word_overflow_hard_truncates(self) -> None:
+        # 35-char single word with no hyphens — accept hard truncation.
+        long_word = "x" * 35
+        result = normalize_sub_domain_label(long_word)
+        assert len(result) == 30
+        assert result == "x" * 30
+
+    def test_max_len_override(self) -> None:
+        """Limit is configurable for callers that need a different bound."""
+        assert normalize_sub_domain_label("short-name", max_len=5) == "short"
+        # The caller supplied a 5-char limit. "short-name" gets cut at
+        # last hyphen ≤ 5 → "short-" stripped → "short".
+
+    def test_short_word_no_truncation_at_high_limit(self) -> None:
+        assert normalize_sub_domain_label("audit", max_len=100) == "audit"
+
+    def test_idempotent(self) -> None:
+        once = normalize_sub_domain_label("Embedding Health")
+        twice = normalize_sub_domain_label(once)
+        assert once == twice == "embedding-health"
+
+    def test_idempotent_for_underscore_input(self) -> None:
+        once = normalize_sub_domain_label("embedding_health")
+        twice = normalize_sub_domain_label(once)
+        assert once == twice == "embedding-health"
+
+    def test_idempotent_after_truncation(self) -> None:
+        once = normalize_sub_domain_label(
+            "async-session-management-pool-extra-tail"
+        )
+        twice = normalize_sub_domain_label(once)
+        assert once == twice
+
+    def test_only_separator_chars_returns_empty(self) -> None:
+        assert normalize_sub_domain_label("- _ -") == ""
+        assert normalize_sub_domain_label("___") == ""
+

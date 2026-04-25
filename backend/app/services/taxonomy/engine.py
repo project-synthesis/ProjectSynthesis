@@ -2525,8 +2525,18 @@ class TaxonomyEngine:
                 if not passed:
                     continue
 
-                # Check label dedup + flip-flop prevention
-                sub_label = qualifier.lower().replace(" ", "-")[:30]
+                # Check label dedup + flip-flop prevention.
+                # Shared canonicalizer (text_cleanup.normalize_sub_domain_label)
+                # guarantees vocab-group names AND sub-domain labels follow the
+                # same rule: lowercase + space/underscore→hyphen + collapse
+                # multiple hyphens + word-boundary truncation at 30 chars.
+                # Prevents incoherent labels like ``pattern-instrumentat``
+                # (mid-word slice) when Haiku returns longer phrases.
+                from app.utils.text_cleanup import normalize_sub_domain_label
+
+                sub_label = normalize_sub_domain_label(qualifier)
+                if not sub_label:
+                    continue
                 if sub_label in existing_labels or sub_label in dissolved_this_cycle:
                     skip_reason = (
                         "dissolved_this_cycle" if sub_label in dissolved_this_cycle
