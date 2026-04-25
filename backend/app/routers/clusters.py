@@ -412,27 +412,72 @@ async def get_cluster_activity(
 
 @router.get("/api/clusters/activity/history", response_model=ActivityHistoryResponse)
 async def get_cluster_activity_history(
-    date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    since: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    until: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ) -> ActivityHistoryResponse:
-    """Return taxonomy decision events for a specific date from JSONL storage."""
+    """Return taxonomy decision events for a specific date OR a date range
+    from JSONL storage. `date` and `since`/`until` are mutually exclusive."""
+    from datetime import datetime, timedelta, timezone
+
+    if date is not None and (since is not None or until is not None):
+        raise HTTPException(422, "`date` is mutually exclusive with `since`/`until`")
+
+    range_mode = since is not None or until is not None
+    start_dt: datetime | None = None
+    end_dt: datetime | None = None
+    if range_mode:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start = since or today
+        end = until or today
+        start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if end_dt < start_dt:
+            raise HTTPException(422, "`until` must be >= `since`")
+        span = (end_dt - start_dt).days
+        if span > 30:
+            raise HTTPException(422, "range must be <= 30 days")
+    elif date is None:
+        raise HTTPException(422, "either `date` or `since`/`until` required")
+
     try:
         tel = get_event_logger()
     except RuntimeError:
         return ActivityHistoryResponse(events=[], total=0, has_more=False)
 
     try:
+        if range_mode:
+            assert start_dt is not None and end_dt is not None
+            events: list[dict] = []
+            cursor = end_dt
+            while cursor >= start_dt:
+                day = cursor.strftime("%Y-%m-%d")
+                events.extend(tel.get_history(date=day, limit=limit + 1, offset=0))
+                cursor -= timedelta(days=1)
+
+            events = events[offset : offset + limit + 1]
+            has_more = len(events) > limit
+            events = events[:limit]
+            return ActivityHistoryResponse(
+                events=[TaxonomyActivityEvent(**e) for e in events],
+                total=offset + len(events) + (1 if has_more else 0),
+                has_more=has_more,
+            )
+
+        assert date is not None  # narrowed by upstream validation
         raw = tel.get_history(date=date, limit=limit + 1, offset=offset)
         has_more = len(raw) > limit
         raw = raw[:limit]
-
         events = [TaxonomyActivityEvent(**e) for e in raw]
         return ActivityHistoryResponse(
             events=events,
             total=offset + len(events) + (1 if has_more else 0),
             has_more=has_more,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("GET /api/clusters/activity/history failed: %s", exc, exc_info=True)
         raise HTTPException(500, "Failed to load activity history") from exc
