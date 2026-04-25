@@ -585,6 +585,58 @@ class TestPreflight:
             await tracker.end_update()
 
     @pytest.mark.asyncio
+    async def test_commits_ahead_of_origin_emits_warning(self, tmp_path):
+        """Pinned regression for the third P0 risk — local commits ahead
+        of ``origin/main`` would be silently orphaned by a pure-tag
+        checkout. Preflight must surface the count as a warning so the
+        operator sees the orphan-risk before applying.
+        """
+        import subprocess as _sp
+
+        _sp.run(["git", "init", "--initial-branch", "main"],
+                cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.email", "t@t.com"],
+                cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.name", "Test"],
+                cwd=str(tmp_path), capture_output=True)
+        (tmp_path / "version.json").write_text('{"version": "0.4.0"}')
+        _sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "commit", "-m", "shared base"],
+                cwd=str(tmp_path), capture_output=True)
+        # Create origin/main pointing at the shared base.
+        _sp.run(["git", "checkout", "-b", "origin/main"],
+                cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "checkout", "main"],
+                cwd=str(tmp_path), capture_output=True)
+        # Add two local commits ahead of origin/main.
+        (tmp_path / "version.json").write_text('{"version": "0.4.1-dev"}')
+        _sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "commit", "-m", "local-only #1"],
+                cwd=str(tmp_path), capture_output=True)
+        (tmp_path / "version.json").write_text('{"version": "0.4.2-dev"}')
+        _sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "commit", "-m", "local-only #2"],
+                cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "tag", "v0.4.0", "main~2"],
+                cwd=str(tmp_path), capture_output=True)
+
+        from app.services.update_service import (
+            UpdateInflightTracker,
+            UpdateService,
+            set_inflight_tracker,
+        )
+
+        set_inflight_tracker(UpdateInflightTracker())
+        svc = UpdateService(project_root=tmp_path)
+        status = await svc.preflight(tag="v0.4.0")
+        assert status.commits_ahead_of_origin == 2
+        # Warning, not blocking — operator can choose to proceed.
+        assert status.can_apply is True
+        assert any(
+            "ahead of origin" in w.lower() for w in status.warnings
+        ), f"Expected commits-ahead warning, got: {status.warnings}"
+
+    @pytest.mark.asyncio
     async def test_unknown_tag_emits_warning_not_block(self, tmp_path):
         _seed_repo(tmp_path)
         from app.services.update_service import (

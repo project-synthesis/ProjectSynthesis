@@ -58,10 +58,16 @@ class UpdateInflightTracker:
 
     @property
     def running_count(self) -> int:
+        # Lock-free read by design: ``set.add/discard`` are atomic
+        # operations under CPython's GIL, so a torn read is impossible.
+        # Drain loop polls this between awaits — new arrivals during
+        # drain are bounded by the 503 gate set inside ``begin_update``.
         return len(self._running)
 
     @property
     def running_trace_ids(self) -> list[str]:
+        # Same lock-free reasoning as ``running_count``. ``sorted()`` of
+        # a set snapshot is atomic; no need to acquire ``self._lock``.
         return sorted(self._running)
 
     @property
@@ -928,9 +934,16 @@ class UpdateService:
             stderr=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        # SEV-MEDIUM hardening (review #1): require ``synthesis-update-``
+        # WITH the trailing hyphen so an operator stash whose message
+        # coincidentally contains ``synthesis-update`` (e.g.
+        # ``"WIP synthesis-update-debugging"``) is NOT mistakenly popped.
+        # All real auto-stashes follow the format
+        # ``synthesis-update-<tag>-<iso8601>``.
+        sentinel = f"{AUTO_STASH_PREFIX}-"
         target_ref: str | None = None
         for line in stdout.decode().splitlines():
-            if AUTO_STASH_PREFIX in line:
+            if sentinel in line:
                 target_ref = line.split(":")[0].strip()
                 break
         if target_ref is None:

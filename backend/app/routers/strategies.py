@@ -139,15 +139,22 @@ async def update_strategy(name: str, body: StrategyUpdate, request: Request) -> 
     # Customization tracking — record this API edit so the self-update
     # pre-flight (GET /api/update/preflight) can warn the user and
     # update_service.apply_update can auto-stash it before checkout.
-    # Best-effort: a tracking failure must not block the strategy save.
+    # Best-effort: a tracking failure must not block the strategy save,
+    # but it must NOT be silent at info-level either — operators should
+    # see the degradation in data/backend.log so they know the auto-stash
+    # safety net is offline (e.g. read-only data dir).
     try:
         from app.config import PROJECT_ROOT
         from app.services.customization_tracker import get_tracker
 
         rel_path = path.resolve().relative_to(PROJECT_ROOT).as_posix()
         get_tracker().record_edit(rel_path, body.content, source="api")
-    except Exception:
-        logger.debug("Customization tracker write failed", exc_info=True)
+    except Exception as _track_exc:
+        logger.warning(
+            "Customization tracker write failed for %s — auto-stash on "
+            "self-update will not preserve this edit. Cause: %s",
+            name, _track_exc,
+        )
 
     # Audit log
     try:
