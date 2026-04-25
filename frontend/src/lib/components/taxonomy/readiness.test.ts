@@ -250,7 +250,7 @@ describe('SubDomainEmergenceList', () => {
   });
 
   it('renders runner-ups when provided', () => {
-    render(SubDomainEmergenceList, {
+    const { container } = render(SubDomainEmergenceList, {
       props: {
         report: baseEmergence({
           tier: 'warming',
@@ -277,7 +277,12 @@ describe('SubDomainEmergenceList', () => {
       },
     });
     expect(screen.getByText('api')).toBeInTheDocument();
-    expect(screen.getByText('TFI')).toBeInTheDocument();
+    // The "TFI" string appears in two places now: the runner-up's
+    // source badge AND the top candidate's breakdown chip strip.
+    // Scope the assertion to the runner-up row to avoid the breakdown
+    // chip's TFI label causing a false multiple-match.
+    const runnerSource = container.querySelector('.sel-runner-source');
+    expect(runnerSource?.textContent?.trim()).toBe('TFI');
   });
 
   it('contains no glow, drop-shadow, or text-shadow', () => {
@@ -297,6 +302,121 @@ describe('SubDomainEmergenceList', () => {
       },
     });
     assertNoGlowShadow(container);
+  });
+
+  // ---------------------------------------------------------------
+  // Source breakdown chip strip (PR #55, observability follow-up
+  // for the cycle-3 incident)
+  // ---------------------------------------------------------------
+  // The breakdown chip strip exposes the qualifier-cascade
+  // contribution per source pipeline (domain_raw / intent_label /
+  // tf_idf). The cycle-3 incident showed all qualifier counts came
+  // from intent_label fallback; without this strip an operator had
+  // to query the API to know that. The chip's `dominant` class
+  // tints the source the cascade actually picked.
+  it('renders three breakdown chips reflecting source_breakdown counts', () => {
+    const { container } = render(SubDomainEmergenceList, {
+      props: {
+        report: baseEmergence({
+          tier: 'inert',
+          blocked_reason: 'below_threshold',
+          top_candidate: {
+            qualifier: 'embedding',
+            count: 7,
+            consistency: 0.3,
+            dominant_source: 'intent_label',
+            source_breakdown: { domain_raw: 0, intent_label: 7, tf_idf: 0 },
+            cluster_breadth: 4,
+          },
+        }),
+      },
+    });
+    const chips = container.querySelectorAll('.sel-breakdown-chip');
+    expect(chips.length).toBe(3);
+    // Order is deterministic: RAW, INT, TFI.
+    expect(chips[0].textContent).toMatch(/RAW.*0/);
+    expect(chips[1].textContent).toMatch(/INT.*7/);
+    expect(chips[2].textContent).toMatch(/TFI.*0/);
+  });
+
+  it('marks the dominant source chip with the dominant class only when count > 0', () => {
+    const { container } = render(SubDomainEmergenceList, {
+      props: {
+        report: baseEmergence({
+          tier: 'inert',
+          top_candidate: {
+            qualifier: 'tracing',
+            count: 4,
+            consistency: 0.17,
+            dominant_source: 'intent_label',
+            source_breakdown: { domain_raw: 0, intent_label: 4, tf_idf: 0 },
+            cluster_breadth: 2,
+          },
+        }),
+      },
+    });
+    const chips = container.querySelectorAll('.sel-breakdown-chip');
+    // RAW: count=0, NOT active, NOT dominant.
+    expect(chips[0].classList.contains('active')).toBe(false);
+    expect(chips[0].classList.contains('dominant')).toBe(false);
+    // INT: count=4, dominant_source=intent_label → active + dominant.
+    expect(chips[1].classList.contains('active')).toBe(true);
+    expect(chips[1].classList.contains('dominant')).toBe(true);
+    // TFI: count=0, NOT active.
+    expect(chips[2].classList.contains('active')).toBe(false);
+  });
+
+  it('marks domain_raw chip as dominant when post-fix qualifier signal flows', () => {
+    // Post-fix scenario: every prompt now writes `backend: tracing`
+    // into `domain_raw`, so the breakdown should show RAW=N · INT=0
+    // · TFI=0 with RAW marked dominant. Pinned regression for the
+    // cycle-3 fix soaking properly.
+    const { container } = render(SubDomainEmergenceList, {
+      props: {
+        report: baseEmergence({
+          tier: 'ready',
+          ready: true,
+          gap_to_threshold: -0.05,
+          top_candidate: {
+            qualifier: 'tracing',
+            count: 6,
+            consistency: 0.55,
+            dominant_source: 'domain_raw',
+            source_breakdown: { domain_raw: 6, intent_label: 0, tf_idf: 0 },
+            cluster_breadth: 4,
+          },
+        }),
+      },
+    });
+    const chips = container.querySelectorAll('.sel-breakdown-chip');
+    expect(chips[0].classList.contains('dominant')).toBe(true);
+    expect(chips[0].textContent).toMatch(/RAW.*6/);
+  });
+
+  it('handles missing source_breakdown defensively (legacy API row)', () => {
+    // Pre-v0.4.5 readiness rows didn't carry source_breakdown;
+    // helper coerces to zero-counts so the chip strip still renders.
+    const { container } = render(SubDomainEmergenceList, {
+      props: {
+        report: baseEmergence({
+          tier: 'inert',
+          top_candidate: {
+            qualifier: 'legacy',
+            count: 3,
+            consistency: 0.2,
+            dominant_source: 'intent_label',
+            source_breakdown: undefined as unknown as Record<string, number>,
+            cluster_breadth: 1,
+          },
+        }),
+      },
+    });
+    const chips = container.querySelectorAll('.sel-breakdown-chip');
+    expect(chips.length).toBe(3);
+    // No source has a count, so no chip is .active.
+    chips.forEach((chip) => {
+      expect(chip.classList.contains('active')).toBe(false);
+    });
   });
 });
 
