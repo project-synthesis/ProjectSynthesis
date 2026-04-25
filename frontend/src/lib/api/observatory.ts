@@ -1,3 +1,8 @@
+/**
+ * Observatory API client — typed wrapper around the taxonomy observatory
+ * endpoints. Backed by `backend/app/routers/taxonomy.py::pattern_density`.
+ */
+
 import { apiFetch } from './client';
 
 export type ObservatoryPeriod = '24h' | '7d' | '30d';
