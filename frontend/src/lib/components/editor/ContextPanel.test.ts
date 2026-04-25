@@ -299,8 +299,9 @@ describe('ContextPanel', () => {
     it('respects prefers-reduced-motion (C23)', () => {
       // Source-locked: assert the @media block lives in the .svelte file.
       // Same rationale as C8 — Svelte's compile-time scoped CSS isn't
-      // injected into <style> tags in the vitest runner. Brand-grep at
-      // Task 18 catches drift.
+      // injected into <style> tags in the vitest runner, so this test IS
+      // the contract. (Task 18's brand-grep only catches *forbidden*
+      // patterns — it does not assert presence.)
       expect(contextPanelSource).toContain('prefers-reduced-motion: reduce');
       expect(contextPanelSource).toMatch(/transition-duration:\s*0\.01ms/);
     });
