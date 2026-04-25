@@ -129,7 +129,7 @@
     id="context-panel-body"
     class="panel-body"
     data-test="panel-body"
-    style="opacity: {inFlight ? 0.5 : 1};"
+    style={inFlight ? 'opacity: 0.5;' : null}
     hidden={!isOpen}
   >
 
