@@ -194,3 +194,91 @@ class TestBuildPipelineResultRepoPropagation:
         inputs = self._persistence_inputs(repo_full_name=None)
         result = build_pipeline_result(inputs)
         assert result.repo_full_name is None
+
+
+class TestNormalizeLLMDomain:
+    """Hyphenated sub-domain reconciliation against the live registry.
+
+    Covers the case where the LLM follows the analyze.md hyphen-style
+    instruction (``"backend-observability"``) instead of the colon-style
+    (``"backend: observability"``). Both styles are valid per the prompt;
+    only the colon style parses correctly downstream.
+
+    Pinned by the 2026-04-25 cycle-3 incident: prompt #7 (score 9.0)
+    landed under ``general`` with domain string ``"backend-observability"``
+    instead of joining ``backend``.
+    """
+
+    def test_hyphen_with_known_primary_normalized(self):
+        from app.services.pipeline_phases import _normalize_llm_domain
+
+        result = _normalize_llm_domain(
+            "backend-observability", {"backend", "database", "general"},
+        )
+        assert result == "backend: observability"
+
+    def test_hyphen_with_unknown_primary_unchanged(self):
+        """``cyber-security`` stays as-is when ``cyber`` is not a known domain.
+
+        The LLM is allowed to invent single-word domain names; until that
+        invented label survives warm-path discovery and gets registered,
+        we cannot safely split on the hyphen.
+        """
+        from app.services.pipeline_phases import _normalize_llm_domain
+
+        result = _normalize_llm_domain(
+            "cyber-security", {"backend", "database", "general"},
+        )
+        assert result == "cyber-security"
+
+    def test_colon_already_present_unchanged(self):
+        """No double-rewrite if LLM already used canonical syntax."""
+        from app.services.pipeline_phases import _normalize_llm_domain
+
+        result = _normalize_llm_domain(
+            "backend: auth middleware", {"backend"},
+        )
+        assert result == "backend: auth middleware"
+
+    def test_no_hyphen_unchanged(self):
+        from app.services.pipeline_phases import _normalize_llm_domain
+
+        result = _normalize_llm_domain("backend", {"backend"})
+        assert result == "backend"
+
+    def test_empty_unchanged(self):
+        from app.services.pipeline_phases import _normalize_llm_domain
+
+        assert _normalize_llm_domain("", {"backend"}) == ""
+
+    def test_idempotent(self):
+        """Running twice produces the same result as running once."""
+        from app.services.pipeline_phases import _normalize_llm_domain
+
+        once = _normalize_llm_domain(
+            "backend-observability", {"backend"},
+        )
+        twice = _normalize_llm_domain(once, {"backend"})
+        assert once == twice == "backend: observability"
+
+    def test_trailing_hyphen_unchanged(self):
+        """``backend-`` (empty qualifier) doesn't normalize to ``backend: ``."""
+        from app.services.pipeline_phases import _normalize_llm_domain
+
+        result = _normalize_llm_domain("backend-", {"backend"})
+        assert result == "backend-"
+
+    def test_multi_word_qualifier_after_hyphen(self):
+        """LLM might emit ``backend-async-session``; join the tail.
+
+        ``str.partition`` splits on the first hyphen, so the qualifier
+        becomes ``async-session``. That's the desired semantic — the
+        primary is ``backend`` and the qualifier preserves its own
+        hyphenated structure.
+        """
+        from app.services.pipeline_phases import _normalize_llm_domain
+
+        result = _normalize_llm_domain(
+            "backend-async-session", {"backend"},
+        )
+        assert result == "backend: async-session"
