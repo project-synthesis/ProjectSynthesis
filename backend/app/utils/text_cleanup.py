@@ -412,8 +412,10 @@ def normalize_sub_domain_label(raw: str, max_len: int = 30) -> str:
         normalize_sub_domain_label("embedding_health")         → "embedding-health"
         normalize_sub_domain_label("  embedding--health  ")    → "embedding-health"
         normalize_sub_domain_label("pattern instrumentation")  → "pattern-instrumentation"
-        normalize_sub_domain_label("async-session-management-pool-extra") → "async-session-management"
-        normalize_sub_domain_label("loooongmonowordlongerthan30chars")    → "loooongmonowordlongerthan30ch"  # hard truncate
+        normalize_sub_domain_label("async-session-management-pool-extra")
+            → "async-session-management-pool"  # cuts at last hyphen ≤ max
+        normalize_sub_domain_label("loooongmonowordlongerthan30chars")
+            → "loooongmonowordlongerthan30ch"  # single word → hard truncate
         normalize_sub_domain_label("---")                      → ""
         normalize_sub_domain_label("")                         → ""
     """
