@@ -235,4 +235,18 @@ describe('EditorGroups', () => {
 
     expect(tabBar).toBeInTheDocument();
   });
+
+  // Tier 1 — ContextPanel slot mount + narrow-viewport rail (I3, I4).
+  it('renders ContextPanel slot at >= 1400 px (I3)', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1500 });
+    const { container } = render(EditorGroups);
+    expect(container.querySelector('[data-test="context-panel"]')).not.toBeNull();
+  });
+
+  it('collapses ContextPanel to rail at < 1400 px (I4)', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
+    const { container } = render(EditorGroups);
+    const panel = container.querySelector('[data-test="context-panel"]');
+    expect(panel?.getAttribute('data-collapsed')).toBe('true');
+  });
 });

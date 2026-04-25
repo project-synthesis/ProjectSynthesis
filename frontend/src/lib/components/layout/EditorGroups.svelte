@@ -9,6 +9,7 @@
   import DiffView from '$lib/components/shared/DiffView.svelte';
   import RefinementTimeline from '$lib/components/refinement/RefinementTimeline.svelte';
   import SemanticTopology from '$lib/components/taxonomy/SemanticTopology.svelte';
+  import ContextPanel from '$lib/components/editor/ContextPanel.svelte';
   import { isPassthroughResult } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
   import { EDITOR_TOOLTIPS } from '$lib/utils/ui-tooltips';
@@ -44,8 +45,21 @@
     forgeStore.reset();
     editorStore.closeAllResults();
   }
+
+  // Tier 1 — viewport-aware ContextPanel rail. Below 1400px we force the
+  // panel to render as a 28px rail regardless of the user's persisted
+  // open/closed preference so the editor doesn't lose horizontal space.
+  let innerWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1920);
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => { innerWidth = window.innerWidth; };
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  });
+  const narrowViewport = $derived(innerWidth < 1400);
 </script>
 
+<div class="editor-shell">
 <div class="editor-groups">
   <!-- Tab bar -->
   <div
@@ -147,8 +161,18 @@
     {/if}
   </div>
 </div>
+<ContextPanel forceCollapsed={narrowViewport} />
+</div>
 
 <style>
+  /* Tier 1 — horizontal shell so ContextPanel sits beside the editor groups */
+  .editor-shell {
+    display: flex;
+    flex-direction: row;
+    height: 100%;
+    min-width: 0;
+  }
+
   .editor-groups {
     display: flex;
     flex-direction: column;
@@ -156,6 +180,7 @@
     background: var(--color-bg-primary);
     overflow: hidden;
     min-width: 0;
+    flex: 1 1 auto;
   }
 
   .tab-bar {
