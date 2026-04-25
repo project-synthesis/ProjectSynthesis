@@ -169,6 +169,15 @@ PROMPT_SETS = {
         "Find the race between alembic upgrade and lifespan startup where _gc_orphan_meta_patterns runs against an unmigrated DB.",
         "Audit the asyncio.gather + return_exceptions=True call in batch_orchestrator — confirm partial failure does not leave the dirty_set inconsistent.",
     ],
+    # Cycle 4 verify: post-fix qualifier-syntax verification (3 prompts).
+    # Tight cycle to confirm the post-LLM enrichment + tiebreaker fixes
+    # cause `domain_raw` to land with qualifier syntax (e.g.
+    # ``backend: tracing``) instead of bare ``backend``.
+    "cycle-4-verify-qualifier-syntax": [
+        "Add OpenTelemetry tracing around ContextEnrichmentService.enrich() — wrap each profile-gated layer in its own span so the trace flame graph reveals which layer dominates request latency.",
+        "Implement Prometheus metrics histograms for the EmbeddingIndex.search hot loop — separate buckets for numpy backend vs HNSW backend so we see backend-swap latency cliffs.",
+        "Build a structured debug logger for TaxonomyEventLogger.log_decision — emit duration_ms + caller frame + correlated trace_id alongside the existing op/decision/path fields.",
+    ],
     # Cycle 3: tracing / instrumentation sub-domain — drive a SECOND organic
     # sub-domain emergence under `backend`, alongside the existing `audit` one.
     # Strategy: every first-sentence verb is implementation/instrumentation
