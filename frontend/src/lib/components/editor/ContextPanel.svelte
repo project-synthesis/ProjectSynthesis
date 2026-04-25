@@ -1,7 +1,9 @@
 <script lang="ts">
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { taxonomyColor } from '$lib/utils/colors';
 
-  const hasSuggestion = $derived(clustersStore.suggestion !== null);
+  const suggestion = $derived(clustersStore.suggestion);
+  const hasSuggestion = $derived(suggestion !== null);
 </script>
 
 <!-- svelte-ignore a11y_no_redundant_roles -->
@@ -19,6 +21,22 @@
       <p class="empty-copy">Start typing to see related clusters and patterns.</p>
       <p class="empty-sub">Waiting for prompt — at least 30 characters.</p>
     </div>
+  {:else if suggestion}
+    <section class="identity-row" aria-label="Matched cluster">
+      <div class="identity-primary">
+        <span
+          class="domain-dot"
+          data-test="domain-dot"
+          style="background-color: {taxonomyColor(suggestion.cluster.domain)};"
+        ></span>
+        <span class="cluster-label">{suggestion.cluster.label}</span>
+      </div>
+      <div class="identity-meta">
+        <span class="similarity">matched {Math.round(suggestion.similarity * 100)}%</span>
+        <span class="meta-sep">·</span>
+        <span class="match-level">{suggestion.match_level}</span>
+      </div>
+    </section>
   {/if}
 </aside>
 
@@ -56,4 +74,39 @@
 
   .empty-copy { margin: 0 0 4px 0; }
   .empty-sub { margin: 0; color: var(--color-text-dim); font-size: 10px; }
+
+  .identity-row {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+  .identity-primary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 20px;
+    color: var(--color-text-primary);
+  }
+  .domain-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
+  }
+  .cluster-label {
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .identity-meta {
+    height: 18px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-dim);
+  }
+  .meta-sep { color: var(--color-text-dim); }
+  .match-level { font-variant: tabular-nums; }
 </style>
