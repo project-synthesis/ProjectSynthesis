@@ -125,20 +125,29 @@ describe('DomainLifecycleTimeline', () => {
     expect(cs?.animationName === '' || cs?.animationName === 'none').toBe(true);
   });
 
-  it('observatoryStore.setPeriod refetches via /api/clusters/activity/history (T10)', async () => {
+  it('Timeline does NOT issue fetch on observatoryStore.period change (T10)', async () => {
+    // Wiring fix: the prior period→fetch backfill silently discarded the
+    // response (no merge path into clustersStore.activityEvents), making
+    // the period chips a no-op for Timeline. Period chips drive Heatmap
+    // only — Timeline is SSE-live. Asserting the fetch is gone prevents
+    // the dead path from re-emerging.
     const { observatoryStore } = await import('$lib/stores/observatory.svelte');
     observatoryStore._reset?.();
     const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 200,
+      ok: true,
+      status: 200,
       json: async () => ({ events: [], total: 0, has_more: false }),
     });
     vi.stubGlobal('fetch', fetchSpy);
     vi.useFakeTimers();
     render(DomainLifecycleTimeline);
+    fetchSpy.mockClear();
     observatoryStore.setPeriod('24h');
     await vi.advanceTimersByTimeAsync(1100);
-    const urlsCalled = fetchSpy.mock.calls.map((c) => String(c[0])).join(' ');
-    expect(urlsCalled).toMatch(/activity\/history\?.*since=\d{4}-\d{2}-\d{2}/);
+    const historyCalls = fetchSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.includes('activity/history'));
+    expect(historyCalls.length).toBe(0);
     vi.useRealTimers();
   });
 });

@@ -16,7 +16,6 @@
    */
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { observatoryStore } from '$lib/stores/observatory.svelte';
-  import { apiFetch } from '$lib/api/client';
   import { pathColor, type ActivityPath } from '$lib/utils/activity-colors';
   import type { ObservatoryPeriod } from '$lib/api/observatory';
 
@@ -108,18 +107,13 @@
     return activeFamilies.has(fam);
   }));
 
-  // Period subscription — refetch history on observatoryStore.period change.
-  $effect(() => {
-    const period = observatoryStore.period;
-    const daysMap: Record<typeof period, number> = { '24h': 1, '7d': 7, '30d': 30 };
-    const days = daysMap[period];
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    const past = new Date(now.getTime() - (days - 1) * 86400000).toISOString().slice(0, 10);
-    void apiFetch(`/clusters/activity/history?since=${past}&until=${today}&limit=200`).catch(() => {
-      /* silently fail — SSE still provides live events */
-    });
-  });
+  // Period chips drive the Heatmap window only; Timeline is SSE-live and
+  // shows whatever is currently in `clustersStore.activityEvents`. The prior
+  // period→`/clusters/activity/history` backfill silently discarded its
+  // response (no merge into activityEvents), making the chips a no-op for
+  // this panel — see TaxonomyObservatory legend (TO3) and the wiring-fix
+  // audit. If a windowed Timeline is re-introduced, route the response
+  // through `clustersStore` so the events actually become visible.
 </script>
 
 <section class="timeline" data-test="lifecycle-timeline" aria-label="Domain lifecycle timeline">
