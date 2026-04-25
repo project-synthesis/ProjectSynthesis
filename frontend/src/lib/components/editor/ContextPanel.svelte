@@ -34,6 +34,14 @@
   const globalSelectedCount = $derived(
     globalPatterns.filter((p) => selectedIds.has(p.id)).length,
   );
+
+  const totalSelected = $derived(metaSelectedCount + globalSelectedCount);
+
+  function apply() {
+    if (totalSelected === 0 || !suggestion) return;
+    forgeStore.appliedPatternIds = Array.from(selectedIds);
+    forgeStore.appliedPatternLabel = `${suggestion.cluster.label} (${totalSelected})`;
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_redundant_roles -->
@@ -117,6 +125,17 @@
         </ul>
       </section>
     {/if}
+
+    <footer class="apply-footer">
+      <button
+        type="button"
+        class="apply-btn"
+        disabled={totalSelected === 0}
+        onclick={apply}
+      >
+        APPLY {totalSelected}
+      </button>
+    </footer>
   {/if}
 </aside>
 
@@ -242,5 +261,37 @@
 
   .pattern-section--global {
     border-left: 1px solid var(--color-neon-purple);
+  }
+
+  .apply-footer {
+    padding: 4px 6px;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .apply-btn {
+    height: 20px;
+    padding: 0 8px;
+    font-family: var(--font-display);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-neon-cyan);
+    background: transparent;
+    border: 1px solid var(--color-neon-cyan);
+    cursor: pointer;
+    transition: all var(--duration-hover) var(--ease-spring);
+  }
+  .apply-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    background: color-mix(in srgb, var(--color-neon-cyan) 6%, transparent);
+  }
+  .apply-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .apply-btn:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
   }
 </style>
