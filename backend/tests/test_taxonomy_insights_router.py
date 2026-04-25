@@ -37,9 +37,7 @@ class TestPatternDensityRouter:
         present are ALL state='domain' members AND that totals reflect
         zero MetaPatterns/GlobalPatterns at fresh DB.
         """
-        from app.models import PromptCluster
-        # Sanity check our assumption: any pre-seeded domains should have
-        # zero MetaPatterns and GlobalPatterns at this point.
+        # Any pre-seeded domains have zero MetaPatterns and GlobalPatterns.
         resp = await app_client.get("/api/taxonomy/pattern-density", params={"period": "7d"})
         assert resp.status_code == 200
         body = resp.json()

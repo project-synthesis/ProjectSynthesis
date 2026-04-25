@@ -26,11 +26,26 @@ _PERIOD_DAYS = {"24h": 1, "7d": 7, "30d": 30}
 
 @router.get("/pattern-density", response_model=PatternDensityResponse)
 async def get_pattern_density(
-    period: Literal["24h", "7d", "30d"] = Query("7d"),
+    period: Literal["24h", "7d", "30d"] = Query(
+        "7d", description="Time window for cross-cluster injection rate."
+    ),
     db: AsyncSession = Depends(get_db),
     _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
 ) -> PatternDensityResponse:
-    """Aggregate pattern density per active domain over the given period."""
+    """Aggregate pattern density per active domain.
+
+    "Pattern density" rolls up four observability signals into one row per
+    domain node: child cluster count, MetaPattern count + average score
+    of MetaPattern-bearing clusters, GlobalPattern containment, and the
+    in-period cross-cluster injection rate. Rows sort by
+    ``meta_pattern_count`` desc, with ``cluster_count`` desc as the
+    tiebreaker; the response also surfaces totals across all rows so
+    clients can render an overview without re-summing.
+
+    Returns rows for every ``state="domain"`` node — including seed
+    domains with zero activity — so the Observatory always has a stable
+    label set to render against.
+    """
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=_PERIOD_DAYS[period])
     rows = await aggregate_pattern_density(db, start, end)
