@@ -120,6 +120,30 @@ async def optimize(
     if not routing:
         raise HTTPException(status_code=503, detail="Routing service not initialized.")
 
+    # Self-update gate (v0.4.6 hardening) — when an update is in flight,
+    # the backend is about to be killed by ``init.sh restart``. Refusing
+    # new optimization requests during this window prevents a half-written
+    # row from being orphaned by the restart. The pipeline drain wait in
+    # ``update_service.apply_update`` does the symmetric job for in-flight
+    # requests that started before the update.
+    try:
+        from app.services.update_service import get_inflight_tracker
+
+        if get_inflight_tracker().update_in_progress:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Self-update in progress. Optimization rejected to avoid "
+                    "mid-flight restart. Retry after the backend restarts "
+                    "(typically 30-90 seconds)."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # Tracker import / lookup failure is non-fatal; log and continue.
+        logger.debug("Update inflight check failed (non-fatal)", exc_info=True)
+
     _prefs = PreferencesService(_cfg.DATA_DIR)
     prefs_snapshot = _prefs.load()
 

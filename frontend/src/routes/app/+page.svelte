@@ -170,6 +170,9 @@
         if (type === 'update_complete') {
           updateStore.receiveComplete(data as Record<string, unknown>);
         }
+        if (type === 'update_step') {
+          updateStore.receiveStep(data as Record<string, unknown>);
+        }
         if (type === 'domain_created') {
           domainStore.invalidate();
           readinessStore.invalidate();

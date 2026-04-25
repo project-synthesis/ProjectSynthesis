@@ -363,3 +363,308 @@ async def test_apply_update_rollback_on_alembic_failure(tmp_path):
         cwd=str(tmp_path), capture_output=True, text=True,
     )
     assert "v0.4.0" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# v0.4.6 hardening — drain tracker + preflight + auto-stash
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateInflightTracker:
+    """Drain tracker — coordinates apply_update with in-flight optimizations."""
+
+    @pytest.mark.asyncio
+    async def test_begin_increments_running(self):
+        from app.services.update_service import UpdateInflightTracker
+
+        tracker = UpdateInflightTracker()
+        await tracker.begin("trace-1")
+        assert tracker.running_count == 1
+        assert tracker.running_trace_ids == ["trace-1"]
+
+    @pytest.mark.asyncio
+    async def test_end_decrements_running(self):
+        from app.services.update_service import UpdateInflightTracker
+
+        tracker = UpdateInflightTracker()
+        await tracker.begin("trace-1")
+        await tracker.end("trace-1")
+        assert tracker.running_count == 0
+
+    @pytest.mark.asyncio
+    async def test_end_unknown_trace_id_is_noop(self):
+        from app.services.update_service import UpdateInflightTracker
+
+        tracker = UpdateInflightTracker()
+        await tracker.end("never-registered")
+        assert tracker.running_count == 0
+
+    @pytest.mark.asyncio
+    async def test_drain_returns_immediately_when_empty(self):
+        from app.services.update_service import UpdateInflightTracker
+
+        tracker = UpdateInflightTracker()
+        drained, remaining = await tracker.drain(timeout=0.1)
+        assert drained is True
+        assert remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_drain_times_out_when_optimizations_running(self):
+        from app.services.update_service import UpdateInflightTracker
+
+        tracker = UpdateInflightTracker()
+        await tracker.begin("trace-stuck")
+        drained, remaining = await tracker.drain(timeout=0.2, poll=0.05)
+        assert drained is False
+        assert remaining == 1
+
+    @pytest.mark.asyncio
+    async def test_drain_succeeds_when_optimization_finishes(self):
+        import asyncio as _asyncio
+
+        from app.services.update_service import UpdateInflightTracker
+
+        tracker = UpdateInflightTracker()
+        await tracker.begin("trace-finishing")
+
+        async def _finish_after_delay():
+            await _asyncio.sleep(0.1)
+            await tracker.end("trace-finishing")
+
+        finisher = _asyncio.create_task(_finish_after_delay())
+        drained, remaining = await tracker.drain(timeout=1.0, poll=0.05)
+        await finisher
+        assert drained is True
+        assert remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_update_in_progress_flag_lifecycle(self):
+        from app.services.update_service import UpdateInflightTracker
+
+        tracker = UpdateInflightTracker()
+        assert tracker.update_in_progress is False
+        await tracker.begin_update()
+        assert tracker.update_in_progress is True
+        await tracker.end_update()
+        assert tracker.update_in_progress is False
+
+
+def _seed_repo(tmp_path):
+    """Helper — initialize a tiny git repo with one commit + v0.4.0 tag."""
+    import subprocess as _sp
+
+    _sp.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+    _sp.run(["git", "config", "user.email", "t@t.com"], cwd=str(tmp_path), capture_output=True)
+    _sp.run(["git", "config", "user.name", "Test"], cwd=str(tmp_path), capture_output=True)
+    (tmp_path / "version.json").write_text('{"version": "0.4.0"}')
+    _sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+    _sp.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), capture_output=True)
+    _sp.run(["git", "tag", "v0.4.0"], cwd=str(tmp_path), capture_output=True)
+
+
+class TestPreflight:
+    """Preflight readiness probe — comprehensive coverage of the contract."""
+
+    @pytest.mark.asyncio
+    async def test_clean_repo_with_known_tag_can_apply(self, tmp_path):
+        _seed_repo(tmp_path)
+        from app.services.update_service import (
+            UpdateInflightTracker,
+            UpdateService,
+            set_inflight_tracker,
+        )
+
+        set_inflight_tracker(UpdateInflightTracker())
+        svc = UpdateService(project_root=tmp_path)
+        status = await svc.preflight(tag="v0.4.0")
+        assert status.can_apply is True
+        assert status.target_tag_exists_locally is True
+        assert status.dirty_files == []
+        assert status.in_flight_optimizations == 0
+        assert status.will_auto_stash is False
+
+    @pytest.mark.asyncio
+    async def test_dirty_prompts_file_marked_for_auto_stash(self, tmp_path):
+        import subprocess as _sp
+
+        _sp.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.email", "t@t.com"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.name", "Test"], cwd=str(tmp_path), capture_output=True)
+        (tmp_path / "version.json").write_text('{"version": "0.4.0"}')
+        prompts = tmp_path / "prompts" / "strategies"
+        prompts.mkdir(parents=True)
+        (prompts / "foo.md").write_text("---\ntagline: x\ndescription: y\n---\n\nstock content")
+        _sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "tag", "v0.4.0"], cwd=str(tmp_path), capture_output=True)
+
+        # Make the file dirty (simulates PUT /api/strategies/foo).
+        (prompts / "foo.md").write_text("---\ntagline: x\ndescription: y\n---\n\nuser-edited")
+
+        from app.services.update_service import (
+            UpdateInflightTracker,
+            UpdateService,
+            set_inflight_tracker,
+        )
+
+        set_inflight_tracker(UpdateInflightTracker())
+        svc = UpdateService(project_root=tmp_path)
+        status = await svc.preflight(tag="v0.4.0")
+        assert status.can_apply is True
+        assert status.will_auto_stash is True
+        assert any(
+            d.in_prompts_tree and d.path == "prompts/strategies/foo.md"
+            for d in status.dirty_files
+        )
+
+    @pytest.mark.asyncio
+    async def test_dirty_non_prompts_file_blocks(self, tmp_path):
+        import subprocess as _sp
+
+        _sp.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.email", "t@t.com"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.name", "Test"], cwd=str(tmp_path), capture_output=True)
+        (tmp_path / "version.json").write_text('{"version": "0.4.0"}')
+        (tmp_path / "config.py").write_text("STOCK = 1\n")
+        _sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "tag", "v0.4.0"], cwd=str(tmp_path), capture_output=True)
+        (tmp_path / "config.py").write_text("STOCK = 2\n")
+
+        from app.services.update_service import (
+            UpdateInflightTracker,
+            UpdateService,
+            set_inflight_tracker,
+        )
+
+        set_inflight_tracker(UpdateInflightTracker())
+        svc = UpdateService(project_root=tmp_path)
+        status = await svc.preflight(tag="v0.4.0")
+        assert status.can_apply is False
+        assert any("config.py" in issue for issue in status.blocking_issues)
+
+    @pytest.mark.asyncio
+    async def test_in_flight_optimization_emits_warning(self, tmp_path):
+        _seed_repo(tmp_path)
+        from app.services.update_service import (
+            UpdateInflightTracker,
+            UpdateService,
+            set_inflight_tracker,
+        )
+
+        tracker = UpdateInflightTracker()
+        set_inflight_tracker(tracker)
+        await tracker.begin("trace-pending")
+        try:
+            svc = UpdateService(project_root=tmp_path)
+            status = await svc.preflight(tag="v0.4.0")
+            assert status.can_apply is True
+            assert status.in_flight_optimizations == 1
+            assert any("optimization" in w for w in status.warnings)
+        finally:
+            await tracker.end("trace-pending")
+
+    @pytest.mark.asyncio
+    async def test_concurrent_update_blocks(self, tmp_path):
+        _seed_repo(tmp_path)
+        from app.services.update_service import (
+            UpdateInflightTracker,
+            UpdateService,
+            set_inflight_tracker,
+        )
+
+        tracker = UpdateInflightTracker()
+        set_inflight_tracker(tracker)
+        await tracker.begin_update()
+        try:
+            svc = UpdateService(project_root=tmp_path)
+            status = await svc.preflight(tag="v0.4.0")
+            assert status.can_apply is False
+            assert any("already in progress" in i.lower() for i in status.blocking_issues)
+        finally:
+            await tracker.end_update()
+
+    @pytest.mark.asyncio
+    async def test_unknown_tag_emits_warning_not_block(self, tmp_path):
+        _seed_repo(tmp_path)
+        from app.services.update_service import (
+            UpdateInflightTracker,
+            UpdateService,
+            set_inflight_tracker,
+        )
+
+        set_inflight_tracker(UpdateInflightTracker())
+        svc = UpdateService(project_root=tmp_path)
+        status = await svc.preflight(tag="v9.9.9")
+        # Tag not yet fetched is a warning (apply will fetch) — not a block.
+        assert status.target_tag_exists_locally is False
+        assert any("not yet fetched" in w for w in status.warnings)
+
+
+class TestAutoStashSentinel:
+    """The auto-stash uses a prefix to identify its own stashes —
+    operator stashes (without the prefix) are never popped."""
+
+    @pytest.mark.asyncio
+    async def test_pop_only_targets_synthesis_update_prefix(self, tmp_path):
+        import subprocess as _sp
+
+        _sp.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.email", "t@t.com"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.name", "Test"], cwd=str(tmp_path), capture_output=True)
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "user.md").write_text("v1")
+        _sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), capture_output=True)
+
+        # Operator stashes unrelated work first — must NOT be popped.
+        (prompts / "user.md").write_text("operator-WIP")
+        _sp.run(
+            ["git", "stash", "push", "-m", "my-personal-WIP", "--", "prompts/"],
+            cwd=str(tmp_path), capture_output=True,
+        )
+
+        from app.services.update_service import UpdateService
+
+        svc = UpdateService(project_root=tmp_path)
+        conflicts = await svc._auto_stash_pop()
+        assert conflicts == []
+
+        result = _sp.run(
+            ["git", "stash", "list"],
+            cwd=str(tmp_path), capture_output=True, text=True,
+        )
+        assert "my-personal-WIP" in result.stdout, (
+            "Operator stash was unexpectedly popped"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_stash_round_trip_preserves_user_edit(self, tmp_path):
+        """End-to-end stash → checkout-back → pop should restore the edit."""
+        import subprocess as _sp
+
+        _sp.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.email", "t@t.com"], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "config", "user.name", "Test"], cwd=str(tmp_path), capture_output=True)
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "user.md").write_text("stock content")
+        _sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        _sp.run(["git", "commit", "-m", "stock"], cwd=str(tmp_path), capture_output=True)
+
+        # User edit
+        (prompts / "user.md").write_text("user-edited content")
+
+        from app.services.update_service import UpdateService
+
+        svc = UpdateService(project_root=tmp_path)
+        stashed = await svc._auto_stash("v0.0.1")
+        assert stashed is True
+        # File is back to stock now (stash moved the change away).
+        assert (prompts / "user.md").read_text() == "stock content"
+
+        # Pop restores the user's edit.
+        conflicts = await svc._auto_stash_pop()
+        assert conflicts == []
+        assert (prompts / "user.md").read_text() == "user-edited content"

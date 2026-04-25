@@ -193,6 +193,20 @@ class PipelineOrchestrator:
         opt_id = str(uuid.uuid4())
         start_time = time.monotonic()
 
+        # Drain coordination — register this trace_id with the
+        # inflight tracker so the self-update flow knows there's an
+        # optimization in progress and can wait for it to finish before
+        # restarting. Wrapped in try/except so a tracker bug never
+        # blocks an optimization.
+        try:
+            from app.services.update_service import get_inflight_tracker
+
+            await get_inflight_tracker().begin(trace_id)
+            _drain_registered = True
+        except Exception:
+            logger.debug("Inflight tracker begin failed (non-fatal)", exc_info=True)
+            _drain_registered = False
+
         prefs = PreferencesService(self._data_dir)
         prefs_snapshot = prefs.load()
         optimizer_model = prefs.resolve_model("optimizer", prefs_snapshot)
@@ -672,6 +686,21 @@ class PipelineOrchestrator:
                 "trace_id": trace_id,
                 "error": str(exc),
             })
+
+        finally:
+            # Drain coordination — always decrement, even on error,
+            # so the inflight tracker stays balanced. ``begin`` may
+            # have failed silently above; ``end`` is wrapped in the
+            # same defensive try/except.
+            if _drain_registered:
+                try:
+                    from app.services.update_service import get_inflight_tracker
+
+                    await get_inflight_tracker().end(trace_id)
+                except Exception:
+                    logger.debug(
+                        "Inflight tracker end failed (non-fatal)", exc_info=True,
+                    )
 
 
 __all__ = ["PipelineOrchestrator"]
