@@ -236,4 +236,28 @@ describe('ContextPanel', () => {
       expect((checkboxes[0] as HTMLInputElement).checked).toBe(true);
     });
   });
+
+  describe('collapse / expand', () => {
+    it('collapse toggle narrows panel (C17)', async () => {
+      const userEvent = (await import('@testing-library/user-event')).default;
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel);
+      const user = userEvent.setup();
+      const panel = container.querySelector('[data-test="context-panel"]') as HTMLElement;
+      expect(panel.getAttribute('data-collapsed')).toBe('false');
+      await user.click(screen.getByRole('button', { name: /collapse/i }));
+      expect(panel.getAttribute('data-collapsed')).toBe('true');
+    });
+
+    it('collapse state persists to localStorage (C18)', async () => {
+      const userEvent = (await import('@testing-library/user-event')).default;
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      render(ContextPanel);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: /collapse/i }));
+      expect(localStorage.getItem('synthesis:context_panel_open')).toBe('false');
+    });
+  });
 });
