@@ -108,7 +108,13 @@ export function mockMetaPattern(overrides: Record<string, unknown> = {}) {
   };
 }
 
-export function mockClusterMatch(overrides: Record<string, unknown> = {}) {
+// Typed factory: returns a complete ClusterMatch so consumers can assign
+// directly to clustersStore.suggestion without `as never`. The overrides
+// parameter stays loose (`Record<string, unknown>`) for ergonomic test
+// authoring — the cast happens at the boundary, not at every call site.
+import type { ClusterMatch } from './stores/clusters.svelte';
+
+export function mockClusterMatch(overrides: Record<string, unknown> = {}): ClusterMatch {
   return {
     cluster: {
       id: 'fam-1',
@@ -121,7 +127,7 @@ export function mockClusterMatch(overrides: Record<string, unknown> = {}) {
     cross_cluster_patterns: [],
     match_level: 'cluster' as const,
     ...overrides,
-  };
+  } as ClusterMatch;
 }
 
 /** @deprecated Use mockClusterMatch */

@@ -38,21 +38,21 @@ describe('ContextPanel', () => {
     it('renders the cluster label (C2)', () => {
       clustersStore.suggestion = makeSuggestion({
         cluster: { id: 'c1', label: 'API endpoint patterns', domain: 'backend', member_count: 5 },
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
       render(ContextPanel);
       expect(screen.getByText('API endpoint patterns')).toBeTruthy();
     });
 
     it('renders similarity as an integer percentage (C3)', () => {
-      clustersStore.suggestion = makeSuggestion({ similarity: 0.842 }) as never;
+      clustersStore.suggestion = makeSuggestion({ similarity: 0.842 });
       clustersStore.suggestionVisible = true;
       render(ContextPanel);
       expect(screen.getByText(/84%/)).toBeTruthy();
     });
 
     it('renders the match_level (C4)', () => {
-      clustersStore.suggestion = makeSuggestion({ match_level: 'family' }) as never;
+      clustersStore.suggestion = makeSuggestion({ match_level: 'family' });
       clustersStore.suggestionVisible = true;
       render(ContextPanel);
       expect(screen.getByText(/family/i)).toBeTruthy();
@@ -61,7 +61,7 @@ describe('ContextPanel', () => {
     it('renders a domain dot styled with taxonomyColor (C5)', () => {
       clustersStore.suggestion = makeSuggestion({
         cluster: { id: 'c1', label: 'x', domain: 'backend', member_count: 2 },
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel);
       const dot = container.querySelector('[data-test="domain-dot"]') as HTMLElement | null;
@@ -79,7 +79,7 @@ describe('ContextPanel', () => {
           mockMetaPattern({ id: 'mp2', pattern_text: 'B', source_count: 1 }),
           mockMetaPattern({ id: 'mp3', pattern_text: 'C', source_count: 1 }),
         ],
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel);
       const meta = container.querySelector('[data-test="meta-section"]') as HTMLElement;
@@ -90,7 +90,7 @@ describe('ContextPanel', () => {
       const long = 'a'.repeat(80);
       clustersStore.suggestion = mockClusterMatch({
         meta_patterns: [mockMetaPattern({ id: 'mp1', pattern_text: long, source_count: 1 })],
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel);
       const row = container.querySelector('[data-test="pattern-row"]') as HTMLElement;
@@ -108,7 +108,7 @@ describe('ContextPanel', () => {
           mockMetaPattern({ id: 'mp2', pattern_text: 'B', source_count: 1 }),
           mockMetaPattern({ id: 'mp3', pattern_text: 'C', source_count: 1 }),
         ],
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel);
       const user = userEvent.setup();
@@ -126,7 +126,7 @@ describe('ContextPanel', () => {
           mockMetaPattern({ id: 'mp2', pattern_text: 'B', source_count: 1 }),
           mockMetaPattern({ id: 'mp3', pattern_text: 'C', source_count: 1 }),
         ],
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel);
       const user = userEvent.setup();
@@ -144,7 +144,7 @@ describe('ContextPanel', () => {
           mockMetaPattern({ id: 'gp1', pattern_text: 'Universal practice A', source_count: 5 }),
           mockMetaPattern({ id: 'gp2', pattern_text: 'Universal practice B', source_count: 4 }),
         ],
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel);
       expect(screen.getByText('GLOBAL')).toBeTruthy();
@@ -155,7 +155,7 @@ describe('ContextPanel', () => {
     it('global section has neon-purple left border (C8)', () => {
       clustersStore.suggestion = mockClusterMatch({
         cross_cluster_patterns: [mockMetaPattern({ id: 'gp1', pattern_text: 'P', source_count: 5 })],
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
       const { container } = render(ContextPanel);
       const global = container.querySelector('[data-test="global-section"]') as HTMLElement;
@@ -179,7 +179,7 @@ describe('ContextPanel', () => {
           mockMetaPattern({ id: 'mp2', pattern_text: 'B', source_count: 1 }),
           mockMetaPattern({ id: 'mp3', pattern_text: 'C', source_count: 1 }),
         ],
-      }) as never;
+      });
       clustersStore.suggestionVisible = true;
     }
 
