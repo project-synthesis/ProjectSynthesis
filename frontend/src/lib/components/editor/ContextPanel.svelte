@@ -62,8 +62,12 @@
       /* ignore — private browsing etc. */
     }
   }
+
+  const SYNTHESIS_STATES = new Set(['analyzing', 'optimizing', 'scoring', 'forging']);
+  const isSynthesizing = $derived(SYNTHESIS_STATES.has(forgeStore.status));
 </script>
 
+{#if !isSynthesizing}
 <!-- svelte-ignore a11y_no_redundant_roles -->
 <aside
   class="context-panel"
@@ -173,6 +177,7 @@
   {/if}
   </div>
 </aside>
+{/if}
 
 <style>
   .context-panel {

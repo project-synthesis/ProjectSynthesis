@@ -260,4 +260,15 @@ describe('ContextPanel', () => {
       expect(localStorage.getItem('synthesis:context_panel_open')).toBe('false');
     });
   });
+
+  describe('synthesis gating', () => {
+    it('hides panel when forgeStore.status === "analyzing" (C19)', () => {
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      forgeStore.status = 'analyzing';
+      const { container } = render(ContextPanel);
+      const panel = container.querySelector('[data-test="context-panel"]');
+      expect(panel === null || panel.getAttribute('aria-hidden') === 'true').toBe(true);
+    });
+  });
 });
