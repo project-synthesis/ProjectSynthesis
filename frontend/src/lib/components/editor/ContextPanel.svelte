@@ -118,7 +118,7 @@
     class="panel-body"
     data-test="panel-body"
     style="opacity: {inFlight ? 0.5 : 1};"
-    hidden={!isOpen}
+    hidden={!isOpen || forceCollapsed}
   >
 
   {#if !hasSuggestion}
@@ -221,6 +221,9 @@
     background: var(--color-bg-secondary);
     border-left: 1px solid var(--color-border-subtle);
     font-family: var(--font-sans);
+    /* Tier 1 — never shrink below the rail, never overflow when collapsed */
+    flex-shrink: 0;
+    overflow: hidden;
   }
 
   .panel-header {

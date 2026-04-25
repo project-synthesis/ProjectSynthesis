@@ -261,6 +261,20 @@ describe('ContextPanel', () => {
       const panel = container.querySelector('[data-test="context-panel"]') as HTMLElement;
       expect(panel.getAttribute('data-collapsed')).toBe('false');
     });
+
+    it('forceCollapsed=true HIDES the body even when localStorage says open=true', () => {
+      // Regression lock for the live-render bug where the empty-state copy
+      // bled through the 28px collapsed rail and rendered vertically. Body
+      // must carry the hidden attribute when forceCollapsed is true,
+      // independent of the user's localStorage preference.
+      localStorage.setItem('synthesis:context_panel_open', 'true');
+      clustersStore.suggestion = null;
+      clustersStore.suggestionVisible = false;
+      const { container } = render(ContextPanel, { props: { forceCollapsed: true } });
+      const body = container.querySelector('[data-test="panel-body"]') as HTMLElement;
+      expect(body).not.toBeNull();
+      expect(body.hasAttribute('hidden')).toBe(true);
+    });
   });
 
   describe('collapse / expand', () => {
