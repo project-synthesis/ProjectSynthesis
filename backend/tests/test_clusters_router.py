@@ -882,3 +882,97 @@ class TestDomainFieldValidation:
             confidence=0.9,
         )
         assert result.domain == "general"
+
+
+class TestClusterActivityHistory:
+    """GET /api/clusters/activity/history — date-only and since/until range variant."""
+
+    @pytest.mark.asyncio
+    async def test_activity_history_range_multi_day(self, app_client):
+        """AH1: ?since=X&until=Y fans out over the JSONL files in the range."""
+        from unittest.mock import patch
+
+        mock_logger = MagicMock()
+        def _get_history(date, limit, offset):
+            if date == "2026-04-23":
+                return [{"ts": "2026-04-23T10:00Z", "path": "warm", "op": "discover", "decision": "domains_created"}]
+            if date == "2026-04-24":
+                return [{"ts": "2026-04-24T09:00Z", "path": "hot", "op": "match", "decision": "matched"}]
+            return []
+        mock_logger.get_history = _get_history
+
+        with patch("app.routers.clusters.get_event_logger", return_value=mock_logger):
+            resp = await app_client.get(
+                "/api/clusters/activity/history",
+                params={"since": "2026-04-23", "until": "2026-04-24"},
+            )
+        assert resp.status_code == 200
+        events = resp.json()["events"]
+        assert len(events) == 2
+        assert events[0]["ts"] == "2026-04-24T09:00Z"  # reverse chrono
+
+    @pytest.mark.asyncio
+    async def test_activity_history_range_missing_days(self, app_client):
+        """AH2: missing JSONL files in the range are skipped, not errored."""
+        from unittest.mock import patch
+        mock_logger = MagicMock()
+        mock_logger.get_history = lambda date, limit, offset: (
+            [{"ts": f"{date}T10:00Z", "path": "warm", "op": "discover", "decision": "d"}]
+            if date in {"2026-04-22", "2026-04-24"} else []
+        )
+        with patch("app.routers.clusters.get_event_logger", return_value=mock_logger):
+            resp = await app_client.get(
+                "/api/clusters/activity/history",
+                params={"since": "2026-04-22", "until": "2026-04-24"},
+            )
+        assert resp.status_code == 200
+        assert len(resp.json()["events"]) == 2  # only 2 days had data
+
+    @pytest.mark.asyncio
+    async def test_activity_history_range_mutex_with_date(self, app_client):
+        """AH3: date + since/until together is 422."""
+        resp = await app_client.get(
+            "/api/clusters/activity/history",
+            params={"date": "2026-04-24", "since": "2026-04-22", "until": "2026-04-24"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_activity_history_range_oversized(self, app_client):
+        """AH4: range > 30 days is 422."""
+        resp = await app_client.get(
+            "/api/clusters/activity/history",
+            params={"since": "2026-03-01", "until": "2026-04-15"},
+        )
+        assert resp.status_code == 422
+        # Must reject because the range exceeds 30 days — not because `date`
+        # is missing. Today the endpoint only knows `date`, so it 422s with
+        # `Field required` on `date`; once `since`/`until` is implemented the
+        # validation must explicitly mention the range size.
+        body = resp.json()
+        rendered = repr(body).lower()
+        assert "date" not in rendered or "30" in rendered, (
+            f"422 must come from range-size validation, not missing-date: {body}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_activity_history_range_since_only(self, app_client):
+        """AH5: since alone defaults until=today UTC."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        mock_logger = MagicMock()
+        dates_called: list[str] = []
+        def _get_history(date, limit, offset):
+            dates_called.append(date)
+            return []
+        mock_logger.get_history = _get_history
+
+        with patch("app.routers.clusters.get_event_logger", return_value=mock_logger):
+            resp = await app_client.get(
+                "/api/clusters/activity/history",
+                params={"since": today},  # `until` omitted
+            )
+        assert resp.status_code == 200
+        assert today in dates_called
