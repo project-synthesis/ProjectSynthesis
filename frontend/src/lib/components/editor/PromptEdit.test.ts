@@ -199,4 +199,22 @@ describe('PromptEdit', () => {
     await user.type(textarea, 'x');
     expect(checkSpy).toHaveBeenCalled();
   });
+
+  // Tier 1 regression locks (I1 + I2): PatternSuggestion was deleted in
+  // favour of ContextPanel.svelte mounted by EditorGroups. PromptEdit must
+  // never re-mount the legacy banner, but must still render the
+  // applied-chip when forgeStore exposes selected pattern IDs.
+  it('does not render the legacy PatternSuggestion banner (I1)', () => {
+    const { container } = render(PromptEdit);
+    expect(container.querySelector('.suggestion-banner')).toBeNull();
+  });
+
+  it('still renders the applied-chip when forgeStore.appliedPatternIds is populated (I2)', () => {
+    forgeStore.appliedPatternIds = ['mp-1', 'mp-2'];
+    forgeStore.appliedPatternLabel = 'API endpoint patterns';
+    const { container } = render(PromptEdit);
+    const chip = container.querySelector('.applied-chip');
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).toMatch(/2 patterns/);
+  });
 });
