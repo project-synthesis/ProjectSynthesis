@@ -197,6 +197,20 @@ _TECHNICAL_NOUNS = frozenset({
     # Explicitly NOT added: ``app``, ``tool``, ``client`` — all three
     # have legitimate creative-writing use.
     "factory", "session", "sqlalchemy", "fastapi", "django", "flask",
+    # B3 (2026-04-25 validation cycle): async / concurrency primitives.
+    # All zero-non-code-legitimacy — no creative-writing prompt says
+    # "audit the asyncio gather" or "trace the coroutine cancellation".
+    # Live reference: "Audit the asyncio.gather error handling in our
+    # warm-path Phase 4 — find race conditions ..." matched no technical
+    # nouns and was demoted to the ``knowledge_work`` enrichment profile,
+    # silently skipping curated retrieval + strategy intelligence + pattern
+    # injection on a clearly-code-aware prompt about a linked codebase.
+    # Conservative additions — ``async`` alone is excluded because adjective
+    # use is too broad; ``await`` is excluded because it has prose meaning.
+    "asyncio", "coroutine", "eventloop", "mutex", "semaphore", "deadlock",
+    # DB transaction primitive — ``savepoint`` is unambiguous (no creative
+    # legitimacy), unlike ``transaction`` which is overloaded with finance.
+    "savepoint",
 })
 
 # Pre-compiled word-boundary patterns for task_type keywords.  Built once at
@@ -450,12 +464,25 @@ def has_technical_nouns(first_sentence: str) -> bool:
     codebase and should get ``code_aware`` context even though the
     task_type stays non-coding.
 
-    Words are lowercased and stripped of trailing punctuation before
-    matching so "FastAPI." / "pipeline," / "system!" all register.
+    Words are lowercased, stripped of trailing punctuation, and SPLIT on
+    interior dots / hyphens so module-method tokens (``asyncio.gather``,
+    ``db.execute``) and kebab-case identifiers (``warm-path``,
+    ``meta-pattern``) match their constituent technical noun. Without the
+    split, ``asyncio.gather`` was one whitespace-token, didn't strip its
+    interior dot, and missed the ``asyncio`` noun (B3, 2026-04-25).
     """
     lowered = first_sentence.lower()
-    words = [w.strip(".,;:!?()[]{}\"'") for w in lowered.split()]
-    return any(w in _TECHNICAL_NOUNS for w in words)
+    expanded: list[str] = []
+    for raw in lowered.split():
+        word = raw.strip(".,;:!?()[]{}\"'")
+        if word:
+            expanded.append(word)
+        # Expand interior `.` / `-` so module.method and kebab-case
+        # identifiers contribute their parts.
+        for sub in re.split(r"[.\-]", word):
+            if sub and sub != word:
+                expanded.append(sub)
+    return any(w in _TECHNICAL_NOUNS for w in expanded)
 
 
 async def classify_with_llm(

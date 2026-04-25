@@ -129,6 +129,81 @@ class TestHistoryRouter:
         assert data["count"] == 3
         assert len(data["items"]) == 3
 
+    async def test_history_surfaces_enrichment_summary_per_row(self, app_client, db_session):
+        """B3 (2026-04-25): list view surfaces a compact enrichment activation
+        summary so a silent profile demotion (e.g. ``code_aware`` → ``knowledge_work``
+        when async vocab missed the ``_TECHNICAL_NOUNS`` set) is visible at-a-glance
+        without an N+1 detail fetch.
+        """
+        from app.models import Optimization
+
+        # Row A — full code_aware enrichment.
+        opt_a = Optimization(
+            id="enr-a", raw_prompt="audit asyncio.gather", optimized_prompt="ok",
+            task_type="analysis", status="completed", provider="mock",
+            context_sources={
+                "codebase_context": True,
+                "strategy_intelligence": True,
+                "applied_patterns": False,
+                "heuristic_analysis": True,
+                "enrichment_meta": {
+                    "enrichment_profile": "code_aware",
+                    "technical_signals_detected": True,
+                    "repo_relevance_score": 0.42,
+                    "injection_stats": {"patterns_injected": 12, "injection_clusters": 1},
+                    "curated_retrieval": {"files_included": 4},
+                },
+            },
+        )
+        # Row B — knowledge_work demotion (the bug the user observed).
+        opt_b = Optimization(
+            id="enr-b", raw_prompt="audit something abstract", optimized_prompt="ok",
+            task_type="analysis", status="completed", provider="mock",
+            context_sources={
+                "codebase_context": False,
+                "strategy_intelligence": False,
+                "applied_patterns": False,
+                "heuristic_analysis": True,
+                "enrichment_meta": {
+                    "enrichment_profile": "knowledge_work",
+                    "injection_stats": {"patterns_injected": 0},
+                    "curated_retrieval": {"files_included": 0},
+                },
+            },
+        )
+        # Row C — legacy row with no enrichment_meta block.
+        opt_c = Optimization(
+            id="enr-c", raw_prompt="legacy", optimized_prompt="ok",
+            task_type="coding", status="completed", provider="mock",
+        )
+        db_session.add_all([opt_a, opt_b, opt_c])
+        await db_session.commit()
+
+        resp = await app_client.get("/api/history")
+        assert resp.status_code == 200
+        items = {it["id"]: it for it in resp.json()["items"]}
+
+        a = items["enr-a"]["enrichment"]
+        assert a is not None
+        assert a["profile"] == "code_aware"
+        assert a["codebase_context"] is True
+        assert a["strategy_intelligence"] is True
+        assert a["applied_patterns"] is False
+        assert a["patterns_injected"] == 12
+        assert a["curated_files"] == 4
+        assert a["repo_relevance_score"] == 0.42
+
+        b = items["enr-b"]["enrichment"]
+        assert b is not None
+        assert b["profile"] == "knowledge_work"
+        assert b["codebase_context"] is False
+        assert b["patterns_injected"] == 0
+        assert b["curated_files"] == 0
+
+        # Legacy row — no context_sources at all → enrichment is None.
+        c = items["enr-c"]["enrichment"]
+        assert c is None
+
     async def test_get_history_filter_by_task_type(self, app_client, db_session):
         from app.models import Optimization
 

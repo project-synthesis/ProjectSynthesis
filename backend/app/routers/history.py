@@ -1,6 +1,7 @@
 """History endpoint — sorted/filtered optimization list + per-id delete."""
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
@@ -21,6 +22,43 @@ def _validate_sort_by(sort_by: str = Query("created_at")) -> str:
     if sort_by not in VALID_SORT_COLUMNS:
         raise HTTPException(422, f"Invalid sort column. Must be one of: {', '.join(sorted(VALID_SORT_COLUMNS))}")
     return sort_by
+
+
+class HistorySummaryEnrichment(BaseModel):
+    """At-a-glance enrichment activation summary for a row.
+
+    The full ``enrichment_meta`` payload (curated retrieval files,
+    injection stats, repo relevance, etc.) lives on the detail endpoint
+    (``GET /api/optimize/{trace_id}``). This summary surfaces just enough
+    for a list view to answer "did this prompt actually use the linked
+    codebase / patterns / strategy intelligence?" without requiring an
+    N+1 detail fetch — the failure mode that hid silent profile demotions.
+    """
+
+    profile: str | None = Field(
+        default=None,
+        description="Selected enrichment profile: code_aware | knowledge_work | cold_start.",
+    )
+    codebase_context: bool | None = Field(
+        default=None, description="Whether codebase context layer activated.",
+    )
+    strategy_intelligence: bool | None = Field(
+        default=None, description="Whether strategy intelligence layer activated.",
+    )
+    applied_patterns: bool | None = Field(
+        default=None, description="Whether patterns were injected pre-pipeline.",
+    )
+    patterns_injected: int | None = Field(
+        default=None,
+        description="Total patterns injected (pipeline + enrichment), pulled from injection_stats.",
+    )
+    curated_files: int | None = Field(
+        default=None,
+        description="Number of files included via curated retrieval (0 when codebase skipped).",
+    )
+    repo_relevance_score: float | None = Field(
+        default=None, description="B0 repo-relevance gate score (cosine vs project anchor).",
+    )
 
 
 class HistoryItem(BaseModel):
@@ -44,6 +82,14 @@ class HistoryItem(BaseModel):
     cluster_id: str | None = Field(default=None, description="Pattern family ID.")
     project_id: str | None = Field(default=None, description="Project node ID.")  # ADR-005
     feedback_rating: str | None = Field(default=None, description="Latest feedback rating.")
+    enrichment: HistorySummaryEnrichment | None = Field(
+        default=None,
+        description=(
+            "Compact enrichment-activation summary so list consumers can spot "
+            "silent profile demotions (e.g., a code-aware prompt that fell "
+            "through to knowledge_work) without an N+1 detail fetch."
+        ),
+    )
 
 
 class HistoryResponse(BaseModel):
@@ -130,9 +176,54 @@ async def get_history(
                 cluster_id=family_map.get(opt.id),
                 project_id=opt.project_id,
                 feedback_rating=feedback_map.get(opt.id),
+                enrichment=_summarize_enrichment(opt.context_sources),
             )
             for opt in items
         ],
+    )
+
+
+def _summarize_enrichment(
+    context_sources: dict | None,
+) -> HistorySummaryEnrichment | None:
+    """Build the at-a-glance enrichment summary from a stored context_sources blob.
+
+    Returns ``None`` when no enrichment data was persisted (legacy rows
+    pre-v0.4.2 + failed/passthrough rows). Non-blocking — silently
+    coerces unexpected shapes to ``None`` so a malformed row never breaks
+    the list endpoint.
+    """
+    if not isinstance(context_sources, dict):
+        return None
+    em = context_sources.get("enrichment_meta")
+    if not isinstance(em, dict):
+        # Pre-v0.4.2 row that has flat context_sources keys but no
+        # enrichment_meta block — surface what we can.
+        cb = context_sources.get("codebase_context")
+        si = context_sources.get("strategy_intelligence")
+        ap = context_sources.get("applied_patterns")
+        if cb is None and si is None and ap is None:
+            return None
+        return HistorySummaryEnrichment(
+            codebase_context=cb if isinstance(cb, bool) else None,
+            strategy_intelligence=si if isinstance(si, bool) else None,
+            applied_patterns=ap if isinstance(ap, bool) else None,
+        )
+    inj = em.get("injection_stats") if isinstance(em.get("injection_stats"), dict) else {}
+    cur = em.get("curated_retrieval") if isinstance(em.get("curated_retrieval"), dict) else {}
+
+    def _typed(d: dict, key: str, t: type | tuple[type, ...]) -> Any:
+        v = d.get(key)
+        return v if isinstance(v, t) else None
+
+    return HistorySummaryEnrichment(
+        profile=_typed(em, "enrichment_profile", str),
+        codebase_context=_typed(context_sources, "codebase_context", bool),
+        strategy_intelligence=_typed(context_sources, "strategy_intelligence", bool),
+        applied_patterns=_typed(context_sources, "applied_patterns", bool),
+        patterns_injected=_typed(inj, "patterns_injected", int),
+        curated_files=_typed(cur, "files_included", int),
+        repo_relevance_score=_typed(em, "repo_relevance_score", (int, float)),
     )
 
 
