@@ -46,8 +46,14 @@ from app.schemas.pipeline_contracts import (
     ScoreResult,
     SuggestionsOutput,
 )
+from app.services.classification_agreement import get_classification_agreement
+from app.services.domain_detector import enrich_domain_qualifier
 from app.services.heuristic_scorer import HeuristicScorer
-from app.services.pattern_injection import InjectedPattern, format_injected_patterns
+from app.services.pattern_injection import (
+    InjectedPattern,
+    format_injected_patterns,
+    record_injection_provenance,
+)
 from app.services.pipeline_constants import (
     MAX_DOMAIN_RAW_LENGTH,
     MAX_INTENT_LABEL_LENGTH,
@@ -61,6 +67,9 @@ from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
+from app.services.task_type_classifier import (
+    rescue_task_type_via_structural_evidence,
+)
 from app.services.trace_logger import TraceLogger
 from app.utils.text_cleanup import title_case_label, validate_intent_label
 
@@ -100,7 +109,11 @@ def _normalize_llm_domain(domain: str, known_primaries: set[str]) -> str:
         return domain
     primary, _, qualifier = domain.partition("-")
     primary = primary.strip().lower()
-    qualifier = qualifier.strip()
+    # Lowercase the qualifier too for parity with parse_domain() and the
+    # rest of the domain pipeline (every other place stores qualifiers
+    # lowercase). Without this ``Backend-OBSERVABILITY`` would emerge as
+    # ``backend: OBSERVABILITY`` and break the lower-case lookup contract.
+    qualifier = qualifier.strip().lower()
     if primary in known_primaries and qualifier:
         return f"{primary}: {qualifier}"
     return domain
@@ -269,10 +282,6 @@ async def resolve_post_analyze_state(
     # in the first sentence beats semantic vibes — same B2 philosophy used by
     # the enrichment-profile rescue.
     try:
-        from app.services.task_type_classifier import (
-            rescue_task_type_via_structural_evidence,
-        )
-
         rescued, reason = rescue_task_type_via_structural_evidence(
             analysis.task_type, raw_prompt,
         )
@@ -288,6 +297,55 @@ async def resolve_post_analyze_state(
             "Task-type rescue failed (non-fatal) trace_id=%s",
             trace_id, exc_info=True,
         )
+
+    # Phase 1.5: Post-LLM domain reconciliation — MUST run BEFORE
+    # ``domain_resolver.resolve()`` so the resolver sees the canonical
+    # form. Two transforms layered:
+    #
+    #   1. Hyphen-style sub-domains (``"backend-observability"``) get
+    #      misparsed by :func:`parse_domain` as new primaries — caught here
+    #      by :func:`_normalize_llm_domain` against the live domain registry.
+    #   2. The LLM frequently returns a bare primary (``"backend"``) even
+    #      when tracing/instrumentation/observability dominate the prompt's
+    #      first sentence. Reason: the LLM hasn't seen the organic
+    #      Haiku-generated qualifier vocabulary; the heuristic analyzer has,
+    #      but its qualifier-enriched output was previously discarded.
+    #
+    # Ordering matters: if reconciliation ran AFTER ``resolver.resolve()``
+    # (the cycle-3-fix v1 layout), ``effective_domain`` would lock in from
+    # the un-normalized string and downstream consumers (E1 agreement
+    # tracking, ``Optimization.domain``, strategy-intelligence keys) would
+    # diverge from ``domain_raw``. Code-review SEV-MAJOR caught this; the
+    # fix is purely a sequencing change — the transforms themselves are
+    # unchanged.
+    if domain_resolver is not None:
+        original_domain = analysis.domain or "general"
+        normalized = _normalize_llm_domain(
+            original_domain,
+            domain_resolver.domain_labels,
+        )
+        if normalized != original_domain:
+            logger.info(
+                "Hyphenated sub-domain normalized: '%s' → '%s' trace_id=%s",
+                original_domain, normalized, trace_id,
+            )
+        analysis.domain = normalized
+    if analysis.domain and ":" not in analysis.domain:
+        try:
+            enriched = enrich_domain_qualifier(
+                analysis.domain, raw_prompt.lower(),
+            )
+            if enriched != analysis.domain:
+                logger.info(
+                    "Post-LLM qualifier enrichment: '%s' → '%s' trace_id=%s",
+                    analysis.domain, enriched, trace_id,
+                )
+                analysis.domain = enriched
+        except Exception:
+            logger.debug(
+                "Post-LLM qualifier enrichment failed (non-fatal) trace_id=%s",
+                trace_id, exc_info=True,
+            )
 
     logger.info(
         "Domain resolution: raw='%s' confidence=%.2f (analyzer=%.2f) trace_id=%s",
@@ -305,10 +363,10 @@ async def resolve_post_analyze_state(
     else:
         effective_domain = "general"
 
-    # E1: Heuristic vs LLM classification agreement tracking
+    # E1: Heuristic vs LLM classification agreement tracking — runs
+    # AFTER resolver so ``effective_domain`` reflects the resolved label.
     if heuristic_task_type is not None:
         try:
-            from app.services.classification_agreement import get_classification_agreement
             get_classification_agreement().record(
                 heuristic_task_type=heuristic_task_type,
                 heuristic_domain=heuristic_domain or "general",
@@ -318,58 +376,6 @@ async def resolve_post_analyze_state(
             )
         except Exception:
             logger.debug("Classification agreement tracking failed", exc_info=True)
-
-    # Phase 1.5: Post-LLM domain reconciliation.
-    #
-    # The LLM's analyze-phase output (``analysis.domain``) is the single
-    # source of truth for ``domain_raw``, but its style is inconsistent:
-    #
-    #   1. Hyphen-style sub-domains (``"backend-observability"``) get
-    #      misparsed by :func:`parse_domain` as new primaries — caught here
-    #      by :func:`_normalize_llm_domain` against the live domain registry.
-    #   2. The LLM frequently returns a bare primary (``"backend"``) even
-    #      when tracing/instrumentation/observability dominate the prompt's
-    #      first sentence. Reason: the LLM hasn't seen the organic
-    #      Haiku-generated qualifier vocabulary; the heuristic analyzer has,
-    #      but its qualifier-enriched output was previously discarded.
-    #
-    # Both gaps were observed empirically during the 2026-04-25 cycle-3
-    # validation run: 11/13 cycle-3 prompts emitted bare ``"backend"`` even
-    # though their first sentence had >=2 keyword hits in the cached vocab
-    # (``backend.instrumentation`` for #1/#6/#8/#9, ``backend.tracing`` for
-    # #2/#3/#5/#7/#10, ``backend.embeddings`` for #4). After this fix the
-    # canonical ``"backend: instrumentation"`` / ``"backend: tracing"``
-    # qualifier syntax flows into ``domain_raw`` for free.
-    if domain_resolver is not None:
-        original_domain = analysis.domain or "general"
-        normalized = _normalize_llm_domain(
-            original_domain,
-            domain_resolver.domain_labels,
-        )
-        if normalized != original_domain:
-            logger.info(
-                "Hyphenated sub-domain normalized: '%s' → '%s' trace_id=%s",
-                original_domain, normalized, trace_id,
-            )
-        analysis.domain = normalized
-    if analysis.domain and ":" not in analysis.domain:
-        try:
-            from app.services.domain_detector import enrich_domain_qualifier
-
-            enriched = enrich_domain_qualifier(
-                analysis.domain, raw_prompt.lower(),
-            )
-            if enriched != analysis.domain:
-                logger.info(
-                    "Post-LLM qualifier enrichment: '%s' → '%s' trace_id=%s",
-                    analysis.domain, enriched, trace_id,
-                )
-                analysis.domain = enriched
-        except Exception:
-            logger.debug(
-                "Post-LLM qualifier enrichment failed (non-fatal) trace_id=%s",
-                trace_id, exc_info=True,
-            )
 
     # Phase 1.5b: Domain mapping via taxonomy engine
     domain_raw = (analysis.domain or "general")[:MAX_DOMAIN_RAW_LENGTH]
@@ -878,6 +884,12 @@ class PersistenceInputs:
     # ``record_injection_provenance`` post-commit, which is the only
     # consumer.
     auto_injected_patterns: list[Any] = field(default_factory=list)
+    # ``cluster_id → cosine_similarity`` produced by ``auto_inject_patterns``
+    # during the topic-cluster scan. Forwarded to
+    # ``record_injection_provenance`` so post-commit topic rows carry the
+    # similarity score the in-line write used to capture. Without this,
+    # every topic-row provenance entry would land with ``similarity=NULL``.
+    auto_injected_similarity_map: dict[str, float] = field(default_factory=dict)
 
 
 async def persist_and_propagate(
@@ -973,13 +985,12 @@ async def persist_and_propagate(
     # committed, we can write provenance cleanly.
     if inputs.auto_injected_cluster_ids or inputs.auto_injected_patterns:
         try:
-            from app.services.pattern_injection import record_injection_provenance
-
             await record_injection_provenance(
                 db,
                 optimization_id=inputs.opt_id,
                 cluster_ids=list(inputs.auto_injected_cluster_ids),
                 injected=list(inputs.auto_injected_patterns),
+                similarity_map=inputs.auto_injected_similarity_map,
                 trace_id=inputs.trace_id,
             )
             await db.commit()

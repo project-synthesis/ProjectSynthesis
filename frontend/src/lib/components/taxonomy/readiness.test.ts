@@ -391,6 +391,10 @@ describe('SubDomainEmergenceList', () => {
     const chips = container.querySelectorAll('.sel-breakdown-chip');
     expect(chips[0].classList.contains('dominant')).toBe(true);
     expect(chips[0].textContent).toMatch(/RAW.*6/);
+    // Brand guard — every state of the chip strip must stay zero-glow.
+    // Pre-existing 'no glow' test renders a different prop shape; this
+    // assertion locks the chip-strip-rendered path specifically.
+    assertNoGlowShadow(container);
   });
 
   it('handles missing source_breakdown defensively (legacy API row)', () => {
