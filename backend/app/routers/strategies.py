@@ -136,6 +136,19 @@ async def update_strategy(name: str, body: StrategyUpdate, request: Request) -> 
             status_code=500, detail="Failed to save strategy.",
         ) from exc
 
+    # Customization tracking — record this API edit so the self-update
+    # pre-flight (GET /api/update/preflight) can warn the user and
+    # update_service.apply_update can auto-stash it before checkout.
+    # Best-effort: a tracking failure must not block the strategy save.
+    try:
+        from app.config import PROJECT_ROOT
+        from app.services.customization_tracker import get_tracker
+
+        rel_path = path.resolve().relative_to(PROJECT_ROOT).as_posix()
+        get_tracker().record_edit(rel_path, body.content, source="api")
+    except Exception:
+        logger.debug("Customization tracker write failed", exc_info=True)
+
     # Audit log
     try:
         from app.database import async_session_factory

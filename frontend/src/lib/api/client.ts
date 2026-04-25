@@ -640,10 +640,43 @@ export interface UpdateStatusResponse {
 export const getUpdateStatus = () =>
   apiFetch<UpdateStatusResponse>('/update/status');
 
-export const applyUpdate = (tag: string) =>
-  apiFetch<{ status: string; tag: string; message: string }>('/update/apply', {
+export interface PreflightDirtyFile {
+  path: string;
+  status: string;
+  source: 'user_api' | 'manual_edit' | 'untracked' | string;
+  in_prompts_tree: boolean;
+}
+
+export interface PreflightResponse {
+  can_apply: boolean;
+  blocking_issues: string[];
+  warnings: string[];
+  dirty_files: PreflightDirtyFile[];
+  user_customizations: string[];
+  commits_ahead_of_origin: number;
+  commits_behind_origin: number;
+  on_detached_head: boolean;
+  in_flight_optimizations: number;
+  in_flight_trace_ids: string[];
+  will_auto_stash: boolean;
+  target_tag: string | null;
+  target_tag_exists_locally: boolean;
+}
+
+export const getUpdatePreflight = (tag?: string) => {
+  const qs = tag ? `?tag=${encodeURIComponent(tag)}` : '';
+  return apiFetch<PreflightResponse>(`/update/preflight${qs}`);
+};
+
+export const applyUpdate = (tag: string, force: boolean = false) =>
+  apiFetch<{
+    status: string;
+    tag: string;
+    message: string;
+    stash_pop_conflicts: string[];
+  }>('/update/apply', {
     method: 'POST',
-    body: JSON.stringify({ tag }),
+    body: JSON.stringify({ tag, force }),
   });
 
 // ---- Real-time event stream ----
