@@ -56,10 +56,22 @@
 
   const STORAGE_KEY = 'synthesis:context_panel_open';
 
+  // forceCollapsed is the INITIAL DEFAULT when no localStorage preference
+  // exists yet — narrow-viewport mounts default closed, wide-viewport
+  // mounts default open. Once the user clicks the chevron, their choice
+  // persists and wins on every subsequent mount, regardless of viewport.
+  // This means at narrow viewport the user can still expand the panel
+  // to see patterns when they want to.
+  const _stored = typeof localStorage !== 'undefined'
+    ? localStorage.getItem(STORAGE_KEY)
+    : null;
+  // svelte-ignore state_referenced_locally — forceCollapsed is intentionally
+  // captured ONCE at mount as the initial default. After that, isOpen is
+  // driven by the chevron toggle and persisted to localStorage; the prop
+  // can change later but must not yank the panel back closed under the
+  // user's feet.
   let isOpen = $state<boolean>(
-    typeof localStorage !== 'undefined'
-      ? (localStorage.getItem(STORAGE_KEY) ?? 'true') !== 'false'
-      : true,
+    _stored !== null ? _stored !== 'false' : !forceCollapsed,
   );
 
   function toggleCollapse() {
@@ -90,11 +102,11 @@
 <!-- svelte-ignore a11y_no_redundant_roles -->
 <aside
   class="context-panel"
-  class:context-panel--collapsed={forceCollapsed || !isOpen}
+  class:context-panel--collapsed={!isOpen}
   role="complementary"
   aria-label="Pattern context"
   data-test="context-panel"
-  data-collapsed={forceCollapsed || !isOpen}
+  data-collapsed={!isOpen}
 >
   <header
     class="panel-header"
@@ -118,7 +130,7 @@
     class="panel-body"
     data-test="panel-body"
     style="opacity: {inFlight ? 0.5 : 1};"
-    hidden={!isOpen || forceCollapsed}
+    hidden={!isOpen}
   >
 
   {#if !hasSuggestion}
