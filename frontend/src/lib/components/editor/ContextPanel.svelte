@@ -1,9 +1,34 @@
 <script lang="ts">
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { forgeStore } from '$lib/stores/forge.svelte';
   import { taxonomyColor } from '$lib/utils/colors';
 
   const suggestion = $derived(clustersStore.suggestion);
   const hasSuggestion = $derived(suggestion !== null);
+
+  let selectedIds = $state<Set<string>>(new Set());
+
+  // Seed selection from forgeStore on mount / when suggestion changes.
+  $effect(() => {
+    const initial = forgeStore.appliedPatternIds ?? [];
+    selectedIds = new Set(initial);
+  });
+
+  function toggle(id: string) {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedIds = next;
+  }
+
+  function truncate(text: string, n: number): string {
+    return text.length <= n ? text : text.slice(0, n - 1) + '…';
+  }
+
+  const metaPatterns = $derived(suggestion?.meta_patterns ?? []);
+  const metaSelectedCount = $derived(
+    metaPatterns.filter((p) => selectedIds.has(p.id)).length,
+  );
 </script>
 
 <!-- svelte-ignore a11y_no_redundant_roles -->
@@ -36,6 +61,30 @@
         <span class="meta-sep">·</span>
         <span class="match-level">{suggestion.match_level}</span>
       </div>
+    </section>
+
+    <section class="pattern-section" data-test="meta-section" aria-label="Meta-patterns">
+      <header class="section-heading">
+        <span class="section-title">META-PATTERNS</span>
+        <span class="section-count" class:section-count--active={metaSelectedCount > 0}>
+          {metaSelectedCount}/{metaPatterns.length}{metaSelectedCount > 0 ? ' ✔' : ''}
+        </span>
+      </header>
+      <ul class="pattern-list">
+        {#each metaPatterns as p (p.id)}
+          <li class="pattern-row" data-test="pattern-row">
+            <label class="pattern-label">
+              <input
+                type="checkbox"
+                checked={selectedIds.has(p.id)}
+                onchange={() => toggle(p.id)}
+                aria-describedby="pattern-{p.id}-text"
+              />
+              <span id="pattern-{p.id}-text" class="pattern-text">{truncate(p.pattern_text, 60)}</span>
+            </label>
+          </li>
+        {/each}
+      </ul>
     </section>
   {/if}
 </aside>
@@ -109,4 +158,54 @@
   }
   .meta-sep { color: var(--color-text-dim); }
   .match-level { font-variant: tabular-nums; }
+
+  .pattern-section { border-bottom: 1px solid var(--color-border-subtle); }
+  .section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 20px;
+    padding: 0 6px;
+    font-family: var(--font-display);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-text-dim);
+  }
+  .section-count {
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .section-count--active { color: var(--color-neon-cyan); }
+  .pattern-list { list-style: none; padding: 0; margin: 0; }
+  .pattern-row { height: 20px; border-top: 1px solid var(--color-border-subtle); padding: 0 6px; }
+  .pattern-label { display: flex; align-items: center; gap: 6px; height: 20px; cursor: pointer; }
+  .pattern-label input[type="checkbox"] {
+    appearance: none;
+    width: 10px;
+    height: 10px;
+    margin: 0;
+    border: 1px solid var(--color-border-subtle);
+    background: transparent;
+    cursor: pointer;
+  }
+  .pattern-label input[type="checkbox"]:hover {
+    border-color: var(--color-neon-cyan);
+  }
+  .pattern-label input[type="checkbox"]:checked {
+    border-color: var(--color-neon-cyan);
+    background: color-mix(in srgb, var(--color-neon-cyan) 12%, transparent);
+  }
+  .pattern-label input[type="checkbox"]:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
+  .pattern-text {
+    font-size: 11px;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 </style>
