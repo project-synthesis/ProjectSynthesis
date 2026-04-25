@@ -1,4 +1,19 @@
 <script lang="ts">
+  /**
+   * DomainLifecycleTimeline — Observatory tier-1 surface for taxonomy activity.
+   *
+   * Renders `clustersStore.activityEvents` as a chronological row list with
+   * three filter dimensions: hot/warm/cold execution path, op-family
+   * (domain | cluster | pattern | readiness), and an `errors only` toggle.
+   * Rows expand to reveal the raw context payload. Period changes on
+   * `observatoryStore` trigger a backfill against `/clusters/activity/history`
+   * so the panel stays consistent with the global window selector.
+   *
+   * Op→family mapping is 1-to-1 by intent: `promote` belongs to the pattern
+   * family per ADR-005 ("global pattern promotion"); cluster lifecycle uses
+   * `split`/`merge`/`retire`. Uncategorised ops surface only when every
+   * family chip is on, matching ActivityPanel's "no filter = show all" UX.
+   */
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { observatoryStore } from '$lib/stores/observatory.svelte';
   import { apiFetch } from '$lib/api/client';
@@ -6,11 +21,26 @@
 
   type OpFamily = 'domain' | 'cluster' | 'pattern' | 'readiness';
 
-  const OP_FAMILY_MAP: Record<OpFamily, (op: string) => boolean> = {
-    domain: (op) => op === 'discover' || op === 'reevaluate' || op === 'dissolve',
-    cluster: (op) => ['split', 'merge', 'retire', 'promote', 'evaluate', 'reassign'].includes(op),
-    pattern: (op) => ['promote', 'demote', 're_promote', 'retired', 'global_pattern', 'meta_pattern', 'extract'].includes(op),
-    readiness: (op) => op === 'readiness' || op === 'signal_adjuster' || op.startsWith('readiness/'),
+  // 1-to-1 op→family lookup. Each backend op key maps to exactly one family
+  // so toggling a chip never produces overlap (e.g. `promote` is pattern-only,
+  // matching its sole hot-path emitter `global_pattern_promoted`). Ops not
+  // present here fall through to the "uncategorised" bucket and only render
+  // when every family chip is active (default state).
+  const OP_TO_FAMILY: Record<string, OpFamily> = {
+    discover: 'domain',
+    reevaluate: 'domain',
+    dissolve: 'domain',
+    split: 'cluster',
+    merge: 'cluster',
+    retire: 'cluster',
+    promote: 'pattern',
+    demote: 'pattern',
+    re_promote: 'pattern',
+    retired: 'pattern',
+    global_pattern: 'pattern',
+    meta_pattern: 'pattern',
+    readiness: 'readiness',
+    signal_adjuster: 'readiness',
   };
 
   const events = $derived(clustersStore.activityEvents);
@@ -52,12 +82,12 @@
     return `${e.ts}::${e.op}::${e.decision}::${e.cluster_id ?? ''}`;
   }
 
-  const ALL_FAMILIES: OpFamily[] = ['domain', 'cluster', 'pattern', 'readiness'];
+  const ALL_FAMILIES: readonly OpFamily[] = ['domain', 'cluster', 'pattern', 'readiness'];
 
   function eventFamily(op: string): OpFamily | null {
-    for (const f of ALL_FAMILIES) {
-      if (OP_FAMILY_MAP[f](op)) return f;
-    }
+    // 1-to-1 lookup; falls back to readiness sub-paths via prefix.
+    if (op in OP_TO_FAMILY) return OP_TO_FAMILY[op];
+    if (op.startsWith('readiness/')) return 'readiness';
     return null;
   }
 
