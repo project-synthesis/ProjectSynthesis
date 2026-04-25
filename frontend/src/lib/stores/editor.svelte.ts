@@ -2,10 +2,12 @@
 
 import type { OptimizationResult } from '$lib/api/client';
 
-export type TabType = 'prompt' | 'result' | 'diff' | 'mindmap';
+export type TabType = 'prompt' | 'result' | 'diff' | 'mindmap' | 'observatory';
 
 /** The prompt tab ID is a constant — there is always exactly one prompt tab. */
 export const PROMPT_TAB_ID = 'prompt';
+/** The observatory tab ID is a constant — pinned alongside the prompt tab. */
+export const OBSERVATORY_TAB_ID = 'observatory';
 
 export interface Tab {
   id: string;
@@ -20,6 +22,7 @@ export interface Tab {
 class EditorStore {
   tabs = $state<Tab[]>([
     { id: PROMPT_TAB_ID, title: 'Prompt', type: 'prompt', pinned: true },
+    { id: OBSERVATORY_TAB_ID, title: 'Observatory', type: 'observatory', pinned: true },
   ]);
   activeTabId = $state(PROMPT_TAB_ID);
 
@@ -105,9 +108,17 @@ class EditorStore {
     }
 
     if (this.activeTabId === id) {
-      this.activeTabId = this.tabs.length > 0
-        ? this.tabs[this.tabs.length - 1].id
-        : PROMPT_TAB_ID;
+      // Prefer the Prompt tab as the natural fallback so closing a result
+      // returns the user to the editor — not to a sibling pinned tab like
+      // the Observatory which lives on the same level.
+      const promptTab = this.tabs.find((t) => t.id === PROMPT_TAB_ID);
+      if (promptTab) {
+        this.activeTabId = PROMPT_TAB_ID;
+      } else {
+        this.activeTabId = this.tabs.length > 0
+          ? this.tabs[this.tabs.length - 1].id
+          : PROMPT_TAB_ID;
+      }
     }
   }
 
@@ -193,7 +204,10 @@ class EditorStore {
 
   /** @internal Test-only: restore initial state */
   _reset() {
-    this.tabs = [{ id: PROMPT_TAB_ID, title: 'Prompt', type: 'prompt', pinned: true }];
+    this.tabs = [
+      { id: PROMPT_TAB_ID, title: 'Prompt', type: 'prompt', pinned: true },
+      { id: OBSERVATORY_TAB_ID, title: 'Observatory', type: 'observatory', pinned: true },
+    ];
     this.activeTabId = PROMPT_TAB_ID;
     this._resultCache = {};
   }

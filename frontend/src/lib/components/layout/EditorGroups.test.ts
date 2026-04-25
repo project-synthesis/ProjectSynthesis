@@ -11,6 +11,7 @@ vi.mock('$lib/components/editor/PassthroughView.svelte', () => ({ default: () =>
 vi.mock('$lib/components/shared/DiffView.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
 vi.mock('$lib/components/refinement/RefinementTimeline.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
 vi.mock('$lib/components/taxonomy/SemanticTopology.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
+vi.mock('$lib/components/taxonomy/TaxonomyObservatory.svelte', () => ({ default: () => ({ destroy: () => {} }) }));
 
 // Mock API calls used by sub-components
 vi.mock('$lib/api/client', () => ({
@@ -64,8 +65,8 @@ describe('EditorGroups', () => {
     editorStore.openResult('opt-abc');
     render(EditorGroups);
     const tabs = screen.getAllByRole('tab');
-    // Should have Prompt tab + result tab
-    expect(tabs.length).toBeGreaterThanOrEqual(2);
+    // Should have Prompt tab + Observatory tab + result tab
+    expect(tabs.length).toBeGreaterThanOrEqual(3);
   });
 
   it('clicking a non-active tab makes it active', async () => {
@@ -106,7 +107,8 @@ describe('EditorGroups', () => {
     render(EditorGroups);
 
     const tabsBefore = screen.getAllByRole('tab');
-    expect(tabsBefore.length).toBe(2);
+    // Prompt + Observatory + result
+    expect(tabsBefore.length).toBe(3);
 
     const closeBtn = screen.getAllByRole('button').find(b =>
       (b.getAttribute('aria-label') ?? '').startsWith('Close ')
@@ -115,7 +117,8 @@ describe('EditorGroups', () => {
     await user.click(closeBtn!);
 
     const tabsAfter = screen.getAllByRole('tab');
-    expect(tabsAfter.length).toBe(1);
+    // Closing the result tab leaves the two pinned tabs.
+    expect(tabsAfter.length).toBe(2);
   });
 
   it('shows empty state message when no tabs', () => {
@@ -131,12 +134,14 @@ describe('EditorGroups', () => {
     editorStore.openResult('opt-789');
     render(EditorGroups);
 
-    expect(screen.getAllByRole('tab').length).toBe(2);
+    // Prompt + Observatory + result
+    expect(screen.getAllByRole('tab').length).toBe(3);
     await user.click(screen.getByRole('button', { name: 'New prompt' }));
 
-    // After reset, only the pinned Prompt tab should remain
-    expect(screen.getAllByRole('tab').length).toBe(1);
+    // After reset, the two pinned tabs (Prompt + Observatory) remain
+    expect(screen.getAllByRole('tab').length).toBe(2);
     expect(screen.getByRole('tab', { name: 'Prompt' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Observatory' })).toBeInTheDocument();
   });
 
   it('shows PassthroughView when forgeStore.status is passthrough', async () => {
@@ -151,7 +156,8 @@ describe('EditorGroups', () => {
     editorStore.openDiff('opt-diff-1');
     render(EditorGroups);
     const tabs = screen.getAllByRole('tab');
-    expect(tabs.length).toBe(2);
+    // Prompt + Observatory + diff
+    expect(tabs.length).toBe(3);
     // diff tab should be present
     const diffTab = tabs.find(t => t.textContent?.includes('~') || t.getAttribute('aria-selected') === 'true');
     expect(diffTab).toBeDefined();
@@ -203,13 +209,14 @@ describe('EditorGroups', () => {
     );
     expect(closeBtn).toBeDefined();
 
-    // Tab count before
-    expect(screen.getAllByRole('tab').length).toBe(2);
+    // Tab count before — Prompt + Observatory + result
+    expect(screen.getAllByRole('tab').length).toBe(3);
 
     // Simulate keyboard Enter on close button
     await user.type(closeBtn!, '{Enter}');
 
-    expect(screen.getAllByRole('tab').length).toBe(1);
+    // After close — only the two pinned tabs remain
+    expect(screen.getAllByRole('tab').length).toBe(2);
   });
 
   it('does not show refinement for passthrough results', async () => {
