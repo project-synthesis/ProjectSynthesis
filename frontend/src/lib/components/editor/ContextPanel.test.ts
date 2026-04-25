@@ -242,6 +242,27 @@ describe('ContextPanel', () => {
     });
   });
 
+  describe('forceCollapsed prop', () => {
+    it('forceCollapsed=true sets data-collapsed regardless of localStorage (Tier 1 viewport rail)', () => {
+      // Even with localStorage saying open=true, the prop forces collapse.
+      localStorage.setItem('synthesis:context_panel_open', 'true');
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel, { props: { forceCollapsed: true } });
+      const panel = container.querySelector('[data-test="context-panel"]') as HTMLElement;
+      expect(panel.getAttribute('data-collapsed')).toBe('true');
+    });
+
+    it('forceCollapsed=false defers to localStorage (default behaviour preserved)', () => {
+      localStorage.setItem('synthesis:context_panel_open', 'true');
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel, { props: { forceCollapsed: false } });
+      const panel = container.querySelector('[data-test="context-panel"]') as HTMLElement;
+      expect(panel.getAttribute('data-collapsed')).toBe('false');
+    });
+  });
+
   describe('collapse / expand', () => {
     it('collapse toggle narrows panel (C17)', async () => {
       const userEvent = (await import('@testing-library/user-event')).default;
