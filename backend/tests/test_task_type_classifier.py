@@ -284,6 +284,56 @@ class TestHasTechnicalNouns:
         assert not ttc.has_technical_nouns("")
         assert not ttc.has_technical_nouns("   ")
 
+    def test_async_concurrency_vocabulary_fires(self):
+        """B2 vocabulary expansion: async/concurrency primitives are
+        unambiguously technical and should rescue analysis/general prompts
+        about an async codebase to ``code_aware``.
+
+        Live reference (2026-04-25 validation cycle): "Audit the asyncio.gather
+        error handling in our warm-path Phase 4 — find race conditions where
+        a transient failure poisons the maintenance transaction." matched no
+        ``_TECHNICAL_NOUNS`` despite being clearly about a code-base —
+        ``has_technical_nouns()`` returned False, the enrichment profile fell
+        through to ``knowledge_work``, and the curated retrieval / strategy
+        intelligence / pattern injection layers all silently skipped.
+        """
+        # Async runtime primitives — zero non-code legitimacy.
+        assert ttc.has_technical_nouns("audit the asyncio gather error handling")
+        assert ttc.has_technical_nouns("inspect the coroutine cancellation flow")
+        assert ttc.has_technical_nouns("trace the eventloop blocking call")
+        # Concurrency primitives.
+        assert ttc.has_technical_nouns("diagnose the deadlock in the warm path")
+        assert ttc.has_technical_nouns("review the mutex acquisition order")
+        assert ttc.has_technical_nouns("debug the semaphore release path")
+        # Live exact phrasing from validation cycle 1.
+        assert ttc.has_technical_nouns(
+            "audit the asyncio.gather error handling in our warm-path phase 4"
+        )
+
+    def test_transaction_savepoint_fire_in_db_context(self):
+        """Database transaction primitives. Conservative — ``transaction``
+        alone is overloaded (could be financial), so this guards against an
+        over-eager add. ``savepoint`` is unambiguous DB."""
+        assert ttc.has_technical_nouns("review the savepoint nesting in phase 4.5")
+
+    def test_module_method_dotted_token_matches(self):
+        """B3: ``asyncio.gather`` should match ``asyncio`` even though the
+        interior dot was not a word boundary in the prior splitter — the
+        whitespace tokenizer left ``asyncio.gather`` as one token and the
+        punctuation strip didn't touch interior dots.
+        """
+        assert ttc.has_technical_nouns("audit asyncio.gather error handling")
+        assert ttc.has_technical_nouns("trace session.close timing in the warm path")
+        # Negative — bare period (sentence end) still works as before.
+        assert ttc.has_technical_nouns("inspect the pipeline.")
+
+    def test_kebab_case_compound_matches_inner_noun(self):
+        """Kebab split: ``async-session`` should hit ``session``, ``cache-aware``
+        should hit ``cache``. Catches kebab-case identifiers that wouldn't
+        otherwise reach the noun set as a single whitespace token."""
+        assert ttc.has_technical_nouns("review the async-session lifecycle")
+        assert ttc.has_technical_nouns("optimize the cache-aware fetch loop")
+
 
 class TestStaticSingleSignalsSurviveDynamicMerge:
     """B6: `set_task_type_signals()` must not wipe the default single-word
