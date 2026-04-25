@@ -722,12 +722,41 @@ _probe_mcp_sampling() {
 }
 
 _resolve_active_tier() {
-    # Determines which routing tier will be active based on detected state.
-    # Returns the tier name via echo: "internal", "sampling", or "passthrough".
-    if [[ -n "$_VS_BRIDGE_VER" ]] && [[ "$_VS_HEALTH" == "ok" ]]; then
-        echo "sampling"
-    elif [[ -n "$_PROVIDER_NAME" ]]; then
+    # Determines which routing tier the backend will currently pick.
+    #
+    # Authoritative source: the backend's RoutingManager via GET /api/providers.
+    # That endpoint reports `routing_tiers` in priority order (first item =
+    # what the backend actually routes to with no force flags). The
+    # RoutingManager only adds "sampling" when sampling_capable=True AND
+    # mcp_connected=True — i.e. a VS Code session is genuinely connected
+    # right now. Bridge installed but VS Code closed → no sampling.
+    #
+    # The pre-fix heuristic ("bridge file installed + MCP port healthy")
+    # claimed sampling whenever the BACKEND's MCP port was reachable, even
+    # with VS Code closed. Live routing then cycled passthrough → internal
+    # for actual prompts while the init.sh banner kept advertising sampling.
+    #
+    # Backend-unreachable fallback: heuristic ordering. The fallback is
+    # only used during the brief window before the backend lifespan
+    # completes — once it serves /api/providers, that is authoritative.
+    local tiers
+    if command -v curl >/dev/null 2>&1; then
+        tiers=$(curl -sS --max-time 1 "http://localhost:${BACKEND_PORT:-8000}/api/providers" 2>/dev/null \
+                | python3 -c "import json,sys; d=json.load(sys.stdin); print(' '.join(d.get('routing_tiers') or []))" \
+                2>/dev/null)
+        if [[ -n "$tiers" ]]; then
+            # First tier = the one the backend will route to right now.
+            echo "${tiers%% *}"
+            return
+        fi
+    fi
+
+    # Fallback heuristic (pre-startup or curl/python unavailable). Same
+    # priority order the backend uses.
+    if [[ -n "$_PROVIDER_NAME" ]]; then
         echo "internal"
+    elif [[ -n "$_VS_BRIDGE_VER" ]] && [[ "$_VS_HEALTH" == "ok" ]]; then
+        echo "sampling"
     else
         echo "passthrough"
     fi

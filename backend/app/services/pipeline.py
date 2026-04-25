@@ -138,12 +138,20 @@ class PipelineOrchestrator:
         """Auto-inject cluster meta-patterns based on prompt embedding similarity.
 
         Delegates to the shared ``pattern_injection.auto_inject_patterns()``
-        helper so the same logic is reused by the sampling pipeline.
+        helper so the same logic is reused by the sampling pipeline. The
+        ``record_provenance=False`` flag skips in-line provenance writes
+        — the parent ``Optimization`` row hasn't been committed yet at
+        this call site (the patterns need to flow into the optimizer
+        prompt first), so the FK check would fail every single time and
+        leave 0 ``relationship='injected'`` rows in
+        ``OptimizationPattern``. Provenance is recorded post-persist by
+        ``persist_and_propagate`` instead, after the parent row is durable.
         """
         return await auto_inject_patterns(
             raw_prompt, taxonomy_engine, db, trace_id,
             optimization_id=optimization_id,
             project_id=project_id,
+            record_provenance=False,
         )
 
     # ------------------------------------------------------------------
@@ -592,6 +600,7 @@ class PipelineOrchestrator:
                 duration_ms=duration_ms,
                 applied_pattern_ids=applied_pattern_ids,
                 auto_injected_cluster_ids=auto_injected_cluster_ids,
+                auto_injected_patterns=auto_injected_patterns,
                 taxonomy_engine=taxonomy_engine,
                 divergence_flags=scoring.divergence_flags if scoring else [],
             )
