@@ -95,12 +95,13 @@ src/lib/components/
                 # + DomainReadinessSparkline (hourly-bucket history; per-domain rings
                 # overlaid on topology; `role="meter"`, zero-glow), SeedModal,
                 # TaxonomyObservatory (v0.4.4 — three-panel shell on the pinned
-                # Observatory tab; legend explains period chip asymmetry; routes
-                # domain:select → clustersStore.selectCluster()): DomainLifecycleTimeline
-                # (reverse-chrono SSE-live + JSONL backfill via
-                # clustersStore.loadActivityForPeriod() driven by observatoryStore.period;
-                # path/op-family/errors chips; pathColor() shared with ActivityPanel via
-                # utils/activity-colors.ts), DomainReadinessAggregate (auto-fill card
+                # Observatory tab; routes domain:select → clustersStore.selectCluster()):
+                # DomainLifecycleTimeline (render-time merge of clustersStore.activityEvents
+                # [live SSE ring] + observatoryStore.historicalEvents [JSONL period buffer],
+                # deduped by ts|op|decision, cap 200 newest-first; period chips drive
+                # observatoryStore.loadTimelineEvents(); shared isErrorEvent + opFamily +
+                # keyMetric helpers in $lib/utils/activity-{filters,summary}.ts keep
+                # ActivityPanel + Timeline aligned), DomainReadinessAggregate (auto-fill card
                 # grid composing existing meter+emergence per domain; 6px chromatic
                 # dot; sorted critical→guarded→healthy; click dispatches domain:select),
                 # PatternDensityHeatmap (read-only grid; opacity-scaled tint with

@@ -135,6 +135,98 @@ describe('observatoryStore', () => {
     expect(observatoryStore.historicalLoading).toBe(false);
   });
 
+  /**
+   * OS11: 24h → since == until == today UTC. The Observatory's smallest
+   * window collapses to today's JSONL bucket. Reviewer flagged this as
+   * a regression-test gap when the math moved from clustersStore.
+   */
+  it('loadTimelineEvents() — 24h period collapses to a single-day range (OS11)', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const fetchSpy = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('activity/history')) {
+        return new Response(
+          JSON.stringify({ events: [], total: 0, has_more: false }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ events: [], total_in_buffer: 0, oldest_ts: null }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchSpy);
+    const { observatoryStore } = await import('./observatory.svelte');
+    observatoryStore.period = '24h';
+    await observatoryStore.loadTimelineEvents();
+    const historyCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('activity/history'));
+    expect(historyCall).toBeDefined();
+    const url = String(historyCall![0]);
+    expect(url).toContain(`since=${today}`);
+    expect(url).toContain(`until=${today}`);
+  });
+
+  /**
+   * OS12: 7d → since = today − 6 days. Day-1 of "7d" must include today;
+   * the bucket count is six prior days plus today (PERIOD_DAYS[7d]=7,
+   * so the math is `(7 - 1) * 86_400_000` = 6 days back).
+   */
+  it('loadTimelineEvents() — 7d period requests since = today − 6 days (OS12)', async () => {
+    const fetchSpy = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('activity/history')) {
+        return new Response(
+          JSON.stringify({ events: [], total: 0, has_more: false }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ events: [], total_in_buffer: 0, oldest_ts: null }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchSpy);
+    const { observatoryStore } = await import('./observatory.svelte');
+    observatoryStore.period = '7d';
+    await observatoryStore.loadTimelineEvents();
+    const historyCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('activity/history'));
+    const url = String(historyCall![0]);
+    const sinceMatch = url.match(/since=(\d{4}-\d{2}-\d{2})/);
+    expect(sinceMatch).not.toBeNull();
+    const sinceDate = new Date(sinceMatch![1]);
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const diffDays = Math.round((today.getTime() - sinceDate.getTime()) / 86_400_000);
+    expect(diffDays).toBe(6);
+  });
+
+  /**
+   * OS13: 30d → since = today − 29 days. Same pattern as OS12; explicit
+   * coverage of the longest window guards against off-by-one drift.
+   */
+  it('loadTimelineEvents() — 30d period requests since = today − 29 days (OS13)', async () => {
+    const fetchSpy = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('activity/history')) {
+        return new Response(
+          JSON.stringify({ events: [], total: 0, has_more: false }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ events: [], total_in_buffer: 0, oldest_ts: null }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchSpy);
+    const { observatoryStore } = await import('./observatory.svelte');
+    observatoryStore.period = '30d';
+    await observatoryStore.loadTimelineEvents();
+    const historyCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('activity/history'));
+    const url = String(historyCall![0]);
+    const sinceMatch = url.match(/since=(\d{4}-\d{2}-\d{2})/);
+    const sinceDate = new Date(sinceMatch![1]);
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const diffDays = Math.round((today.getTime() - sinceDate.getTime()) / 86_400_000);
+    expect(diffDays).toBe(29);
+  });
+
   it('loadTimelineEvents() race-guards stale responses (OS10)', async () => {
     // Generation counter discards in-flight responses when a newer fetch
     // is issued — fast period flicks must not let a stale older response
