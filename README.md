@@ -215,7 +215,7 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2994 tests)
+# Backend tests (2995 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
