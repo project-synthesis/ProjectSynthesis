@@ -3,6 +3,14 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { taxonomyColor } from '$lib/utils/colors';
 
+  // Tier 1 — narrow-viewport rail: EditorGroups passes forceCollapsed
+  // when the viewport is < 1400 px so the panel stays as a 28px rail
+  // regardless of the user's localStorage preference.
+  interface Props {
+    forceCollapsed?: boolean;
+  }
+  let { forceCollapsed = false }: Props = $props();
+
   const suggestion = $derived(clustersStore.suggestion);
   const hasSuggestion = $derived(suggestion !== null);
 
@@ -82,11 +90,11 @@
 <!-- svelte-ignore a11y_no_redundant_roles -->
 <aside
   class="context-panel"
-  class:context-panel--collapsed={!isOpen}
+  class:context-panel--collapsed={forceCollapsed || !isOpen}
   role="complementary"
   aria-label="Pattern context"
   data-test="context-panel"
-  data-collapsed={!isOpen}
+  data-collapsed={forceCollapsed || !isOpen}
 >
   <header
     class="panel-header"
