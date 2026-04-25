@@ -126,7 +126,15 @@ class ClusterStore {
   // Internal — pattern detection
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _lastLength = 0;
-  private _lastMatchedText = '';        // avoid re-matching identical content
+  // _lastMatchedText was private until Tier 1 — lifted to public so
+  // ContextPanel can gate its 'no match' empty-state copy on whether
+  // the store has actually attempted a match for the current text.
+  _lastMatchedText = $state('');
+  // Transient fetch-state flags surfaced for ContextPanel rendering:
+  //   _matchInFlight: true while a match request is awaiting response.
+  //   _matchError: 'network' if the last match request rejected.
+  _matchInFlight = $state(false);
+  _matchError: 'network' | null = $state(null);
   private _matchAbort: AbortController | null = null;  // cancel in-flight match requests
   private _loadGeneration = 0;
   private _clusterGeneration = 0;
@@ -176,6 +184,8 @@ class ClusterStore {
       // Abort any in-flight match request
       if (this._matchAbort) this._matchAbort.abort();
       this._matchAbort = new AbortController();
+      this._matchInFlight = true;
+      this._matchError = null;
 
       const signal = this._matchAbort.signal;
       try {
@@ -203,7 +213,10 @@ class ClusterStore {
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return;
+        this._matchError = 'network';
         console.warn('Pattern match failed:', err);
+      } finally {
+        this._matchInFlight = false;
       }
     }, debounceMs);
   }
@@ -431,6 +444,8 @@ class ClusterStore {
     this._matchAbort = null;
     this._lastLength = 0;
     this._lastMatchedText = '';
+    this._matchInFlight = false;
+    this._matchError = null;
     this._loadGeneration = 0;
     this._clusterGeneration = 0;
   }

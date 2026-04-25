@@ -435,3 +435,70 @@ describe('skipped-cluster state removal (Tier 1)', () => {
     expect(typeof (clustersStore as unknown as Record<string, unknown>).dismissSuggestion).toBe('undefined');
   });
 });
+
+describe('transient fetch flags (Tier 1)', () => {
+  beforeEach(() => {
+    clustersStore._reset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('exposes _matchInFlight as public state (S7)', async () => {
+    // Delayed-resolve fetch so we can observe the in-flight transition.
+    let resolveFetch!: (value: unknown) => void;
+    const fakeFetch = vi.fn(() => new Promise((r) => { resolveFetch = r; }));
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = fakeFetch as unknown as typeof fetch;
+
+    expect(clustersStore._matchInFlight).toBe(false);
+    clustersStore.checkForPatterns('x'.repeat(60));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(clustersStore._matchInFlight).toBe(true);
+
+    resolveFetch({
+      ok: true,
+      status: 200,
+      json: async () => ({ match: null }),
+    });
+    await vi.runAllTimersAsync();
+    expect(clustersStore._matchInFlight).toBe(false);
+  });
+
+  it('captures _matchError="network" on rejection, clears on success (S8)', async () => {
+    const failFetch = vi.fn().mockRejectedValueOnce(new TypeError('network failure'));
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = failFetch as unknown as typeof fetch;
+    clustersStore.checkForPatterns('x'.repeat(60));
+    await vi.advanceTimersByTimeAsync(900);
+    await vi.runAllTimersAsync();
+    expect(clustersStore._matchError).toBe('network');
+
+    mockFetch([{ match: '/clusters/match', response: { match: null } }]);
+    clustersStore.checkForPatterns('y'.repeat(60));
+    await vi.advanceTimersByTimeAsync(900);
+    await vi.runAllTimersAsync();
+    expect(clustersStore._matchError).toBeNull();
+  });
+
+  it('_lastMatchedText is readable after a successful match (S9)', async () => {
+    mockFetch([
+      {
+        match: '/clusters/match',
+        response: {
+          match: {
+            cluster: { id: 'c', label: 'L', domain: 'backend', member_count: 1 },
+            meta_patterns: [{ id: 'mp', pattern_text: 'p', source_count: 1 }],
+            similarity: 0.9,
+            cross_cluster_patterns: [],
+            match_level: 'cluster',
+          },
+        },
+      },
+    ]);
+    clustersStore.checkForPatterns('hello world this is a long enough prompt');
+    await vi.advanceTimersByTimeAsync(900);
+    expect(clustersStore._lastMatchedText).not.toBe('');
+  });
+});
