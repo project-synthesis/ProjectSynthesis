@@ -29,10 +29,8 @@ Based on the audit of the `HeuristicAnalyzer` and its sub-components, here are s
 ## 3. Telemetry and Learning Pipelines
 
 ### Proactive Signal Mining from Haiku
-**Status:** Partial — telemetry shipped, active-learning pipeline pending. `TaskTypeTelemetry` model + migration `2f3b0645e24d` (v0.4.2) record every heuristic-vs-LLM classification event (`raw_prompt`, `task_type`, `domain`, `source`) for drift analysis + A4 tuning. A `signal_adjuster.py` service that consumes telemetry into a live keyword-weight learning loop is still planned (tracked as C2 in ROADMAP "LLM domain classification — remaining optimizations").
-**Optimization (as proposed):** Use the A4 Haiku fallback as an **Active Learning oracle**. Every time Haiku is invoked to resolve an ambiguous prompt (the 15-20% edge cases), pipe that prompt's keywords directly into a high-priority learning queue.
+**Status:** Shipped — v0.4.4. `TaskTypeTelemetry` model + migration `2f3b0645e24d` (v0.4.2) record every heuristic-vs-LLM classification event. `signal_adjuster.py` (v0.4.4) consumes telemetry via warm Phase 4.76, merging high-confidence tokens into `_TASK_TYPE_SIGNALS` at weight 0.5. Closes the active-learning loop — what was C2 Open in `enrichment-consolidation-action-items.md` is now wired end-to-end.
+**Implementation note:** The A4 Haiku fallback fires on ~15-20% of edge-case prompts; each invocation persists a telemetry row, and the warm-path adjuster mines those rows into live signal tweaks every cycle.
 
 ### Semantic Feature Engineering
-**Status:** Partial. First-sentence splitting uses `re.split(r"[.?!]", prompt_lower, maxsplit=1)[0]` as of v0.4.0 (fixes the `?`/`!` terminator bug). A code-block / markdown-table stripping preprocessor ahead of first-sentence extraction is still open.
-**Current State:** The classifier splits on `.?!` to find the "first sentence" and boost its keywords.
-**Remaining work:** Implement a lightweight pre-processor that strips code blocks and markdown tables *before* extracting the first sentence. This prevents a `python` keyword inside a log dump from being falsely weighted as the primary intent of the prompt.
+**Status:** Shipped — v0.4.5 (PR #55). `extract_first_sentence()` in `task_type_classifier.py` tightens the regex from `re.split(r"[.?!]")` to `re.split(r"[.?!](?=\s|$)")` so module-method dots (`asyncio.gather`) no longer truncate the boundary mid-token. Pre-strip of code fences + markdown tables remains a follow-up — but the most acute boundary leak (interior dots in identifier names) is now closed via this regex tightening + the `has_technical_nouns()` interior-token split that decomposes `backend/app/services/...` into its constituent vocabulary tokens.

@@ -19,7 +19,7 @@
 | Hardening | Analyze effort ceiling (`ANALYZE_EFFORT_CEILING='high'`) | **Shipped** (v0.4.2) |
 | Hardening | A4 LLM classification retry wrapping | **Shipped** (v0.4.0) |
 | Hardening | `TaskTypeTelemetry` persistent record | **Shipped** (v0.4.2) |
-| C2 | Heuristic-to-LLM signal-weight adjuster from telemetry | **Open** — see ROADMAP "LLM domain classification — remaining optimizations" |
+| C2 | Heuristic-to-LLM signal-weight adjuster from telemetry | **Shipped** (v0.4.4) — `signal_adjuster.py` consumes `TaskTypeTelemetry`; warm Phase 4.76 merges high-confidence tokens into `_TASK_TYPE_SIGNALS` at weight 0.5 |
 | E1b | Cross-process heuristic-vs-LLM agreement bridge | **Open** (telemetry persisted; HTTP forwarding not yet wired) |
 
 **Test coverage** at v0.3.30 baseline: 2107 backend tests, 1038 frontend tests.

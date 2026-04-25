@@ -1,6 +1,6 @@
 # Sub-Domain Discovery Architecture
 
-_Last reviewed: 2026-04-24. Reflects the fully-organic vocabulary pivot shipped across v0.3.32 → v0.3.38 and the re-evaluation / dissolution lifecycle from v0.3.37._
+_Last reviewed: 2026-04-25. Reflects the fully-organic vocabulary pivot shipped across v0.3.32 → v0.3.38 and the re-evaluation / dissolution lifecycle from v0.3.37. **v0.4.5 (PR #55)**: `enrich_domain_qualifier()` now ALSO runs **post-LLM** in `pipeline_phases.resolve_post_analyze_state` (ordered BEFORE `domain_resolver.resolve()` so the resolver sees the canonical form), so Source 1 captures qualifier syntax even when the LLM analyzer returns a bare primary. Hyphen-style sub-domain syntax from the LLM (`backend-observability`) is normalized to colon syntax (`backend: observability`) by `_normalize_llm_domain` against the live `DomainResolver` registry. Sub-domain labels themselves go through the new shared `normalize_sub_domain_label()` canonicalizer (kebab-case, max 30 chars, word-boundary truncation) — used by both vocab generation and discovery._
 
 How sub-domains are organically discovered in the taxonomy engine.
 

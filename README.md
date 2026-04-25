@@ -237,7 +237,7 @@ cd frontend && npm run build
 | `/api/refine` | POST (SSE) | Run refinement turn |
 | `/api/refine/{id}/versions` | GET | List refinement versions |
 | `/api/refine/{id}/rollback` | POST | Fork from a version |
-| `/api/history` | GET | List past optimizations |
+| `/api/history` | GET | List past optimizations. Each item carries a compact `enrichment` summary (`profile`, `codebase_context`, `strategy_intelligence`, `applied_patterns`, `patterns_injected`, `curated_files`, `repo_relevance_score`) projected from the persisted `context_sources` blob — no second fetch required to see which services activated per row (v0.4.5+, empty for legacy rows) |
 | `/api/optimizations/{id}` | DELETE | Delete a single optimization with DB-cascade on dependents; returns `{deleted, requested, affected_cluster_ids, affected_project_ids}` (v0.4.2+, always available) |
 | `/api/optimizations/delete` | POST | Bulk-delete up to 100 optimizations in one call (body `{ids: list[str], reason?: str}`, 1≤ids≤100, rate-limited 10/min). Emits one `optimization_deleted` SSE event per row + one aggregated `taxonomy_changed` per call. Returns `{deleted, requested, affected_cluster_ids, affected_project_ids}` — compare `requested - deleted` for partial-match UX (v0.4.3+) |
 | `/api/feedback` | POST/GET | Submit/list feedback |
