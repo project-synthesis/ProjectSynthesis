@@ -1742,6 +1742,12 @@ except ImportError:
     pass
 
 try:
+    from app.routers.taxonomy_insights import router as taxonomy_insights_router
+    app.include_router(taxonomy_insights_router)
+except ImportError:
+    pass
+
+try:
     from app.routers.update import router as update_router
     app.include_router(update_router)
 except ImportError:
