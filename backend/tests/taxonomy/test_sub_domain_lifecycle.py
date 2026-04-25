@@ -789,6 +789,215 @@ def _make_engine(mock_provider):
     return engine
 
 
+class TestMultipleSiblingSubDomains:
+    """B6 (2026-04-25): explicit coverage that multiple sub-domains can
+    coexist as siblings under one parent domain.
+
+    Live reference: cycle 2 produced an ``audit`` sub-domain under
+    ``backend``. The user asked to confirm the architecture supports
+    additional siblings (``audit`` + ``embedding`` + ``async`` etc.) —
+    schema-wise it does (uniqueness only on ``(parent_id, label)`` per
+    migration ``e7f8a9b0c1d2``), and the discovery loop iterates over
+    every qualifier above threshold. These tests pin both invariants
+    end-to-end so a future regression in either layer surfaces here.
+    """
+
+    @pytest.mark.asyncio
+    async def test_two_qualifiers_above_threshold_yield_two_siblings(self, db, mock_provider):
+        """Two qualifiers crossing the consistency threshold in the same
+        cycle MUST produce two sub-domain nodes as siblings — not one
+        winner-take-all.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        # Return a normalised vector so vocab quality computation succeeds.
+        mock_embedding.aembed_single = AsyncMock(
+            return_value=np.random.RandomState(7).randn(EMBEDDING_DIM).astype(np.float32),
+        )
+        engine = TaxonomyEngine(embedding_service=mock_embedding, provider=mock_provider)
+
+        # Parent domain — needs ≥2 child clusters for vocab to even fire,
+        # ≥SUB_DOMAIN_QUALIFIER_MIN_MEMBERS optimizations per qualifier
+        # to cross the threshold, and the qualifiers must be present in
+        # ``domain_raw`` so Source 1 of the cascade picks them up.
+        parent = PromptCluster(
+            label="backend", state="domain", domain="backend",
+            color_hex="#7c3aed", member_count=0,
+            cluster_metadata=write_meta(None, source="seed"),
+        )
+        db.add(parent)
+        await db.flush()
+
+        # Two distinct child clusters per qualifier so the
+        # SUB_DOMAIN_MIN_CLUSTER_BREADTH=2 gate passes for both.
+        from app.services.taxonomy._constants import (
+            SUB_DOMAIN_MIN_CLUSTER_BREADTH,
+            SUB_DOMAIN_QUALIFIER_MIN_MEMBERS,
+        )
+        clusters = []
+        for q, n in (("audit", SUB_DOMAIN_MIN_CLUSTER_BREADTH),
+                     ("embedding", SUB_DOMAIN_MIN_CLUSTER_BREADTH)):
+            for i in range(n):
+                cl = PromptCluster(
+                    label=f"{q.title()} Cluster {i}",
+                    state="active", domain="backend",
+                    parent_id=parent.id, color_hex="#abc",
+                    member_count=SUB_DOMAIN_QUALIFIER_MIN_MEMBERS,
+                    centroid_embedding=_random_embedding(hash((q, i)) % 2**31),
+                )
+                db.add(cl)
+                clusters.append((q, cl))
+        await db.flush()
+
+        # Optimizations carrying ``domain_raw="backend: <qualifier>"``.
+        # Need enough per qualifier that BOTH cross the adaptive threshold
+        # ``max(0.40, 0.60 - 0.004 * total_opts)``. With two equally-sized
+        # cohorts each consistency is 0.50, so total_opts must reach the
+        # point where 0.60 - 0.004*N ≤ 0.50 → N ≥ 25. We use 30 per qualifier
+        # (60 total) which gives threshold = max(0.40, 0.60-0.24) = 0.40,
+        # well below the 0.50 consistency each cohort achieves.
+        opts_per_qualifier = 30
+        for q, cl in clusters:
+            for j in range(opts_per_qualifier):
+                db.add(Optimization(
+                    raw_prompt=f"{q} prompt {j}",
+                    domain="backend", domain_raw=f"backend: {q}",
+                    intent_label=f"{q} task {j}", task_type="coding",
+                    cluster_id=cl.id,
+                ))
+        await db.commit()
+
+        async def _fake_vocab(provider, domain_label, cluster_contexts, similarity_matrix, model):
+            return {
+                "audit": ["audit", "verify", "review"],
+                "embedding": ["embed", "vector", "fusion"],
+            }
+
+        with patch(
+            "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
+            _fake_vocab,
+        ):
+            created = await engine._propose_sub_domains(db)
+
+        # BOTH qualifiers must have produced sub-domain nodes.
+        assert "audit" in created, f"audit sub-domain missing — got {created}"
+        assert "embedding" in created, f"embedding sub-domain missing — got {created}"
+
+        # Verify schema persisted both as siblings under the same parent.
+        from sqlalchemy import select
+        rows = await db.execute(
+            select(PromptCluster.label).where(
+                PromptCluster.parent_id == parent.id,
+                PromptCluster.state == "domain",
+            )
+        )
+        sibling_labels = sorted(r[0] for r in rows.all())
+        assert sibling_labels == ["audit", "embedding"], sibling_labels
+
+    @pytest.mark.asyncio
+    async def test_sibling_sub_domains_evaluated_independently(self, db, mock_provider):
+        """``_reevaluate_sub_domains`` iterates per-sibling. A degraded
+        sibling dissolves while a healthy one survives — they share a
+        parent but their lifecycles are independent.
+        """
+        from unittest.mock import AsyncMock
+
+        from app.services.taxonomy._constants import (
+            SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS,
+            SUB_DOMAIN_QUALIFIER_MIN_MEMBERS,
+        )
+
+        engine = _make_engine(mock_provider)
+        engine._embedding.aembed_single = AsyncMock(
+            return_value=np.random.RandomState(11).randn(EMBEDDING_DIM).astype(np.float32),
+        )
+
+        parent = _make_domain("backend")
+        db.add(parent)
+        await db.flush()
+
+        # Healthy sibling: child cluster with optimizations carrying
+        # ``domain_raw="backend: audit"`` — high consistency.
+        old_age = datetime.now(timezone.utc) - timedelta(
+            hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 24,
+        )
+        sub_healthy = _make_domain("audit", parent_id=parent.id)
+        sub_healthy.created_at = old_age
+        # Degraded sibling: child has optimizations whose domain_raw doesn't
+        # carry the sibling's qualifier, so consistency drops below floor.
+        sub_degraded = _make_domain("legacy-tag", parent_id=parent.id)
+        sub_degraded.created_at = old_age
+        db.add_all([sub_healthy, sub_degraded])
+        await db.flush()
+
+        cl_healthy = _make_cluster("Audit Cluster", "backend", sub_healthy.id)
+        cl_degraded = _make_cluster("Drift Cluster", "backend", sub_degraded.id)
+        db.add_all([cl_healthy, cl_degraded])
+        await db.flush()
+
+        for j in range(SUB_DOMAIN_QUALIFIER_MIN_MEMBERS + 2):
+            db.add(Optimization(
+                raw_prompt=f"audit prompt {j}",
+                domain="backend", domain_raw="backend: audit",
+                intent_label=f"audit task {j}", task_type="coding",
+                cluster_id=cl_healthy.id,
+            ))
+        for j in range(SUB_DOMAIN_QUALIFIER_MIN_MEMBERS + 2):
+            db.add(Optimization(
+                raw_prompt=f"unrelated prompt {j}",
+                domain="backend", domain_raw="backend: somethingelse",
+                intent_label=f"unrelated {j}", task_type="coding",
+                cluster_id=cl_degraded.id,
+            ))
+        await db.commit()
+
+        existing = {sub_healthy.label, sub_degraded.label}
+        dissolved = await engine._reevaluate_sub_domains(db, parent, existing)
+
+        assert "legacy-tag" in dissolved, (
+            f"degraded sibling should dissolve — got {dissolved}"
+        )
+        assert "audit" not in dissolved, (
+            f"healthy sibling must NOT dissolve when its sibling does — got {dissolved}"
+        )
+
+        # Healthy sibling node still present + child cluster still parented to it.
+        await db.refresh(sub_healthy)
+        await db.refresh(cl_healthy)
+        assert sub_healthy.state == "domain"
+        assert cl_healthy.parent_id == sub_healthy.id
+
+    @pytest.mark.asyncio
+    async def test_schema_allows_multiple_siblings_under_same_parent(self, db):
+        """Direct schema integrity check: the partial unique index on
+        ``(parent_id, label)`` for ``state='domain'`` rows admits
+        multiple sub-domain rows with the same parent as long as their
+        labels are distinct. Add a third sibling alongside two existing
+        ones and confirm the commit succeeds.
+        """
+        parent = _make_domain("backend")
+        db.add(parent)
+        await db.flush()
+
+        for label in ("audit", "embedding", "concurrency"):
+            sib = _make_domain(label, parent_id=parent.id)
+            db.add(sib)
+        await db.commit()
+
+        from sqlalchemy import select
+        rows = await db.execute(
+            select(PromptCluster.label).where(
+                PromptCluster.parent_id == parent.id,
+                PromptCluster.state == "domain",
+            )
+        )
+        labels = sorted(r[0] for r in rows.all())
+        assert labels == ["audit", "concurrency", "embedding"]
+
+
 class TestSubDomainDissolution:
     """Tests for _reevaluate_sub_domains() — graceful dissolution."""
 
