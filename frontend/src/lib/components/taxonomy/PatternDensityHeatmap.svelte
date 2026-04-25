@@ -14,6 +14,29 @@
   const loading = $derived(observatoryStore.patternDensityLoading);
   const error = $derived(observatoryStore.patternDensityError);
 
+  /**
+   * Mount-time backfill — without this, the panel renders the misleading
+   * "Pattern library is empty" copy until the user clicks a Timeline period
+   * chip (which then debounces a refresh by 1s). Fire once when no data has
+   * been observed yet (`patternDensity === null`), no fetch is in-flight,
+   * and no error is already surfaced. The local `triggered` flag prevents
+   * the effect from re-firing if the gate becomes true again later (e.g.
+   * after a manual reset to `null`); subsequent refreshes go through the
+   * Retry button or `setPeriod()`.
+   */
+  let triggered = false;
+  $effect(() => {
+    if (triggered) return;
+    if (
+      observatoryStore.patternDensity === null
+      && !observatoryStore.patternDensityLoading
+      && observatoryStore.patternDensityError === null
+    ) {
+      triggered = true;
+      void observatoryStore.refreshPatternDensity();
+    }
+  });
+
   // Empirical opacity ceiling: 22% keeps row text readable against the
   // tinted background while still encoding the density signal. Pushed
   // higher (>30%) the foreground hex contrast collapses below WCAG AA

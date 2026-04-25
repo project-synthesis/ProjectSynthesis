@@ -101,6 +101,46 @@ describe('PatternDensityHeatmap', () => {
     expect(screen.getByText(/pattern library is empty/i)).toBeTruthy();
   });
 
+  it('triggers initial fetch on mount when patternDensity is null (W1)', async () => {
+    const refreshSpy = vi
+      .spyOn(observatoryStore, 'refreshPatternDensity')
+      .mockResolvedValue();
+    observatoryStore.patternDensity = null;
+    observatoryStore.patternDensityLoading = false;
+    observatoryStore.patternDensityError = null;
+    render(PatternDensityHeatmap);
+    expect(refreshSpy).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT trigger initial fetch when data already loaded (W1b)', () => {
+    const refreshSpy = vi
+      .spyOn(observatoryStore, 'refreshPatternDensity')
+      .mockResolvedValue();
+    observatoryStore.patternDensity = []; // already loaded (empty)
+    render(PatternDensityHeatmap);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT trigger initial fetch when a fetch is already in-flight (W1c)', () => {
+    const refreshSpy = vi
+      .spyOn(observatoryStore, 'refreshPatternDensity')
+      .mockResolvedValue();
+    observatoryStore.patternDensity = null;
+    observatoryStore.patternDensityLoading = true;
+    render(PatternDensityHeatmap);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT trigger initial fetch when an error already surfaced (W1d)', () => {
+    const refreshSpy = vi
+      .spyOn(observatoryStore, 'refreshPatternDensity')
+      .mockResolvedValue();
+    observatoryStore.patternDensity = null;
+    observatoryStore.patternDensityError = 'fetch-failed';
+    render(PatternDensityHeatmap);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
   it('zero counts render as "0", not "—" (REFACTOR regression)', () => {
     // Schema: cluster_count, meta_pattern_count, global_pattern_count are
     // non-nullable numbers. 0 means "none observed yet" — a meaningful
