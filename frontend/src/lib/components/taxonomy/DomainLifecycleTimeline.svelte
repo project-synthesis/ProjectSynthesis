@@ -18,8 +18,14 @@
   import { observatoryStore } from '$lib/stores/observatory.svelte';
   import { apiFetch } from '$lib/api/client';
   import { pathColor, type ActivityPath } from '$lib/utils/activity-colors';
+  import type { ObservatoryPeriod } from '$lib/api/observatory';
 
   type OpFamily = 'domain' | 'cluster' | 'pattern' | 'readiness';
+
+  // Period chips live in this filter-bar (NOT in TaxonomyObservatory's shell
+  // header) because Readiness is current-state and the asymmetry is owned
+  // by the period-aware panels. See TaxonomyObservatory legend (TO3).
+  const PERIODS: readonly ObservatoryPeriod[] = ['24h', '7d', '30d'];
 
   // 1-to-1 op→family lookup. Each backend op key maps to exactly one family
   // so toggling a chip never produces overlap (e.g. `promote` is pattern-only,
@@ -133,6 +139,18 @@
     <button type="button" class="chip" class:chip--on={activeFamilies.has('readiness')} onclick={() => toggleFamily('readiness')}>readiness</button>
     <span class="filter-sep" aria-hidden="true">·</span>
     <button type="button" class="chip" class:chip--on={errorsOnly} onclick={() => errorsOnly = !errorsOnly}>errors only</button>
+    <span class="filter-spacer" aria-hidden="true"></span>
+    {#each PERIODS as p (p)}
+      <button
+        type="button"
+        class="chip"
+        data-test="period-chip"
+        data-period={p}
+        aria-pressed={observatoryStore.period === p}
+        class:chip--on={observatoryStore.period === p}
+        onclick={() => observatoryStore.setPeriod(p)}
+      >{p}</button>
+    {/each}
   </nav>
 
   {#if visibleEvents.length === 0}
@@ -173,6 +191,7 @@
     flex-shrink: 0;
   }
   .filter-sep { color: var(--color-text-dim); font-size: 10px; }
+  .filter-spacer { flex: 1; }
   .chip {
     height: 18px;
     line-height: 16px;
