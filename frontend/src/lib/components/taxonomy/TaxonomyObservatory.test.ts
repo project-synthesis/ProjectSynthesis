@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/svelte';
 import TaxonomyObservatory from './TaxonomyObservatory.svelte';
+import componentSource from './TaxonomyObservatory.svelte?raw';
 import { observatoryStore } from '$lib/stores/observatory.svelte';
 import { clustersStore } from '$lib/stores/clusters.svelte';
 import { readinessStore } from '$lib/stores/readiness.svelte';
@@ -62,6 +63,33 @@ describe('TaxonomyObservatory', () => {
     const { unmount } = render(TaxonomyObservatory);
     unmount();
     expect(Array.isArray(clustersStore.activityEvents)).toBe(true);
+  });
+
+  /**
+   * Brand-audit lock (TO8): the shell header allows the legend to wrap
+   * onto a second line on narrow widths rather than getting clipped at
+   * the right edge. Plan #5 shipped with `height: 28px` + `align-items:
+   * center` which forced single-line layout and hid the legend on the
+   * 1280px workbench width. `flex-wrap: wrap` + `min-height` (vs fixed
+   * `height`) is the canonical fix.
+   */
+  it('shell header allows legend to wrap on narrow widths (TO8 brand audit)', () => {
+    expect(componentSource).toMatch(/\.observatory-shell-header[\s\S]*?flex-wrap:\s*wrap/);
+    expect(componentSource).toMatch(/\.observatory-shell-header[\s\S]*?min-height:\s*24px/);
+    // Negative assertion: no fixed height that would prevent wrap.
+    expect(componentSource).not.toMatch(/\.observatory-shell-header[\s\S]*?\n\s+height:\s*28px/);
+  });
+
+  /**
+   * Brand-audit lock (TO9): the legend is visually subordinated to the
+   * Syne title via 10px font, dim color, and `flex: 1 1 auto` + `min-width:
+   * 0` so it consumes remaining horizontal space when wide and shrinks
+   * gracefully when narrow.
+   */
+  it('legend is brand-subordinated to title (TO9 brand audit)', () => {
+    expect(componentSource).toMatch(/\.observatory-legend[\s\S]*?font-size:\s*10px/);
+    expect(componentSource).toMatch(/\.observatory-legend[\s\S]*?color:\s*var\(--color-text-dim\)/);
+    expect(componentSource).toMatch(/\.observatory-legend[\s\S]*?min-width:\s*0/);
   });
 
   it('routes domain:select CustomEvent from Aggregate panel to clustersStore.selectCluster (TO7)', () => {
