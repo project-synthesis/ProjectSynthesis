@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { TaxonomyActivityEvent } from '$lib/api/clusters';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { pathColor } from '$lib/utils/activity-colors';
 
   // -- State --
 
@@ -67,12 +68,7 @@
     return 'var(--color-text-dim)';
   }
 
-  function pathColor(path: string): string {
-    if (path === 'hot') return 'var(--color-neon-red)';
-    if (path === 'warm') return 'var(--color-neon-yellow)';
-    if (path === 'cold') return 'var(--color-neon-cyan)';
-    return 'var(--color-text-dim)';
-  }
+  // pathColor — imported from $lib/utils/activity-colors (shared with DomainLifecycleTimeline).
 
   // -- Key metric from context --
 
