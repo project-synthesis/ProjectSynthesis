@@ -122,7 +122,7 @@
       aria-controls="context-panel-body"
       aria-label={isOpen ? 'Collapse pattern context' : 'Expand pattern context'}
     >
-      {isOpen ? '∨' : '∧'}
+      <span class="caret" class:caret--open={isOpen} aria-hidden="true">▸</span>
     </button>
   </header>
   <div
@@ -216,7 +216,7 @@
         disabled={totalSelected === 0}
         onclick={apply}
       >
-        APPLY {totalSelected}
+        APPLY{totalSelected > 0 ? ` ${totalSelected}` : ''}
       </button>
     </footer>
   {/if}
@@ -392,13 +392,32 @@
     border: none;
     color: var(--color-text-dim);
     cursor: pointer;
-    font-family: var(--font-mono);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     transition: color var(--duration-hover) var(--ease-spring);
   }
   .collapse-btn:hover { color: var(--color-text-primary); }
+  .collapse-btn:hover .caret { color: var(--color-text-primary); }
   .collapse-btn:focus-visible {
     outline: 1px solid rgba(0, 229, 255, 0.3);
     outline-offset: 2px;
+  }
+  /* Brand-aligned with .nsh-caret in CollapsibleSectionHeader.svelte:
+     mono glyph + 90deg rotate-on-open with the spring easing. Keeps the
+     ContextPanel chevron motion identical to navigator section toggles. */
+  .caret {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+    width: 8px;
+    display: inline-flex;
+    justify-content: center;
+    transform-origin: center;
+    transition: transform var(--duration-micro) var(--ease-spring);
+  }
+  .caret--open {
+    transform: rotate(90deg);
   }
 
   .panel-header--error {
@@ -412,6 +431,7 @@
     .context-panel,
     .apply-btn,
     .collapse-btn,
+    .caret,
     .panel-body {
       transition-duration: 0.01ms !important;
       animation-duration: 0.01ms !important;

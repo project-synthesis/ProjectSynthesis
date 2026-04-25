@@ -275,6 +275,27 @@ describe('ContextPanel', () => {
       expect(panel.getAttribute('data-collapsed')).toBe('false');
     });
 
+    it('chevron renders ▸ caret with --open modifier when isOpen=true (matches navigator chevron motion)', () => {
+      // Brand contract: collapse caret animates via 90deg rotate transform,
+      // mirroring CollapsibleSectionHeader.svelte (.nsh-caret + .nsh-caret--open).
+      // Source-locked because Svelte's scoped CSS isn't injected at test time.
+      localStorage.setItem('synthesis:context_panel_open', 'true');
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel);
+      const caret = container.querySelector('.caret') as HTMLElement;
+      expect(caret).not.toBeNull();
+      expect(caret.textContent).toBe('▸');
+      expect(caret.classList.contains('caret--open')).toBe(true);
+      // Source-side motion contract.
+      expect(contextPanelSource).toMatch(
+        /\.caret\s*\{[^}]*transition:\s*transform\s+var\(--duration-micro\)\s+var\(--ease-spring\)/,
+      );
+      expect(contextPanelSource).toMatch(
+        /\.caret--open\s*\{[^}]*transform:\s*rotate\(90deg\)/,
+      );
+    });
+
     it('chevron toggle works at narrow viewport (regression: forceCollapsed must not block toggle)', async () => {
       const userEvent = (await import('@testing-library/user-event')).default;
       localStorage.removeItem('synthesis:context_panel_open');
@@ -319,12 +340,12 @@ describe('ContextPanel', () => {
 
   describe('synthesis gating', () => {
     it('hides panel when forgeStore.status === "analyzing" (C19)', () => {
+      // Implementation removes the element via {#if !isSynthesizing}.
+      // Asserted directly against null — no aria-hidden alternative branch.
       clustersStore.suggestion = mockClusterMatch();
-      clustersStore.suggestionVisible = true;
       forgeStore.status = 'analyzing';
       const { container } = render(ContextPanel);
-      const panel = container.querySelector('[data-test="context-panel"]');
-      expect(panel === null || panel.getAttribute('aria-hidden') === 'true').toBe(true);
+      expect(container.querySelector('[data-test="context-panel"]')).toBeNull();
     });
   });
 
