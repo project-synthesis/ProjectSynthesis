@@ -306,4 +306,33 @@ describe('ContextPanel', () => {
       expect(contextPanelSource).toMatch(/transition-duration:\s*0\.01ms/);
     });
   });
+
+  describe('edge cases', () => {
+    it('renders "no match" state when suggestion is null after a fetch attempt (C20)', () => {
+      clustersStore.suggestion = null;
+      clustersStore.suggestionVisible = false;
+      clustersStore._lastMatchedText = 'x'.repeat(60);  // signal "we attempted"
+      render(ContextPanel);
+      expect(screen.queryByText(/no (similar|match)/i)).toBeTruthy();
+    });
+
+    it('in-flight state fades prior match body to 0.5 opacity (C21)', () => {
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      clustersStore._matchInFlight = true;
+      const { container } = render(ContextPanel);
+      const body = container.querySelector('[data-test="panel-body"]') as HTMLElement;
+      // jsdom exposes inline style; assert the attribute string.
+      expect(body.getAttribute('style') || '').toMatch(/opacity:\s*0\.5/);
+    });
+
+    it('network error draws a red-contour class on the header (C22)', () => {
+      clustersStore.suggestion = mockClusterMatch();
+      clustersStore.suggestionVisible = true;
+      clustersStore._matchError = 'network';
+      const { container } = render(ContextPanel);
+      const header = container.querySelector('[data-test="panel-header"]') as HTMLElement;
+      expect(header.classList.contains('panel-header--error')).toBe(true);
+    });
+  });
 });

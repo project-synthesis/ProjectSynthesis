@@ -68,6 +68,14 @@
   // — dropped to keep the gate honest.
   const SYNTHESIS_STATES = new Set(['analyzing', 'optimizing', 'scoring']);
   const isSynthesizing = $derived(SYNTHESIS_STATES.has(forgeStore.status));
+
+  // Edge-case flags from clustersStore (Tier 1):
+  //   inFlight: a match request is awaiting — fade prior body to 0.5 opacity
+  //   errorState: last fetch rejected — draw 1px neon-red contour on header
+  //   attemptedMatch: distinguish "never tried" empty state from "no match"
+  const inFlight = $derived(clustersStore._matchInFlight);
+  const errorState = $derived(clustersStore._matchError !== null);
+  const attemptedMatch = $derived(clustersStore._lastMatchedText !== '');
 </script>
 
 {#if !isSynthesizing}
@@ -80,7 +88,11 @@
   data-test="context-panel"
   data-collapsed={!isOpen}
 >
-  <header class="panel-header">
+  <header
+    class="panel-header"
+    class:panel-header--error={errorState}
+    data-test="panel-header"
+  >
     <span class="panel-title">CONTEXT</span>
     <button
       type="button"
@@ -93,12 +105,22 @@
       {isOpen ? '∨' : '∧'}
     </button>
   </header>
-  <div id="context-panel-body" class="panel-body" hidden={!isOpen}>
+  <div
+    id="context-panel-body"
+    class="panel-body"
+    data-test="panel-body"
+    style="opacity: {inFlight ? 0.5 : 1};"
+    hidden={!isOpen}
+  >
 
   {#if !hasSuggestion}
     <div class="empty-state">
-      <p class="empty-copy">Start typing to see related clusters and patterns.</p>
-      <p class="empty-sub">Waiting for prompt — at least 30 characters.</p>
+      {#if attemptedMatch}
+        <p class="empty-copy">No similar clusters found — the optimizer will treat this prompt standalone.</p>
+      {:else}
+        <p class="empty-copy">Start typing to see related clusters and patterns.</p>
+        <p class="empty-sub">Waiting for prompt — at least 30 characters.</p>
+      {/if}
     </div>
   {:else if suggestion}
     <section class="identity-row" aria-label="Matched cluster">
@@ -354,6 +376,13 @@
   .collapse-btn:focus-visible {
     outline: 1px solid rgba(0, 229, 255, 0.3);
     outline-offset: 2px;
+  }
+
+  .panel-header--error {
+    box-shadow: inset 0 0 0 1px var(--color-neon-red);
+  }
+  .panel-body {
+    transition: opacity var(--duration-hover) var(--ease-spring);
   }
 
   @media (prefers-reduced-motion: reduce) {
