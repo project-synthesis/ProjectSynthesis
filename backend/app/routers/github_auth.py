@@ -1,8 +1,10 @@
 """GitHub OAuth flow — login, callback, me, logout."""
 
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -16,6 +18,46 @@ from app.database import get_db
 from app.models import GitHubToken, LinkedRepo
 from app.services.github_client import GitHubClient
 from app.services.github_service import GitHubService
+
+
+def _safe_github_json(resp: httpx.Response, *, what: str) -> dict[str, Any]:
+    """Defensively parse a GitHub OAuth JSON response.
+
+    GitHub OAuth endpoints occasionally return non-JSON bodies during
+    outages, rate-limiting, or device-code expiry — most commonly an
+    empty body that raises ``JSONDecodeError`` on ``resp.json()``. The
+    unhandled exception bubbles up to ASGI as a 500 with no CORS headers
+    attached, which the browser then surfaces as a misleading
+    ``"blocked by CORS policy"`` error.
+
+    This helper unifies parsing across all four OAuth call sites
+    (`request_device_code`, `poll_device_code`, `auth/login` callback,
+    and `_refresh_access_token`). On parse failure or non-2xx + non-JSON,
+    raises a clean ``HTTPException(502)`` so the response flows through
+    CORS middleware normally and the client sees a proper error.
+    """
+    body = resp.text or ""
+    try:
+        parsed = resp.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning(
+            "GitHub %s returned non-JSON body (status=%s, len=%d): %r",
+            what, resp.status_code, len(body), body[:200],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"GitHub returned an invalid response for {what}. Try again in a few seconds.",
+        ) from exc
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "GitHub %s returned non-object JSON (status=%s, type=%s): %r",
+            what, resp.status_code, type(parsed).__name__, str(parsed)[:200],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"GitHub returned an unexpected response shape for {what}.",
+        )
+    return parsed
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +122,9 @@ async def _refresh_token_if_expired(
                 },
                 headers={"Accept": "application/json"},
             )
-            data = resp.json()
+            data = _safe_github_json(resp, what="token refresh")
+    except HTTPException:
+        return False
     except Exception as exc:
         logger.warning("GitHub token refresh request failed: %s", exc)
         return False
@@ -175,7 +219,7 @@ async def github_callback(
             },
             headers={"Accept": "application/json"},
         )
-        data = resp.json()
+        data = _safe_github_json(resp, what="OAuth token exchange")
 
     access_token = data.get("access_token")
     if not access_token:
@@ -384,7 +428,7 @@ async def request_device_code():
             },
             headers={"Accept": "application/json"},
         )
-        data = resp.json()
+        data = _safe_github_json(resp, what="device code request")
 
     if "user_code" not in data:
         error_desc = data.get("error_description", "Failed to start device flow")
@@ -417,7 +461,7 @@ async def poll_device_code(
             },
             headers={"Accept": "application/json"},
         )
-        data = resp.json()
+        data = _safe_github_json(resp, what="device code poll")
 
     # Still waiting or error
     if "error" in data:

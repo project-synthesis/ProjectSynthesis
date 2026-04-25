@@ -601,6 +601,96 @@ class TestGitHubAuth:
         assert result.scalar_one_or_none() is None
 
 
+class TestGitHubOAuthDefensive:
+    """Regression tests for ``_safe_github_json`` — the defensive parser
+    on the four GitHub OAuth call sites.
+
+    Live reference (2026-04-25): ``/api/github/auth/device/poll`` crashed
+    with ``json.JSONDecodeError`` on a non-JSON response from GitHub, the
+    unhandled 500 bypassed CORS middleware, and the browser surfaced the
+    underlying crash as a misleading ``"blocked by CORS policy"`` error.
+    The helper now turns malformed responses into a clean
+    ``HTTPException(502)`` that flows through CORS normally.
+
+    We exercise the helper directly rather than the four endpoints because
+    the FastAPI test fixture itself uses ``httpx.AsyncClient`` — patching
+    ``httpx.AsyncClient.post`` at the module level intercepts the test's
+    own request to the backend. Direct helper tests are equivalent in
+    coverage (the four call sites differ only in the GitHub URL) and
+    immune to that fixture entanglement.
+    """
+
+    def test_safe_json_decode_error_raises_502(self):
+        """JSONDecodeError on ``resp.json()`` → 502 with explicit message."""
+        import json as _json
+
+        import pytest as _pytest
+        from fastapi import HTTPException
+
+        from app.routers.github_auth import _safe_github_json
+
+        class _R:
+            status_code = 502
+            text = "<!DOCTYPE html><html>GitHub is down</html>"
+            def json(self):
+                raise _json.JSONDecodeError("Expecting value", self.text, 0)
+
+        with _pytest.raises(HTTPException) as exc_info:
+            _safe_github_json(_R(), what="device code poll")
+        assert exc_info.value.status_code == 502
+        assert "GitHub returned an invalid response for device code poll" in exc_info.value.detail
+
+    def test_safe_json_empty_body_raises_502(self):
+        """Empty body (the actual production failure mode) → 502."""
+        import json as _json
+
+        import pytest as _pytest
+        from fastapi import HTTPException
+
+        from app.routers.github_auth import _safe_github_json
+
+        class _R:
+            status_code = 200
+            text = ""
+            def json(self):
+                raise _json.JSONDecodeError("Expecting value", "", 0)
+
+        with _pytest.raises(HTTPException) as exc_info:
+            _safe_github_json(_R(), what="OAuth token exchange")
+        assert exc_info.value.status_code == 502
+
+    def test_safe_json_non_object_response_raises_502(self):
+        """GitHub returning a JSON list / scalar instead of an object → 502."""
+        import pytest as _pytest
+        from fastapi import HTTPException
+
+        from app.routers.github_auth import _safe_github_json
+
+        class _R:
+            status_code = 200
+            text = '"some string"'
+            def json(self):
+                return "some string"  # valid JSON, but not a dict
+
+        with _pytest.raises(HTTPException) as exc_info:
+            _safe_github_json(_R(), what="device code request")
+        assert exc_info.value.status_code == 502
+        assert "unexpected response shape" in exc_info.value.detail
+
+    def test_safe_json_valid_dict_returns_parsed(self):
+        """Happy path — valid JSON dict passes through untouched."""
+        from app.routers.github_auth import _safe_github_json
+
+        class _R:
+            status_code = 200
+            text = '{"device_code": "abc", "user_code": "XYZ-123"}'
+            def json(self):
+                return {"device_code": "abc", "user_code": "XYZ-123"}
+
+        out = _safe_github_json(_R(), what="device code request")
+        assert out == {"device_code": "abc", "user_code": "XYZ-123"}
+
+
 class TestGitHubRepos:
     async def test_list_repos_unauthenticated(self, app_client):
         """repos listing returns 401 without session cookie."""
