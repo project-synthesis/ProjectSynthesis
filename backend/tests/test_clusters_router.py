@@ -958,8 +958,8 @@ class TestClusterActivityHistory:
     @pytest.mark.asyncio
     async def test_activity_history_range_since_only(self, app_client):
         """AH5: since alone defaults until=today UTC."""
-        from unittest.mock import patch
         from datetime import datetime, timezone
+        from unittest.mock import patch
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         mock_logger = MagicMock()
