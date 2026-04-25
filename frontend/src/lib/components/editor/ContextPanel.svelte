@@ -29,6 +29,11 @@
   const metaSelectedCount = $derived(
     metaPatterns.filter((p) => selectedIds.has(p.id)).length,
   );
+
+  const globalPatterns = $derived(suggestion?.cross_cluster_patterns ?? []);
+  const globalSelectedCount = $derived(
+    globalPatterns.filter((p) => selectedIds.has(p.id)).length,
+  );
 </script>
 
 <!-- svelte-ignore a11y_no_redundant_roles -->
@@ -86,6 +91,32 @@
         {/each}
       </ul>
     </section>
+
+    {#if globalPatterns.length > 0}
+      <section class="pattern-section pattern-section--global" data-test="global-section" aria-label="Global patterns">
+        <header class="section-heading">
+          <span class="section-title">GLOBAL</span>
+          <span class="section-count" class:section-count--active={globalSelectedCount > 0}>
+            {globalSelectedCount}/{globalPatterns.length}{globalSelectedCount > 0 ? ' ✔' : ''}
+          </span>
+        </header>
+        <ul class="pattern-list">
+          {#each globalPatterns as p (p.id)}
+            <li class="pattern-row" data-test="pattern-row">
+              <label class="pattern-label">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(p.id)}
+                  onchange={() => toggle(p.id)}
+                  aria-describedby="pattern-{p.id}-text"
+                />
+                <span id="pattern-{p.id}-text" class="pattern-text">{truncate(p.pattern_text, 60)}</span>
+              </label>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
   {/if}
 </aside>
 
@@ -207,5 +238,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .pattern-section--global {
+    border-left: 1px solid var(--color-neon-purple);
   }
 </style>

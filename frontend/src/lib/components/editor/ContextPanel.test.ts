@@ -136,4 +136,37 @@ describe('ContextPanel', () => {
       expect(screen.getByText('2/3 ✔')).toBeTruthy();
     });
   });
+
+  describe('global section', () => {
+    it('renders GLOBAL heading and cross-cluster pattern rows (C7)', () => {
+      clustersStore.suggestion = mockClusterMatch({
+        cross_cluster_patterns: [
+          mockMetaPattern({ id: 'gp1', pattern_text: 'Universal practice A', source_count: 5 }),
+          mockMetaPattern({ id: 'gp2', pattern_text: 'Universal practice B', source_count: 4 }),
+        ],
+      }) as never;
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel);
+      expect(screen.getByText('GLOBAL')).toBeTruthy();
+      const global = container.querySelector('[data-test="global-section"]') as HTMLElement;
+      expect(global.querySelectorAll('input[type="checkbox"]').length).toBe(2);
+    });
+
+    it('global section has neon-purple left border (C8)', () => {
+      clustersStore.suggestion = mockClusterMatch({
+        cross_cluster_patterns: [mockMetaPattern({ id: 'gp1', pattern_text: 'P', source_count: 5 })],
+      }) as never;
+      clustersStore.suggestionVisible = true;
+      const { container } = render(ContextPanel);
+      const global = container.querySelector('[data-test="global-section"]') as HTMLElement;
+      // jsdom does not resolve scoped CSS variables in getComputedStyle and
+      // Svelte's compile-time scoped CSS isn't injected into <style> tags in
+      // the vitest runner — so the brand contract (1px solid neon-purple
+      // border-left) is asserted via the marker class that owns the rule.
+      // The CSS source (pattern-section--global { border-left: 1px solid
+      // var(--color-neon-purple) }) is locked in the component's <style>
+      // block — Task 18's brand-guideline grep catches any drift.
+      expect(global.classList.contains('pattern-section--global')).toBe(true);
+    });
+  });
 });
