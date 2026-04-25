@@ -471,6 +471,17 @@ class DomainSignalLoader:
         (``_enrich_domain_qualifier``) and warm-path Phase 5 Source 2
         (intent_label matching in ``_propose_sub_domains``).
 
+        **Tiebreaker — qualifier-name match.** When multiple qualifier
+        groups tie on hit count, prefer the qualifier whose NAME itself
+        appears as a substring of *text* over one whose name does not.
+        Cycle-3 evidence (2026-04-25): a prompt about OpenTelemetry tracing
+        hit ``embedding`` (1 keyword: ``latency``), ``metrics`` (1 keyword:
+        ``telemetry``), AND ``tracing`` (1 keyword: ``tracing``) — without
+        this tiebreaker, dict insertion order would have promoted
+        ``embedding`` over the semantically-correct ``tracing``. Falling
+        back to insertion order only when names also tie keeps the function
+        deterministic.
+
         Args:
             text: Lowercased text to scan for keywords.
             qualifiers: Mapping of qualifier name → keyword list.
@@ -481,11 +492,18 @@ class DomainSignalLoader:
         """
         best: str | None = None
         best_hits = 0
+        best_name_in_text = False
         for name, keywords in qualifiers.items():
             hits = sum(1 for kw in keywords if kw in text)
-            if hits > best_hits:
+            if hits == 0:
+                continue
+            name_in_text = name in text
+            if hits > best_hits or (
+                hits == best_hits and name_in_text and not best_name_in_text
+            ):
                 best_hits = hits
                 best = name
+                best_name_in_text = name_in_text
         return best, best_hits
 
     def stats(self) -> dict:
