@@ -45,17 +45,48 @@
     forgeStore.appliedPatternIds = Array.from(selectedIds);
     forgeStore.appliedPatternLabel = `${suggestion.cluster.label} (${totalSelected})`;
   }
+
+  const STORAGE_KEY = 'synthesis:context_panel_open';
+
+  let isOpen = $state<boolean>(
+    typeof localStorage !== 'undefined'
+      ? (localStorage.getItem(STORAGE_KEY) ?? 'true') !== 'false'
+      : true,
+  );
+
+  function toggleCollapse() {
+    isOpen = !isOpen;
+    try {
+      localStorage.setItem(STORAGE_KEY, String(isOpen));
+    } catch {
+      /* ignore — private browsing etc. */
+    }
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_redundant_roles -->
 <aside
   class="context-panel"
+  class:context-panel--collapsed={!isOpen}
   role="complementary"
   aria-label="Pattern context"
+  data-test="context-panel"
+  data-collapsed={!isOpen}
 >
   <header class="panel-header">
     <span class="panel-title">CONTEXT</span>
+    <button
+      type="button"
+      class="collapse-btn"
+      onclick={toggleCollapse}
+      aria-expanded={isOpen}
+      aria-controls="context-panel-body"
+      aria-label={isOpen ? 'Collapse pattern context' : 'Expand pattern context'}
+    >
+      {isOpen ? '∨' : '∧'}
+    </button>
   </header>
+  <div id="context-panel-body" class="panel-body" hidden={!isOpen}>
 
   {#if !hasSuggestion}
     <div class="empty-state">
@@ -140,6 +171,7 @@
       </button>
     </footer>
   {/if}
+  </div>
 </aside>
 
 <style>
@@ -294,6 +326,23 @@
     cursor: not-allowed;
   }
   .apply-btn:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
+  }
+
+  .context-panel--collapsed { width: 28px; }
+  .collapse-btn {
+    height: 20px;
+    padding: 0 4px;
+    background: transparent;
+    border: none;
+    color: var(--color-text-dim);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    transition: color var(--duration-hover) var(--ease-spring);
+  }
+  .collapse-btn:hover { color: var(--color-text-primary); }
+  .collapse-btn:focus-visible {
     outline: 1px solid rgba(0, 229, 255, 0.3);
     outline-offset: 2px;
   }
