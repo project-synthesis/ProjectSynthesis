@@ -4,17 +4,20 @@ import { flushSync } from 'svelte';
 import DomainLifecycleTimeline from './DomainLifecycleTimeline.svelte';
 import componentSource from './DomainLifecycleTimeline.svelte?raw';
 import { clustersStore } from '$lib/stores/clusters.svelte';
+import { observatoryStore } from '$lib/stores/observatory.svelte';
 
 describe('DomainLifecycleTimeline', () => {
   beforeEach(() => {
     clustersStore._reset();
+    observatoryStore._reset();
     vi.restoreAllMocks();
-    // The Timeline's mount-time backfill calls `loadActivityForPeriod()`
-    // which would replace `activityEvents` mid-test as the async chain
-    // resolves through user-event microtask flushes. Stub it by default;
-    // the T10/T10b period-wiring tests re-stub explicitly when they need
-    // to assert on the call.
-    vi.spyOn(clustersStore, 'loadActivityForPeriod').mockResolvedValue();
+    // The Timeline's mount-time backfill calls
+    // `observatoryStore.loadTimelineEvents()` which would replace the
+    // historical buffer mid-test as the async chain resolves through
+    // user-event microtask flushes. Stub it by default; the T10/T10b
+    // period-wiring tests re-stub explicitly when they need to assert
+    // on the call.
+    vi.spyOn(observatoryStore, 'loadTimelineEvents').mockResolvedValue();
   });
   afterEach(() => cleanup());
 
@@ -181,17 +184,15 @@ describe('DomainLifecycleTimeline', () => {
     expect(labels).toEqual(labels);  // satisfy noUnusedLocals
   });
 
-  it('Timeline calls loadActivityForPeriod on observatoryStore.period change (T10)', async () => {
-    // Spec: period chips apply to BOTH the Heatmap (via observatoryStore
-    // refresh) and the Timeline (via the JSONL since/until range variant).
-    // The previous build skipped the Timeline backfill — chips were no-op
-    // for this panel — and locked that deviation in T10. The wiring is
-    // now restored: this test asserts the period change triggers the
-    // store method that hydrates `activityEvents` from the JSONL range.
-    const { observatoryStore } = await import('$lib/stores/observatory.svelte');
-    observatoryStore._reset?.();
+  it('Timeline calls observatoryStore.loadTimelineEvents on period change (T10)', async () => {
+    // v0.4.5 separation-of-concerns refactor: period backfill moved
+    // from `clustersStore.loadActivityForPeriod()` (mutated the SSE
+    // ring) to `observatoryStore.loadTimelineEvents()` (writes to its
+    // own buffer). The Timeline subscribes to `observatoryStore.period`
+    // and re-fires `loadTimelineEvents` on every change.
+    observatoryStore._reset();
     const loadSpy = vi
-      .spyOn(clustersStore, 'loadActivityForPeriod')
+      .spyOn(observatoryStore, 'loadTimelineEvents')
       .mockResolvedValue();
     // Seed enough events to skip the initial-mount sparse-only backfill
     // — that path is covered by T10b.
@@ -207,28 +208,75 @@ describe('DomainLifecycleTimeline', () => {
       context: {},
     })) as unknown as typeof clustersStore.activityEvents;
     render(DomainLifecycleTimeline);
-    // Effects run asynchronously after mount — settle them, then clear
-    // the spy so we only assert on the post-setPeriod call.
     flushSync();
     loadSpy.mockClear();
     observatoryStore.setPeriod('24h');
     flushSync();
-    expect(loadSpy).toHaveBeenCalledWith('24h');
+    expect(loadSpy).toHaveBeenCalled();
   });
 
-  it('Timeline backfills initial period on mount when activityEvents sparse (T10b)', async () => {
-    // First mount + sparse ring buffer (< 20 events) hydrates the JSONL
-    // range immediately so the panel never renders the empty-state copy
-    // when there IS history available. Once seeded, subsequent period
-    // chips drive a fresh backfill (T10).
-    const { observatoryStore } = await import('$lib/stores/observatory.svelte');
-    observatoryStore._reset?.();
-    clustersStore.activityEvents = []; // sparse
+  it('Timeline backfills initial period on mount when both buffers sparse (T10b)', async () => {
+    observatoryStore._reset();
+    clustersStore.activityEvents = []; // ring buffer empty
+    // historicalEvents already empty after observatoryStore._reset()
     const loadSpy = vi
-      .spyOn(clustersStore, 'loadActivityForPeriod')
+      .spyOn(observatoryStore, 'loadTimelineEvents')
       .mockResolvedValue();
     render(DomainLifecycleTimeline);
     flushSync();
-    expect(loadSpy).toHaveBeenCalledWith(observatoryStore.period);
+    expect(loadSpy).toHaveBeenCalled();
+  });
+
+  it('Timeline merges live SSE ring + Observatory historical buffer (T11 separation)', async () => {
+    // The Timeline derives `events` from BOTH stores. A live SSE event
+    // (in `clustersStore.activityEvents`) and a historical event (in
+    // `observatoryStore.historicalEvents`) both render. Dedup keys on
+    // `ts|op|decision`; live wins on collision.
+    observatoryStore._reset();
+    clustersStore.activityEvents = [{
+      id: 'live-1',
+      ts: '2026-04-25T12:00:00Z',
+      path: 'hot',
+      op: 'assign',
+      decision: 'merge_into',
+      cluster_id: null,
+      optimization_id: null,
+      duration_ms: null,
+      context: {},
+    }] as unknown as typeof clustersStore.activityEvents;
+    observatoryStore.historicalEvents = [{
+      ts: '2026-04-25T08:00:00Z',
+      path: 'warm',
+      op: 'split',
+      decision: 'spectral_evaluation',
+      cluster_id: null,
+      optimization_id: null,
+      duration_ms: null,
+      context: {},
+    }] as unknown as typeof observatoryStore.historicalEvents;
+    const { container } = render(DomainLifecycleTimeline);
+    const rows = container.querySelectorAll('.timeline-row');
+    expect(rows.length).toBe(2);
+    // Newest first.
+    expect(rows[0].textContent).toContain('assign');
+    expect(rows[1].textContent).toContain('split');
+  });
+
+  it('Timeline does NOT mutate clustersStore.activityEvents on period change (T12 separation guard)', async () => {
+    // The pre-v0.4.5 implementation rewrote `clustersStore.activityEvents`
+    // from a period chip click — silently disturbing the ActivityPanel
+    // terminal feed in the topology view. The split fixed this: period
+    // chips touch `observatoryStore.historicalEvents` only.
+    observatoryStore._reset();
+    vi.spyOn(observatoryStore, 'loadTimelineEvents').mockResolvedValue();
+    const seed = [{ id: 'live-keep', ts: '2026-04-25T12:00:00Z', path: 'hot', op: 'assign', decision: 'merge_into', cluster_id: null, optimization_id: null, duration_ms: null, context: {} }];
+    clustersStore.activityEvents = [...seed] as unknown as typeof clustersStore.activityEvents;
+    render(DomainLifecycleTimeline);
+    flushSync();
+    observatoryStore.setPeriod('24h');
+    flushSync();
+    // SSE ring untouched.
+    expect(clustersStore.activityEvents.length).toBe(1);
+    expect((clustersStore.activityEvents[0] as unknown as { id: string }).id).toBe('live-keep');
   });
 });
