@@ -165,12 +165,19 @@
 </div>
 
 <style>
-  /* Tier 1 — horizontal shell so ContextPanel sits beside the editor groups */
+  /* Tier 1 — horizontal shell so ContextPanel sits beside the editor groups.
+     width: 100% is REQUIRED — the parent .editor-area is a grid cell that
+     does not always stretch its single flex child to fill. Without an
+     explicit width, editor-shell sizes to its content and ContextPanel
+     ends up rendering against the LEFT edge of the cell with editor-groups
+     overflowing. */
   .editor-shell {
     display: flex;
     flex-direction: row;
+    width: 100%;
     height: 100%;
     min-width: 0;
+    overflow: hidden;
   }
 
   .editor-groups {
