@@ -351,4 +351,14 @@
     outline: 1px solid rgba(0, 229, 255, 0.3);
     outline-offset: 2px;
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    .context-panel,
+    .apply-btn,
+    .collapse-btn,
+    .panel-body {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+    }
+  }
 </style>
