@@ -39,7 +39,7 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | Store | Purpose |
 |-------|---------|
 | `forge.svelte.ts` | Pipeline state (prompt, strategy, SSE, result, feedback). `localStorage` persistence via `synthesis:last_trace_id` — refresh restores last optimization. `OptimizationResult.optimized_scores: DimensionScores \| null` (legacy alias, narrowed — drops `as any` casts in favour of typed normalization) |
-| `editor.svelte.ts` | Tab management (prompt/result/diff/mindmap types) |
+| `editor.svelte.ts` | Tab management (`prompt | result | diff | mindmap | observatory`). Two pinned tabs: `PROMPT_TAB_ID` + `OBSERVATORY_TAB_ID` (both `pinned: true`, never closeable; closing a result tab falls back to the Prompt tab). `closeTab()` cleans the result cache when no other tab references it |
 | `github.svelte.ts` | GitHub Device Flow auth + token refresh, `connectionState` getter (7 states: `disconnected | expired | authenticated | linked | indexing | error | ready`), `phaseLabel` + `indexErrorText` for per-phase progress/error surfacing, `reconnect()`, repo picker, file browser (tree/content), branch list, index status, project selection, `uiTab` + `setUiTab()` for GitHubPanel tab persistence (migrated from ad-hoc `$effect` → `synthesis:github_tab` localStorage). `applyPhaseEvent()` consumes `index_phase_changed` SSE; `_handleAuthError()` centralizes 401 detection |
 | `project.svelte.ts` | ADR-005 multi-project scope (F1–F5). `currentProjectId` rune (`null` = "All projects", `<uuid>` = scoped view, persisted to `localStorage['synthesis:current_project_id']` as JSON — survives repo unlink). `projects` list, `currentLabel`, `isLegacyScope` getters. `setCurrent()`, `refresh()` hits `GET /api/projects`. `applyLinkResponse(projectId, candidates)` auto-switches scope on `githubStore.linkRepo()` response and stashes `lastMigrationCandidates` for the F5 post-link migration toast (dismissed via `clearMigrationCandidates()`). F2 project selector subscribes; F3 threads explicit `project_id` into `/api/optimize`, `/api/refine`, `synthesis_optimize`; F4 tree/topology/pattern consumers scope by `currentProjectId`; F5 link/unlink transition toasts via `taxonomy_changed` SSE (`trigger: "project_created"`) and Inspector per-project breakdown |
 | `refinement.svelte.ts` | Refinement sessions: turns, branches, suggestions, score progression |
@@ -48,14 +48,11 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 | `toasts.svelte.ts` | **Distinct from `toast.svelte.ts`** — destructive-action primitive. `toastsStore` singleton exposes `push/dismiss/undo/pause/resume` on a capped stack (max 3). Toasts carry an optional `commit?: () => Promise<void>` hook fired on timer expiry (grace-window pattern — HistoryPanel's row × defers `deleteOptimization` until the 5 s undo window closes). Consumed by `UndoToast.svelte`; not a replacement for `toast.svelte.ts` |
 | `readiness-notifications.svelte.ts` | SSE dispatcher for `domain_readiness_changed`. Maps tier transitions to toast severity via `readiness-tier.ts`. Gated by `preferences.domain_readiness_notifications`; per-row mute toggle stored in `localStorage` |
 | `routing.svelte.ts` | Derived routing state mirroring backend 5-tier priority chain. Reactive tier resolver |
-| `clusters.svelte.ts` | Cluster state: two-path pattern detection (typing 800ms + paste 300ms debounce, 30-char min, AbortController), persistent suggestion (no auto-dismiss), `applySuggestion()` returns `{ids, clusterLabel}`, tree/stats, detail, `StateFilter` + `filteredTaxonomyTree`, async `invalidateClusters()` with ghost-selection guard, seed batch progress. Activity panel state: `activityEvents`, `activityOpen`, `pushActivityEvent()`, `toggleActivity()`, `loadActivity()` with JSONL history fallback. (Template spawning moved to `templates.svelte.ts`) |
+| `clusters.svelte.ts` | Cluster state: two-path pattern detection (typing 800ms + paste 300ms debounce, 30-char min, AbortController), persistent suggestion (no auto-dismiss). `ClusterMatch` carries `cross_cluster_patterns: MetaPatternItem[]` + `match_level: 'family'\|'cluster'` (defensively defaulted on decode for legacy responses). Public transient flags `_matchInFlight`/`_matchError`/`_lastMatchedText` drive `ContextPanel` empty-states. `applySuggestion()` returns `{ids, clusterLabel}`, tree/stats, detail, `StateFilter` + `filteredTaxonomyTree`, async `invalidateClusters()` with ghost-selection guard, seed batch progress. Activity: `activityEvents`, `activityOpen`, `pushActivityEvent()`, `toggleActivity()`, `loadActivity()` (single-day fallback) + `loadActivityForPeriod(period)` (Observatory range fetch — `getClusterActivityHistory({since, until})`, dedupe-merges with ring buffer by `ts\|op\|decision`, newest-first cap 200). (Template spawning moved to `templates.svelte.ts`) |
+| `observatory.svelte.ts` | Pattern-density telemetry for the Taxonomy Observatory. Owns the period selector (`'24h'\|'7d'\|'30d'`, default `'7d'`, persisted to `synthesis:observatory_period`). `setPeriod()` debounces re-fetch by 1 s; `_fetchGeneration` race-guard counter discards stale responses when the user flicks chips while a fetch is in flight. `refreshPatternDensity()` hits `/api/taxonomy/pattern-density?period=...`. `_reset()` test helper |
 | `templates.svelte.ts` | Proven-templates store: `load(projectId)`, `spawn(templateId)` (records a use and returns the spawned optimization), `retire(templateId)`. List grouped by frozen domain in PROVEN TEMPLATES navigator section. Reacts to `taxonomy_changed` SSE (template fork/retire triggers via warm path). Halo ring rendering uses `HIGHLIGHT_COLOR_HEX` from `colors.ts` |
 | `domains.svelte.ts` | API-driven domain palette. `colorFor()` resolves domain→hex with keyword fallback. Invalidated on `domain_created`/`taxonomy_changed` SSE |
-| `passthrough-guide.svelte.ts` | Passthrough workflow guide modal (visibility, "don't show again") |
-| `sampling-guide.svelte.ts` | Sampling tier guide modal state |
-| `internal-guide.svelte.ts` | Internal tier guide modal state |
-| `guide-factory.svelte.ts` | Tier guide factory |
-| `tier-onboarding.svelte.ts` | Tier onboarding flow state |
+| `passthrough-guide.svelte.ts` / `sampling-guide.svelte.ts` / `internal-guide.svelte.ts` / `guide-factory.svelte.ts` / `tier-onboarding.svelte.ts` | Tier-specific onboarding guide modals + factory |
 | `pattern-graph-guide.svelte.ts` | Pattern graph keyboard shortcuts/interaction hints modal |
 | `update.svelte.ts` | Auto-update state: available version, changelog, dialog, restart progress, health polling. SSE-driven via `update_available`/`update_complete` events. `localStorage` persistence for detached HEAD warning dismissal |
 | `sse-health.svelte.ts` | SSE connection health: owns EventSource lifecycle, latency tracking (rolling 100-event window, p50/p95/p99), 3-state degradation detection (healthy/degraded/disconnected), exponential backoff reconnection (1s-16s cap, 10 attempts, ±20% jitter), 90s staleness detection. StatusBar indicator reads `connectionState` and `tooltipText` |
@@ -69,44 +66,46 @@ Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryIte
 
 ```
 src/lib/components/
-  layout/       # ActivityBar (sliding tab indicator), Navigator (182-line shell
-                # delegating to 8 focused panels: StrategiesPanel, HistoryPanel
-                # [row × grace-window delete via toastsStore; multi-select +
-                # file-manager keyboard grammar — Ctrl/Cmd+Click auto-seed,
-                # Shift+Click range, Ctrl+A, Esc, Delete/Backspace; bulk 404 fallback],
-                # GitHubPanel, SettingsPanel, ClusterRow, DomainGroup,
-                # StateFilterTabs, TemplatesSection — all Navigator sidebar logic
-                # lives in these panel files), ClusterNavigator (reads
-                # templatesStore, renders PROVEN TEMPLATES section grouped by
-                # frozen domain), EditorGroups, Inspector (phase-dot indicator;
-                # Templates collapsible section; delegates to ClusterPatternsSection
-                # [meta-patterns + 5 context-aware empty states],
-                # ClusterTemplatesSection [cluster-scoped templates],
-                # TaxonomyHealthPanel [idle Q_health/coherence/separation +
-                # sparkline] — all three Inspector sections co-located in
-                # layout/, not a subfolder), StatusBar
-  editor/       # PromptEdit, ForgeArtifact (ENRICHMENT panel renders analyzer
-                # telemetry — signal source tag [bootstrap/dynamic], TASK-TYPE
-                # SCORES distribution, CONTEXT INJECTION counts, DOMAIN SIGNALS
-                # + RETRIEVAL headings, per-layer skip-reason tags; guards
-                # all-zero score vectors; handles legacy {label: score}
-                # domain_signals shape), PatternSuggestion, PassthroughView
-  taxonomy/     # SemanticTopology, TopologyControls (diegetic UI — auto-hide controls,
-                # right-edge hover zone, Q key metrics, inline hint card),
-                # TopologyRenderer (growable halo pool around clusters with
-                # template_count > 0 — halos inherit domain color),
-                # TopologyData (state filter graph dimming, surfaces `template_count` on SceneNode),
-                # TopologyInteraction, TopologyLabels, TopologyWorker (5-force simulation),
-                # ActivityPanel (mission control terminal — severity-driven rows, path
-                # accent rails, auto-hide cluster links, expandable context cards;
-                # recognizes `readiness/*` + `vocab_generated_enriched` ops),
-                # DomainReadinessPanel, DomainStabilityMeter, SubDomainEmergenceList,
-                # DomainReadinessSparkline (hourly-bucketed time-series, fetched from
-                #  /api/domains/{id}/readiness/history)
-                # (readiness surface: 1px-contour gauges, chromatic tier encoding,
-                #  per-domain rings overlaid on SemanticTopology via readiness-tier.ts,
-                #  `role="meter"` ARIA, zero-glow per brand spec),
-                # SeedModal (batch seeding modal — agent selector, progress bar, result card)
+  layout/       # ActivityBar (sliding tab indicator), Navigator (~182-line shell
+                # delegating to 8 panels: StrategiesPanel, HistoryPanel [row ×
+                # grace-window delete; multi-select keyboard grammar — Ctrl/Cmd+Click
+                # auto-seed, Shift+Click range, Ctrl+A, Esc, Delete/Backspace;
+                # bulk 404 fallback], GitHubPanel, SettingsPanel, ClusterRow,
+                # DomainGroup, StateFilterTabs, TemplatesSection), ClusterNavigator
+                # (reads templatesStore, renders PROVEN TEMPLATES grouped by domain),
+                # EditorGroups (mounts ContextPanel beside the prompt editor + the
+                # pinned Observatory tab via the editor TabType), Inspector
+                # (phase-dot + Templates section + ClusterPatternsSection +
+                # ClusterTemplatesSection + TaxonomyHealthPanel co-located here),
+                # StatusBar
+  editor/       # PromptEdit, ForgeArtifact (ENRICHMENT renders analyzer telemetry —
+                # signal source [bootstrap/dynamic], TASK-TYPE SCORES, CONTEXT
+                # INJECTION counts, DOMAIN SIGNALS + RETRIEVAL headings, per-layer
+                # skip-reason tags; guards all-zero vectors), ContextPanel (ADR-007
+                # Tier 1 — persistent sidebar mounted by EditorGroups; cluster
+                # identity row + meta-patterns checkboxes + neon-purple-bordered
+                # GLOBAL section; APPLY → forgeStore.appliedPatternIds; mount-gated
+                # to prompt tab, hidden during synthesis; <1400px → 28px rail;
+                # localStorage-persisted collapse state), PassthroughView
+  taxonomy/     # SemanticTopology + TopologyControls/Renderer/Data/Interaction/Labels/Worker
+                # (5-force sim, halo pool around clusters with template_count > 0,
+                # state filter dimming), ActivityPanel (severity rows + path accent
+                # rails + expandable context cards; recognizes readiness/* + vocab
+                # ops), DomainReadinessPanel + DomainStabilityMeter + SubDomainEmergenceList
+                # + DomainReadinessSparkline (hourly-bucket history; per-domain rings
+                # overlaid on topology; `role="meter"`, zero-glow), SeedModal,
+                # TaxonomyObservatory (v0.4.4 — three-panel shell on the pinned
+                # Observatory tab; legend explains period chip asymmetry; routes
+                # domain:select → clustersStore.selectCluster()): DomainLifecycleTimeline
+                # (reverse-chrono SSE-live + JSONL backfill via
+                # clustersStore.loadActivityForPeriod() driven by observatoryStore.period;
+                # path/op-family/errors chips; pathColor() shared with ActivityPanel via
+                # utils/activity-colors.ts), DomainReadinessAggregate (auto-fill card
+                # grid composing existing meter+emergence per domain; 6px chromatic
+                # dot; sorted critical→guarded→healthy; click dispatches domain:select),
+                # PatternDensityHeatmap (read-only grid; opacity-scaled tint with
+                # HEAT_MAX_PCT=14 mixed INTO bg-card; hover 1px inset cyan + use:tooltip
+                # with absolute counts + period_end UTC; mount-time backfill)
   refinement/   # RefinementTimeline, RefinementTurnCard, SuggestionChips,
                 # BranchSwitcher, ScoreSparkline, RefinementInput
   shared/       # CommandPalette, CollapsibleSectionHeader (whole-bar/split modes,

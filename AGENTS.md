@@ -15,7 +15,7 @@ Universal guidance for AI coding agents (Cursor, Copilot, Windsurf, Gemini CLI, 
 
 ## MCP tools
 
-13 tools available at `http://127.0.0.1:8001/mcp` (all use `structured_output=True`):
+14 tools available at `http://127.0.0.1:8001/mcp` (all use `structured_output=True`):
 
 ### Core pipeline
 
@@ -25,6 +25,7 @@ Universal guidance for AI coding agents (Cursor, Copilot, Windsurf, Gemini CLI, 
 | `synthesis_analyze` | Quality assessment without optimization — task type, weaknesses, baseline scores, strategy recommendation |
 | `synthesis_prepare_optimization` | Your own LLM should do the optimization — server assembles context + strategy + rubric into a single prompt |
 | `synthesis_save_result` | After your LLM processes the prepared prompt — server applies hybrid scoring (z-score + heuristic blending) and persists |
+| `synthesis_delete` | Delete a single optimization by id with cascade on dependent rows + `optimization_deleted` SSE emission. Unknown id raises `ValueError` instead of a silent no-op |
 
 ### Workflow
 
@@ -87,7 +88,7 @@ All prompts are in `prompts/`. Edit any file and changes take effect immediately
 - **Pipeline**: 3 phases (analyze → optimize → score), models configurable per phase via preferences
 - **Scoring**: Hybrid — LLM scores blended with model-independent heuristics + z-score normalization
 - **Providers**: Claude CLI (Claude Code subscription) or Anthropic API (auto-detected at startup)
-- **MCP server**: Standalone on port 8001, 13 tools with structured output
+- **MCP server**: Standalone on port 8001, 14 tools with structured output
 - **Routing**: 5-tier priority chain — force_passthrough > force_sampling > internal > auto_sampling > passthrough
 
 ## Key files
@@ -103,7 +104,7 @@ All prompts are in `prompts/`. Edit any file and changes take effect immediately
 | `backend/app/services/routing.py` | 5-tier routing engine (provider, sampling, passthrough) |
 | `backend/app/services/context_enrichment.py` | Unified context enrichment for all tiers |
 | `backend/app/services/file_watcher.py` | Real-time strategy file watching (watchfiles) |
-| `backend/app/mcp_server.py` | MCP server with 13 tools |
+| `backend/app/mcp_server.py` | MCP server with 14 tools |
 | `backend/app/config.py` | All configuration |
 | `backend/app/providers/detector.py` | LLM provider auto-detection |
 | `prompts/manifest.json` | Template variable specs |
