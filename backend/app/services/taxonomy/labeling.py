@@ -260,9 +260,17 @@ async def generate_qualifier_vocabulary(
             output_format=_QualifierVocabulary,
         )
 
+        from app.utils.text_cleanup import normalize_sub_domain_label
+
         vocab: dict[str, list[str]] = {}
         for group in result.groups:
-            name = group.name.strip().lower().replace(" ", "-")[:20]
+            # Use the shared canonicalizer so vocab group names follow the
+            # same rule as eventual sub-domain labels (no underscore/space
+            # drift, word-boundary truncation, no mid-word slice). Limit
+            # raised from 20 → 30 to align with engine.py:_propose_sub_domains
+            # — short names like "tracing" still fit, longer ones like
+            # "pattern-instrumentation" no longer truncate mid-word.
+            name = normalize_sub_domain_label(group.name)
             keywords = [kw.strip().lower() for kw in group.keywords if kw.strip()]
             if name and len(keywords) >= 3:
                 vocab[name] = keywords

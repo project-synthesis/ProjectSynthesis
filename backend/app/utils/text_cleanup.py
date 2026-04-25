@@ -360,6 +360,85 @@ def sanitize_optimization_result(
     return cleaned_prompt, changes_summary
 
 
+def normalize_sub_domain_label(raw: str, max_len: int = 30) -> str:
+    """Canonicalize a qualifier name into a sub-domain label.
+
+    Single source of truth for sub-domain naming. Used by both:
+
+      * ``labeling.generate_qualifier_vocabulary`` — when Haiku returns
+        a freshly-named qualifier group, we normalize before storing
+        in ``cluster_metadata["generated_qualifiers"]``.
+      * ``engine._propose_sub_domains`` — when a qualifier crosses the
+        emergence threshold and becomes a ``state="domain"`` row.
+
+    Both stages running the same rule guarantees the format is coherent:
+    a 1-word qualifier ends up the same regardless of which pipeline
+    produced it.
+
+    Rules (applied in order):
+
+      1. **Lowercase + strip** outer whitespace.
+      2. **Unify separators**: any whitespace OR underscore run becomes
+         a single hyphen. (Hardens against Haiku quirks like
+         ``"embedding_health"`` and against operator-typed compound
+         names with spaces.)
+      3. **Collapse multiple hyphens** to a single hyphen — guards
+         against double-conversion artifacts.
+      4. **Strip leading/trailing hyphens** — a name like ``"-audit-"``
+         becomes ``"audit"``.
+      5. **Word-boundary truncation** when the result exceeds
+         ``max_len``: cut at the last hyphen at-or-below ``max_len``
+         (so ``"pattern-instrumentation"`` does NOT become
+         ``"pattern-instrumentat"`` mid-word). Only honour the
+         hyphen if it leaves at least half of ``max_len`` worth of
+         label — otherwise hard-truncate (a single 35-char word
+         can't cleanly split, so cut at the limit and accept the
+         visual cost).
+
+    Args:
+        raw: The free-form qualifier string from Haiku (or anywhere
+            else). Empty input → empty output.
+        max_len: Hard upper bound on label length. Defaults to 30 to
+            match the engine's pre-existing ``[:30]`` slice.
+
+    Returns:
+        Canonical kebab-case sub-domain label, or ``""`` if input was
+        empty / all separators.
+
+    Examples::
+
+        normalize_sub_domain_label("audit")                    → "audit"
+        normalize_sub_domain_label("Embedding Health")         → "embedding-health"
+        normalize_sub_domain_label("embedding_health")         → "embedding-health"
+        normalize_sub_domain_label("  embedding--health  ")    → "embedding-health"
+        normalize_sub_domain_label("pattern instrumentation")  → "pattern-instrumentation"
+        normalize_sub_domain_label("async-session-management-pool-extra") → "async-session-management"
+        normalize_sub_domain_label("loooongmonowordlongerthan30chars")    → "loooongmonowordlongerthan30ch"  # hard truncate
+        normalize_sub_domain_label("---")                      → ""
+        normalize_sub_domain_label("")                         → ""
+    """
+    if not raw:
+        return ""
+    s = raw.strip().lower()
+    # Step 2: unify whitespace and underscores to hyphens.
+    s = re.sub(r"[\s_]+", "-", s)
+    # Step 3: collapse multiple hyphens.
+    s = re.sub(r"-+", "-", s)
+    # Step 4: strip leading/trailing hyphens.
+    s = s.strip("-")
+    if not s:
+        return ""
+    if len(s) <= max_len:
+        return s
+    # Step 5: word-boundary truncation.
+    head = s[:max_len]
+    last_hyphen = head.rfind("-")
+    if last_hyphen >= max_len // 2:
+        return head[:last_hyphen].rstrip("-")
+    # Single oversized word — hard truncate, strip trailing hyphen if any.
+    return head.rstrip("-")
+
+
 def parse_domain(raw: str | None) -> tuple[str, str | None]:
     """Parse a domain string into (primary, qualifier).
 
