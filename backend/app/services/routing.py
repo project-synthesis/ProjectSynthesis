@@ -574,12 +574,33 @@ class RoutingManager:
         Clears both ``sampling_capable`` and ``mcp_connected`` since the
         session no longer exists.  Idempotent — multiple 400/404 responses
         in quick succession won't generate duplicate events.
+
+        Issue-2/3 follow-up: cancels any in-flight deferred-disconnect task
+        and clears the ``_pre_disconnect_sampling`` snapshot so a 400/404
+        landing inside a debounce window does not produce double events
+        (deferred disconnect + session_invalidated) for one logical
+        disconnect.  The session-invalidated broadcast supersedes the
+        pending one.
         """
-        if self._state.sampling_capable is None and not self._state.mcp_connected:
+        # Idempotency early-return: skip duplicate work UNLESS a deferred
+        # disconnect is in flight.  In that case the state already reads
+        # "fully disconnected" (set by ``on_mcp_disconnect``), but the
+        # broadcast hasn't fired yet — we still need to cancel the
+        # pending task and emit ``session_invalidated`` instead.
+        if (
+            self._state.sampling_capable is None
+            and not self._state.mcp_connected
+            and self._pending_disconnect_task is None
+        ):
             return  # Already invalidated — avoid duplicate events
         old_sampling = self._state.sampling_capable
         old_connected = self._state.mcp_connected
         self._update_state(sampling_capable=None, mcp_connected=False)
+        if self._pending_disconnect_task is not None:
+            self._pending_disconnect_task.cancel()
+            self._pending_disconnect_task = None
+            self._disconnect_at = None
+            self._pre_disconnect_sampling = None
         # Delete session file — same rationale as on_mcp_disconnect.
         if self._session_file:
             self._session_file.delete()

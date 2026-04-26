@@ -3415,24 +3415,41 @@ class TaxonomyEngine:
         from sklearn.feature_extraction.text import TfidfVectorizer
 
         if cluster.state == "domain":
-            # Aggregate across descendants (children with parent_id pointing
-            # to this domain node, in active or mature lifecycle states).
-            # Sub-domain children are excluded — they are evaluated in
-            # their own pass — but the active/mature clusters parented
-            # *under* a sub-domain still reach this domain via the parent
-            # chain when the sub-domain itself is the immediate parent
-            # of those clusters.  For now the simple one-hop query
-            # captures all the volume in production (no nested sub-
-            # sub-domains exist).
-            result = await db.execute(
-                select(Optimization.raw_prompt)
-                .join(
-                    PromptCluster,
-                    PromptCluster.id == Optimization.cluster_id,
+            # Aggregate across ALL active/mature descendants — direct
+            # children AND clusters parented under sub-domains (which
+            # carry ``state="domain"`` themselves).  A two-pass walk
+            # collects descendant cluster ids (one query per tier),
+            # then a single ``raw_prompt`` query joins on those ids.
+            # SQLite via aiosqlite has limited recursive-CTE ergonomics
+            # in SQLAlchemy 2.0 (especially with mapped classes), so
+            # the explicit two-pass walk is more portable than a
+            # ``WITH RECURSIVE`` CTE — and the depth is bounded at 2
+            # in production today (sub-sub-domains are not created by
+            # any code path).  The walk is iterative so deeper trees
+            # are still correct without recursion-limit risk.
+            descendant_ids: set[str] = set()
+            frontier: set[str] = {cluster.id}
+            for _depth in range(8):  # paranoia: cap at 8 hops
+                if not frontier:
+                    break
+                child_q = await db.execute(
+                    select(PromptCluster.id, PromptCluster.state).where(
+                        PromptCluster.parent_id.in_(frontier),
+                    )
                 )
-                .where(
-                    PromptCluster.parent_id == cluster.id,
-                    PromptCluster.state.in_(("active", "mature")),
+                next_frontier: set[str] = set()
+                for cid, cstate in child_q.all():
+                    if cstate in ("active", "mature"):
+                        descendant_ids.add(cid)
+                    elif cstate == "domain":
+                        # Sub-domain node — recurse to its children.
+                        next_frontier.add(cid)
+                frontier = next_frontier
+            if not descendant_ids:
+                return []
+            result = await db.execute(
+                select(Optimization.raw_prompt).where(
+                    Optimization.cluster_id.in_(descendant_ids),
                 )
             )
         else:

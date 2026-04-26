@@ -702,3 +702,41 @@ CROSS_CLUSTER_MIN_SOURCE_COUNT = 2     # min global_source_count to qualify
 CROSS_CLUSTER_MAX_PATTERNS = 5         # max cross-cluster patterns per injection
 CROSS_CLUSTER_RELEVANCE_FLOOR = 0.35   # min composite relevance score
 CROSS_CLUSTER_SIMILARITY_THRESHOLD = 0.82  # cosine threshold for pattern dedup
+
+
+# ---------------------------------------------------------------------------
+# B5 / B5+ writing-about-code path (v0.4.7)
+# ---------------------------------------------------------------------------
+# Single source of truth for the writing-lead-verb + prose-output cue
+# vocabularies consumed by both ``pipeline_phases.resolve_post_analyze_state``
+# (post-LLM task-type lock) and ``context_enrichment.enrich`` (codebase trim
+# trigger).  Pre-extraction the two layers each carried their own copy and
+# code-review flagged the drift risk — adding a verb in one place silently
+# diverged the lock from the trim.  The lock and the trim must agree on
+# exactly the same set of prompts.
+#
+# ``AMBIGUOUS_WRITING_LEAD_VERBS`` is the subset of ``WRITING_LEAD_VERBS``
+# whose leads can also introduce a coding ask ("write a function" → coding).
+# When one of these leads, downstream callers require an additional
+# ``PROSE_OUTPUT_CUES`` hit in the first sentence to lock the task_type
+# to writing.  Other verbs (draft / compose / author / summarize / etc.)
+# are unambiguously prose and lock without an extra cue.
+WRITING_LEAD_VERBS: frozenset[str] = frozenset({
+    "write", "draft", "compose", "author", "summarize",
+    "describe", "document", "outline", "narrate",
+})
+AMBIGUOUS_WRITING_LEAD_VERBS: frozenset[str] = frozenset({"write"})
+PROSE_OUTPUT_CUES: frozenset[str] = frozenset({
+    "markdown", "docs", "doc", "paragraph", "paragraphs", "page",
+    "notes", "style", "release", "blog", "readme", "guide",
+    "reference", "changelog", "section", "summary", "post",
+})
+
+# B5+ codebase-context cap for writing-about-code prompts.  Full curated
+# retrieval (80K) tempted the optimizer to fish plausible-but-wrong
+# details out of related-but-irrelevant code; 15K is enough to verify
+# identifier references without diluting accuracy.  Live regression:
+# cycle-10 CHANGELOG hallucinated ``taxonomy_activity`` (vs the actual
+# ``taxonomy_changed``) at 80K and lost 0.35 points on faithfulness vs
+# the same prompt without codebase context.
+WRITING_CODE_CONTEXT_CAP_CHARS = 15_000

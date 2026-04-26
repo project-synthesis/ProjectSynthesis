@@ -33,6 +33,11 @@ from app.services.divergence_detector import (
     detect_divergences,
 )
 from app.services.heuristic_analyzer import HeuristicAnalysis, HeuristicAnalyzer
+from app.services.pipeline_constants import (
+    PROSE_OUTPUT_CUES,
+    WRITING_CODE_CONTEXT_CAP_CHARS,
+    WRITING_LEAD_VERBS,
+)
 from app.services.repo_relevance import (
     compute_repo_relevance,
     extract_domain_vocab,
@@ -59,24 +64,9 @@ PROFILE_COLD_START = "cold_start"
 
 _COLD_START_THRESHOLD = 10  # optimization count below which cold-start profile activates
 
-# B5+ writing-about-code path (v0.4.7). Module-level so the constants are not
-# re-allocated per ``enrich()`` call and so ruff N806 is satisfied.
-_LEAD_VERBS_WRITING: frozenset[str] = frozenset({
-    "write", "draft", "compose", "author", "summarize",
-    "describe", "document", "outline", "narrate",
-})
-_PROSE_OUTPUT_CUES: frozenset[str] = frozenset({
-    "markdown", "docs", "doc", "paragraph", "paragraphs", "page",
-    "notes", "style", "release", "blog", "readme", "guide",
-    "reference", "changelog", "section", "summary", "post",
-})
-# Codebase-context cap for writing-about-code prompts. Full curated retrieval
-# (80K) tempted the optimizer to fish plausible-but-wrong details out of
-# related-but-irrelevant code; 15K is enough to verify identifier references
-# without diluting accuracy. Live regression: cycle-10 CHANGELOG hallucinated
-# ``taxonomy_activity`` (vs the actual ``taxonomy_changed``) at 80K and lost
-# 0.35 points on faithfulness vs the same prompt without codebase context.
-WRITING_CODE_CONTEXT_CAP_CHARS = 15_000
+# B5+ writing-about-code path vocab is shared with ``pipeline_phases`` via
+# ``pipeline_constants`` — the post-LLM task-type lock and the codebase trim
+# must agree on the same set of prompts.
 # I-6: if meta_patterns exist from prior seeding/import, the pattern tier is
 # warm enough to unlock strategy intelligence + pattern injection even on a
 # freshly-reset optimization table. Threshold is deliberately permissive —
@@ -623,13 +613,13 @@ class ContextEnrichmentService:
         _lead_verb_writing = False
         if raw_prompt.strip():
             _first_word = raw_prompt.strip().split()[0].lower().strip(".,;:!?")
-            if _first_word in _LEAD_VERBS_WRITING:
+            if _first_word in WRITING_LEAD_VERBS:
                 if _first_word == "write":
                     _first_sentence_lc = (
                         raw_prompt.split(".")[0] if "." in raw_prompt else raw_prompt
                     ).lower()
                     _lead_verb_writing = any(
-                        cue in _first_sentence_lc for cue in _PROSE_OUTPUT_CUES
+                        cue in _first_sentence_lc for cue in PROSE_OUTPUT_CUES
                     )
                 else:
                     _lead_verb_writing = True

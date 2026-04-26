@@ -669,3 +669,53 @@ async def test_extract_domain_keywords_empty_corpus_returns_empty(
         provider_resolver=lambda: None,
     )
     assert await engine._extract_domain_keywords(db, backend) == []
+
+
+@pytest.mark.asyncio
+async def test_extract_domain_keywords_walks_sub_domain_descendants(
+    db, mock_embedding,
+):
+    """Two-hop reachability: clusters parented under a sub-domain still
+    reach the parent domain's TF-IDF aggregation.  The previous one-hop
+    join silently dropped them — pinpointed in code-review SEV-MINOR.
+    """
+    backend = PromptCluster(
+        label="backend", state="domain", domain="backend",
+        persistence=1.0, color_hex="#aa55ff",
+    )
+    db.add(backend)
+    await db.flush()
+
+    audit_sub = PromptCluster(
+        label="audit", state="domain", domain="backend",
+        parent_id=backend.id, persistence=1.0, color_hex="#aa55ff",
+    )
+    db.add(audit_sub)
+    await db.flush()
+
+    nested = PromptCluster(
+        label="nested-cluster", state="active", domain="backend",
+        parent_id=audit_sub.id, member_count=2, coherence=0.8,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(nested)
+    await db.flush()
+
+    for i in range(2):
+        db.add(Optimization(
+            raw_prompt=f"audit the deadlock lifecycle in service {i}",
+            domain="backend", cluster_id=nested.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    keywords = await engine._extract_domain_keywords(db, backend, top_k=10)
+    assert keywords, (
+        "two-hop descendants must reach the domain — the previous one-hop "
+        "join would have returned [] here"
+    )
+    kw_strings = {kw.lower() for kw, _ in keywords}
+    assert "audit" in kw_strings or "deadlock" in kw_strings or "lifecycle" in kw_strings
