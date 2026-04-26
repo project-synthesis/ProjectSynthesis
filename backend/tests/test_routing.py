@@ -452,6 +452,41 @@ class TestDisconnectDebounce:
         finally:
             _routing.DISCONNECT_DEBOUNCE_SECONDS = original
 
+    @pytest.mark.asyncio
+    async def test_session_invalidated_during_debounce_cancels_pending(
+        self, tmp_path: Path,
+    ) -> None:
+        """Issue-3 follow-up: a 400/404 landing inside the debounce window
+        must cancel the pending deferred-broadcast and clear the snapshot
+        so subscribers see exactly ONE event (session_invalidated), not
+        TWO (deferred mcp_disconnect + session_invalidated).
+        """
+        eb = EventBus()
+        mgr = RoutingManager(event_bus=eb, data_dir=tmp_path)
+        mgr.on_mcp_initialize(sampling_capable=True)
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        eb._subscribers.add(queue)
+
+        mgr.on_mcp_disconnect()
+        assert mgr._pending_disconnect_task is not None
+        assert mgr._pre_disconnect_sampling is True
+
+        mgr.on_session_invalidated()
+        await asyncio.sleep(0)
+
+        assert mgr._pending_disconnect_task is None
+        assert mgr._pre_disconnect_sampling is None
+
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+        triggers = [e["data"]["trigger"] for e in events]
+        assert triggers.count("mcp_disconnect") == 0, (
+            "deferred disconnect must be suppressed by session invalidation"
+        )
+        assert "session_invalidated" in triggers
+
 
 class TestManagerActivity:
     def test_activity_updates_timestamp(self, manager: RoutingManager) -> None:

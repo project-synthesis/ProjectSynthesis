@@ -252,9 +252,18 @@ async def generate_qualifier_vocabulary(
                 matrix_lines.append(f"  C{i+1}↔C{j+1}: {sim:.2f}{hint}")
         matrix_block = '\n'.join(matrix_lines)
 
-    # Render TF-IDF orphan terms — keep only ones that don't appear as
-    # substrings in any existing vocab group name (those are the "latent
-    # themes" the cascade is recording via source 3 but no group covers).
+    # Render TF-IDF orphan terms — keep only ones that don't already
+    # match an existing vocab group name (those are the "latent themes"
+    # the cascade is recording via source 3 but no group covers).
+    #
+    # The match rule is word-boundary, NOT generic substring.  An earlier
+    # bidirectional ``kw_l in g or g in kw_l`` swallowed any short orphan
+    # that happened to be a substring of any existing group — e.g. the
+    # orphan ``audit`` would be filtered the moment Haiku names a group
+    # ``audit-trail``, which is the very class of single-word themes
+    # this feature was built to surface.  Word-boundary match (equality,
+    # prefix-with-hyphen, suffix-with-hyphen) preserves the orphan
+    # signal while still suppressing genuine duplicates.
     orphan_block = ""
     if domain_signal_keywords:
         existing_lower = [g.lower() for g in (existing_vocab_groups or [])]
@@ -263,12 +272,17 @@ async def generate_qualifier_vocabulary(
             kw_l = (kw or "").strip().lower()
             if not kw_l or len(kw_l) < 3 or weight < 0.5:
                 continue
-            # Skip terms that look like noise: pure-digit fragments, single
-            # tokens like "py" / "app" already contained inside an existing
-            # group name, or the domain label itself.
+            # Skip the domain label itself — it cannot be a sub-domain qualifier.
             if kw_l == domain_label.lower():
                 continue
-            covered = any(kw_l in g or g in kw_l for g in existing_lower)
+            covered = any(
+                kw_l == g
+                or kw_l.startswith(g + "-")
+                or kw_l.endswith("-" + g)
+                or g.startswith(kw_l + "-")
+                or g.endswith("-" + kw_l)
+                for g in existing_lower
+            )
             if covered:
                 continue
             orphans.append((kw_l, weight))

@@ -55,10 +55,13 @@ from app.services.pattern_injection import (
     record_injection_provenance,
 )
 from app.services.pipeline_constants import (
+    AMBIGUOUS_WRITING_LEAD_VERBS,
     MAX_DOMAIN_RAW_LENGTH,
     MAX_INTENT_LABEL_LENGTH,
+    PROSE_OUTPUT_CUES,
     SCORE_MAX_TOKENS,
     VALID_TASK_TYPES,
+    WRITING_LEAD_VERBS,
     resolve_effective_strategy,
     semantic_check,
     semantic_upgrade_general,
@@ -75,22 +78,9 @@ from app.utils.text_cleanup import title_case_label, validate_intent_label
 
 logger = logging.getLogger(__name__)
 
-# B5+ task-type lock (v0.4.7). Module-level so the constants are not re-
-# allocated per call and so ruff N806 is satisfied. ``write`` is the only
-# ambiguous verb in this set ("write a function" is genuinely coding); when
-# ``write`` leads, we require an additional prose-output cue in the first
-# sentence to lock the task_type to ``writing``. All other verbs in the set
-# are unambiguously prose and lock without an extra cue.
-_WRITING_LEAD_VERBS: frozenset[str] = frozenset({
-    "write", "draft", "compose", "author", "summarize",
-    "describe", "document", "outline", "narrate",
-})
-_AMBIGUOUS_LEAD_VERBS: frozenset[str] = frozenset({"write"})
-_PROSE_OUTPUT_CUES: frozenset[str] = frozenset({
-    "markdown", "docs", "doc", "paragraph", "paragraphs", "page",
-    "notes", "style", "release", "blog", "readme", "guide",
-    "reference", "changelog", "section", "summary", "post",
-})
+# B5+ task-type lock vocab lives in ``pipeline_constants`` so the lock
+# (here) and the trim (in ``context_enrichment``) cannot drift.  See the
+# ``B5 / B5+ writing-about-code path`` block in that module.
 
 
 def _normalize_llm_domain(domain: str, known_primaries: set[str]) -> str:
@@ -339,18 +329,20 @@ async def resolve_post_analyze_state(
     # writing intent bypassed, length budget bloated to 3.9× (writing
     # tasks should stay tight), conciseness dropped to 6.1.
     #
-    # See module-level ``_WRITING_LEAD_VERBS`` / ``_AMBIGUOUS_LEAD_VERBS`` /
-    # ``_PROSE_OUTPUT_CUES`` for the lock vocabulary + compound-verb guard.
+    # See ``pipeline_constants.WRITING_LEAD_VERBS`` /
+    # ``AMBIGUOUS_WRITING_LEAD_VERBS`` / ``PROSE_OUTPUT_CUES`` for the lock
+    # vocabulary + compound-verb guard (shared with the codebase trim in
+    # ``context_enrichment.enrich``).
     if analysis.task_type == "coding" and raw_prompt.strip():
         _first_word = raw_prompt.strip().split()[0].lower().strip(".,;:!?")
-        if _first_word in _WRITING_LEAD_VERBS:
-            _lock = _first_word not in _AMBIGUOUS_LEAD_VERBS
+        if _first_word in WRITING_LEAD_VERBS:
+            _lock = _first_word not in AMBIGUOUS_WRITING_LEAD_VERBS
             if not _lock:
                 # Disambiguate "Write" via first-sentence prose-output cue.
                 _first_sentence_lower = (
                     raw_prompt.split(".")[0] if "." in raw_prompt else raw_prompt
                 ).lower()
-                _lock = any(cue in _first_sentence_lower for cue in _PROSE_OUTPUT_CUES)
+                _lock = any(cue in _first_sentence_lower for cue in PROSE_OUTPUT_CUES)
             if _lock:
                 logger.info(
                     "B5+ task-type lock: LLM said coding but lead verb '%s' "
