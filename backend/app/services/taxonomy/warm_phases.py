@@ -3765,11 +3765,28 @@ async def phase_refresh(
                 score = float(row[3] if row[3] is not None else row[0])
                 cluster_groups.setdefault(cid, []).append((score, row[1]))
 
+        # T1.1: build the prior from the GLOBAL learned target (computed
+        # above as ``target_profiles``) so per-cluster shrinkage anchors
+        # to "what works across the corpus" rather than to a static
+        # default.  When global learning hasn't produced a target yet,
+        # fall back to phase defaults inside compute_score_correlated_target.
+        global_prior: dict[str, PhaseWeights] | None = None
+        try:
+            global_prior = target_profiles  # may be None
+        except NameError:
+            global_prior = None
+
         clusters_adapted = 0
         for cid, members in cluster_groups.items():
+            # Bayesian shrinkage admits learning from m=2; the prior carries
+            # most of the weight at low n.  At m=10 (the prior gate's old
+            # threshold), n/(n+κ) = 10/18 ≈ 56% empirical, 44% prior — about
+            # the inflection point where empirical starts to dominate.
             if len(members) < SCORE_ADAPTATION_MIN_SAMPLES:
                 continue
-            cluster_target = compute_score_correlated_target(members)
+            cluster_target = compute_score_correlated_target(
+                members, prior=global_prior,
+            )
             if not cluster_target:
                 continue
             cluster_q = await db.execute(

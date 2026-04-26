@@ -268,6 +268,68 @@ async def record_injection_provenance(
     return _prov_ok, _prov_fail
 
 
+# T1.3-lite — pattern usefulness thresholds.  Tuned to match the
+# observed score distribution: mean≈8.6 stddev≈0.4, so 7.5 is the lower
+# tail and 6.5 is genuinely below average.  Optimizations in the [6.5,
+# 7.5) band carry no signal (both counters stay flat) — we don't want to
+# noise-train on borderline cases.
+PATTERN_USEFUL_FLOOR = 7.5
+PATTERN_UNUSED_CEILING = 6.5
+
+# T1.6 — Maximal Marginal Relevance (MMR) λ for few-shot diversity.
+# score(d) = λ·relevance(d) - (1-λ)·max_{s∈selected} sim(d, s).
+# 0.6 is a strong default — slight preference for relevance with meaningful
+# diversity. Module-level so the constant is not re-allocated per call and
+# so ruff N806 is satisfied.
+FEW_SHOT_MMR_LAMBDA = 0.6
+
+
+async def record_pattern_usefulness(
+    db: AsyncSession,
+    *,
+    optimization_id: str,
+    overall_score: float | None,
+) -> int:
+    """T1.3-lite — increment useful/unused counters on all
+    ``OptimizationPattern`` rows attached to this optimization.
+
+    Decision:
+    - ``overall_score >= PATTERN_USEFUL_FLOOR`` → bump ``useful_count``
+    - ``overall_score <= PATTERN_UNUSED_CEILING`` → bump ``unused_count``
+    - Between thresholds → no-op (don't punish borderline outcomes)
+
+    Returns the number of OP rows updated (0 when score is None or in the
+    no-signal band).  Failures swallowed and logged at debug level so a
+    counter blip never breaks the parent pipeline.
+    """
+    if overall_score is None:
+        return 0
+    if overall_score >= PATTERN_USEFUL_FLOOR:
+        col_name = "useful_count"
+    elif overall_score <= PATTERN_UNUSED_CEILING:
+        col_name = "unused_count"
+    else:
+        return 0
+    try:
+        from sqlalchemy import update as _sa_update
+
+        from app.models import OptimizationPattern
+
+        col = getattr(OptimizationPattern, col_name)
+        result = await db.execute(
+            _sa_update(OptimizationPattern)
+            .where(OptimizationPattern.optimization_id == optimization_id)
+            .values({col_name: col + 1})
+        )
+        return int(result.rowcount or 0)  # type: ignore[attr-defined]
+    except Exception as exc:
+        logger.debug(
+            "record_pattern_usefulness no-op (non-fatal): opt=%s col=%s err=%s",
+            optimization_id, col_name, exc,
+        )
+        return 0
+
+
 async def auto_inject_patterns(
     raw_prompt: str,
     taxonomy_engine: Any,
@@ -701,8 +763,9 @@ async def retrieve_few_shot_examples(
         )
 
         # Collect candidates from both retrieval paths, keyed by opt ID
-        # to deduplicate.  Store (input_sim, output_sim, FewShotExample).
-        seen: dict[str, tuple[float, float, FewShotExample]] = {}
+        # to deduplicate.  Store (input_sim, output_sim, FewShotExample,
+        # input_emb_normalized) — embeddings retained for MMR diversity.
+        seen: dict[str, tuple[float, float, FewShotExample, np.ndarray]] = {}
 
         for row in result.all():
             try:
@@ -710,11 +773,13 @@ async def retrieve_few_shot_examples(
 
                 # Input similarity (raw embedding)
                 input_sim = 0.0
+                input_emb_normed: np.ndarray | None = None
                 if row.embedding is not None:
                     emb = np.frombuffer(row.embedding, dtype=np.float32)
                     emb_norm = float(np.linalg.norm(emb))
                     if emb_norm > 1e-9:
                         input_sim = float(np.dot(prompt_embedding, emb) / (prompt_norm * emb_norm))
+                        input_emb_normed = emb / emb_norm
 
                 # Output similarity (optimized embedding)
                 output_sim = 0.0
@@ -749,10 +814,17 @@ async def retrieve_few_shot_examples(
 
                 # Dedup: keep whichever has higher combined score
                 if opt_id in seen:
-                    prev_input, prev_output, _ = seen[opt_id]
+                    prev_input, prev_output, _, _ = seen[opt_id]
                     if max(input_sim, output_sim) <= max(prev_input, prev_output):
                         continue
-                seen[opt_id] = (input_sim, output_sim, example)
+                # Fall back to a unit vector if no embedding (MMR will treat
+                # it as orthogonal to all selected candidates — never a
+                # diversity penalty, never a boost).
+                _input_for_mmr = (
+                    input_emb_normed if input_emb_normed is not None
+                    else np.zeros_like(prompt_embedding)
+                )
+                seen[opt_id] = (input_sim, output_sim, example, _input_for_mmr)
             except (ValueError, TypeError) as _fs_exc:
                 logger.warning(
                     "Corrupt embedding in few-shot candidate, opt=%s: %s trace_id=%s",
@@ -760,16 +832,56 @@ async def retrieve_few_shot_examples(
                 )
                 continue
 
-        # Rank by max(input_sim, output_sim) * overall_score + label overlap bonus
-        ranked = sorted(
-            seen.values(),
-            key=lambda t: (
-                max(t[0], t[1]) * t[2].overall_score
-                + _intent_label_bonus(raw_prompt, t[2].intent_label)
-            ),
-            reverse=True,
-        )
-        examples = [ex for _, _, ex in ranked[:max_examples]]
+        # T1.6 — MMR selection (see ``FEW_SHOT_MMR_LAMBDA`` module constant).
+        # When max_examples ≤ 1 MMR is a no-op so we fall through to plain
+        # top-K.
+        # Pre-compute relevance score for every candidate (same formula as
+        # the legacy ranker, retained verbatim for backward compat with the
+        # tests that pin this behaviour).
+        scored_candidates: list[
+            tuple[float, np.ndarray, FewShotExample]
+        ] = []
+        for input_sim, output_sim, ex, emb in seen.values():
+            relevance = (
+                max(input_sim, output_sim) * ex.overall_score
+                + _intent_label_bonus(raw_prompt, ex.intent_label)
+            )
+            scored_candidates.append((relevance, emb, ex))
+        # Sort descending by relevance for the MMR seed.
+        scored_candidates.sort(key=lambda t: t[0], reverse=True)
+
+        examples: list[FewShotExample] = []
+        if max_examples <= 1 or len(scored_candidates) <= 1:
+            examples = [ex for _, _, ex in scored_candidates[:max_examples]]
+        else:
+            # Greedy MMR selection.  Always seed with the highest-relevance
+            # candidate so the strongest match is never displaced by
+            # diversity heuristics on the first pick.
+            selected: list[tuple[float, np.ndarray, FewShotExample]] = [
+                scored_candidates[0],
+            ]
+            remaining = scored_candidates[1:]
+            while len(selected) < max_examples and remaining:
+                best_idx = -1
+                best_mmr = -float("inf")
+                for idx, (relevance, emb, _) in enumerate(remaining):
+                    # max similarity to anything already in `selected`
+                    max_sim_selected = 0.0
+                    for _, sel_emb, _ in selected:
+                        sim = float(np.dot(emb, sel_emb))
+                        if sim > max_sim_selected:
+                            max_sim_selected = sim
+                    mmr = (
+                        FEW_SHOT_MMR_LAMBDA * relevance
+                        - (1.0 - FEW_SHOT_MMR_LAMBDA) * max_sim_selected
+                    )
+                    if mmr > best_mmr:
+                        best_mmr = mmr
+                        best_idx = idx
+                if best_idx < 0:
+                    break
+                selected.append(remaining.pop(best_idx))
+            examples = [ex for _, _, ex in selected]
 
         if examples:
             logger.info(

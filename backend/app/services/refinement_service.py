@@ -372,8 +372,14 @@ class RefinementService:
             except Exception:
                 pass
 
-            blended_original = blend_scores(llm_original, heur_original, historical_stats)
-            blended_optimized = blend_scores(llm_optimized, heur_optimized, historical_stats)
+            blended_original = blend_scores(
+                llm_original, heur_original, historical_stats,
+                prompt_text=original_prompt,
+            )
+            blended_optimized = blend_scores(
+                llm_optimized, heur_optimized, historical_stats,
+                prompt_text=refined.optimized_prompt,
+            )
             original_scores = blended_original.to_dimension_scores()
             optimized_scores = blended_optimized.to_dimension_scores()
 

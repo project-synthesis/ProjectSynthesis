@@ -294,6 +294,15 @@ def resolve_route(state: RoutingState, ctx: RoutingContext) -> RoutingDecision:
 # RoutingManager — thin orchestration wrapper
 # ---------------------------------------------------------------------------
 
+# Issue-2 debounce window for MCP disconnect broadcasts.  Claude Code and
+# similar clients open/close SSE sessions per tool call (every 30-110s on
+# observed traffic).  Without debounce, every cycle emits a connect+
+# disconnect pair to the frontend, producing visible flicker in the
+# status indicator.  3 seconds is long enough to absorb the typical
+# tool-call gap (1-2 seconds between close and re-open) without
+# noticeably delaying the surfacing of a real, sustained disconnect.
+DISCONNECT_DEBOUNCE_SECONDS = 3.0
+
 
 class RoutingManager:
     """Manages live routing state, disconnect detection, and event broadcasting.
@@ -316,6 +325,28 @@ class RoutingManager:
         self._cross_process_notify = cross_process_notify
         self._session_file: MCPSessionFile | None = None
         self._disconnect_task: asyncio.Task[None] | None = None
+
+        # Issue-2 debounce: Claude Code (and similar MCP clients) opens
+        # and closes SSE sessions per tool call.  Each disconnect was
+        # immediately broadcast as ``mcp_disconnect`` to the frontend,
+        # producing visible status-indicator flicker every 30-110s
+        # (one cycle per Claude Code tool call).  We now defer the
+        # disconnect broadcast for ``DISCONNECT_DEBOUNCE_SECONDS`` so
+        # a quick re-initialize cancels the pending broadcast.  Only
+        # disconnects that PERSIST past the debounce window propagate
+        # to event_bus + cross-process publish.
+        self._pending_disconnect_task: asyncio.Task[None] | None = None
+        self._disconnect_at: datetime | None = None
+        # Issue-3 companion to debounce: when the disconnect mutation
+        # ran but the BROADCAST was suppressed by a re-initialize
+        # within the window, we also need to suppress the matching
+        # ``mcp_initialize`` broadcast (otherwise we'd still emit one
+        # publish per tool-call cycle — half of the original 994/cycle
+        # volume).  We snapshot the pre-disconnect ``sampling_capable``
+        # at disconnect time; ``on_mcp_initialize`` consults the
+        # snapshot to decide whether the re-init is restoring the same
+        # capability state (no externally-visible change → suppress).
+        self._pre_disconnect_sampling: bool | None = None
 
         # Initialize from persistence or defaults
         self._state = self._recover_state()
@@ -360,7 +391,34 @@ class RoutingManager:
         ``on_mcp_disconnect()`` clears ``sampling_capable`` to ``None`` when
         the last SSE stream closes, stale True values cannot persist across
         client restarts.
+
+        Issue-2 fix: cancels any pending deferred-disconnect broadcast so
+        a brief disconnect→reconnect cycle (typical Claude Code per-tool-
+        call pattern) doesn't surface as a visible state-flicker pair to
+        the frontend.
+
+        Issue-3 fix: if the cancelled disconnect's pre-mutation
+        ``sampling_capable`` snapshot equals the incoming value, the
+        re-initialize is a no-op from the externally-visible state's
+        perspective, so we suppress the initialize broadcast as well.
+        Halves the per-tool-call publish volume — the disconnect side
+        is already silenced by Issue-2, this silences the matching
+        initialize.
         """
+        # Cancel a pending deferred disconnect broadcast (debounce hit).
+        debounce_hit = False
+        pre_disconnect_sampling: bool | None = None
+        if self._pending_disconnect_task is not None:
+            self._pending_disconnect_task.cancel()
+            self._pending_disconnect_task = None
+            self._disconnect_at = None
+            debounce_hit = True
+            pre_disconnect_sampling = self._pre_disconnect_sampling
+            self._pre_disconnect_sampling = None
+            logger.debug(
+                "routing.disconnect_debounce: pending disconnect cancelled by re-initialize",
+            )
+
         now = datetime.now(timezone.utc)
         old_sampling = self._state.sampling_capable
         was_connected = self._state.mcp_connected
@@ -371,6 +429,26 @@ class RoutingManager:
             last_activity=now,
         )
         self._persist()
+        # Issue-3: when the debounce just absorbed a disconnect, compare
+        # against the snapshot taken BEFORE the disconnect mutation
+        # rather than the post-mutation in-memory state (which is
+        # ``None`` / ``False`` by definition because the disconnect
+        # mutation already ran).  This catches the Claude-Code-per-
+        # tool-call pattern where the externally visible state never
+        # changed across the disconnect/reconnect pair.
+        capability_unchanged_across_debounce = (
+            debounce_hit
+            and pre_disconnect_sampling == sampling_capable
+        )
+        if capability_unchanged_across_debounce:
+            logger.debug(
+                "routing.mcp_initialize sampling_capable=%s "
+                "(suppressed — debounce absorbed disconnect, "
+                "capability unchanged)",
+                sampling_capable,
+            )
+            return
+
         if old_sampling != sampling_capable or not was_connected:
             logger.info(
                 "routing.mcp_initialize sampling_capable=%s→%s mcp_connected=%s→%s",
@@ -394,16 +472,85 @@ class RoutingManager:
         hard signal: no SSE streams remain, so no client can serve sampling
         requests.  The next ``on_mcp_initialize()`` will set fresh values
         from the reconnecting client's actual capabilities.
+
+        Issue-2 fix: state mutation is immediate (state always reflects
+        reality), but the BROADCAST is deferred by
+        ``DISCONNECT_DEBOUNCE_SECONDS``.  If ``on_mcp_initialize`` fires
+        within the debounce window the deferred broadcast is cancelled,
+        suppressing the connect→disconnect→connect flicker observed when
+        Claude Code (and similar) opens fresh SSE sessions per tool call.
+        Sustained disconnects still propagate after the window elapses.
         """
         if not self._state.mcp_connected and self._state.sampling_capable is None:
             return  # Already fully disconnected — avoid duplicate events
+        # Issue-3: snapshot capability BEFORE the disconnect mutation so
+        # ``on_mcp_initialize`` can detect "capability unchanged across
+        # debounce" and suppress the matching initialize broadcast.
+        # We coerce to ``bool`` (or ``None``) — Claude's middleware
+        # sends a bool, so this matches the comparison shape exactly.
+        self._pre_disconnect_sampling = self._state.sampling_capable
         self._update_state(mcp_connected=False, sampling_capable=None)
         # Delete session file on disconnect — do NOT _persist(), which
         # writes a fresh last_activity that the reconnect detector reads
         # as evidence of a new connection, creating infinite loops.
         if self._session_file:
             self._session_file.delete()
-        logger.info("routing.disconnect trigger=sse_closed")
+
+        # Cancel any in-flight deferred disconnect (defensive — shouldn't
+        # normally happen since each disconnect is paired with an
+        # initialize, but if two disconnects arrive back-to-back we
+        # collapse them to a single deferred broadcast).
+        if self._pending_disconnect_task is not None:
+            self._pending_disconnect_task.cancel()
+            self._pending_disconnect_task = None
+
+        # Schedule the deferred broadcast.  Falls back to immediate
+        # broadcast if no event loop is available (e.g. sync test paths).
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.info("routing.disconnect trigger=sse_closed (immediate — no event loop)")
+            self._broadcast_state_change("mcp_disconnect")
+            return
+
+        self._disconnect_at = datetime.now(timezone.utc)
+        self._pending_disconnect_task = loop.create_task(
+            self._deferred_disconnect_broadcast(),
+        )
+        logger.info(
+            "routing.disconnect_deferred trigger=sse_closed debounce=%.1fs",
+            DISCONNECT_DEBOUNCE_SECONDS,
+        )
+
+    async def _deferred_disconnect_broadcast(self) -> None:
+        """Wait for the debounce window then commit the disconnect broadcast.
+
+        Cancellation by ``on_mcp_initialize`` suppresses the broadcast —
+        the state itself was already updated at disconnect time, so a
+        re-initialize within the window cleanly transitions the state
+        without ever surfacing the disconnect to subscribers.
+        """
+        try:
+            await asyncio.sleep(DISCONNECT_DEBOUNCE_SECONDS)
+        except asyncio.CancelledError:
+            # Quietly: this is the happy path (re-init within debounce).
+            self._pending_disconnect_task = None
+            self._disconnect_at = None
+            return
+
+        # Commit the disconnect broadcast.  State is already consistent —
+        # ``mcp_connected`` was set to False at disconnect time and no
+        # initialize has flipped it back, so the broadcast is honest.
+        logger.info(
+            "routing.disconnect_committed trigger=sse_closed "
+            "after debounce=%.1fs (no re-initialize within window)",
+            DISCONNECT_DEBOUNCE_SECONDS,
+        )
+        self._pending_disconnect_task = None
+        self._disconnect_at = None
+        # The disconnect was honest — clear the snapshot so a later
+        # genuine reconnect (different capability) is not silenced.
+        self._pre_disconnect_sampling = None
         self._broadcast_state_change("mcp_disconnect")
 
     def on_sampling_disconnect(self) -> None:
@@ -626,7 +773,15 @@ class RoutingManager:
                                 except (KeyError, ValueError, TypeError):
                                     fresh_activity = None
                                 if fresh_activity:
-                                    logger.info(
+                                    # Demoted to DEBUG (was INFO).  This logs
+                                    # every 30s when in-memory state is stale
+                                    # but the MCP session file shows the
+                                    # client is still alive — a no-op save,
+                                    # not a real state change.  Live-run
+                                    # forensics: cycle 11 produced 32 of
+                                    # these in 30 minutes, drowning the
+                                    # actually-meaningful log signal.
+                                    logger.debug(
                                         "routing.disconnect_averted "
                                         "in_memory_stale=%.0fs "
                                         "session_file_fresh=True",
@@ -752,12 +907,27 @@ class RoutingManager:
             return _defaults
 
         try:
-            # On a fresh server start, no MCP clients are connected — the
-            # session file is always stale.  Never trust sampling_capable
-            # from the file; a real `initialize` handshake from the IDE
-            # will set it within ~2 seconds if VS Code is actually open.
+            # Issue-4 fix: trust a fresh session file when the FastAPI
+            # backend restarts (e.g. uvicorn auto-reload) while the MCP
+            # server process is still up.  Without this, the backend
+            # sat with sampling_capable=None for ~60s — the disconnect-
+            # checker grace window — even though the MCP server already
+            # had an authenticated client.  Sampling tier 4 silently
+            # degraded to passthrough during that window for any MCP
+            # tool call landing in the gap.
+            #
+            # We only trust the file when BOTH freshness signals agree:
+            #   1. ``is_capability_fresh`` — written_at within 30 min
+            #      (so we're not picking up a day-old crash artifact)
+            #   2. ``not detect_disconnect`` — sse_streams > 0 (or, on
+            #      legacy files without sse_streams, last_activity
+            #      within MCP_ACTIVITY_STALENESS_SECONDS)
+            #
+            # If either signal disagrees, we keep the conservative
+            # behaviour and wait for a live initialize handshake.
             file_sampling = data.get("sampling_capable", False)
             file_connected = not self._session_file.detect_disconnect(data)
+            file_capability_fresh = self._session_file.is_capability_fresh(data)
 
             last_activity = None
             if "last_activity" in data:
@@ -766,10 +936,27 @@ class RoutingManager:
                 except (ValueError, TypeError):
                     pass
 
+            if file_connected and file_capability_fresh:
+                logger.info(
+                    "routing.recovery file_sampling=%s file_connected=True "
+                    "capability_fresh=True last_activity=%s "
+                    "(trusting file — MCP server appears live)",
+                    file_sampling, last_activity,
+                )
+                return RoutingState(
+                    provider=None,  # Provider set separately via set_provider()
+                    provider_name=None,
+                    sampling_capable=bool(file_sampling) if file_sampling else None,
+                    mcp_connected=True,
+                    last_capability_update=last_activity,
+                    last_activity=last_activity,
+                )
+
             logger.info(
-                "routing.recovery file_sampling=%s file_connected=%s last_activity=%s "
+                "routing.recovery file_sampling=%s file_connected=%s "
+                "capability_fresh=%s last_activity=%s "
                 "(ignoring — waiting for live initialize handshake)",
-                file_sampling, file_connected, last_activity,
+                file_sampling, file_connected, file_capability_fresh, last_activity,
             )
             return RoutingState(
                 provider=None,  # Provider set separately via set_provider()

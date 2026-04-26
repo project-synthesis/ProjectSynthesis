@@ -68,12 +68,25 @@ class TestNormalizeLlmScore:
         got = _normalize_llm_score(6.0, mean=7.0, stddev=1.0)
         assert got == pytest.approx(ZSCORE_CENTER - ZSCORE_SPREAD, abs=0.01)
 
-    def test_extreme_positive_is_clamped_at_ten(self):
-        # raw 50 stddev above mean → normalized > 10 → clamp
+    def test_extreme_positive_clamps_at_ten(self):
+        # C1 asymmetric: positive z is NOT capped — only the [1.0, 10.0]
+        # clamp bounds the upper end.  Confident high-quality LLM scores
+        # should still reach 10.0 normalized.  Without this, a raw 9.5
+        # with mean≈8 stddev≈0.4 (cycle-8 corpus shape) clipped to ~8.5
+        # — suppressing legitimate excellence.
         assert _normalize_llm_score(100.0, mean=5.0, stddev=1.0) == 10.0
 
-    def test_extreme_negative_is_clamped_at_one(self):
-        assert _normalize_llm_score(-100.0, mean=5.0, stddev=1.0) == 1.0
+    def test_extreme_negative_capped_at_zscore_floor(self):
+        # C1 asymmetric: negative z is FLOOR-capped at -ZSCORE_CAP.
+        # Without the cap, an LLM raw score 1.5+ stddev below the rolling
+        # mean would floor-clamp to 1.0 on narrow-stddev corpora.  The
+        # cap bounds the worst case at 5.5 - 2.0*1.5 = 2.5 — still a
+        # strong demotion, but not a floor-clamp.
+        from app.services.score_blender import ZSCORE_CAP
+
+        assert _normalize_llm_score(-100.0, mean=5.0, stddev=1.0) == pytest.approx(
+            ZSCORE_CENTER - ZSCORE_CAP * ZSCORE_SPREAD, abs=0.01,
+        )
 
 
 # ---------------------------------------------------------------------------

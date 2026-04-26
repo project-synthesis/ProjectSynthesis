@@ -503,6 +503,34 @@ class PipelineOrchestrator:
                 context_sources["enrichment_meta"] = em
             em["injection_stats"] = injection_stats
 
+            # Length-ratio observability (C2 follow-on).  Surfaces the
+            # actual expansion the optimizer produced relative to the
+            # original input — pairs with the ``Length budget:`` line we
+            # inject into the analyzer's analysis_summary so reviewers
+            # can see whether the optimizer respected the budget.
+            try:
+                _orig_len = len(raw_prompt)
+                _opt_len = len(optimization.optimized_prompt or "")
+                _ratio = (_opt_len / _orig_len) if _orig_len > 0 else 0.0
+                em["length_ratio"] = round(_ratio, 2)
+                em["original_chars"] = _orig_len
+                em["optimized_chars"] = _opt_len
+                # Concision flag: True when the original was concise AND
+                # the optimizer respected the ≤3× budget.  Useful as a
+                # filter for diagnosing scoring regressions.
+                from app.services.heuristic_scorer import HeuristicScorer
+                _orig_cnc = float(
+                    HeuristicScorer.score_prompt(raw_prompt).get(
+                        "conciseness", 5.0,
+                    )
+                )
+                em["original_heuristic_conciseness"] = round(_orig_cnc, 2)
+                em["concision_preserved"] = bool(
+                    _orig_cnc >= 7.0 and _ratio <= 3.0,
+                )
+            except Exception as _len_exc:
+                logger.debug("length_ratio observability skipped: %s", _len_exc)
+
             usage = self._get_usage(optimize_provider)
             if self.trace_logger:
                 self.trace_logger.log_phase(

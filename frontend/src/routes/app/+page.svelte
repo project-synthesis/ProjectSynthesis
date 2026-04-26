@@ -3,6 +3,7 @@
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { domainStore } from '$lib/stores/domains.svelte';
+  import { observatoryStore } from '$lib/stores/observatory.svelte';
   import { readinessStore } from '$lib/stores/readiness.svelte';
   import { preferencesStore } from '$lib/stores/preferences.svelte';
   import type { Preferences } from '$lib/stores/preferences.svelte';
@@ -119,6 +120,14 @@
           clustersStore.invalidateClusters();
           domainStore.invalidate();
           readinessStore.invalidate();
+          // Observatory's pattern-density Heatmap + Timeline backfill
+          // are also derived from the cluster tree — sub-domain
+          // emergence/dissolution silently went stale on the heatmap
+          // without these refresh calls (live regression: dissolved
+          // ``embedding-health`` row persisted in the heatmap for hours
+          // after the row was archived + GC'd from the DB).
+          void observatoryStore.refreshPatternDensity();
+          void observatoryStore.loadTimelineEvents();
           addToast('created', 'Taxonomy updated');
         }
         if (type === 'optimization_deleted') {
@@ -176,6 +185,8 @@
         if (type === 'domain_created') {
           domainStore.invalidate();
           readinessStore.invalidate();
+          // New domain shifts the heatmap row set — refresh.
+          void observatoryStore.refreshPatternDensity();
         }
         if (type === 'index_phase_changed') {
           // Live per-phase state for the linked repo — updates connectionState
@@ -262,6 +273,10 @@
         clustersStore.invalidateClusters();
         domainStore.invalidate();
         readinessStore.invalidate();
+        // Observatory rebuild — taxonomy events that fired during the
+        // disconnect window are gone; the only safe baseline is a re-fetch.
+        void observatoryStore.refreshPatternDensity();
+        void observatoryStore.loadTimelineEvents();
         window.dispatchEvent(new CustomEvent('strategy-changed'));
       },
     );

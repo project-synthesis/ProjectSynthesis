@@ -493,8 +493,14 @@ async def run_single_prompt(
                 except Exception as _hs_exc:
                     logger.debug("Historical stats fetch failed: %s", _hs_exc)
 
-            blended_original = blend_scores(llm_original, heur_original, effective_stats)
-            blended_optimized = blend_scores(llm_optimized, heur_optimized, effective_stats)
+            blended_original = blend_scores(
+                llm_original, heur_original, effective_stats,
+                prompt_text=raw_prompt,
+            )
+            blended_optimized = blend_scores(
+                llm_optimized, heur_optimized, effective_stats,
+                prompt_text=optimization.optimized_prompt,
+            )
 
             original_scores = blended_original.to_dimension_scores()
             optimized_scores = blended_optimized.to_dimension_scores()

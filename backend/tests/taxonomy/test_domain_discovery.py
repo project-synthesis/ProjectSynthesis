@@ -538,3 +538,134 @@ async def test_domain_ceiling_blocks_discovery(db, mock_embedding):
     )
     created = await engine._propose_domains(db)
     assert created == []
+
+
+# ---------------------------------------------------------------------------
+# TF-IDF extraction — domain-node aggregation regression test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_domain_keywords_aggregates_descendants_for_domain_node(
+    db, mock_embedding,
+):
+    """Regression: ``_extract_domain_keywords`` MUST aggregate raw_prompt
+    text from descendant active/mature clusters when the input is a
+    domain node.  The previous implementation queried
+    ``Optimization.cluster_id == domain.id`` and consistently returned
+    [] (domain nodes never own opts directly), which made the cascade's
+    ``tf_idf`` source structurally silent across all domains in
+    production.
+    """
+    # Build: domain → 2 active clusters → 6 opts total
+    backend = PromptCluster(
+        label="backend", state="domain", domain="backend",
+        persistence=1.0, color_hex="#aa55ff",
+        cluster_metadata={"source": "seed"},
+    )
+    db.add(backend)
+    await db.flush()
+
+    cluster_a = PromptCluster(
+        label="audit-things", state="active", domain="backend",
+        parent_id=backend.id, member_count=3, coherence=0.8,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    cluster_b = PromptCluster(
+        label="cache-things", state="mature", domain="backend",
+        parent_id=backend.id, member_count=3, coherence=0.8,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add_all([cluster_a, cluster_b])
+    await db.flush()
+
+    for i in range(3):
+        db.add(Optimization(
+            raw_prompt=f"audit the race condition lifecycle in service {i}",
+            domain="backend", cluster_id=cluster_a.id, status="completed",
+        ))
+    for i in range(3):
+        db.add(Optimization(
+            raw_prompt=f"profile the cache lookup latency hot path {i}",
+            domain="backend", cluster_id=cluster_b.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+
+    keywords = await engine._extract_domain_keywords(db, backend, top_k=10)
+    assert keywords, "expected non-empty TF-IDF keywords aggregated from descendants"
+
+    kw_strings = {kw.lower() for kw, _ in keywords}
+    # At least one of these should surface from the corpus above.
+    expected_any = {"audit", "race", "cache", "latency", "lifecycle", "hot"}
+    assert kw_strings & expected_any, (
+        f"none of the expected corpus terms surfaced: got {kw_strings}"
+    )
+
+    # Min-max normalization — top score must be 1.0
+    top_kw, top_weight = keywords[0]
+    assert abs(top_weight - 1.0) < 1e-6, (
+        f"top weight should be normalized to 1.0, got {top_weight}"
+    )
+
+    # Sanity: at least one keyword passes the cascade's >=0.5 admit gate
+    pass_gate = [kw for kw, w in keywords if w >= 0.5]
+    assert pass_gate, (
+        "no normalized keyword passed the cascade's weight>=0.5 gate — "
+        "tf_idf source would still be silent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_extract_domain_keywords_regular_cluster_unchanged(
+    db, mock_embedding,
+):
+    """For non-domain clusters, the function still pulls direct members
+    via ``cluster_id == cluster.id`` (preserves the seed-cluster
+    behaviour at ``_create_domain_node`` time).
+    """
+    cluster = PromptCluster(
+        label="seed-cluster", state="active", domain="general",
+        member_count=4, coherence=0.8,
+        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+    )
+    db.add(cluster)
+    await db.flush()
+    for i in range(4):
+        db.add(Optimization(
+            raw_prompt=f"observability dashboard panel layout {i}",
+            domain="general", cluster_id=cluster.id, status="completed",
+        ))
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    keywords = await engine._extract_domain_keywords(db, cluster, top_k=10)
+    assert keywords, "non-domain cluster path must still extract keywords"
+    # Top score normalized to 1.0
+    assert abs(float(keywords[0][1]) - 1.0) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_extract_domain_keywords_empty_corpus_returns_empty(
+    db, mock_embedding,
+):
+    """Domain node with no descendant opts must return [] without raising."""
+    backend = PromptCluster(
+        label="backend", state="domain", domain="backend",
+        persistence=1.0, color_hex="#aa55ff",
+    )
+    db.add(backend)
+    await db.commit()
+
+    engine = TaxonomyEngine(
+        embedding_service=mock_embedding,
+        provider_resolver=lambda: None,
+    )
+    assert await engine._extract_domain_keywords(db, backend) == []

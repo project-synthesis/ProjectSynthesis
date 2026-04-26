@@ -336,6 +336,123 @@ class TestManagerMcpInitialize:
         assert event["data"]["sampling_capable"] is True
 
 
+class TestDisconnectDebounce:
+    """Issues 2 + 3: debounced disconnect broadcast and matching initialize suppression.
+
+    These tests run inside an event loop because the deferred broadcast
+    is implemented as ``asyncio.create_task`` — without a loop the
+    debounce path falls back to immediate broadcast (legacy sync behaviour).
+    """
+
+    @pytest.mark.asyncio
+    async def test_disconnect_then_quick_reinitialize_emits_no_events(
+        self, tmp_path: Path,
+    ) -> None:
+        """Issue-2 + Issue-3: per-tool-call cycle is fully silenced.
+
+        Models the Claude-Code-style pattern: SSE stream closes after a
+        tool call, then a fresh stream opens within the debounce window
+        for the next tool call.  Capability is unchanged across the
+        cycle, so neither the disconnect nor the re-initialize should
+        produce a ``routing_state_changed`` event for the frontend.
+        """
+        eb = EventBus()
+        mgr = RoutingManager(event_bus=eb, data_dir=tmp_path)
+        mgr.on_mcp_initialize(sampling_capable=True)
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        eb._subscribers.add(queue)
+
+        # Disconnect → schedules deferred broadcast (no event yet).
+        mgr.on_mcp_disconnect()
+        assert queue.empty(), "disconnect must not broadcast immediately"
+        assert mgr._pending_disconnect_task is not None
+
+        # Quick re-initialize within debounce window → cancel pending,
+        # AND suppress the matching initialize broadcast because the
+        # capability snapshot matches the incoming value.
+        mgr.on_mcp_initialize(sampling_capable=True)
+        # Yield once so the cancelled task settles.
+        await asyncio.sleep(0)
+
+        assert queue.empty(), (
+            "no externally-visible state change across the debounce — "
+            "neither disconnect nor initialize should broadcast"
+        )
+        assert mgr.state.mcp_connected is True
+        assert mgr.state.sampling_capable is True
+
+    @pytest.mark.asyncio
+    async def test_disconnect_then_reinitialize_with_changed_capability_broadcasts(
+        self, tmp_path: Path,
+    ) -> None:
+        """Issue-3 negative case: capability change breaks suppression.
+
+        If the re-initialize sees a different ``sampling_capable``, the
+        externally-visible state DID change, so the initialize broadcast
+        must still fire (only the disconnect side stays suppressed).
+        """
+        eb = EventBus()
+        mgr = RoutingManager(event_bus=eb, data_dir=tmp_path)
+        mgr.on_mcp_initialize(sampling_capable=True)
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        eb._subscribers.add(queue)
+
+        mgr.on_mcp_disconnect()
+        mgr.on_mcp_initialize(sampling_capable=False)  # Changed!
+        await asyncio.sleep(0)
+
+        # Disconnect was suppressed, but the changed-capability
+        # initialize is honestly broadcast.
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+        assert len(events) == 1
+        assert events[0]["data"]["trigger"] == "mcp_initialize"
+        assert events[0]["data"]["sampling_capable"] is False
+
+    @pytest.mark.asyncio
+    async def test_sustained_disconnect_broadcasts_after_window(
+        self, tmp_path: Path,
+    ) -> None:
+        """Issue-2: a real, sustained disconnect propagates after the debounce.
+
+        Uses a tiny debounce override so the test stays fast.
+        """
+        from app.services import routing as _routing
+
+        original = _routing.DISCONNECT_DEBOUNCE_SECONDS
+        _routing.DISCONNECT_DEBOUNCE_SECONDS = 0.05
+        try:
+            eb = EventBus()
+            mgr = RoutingManager(event_bus=eb, data_dir=tmp_path)
+            mgr.on_mcp_initialize(sampling_capable=True)
+
+            queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+            eb._subscribers.add(queue)
+
+            mgr.on_mcp_disconnect()
+            assert queue.empty(), "no immediate broadcast"
+
+            # Wait past the debounce — broadcast must commit.
+            await asyncio.sleep(0.15)
+
+            events = []
+            while not queue.empty():
+                events.append(queue.get_nowait())
+            assert any(
+                e["data"]["trigger"] == "mcp_disconnect" for e in events
+            ), "sustained disconnect must propagate"
+            assert mgr.state.mcp_connected is False
+            assert mgr.state.sampling_capable is None
+            assert mgr._pre_disconnect_sampling is None, (
+                "snapshot must clear once the disconnect commits"
+            )
+        finally:
+            _routing.DISCONNECT_DEBOUNCE_SECONDS = original
+
+
 class TestManagerActivity:
     def test_activity_updates_timestamp(self, manager: RoutingManager) -> None:
         manager.on_mcp_initialize(sampling_capable=True)
@@ -386,16 +503,44 @@ class TestManagerRecovery:
         assert mgr.state.mcp_connected is False
 
     def test_fresh_session_file(self, tmp_path: Path, event_bus: EventBus) -> None:
-        """Recent mcp_session.json with sampling=True — recovers correctly."""
+        """Issue-4: a fresh session file (live MCP server) IS trusted on recovery.
+
+        Scenario: FastAPI backend restarts (uvicorn auto-reload) while the MCP
+        server is still up with an active client.  ``mcp_session.json`` was
+        written within the capability-fresh window AND ``sse_streams > 0``
+        (or activity is recent on legacy files), so we trust the file
+        instead of waiting ~60s for the disconnect-checker reconnection
+        poll to notice the live MCP server.
+        """
         from datetime import datetime, timezone
         session_file = tmp_path / "mcp_session.json"
         now = datetime.now(timezone.utc).isoformat()
         session_file.write_text(json.dumps({
             "sampling_capable": True, "written_at": now, "last_activity": now,
+            "sse_streams": 1,
         }))
         mgr = RoutingManager(event_bus=event_bus, data_dir=tmp_path)
-        # On startup, session file sampling state is NEVER trusted —
-        # we wait for a live initialize handshake from the IDE.
+        assert mgr.state.sampling_capable is True
+        assert mgr.state.mcp_connected is True
+
+    def test_capability_fresh_but_disconnected(
+        self, tmp_path: Path, event_bus: EventBus,
+    ) -> None:
+        """Issue-4: capability is fresh but ``sse_streams=0`` — do NOT trust.
+
+        ``written_at`` within the capability window is necessary but not
+        sufficient: if ``detect_disconnect`` returns True (no active SSE
+        streams), recovery falls back to the conservative "wait for
+        handshake" behaviour.
+        """
+        from datetime import datetime, timezone
+        session_file = tmp_path / "mcp_session.json"
+        now = datetime.now(timezone.utc).isoformat()
+        session_file.write_text(json.dumps({
+            "sampling_capable": True, "written_at": now, "last_activity": now,
+            "sse_streams": 0,
+        }))
+        mgr = RoutingManager(event_bus=event_bus, data_dir=tmp_path)
         assert mgr.state.sampling_capable is None
         assert mgr.state.mcp_connected is False
 
