@@ -173,6 +173,9 @@ async def generate_qualifier_vocabulary(
     cluster_contexts: list[ClusterVocabContext],
     similarity_matrix: list[list[float | None]] | None,
     model: str,
+    *,
+    domain_signal_keywords: list[tuple[str, float]] | None = None,
+    existing_vocab_groups: list[str] | None = None,
 ) -> dict[str, list[str]]:
     """Generate a qualifier vocabulary from a domain's cluster structure.
 
@@ -192,6 +195,19 @@ async def generate_qualifier_vocabulary(
         similarity_matrix: Optional NxN pairwise cosine matrix of cluster
             centroids. None = no geometric context rendered.
         model: Model ID to use.
+        domain_signal_keywords: Top-K corpus TF-IDF terms the cascade's
+            source-3 path is currently using (``signal_keywords`` in the
+            domain node's ``cluster_metadata``).  Surfaces latent themes
+            that the previous vocab missed — e.g., the live backend
+            domain shows ``audit`` as a TF-IDF top term not covered by
+            any existing Haiku group.  Without this hint the cascade
+            keeps recording ``audit`` via source 3 every cycle while
+            successive vocabs ignore it.
+        existing_vocab_groups: Names of the previous vocab's groups,
+            so Haiku can prefer continuity (keep stable group names
+            when the underlying clusters haven't drifted) and only
+            introduce new groups when warranted by new TF-IDF terms or
+            shifted cluster geometry.
 
     Returns:
         Qualifier vocabulary dict, e.g. ``{"growth": ["metrics", "kpi", ...], ...}``.
@@ -236,6 +252,41 @@ async def generate_qualifier_vocabulary(
                 matrix_lines.append(f"  C{i+1}↔C{j+1}: {sim:.2f}{hint}")
         matrix_block = '\n'.join(matrix_lines)
 
+    # Render TF-IDF orphan terms — keep only ones that don't appear as
+    # substrings in any existing vocab group name (those are the "latent
+    # themes" the cascade is recording via source 3 but no group covers).
+    orphan_block = ""
+    if domain_signal_keywords:
+        existing_lower = [g.lower() for g in (existing_vocab_groups or [])]
+        orphans: list[tuple[str, float]] = []
+        for kw, weight in domain_signal_keywords:
+            kw_l = (kw or "").strip().lower()
+            if not kw_l or len(kw_l) < 3 or weight < 0.5:
+                continue
+            # Skip terms that look like noise: pure-digit fragments, single
+            # tokens like "py" / "app" already contained inside an existing
+            # group name, or the domain label itself.
+            if kw_l == domain_label.lower():
+                continue
+            covered = any(kw_l in g or g in kw_l for g in existing_lower)
+            if covered:
+                continue
+            orphans.append((kw_l, weight))
+        if orphans:
+            top = orphans[:8]
+            orphan_lines = ", ".join(f"{kw}({w:.2f})" for kw, w in top)
+            orphan_block = (
+                f"Recurring corpus terms NOT covered by any existing group "
+                f"(weight 0-1, normalized): {orphan_lines}"
+            )
+
+    existing_block = ""
+    if existing_vocab_groups:
+        existing_block = (
+            f"Existing vocab groups (prefer continuity unless geometry has "
+            f"shifted): {', '.join(existing_vocab_groups)}"
+        )
+
     try:
         result = await call_provider_with_retry(
             provider,
@@ -249,12 +300,21 @@ async def generate_qualifier_vocabulary(
                 "groups — choose words that appear in one specialization but not others. "
                 f"Use the similarity matrix to guide grouping: clusters with cosine > {_VOCAB_SIM_HIGH} "
                 "should typically belong to the same group. "
+                "If the user message lists 'Recurring corpus terms NOT covered by any existing "
+                "group', evaluate whether they represent a real latent specialization "
+                "(in which case introduce or rename a group to absorb them) or merely lexical "
+                "noise (in which case ignore them). "
+                "If the user message lists existing vocab groups, prefer keeping those names "
+                "stable when cluster geometry hasn't materially shifted — drift in group naming "
+                "across regenerations breaks downstream consistency-based emergence detection. "
                 "Do not include the domain name itself as a keyword."
             ),
             user_message=(
                 f"Domain: {domain_label}\n\n"
                 f"Clusters:\n{cluster_block}\n\n"
                 + (f"{matrix_block}\n\n" if matrix_block else "")
+                + (f"{existing_block}\n\n" if existing_block else "")
+                + (f"{orphan_block}\n\n" if orphan_block else "")
                 + "Generate qualifier groups for this domain's specializations."
             ),
             output_format=_QualifierVocabulary,

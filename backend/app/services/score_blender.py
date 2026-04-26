@@ -32,6 +32,15 @@ ZSCORE_MIN_SAMPLES = 30       # Minimum sample count for z-score stability (CLT 
 ZSCORE_MIN_STDDEV = 0.3       # Skip normalization if stddev is tiny (degenerate data)
 ZSCORE_CENTER = 5.5           # Re-center normalized scores around midpoint
 ZSCORE_SPREAD = 1.5           # Map 1 stddev to ±1.5 on the 1-10 scale
+ZSCORE_CAP = 2.0              # |z| ceiling — guards against narrow-stddev amplification (C1)
+                              # On a corpus with stddev=0.37 and historical mean=8.58, an LLM
+                              # score of 7.1 produces z=-3.97, normalized to 1.0 — flooring the
+                              # blended dimension even though 7.1 is "above average" by any
+                              # absolute standard.  Capping |z| at 2.0 keeps narrow-distribution
+                              # demotions bounded (worst-case dimension floor 5.5-2.0*1.5 = 2.5)
+                              # while still letting moderately-bad scores demote meaningfully.
+                              # The cap matters more as more cycles complete; once stddev widens
+                              # past ~1.0 the cap rarely fires.
 
 
 @dataclass
@@ -87,8 +96,23 @@ def _normalize_llm_score(
       - A score 1 stddev above mean → ~7.0 (not inflated to 9.0)
       - A score at mean → 5.5 (not clustered at 8.0)
       - A score 1 stddev below mean → ~4.0 (actually reflects weakness)
+
+    C1 (asymmetric): z is FLOOR-capped at ``-ZSCORE_CAP`` (=-2.0) but
+    NOT ceiling-capped.  Original C1 capped both ends and accidentally
+    suppressed legitimate high-quality outputs — a raw 9.5 with mean≈8
+    stddev≈0.4 produces z=3.75, which the symmetric cap clipped at 2.0
+    (normalized 8.5) when it should have been 5.5+5.625=11 → clamped to
+    10.  The asymmetric cap keeps the original C1 protection (a raw 7.1
+    from a "below-average but not catastrophic" LLM call no longer
+    floor-clamps to 1.0; it's bounded at 5.5-3.0=2.5) while restoring
+    upside on confident high-quality outputs.  Final 1.0–10.0 clamp is
+    still applied after ``ZSCORE_CENTER + z*ZSCORE_SPREAD``, so
+    extreme positive z values land at 10.0 rather than going unbounded.
     """
     z = (raw - mean) / stddev
+    if z < 0:
+        z = max(-ZSCORE_CAP, z)
+    # Positive z left uncapped (final clamp to [1.0, 10.0] handles overflow).
     normalized = ZSCORE_CENTER + z * ZSCORE_SPREAD
     return _clamp(normalized)
 
@@ -97,6 +121,7 @@ def blend_scores(
     llm_scores: DimensionScores,
     heuristic_scores: dict[str, float],
     historical_stats: dict[str, dict[str, float]] | None = None,
+    prompt_text: str | None = None,
 ) -> BlendedScores:
     """Blend LLM and heuristic scores with optional z-score normalization.
 
@@ -106,6 +131,10 @@ def blend_scores(
         historical_stats: Optional per-dimension stats from
             optimization_service.get_score_distribution(). Expected shape:
             ``{"score_clarity": {"count": N, "mean": M, "stddev": S}, ...}``
+        prompt_text: Optional optimized-prompt text used by C3 to detect
+            technical-prompt density and bump the heuristic conciseness
+            weight on prompts where LLM and heuristic systematically
+            disagree about info density.
 
     Returns:
         BlendedScores with per-dimension blended values, divergence flags,
@@ -116,6 +145,30 @@ def blend_scores(
     raw_heur: dict[str, float] = {}
     normalization_applied = False
     divergence_flags: list[str] = []
+
+    # C3: detect technical-prompt density once.  Heuristic conciseness
+    # already grants a TTR multiplier when ``_count_technical_nouns(prompt)
+    # >= TECHNICAL_CONTEXT_THRESHOLD`` (heuristic_scorer.py:177).  The same
+    # gate widens the heuristic's blend weight on conciseness here, on the
+    # observation that LLM-as-judge consistently mis-reads structurally
+    # dense technical specs as verbose (e.g. cycle 6 prompt 1: heur=8.3
+    # but LLM raw≈7.1, blended dropped to 3.9 after z-amplification).
+    # Trusting the heuristic more on technical prompts dampens that drift.
+    technical_dense = False
+    if prompt_text:
+        try:
+            from app.services.heuristic_scorer import (
+                TECHNICAL_CONTEXT_THRESHOLD,
+                _count_technical_nouns,
+            )
+            technical_dense = (
+                _count_technical_nouns(prompt_text) >= TECHNICAL_CONTEXT_THRESHOLD
+            )
+        except Exception:
+            logger.debug(
+                "C3 technical-density detection failed, using default weights",
+                exc_info=True,
+            )
 
     for dim in DIMENSIONS:
         llm_raw = getattr(llm_scores, dim)
@@ -143,6 +196,12 @@ def blend_scores(
 
         # Weighted blend
         w_h = HEURISTIC_WEIGHTS.get(dim, 0.30)
+        # C3: bump heuristic weight on conciseness for technical-dense prompts.
+        # 0.20 → 0.35 lifts the heuristic's structural-density signal from
+        # "minor adjustment" to "substantial pull" without overwhelming the
+        # LLM-as-judge component.  Other dimensions stay at default.
+        if dim == "conciseness" and technical_dense:
+            w_h = 0.35
         w_l = 1.0 - w_h
         blended_val = w_l * llm_component + w_h * heur_raw
         blended[dim] = round(_clamp(blended_val), 1)

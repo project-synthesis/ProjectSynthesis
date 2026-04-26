@@ -31,7 +31,10 @@ ADAPTATION_ALPHA = 0.05
 DECAY_RATE = 0.01
 FUSION_CLUSTER_LOOKUP_THRESHOLD = 0.3
 FUSION_PATTERN_TOP_K = 3
-SCORE_ADAPTATION_MIN_SAMPLES = 10
+SCORE_ADAPTATION_MIN_SAMPLES = 2  # Bayesian shrinkage admits learning from m=2; prior dominates at low n
+SCORE_ADAPTATION_PRIOR_KAPPA = 8.0  # T1.1 — pseudo-count for the prior;
+                                    # at n=κ the empirical and prior contribute equally;
+                                    # at n=2 prior carries 80% (2/(2+8)*emp + 8/10*prior).
 SCORE_ADAPTATION_LOOKBACK = 200
 
 # Default weight profiles: (w_topic, w_transform, w_output, w_pattern, w_qualifier)
@@ -379,6 +382,8 @@ decay_toward_defaults = decay_toward_target
 def compute_score_correlated_target(
     scored_profiles: list[tuple[float, dict[str, dict[str, float]]]],
     min_samples: int = SCORE_ADAPTATION_MIN_SAMPLES,
+    prior: dict[str, PhaseWeights] | None = None,
+    prior_kappa: float = SCORE_ADAPTATION_PRIOR_KAPPA,
 ) -> dict[str, PhaseWeights] | None:
     """Compute score-weighted target weight profiles from historical data.
 
@@ -407,6 +412,15 @@ def compute_score_correlated_target(
         - Below-median optimizations contribute 0 (no anti-reinforcement)
         - If stdev < 0.01 (all scores identical), equal contribution
         - Target = score-weighted mean of phase weights, floor-enforced
+
+    T1.1 — Bayesian shrinkage:
+        When ``prior`` is supplied, the returned target is a posterior:
+        ``posterior = (n / (n + κ)) * empirical + (κ / (n + κ)) * prior``
+        With ``κ=8`` (default) and ``n=2`` (the minimum sample count), the
+        prior carries 80% weight; at ``n=8`` they contribute equally; at
+        ``n=24`` empirical dominates 75/25.  This eliminates the prior
+        ``≥10`` hard threshold that prevented all but the largest cluster
+        from learning anything beyond bootstrap.
     """
     if len(scored_profiles) < min_samples:
         return None
@@ -494,6 +508,28 @@ def compute_score_correlated_target(
             w_qualifier=q_weight,
         )
         result[phase] = target.enforce_floor()
+
+    # T1.1 Bayesian shrinkage: blend the empirical posterior with the prior
+    # so small-sample clusters (n=2..8) start contributing signal without
+    # over-fitting to a handful of optimizations.  ``n`` is the count of
+    # profiles that actually contributed (i.e. that had non-zero weight).
+    if prior and result:
+        n = float(len(scored_profiles))
+        kappa = max(0.0, prior_kappa)
+        if n + kappa > 1e-9:
+            w_emp = n / (n + kappa)
+            w_pri = kappa / (n + kappa)
+            shrunk: dict[str, PhaseWeights] = {}
+            for phase, emp_target in result.items():
+                pri_target = prior.get(phase) or PhaseWeights.for_phase(phase)
+                shrunk[phase] = PhaseWeights(
+                    w_topic=w_emp * emp_target.w_topic + w_pri * pri_target.w_topic,
+                    w_transform=w_emp * emp_target.w_transform + w_pri * pri_target.w_transform,
+                    w_output=w_emp * emp_target.w_output + w_pri * pri_target.w_output,
+                    w_pattern=w_emp * emp_target.w_pattern + w_pri * pri_target.w_pattern,
+                    w_qualifier=w_emp * emp_target.w_qualifier + w_pri * pri_target.w_qualifier,
+                ).enforce_floor()
+            return shrunk
 
     return result if result else None
 

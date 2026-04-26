@@ -132,7 +132,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 
 ### Knowledge Engine
 - **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Fully organic domain and sub-domain discovery from user behavior via enriched Haiku-generated qualifier vocabulary (cluster centroid similarity matrix + intent labels + qualifier distribution fed forward, post-generation quality metric tracked). Unified lifecycle: domains and sub-domains re-evaluated every warm cycle with parameterized guards (consistency, age, member count, sub-domain anchoring). Graceful dissolution reparents clusters and merges meta-patterns — prompts are never lost. Qualifier-augmented embeddings (4th signal) enable cross-project specialization-aware clustering. No hardcoded domain assumptions — seed domains dissolve organically when unused (ADR-006)
-- **Domain readiness telemetry** — live `/api/domains/readiness` endpoints expose the three-source qualifier cascade (domain_raw > intent_label > tf_idf), adaptive promotion threshold, and dissolution 5-guard evaluation. Readiness panel + stability meter + emergence list + sparkline render in the topology inspector; per-domain rings overlay the 3D topology so operators see which domains are warming toward a new sub-domain and which are approaching dissolution. JSONL snapshot writer (30-day retention, hourly bucketing) feeds `/api/domains/{id}/readiness/history`. Tier-crossing detector (2-cycle hysteresis + per-domain cooldown) publishes `domain_readiness_changed` SSE events; a preference-gated toast dispatcher surfaces them in the UI. 30s TTL cache keyed by `(domain_id, member_count)` so new optimizations naturally invalidate stale entries
+- **Domain readiness telemetry** — live `/api/domains/readiness` endpoints expose the three-source qualifier cascade (domain_raw > intent_label > tf_idf), adaptive promotion threshold, and dissolution 5-guard evaluation. **TF-IDF source-3 (v0.4.7)** aggregates `raw_prompt` text across descendant active/mature clusters and min-max normalizes scores so the cascade's admit gate becomes meaningful — closes the prior structural silence where every domain reported `tf_idf: 0`. Vocab regeneration receives orphan TF-IDF terms + existing group names so latent themes the cascade is recording exclusively via source 3 get organically absorbed by the next Haiku regeneration. Readiness panel + stability meter + emergence list + sparkline render in the topology inspector; per-domain rings overlay the 3D topology so operators see which domains are warming toward a new sub-domain and which are approaching dissolution. JSONL snapshot writer (30-day retention, hourly bucketing) feeds `/api/domains/{id}/readiness/history`. Tier-crossing detector (2-cycle hysteresis + per-domain cooldown) publishes `domain_readiness_changed` SSE events; a preference-gated toast dispatcher surfaces them in the UI. 30s TTL cache keyed by `(domain_id, member_count)` so new optimizations naturally invalidate stale entries
 - **Pattern extraction** — reusable techniques extracted from successful optimizations, stored as meta-patterns per cluster
 - **Cross-cluster injection** — universal techniques injected across topic boundaries, ranked by composite relevance
 - **Global pattern tier** — durable patterns promoted from meta-pattern siblings that cross both gates: 5+ distinct source clusters AND 2+ distinct source projects. Single-project patterns stay project-scoped until a sibling emerges elsewhere. Injected with 1.3x relevance boost. Validated with demotion/re-promotion hysteresis, 500 retention cap. Injection effectiveness tracked in health endpoint
@@ -145,7 +145,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Enrichment profiles** — auto-selected per request: `code_aware` (all layers, coding+repo), `knowledge_work` (skip codebase, non-coding), `cold_start` (skip strategy+patterns, <10 optimizations). Profile gates which context layers activate
 - **Strategy intelligence** — unified advisory merging score-based strategy rankings, anti-patterns, domain keywords, and user feedback affinities. Domain-relaxed fallback queries across all domains when exact match is empty
 - **Prompt-context divergence detection** — two-layer system flags tech stack conflicts between prompt and codebase (e.g., PostgreSQL prompt vs SQLite codebase). Optimizer classifies intent as OVERSIGHT, DELIBERATE CHANGE, UPGRADE, or STANDALONE
-- **Heuristic accuracy pipeline** — compound keywords, technical verb+noun disambiguation, TF-IDF domain signal auto-enrichment from taxonomy discoveries, and confidence-gated Haiku LLM fallback for ambiguous classifications
+- **Heuristic accuracy pipeline** — compound keywords, technical verb+noun disambiguation, TF-IDF domain signal auto-enrichment from taxonomy discoveries, and confidence-gated Haiku LLM fallback for ambiguous classifications. **B5+ task-type lock** (v0.4.7): post-LLM check that prefers a writing lead verb (`Write/Draft/Compose/...`) over an LLM `coding` flip when the heuristic also said writing — prevents `Write a CHANGELOG section` from getting the coding rubric. **B5+ codebase trim**: writing-about-code prompts cap codebase context at 15K chars instead of 80K so the optimizer doesn't hallucinate against related-but-wrong code (live regression: cycle-10 CHANGELOG scored 6.61 vs 6.96 without codebase context — fix raised it to 7.39 with proper grounding)
 - **Classification agreement tracking** — heuristic vs LLM comparison after every analysis phase, exposed in health endpoint
 
 ### Developer Integration (First Vertical)
@@ -215,13 +215,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (2995 tests)
+# Backend tests (3097 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1477 tests)
+# Frontend tests (1518 tests)
 cd frontend && npm test
 
 # Frontend build

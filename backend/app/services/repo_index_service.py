@@ -119,6 +119,40 @@ def _classify_github_error(exc: GitHubApiError) -> str:
     return f"github_{exc.status_code}"
 
 
+# Per-process noise suppression for incremental-update auth failures.
+# Without this, every refresh cycle (default every 600s) logs WARNING
+# "HEAD check failed: GitHub API 401: Bad credentials (token_expired)".
+# The condition is real but the operator sees it once and there's no
+# action they can take from a log message — token refresh is automatic
+# on the next user-side API call.  After the first WARNING per
+# (repo_tag, reason), subsequent repeats demote to DEBUG; the
+# (repo_tag, reason) pair clears on a successful update.
+_SUPPRESSED_REFRESH_REASONS: frozenset[str] = frozenset(
+    {"token_expired", "rate_limited", "auth_invalid"},
+)
+_seen_refresh_warning: set[tuple[str, str]] = set()
+
+
+def _log_refresh_warning(repo_tag: str, reason: str, message: str) -> None:
+    """Log a refresh-time warning, suppressing repeat (repo, reason) pairs.
+
+    First occurrence logs at WARNING; subsequent repeats go to DEBUG.
+    Reset by ``mark_refresh_recovered`` when the refresh succeeds again.
+    """
+    key = (repo_tag, reason)
+    if reason in _SUPPRESSED_REFRESH_REASONS and key in _seen_refresh_warning:
+        logger.debug("incremental_update (suppressed-repeat): %s", message)
+        return
+    _seen_refresh_warning.add(key)
+    logger.warning("incremental_update: %s", message)
+
+
+def _mark_refresh_recovered(repo_tag: str) -> None:
+    """Clear suppression for a repo once it refreshes cleanly again."""
+    for reason in tuple(_SUPPRESSED_REFRESH_REASONS):
+        _seen_refresh_warning.discard((repo_tag, reason))
+
+
 # ---------------------------------------------------------------------------
 # RepoIndexService — indexing lifecycle (build / incremental / invalidate)
 # ---------------------------------------------------------------------------
@@ -490,11 +524,19 @@ class RepoIndexService:
             current_sha = await self._gc.get_branch_head_sha(token, repo_full_name, branch)
         except GitHubApiError as exc:
             reason = _classify_github_error(exc)
-            logger.warning("incremental_update: %s HEAD check failed: %s (%s)", repo_tag, exc, reason)
+            _log_refresh_warning(
+                repo_tag, reason,
+                f"{repo_tag} HEAD check failed: {exc} ({reason})",
+            )
             return _result(skipped_reason=reason)
         except Exception as exc:
-            logger.warning("incremental_update: %s HEAD check failed: %s", repo_tag, exc)
+            _log_refresh_warning(
+                repo_tag, "network_error",
+                f"{repo_tag} HEAD check failed: {exc}",
+            )
             return _result(skipped_reason="network_error")
+        else:
+            _mark_refresh_recovered(repo_tag)
         sha_ms = (time.monotonic() - t_sha) * 1000
 
         if current_sha and meta.head_sha == current_sha:

@@ -75,6 +75,15 @@ class Optimization(Base):
     tokens_by_phase: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     context_sources: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     original_scores: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # C4 — deterministic heuristic-only baseline scores for the *raw* prompt.
+    # Distinct from ``original_scores`` (which is LLM+heuristic blended,
+    # contaminated by A/B presentation noise on the original-side judgment).
+    # Use this as the stable anchor for delta computation, learning signal
+    # extraction, and improvement_score.  Keys: clarity, specificity,
+    # structure, faithfulness, conciseness — all in [1.0, 10.0].
+    heuristic_baseline_scores: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True,
+    )
     score_deltas: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     intent_label: Mapped[str | None] = mapped_column(String, nullable=True)
     domain: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -264,6 +273,15 @@ class OptimizationPattern(Base):
     )
     relationship: Mapped[str] = mapped_column(String(20), nullable=False, default="source")
     similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # T1.3-lite — pattern usefulness counters.  Incremented after the
+    # optimization scores: useful_count++ when the host optimization's
+    # overall_score >= USEFUL_FLOOR (7.5), unused_count++ when it
+    # <= UNUSED_CEILING (6.5).  Builds the data path for pattern
+    # attribution without paying the cost of pattern-ablation re-scoring
+    # on every Nth request.  ``relevance_score`` derived field is
+    # useful / max(useful + unused, 1).
+    useful_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unused_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (

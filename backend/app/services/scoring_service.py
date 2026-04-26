@@ -107,7 +107,10 @@ async def score_passthrough(
         clean = {k: max(1.0, min(10.0, float(v))) for k, v in external_scores.items()}
         try:
             ide_dims = DimensionScores.from_dict(clean)
-            blended_opt = blend_scores(ide_dims, heur_optimized, historical_stats)
+            blended_opt = blend_scores(
+                ide_dims, heur_optimized, historical_stats,
+                prompt_text=optimized_prompt,
+            )
             opt_dims = blended_opt.to_dimension_scores()
             scoring_mode = "hybrid_passthrough"
             divergence_flags = blended_opt.divergence_flags or []
@@ -126,6 +129,7 @@ async def score_passthrough(
                     DimensionScores.from_dict(heur_original),
                     heur_original,
                     historical_stats,
+                    prompt_text=raw_prompt,
                 )
                 orig_dims = blended_orig.to_dimension_scores()
             except Exception:

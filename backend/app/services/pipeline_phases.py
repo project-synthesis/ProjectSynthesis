@@ -75,6 +75,23 @@ from app.utils.text_cleanup import title_case_label, validate_intent_label
 
 logger = logging.getLogger(__name__)
 
+# B5+ task-type lock (v0.4.7). Module-level so the constants are not re-
+# allocated per call and so ruff N806 is satisfied. ``write`` is the only
+# ambiguous verb in this set ("write a function" is genuinely coding); when
+# ``write`` leads, we require an additional prose-output cue in the first
+# sentence to lock the task_type to ``writing``. All other verbs in the set
+# are unambiguously prose and lock without an extra cue.
+_WRITING_LEAD_VERBS: frozenset[str] = frozenset({
+    "write", "draft", "compose", "author", "summarize",
+    "describe", "document", "outline", "narrate",
+})
+_AMBIGUOUS_LEAD_VERBS: frozenset[str] = frozenset({"write"})
+_PROSE_OUTPUT_CUES: frozenset[str] = frozenset({
+    "markdown", "docs", "doc", "paragraph", "paragraphs", "page",
+    "notes", "style", "release", "blog", "readme", "guide",
+    "reference", "changelog", "section", "summary", "post",
+})
+
 
 def _normalize_llm_domain(domain: str, known_primaries: set[str]) -> str:
     """Reconcile LLM-output domain styles into canonical ``primary: qualifier``.
@@ -177,6 +194,12 @@ class ScoringOutput:
     normalization_applied: bool
     score_duration_ms: int
     score_model: str
+    # C4: deterministic heuristic-only baseline.  Stable across runs
+    # because it never touches the LLM.  Used as the canonical anchor
+    # for delta and improvement_score computation.  Optional (last) to
+    # keep legacy callers / tests that hand-construct ScoringOutput
+    # working without code change.
+    heuristic_baseline_scores: DimensionScores | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +320,46 @@ async def resolve_post_analyze_state(
             "Task-type rescue failed (non-fatal) trace_id=%s",
             trace_id, exc_info=True,
         )
+
+    # B5+ task-type LOCK (cycle-10 + cycle-11 forensics): when the
+    # prompt's LEAD VERB is unambiguously a prose-writing verb AND the
+    # LLM analyzer flipped to ``coding`` (because of inline code refs in
+    # the body), prefer ``writing`` so the writing-rubric scoring +
+    # role-playing strategy stays in effect.  The lead verb is the
+    # user's clearest intent signal — far more reliable than the
+    # heuristic's task-type vote on prompts that mix writing intent
+    # with technical content.
+    #
+    # Cycle-11 finding (the original guard ``heuristic_task_type IN
+    # writing/creative`` was too restrictive): on a prompt like
+    # ``Write a brief reference page for `POST /api/clusters/match` ...``,
+    # the heuristic classified as ``analysis`` (not ``writing``) because
+    # technical-noun density beat the single ``Write`` keyword.  LLM
+    # then flipped to ``coding``, and the lock didn't engage.  Result:
+    # writing intent bypassed, length budget bloated to 3.9× (writing
+    # tasks should stay tight), conciseness dropped to 6.1.
+    #
+    # See module-level ``_WRITING_LEAD_VERBS`` / ``_AMBIGUOUS_LEAD_VERBS`` /
+    # ``_PROSE_OUTPUT_CUES`` for the lock vocabulary + compound-verb guard.
+    if analysis.task_type == "coding" and raw_prompt.strip():
+        _first_word = raw_prompt.strip().split()[0].lower().strip(".,;:!?")
+        if _first_word in _WRITING_LEAD_VERBS:
+            _lock = _first_word not in _AMBIGUOUS_LEAD_VERBS
+            if not _lock:
+                # Disambiguate "Write" via first-sentence prose-output cue.
+                _first_sentence_lower = (
+                    raw_prompt.split(".")[0] if "." in raw_prompt else raw_prompt
+                ).lower()
+                _lock = any(cue in _first_sentence_lower for cue in _PROSE_OUTPUT_CUES)
+            if _lock:
+                logger.info(
+                    "B5+ task-type lock: LLM said coding but lead verb '%s' "
+                    "indicates writing intent (heuristic was %s) — preferring "
+                    "writing. trace_id=%s",
+                    _first_word, heuristic_task_type, trace_id,
+                )
+                analysis.task_type = "writing"  # type: ignore[assignment]
+                effective_task_type = "writing"
 
     # Phase 1.5: Post-LLM domain reconciliation — MUST run BEFORE
     # ``domain_resolver.resolve()`` so the resolver sees the canonical
@@ -499,13 +562,56 @@ async def build_optimize_context(
     payload.
     """
     strategy_instructions = strategy_loader.load(effective_strategy)
+
+    # C2: surface original-prompt heuristics (length + conciseness) to the
+    # optimizer.  Without these signals the optimizer always elaborates,
+    # producing 10x expansions of already-concise prompts that score badly
+    # on conciseness.  The heuristic conciseness scorer is regex/word-count —
+    # cheap, deterministic, no LLM call.  Tier the expansion advice so the
+    # optimizer has explicit guidance, not just "scale to task type" prose.
+    try:
+        from app.services.heuristic_scorer import HeuristicScorer
+        _heur_baseline = HeuristicScorer.score_prompt(raw_prompt)
+        _orig_conc = float(_heur_baseline.get("conciseness", 5.0))
+    except Exception:
+        _orig_conc = 5.0
+    _orig_len = len(raw_prompt)
+
+    if _orig_conc >= 7.0 and _orig_len < 500:
+        _expansion_advice = (
+            f"Length budget: original is {_orig_len} chars with conciseness="
+            f"{_orig_conc:.1f}/10 — already terse and well-formed. Aim for "
+            f"≤3× expansion ({_orig_len * 3} chars max). Sharpen vocabulary, "
+            f"deduce one load-bearing implication, and STOP — do not "
+            f"scaffold into ## Why this matters / ## Deliverables / ## "
+            f"Constraints sections. BUT keep one bullet list when there "
+            f"are ≥3 distinct constraints (a flat paragraph forfeits "
+            f"~3 points on the structure scoring dimension; a single "
+            f"`- bullet` list reclaims them at minimal length cost)."
+        )
+    elif _orig_conc >= 6.0 and _orig_len < 1000:
+        _expansion_advice = (
+            f"Length budget: original is {_orig_len} chars with conciseness="
+            f"{_orig_conc:.1f}/10 — moderately concise. Aim for ≤5× expansion "
+            f"({_orig_len * 5} chars max) unless task type genuinely demands "
+            f"high depth (specs, multi-concern features). Use one "
+            f"`##` header + one bullet list, not a 5-section RFP."
+        )
+    else:
+        _expansion_advice = (
+            f"Length budget: original is {_orig_len} chars with conciseness="
+            f"{_orig_conc:.1f}/10 — verbose or under-structured. Restructure "
+            f"freely; expansion ratio is not the constraint here."
+        )
+
     analysis_summary = (
         f"Task type: {analysis.task_type}\n"
         f"Domain: {effective_domain}\n"
         f"Weaknesses: {', '.join(analysis.weaknesses)}\n"
         f"Strengths: {', '.join(analysis.strengths)}\n"
         f"Strategy: {effective_strategy}\n"
-        f"Rationale: {analysis.strategy_rationale}"
+        f"Rationale: {analysis.strategy_rationale}\n"
+        f"{_expansion_advice}"
     )
 
     applied_patterns_text: str | None = None
@@ -703,9 +809,11 @@ async def run_hybrid_scoring(
 
     blended_original = blend_scores(
         llm_original_scores, heur_original, historical_stats,
+        prompt_text=raw_prompt,
     )
     blended_optimized = blend_scores(
         llm_optimized_scores, heur_optimized, historical_stats,
+        prompt_text=optimization.optimized_prompt,
     )
 
     original_scores = blended_original.to_dimension_scores()
@@ -787,11 +895,25 @@ async def run_hybrid_scoring(
     except (ImportError, RuntimeError, ValueError, MemoryError) as exc:
         logger.debug("Intent drift check skipped: %s", exc)
 
+    # C4: heuristic-only baseline for the original prompt.  Computed from
+    # the SAME ``heur_original`` we already have — it's the unblended,
+    # un-normalized version of the original-side score.  Persisted to
+    # ``heuristic_baseline_scores`` for downstream delta + improvement
+    # computation that needs immunity from LLM-judge noise.
+    heuristic_baseline_scores = DimensionScores(
+        clarity=float(heur_original.get("clarity", 5.0)),
+        specificity=float(heur_original.get("specificity", 5.0)),
+        structure=float(heur_original.get("structure", 5.0)),
+        faithfulness=float(heur_original.get("faithfulness", 5.0)),
+        conciseness=float(heur_original.get("conciseness", 5.0)),
+    )
+
     return ScoringOutput(
         llm_original_scores=llm_original_scores,
         llm_optimized_scores=llm_optimized_scores,
         original_scores=original_scores,
         optimized_scores=optimized_scores,
+        heuristic_baseline_scores=heuristic_baseline_scores,
         deltas=deltas,
         divergence_flags=divergence_flags,
         warnings=warnings,
@@ -905,6 +1027,7 @@ async def persist_and_propagate(
     scoring = inputs.scoring
     optimized_scores = scoring.optimized_scores if scoring else None
     original_scores = scoring.original_scores if scoring else None
+    heuristic_baseline = scoring.heuristic_baseline_scores if scoring else None
     deltas = scoring.deltas if scoring else None
 
     db_opt = Optimization(
@@ -938,14 +1061,32 @@ async def persist_and_propagate(
         project_id=inputs.project_id,
         context_sources=inputs.context_sources or {},
         original_scores=original_scores.model_dump() if original_scores else None,
+        heuristic_baseline_scores=(
+            heuristic_baseline.model_dump() if heuristic_baseline else None
+        ),
         score_deltas=deltas,
         tokens_by_phase=inputs.phase_durations,
         models_by_phase=inputs.model_ids,
         heuristic_flags=inputs.divergence_flags or None,
         suggestions=inputs.suggestions,
     )
-    # Compute weighted improvement score from deltas.
-    if deltas:
+    # C4: Compute improvement_score from the deterministic heuristic
+    # baseline when available — shields the score from LLM-judge noise on
+    # the original-side A/B presentation.  Falls back to the LLM-blended
+    # ``deltas`` when no heuristic baseline is recorded (legacy rows or
+    # heuristic-only scoring mode).  ``deltas`` itself is preserved as-is
+    # for backward compat, callers, and side-by-side comparison.
+    if heuristic_baseline and optimized_scores:
+        heuristic_lift = {
+            dim: getattr(optimized_scores, dim) - getattr(heuristic_baseline, dim)
+            for dim in DIMENSION_WEIGHTS
+        }
+        imp = sum(
+            heuristic_lift.get(dim, 0) * w
+            for dim, w in DIMENSION_WEIGHTS.items()
+        )
+        db_opt.improvement_score = round(max(0.0, min(10.0, imp)), 2)
+    elif deltas:
         imp = sum(
             deltas.get(dim, 0) * w
             for dim, w in DIMENSION_WEIGHTS.items()
@@ -999,6 +1140,29 @@ async def persist_and_propagate(
                 "Post-persist injection provenance write failed (non-fatal): %s",
                 prov_exc,
             )
+
+    # T1.3-lite — increment useful/unused counters on every
+    # ``OptimizationPattern`` row attached to this optimization based on
+    # the host's overall_score.  Builds attribution data without paying
+    # the cost of pattern-ablation re-scoring.  A separate commit so a
+    # counter failure can never roll back provenance.
+    try:
+        from app.services.pattern_injection import record_pattern_usefulness
+
+        _overall = (
+            optimized_scores.overall if optimized_scores is not None else None
+        )
+        bumped = await record_pattern_usefulness(
+            db,
+            optimization_id=inputs.opt_id,
+            overall_score=_overall,
+        )
+        if bumped:
+            await db.commit()
+    except Exception as cnt_exc:
+        logger.debug(
+            "Pattern usefulness bump skipped (non-fatal): %s", cnt_exc,
+        )
 
     # Include auto-injected cluster IDs in usage propagation
     if inputs.auto_injected_cluster_ids:
@@ -1061,6 +1225,7 @@ def build_pipeline_result(inputs: PersistenceInputs) -> PipelineResult:
     scoring = inputs.scoring
     optimized_scores = scoring.optimized_scores if scoring else None
     original_scores = scoring.original_scores if scoring else None
+    heuristic_baseline = scoring.heuristic_baseline_scores if scoring else None
     deltas = scoring.deltas if scoring else None
 
     result_kwargs = dict(
@@ -1073,6 +1238,7 @@ def build_pipeline_result(inputs: PersistenceInputs) -> PipelineResult:
         changes_summary=inputs.optimization.changes_summary,
         optimized_scores=optimized_scores,
         original_scores=original_scores,
+        heuristic_baseline_scores=heuristic_baseline,
         score_deltas=deltas,
         overall_score=optimized_scores.overall if optimized_scores else None,
         provider=inputs.provider_name,

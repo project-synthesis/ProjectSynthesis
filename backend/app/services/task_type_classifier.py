@@ -165,8 +165,17 @@ _STATIC_SINGLE_SIGNALS: dict[str, list[tuple[str, float]]] = {
 }
 
 # --- A4: Confidence-gated LLM fallback thresholds ---
-_LLM_CLASSIFICATION_CONFIDENCE_GATE = 0.5  # heuristic confidence below this triggers check
-_LLM_CLASSIFICATION_MARGIN_GATE = 0.2      # margin between top 2 categories below this triggers LLM
+# T1.7 — gate tightened so we stop paying Haiku tokens on prompts where the
+# heuristic ALREADY made a confident call.  Pre-fix: 0.5/0.2 caused every
+# classification on the project's own corpus to fall through to Haiku
+# (4 of 4 task_type_telemetry rows = ``haiku_fallback``, none from the
+# static path).  Post-fix: 0.40 confidence + 0.10 margin — Haiku only fires
+# when the heuristic genuinely can't tell two task types apart.  The
+# B2 ``has_technical_nouns`` rescue + technical-verb disambiguation (A2)
+# already cover the high-leverage code-aware cases at confidence 0.6+, so
+# this tighter gate doesn't sacrifice quality on the live workload.
+_LLM_CLASSIFICATION_CONFIDENCE_GATE = 0.40  # heuristic confidence below this triggers check
+_LLM_CLASSIFICATION_MARGIN_GATE = 0.10      # margin between top 2 categories below this triggers LLM
 
 # --- Technical verb + noun disambiguation (A2) ---
 # When a technical verb appears with a technical noun in the first sentence,
@@ -211,6 +220,46 @@ _TECHNICAL_NOUNS = frozenset({
     # DB transaction primitive — ``savepoint`` is unambiguous (no creative
     # legitimacy), unlike ``transaction`` which is overloaded with finance.
     "savepoint",
+    # B4 (cycle 9 validation): vocabulary scope expansion across
+    # commonly-audited tech categories.  Every term below is unambiguous —
+    # zero overlap with creative-writing legitimacy.  Specifically excluded:
+    # ``test`` / ``build`` / ``component`` / ``metric`` / ``hook`` —
+    # these all have prose use ("test the waters", "build a relationship",
+    # "metric system", "off the hook") and would over-trigger.  Brand
+    # names + technical compounds get in; generic engineering verbs and
+    # nouns stay out.
+    #
+    # Container / orchestration / IaC.  Dropped terms with prose use:
+    # ``container`` (shipping), ``image`` (photo), ``deployment``
+    # (military/marketing), ``ingress`` (architecture).  Kept brand
+    # names + compound terms with zero prose legitimacy.
+    "dockerfile", "docker-compose", "kubectl", "helm", "terraform",
+    "ansible", "containerd", "podman",
+    "nginx", "haproxy", "traefik", "envoy", "istio",
+    "healthcheck",
+    # OAuth / auth / crypto primitives.  Acronyms have zero prose use.
+    "oauth", "oidc", "saml", "openid", "fernet", "jwt", "csrf", "xss",
+    "bcrypt", "argon2", "scrypt", "mtls",
+    # Frontend frameworks.  Dropped: ``react`` (chemistry), ``vue`` (view
+    # in French), ``angular`` (math/anatomy).  Kept compound brands.
+    "svelte", "sveltekit", "nextjs", "tailwind", "vite",
+    # Backend frameworks (extension of the FastAPI line above).
+    # Dropped: ``celery`` (vegetable).
+    "uvicorn", "gunicorn", "starlette", "wsgi", "asgi",
+    # Datastores + queues + caches.  Dropped: ``mongo`` (mongoose family),
+    # ``kafka`` (author).
+    "postgresql", "mongodb", "redis", "memcached",
+    "elasticsearch", "rabbitmq", "pulsar",
+    # Observability / tracing brand names.  Dropped: ``prometheus``
+    # (mythology), ``loki`` (mythology), ``sentry`` (military), ``jaeger``
+    # (German for hunter).  Kept compound + product-specific.
+    "opentelemetry", "datadog",
+    # Test runners.  Dropped: ``mocha`` (drink), ``cypress`` (tree).
+    "pytest", "jest", "vitest", "playwright",
+    # Concurrency runtime primitives (extends ``asyncio`` line above).
+    # Dropped: ``channel`` (TV / communication), ``lifecycle`` (career),
+    # ``lambda`` (math), ``rayon`` (fabric).
+    "goroutine", "tokio",
 })
 
 # Pre-compiled word-boundary patterns for task_type keywords.  Built once at
@@ -228,17 +277,70 @@ _INLINE_CODE_RE = re.compile(r"`[^`]+`")
 _MD_TABLE_ROW_RE = re.compile(r"(?m)^\s*\|.*\|\s*$")
 
 
-def _strip_code_and_tables(text: str) -> str:
-    """Remove triple-backtick fences, inline-backtick spans, and pipe-
-    delimited markdown table rows.  Replaces each occurrence with a single
-    space so adjacent prose words don't fuse.
+# Inline-backtick content classified as a "real code reference" gets
+# unwrapped (content preserved); other backtick spans are stripped to
+# blank space (legacy behaviour).  A real code reference is signalled by:
+#   - a path separator ``/`` (file path: ``backend/app/...``)
+#   - a recognised source-file extension (``.py``, ``.svelte``, ``.ts``,
+#     ``.tsx``, ``.js``, ``.jsx``, ``.yml``, ``.yaml``, ``.json``, ``.md``,
+#     ``.go``, ``.rs``, ``.java``, ``.kt``, ``.cs``, ``.rb``, ``.php``)
+#   - snake_case (``_``) — guaranteed code identifier syntax
+# Anything else (e.g. ``\`pipeline.schema.endpoint.database.api\``` —
+# concatenated technical nouns with no real-file shape) is treated as a
+# code-dump and stripped, preserving the original keyword-boost
+# protection while restoring the B2 rescue on real file mentions.
+_CODE_FILE_EXT_RE = re.compile(
+    r"\.(?:py|svelte|tsx?|jsx?|ya?ml|json|md|go|rs|java|kt|cs|rb|php)\b",
+    re.IGNORECASE,
+)
 
-    Called before ``re.split(r"[.?!]", ...)`` so the first-sentence boundary
-    is computed on the user's intent prose rather than on code or tabular
-    data that happens to precede it.
+
+def _looks_like_code_reference(content: str) -> bool:
+    """Return True if the content looks like a real file path / identifier."""
+    if "/" in content:
+        return True
+    if "_" in content:
+        return True
+    if _CODE_FILE_EXT_RE.search(content):
+        return True
+    return False
+
+
+def _strip_code_and_tables(text: str) -> str:
+    """Remove triple-backtick fences and pipe-delimited markdown table rows;
+    SELECTIVELY unwrap inline-backtick spans (only those that look like
+    real code references — file paths, module.method tokens, snake_case).
+
+    Triple-backtick fences and tables are stripped entirely (replaced with
+    a single space so adjacent prose words don't fuse) — they typically
+    contain code dumps that pollute first-sentence keyword analysis.
+
+    Inline backtick-wrapped identifier spans get differentiated treatment:
+      - Real code refs (paths, file extensions, snake_case) are UNWRAPPED
+        so the B2 ``has_technical_nouns`` rescue can see them.  Pre-fix,
+        cycle-9 prompts 1/2/4 (Heatmap, SQL, OAuth) had their file paths
+        deleted entirely, demoting them to ``knowledge_work`` profile and
+        skipping codebase context on clearly-code-aware prompts.
+      - Concept-strings (e.g. a backtick span containing
+        ``pipeline.schema.endpoint.database.api`` — a stack of technical
+        nouns with no real-file shape) stay STRIPPED because their content
+        was never the user's intent — they're keyword dumps that distort
+        the first-sentence boost.
+
+    Live regressions covered:
+      - cycle-9 prompt 4 (GitHub OAuth audit, 2 file paths in backticks):
+        unwrap → code_aware → codebase context delivered.
+      - test_inline_backticks_stripped_from_first_sentence (concept-stack
+        in backticks + ``evaluate and audit`` verb): strip → analysis
+        task_type preserved as designed.
     """
     text = _CODE_FENCE_RE.sub(" ", text)
-    text = _INLINE_CODE_RE.sub(" ", text)
+
+    def _inline_handler(m: re.Match) -> str:
+        body = m.group(0).strip("`")
+        return body if _looks_like_code_reference(body) else " "
+
+    text = _INLINE_CODE_RE.sub(_inline_handler, text)
     text = _MD_TABLE_ROW_RE.sub(" ", text)
     return text
 

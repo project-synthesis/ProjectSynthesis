@@ -253,7 +253,16 @@ class PipelineResult(BaseModel):
         default=None, description="Scores for the optimized prompt.",
     )
     original_scores: DimensionScores | None = Field(
-        default=None, description="Scores for the original prompt.",
+        default=None, description="LLM+heuristic blended scores for the original prompt.",
+    )
+    heuristic_baseline_scores: DimensionScores | None = Field(
+        default=None,
+        description=(
+            "Deterministic heuristic-only scores for the original prompt — "
+            "no LLM, no z-norm, no blending.  Stable anchor for delta + "
+            "improvement computation, immune to A/B presentation noise on "
+            "the original-side LLM judgment."
+        ),
     )
     score_deltas: dict[str, float] | None = Field(
         default=None, description="Per-dimension score change (optimized minus original).",

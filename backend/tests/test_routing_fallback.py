@@ -392,11 +392,15 @@ class TestStatePersistenceAcrossRestart:
     def test_new_manager_recovers_from_session_file(
         self, tmp_path: Path,
     ) -> None:
-        """A new RoutingManager constructed from the same data_dir recovers state.
+        """Issue-4: a fresh session file IS trusted on recovery.
 
-        Note: recovered state always starts with mcp_connected=False and
-        sampling_capable=None — the manager waits for a live initialize
-        handshake rather than trusting persisted capability state.
+        Models the real-world case where the FastAPI backend restarts
+        (e.g., uvicorn auto-reload) while the MCP server process keeps
+        running with an active sampling-capable client.  The MCP server
+        wrote ``mcp_session.json`` within the capability-fresh window
+        and the file is not stale, so the new backend's
+        ``RoutingManager`` should trust the persisted state instead of
+        waiting ~60s for the disconnect checker to notice.
         """
         eb1 = EventBus()
         mgr1 = RoutingManager(event_bus=eb1, data_dir=tmp_path, is_mcp_process=True)
@@ -408,10 +412,10 @@ class TestStatePersistenceAcrossRestart:
         eb2 = EventBus()
         mgr2 = RoutingManager(event_bus=eb2, data_dir=tmp_path)
 
-        # Recovery does NOT trust persisted sampling/connected state —
-        # waits for live initialize handshake
-        assert mgr2.state.mcp_connected is False
-        assert mgr2.state.sampling_capable is None
+        # Recovery trusts the freshly-written session file — backend
+        # restart no longer blackholes sampling for ~60s.
+        assert mgr2.state.mcp_connected is True
+        assert mgr2.state.sampling_capable is True
 
     def test_stale_session_file_cleared_on_recovery(
         self, tmp_path: Path,

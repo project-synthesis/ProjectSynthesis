@@ -1203,6 +1203,23 @@
                  const sprite = labels.getOrCreate(n.id, n.label, n.color);
                  sprite.position.set(n.position[0], n.position[1] + n.size + 0.5, n.position[2]);
               }
+
+              // Pre-fix bug: halo + readiness ring meshes were positioned ONCE
+              // by ``rebuildScene`` which ran BEFORE this formation animation.
+              // At that moment all nodes were origin-collapsed, so the halos
+              // were placed at origin.  This callback then animated each
+              // ``n.position`` toward its settled target without syncing the
+              // decorations, leaving halos pinned at origin while clusters
+              // flew outward.  Visible until LOD-change → ``rebuildScene``
+              // re-sync (e.g. user zoom — which is exactly the symptom
+              // observed: "I have to zoom in or out for the rings to
+              // position themselves in the correct order and clusters").
+              const halo = _haloById.get(n.id);
+              if (halo) halo.position.set(n.position[0], n.position[1], n.position[2]);
+              const ringEntry = _readinessRings.get(n.id);
+              if (ringEntry) {
+                ringEntry.mesh.position.set(n.position[0], n.position[1], n.position[2]);
+              }
            });
 
            if (t >= 1.0) {

@@ -132,6 +132,75 @@ def extract_domain_vocab(
     return frozenset(synth_vocab | path_vocab)
 
 
+# Boost weights for the additive relevance gate (see compute_repo_relevance).
+# Calibrated so a confident identifier match alone (cosine ≈ 0.05) lifts the
+# score above REPO_RELEVANCE_FLOOR=0.15.  Domain-overlap boost is small per
+# match but capped, so large vocabularies don't overwhelm an unrelated prompt.
+_IDENTIFIER_MATCH_BOOST = 0.10
+_DOMAIN_OVERLAP_BOOST_PER_MATCH = 0.01
+_DOMAIN_OVERLAP_CAP = 10  # max additive +0.10 from overlap
+
+# Min length for an identifier sub-token to be a credible file-path match.
+# Below 4 chars produces noise (`api`, `db`, `id` show up everywhere); 4
+# admits `auth`, `repo`, `cache`, etc. without false positives.
+_MIN_IDENTIFIER_TOKEN_LEN = 4
+
+
+def _pascal_to_snake(token: str) -> str:
+    """Convert ``PascalCaseIdentifier`` to ``pascal_case_identifier``.
+
+    Handles consecutive caps gracefully (``HTTPSConnection`` →
+    ``https_connection``).  Used to bridge the gap between prompt-side
+    PascalCase mentions of a class and the snake_case file path that
+    holds that class.
+    """
+    s = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", token)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    return s.lower()
+
+
+def _check_identifier_match(
+    raw_prompt: str, file_paths: list[str] | None,
+) -> tuple[bool, list[str]]:
+    """Return ``(matched, top_hits)`` if any prompt identifier hits a file path.
+
+    A "credible" identifier match means the prompt explicitly named a class,
+    module, or file that exists in the linked repo — the strongest possible
+    signal that codebase context belongs in this request, regardless of what
+    the cosine embedding says about the prompt as a whole.
+
+    Algorithm:
+    - For each whitespace-separated token, split on interior ``.``/``-``/``/``
+      (so ``DomainSignalLoader.qualifier_embedding_cache`` decomposes).
+    - Convert PascalCase sub-tokens to snake_case.
+    - Filter sub-tokens shorter than 4 chars (avoid noise).
+    - Substring-match against the lowercased file_paths blob.
+
+    Conservative on false positives: requires the snake_case form to appear
+    in a path (filename or directory), not just any vocabulary overlap.
+    """
+    if not file_paths:
+        return False, []
+    paths_blob = "\n".join(p.lower() for p in file_paths)
+
+    hits: list[str] = []
+    for raw in raw_prompt.split():
+        token = raw.strip(".,;:!?()[]{}\"'`")
+        if not token:
+            continue
+        for sub in re.split(r"[.\-/]", token):
+            if not sub:
+                continue
+            snake = _pascal_to_snake(sub)
+            if len(snake) < _MIN_IDENTIFIER_TOKEN_LEN:
+                continue
+            if snake in paths_blob:
+                hits.append(snake)
+                if len(hits) >= 5:
+                    return True, hits
+    return bool(hits), hits
+
+
 async def compute_repo_relevance(
     raw_prompt: str,
     explore_synthesis: str,
@@ -156,14 +225,25 @@ async def compute_repo_relevance(
        fall below the floor because synthesis prose describes the system
        in aggregate, not the individual files by name.
 
-    The prompt must clear ``REPO_RELEVANCE_FLOOR`` cosine against that
-    three-layer anchor to pass — one well-calibrated embedding threshold.
+    Decision is **additive**.  Pure cosine MiniLM is structurally suppressed
+    on short prompts that name a single class+method (e.g. *"Audit
+    DomainSignalLoader.qualifier_embedding_cache"* — 255 chars vs a 50K-char
+    anchor), even when the prompt is unambiguously about the linked repo.
+    The gate combines three signals before deciding:
+
+    - ``cosine`` (always-on baseline)
+    - ``identifier_match`` boost: +0.10 when a snake-cased prompt token
+      appears in any indexed file path (one strong hit lifts a 0.05-cosine
+      prompt over the 0.15 floor)
+    - ``domain_overlap`` boost: +0.01 per match, capped at 10 matches
+      (so 7 vocab matches add +0.07 — meaningful but not overwhelming)
 
     Returns ``(cosine, info)`` where *info* contains diagnostic keys:
-    ``cosine``, ``decision`` (``"pass"``/``"skip"``), ``reason``
-    (``"above_floor"``/``"below_floor"``), plus ``domain_overlap`` +
-    ``domain_matches`` + ``domain_vocab_size`` retained as diagnostics
-    only (they no longer gate the decision).
+    ``cosine`` (raw), ``adjusted_score`` (cosine + boosts), ``decision``
+    (``"pass"``/``"skip"``), ``reason`` (``"above_floor"``,
+    ``"identifier_match"``, ``"overlap_boost"``, or ``"below_floor"``),
+    plus ``domain_overlap`` + ``domain_matches`` + ``domain_vocab_size`` +
+    ``identifier_match`` + ``identifier_hits`` for full observability.
 
     Used by :func:`ContextEnrichmentService.enrich` to gate codebase context
     injection, preventing unrelated projects from inheriting the linked
@@ -201,29 +281,56 @@ async def compute_repo_relevance(
         / (np.linalg.norm(prompt_vec) * np.linalg.norm(synth_vec) + 1e-9)
     )
 
-    # Diagnostic-only: vocabulary overlap no longer gates the decision but
-    # remains in the info dict for observability/debugging.  Vocab uses
+    # Diagnostic + additive signal: vocabulary overlap.  Domain vocab uses
     # *all* supplied paths (not the stride sample) — it's token-deduped
     # downstream so size is bounded by the real vocabulary.
     domain_vocab = extract_domain_vocab(explore_synthesis, file_paths=file_paths)
     prompt_lower = raw_prompt.lower()
     matches = [w for w in domain_vocab if w in prompt_lower]
+    overlap_boost = _DOMAIN_OVERLAP_BOOST_PER_MATCH * min(
+        len(matches), _DOMAIN_OVERLAP_CAP,
+    )
 
-    if cosine >= REPO_RELEVANCE_FLOOR:
+    # Identifier-match signal: did the prompt name a class/module that
+    # exists in the indexed file paths?  This is the strongest independent
+    # signal — overrides a low cosine when the prompt is unambiguously
+    # about a specific file in the repo.
+    identifier_match, identifier_hits = _check_identifier_match(
+        raw_prompt, file_paths,
+    )
+    identifier_boost = _IDENTIFIER_MATCH_BOOST if identifier_match else 0.0
+
+    adjusted = cosine + identifier_boost + overlap_boost
+
+    # Decision precedence — surface the strongest passing signal in ``reason``
+    # so observability shows *why* the prompt was kept.
+    if adjusted >= REPO_RELEVANCE_FLOOR:
+        if cosine >= REPO_RELEVANCE_FLOOR:
+            reason = "above_floor"
+        elif identifier_match:
+            reason = "identifier_match"
+        else:
+            reason = "overlap_boost"
         return cosine, {
             "cosine": round(cosine, 4),
+            "adjusted_score": round(adjusted, 4),
             "domain_overlap": len(matches),
             "domain_matches": sorted(matches)[:10],
             "domain_vocab_size": len(domain_vocab),
+            "identifier_match": identifier_match,
+            "identifier_hits": identifier_hits[:5],
             "decision": "pass",
-            "reason": "above_floor",
+            "reason": reason,
         }
 
     return cosine, {
         "cosine": round(cosine, 4),
+        "adjusted_score": round(adjusted, 4),
         "domain_overlap": len(matches),
         "domain_matches": sorted(matches)[:10],
         "domain_vocab_size": len(domain_vocab),
+        "identifier_match": identifier_match,
+        "identifier_hits": identifier_hits[:5],
         "decision": "skip",
         "reason": "below_floor",
     }

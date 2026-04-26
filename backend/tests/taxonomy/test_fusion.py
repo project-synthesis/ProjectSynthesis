@@ -428,9 +428,16 @@ class TestConstants:
         assert DECAY_RATE == 0.01
 
     def test_score_adaptation_min_samples(self):
-        from app.services.taxonomy.fusion import SCORE_ADAPTATION_MIN_SAMPLES
+        # T1.1: Bayesian shrinkage admits learning from m=2; the prior
+        # carries 80% weight at the floor and decays as n grows.
+        # Constant lowered from 10 → 2 alongside the κ=8 prior gate.
+        from app.services.taxonomy.fusion import (
+            SCORE_ADAPTATION_MIN_SAMPLES,
+            SCORE_ADAPTATION_PRIOR_KAPPA,
+        )
 
-        assert SCORE_ADAPTATION_MIN_SAMPLES == 10
+        assert SCORE_ADAPTATION_MIN_SAMPLES == 2
+        assert SCORE_ADAPTATION_PRIOR_KAPPA == 8.0
 
 
 # ---------------------------------------------------------------------------

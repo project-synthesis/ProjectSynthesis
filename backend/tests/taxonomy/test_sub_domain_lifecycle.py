@@ -452,7 +452,7 @@ class TestSubDomainCreationGuard:
 
         generate_calls = []
 
-        async def fake_generate(provider, domain_label, cluster_contexts, similarity_matrix, model):
+        async def fake_generate(provider, domain_label, cluster_contexts, similarity_matrix, model, **_kwargs):
             generate_calls.append(domain_label)
             return {"query": ["sql", "index"], "migration": ["migrate", "alembic"]}
 
@@ -729,7 +729,7 @@ class TestSignalDrivenCreation:
 
         generate_calls = []
 
-        async def fake_generate(provider, domain_label, cluster_contexts, similarity_matrix, model):
+        async def fake_generate(provider, domain_label, cluster_contexts, similarity_matrix, model, **_kwargs):
             generate_calls.append(domain_label)
             return {"growth": ["metrics", "kpi"], "pricing": ["tier", "billing"]}
 
@@ -870,7 +870,7 @@ class TestMultipleSiblingSubDomains:
                 ))
         await db.commit()
 
-        async def _fake_vocab(provider, domain_label, cluster_contexts, similarity_matrix, model):
+        async def _fake_vocab(provider, domain_label, cluster_contexts, similarity_matrix, model, **_kwargs):
             return {
                 "audit": ["audit", "verify", "review"],
                 "embedding": ["embed", "vector", "fusion"],
@@ -1288,6 +1288,180 @@ class TestSubDomainDissolution:
         dissolved = await engine._reevaluate_sub_domains(db, domain, existing_labels)
         # Empty sub-domain exits via the empty-child-cluster check, not seed protection
         assert isinstance(dissolved, list)
+
+
+# ---------------------------------------------------------------------------
+# Bug B regression — sub-domain vocab-group/term/token consistency
+# ---------------------------------------------------------------------------
+
+
+class TestSubDomainConsistencyVocabGroupMatch:
+    """Bug B: ``_reevaluate_sub_domains`` must accept domain_raw qualifiers
+    that are vocab GROUP names or vocab TERMS within the sub-domain's own
+    ``generated_qualifiers``, not just exact-equality match against the
+    sub-domain label.  Pre-fix, a sub-domain named ``embedding-health`` (an
+    aggregate concept) was dissolved every cycle because its children's
+    ``domain_raw`` was ``backend: observability`` / ``backend: metrics`` /
+    ``backend: concurrency`` — vocab GROUPS inside the sub-domain's own
+    ``generated_qualifiers``, but never the literal label
+    ``embedding-health``.  Consistency was 0%, dissolution fired, and the
+    sub-domain re-emerged on the next discovery pass for an infinite loop.
+    """
+
+    @pytest.mark.asyncio
+    async def test_vocab_group_qualifier_keeps_sub_domain_alive(
+        self, db, mock_provider,
+    ):
+        """domain_raw qualifier == sub-domain's vocab GROUP name → matched."""
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # Sub-domain whose vocab covers four groups; domain_raw on children
+        # quotes the GROUP names, never the sub-domain label itself.
+        sub = _make_sub_domain("embedding-health", parent_id=domain.id, age_hours=24)
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "optimization": ["warmup", "batching", "hot-path"],
+                "correctness": ["normalization", "ordering"],
+                "instrumentation": ["observability", "tracing", "monitoring"],
+                "concurrency": ["race-condition", "asyncio"],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        cluster_ids: list[str] = []
+        for i in range(3):
+            c = _make_cluster(
+                f"eh-cluster-{i}", domain="backend", parent_id=sub.id,
+            )
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+
+        # 6 opts whose domain_raw is the vocab GROUP names — none equal
+        # the sub-domain label "embedding-health".  Pre-fix consistency = 0%.
+        for i, raw in enumerate([
+            "backend: observability", "backend: tracing",
+            "backend: monitoring", "backend: warmup",
+            "backend: ordering", "backend: asyncio",
+        ]):
+            db.add(_make_opt(cluster_ids[i % 3], raw, seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert dissolved == [], (
+            "embedding-health should be KEPT (consistency >= 25% via vocab "
+            f"group matching). Pre-fix returned: {dissolved}"
+        )
+        await db.refresh(sub)
+        assert sub.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_intent_label_token_match_keeps_sub_domain_alive(
+        self, db, mock_provider,
+    ):
+        """intent_label tokens hitting vocab terms → matched (Source 2)."""
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain("embedding-health", parent_id=domain.id, age_hours=24)
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "instrumentation": [
+                    "cache-instrumentation", "cache-metrics", "tracing",
+                ],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        c = _make_cluster("instrumentation-cluster", domain="backend", parent_id=sub.id)
+        db.add(c)
+        await db.flush()
+
+        # domain_raw is bare "backend" (no qualifier) — Source 1 misses.
+        # intent_label "Cache Eviction Policy Audit" hits "cache" via the
+        # tokenized substring of "cache-instrumentation"/"cache-metrics".
+        for i in range(4):
+            opt = _make_opt(c.id, "backend", seed=i)
+            opt.intent_label = "Cache Eviction Policy Audit"
+            db.add(opt)
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert dissolved == [], (
+            "Sub-domain should be KEPT — intent_label tokens hit vocab "
+            f"terms. Got dissolved: {dissolved}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unrelated_qualifiers_still_dissolve(
+        self, db, mock_provider,
+    ):
+        """Control: when children's qualifiers are TRULY unrelated to the
+        sub-domain's vocab, dissolution still fires correctly.  Guards
+        against an over-permissive fix that keeps every sub-domain alive."""
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain("embedding-health", parent_id=domain.id, age_hours=24)
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "instrumentation": ["observability", "tracing"],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        c = _make_cluster("unrelated-cluster", domain="backend", parent_id=sub.id)
+        db.add(c)
+        await db.flush()
+
+        # All 6 opts mention auth/security topics — completely outside the
+        # sub-domain's instrumentation vocabulary.  No vocab-group, term,
+        # or intent-token match.
+        for i, raw in enumerate([
+            "backend: auth", "backend: jwt", "backend: oauth",
+            "backend: security", "backend: validation", "backend: csrf",
+        ]):
+            opt = _make_opt(c.id, raw, seed=i)
+            opt.intent_label = "Authentication Endpoint Audit"
+            db.add(opt)
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert "embedding-health" in dissolved, (
+            "Unrelated qualifiers should still dissolve — fix must not be "
+            f"so permissive it keeps every sub-domain alive. Got: {dissolved}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -213,17 +213,26 @@ class DomainSignalLoader:
                 len(self._signals), total_keywords,
                 live_count, bootstrap_count, live_only,
             )
-            # Only warn about non-general domain nodes that lack signal_keywords
-            # AND are not covered by BOOTSTRAP_DOMAIN_VOCABULARY.  Bootstrap-
-            # covered labels (backend, frontend, database, etc.) keep
-            # classification functional after Phase 0 reconciliation strips
-            # signal_keywords from their domain nodes — no warning needed.
-            # The warning stays loud for genuinely orphaned custom labels.
+            # Only warn about TOP-LEVEL domain nodes that lack vocabulary.
+            # Sub-domains (parent_id != None) route via the parent's bootstrap
+            # / signal_keywords for primary classification, then refine through
+            # the qualifier_cache (Haiku-generated organic vocabulary stored
+            # in cluster_metadata.generated_qualifiers).  A sub-domain with
+            # populated generated_qualifiers IS classifiable — the original
+            # warning treated qualifier-covered sub-domains as uncovered, which
+            # produced spurious spam every cycle for organic sub-domains.
+            #
+            # For top-level domains, populated qualifier_cache also counts as
+            # vocabulary: classify_domain() consults qualifier_cache when
+            # signal_keywords miss.  Bootstrap-covered labels (backend,
+            # frontend, …) remain exempt unconditionally.
             uncovered = [
                 c for c in clusters
                 if c.label != "general"
+                and c.parent_id is None  # sub-domains use qualifier_cache
                 and c.label not in live_labels
                 and c.label not in BOOTSTRAP_DOMAIN_VOCABULARY
+                and c.label not in new_qualifier_cache
             ]
             if uncovered:
                 logger.warning(

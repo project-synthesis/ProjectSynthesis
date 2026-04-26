@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import statistics
 import time
 import traceback
@@ -2187,6 +2188,34 @@ class TaxonomyEngine:
                     except RuntimeError:
                         pass
 
+                # Surface domain-level TF-IDF terms + previous vocab groups
+                # so Haiku can absorb latent themes the cascade is currently
+                # routing through source 3 instead of any curated group.
+                # Without this hint, terms like the live backend's ``audit``
+                # (3 source-3 hits) stay invisible to every regeneration —
+                # the cascade keeps recording them and the vocab keeps
+                # ignoring them.  Continuity hint (existing group names)
+                # also discourages spurious drift in group naming across
+                # regenerations, since name churn breaks the consistency
+                # baseline used for emergence detection.
+                _domain_meta_for_hints = read_meta(domain_node.cluster_metadata)
+                _signal_kw_raw = _domain_meta_for_hints.get("signal_keywords") or []
+                _signal_kws_typed: list[tuple[str, float]] = []
+                for _item in _signal_kw_raw:
+                    try:
+                        _kw, _w = _item[0], float(_item[1])
+                    except (IndexError, TypeError, ValueError):
+                        continue
+                    if isinstance(_kw, str):
+                        _signal_kws_typed.append((_kw, _w))
+                _existing_vocab_dict = _domain_meta_for_hints.get(
+                    "generated_qualifiers",
+                ) or {}
+                _existing_groups = (
+                    list(_existing_vocab_dict.keys())
+                    if isinstance(_existing_vocab_dict, dict) else []
+                )
+
                 try:
                     generated = await generate_qualifier_vocabulary(
                         provider=self._provider,
@@ -2194,6 +2223,8 @@ class TaxonomyEngine:
                         cluster_contexts=cluster_contexts,
                         similarity_matrix=similarity_matrix,
                         model=settings.MODEL_HAIKU,
+                        domain_signal_keywords=_signal_kws_typed,
+                        existing_vocab_groups=_existing_groups,
                     )
                 except Exception as gen_exc:
                     generated = {}
@@ -2584,13 +2615,33 @@ class TaxonomyEngine:
                     break
 
                 try:
+                    # Pick the largest matching cluster as a seed for
+                    # _create_domain_node so signal_keywords + centroid +
+                    # signal_member_count_at_generation get populated from
+                    # representative content instead of left as defaults.
+                    # Without a seed the sub-domain is created with empty
+                    # signal_keywords and a None centroid_embedding — both
+                    # observable bugs prior to this change.
+                    matching_cluster_ids = qualifier_to_cluster_ids.get(qualifier, set())
+                    seed_for_keywords: PromptCluster | None = None
+                    if matching_cluster_ids:
+                        # Order by member_count desc for representativeness.
+                        seed_q = await db.execute(
+                            select(PromptCluster).where(
+                                PromptCluster.id.in_(matching_cluster_ids),
+                                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                            ).order_by(PromptCluster.member_count.desc())
+                            .limit(1)
+                        )
+                        seed_for_keywords = seed_q.scalars().first()
+
                     sub_node, _ = await self._create_domain_node(
                         db, sub_label, existing_labels,
+                        seed_cluster=seed_for_keywords,
                         parent_domain_id=domain_node.id,
                     )
 
                     # Reparent matching clusters
-                    matching_cluster_ids = qualifier_to_cluster_ids.get(qualifier, set())
                     reparented = 0
                     for cid in matching_cluster_ids:
                         cluster = await db.get(PromptCluster, cid)
@@ -2705,6 +2756,19 @@ class TaxonomyEngine:
             .values(cluster_id=dissolution_target_id)
         )
         patterns_merged = mp_result.rowcount  # type: ignore[attr-defined]
+
+        # --- Re-anchor OptimizationPattern provenance to the parent ---
+        # Each OptimizationPattern row records where a cluster's pattern was
+        # injected into a specific Optimization.  Without this update the
+        # provenance points at the now-archived node, stranding the row both
+        # for UI attribution and for `_gc_archived_zero_member_clusters`,
+        # which refuses to delete archived clusters with live OP references.
+        # Update is harmless when there are no rows.
+        await db.execute(
+            _sa_update(OptimizationPattern)
+            .where(OptimizationPattern.cluster_id == node.id)
+            .values(cluster_id=dissolution_target_id)
+        )
 
         # --- Archive the node ---
         node.state = "archived"
@@ -3076,7 +3140,45 @@ class TaxonomyEngine:
 
             _loader = _get_loader()
             domain_qualifiers = _loader.get_qualifiers(domain_node.label) if _loader else {}
-            sub_keywords = domain_qualifiers.get(sub_qualifier, [])
+            # Parent-side lookup at the sub-domain LABEL is structurally
+            # empty: the parent's qualifier dict is keyed by vocab GROUP
+            # names (``observability``, ``metrics``), not by the sub-domain
+            # label (``embedding-health``). Kept for backwards-compat with
+            # any call site that still consults it; real matching uses
+            # ``sub_vocab_*`` below.
+            sub_keywords_legacy = domain_qualifiers.get(sub_qualifier, [])
+
+            # Sub-domain's OWN organic vocabulary (Haiku-generated at
+            # creation time, stored in cluster_metadata.generated_qualifiers).
+            # Shape: ``{group_name: [kebab-case-term, ...], ...}`` — e.g.
+            # ``{"instrumentation": ["observability", "tracing", ...], ...}``
+            # for the ``embedding-health`` sub-domain.
+            sub_meta = read_meta(sub.cluster_metadata)
+            sub_generated_qualifiers = sub_meta.get("generated_qualifiers") or {}
+            sub_vocab_groups: set[str] = {
+                str(k).lower()
+                for k in sub_generated_qualifiers.keys()
+                if isinstance(k, str)
+            }
+            sub_vocab_terms: set[str] = {
+                str(t).lower()
+                for terms in sub_generated_qualifiers.values()
+                if isinstance(terms, list)
+                for t in terms
+                if isinstance(t, str)
+            }
+            # Tokenized form for substring matching against intent labels
+            # (``"Cache Eviction Policy Audit"`` should hit
+            # ``cache-instrumentation``'s ``cache`` token).  Drop tokens
+            # shorter than 4 chars to suppress noise.
+            sub_vocab_tokens: set[str] = set()
+            for _term in sub_vocab_terms:
+                for _sub in re.split(r"[\s\-_]", _term):
+                    if len(_sub) >= 4:
+                        sub_vocab_tokens.add(_sub.lower())
+            for _grp in sub_vocab_groups:
+                if len(_grp) >= 4:
+                    sub_vocab_tokens.add(_grp)
 
             _domain_meta = read_meta(domain_node.cluster_metadata)
             dynamic_keywords: list[tuple[str, float]] = []
@@ -3092,14 +3194,57 @@ class TaxonomyEngine:
             for domain_raw, intent_label, raw_prompt in opt_rows:
                 matched = False
 
+                # Source 1: domain_raw qualifier matches the sub-domain's
+                # vocab (label, group, term, or any tokenized vocab term).
+                # Sub-domain creation aggregates multiple vocab groups under
+                # one label (e.g. ``embedding-health`` covers vocab groups
+                # ``optimization``/``correctness``/``instrumentation``/
+                # ``concurrency``), so a child whose ``domain_raw`` qualifier
+                # is one of those groups (e.g. ``backend: observability``)
+                # IS topically consistent with the sub-domain even though
+                # the qualifier string never equals the sub-domain label.
+                # The pre-fix exact-equality check guaranteed consistency=0%
+                # on healthy sub-domains, producing a flip-flop dissolution
+                # loop every Phase 5 cycle.
                 if domain_raw and not matched:
                     _, q = _parse_domain(domain_raw)
-                    if q and q.lower().replace(" ", "-") == sub_qualifier:
+                    if q:
+                        q_lower = q.lower()
+                        q_norm = q_lower.replace(" ", "-")
+                        if (
+                            q_norm == sub_qualifier
+                            or q_norm in sub_vocab_groups
+                            or q_norm in sub_vocab_terms
+                        ):
+                            matched = True
+                        else:
+                            q_tokens = {
+                                t for t in re.split(r"[\s\-_]", q_lower)
+                                if len(t) >= 4
+                            }
+                            if q_tokens & sub_vocab_tokens:
+                                matched = True
+
+                # Source 2: intent_label tokens hit the sub-domain's vocab.
+                # Replaces the legacy substring scan against the parent-keyed
+                # ``sub_keywords_legacy`` (which is empty by construction),
+                # using tokenized intersection so ``"Cache Eviction Policy
+                # Audit"`` matches via the ``cache`` token shared with
+                # ``cache-instrumentation`` / ``cache-metrics``.
+                if not matched and intent_label and sub_vocab_tokens:
+                    intent_tokens = {
+                        t.lower() for t in re.split(r"[\s\-_,.]+", intent_label)
+                        if len(t) >= 4
+                    }
+                    if intent_tokens & sub_vocab_tokens:
                         matched = True
 
-                if not matched and intent_label and sub_keywords:
+                # Source 2b (legacy): keep substring path against
+                # parent-derived ``sub_keywords_legacy`` so any future caller
+                # that pre-populates that field still contributes.
+                if not matched and intent_label and sub_keywords_legacy:
                     intent_lower = intent_label.lower()
-                    hits = sum(1 for kw in sub_keywords if kw in intent_lower)
+                    hits = sum(1 for kw in sub_keywords_legacy if kw in intent_lower)
                     if hits >= 1:
                         matched = True
 
@@ -3247,14 +3392,55 @@ class TaxonomyEngine:
     async def _extract_domain_keywords(
         self, db: AsyncSession, cluster: PromptCluster, top_k: int = 15,
     ) -> list:
-        """Extract top TF-IDF keywords from cluster member prompts."""
+        """Extract top TF-IDF keywords from member prompts.
+
+        Two query modes depending on the input cluster's role:
+
+        * **Domain node** (``state == "domain"``): aggregates ``raw_prompt``
+          texts across **all active/mature descendant clusters**.  Domain
+          nodes never own optimizations directly — their ``member_count``
+          is the count of child clusters, not opts.  The previous
+          implementation queried ``Optimization.cluster_id == domain.id``
+          and consistently returned 0 rows, so every refresh persisted
+          an empty ``signal_keywords`` list and the cascade's
+          ``tf_idf`` source was permanently silent
+          (``source_breakdown.tf_idf == 0`` across all domains in the
+          live audit).
+
+        * **Regular cluster** (any other state): pulls opts directly via
+          ``cluster_id == cluster.id`` — same as the previous
+          implementation, kept for the domain-creation seed-cluster
+          call site (``_create_domain_node``).
+        """
         from sklearn.feature_extraction.text import TfidfVectorizer
 
-        result = await db.execute(
-            select(Optimization.raw_prompt).where(
-                Optimization.cluster_id == cluster.id,
+        if cluster.state == "domain":
+            # Aggregate across descendants (children with parent_id pointing
+            # to this domain node, in active or mature lifecycle states).
+            # Sub-domain children are excluded — they are evaluated in
+            # their own pass — but the active/mature clusters parented
+            # *under* a sub-domain still reach this domain via the parent
+            # chain when the sub-domain itself is the immediate parent
+            # of those clusters.  For now the simple one-hop query
+            # captures all the volume in production (no nested sub-
+            # sub-domains exist).
+            result = await db.execute(
+                select(Optimization.raw_prompt)
+                .join(
+                    PromptCluster,
+                    PromptCluster.id == Optimization.cluster_id,
+                )
+                .where(
+                    PromptCluster.parent_id == cluster.id,
+                    PromptCluster.state.in_(("active", "mature")),
+                )
             )
-        )
+        else:
+            result = await db.execute(
+                select(Optimization.raw_prompt).where(
+                    Optimization.cluster_id == cluster.id,
+                )
+            )
         texts = [row[0] for row in result if row[0]]
         if not texts:
             return []
@@ -3269,7 +3455,24 @@ class TaxonomyEngine:
             ranked = sorted(
                 zip(feature_names, scores), key=lambda x: x[1], reverse=True,
             )
-            return [[kw, round(float(score), 2)] for kw, score in ranked[:top_k]]
+            # Min-max normalize the top-K mean scores so the top keyword
+            # gets weight 1.0 and the K-th gets the relative ratio.
+            # Without this, raw TF-IDF means cluster in 0.05-0.20 range
+            # because each per-document TF-IDF row is L2-normalized — so
+            # the cascade's ``weight >= 0.5`` admit gate filters out
+            # *every* keyword and the ``tf_idf`` cascade source is
+            # structurally silent (live audit: 0 hits across all
+            # domains).  Normalization also makes the
+            # ``raw_weight >= 0.8`` 1-hit/2-hit threshold meaningful:
+            # top-1 keyword fires on a single prompt mention; mid-rank
+            # keywords need 2 mentions to qualify.
+            top_score = float(ranked[0][1]) if ranked else 0.0
+            if top_score <= 0.0:
+                return []
+            return [
+                [kw, round(float(score) / top_score, 2)]
+                for kw, score in ranked[:top_k]
+            ]
         except Exception:
             logger.warning(
                 "TF-IDF extraction failed for cluster %s", cluster.id,
@@ -4390,32 +4593,74 @@ class TaxonomyEngine:
                         extra={"missing_parent_id": row[2]},
                     )
 
-        # Repair domain mismatches → reset to "general" (case-insensitive)
+        # Repair domain mismatches.  Default fallback is "general", but when
+        # the cluster's parent_id points to a live top-level domain node, use
+        # that domain's label instead.  This preserves taxonomy locality after
+        # sub-domain dissolution: a child cluster of `backend → embedding-health`
+        # whose sub-domain just dissolved becomes parented to `backend`, and
+        # its `domain` field should track the new parent rather than collapse
+        # to `general`.  Sub-domain children (state != 'domain', parent is a
+        # sub-domain) walk one level up to the top-level domain — the canonical
+        # storage convention is `domain = top_level_label` (sub-domain identity
+        # lives in parent_id only).
         mismatch_rows = (await db.execute(text("""
-            SELECT c.id, c.label, c.domain
+            SELECT c.id, c.label, c.domain, c.parent_id
             FROM prompt_cluster c
             WHERE c.state != 'domain'
               AND LOWER(c.domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
               AND c.domain IS NOT NULL
         """))).all()
         if mismatch_rows:
-            await db.execute(text("""
-                UPDATE prompt_cluster
-                SET domain = 'general'
-                WHERE state != 'domain'
-                  AND LOWER(domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
-                  AND domain IS NOT NULL
-            """))
-            logger.info("Auto-repaired %d domain mismatches → 'general'", len(mismatch_rows))
-            repaired += len(mismatch_rows)
-            for row in mismatch_rows:
+            # Build parent_id → top_level_domain_label map once.  Walk up to
+            # the root domain so a cluster parented to a sub-domain inherits
+            # the top-level label (sub-domain children carry the top-level
+            # `domain` field, not the sub-domain label).
+            domain_nodes = (await db.execute(text("""
+                SELECT id, label, parent_id FROM prompt_cluster WHERE state = 'domain'
+            """))).all()
+            id_to_node = {row[0]: row for row in domain_nodes}
+            top_level_label_for: dict[str, str] = {}
+            for did, dlabel, dparent in domain_nodes:
+                cur_id, cur_label = did, dlabel
+                visited: set[str] = set()
+                while id_to_node.get(cur_id) and id_to_node[cur_id][2] is not None:
+                    if cur_id in visited:
+                        break  # cycle defense
+                    visited.add(cur_id)
+                    parent_row = id_to_node.get(id_to_node[cur_id][2])
+                    if not parent_row:
+                        break
+                    cur_id, cur_label = parent_row[0], parent_row[1]
+                top_level_label_for[did] = cur_label
+
+            repaired_to_general = 0
+            repaired_to_parent = 0
+            for cid, clabel, prev_domain, parent_id in mismatch_rows:
+                target = top_level_label_for.get(parent_id) or "general"
+                await db.execute(
+                    text("UPDATE prompt_cluster SET domain = :d WHERE id = :i"),
+                    {"d": target, "i": cid},
+                )
+                if target == "general":
+                    repaired_to_general += 1
+                else:
+                    repaired_to_parent += 1
                 _emit(
                     violation_type="domain_mismatch",
-                    action="domain_reset_to_general",
-                    cluster_id=row[0],
-                    label=row[1],
-                    extra={"previous_domain": row[2]},
+                    action=(
+                        "domain_reset_to_general"
+                        if target == "general"
+                        else "domain_reset_to_parent"
+                    ),
+                    cluster_id=cid,
+                    label=clabel,
+                    extra={"previous_domain": prev_domain, "new_domain": target},
                 )
+            repaired += len(mismatch_rows)
+            logger.info(
+                "Auto-repaired %d domain mismatches (→parent: %d, →general: %d)",
+                len(mismatch_rows), repaired_to_parent, repaired_to_general,
+            )
 
         # Repair self-referencing parents → re-parent under matching domain node
         self_ref_q = await db.execute(
