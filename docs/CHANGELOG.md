@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.8 — 2026-04-27
+
 ### Fixed
 
 - Hardened sub-domain dissolution: Bayesian shrinkage on consistency metric prevents premature dissolution at small member counts (audit `docs/audits/sub-domain-regression-2026-04-27.md` R1).
