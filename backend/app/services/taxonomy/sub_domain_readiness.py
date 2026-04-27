@@ -201,12 +201,11 @@ def match_opt_to_sub_domain_vocab(
     additional callers (operator rebuild endpoint R6, debugger panels)
     will follow without forcing the engine to re-derive the cascade.
     """
-    from app.utils.text_cleanup import parse_domain as _parse_domain
-
     # Source 1: domain_raw qualifier matches the sub-domain's vocab
-    # (label, group, term, or any tokenized vocab term).
+    # (label, group, term, or any tokenized vocab term). `parse_domain`
+    # is imported at module top — no inner re-import needed.
     if domain_raw:
-        _, q = _parse_domain(domain_raw)
+        _, q = parse_domain(domain_raw)
         if q:
             q_lower = q.lower()
             q_norm = q_lower.replace(" ", "-")

@@ -64,6 +64,7 @@ from app.services.taxonomy.matching import (
 )
 from app.services.taxonomy.sparkline import compute_sparkline_data
 from app.services.taxonomy.sub_domain_readiness import (
+    SubDomainMatchResult,
     compute_qualifier_cascade,
     match_opt_to_sub_domain_vocab,
 )
@@ -3566,7 +3567,7 @@ class TaxonomyEngine:
                     continue
 
             matching = 0
-            match_results: list = []
+            match_results: list[SubDomainMatchResult] = []
             for domain_raw, intent_label, raw_prompt, _cluster_id in opt_rows:
                 match_result = match_opt_to_sub_domain_vocab(
                     domain_raw=domain_raw,

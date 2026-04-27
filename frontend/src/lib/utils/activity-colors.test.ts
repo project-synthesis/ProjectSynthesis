@@ -40,6 +40,14 @@ describe('decisionColor', () => {
       .toContain('neon-yellow');
   });
 
+  // Top-level domain dissolution is strictly more severe than sub-domain
+  // dissolution; must land in the same warn bucket so the timeline does
+  // not silently drop it.
+  it('domain_dissolved → neon-yellow (warn)', () => {
+    expect(decisionColor({ op: 'discover', decision: 'domain_dissolved' }))
+      .toContain('neon-yellow');
+  });
+
   // R6 — operator-triggered rebuild is a deliberate creation pathway.
   it('sub_domain_rebuild_invoked → neon-cyan (create)', () => {
     expect(decisionColor({ op: 'discover', decision: 'sub_domain_rebuild_invoked' }))

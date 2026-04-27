@@ -153,33 +153,6 @@ SUB_DOMAIN_ARCHIVAL_IDLE_HOURS: int = 1
 # Hysteresis: creation threshold is 0.40-0.60, dissolution at 0.25 prevents flip-flop.
 SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR: float = 0.25
 
-def _validate_threshold_invariants(
-    *,
-    low: float = SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
-    floor: float = SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
-) -> None:
-    """R8 (audit 2026-04-27): module-level invariant guard.
-
-    Asserts the creation lower bound strictly exceeds the dissolution
-    floor — otherwise sub-domains can enter the unrecoverable degenerate
-    state of being uncreatable AND dissolvable simultaneously.
-
-    Defaults to the live module constants; tests can call directly with
-    arbitrary values to verify the assertion logic without ``importlib.reload``
-    (which re-executes literal assignments and clobbers monkeypatched
-    attributes).
-    """
-    assert low > floor, (
-        f"Threshold collision: SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW "
-        f"({low}) must exceed "
-        f"SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR "
-        f"({floor}). See audit R8."
-    )
-
-
-# Run the invariant at module import so degenerate configurations
-# fail fast (cannot boot the FastAPI app).
-_validate_threshold_invariants()
 # Bumped from 6 → 24 (R2, audit 2026-04-27): both observed dissolutions fired at
 # 6h+ post-creation — exactly on the first cycle the gate allowed.  24h gives a
 # fresh sub-domain one full daily cycle of bootstrap volatility (overnight
@@ -199,6 +172,39 @@ SUB_DOMAIN_DISSOLUTION_PRIOR_CENTER: float = 0.40
 # to be diagnostic.
 SUB_DOMAIN_FAILURE_SAMPLES: int = 3
 SUB_DOMAIN_FAILURE_FIELD_TRUNCATE: int = 80
+
+
+# R8 (audit 2026-04-27): module-level invariant guard.
+# Defined and invoked AFTER the full sub-domain constant block so the
+# block stays contiguous — the only constants the invariant references
+# (LOW + FLOOR) are defined earlier and the invariant itself reads
+# them off the module namespace at call time.
+def _validate_threshold_invariants(
+    *,
+    low: float = SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+    floor: float = SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
+) -> None:
+    """R8: assert creation lower bound strictly exceeds dissolution floor.
+
+    Otherwise sub-domains can enter the unrecoverable degenerate state of
+    being uncreatable AND dissolvable simultaneously.
+
+    Defaults to the live module constants; tests can call directly with
+    arbitrary values to verify the assertion logic without ``importlib.reload``
+    (which re-executes literal assignments and clobbers monkeypatched
+    attributes).
+    """
+    assert low > floor, (
+        f"Threshold collision: SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW "
+        f"({low}) must exceed "
+        f"SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR "
+        f"({floor}). See audit R8."
+    )
+
+
+# Run the invariant at module import so degenerate configurations
+# fail fast (cannot boot the FastAPI app).
+_validate_threshold_invariants()
 
 # ---------------------------------------------------------------------------
 # Domain dissolution — graceful re-grouping when domains lose relevance.

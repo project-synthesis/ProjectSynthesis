@@ -47,8 +47,11 @@ const _ERROR_DECISIONS = new Set<string>([
 ]);
 
 const _WARN_DECISIONS = new Set<string>([
-  // Dissolution & rejection
+  // Dissolution & rejection — top-level domain dissolution is strictly
+  // more severe than sub-domain dissolution (an entire domain disappears,
+  // not just a hierarchy level), so it lands in the same warn bucket.
   'dissolved',
+  'domain_dissolved',
   'sub_domain_dissolved',
   'rejected',
   'blocked',
