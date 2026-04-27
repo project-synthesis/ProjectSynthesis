@@ -1,6 +1,6 @@
 # Unified Taxonomy Lifecycle: Domain + Sub-Domain Discovery and Dissolution
 
-**Status:** Shipped (v0.3.35). Shared `_dissolve_node()` primitive handles both domain and sub-domain dissolution. `_reevaluate_domains()` (5 guards: general permanent, sub-domain anchor, ≥48h age, ≤5 member ceiling, Source-1 consistency <15% with 45-pt hysteresis) + `_reevaluate_sub_domains()` (consistency < 0.25 floor). Seed domains have no special protection per ADR-006. `dissolved_this_cycle` flip-flop guard. Historical record.
+**Status:** Shipped (v0.3.35). Shared `_dissolve_node()` primitive handles both domain and sub-domain dissolution. `_reevaluate_domains()` (5 guards: general permanent, sub-domain anchor, ≥48h age, ≤5 member ceiling, Source-1 consistency <15% with 45-pt hysteresis) + `_reevaluate_sub_domains()` (originally consistency < 0.25 floor at 6h grace). Seed domains have no special protection per ADR-006. `dissolved_this_cycle` flip-flop guard. **Hardened in v0.4.8-dev (2026-04-27)** by R1-R8 of `docs/audits/sub-domain-regression-2026-04-27.md`: Bayesian shrinkage on consistency (R1), grace period 6h → 24h (R2), empty-snapshot guard (R3), per-opt matcher extracted to shared primitive (R4), forensic dissolution telemetry (R5), operator rebuild endpoint (R6), vocab-regen overlap telemetry (R7), threshold-collision invariant (R8). See specs `docs/specs/sub-domain-dissolution-hardening-{2026-04-27,r4-r6,r7-r8}.md`. Historical record (numbers below reflect pre-v0.4.8 design).
 
 **Goal:** Unify domain and sub-domain lifecycle into a shared organic system with re-evaluation and graceful dissolution at both hierarchy levels. Remove seed domain protection so the taxonomy is fully organic from day one. Aligns with ADR-006 (Universal Prompt Engine).
 
@@ -44,7 +44,7 @@ Handles: reparent clusters, reparent any direct optimizations, merge meta-patter
 | Creation consistency | 60% fixed (`DOMAIN_DISCOVERY_CONSISTENCY`) | `max(40%, 60% - 0.4% * members)` adaptive |
 | Dissolution floor | `DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR` = 0.15 | `SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR` = 0.25 |
 | Consistency signal | Source 1 only (domain_raw primary label) | Three-source cascade (domain_raw qualifier + intent_label + TF-IDF) |
-| Age gate | `DOMAIN_DISSOLUTION_MIN_AGE_HOURS` = 48 | `SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS` = 6 |
+| Age gate | `DOMAIN_DISSOLUTION_MIN_AGE_HOURS` = 48 | `SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS` = 24 (was 6 pre-R2) |
 | Member ceiling | `DOMAIN_DISSOLUTION_MEMBER_CEILING` = 5 (must be ≤ this AND below consistency floor) | None |
 | Sub-node anchor | Cannot dissolve while sub-domains exist | N/A |
 | "general" protection | Permanent — never dissolves | N/A |

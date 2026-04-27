@@ -152,7 +152,53 @@ SUB_DOMAIN_ARCHIVAL_IDLE_HOURS: int = 1
 # Sub-domain dissolution — graceful re-grouping when qualifier consistency degrades.
 # Hysteresis: creation threshold is 0.40-0.60, dissolution at 0.25 prevents flip-flop.
 SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR: float = 0.25
-SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS: int = 6  # don't dissolve freshly created sub-domains
+
+def _validate_threshold_invariants(
+    *,
+    low: float = SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+    floor: float = SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
+) -> None:
+    """R8 (audit 2026-04-27): module-level invariant guard.
+
+    Asserts the creation lower bound strictly exceeds the dissolution
+    floor — otherwise sub-domains can enter the unrecoverable degenerate
+    state of being uncreatable AND dissolvable simultaneously.
+
+    Defaults to the live module constants; tests can call directly with
+    arbitrary values to verify the assertion logic without ``importlib.reload``
+    (which re-executes literal assignments and clobbers monkeypatched
+    attributes).
+    """
+    assert low > floor, (
+        f"Threshold collision: SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW "
+        f"({low}) must exceed "
+        f"SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR "
+        f"({floor}). See audit R8."
+    )
+
+
+# Run the invariant at module import so degenerate configurations
+# fail fast (cannot boot the FastAPI app).
+_validate_threshold_invariants()
+# Bumped from 6 → 24 (R2, audit 2026-04-27): both observed dissolutions fired at
+# 6h+ post-creation — exactly on the first cycle the gate allowed.  24h gives a
+# fresh sub-domain one full daily cycle of bootstrap volatility (overnight
+# cadence + first vocab regen) before hostile re-evaluation can dissolve it.
+SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS: int = 24
+
+# Bayesian Beta-Binomial prior on consistency (R1, audit 2026-04-27).
+# Equivalent to K=10 prior observations; α/β = K*center / K*(1-center).
+# Pulls strongly at small N, fades at N≥30. Center aligned with
+# SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW (0.40) — "absent evidence,
+# assume the sub-domain is at the lower bound of healthy."
+SUB_DOMAIN_DISSOLUTION_PRIOR_STRENGTH: int = 10
+SUB_DOMAIN_DISSOLUTION_PRIOR_CENTER: float = 0.40
+
+# R5 (audit 2026-04-27): forensic telemetry on dissolution events.
+# Caps prevent log bloat — small enough to avoid bloat, large enough
+# to be diagnostic.
+SUB_DOMAIN_FAILURE_SAMPLES: int = 3
+SUB_DOMAIN_FAILURE_FIELD_TRUNCATE: int = 80
 
 # ---------------------------------------------------------------------------
 # Domain dissolution — graceful re-grouping when domains lose relevance.

@@ -209,6 +209,96 @@ PROMPT_SETS = {
          "`backend/app/services/taxonomy/matching.py`.  Style: present "
          "tense, two short paragraphs plus a worked example."),
     ],
+    # Cycle 12 — sub-domain dissolution hardening (R1+R2+R3) end-to-end.
+    # Three diverse prompts that exercise the warm-path sub-domain
+    # re-evaluation cycle.  Validation criteria:
+    #   - No `sub_domain_dissolved` events for sub-domains aged < 24h
+    #     (R2 grace period).
+    #   - Any `sub_domain_dissolved` event in the post window MUST carry
+    #     both `consistency_pct` AND `shrunk_consistency_pct` keys (R1
+    #     telemetry).
+    #   - No `sub_domain_reevaluation_skipped` events for sub-domains
+    #     with populated `generated_qualifiers` (R3 should only fire on
+    #     genuinely empty snapshots).
+    #   - Score band remains in the 7.0-7.6 healthy zone.
+    "cycle-12-dissolution-hardening": [
+        ("Audit the warm-path Phase 5 sub-domain re-evaluation in "
+         "`backend/app/services/taxonomy/engine.py::_reevaluate_sub_domains` "
+         "— focus on the Bayesian shrinkage step at line 3301 and the "
+         "empty-snapshot guard at line 3175. Verify the dissolution gate "
+         "uses `shrunk_consistency >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR`, "
+         "not raw `consistency`. Cite the prior parameters K=10, center=0.40."),
+        ("Trace the `sub_domain_reevaluation_skipped` event from "
+         "`engine.py` through `taxonomy/event_logger.py` to the JSONL "
+         "decisions file in `data/taxonomy_events/`. Confirm the context "
+         "carries `domain_node_id` for cross-process correlation symmetry "
+         "with `sub_domain_dissolved`."),
+        ("Diagnose the `SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS` change from "
+         "6 to 24 in `backend/app/services/taxonomy/_constants.py`. "
+         "Walk through the implications for any test that relies on "
+         "the old 6h gate and confirm via `git grep age_hours` that no "
+         "regression is hiding."),
+    ],
+    # Cycle 13 — R4+R5+R6 end-to-end validation.  Three diverse prompts
+    # exercise: extracted matching primitive (R4), forensic dissolution
+    # telemetry (R5), and the operator recovery endpoint (R6).
+    # Validation criteria:
+    #   - No regressions in score_health.
+    #   - If any sub_domain_reevaluated/dissolved fires, it must carry
+    #     R5's matching_members + sample_match_failures keys.
+    #   - The shared primitive match_opt_to_sub_domain_vocab is the
+    #     single source of truth for per-opt matching (R4).
+    "cycle-13-r4-r6-validation": [
+        ("Audit the shared `match_opt_to_sub_domain_vocab` primitive in "
+         "`backend/app/services/taxonomy/sub_domain_readiness.py`. Cover "
+         "the four match sources (Source 1 domain_raw via label / vocab "
+         "group / vocab term / token-overlap, Source 2 intent_label "
+         "tokens, Source 2b legacy keywords, Source 3 dynamic TF-IDF). "
+         "Verify the function is pure — no I/O, no DB."),
+        ("Trace the forensic telemetry on `sub_domain_dissolved` events "
+         "after R5: the context now carries `matching_members` (int) and "
+         "`sample_match_failures` (capped at 3 entries with cluster_id "
+         "preserved unsanitized + domain_raw/intent_label truncated to 80 "
+         "chars + reason from SubDomainMatchResult)."),
+        ("Diagnose the new `POST /api/domains/{domain_id}/rebuild-sub-domains` "
+         "endpoint flow: Pydantic ge=0.25 floor, defense-in-depth runtime "
+         "check in engine.rebuild_sub_domains(), single-transaction "
+         "savepoint semantics for partial-failure rollback, and the "
+         "`sub_domain_rebuild_invoked` telemetry that fires on every "
+         "call (including dry runs)."),
+    ],
+    # Cycle 14 — R7+R8 end-to-end validation. Three prompts that may
+    # plausibly trigger vocab regeneration on the backend domain (introduce
+    # new tech vocab into existing clusters), plus a passive-observability
+    # prompt around the threshold-collision invariant.
+    # Validation criteria:
+    #   - Any vocab_generated_enriched event must carry the new R7 keys
+    #     (previous_groups, new_groups, overlap_pct).
+    #   - No spurious WARNING log for low overlap on bootstrap.
+    #   - Module-level R8 invariant continues to hold (backend started clean).
+    #   - Score health remains stable.
+    "cycle-14-r7-r8-validation": [
+        ("Audit the new R7 vocab-regen overlap telemetry in "
+         "`backend/app/services/taxonomy/engine.py::_propose_sub_domains` "
+         "around line 2336. Trace the Jaccard overlap_pct computation, "
+         "the `previous_groups`/`new_groups` event keys, and the "
+         "WARNING log gated at < 50% overlap on a non-bootstrap regen."),
+        ("Diagnose the R8 threshold-collision invariant in "
+         "`backend/app/services/taxonomy/_constants.py`: the "
+         "`_validate_threshold_invariants` function called at module "
+         "import. Why is the function-call form preferred over a bare "
+         "module-level assert (importlib.reload re-execution semantics)? "
+         "Confirm SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW (0.40) > "
+         "SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR (0.25)."),
+        ("Trace the cross-cycle interaction between R5 (forensic "
+         "dissolution telemetry: matching_members + sample_match_failures) "
+         "and R7 (vocab regen overlap): an operator investigating a "
+         "mass-dissolution event should be able to correlate the "
+         "`sub_domain_dissolved` event with the most-recent "
+         "`vocab_generated_enriched` event by domain label. Are the "
+         "timestamps and per-domain identifiers consistent enough to "
+         "make this join trivial?"),
+    ],
     # Cycle 10 — full-bundle live validation post-C6 + B5.
     # 5 prompts designed to exercise every fix from this run:
     #   (1) writing-about-code (CHANGELOG-style) — B5 must upgrade to

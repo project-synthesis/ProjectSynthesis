@@ -131,7 +131,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Hybrid scoring** — LLM scores blended with heuristic analysis + z-score normalization against historical distribution. Divergence flags when LLM and heuristic disagree by >2.5 points
 
 ### Knowledge Engine
-- **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Fully organic domain and sub-domain discovery from user behavior via enriched Haiku-generated qualifier vocabulary (cluster centroid similarity matrix + intent labels + qualifier distribution fed forward, post-generation quality metric tracked). Unified lifecycle: domains and sub-domains re-evaluated every warm cycle with parameterized guards (consistency, age, member count, sub-domain anchoring). Graceful dissolution reparents clusters and merges meta-patterns — prompts are never lost. Qualifier-augmented embeddings (4th signal) enable cross-project specialization-aware clustering. No hardcoded domain assumptions — seed domains dissolve organically when unused (ADR-006)
+- **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Fully organic domain and sub-domain discovery from user behavior via enriched Haiku-generated qualifier vocabulary (cluster centroid similarity matrix + intent labels + qualifier distribution fed forward, post-generation quality metric tracked). Unified lifecycle: domains and sub-domains re-evaluated every warm cycle with parameterized guards (consistency, age, member count, sub-domain anchoring). **Sub-domain dissolution hardening (v0.4.8 — audit `docs/audits/sub-domain-regression-2026-04-27.md`)**: Bayesian Beta-Binomial shrinkage on consistency prevents single-prompt small-N noise from dissolving healthy sub-domains (R1); grace gate extended 6h → 24h (R2); empty-snapshot guard skips re-eval on missing vocab (R3); per-opt matcher extracted to shared pure primitive `match_opt_to_sub_domain_vocab` (R4); forensic dissolution telemetry (`matching_members` + `sample_match_failures`, R5); operator recovery endpoint `POST /api/domains/{id}/rebuild-sub-domains` (R6); vocab regeneration overlap telemetry (R7); module-import threshold-collision invariant (R8). Graceful dissolution reparents clusters and merges meta-patterns — prompts are never lost. Qualifier-augmented embeddings (4th signal) enable cross-project specialization-aware clustering. No hardcoded domain assumptions — seed domains dissolve organically when unused (ADR-006)
 - **Domain readiness telemetry** — live `/api/domains/readiness` endpoints expose the three-source qualifier cascade (domain_raw > intent_label > tf_idf), adaptive promotion threshold, and dissolution 5-guard evaluation. **TF-IDF source-3 (v0.4.7)** aggregates `raw_prompt` text across descendant active/mature clusters and min-max normalizes scores so the cascade's admit gate becomes meaningful — closes the prior structural silence where every domain reported `tf_idf: 0`. Vocab regeneration receives orphan TF-IDF terms + existing group names so latent themes the cascade is recording exclusively via source 3 get organically absorbed by the next Haiku regeneration. Readiness panel + stability meter + emergence list + sparkline render in the topology inspector; per-domain rings overlay the 3D topology so operators see which domains are warming toward a new sub-domain and which are approaching dissolution. JSONL snapshot writer (30-day retention, hourly bucketing) feeds `/api/domains/{id}/readiness/history`. Tier-crossing detector (2-cycle hysteresis + per-domain cooldown) publishes `domain_readiness_changed` SSE events; a preference-gated toast dispatcher surfaces them in the UI. 30s TTL cache keyed by `(domain_id, member_count)` so new optimizations naturally invalidate stale entries
 - **Pattern extraction** — reusable techniques extracted from successful optimizations, stored as meta-patterns per cluster
 - **Cross-cluster injection** — universal techniques injected across topic boundaries, ranked by composite relevance
@@ -215,13 +215,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (3097 tests)
+# Backend tests (3153 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1518 tests)
+# Frontend tests (1544 tests)
 cd frontend && npm test
 
 # Frontend build
@@ -253,6 +253,7 @@ cd frontend && npm run build
 | `/api/domains/readiness` | GET | Batch readiness report (stability + emergence) across all domains |
 | `/api/domains/{id}/readiness` | GET | Single-domain readiness (three-source cascade + dissolution guards, `?fresh=true` bypass) |
 | `/api/domains/{id}/readiness/history` | GET | Hourly-bucketed readiness time-series (`?window=24h\|7d\|30d`, 30-day retention) |
+| `/api/domains/{id}/rebuild-sub-domains` | POST | Operator recovery — force-rebuild sub-domains under one domain with optional `min_consistency` override (Pydantic `ge=0.25`) and `dry_run` toggle (10/min, v0.4.8+, audit R6) |
 | `/api/clusters` | GET | List clusters (paginated, state/domain filter) |
 | `/api/clusters/{id}` | GET | Cluster detail (children, breadcrumb, optimizations, project breakdown) |
 | `/api/clusters/{id}` | PATCH | Rename/state override |

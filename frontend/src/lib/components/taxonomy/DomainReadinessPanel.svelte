@@ -18,6 +18,7 @@
     emergenceTierVar,
     emergenceTierBadge,
   } from './readiness-tier';
+  import RebuildSubDomainsModal from './RebuildSubDomainsModal.svelte';
 
   interface Props {
     /** When provided, notifies parent of domain selection. */
@@ -141,6 +142,22 @@
     void preferencesStore.toggleDomainMute(report.domain_id);
   }
 
+  // R6 — Rebuild sub-domains modal state. `null` = closed; opens scoped
+  // to a specific domain id when an operator clicks the per-row wrench.
+  let rebuildTargetId = $state<string | null>(null);
+  let rebuildTargetLabel = $state<string | undefined>(undefined);
+
+  function onOpenRebuild(event: MouseEvent, report: DomainReadinessReport) {
+    event.stopPropagation();
+    rebuildTargetId = report.domain_id;
+    rebuildTargetLabel = report.domain_label;
+  }
+
+  function onCloseRebuild() {
+    rebuildTargetId = null;
+    rebuildTargetLabel = undefined;
+  }
+
   /** Accessible name for the row as a whole (the role="button" container). */
   function rowAriaLabel(r: DomainReadinessReport, muted: boolean): string {
     const cons = Math.round(r.stability.consistency * 100);
@@ -241,6 +258,7 @@
       <span class="drp-col-num">GAP</span>
       <span class="drp-col-num">M</span>
       <span></span>
+      <span></span>
     </div>
     <div class="drp-list">
       {#each sorted as r (r.domain_id)}
@@ -283,6 +301,34 @@
           <span class="drp-cell drp-num drp-members">{r.member_count}</span>
           <button
             type="button"
+            class="drp-action"
+            aria-label={`Rebuild sub-domains under ${r.domain_label}`}
+            onclick={(e) => onOpenRebuild(e, r)}
+            use:tooltip={'Rebuild sub-domains for this domain (R6 operator recovery — opens dialog)'}
+          >
+            <!--
+              Inline 1px-stroke wrench glyph (10×10). Inherits currentColor
+              so hover/focus tints come free without a per-state path swap.
+              Stays inside the same chromatic grammar as the mute bell.
+            -->
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 16 16"
+              width="10"
+              height="10"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M11 4a3 3 0 1 1-3 3l-4.5 4.5L5 13l4.5-4.5A3 3 0 0 1 11 4z" />
+              <circle cx="11" cy="4" r="0.6" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+          <button
+            type="button"
             class="drp-mute"
             class:drp-mute--active={muted}
             aria-pressed={muted ? 'true' : 'false'}
@@ -322,6 +368,17 @@
     </div>
   {/if}
 </div>
+
+<!--
+  R6 rebuild modal (audit `docs/audits/sub-domain-regression-2026-04-27.md`).
+  Mount sibling-of-panel so it overlays via fixed positioning without
+  being constrained by the panel's container query/overflow.
+-->
+<RebuildSubDomainsModal
+  domainId={rebuildTargetId}
+  domainLabel={rebuildTargetLabel}
+  onClose={onCloseRebuild}
+/>
 
 <style>
   .drp {
@@ -417,7 +474,7 @@
 
   .drp-columns {
     display: grid;
-    grid-template-columns: 1fr 36px 28px 40px 22px 16px;
+    grid-template-columns: 1fr 36px 28px 40px 22px 16px 16px;
     gap: 6px;
     align-items: baseline;
     font-family: var(--font-mono);
@@ -440,7 +497,7 @@
   .drp-row {
     all: unset;
     display: grid;
-    grid-template-columns: 1fr 36px 28px 40px 22px 16px;
+    grid-template-columns: 1fr 36px 28px 40px 22px 16px 16px;
     gap: 6px;
     align-items: center;
     height: 20px;
@@ -514,7 +571,16 @@
     font-size: 9px;
   }
 
-  .drp-mute {
+  /*
+   * Per-row action buttons (mute bell + R6 rebuild wrench) share the
+   * same compact 16×16 footprint, 1px contour grammar, and chromatic
+   * hover behaviour. The hex below is the single source of truth — both
+   * `.drp-mute` and `.drp-action` extend it via composes-style
+   * cascade. DRY: any new icon button on this row should reuse the
+   * `.drp-icon-btn` selector instead of copying the rules.
+   */
+  .drp-mute,
+  .drp-action {
     all: unset;
     display: inline-flex;
     align-items: center;
@@ -531,7 +597,8 @@
       border-color var(--duration-micro) var(--ease-spring);
   }
 
-  .drp-mute:hover {
+  .drp-mute:hover,
+  .drp-action:hover {
     color: var(--color-neon-cyan);
     border-color: color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
   }
@@ -540,7 +607,8 @@
     color: var(--color-neon-yellow);
   }
 
-  .drp-mute:focus-visible {
+  .drp-mute:focus-visible,
+  .drp-action:focus-visible {
     outline: 1px solid color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
     outline-offset: -1px;
   }
@@ -549,6 +617,7 @@
     .drp-refresh,
     .drp-row,
     .drp-mute,
+    .drp-action,
     .drp-master-mute {
       transition: none;
     }

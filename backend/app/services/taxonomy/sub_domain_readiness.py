@@ -25,6 +25,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -65,9 +66,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "CascadeResult",
+    "SubDomainMatchResult",
     "TierCrossing",
     "DomainReadinessChangedEvent",
     "compute_qualifier_cascade",
+    "match_opt_to_sub_domain_vocab",
     "compute_sub_domain_emergence",
     "compute_domain_stability",
     "compute_domain_readiness",
@@ -138,6 +141,180 @@ class CascadeResult:
                 best_count = count
                 best = src
         return best  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Per-opt sub-domain matcher (R4 — extracted from engine._reevaluate_sub_domains)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SubDomainMatchResult:
+    """Outcome of matching ONE optimization against ONE sub-domain's vocab.
+
+    Pure data carrier, no methods.  ``matched=True`` means the opt belongs
+    to the sub-domain; ``matched=False`` means it does not — the ``reason``
+    field then describes which match attempts were tried and why each missed.
+    """
+
+    matched: bool
+    source: Literal["domain_raw", "intent_label", "tf_idf"] | None
+    matched_value: str | None
+    reason: str
+
+
+def match_opt_to_sub_domain_vocab(
+    *,
+    domain_raw: str | None,
+    intent_label: str | None,
+    raw_prompt: str | None,
+    sub_qualifier: str,
+    sub_vocab_groups: set[str],
+    sub_vocab_terms: set[str],
+    sub_vocab_tokens: set[str],
+    sub_keywords_legacy: list[str],
+    dynamic_keywords: list[tuple[str, float]],
+) -> SubDomainMatchResult:
+    """Targeted: does this opt belong to THIS sub-domain's vocab?
+
+    Implements the v0.4.7 three-source matching cascade verbatim:
+
+    - Source 1 (``domain_raw``): exact qualifier label OR vocab group
+      OR vocab term OR token-overlap with ``sub_vocab_tokens``.
+    - Source 2 (``intent_label``): tokens from the intent label intersect
+      ``sub_vocab_tokens``.
+    - Source 2b (legacy): substring scan against ``sub_keywords_legacy``
+      (parent-keyed; almost always empty, retained for back-compat with
+      any future caller that pre-populates that field).
+    - Source 3 (``raw_prompt`` + dynamic keywords): best-weight TF-IDF
+      keyword that normalises to ``sub_qualifier``, with min-hit gating
+      based on weight.
+
+    Pure: no I/O, no side effects, no DB.  Safe to call from any context.
+
+    The semantics are intentionally per-opt-per-vocab — they answer "does
+    THIS opt belong to THIS sub-domain", not "what's the best qualifier
+    for this opt".  The latter is ``compute_qualifier_cascade``'s job.
+
+    Shared per-opt matcher consumed by
+    ``engine._reevaluate_sub_domains`` — the only call site today;
+    additional callers (operator rebuild endpoint R6, debugger panels)
+    will follow without forcing the engine to re-derive the cascade.
+    """
+    from app.utils.text_cleanup import parse_domain as _parse_domain
+
+    # Source 1: domain_raw qualifier matches the sub-domain's vocab
+    # (label, group, term, or any tokenized vocab term).
+    if domain_raw:
+        _, q = _parse_domain(domain_raw)
+        if q:
+            q_lower = q.lower()
+            q_norm = q_lower.replace(" ", "-")
+            if q_norm == sub_qualifier:
+                return SubDomainMatchResult(
+                    matched=True,
+                    source="domain_raw",
+                    matched_value=q_norm,
+                    reason="",
+                )
+            if q_norm in sub_vocab_groups:
+                return SubDomainMatchResult(
+                    matched=True,
+                    source="domain_raw",
+                    matched_value=q_norm,
+                    reason="",
+                )
+            if q_norm in sub_vocab_terms:
+                return SubDomainMatchResult(
+                    matched=True,
+                    source="domain_raw",
+                    matched_value=q_norm,
+                    reason="",
+                )
+            q_tokens = {
+                t for t in re.split(r"[\s\-_]", q_lower)
+                if len(t) >= 4
+            }
+            overlap = q_tokens & sub_vocab_tokens
+            if overlap:
+                return SubDomainMatchResult(
+                    matched=True,
+                    source="domain_raw",
+                    matched_value=next(iter(overlap)),
+                    reason="",
+                )
+
+    # Source 2: intent_label tokens hit the sub-domain's vocab.
+    if intent_label and sub_vocab_tokens:
+        intent_tokens = {
+            t.lower() for t in re.split(r"[\s\-_,.]+", intent_label)
+            if len(t) >= 4
+        }
+        overlap = intent_tokens & sub_vocab_tokens
+        if overlap:
+            return SubDomainMatchResult(
+                matched=True,
+                source="intent_label",
+                matched_value=next(iter(overlap)),
+                reason="",
+            )
+
+    # Source 2b (legacy): substring scan against parent-keyed
+    # ``sub_keywords_legacy`` (almost always empty in practice; retained
+    # for back-compat with any future caller that pre-populates it).
+    if intent_label and sub_keywords_legacy:
+        intent_lower = intent_label.lower()
+        for kw in sub_keywords_legacy:
+            if kw in intent_lower:
+                return SubDomainMatchResult(
+                    matched=True,
+                    source="intent_label",
+                    matched_value=kw,
+                    reason="",
+                )
+
+    # Source 3: dynamic-keyword (TF-IDF) hits in raw_prompt that
+    # normalise to sub_qualifier, with min-hit gating by weight.
+    if raw_prompt and dynamic_keywords:
+        prompt_lower = raw_prompt.lower()
+        intent_lower_s3 = (intent_label or "").lower()
+        best_dyn: str | None = None
+        best_dyn_weight = 0.0
+        dyn_hits = 0
+        for kw, weight in dynamic_keywords:
+            kw_lower = kw.lower()
+            if kw_lower in prompt_lower:
+                dyn_hits += 1
+                effective_weight = weight + (
+                    0.5 if kw_lower in intent_lower_s3 else 0.0
+                )
+                if effective_weight > best_dyn_weight:
+                    best_dyn_weight = effective_weight
+                    best_dyn = kw
+        raw_weight = best_dyn_weight - (
+            0.5
+            if best_dyn and best_dyn.lower() in intent_lower_s3
+            else 0.0
+        )
+        min_hits = 1 if raw_weight >= 0.8 else 2
+        if (
+            best_dyn
+            and dyn_hits >= min_hits
+            and best_dyn.lower().replace(" ", "-") == sub_qualifier
+        ):
+            return SubDomainMatchResult(
+                matched=True,
+                source="tf_idf",
+                matched_value=best_dyn.lower().replace(" ", "-"),
+                reason="",
+            )
+
+    return SubDomainMatchResult(
+        matched=False,
+        source=None,
+        matched_value=None,
+        reason="no source matched",
+    )
 
 
 async def _collect_child_cluster_ids(

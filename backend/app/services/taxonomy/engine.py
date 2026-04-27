@@ -63,7 +63,10 @@ from app.services.taxonomy.matching import (
     match_prompt as _match_prompt,
 )
 from app.services.taxonomy.sparkline import compute_sparkline_data
-from app.services.taxonomy.sub_domain_readiness import compute_qualifier_cascade
+from app.services.taxonomy.sub_domain_readiness import (
+    compute_qualifier_cascade,
+    match_opt_to_sub_domain_vocab,
+)
 from app.services.taxonomy.warm_path import WarmPathResult, execute_warm_path
 from app.utils.text_cleanup import is_low_quality_label, parse_domain, validate_intent_label
 
@@ -1985,6 +1988,16 @@ class TaxonomyEngine:
 
         Returns:
             List of newly created sub-domain labels (empty when vocab_only).
+
+        Side effects:
+            Emits ``vocab_generated_enriched`` events on each Phase 4.5
+            vocabulary regeneration. Each event carries ``previous_groups``
+            (sorted lowercase prior vocab keys), ``new_groups`` (sorted
+            lowercase regenerated vocab keys), and ``overlap_pct`` (Jaccard
+            intersection-over-union × 100, rounded to 1 decimal) for
+            forensic correlation with downstream sub-domain dissolutions.
+            A WARNING-level log line is emitted when ``overlap_pct < 50.0``
+            on a non-bootstrap regen (audit R7).
         """
         from collections import Counter
 
@@ -2330,6 +2343,31 @@ class TaxonomyEngine:
                         100.0 * clusters_with_centroids / n_ctx, 1
                     )
 
+                    # R7 (audit 2026-04-27): vocab regeneration overlap telemetry.
+                    # Jaccard intersection-over-union between previous and new group names.
+                    prev_set = {g.lower() for g in (_existing_groups or [])}
+                    new_set = {g.lower() for g in generated.keys()}
+                    if prev_set or new_set:
+                        intersect = prev_set & new_set
+                        union = prev_set | new_set
+                        overlap_pct = round(100.0 * len(intersect) / len(union), 1) if union else 0.0
+                    else:
+                        overlap_pct = 0.0
+                    prev_groups_sorted = sorted(prev_set)
+                    new_groups_sorted = sorted(new_set)
+
+                    # WARNING when regen has low overlap — sub-domains anchored to the
+                    # previous vocab may dissolve on next Phase 5. Fires once per regen
+                    # (the enclosing block runs at most once per domain per cycle).
+                    if prev_set and overlap_pct < 50.0:
+                        logger.warning(
+                            "Vocab regen low overlap for '%s': overlap=%.1f%% "
+                            "previous=%s new=%s — sub-domains anchored to the previous "
+                            "vocab may dissolve on next Phase 5 (audit R7)",
+                            domain_node.label, overlap_pct,
+                            prev_groups_sorted, new_groups_sorted,
+                        )
+
                     try:
                         get_event_logger().log_decision(
                             path="warm", op="discover",
@@ -2350,6 +2388,9 @@ class TaxonomyEngine:
                                 "quality_ms": (
                                     _qm_ms if _quality_score is not None else None
                                 ),
+                                "previous_groups": prev_groups_sorted,
+                                "new_groups": new_groups_sorted,
+                                "overlap_pct": overlap_pct,
                             },
                         )
                     except RuntimeError:
@@ -2700,6 +2741,290 @@ class TaxonomyEngine:
 
         return created
 
+    async def rebuild_sub_domains(
+        self,
+        db: AsyncSession,
+        domain_id: str,
+        *,
+        min_consistency_override: float | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Operator recovery: re-run sub-domain discovery on ONE domain.
+
+        Idempotent: existing sub-domains are not recreated. Single transaction
+        semantics — partial failure rolls back the in-flight session. Always
+        emits a ``sub_domain_rebuild_invoked`` event (including dry runs).
+        Publishes ``taxonomy_changed`` only when ``created`` is non-empty AND
+        non-dry.
+
+        Implementation note — cascade deviation:
+            The R6 spec proposed reusing ``compute_qualifier_cascade`` for the
+            qualifier scan, but that primitive admits a qualifier only when it
+            already lives in the parent domain's vocabulary
+            (``generated_qualifiers`` keys ∪ ``signal_keywords`` lemmas — see
+            ``known_qualifiers`` gating in
+            ``sub_domain_readiness.compute_qualifier_cascade``). This is the
+            correct gate for *organic* discovery during the warm-path Phase 5
+            cycle, but it is exactly wrong for the operator-recovery scenario
+            this method exists to serve: post-mass-dissolution, the parent
+            domain's ``generated_qualifiers`` may have been emptied or scoped
+            away from the qualifiers the operator wants to re-promote, and the
+            cascade would therefore return ``qualifier_counts={}`` and silently
+            produce a zero-proposal recovery. We instead read each
+            optimization's ``domain_raw`` directly via
+            ``parse_domain``, count occurrences locally, and let the breadth +
+            consistency gates do their work without a vocabulary precondition.
+            User-visible semantics (threshold formula, breadth gate, idempotency,
+            transactional rollback, telemetry) are unchanged.
+
+        Args:
+            db: Async SQLAlchemy session.
+            domain_id: PromptCluster.id of the domain to rebuild.
+            min_consistency_override: Replaces the adaptive threshold formula.
+                Must be >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR (defense-
+                in-depth check; Pydantic also enforces at the router).
+            dry_run: When True, returns proposals without modifying state.
+
+        Returns:
+            dict with keys: domain_id, domain_label, threshold_used,
+            proposed, created, skipped_existing, dry_run.
+
+        Raises:
+            ValueError: domain_id not found OR not a domain node OR
+                min_consistency_override below dissolution floor.
+        """
+        from collections import Counter
+
+        from app.services.event_bus import event_bus
+        from app.services.taxonomy._constants import (
+            SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
+            SUB_DOMAIN_MIN_CLUSTER_BREADTH,
+            SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH,
+            SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+            SUB_DOMAIN_QUALIFIER_SCALE_RATE,
+        )
+        from app.utils.text_cleanup import normalize_sub_domain_label
+
+        # 1. Validate domain exists and is a domain node.
+        domain = await db.get(PromptCluster, domain_id)
+        if domain is None:
+            raise ValueError(f"domain not found: {domain_id}")
+        if domain.state != "domain":
+            raise ValueError(
+                f"cluster {domain_id} is not a domain node "
+                f"(state='{domain.state}')"
+            )
+
+        # 2. Defense-in-depth floor check (Pydantic also enforces ge=0.25
+        # at the router layer).
+        if (
+            min_consistency_override is not None
+            and min_consistency_override
+            < SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR
+        ):
+            raise ValueError(
+                f"min_consistency_override={min_consistency_override} "
+                f"below SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR="
+                f"{SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR}"
+            )
+
+        # 3. Scan the optimization tree under the domain for raw qualifier
+        # signals.  The rebuild is operator-invoked recovery — it must not
+        # gate on whether the cascade's vocabulary already "knows" the
+        # qualifier (which the discovery cascade does, by design).  Instead
+        # parse every ``domain_raw`` directly so a fresh qualifier the
+        # operator has just observed in production can become a sub-domain.
+        sub_descendant_q = await db.execute(
+            select(PromptCluster.id).where(
+                PromptCluster.parent_id == domain.id,
+                PromptCluster.state == "domain",
+            )
+        )
+        parent_ids: list[str] = [domain.id]
+        parent_ids.extend(r[0] for r in sub_descendant_q.all())
+
+        cluster_id_q = await db.execute(
+            select(PromptCluster.id).where(
+                PromptCluster.parent_id.in_(parent_ids),
+                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+            )
+        )
+        cluster_ids: list[str] = [r[0] for r in cluster_id_q.all()]
+
+        opt_rows: list[tuple[str | None, str | None]] = []
+        if cluster_ids:
+            opt_q = await db.execute(
+                select(
+                    Optimization.domain_raw,
+                    Optimization.cluster_id,
+                ).where(Optimization.cluster_id.in_(cluster_ids))
+            )
+            opt_rows = [(row[0], row[1]) for row in opt_q.all()]
+
+        from app.utils.text_cleanup import parse_domain as _parse_domain
+        qualifier_counts: Counter[str] = Counter()
+        qualifier_to_cluster_ids: dict[str, set[str]] = {}
+        for domain_raw, cluster_id in opt_rows:
+            if not domain_raw or cluster_id is None:
+                # ``cluster_id is None`` cannot occur given the
+                # ``cluster_id.in_(cluster_ids)`` filter, but guard explicitly
+                # so the downstream type narrows to ``str``.
+                continue
+            _, q = _parse_domain(domain_raw)
+            if not q:
+                continue
+            q_norm = q.strip().lower()
+            if not q_norm:
+                continue
+            qualifier_counts[q_norm] += 1
+            qualifier_to_cluster_ids.setdefault(q_norm, set()).add(cluster_id)
+        total_opts = len(opt_rows)
+
+        # 4. Compute threshold_used.
+        if min_consistency_override is not None:
+            threshold_used = min_consistency_override
+        else:
+            threshold_used = max(
+                SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
+                SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH
+                - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
+            )
+
+        # 5. Identify existing sub-domain labels under this domain.
+        existing_q = await db.execute(
+            select(PromptCluster.label).where(
+                PromptCluster.parent_id == domain.id,
+                PromptCluster.state == "domain",
+            )
+        )
+        existing_labels: set[str] = {
+            (row[0] or "").lower() for row in existing_q.all() if row[0]
+        }
+
+        # 6. Walk eligible qualifiers — apply threshold + breadth gates.
+        # Idempotency note: a qualifier whose label already exists as a
+        # sub-domain is reported in ``skipped_existing`` whenever it would
+        # have been considered (threshold met) — regardless of the breadth
+        # gate.  This gives the operator a complete inventory of "already
+        # covered" qualifiers, not just the strict subset the discovery
+        # cascade would have promoted today.
+        proposed: list[str] = []
+        skipped_existing: list[str] = []
+        eligible: list[tuple[str, str, set[str]]] = []  # (qualifier, sub_label, cluster_ids)
+        for qualifier, count in qualifier_counts.most_common():
+            if total_opts <= 0:
+                continue
+            consistency = count / total_opts
+            if consistency < threshold_used:
+                continue
+            sub_label = normalize_sub_domain_label(qualifier)
+            if not sub_label:
+                continue
+            if sub_label in existing_labels:
+                if sub_label not in skipped_existing:
+                    skipped_existing.append(sub_label)
+                continue
+            cluster_breadth = len(
+                qualifier_to_cluster_ids.get(qualifier, set())
+            )
+            if cluster_breadth < SUB_DOMAIN_MIN_CLUSTER_BREADTH:
+                continue
+            proposed.append(sub_label)
+            eligible.append(
+                (qualifier, sub_label, qualifier_to_cluster_ids.get(qualifier, set())),
+            )
+
+        # 7. Create sub-domains (or skip in dry-run mode).
+        # Wrap the batch in a SAVEPOINT so a mid-batch failure rolls back
+        # any in-flight INSERTs without poisoning the outer session — the
+        # caller's prior committed state (and Python references such as
+        # ``domain.id``) survive untouched.
+        created: list[str] = []
+
+        # Materialize domain identity into plain Python so a SAVEPOINT
+        # rollback (which expires ORM-tracked attributes) does not force a
+        # refetch of ``domain.id`` / ``domain.label`` later in this method.
+        domain_id_str = domain.id
+        domain_label_str = domain.label
+
+        if eligible and not dry_run:
+            savepoint = await db.begin_nested()
+            try:
+                for qualifier, sub_label, matching_cluster_ids in eligible:
+                    # Pick the largest matching cluster as a seed for keywords.
+                    seed_for_keywords: PromptCluster | None = None
+                    if matching_cluster_ids:
+                        seed_q = await db.execute(
+                            select(PromptCluster).where(
+                                PromptCluster.id.in_(matching_cluster_ids),
+                                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                            ).order_by(PromptCluster.member_count.desc()).limit(1)
+                        )
+                        seed_for_keywords = seed_q.scalars().first()
+
+                    sub_node, _ = await self._create_domain_node(
+                        db, sub_label, existing_labels,
+                        seed_cluster=seed_for_keywords,
+                        parent_domain_id=domain_id_str,
+                    )
+
+                    # Reparent matching clusters under the new sub-domain.
+                    for cid in matching_cluster_ids:
+                        cluster = await db.get(PromptCluster, cid)
+                        if (
+                            cluster
+                            and cluster.state not in EXCLUDED_STRUCTURAL_STATES
+                        ):
+                            cluster.parent_id = sub_node.id
+                            cluster.domain = domain_label_str
+
+                    created.append(sub_label)
+                    existing_labels.add(sub_label)
+                await savepoint.commit()
+            except Exception:
+                # Single-transaction semantics — discard any partial inserts.
+                await savepoint.rollback()
+                raise
+
+        # 8. Telemetry: always fire sub_domain_rebuild_invoked.
+        try:
+            get_event_logger().log_decision(
+                path="warm",
+                op="discover",
+                decision="sub_domain_rebuild_invoked",
+                cluster_id=domain_id_str,
+                context={
+                    "domain": domain_label_str,
+                    "min_consistency_override": min_consistency_override,
+                    "threshold_used": threshold_used,
+                    "dry_run": dry_run,
+                    "proposed_count": len(proposed),
+                    "created_count": len(created),
+                    "skipped_existing_count": len(skipped_existing),
+                },
+            )
+        except RuntimeError:
+            pass
+
+        # 9. Publish taxonomy_changed only when created is non-empty AND
+        # not dry_run.
+        if created and not dry_run:
+            event_bus.publish("taxonomy_changed", {
+                "source": "rebuild_sub_domains",
+                "domain": domain_label_str,
+                "created_sub_domains": list(created),
+            })
+
+        return {
+            "domain_id": domain_id_str,
+            "domain_label": domain_label_str,
+            "threshold_used": threshold_used,
+            "proposed": list(proposed),
+            "created": list(created),
+            "skipped_existing": list(skipped_existing),
+            "dry_run": dry_run,
+        }
+
     async def _dissolve_node(
         self,
         db: AsyncSession,
@@ -3036,21 +3361,46 @@ class TaxonomyEngine:
         """Re-evaluate existing sub-domains and dissolve those with degraded consistency.
 
         For each sub-domain under ``domain_node``:
-        1. Skip if younger than ``SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS``
+        1. Skip if younger than ``SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS``,
+           or if its ``cluster_metadata.generated_qualifiers`` snapshot is
+           empty (R3 — empty snapshot would silently fall through to
+           v0.4.6 exact-equality matching; emits
+           ``sub_domain_reevaluation_skipped`` for operator visibility).
         2. Gather all optimizations under its child clusters
-        3. Re-check qualifier consistency using the same three-source cascade
-           as ``_propose_sub_domains`` — Source 1 (``domain_raw`` qualifier
-           parse), Source 2 (``intent_label`` vs organic vocab), Source 3
-           (``raw_prompt`` × dynamic ``signal_keywords``). Matching-path
+        3. Re-check qualifier consistency by delegating each opt to the
+           shared per-opt matcher
+           ``sub_domain_readiness.match_opt_to_sub_domain_vocab`` — Source 1
+           (``domain_raw`` qualifier parse), Source 2 (``intent_label`` vs
+           organic vocab), Source 2b (legacy parent-keyed substring scan),
+           Source 3 (``raw_prompt`` × dynamic ``signal_keywords``). Vocab
+           construction (``sub_vocab_groups`` / ``sub_vocab_terms`` /
+           ``sub_vocab_tokens`` / ``sub_keywords_legacy`` /
+           ``dynamic_keywords``) stays inline here — only the per-opt
+           boolean cascade lives in the primitive (R4, audit
+           ``docs/audits/sub-domain-regression-2026-04-27.md``). Matching-path
            parity with the create path is required: any asymmetry produces
-           dissolve/recreate flip-flop cycles.
-        4. If consistency < ``SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR``:
+           dissolve/recreate flip-flop cycles. The dissolution decision uses
+           a Bayesian Beta-Binomial posterior (``shrunk_consistency``) rather
+           than the raw point estimate — the prior pulls strongly at small N
+           (N≤10) and fades at large N (N≥30), preventing single-member
+           swings at small populations from triggering spurious dissolution
+           (R1, audit ``docs/audits/sub-domain-regression-2026-04-27.md``).
+        4. If shrunk consistency < ``SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR``:
            a. Reparent all child clusters to the top-level domain
            b. Merge meta-patterns from sub-domain into parent domain (UPDATE,
               not DELETE — prompts are never lost)
            c. Archive the sub-domain node (state="archived", zero metrics)
            d. Remove from in-memory indices
-           e. Log ``sub_domain_dissolved`` event
+           e. Log ``sub_domain_dissolved`` event. Both this event and the
+              earlier ``sub_domain_reevaluated`` event carry forensic detail
+              for audit reconstruction (R5, audit
+              ``docs/audits/sub-domain-regression-2026-04-27.md``):
+              ``matching_members`` (count of opts the matcher accepted) plus
+              up to ``SUB_DOMAIN_FAILURE_SAMPLES`` (=3) ``sample_match_failures``
+              entries — each with ``cluster_id`` (UUID, not truncated),
+              ``domain_raw``, ``intent_label`` (text fields capped at
+              ``SUB_DOMAIN_FAILURE_FIELD_TRUNCATE`` =80 chars), and the
+              per-opt ``reason`` returned by the matcher.
 
         Returns:
             List of dissolved sub-domain labels.
@@ -3058,11 +3408,14 @@ class TaxonomyEngine:
         from app.services.taxonomy._constants import (
             SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
             SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS,
+            SUB_DOMAIN_DISSOLUTION_PRIOR_CENTER,
+            SUB_DOMAIN_DISSOLUTION_PRIOR_STRENGTH,
+            SUB_DOMAIN_FAILURE_FIELD_TRUNCATE,
+            SUB_DOMAIN_FAILURE_SAMPLES,
             SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH,
             SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
             SUB_DOMAIN_QUALIFIER_SCALE_RATE,
         )
-        from app.utils.text_cleanup import parse_domain as _parse_domain
 
         dissolved: list[str] = []
 
@@ -3125,6 +3478,7 @@ class TaxonomyEngine:
                     Optimization.domain_raw,
                     Optimization.intent_label,
                     Optimization.raw_prompt,
+                    Optimization.cluster_id,
                 ).where(
                     Optimization.cluster_id.in_(child_ids),
                 )
@@ -3155,6 +3509,27 @@ class TaxonomyEngine:
             # for the ``embedding-health`` sub-domain.
             sub_meta = read_meta(sub.cluster_metadata)
             sub_generated_qualifiers = sub_meta.get("generated_qualifiers") or {}
+            # R3 (audit 2026-04-27): when generated_qualifiers is empty, the sub_vocab_*
+            # sets are empty and matching falls back to v0.4.6 exact-equality behavior
+            # — guaranteed 0% consistency on healthy sub-domains. Skip rather than
+            # fail-open. Emit skip event for operator visibility.
+            if not sub_generated_qualifiers:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="sub_domain_reevaluation_skipped",
+                        cluster_id=sub.id,
+                        context={
+                            "domain": domain_node.label,
+                            "domain_node_id": domain_node.id,
+                            "sub_domain": sub.label,
+                            "reason": "empty_vocab_snapshot",
+                            "total_opts": total_opts,
+                        },
+                    )
+                except RuntimeError:
+                    pass
+                continue
             sub_vocab_groups: set[str] = {
                 str(k).lower()
                 for k in sub_generated_qualifiers.keys()
@@ -3191,96 +3566,57 @@ class TaxonomyEngine:
                     continue
 
             matching = 0
-            for domain_raw, intent_label, raw_prompt in opt_rows:
-                matched = False
-
-                # Source 1: domain_raw qualifier matches the sub-domain's
-                # vocab (label, group, term, or any tokenized vocab term).
-                # Sub-domain creation aggregates multiple vocab groups under
-                # one label (e.g. ``embedding-health`` covers vocab groups
-                # ``optimization``/``correctness``/``instrumentation``/
-                # ``concurrency``), so a child whose ``domain_raw`` qualifier
-                # is one of those groups (e.g. ``backend: observability``)
-                # IS topically consistent with the sub-domain even though
-                # the qualifier string never equals the sub-domain label.
-                # The pre-fix exact-equality check guaranteed consistency=0%
-                # on healthy sub-domains, producing a flip-flop dissolution
-                # loop every Phase 5 cycle.
-                if domain_raw and not matched:
-                    _, q = _parse_domain(domain_raw)
-                    if q:
-                        q_lower = q.lower()
-                        q_norm = q_lower.replace(" ", "-")
-                        if (
-                            q_norm == sub_qualifier
-                            or q_norm in sub_vocab_groups
-                            or q_norm in sub_vocab_terms
-                        ):
-                            matched = True
-                        else:
-                            q_tokens = {
-                                t for t in re.split(r"[\s\-_]", q_lower)
-                                if len(t) >= 4
-                            }
-                            if q_tokens & sub_vocab_tokens:
-                                matched = True
-
-                # Source 2: intent_label tokens hit the sub-domain's vocab.
-                # Replaces the legacy substring scan against the parent-keyed
-                # ``sub_keywords_legacy`` (which is empty by construction),
-                # using tokenized intersection so ``"Cache Eviction Policy
-                # Audit"`` matches via the ``cache`` token shared with
-                # ``cache-instrumentation`` / ``cache-metrics``.
-                if not matched and intent_label and sub_vocab_tokens:
-                    intent_tokens = {
-                        t.lower() for t in re.split(r"[\s\-_,.]+", intent_label)
-                        if len(t) >= 4
-                    }
-                    if intent_tokens & sub_vocab_tokens:
-                        matched = True
-
-                # Source 2b (legacy): keep substring path against
-                # parent-derived ``sub_keywords_legacy`` so any future caller
-                # that pre-populates that field still contributes.
-                if not matched and intent_label and sub_keywords_legacy:
-                    intent_lower = intent_label.lower()
-                    hits = sum(1 for kw in sub_keywords_legacy if kw in intent_lower)
-                    if hits >= 1:
-                        matched = True
-
-                if not matched and raw_prompt and dynamic_keywords:
-                    prompt_lower = raw_prompt.lower()
-                    intent_lower_s3 = (intent_label or "").lower()
-                    best_dyn: str | None = None
-                    best_dyn_weight = 0.0
-                    dyn_hits = 0
-                    for _kw, _weight in dynamic_keywords:
-                        _kw_lower = _kw.lower()
-                        if _kw_lower in prompt_lower:
-                            dyn_hits += 1
-                            _effective_weight = _weight + (
-                                0.5 if _kw_lower in intent_lower_s3 else 0.0
-                            )
-                            if _effective_weight > best_dyn_weight:
-                                best_dyn_weight = _effective_weight
-                                best_dyn = _kw
-                    _raw_weight = best_dyn_weight - (
-                        0.5
-                        if best_dyn and best_dyn.lower() in intent_lower_s3
-                        else 0.0
-                    )
-                    _min_hits = 1 if _raw_weight >= 0.8 else 2
-                    if (
-                        best_dyn
-                        and dyn_hits >= _min_hits
-                        and best_dyn.lower().replace(" ", "-") == sub_qualifier
-                    ):
-                        matched = True
-
-                if matched:
+            match_results: list = []
+            for domain_raw, intent_label, raw_prompt, _cluster_id in opt_rows:
+                match_result = match_opt_to_sub_domain_vocab(
+                    domain_raw=domain_raw,
+                    intent_label=intent_label,
+                    raw_prompt=raw_prompt,
+                    sub_qualifier=sub_qualifier,
+                    sub_vocab_groups=sub_vocab_groups,
+                    sub_vocab_terms=sub_vocab_terms,
+                    sub_vocab_tokens=sub_vocab_tokens,
+                    sub_keywords_legacy=sub_keywords_legacy,
+                    dynamic_keywords=dynamic_keywords,
+                )
+                match_results.append(match_result)
+                if match_result.matched:
                     matching += 1
 
-            consistency = matching / total_opts
+            sample_failures: list[dict] = []
+            for (domain_raw, intent_label, _raw_prompt, cluster_id), result in zip(
+                opt_rows, match_results,
+            ):
+                if result.matched:
+                    continue
+                if len(sample_failures) >= SUB_DOMAIN_FAILURE_SAMPLES:
+                    break
+                sample_failures.append({
+                    "cluster_id": str(cluster_id) if cluster_id else None,
+                    "domain_raw": (
+                        (domain_raw or "")[:SUB_DOMAIN_FAILURE_FIELD_TRUNCATE]
+                        or None
+                    ),
+                    "intent_label": (
+                        (intent_label or "")[:SUB_DOMAIN_FAILURE_FIELD_TRUNCATE]
+                        or None
+                    ),
+                    "reason": result.reason,
+                })
+
+            consistency: float = matching / total_opts
+
+            # R1 (audit 2026-04-27): Bayesian Beta-Binomial shrinkage on the
+            # consistency point estimate.  K=10 prior observations centered
+            # at 0.40 (= SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW, "absent
+            # evidence, assume the lower bound of healthy"). Pulls strongly
+            # at small N where one off-topic member can swing raw consistency
+            # by 20+ percentage points; fades at N>=30 where the empirical
+            # rate dominates. Locks dissolution unreachability shut at large
+            # N (see test_large_n_zero_match_still_dissolves).
+            k_prior: int = SUB_DOMAIN_DISSOLUTION_PRIOR_STRENGTH
+            alpha_prior: float = k_prior * SUB_DOMAIN_DISSOLUTION_PRIOR_CENTER
+            shrunk_consistency: float = (matching + alpha_prior) / (total_opts + k_prior)
 
             # Adaptive threshold (same formula as creation, for context)
             creation_threshold = max(
@@ -3297,17 +3633,21 @@ class TaxonomyEngine:
                         "domain": domain_node.label,
                         "sub_domain": sub.label,
                         "consistency_pct": round(consistency * 100, 1),
+                        "shrunk_consistency_pct": round(shrunk_consistency * 100, 1),
+                        "prior_strength": k_prior,
                         "floor_pct": round(SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100, 1),
                         "threshold_pct": round(creation_threshold * 100, 1),
-                        "passed": consistency >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
+                        "passed": shrunk_consistency >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR,
                         "total_opts": total_opts,
                         "matching": matching,
+                        "matching_members": matching,
+                        "sample_match_failures": sample_failures,
                     },
                 )
             except RuntimeError:
                 pass
 
-            if consistency >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR:
+            if shrunk_consistency >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR:
                 continue  # healthy — keep
 
             # --- Dissolve via shared method ---
@@ -3323,10 +3663,11 @@ class TaxonomyEngine:
 
             logger.info(
                 "Dissolved sub-domain '%s' under '%s': "
-                "consistency=%.0f%% < floor=%.0f%%, "
+                "consistency=%.1f%% (shrunk=%.1f%%) < floor=%.1f%%, "
                 "%d clusters reparented, %d patterns merged",
                 sub.label, domain_node.label,
-                consistency * 100, SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100,
+                consistency * 100, shrunk_consistency * 100,
+                SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100,
                 reparented, patterns_merged,
             )
 
@@ -3339,10 +3680,14 @@ class TaxonomyEngine:
                         "domain": domain_node.label,
                         "sub_domain": sub.label,
                         "consistency_pct": round(consistency * 100, 1),
+                        "shrunk_consistency_pct": round(shrunk_consistency * 100, 1),
+                        "prior_strength": k_prior,
                         "floor_pct": round(SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100, 1),
                         "clusters_reparented": reparented,
                         "meta_patterns_merged": patterns_merged,
                         "reason": "qualifier_consistency_below_floor",
+                        "matching_members": matching,
+                        "sample_match_failures": sample_failures,
                     },
                 )
             except RuntimeError:
