@@ -140,6 +140,50 @@ export function keyMetric(e: TimelineEvent): string {
         : '';
       return names ? `${count}: ${names}` : `${count} domains`;
     }
+    // R1+R5 — re-eval kept the sub-domain alive: surface raw + shrunk
+    // consistency so operators can see how close the dissolution call was.
+    if (e.decision === 'sub_domain_reevaluated') {
+      const sub = typeof c.sub_domain === 'string' ? c.sub_domain : '';
+      const cons = typeof c.consistency_pct === 'number' ? `${c.consistency_pct.toFixed(1)}%` : '?';
+      const shrunk = typeof c.shrunk_consistency_pct === 'number' ? c.shrunk_consistency_pct.toFixed(1) : '?';
+      const m = typeof c.matching_members === 'number' && typeof c.total_opts === 'number'
+        ? ` ${c.matching_members}/${c.total_opts}m` : '';
+      return `${sub}${m} cons=${cons} shrunk=${shrunk}%`.trim();
+    }
+    // R1+R5 — dissolution fired: same payload plus reparent count.
+    if (e.decision === 'sub_domain_dissolved') {
+      const sub = typeof c.sub_domain === 'string' ? c.sub_domain : '';
+      const cons = typeof c.consistency_pct === 'number' ? `${c.consistency_pct.toFixed(1)}%` : '?';
+      const shrunk = typeof c.shrunk_consistency_pct === 'number' ? c.shrunk_consistency_pct.toFixed(1) : '?';
+      const samples = Array.isArray(c.sample_match_failures) ? c.sample_match_failures.length : 0;
+      const reparented = typeof c.clusters_reparented === 'number' ? ` → ${c.clusters_reparented} reparented` : '';
+      const samplesNote = samples > 0 ? ` (${samples} sample${samples !== 1 ? 's' : ''})` : '';
+      return `${sub} cons=${cons} shrunk=${shrunk}%${samplesNote}${reparented}`.trim();
+    }
+    // R3 — re-eval skipped due to empty vocab snapshot.
+    if (e.decision === 'sub_domain_reevaluation_skipped') {
+      const sub = typeof c.sub_domain === 'string' ? c.sub_domain : '';
+      const reason = typeof c.reason === 'string' ? c.reason : '';
+      const opts = typeof c.total_opts === 'number' ? ` ${c.total_opts}m` : '';
+      return `${sub}${opts} skipped — ${reason}`.trim();
+    }
+    // R6 — operator-triggered rebuild (always emits, including dry-runs).
+    if (e.decision === 'sub_domain_rebuild_invoked') {
+      const dom = typeof c.domain === 'string' ? c.domain : '';
+      const dry = c.dry_run === true ? ' [dry]' : '';
+      const thr = typeof c.threshold_used === 'number' ? ` thr=${c.threshold_used.toFixed(2)}` : '';
+      const created = typeof c.created_count === 'number' ? c.created_count : 0;
+      const skipped = typeof c.skipped_existing_count === 'number' ? c.skipped_existing_count : 0;
+      return `${dom}${dry}${thr} +${created} created, ${skipped} skipped`.trim();
+    }
+    // R7 — vocab regeneration overlap telemetry. Show the Jaccard % so
+    // low-overlap regens are immediately visible in the timeline.
+    if (e.decision === 'vocab_generated_enriched') {
+      const dom = typeof c.domain === 'string' ? c.domain : '';
+      const groups = typeof c.groups === 'number' ? `${c.groups} groups` : '';
+      const overlap = typeof c.overlap_pct === 'number' ? ` overlap=${c.overlap_pct.toFixed(1)}%` : '';
+      return `${dom} ${groups}${overlap}`.trim();
+    }
     return typeof c.domain_label === 'string' ? c.domain_label : '';
   }
 

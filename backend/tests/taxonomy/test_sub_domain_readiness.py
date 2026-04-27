@@ -684,3 +684,216 @@ class TestBatchAndParity:
         assert "auth" in created, (
             f"primitive reported ready but engine created {created!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# R4: shared per-opt sub-domain matcher primitive
+# ---------------------------------------------------------------------------
+
+
+class TestMatchOptToSubDomainVocab:
+    """R4 (audit 2026-04-27): pure-function unit tests for the shared
+    per-opt sub-domain matcher.
+
+    The function under test is to be added to ``sub_domain_readiness.py``
+    as ``match_opt_to_sub_domain_vocab`` returning a
+    ``SubDomainMatchResult`` dataclass.  It mirrors the v0.4.7 inline
+    matching cascade from ``engine._reevaluate_sub_domains`` verbatim
+    (Source 1 / 2 / 2b legacy / 3) so the engine can delegate to it
+    without behavior drift.
+
+    These tests fail today with ``ImportError`` — the function and
+    dataclass do not yet exist.  GREEN adds them and refactors the
+    engine to consume the primitive.
+
+    Acceptance criteria: AC-R4-1.
+    """
+
+    def test_source_1_exact_label_match(self):
+        """Source 1: ``domain_raw`` qualifier equals the sub-domain label
+        (the v0.4.6 exact-equality clause that the v0.4.7 fix kept as a
+        fast-path).  All vocab sets are empty so a hit through this path
+        proves the label-identity branch is wired.
+        """
+        from app.services.taxonomy.sub_domain_readiness import (
+            SubDomainMatchResult,
+            match_opt_to_sub_domain_vocab,
+        )
+
+        result = match_opt_to_sub_domain_vocab(
+            domain_raw="backend: embedding-health",
+            intent_label=None,
+            raw_prompt=None,
+            sub_qualifier="embedding-health",
+            sub_vocab_groups=set(),
+            sub_vocab_terms=set(),
+            sub_vocab_tokens=set(),
+            sub_keywords_legacy=[],
+            dynamic_keywords=[],
+        )
+
+        assert isinstance(result, SubDomainMatchResult)
+        assert result.matched is True
+        assert result.source == "domain_raw"
+        assert result.matched_value == "embedding-health"
+
+    def test_source_1_vocab_group_match(self):
+        """Source 1: ``domain_raw`` qualifier hits a vocab group name
+        (the v0.4.7 fix's primary path — sub-domain creation aggregates
+        multiple vocab groups so a child whose qualifier IS a group name
+        is topically consistent).
+        """
+        from app.services.taxonomy.sub_domain_readiness import (
+            match_opt_to_sub_domain_vocab,
+        )
+
+        result = match_opt_to_sub_domain_vocab(
+            domain_raw="backend: observability",
+            intent_label=None,
+            raw_prompt=None,
+            sub_qualifier="instrumentation",
+            sub_vocab_groups={"observability"},
+            sub_vocab_terms=set(),
+            sub_vocab_tokens=set(),
+            sub_keywords_legacy=[],
+            dynamic_keywords=[],
+        )
+
+        assert result.matched is True
+        assert result.source == "domain_raw"
+
+    def test_source_1_vocab_term_match(self):
+        """Source 1: ``domain_raw`` qualifier hits a flattened vocab
+        term (any leaf value across all groups).  Term-level hits are
+        narrower than group hits but still legitimate sub-domain
+        membership signals.
+        """
+        from app.services.taxonomy.sub_domain_readiness import (
+            match_opt_to_sub_domain_vocab,
+        )
+
+        result = match_opt_to_sub_domain_vocab(
+            domain_raw="backend: tracing",
+            intent_label=None,
+            raw_prompt=None,
+            sub_qualifier="instrumentation",
+            sub_vocab_groups=set(),
+            sub_vocab_terms={"tracing", "monitoring"},
+            sub_vocab_tokens=set(),
+            sub_keywords_legacy=[],
+            dynamic_keywords=[],
+        )
+
+        assert result.matched is True
+        assert result.source == "domain_raw"
+
+    def test_source_1_token_overlap_match(self):
+        """Source 1: ``domain_raw`` qualifier shares a tokenized chunk
+        (≥4 chars after splitting on space/hyphen/underscore) with the
+        sub-domain's vocab tokens.  Lets ``backend: cache-eviction``
+        match a sub-domain whose tokens include ``cache``.
+        """
+        from app.services.taxonomy.sub_domain_readiness import (
+            match_opt_to_sub_domain_vocab,
+        )
+
+        result = match_opt_to_sub_domain_vocab(
+            domain_raw="backend: cache-eviction",
+            intent_label=None,
+            raw_prompt=None,
+            sub_qualifier="instrumentation",
+            sub_vocab_groups=set(),
+            sub_vocab_terms=set(),
+            sub_vocab_tokens={"cache"},
+            sub_keywords_legacy=[],
+            dynamic_keywords=[],
+        )
+
+        assert result.matched is True
+        assert result.source == "domain_raw"
+
+    def test_source_2_intent_label_token_match(self):
+        """Source 2: ``intent_label`` tokens intersect ``sub_vocab_tokens``
+        — the modern replacement for the legacy substring scan.  Lets
+        ``"Cache Eviction Policy Audit"`` match a sub-domain whose tokens
+        contain ``cache``.
+        """
+        from app.services.taxonomy.sub_domain_readiness import (
+            match_opt_to_sub_domain_vocab,
+        )
+
+        result = match_opt_to_sub_domain_vocab(
+            domain_raw=None,
+            intent_label="Cache Eviction Policy Audit",
+            raw_prompt=None,
+            sub_qualifier="instrumentation",
+            sub_vocab_groups=set(),
+            sub_vocab_terms=set(),
+            sub_vocab_tokens={"cache"},
+            sub_keywords_legacy=[],
+            dynamic_keywords=[],
+        )
+
+        assert result.matched is True
+        assert result.source == "intent_label"
+
+    def test_source_3_dynamic_keyword_match(self):
+        """Source 3: TF-IDF dynamic keyword whose normalised form equals
+        the sub-domain qualifier and meets the per-weight min-hits gate.
+        At weight 0.9 the gate is 1 hit, so a single occurrence in the
+        ``raw_prompt`` is sufficient.
+        """
+        from app.services.taxonomy.sub_domain_readiness import (
+            match_opt_to_sub_domain_vocab,
+        )
+
+        result = match_opt_to_sub_domain_vocab(
+            domain_raw=None,
+            intent_label=None,
+            raw_prompt=(
+                "audit the asyncio race condition in our handler with "
+                "asyncio.gather"
+            ),
+            sub_qualifier="asyncio",
+            sub_vocab_groups=set(),
+            sub_vocab_terms=set(),
+            sub_vocab_tokens=set(),
+            sub_keywords_legacy=[],
+            dynamic_keywords=[("asyncio", 0.9)],
+        )
+
+        assert result.matched is True
+        assert result.source == "tf_idf"
+        assert result.matched_value == "asyncio"
+
+    def test_all_sources_miss_returns_unmatched_with_reason(self):
+        """All four sources miss: ``domain_raw`` qualifier doesn't equal
+        the sub-domain label, isn't in any vocab set, has no token
+        overlap; ``intent_label`` shares no tokens with vocab tokens
+        (and ``sub_keywords_legacy`` is empty so 2b is vacuous);
+        ``raw_prompt`` carries no dynamic-keyword hit.  Expect
+        ``matched=False``, ``source=None``, and a non-empty diagnostic
+        ``reason`` so R5's forensic telemetry can render it.
+        """
+        from app.services.taxonomy.sub_domain_readiness import (
+            match_opt_to_sub_domain_vocab,
+        )
+
+        result = match_opt_to_sub_domain_vocab(
+            domain_raw="frontend: forms",
+            intent_label="Validate Login Form",
+            raw_prompt="this is a frontend prompt",
+            sub_qualifier="instrumentation",
+            sub_vocab_groups=set(),
+            sub_vocab_terms=set(),
+            sub_vocab_tokens=set(),
+            sub_keywords_legacy=[],
+            dynamic_keywords=[],
+        )
+
+        assert result.matched is False
+        assert result.source is None
+        assert isinstance(result.reason, str) and result.reason, (
+            f"reason must be a non-empty string when matched=False; "
+            f"got: {result.reason!r}"
+        )

@@ -15,8 +15,13 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies.rate_limit import RateLimit
 from app.models import Optimization, PromptCluster
-from app.schemas.domains import DomainInfo
+from app.schemas.domains import (
+    DomainInfo,
+    RebuildSubDomainsRequest,
+    RebuildSubDomainsResult,
+)
 from app.schemas.sub_domain_readiness import (
     DomainReadinessReport,
     ReadinessHistoryResponse,
@@ -343,3 +348,57 @@ async def promote_to_domain(
         avg_score=cluster.avg_score,
         source="manual",
     )
+
+
+@router.post(
+    "/{domain_id}/rebuild-sub-domains",
+    response_model=RebuildSubDomainsResult,
+    dependencies=[Depends(RateLimit(lambda: "10/minute"))],
+)
+async def rebuild_sub_domains(
+    domain_id: str,
+    request: RebuildSubDomainsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> RebuildSubDomainsResult:
+    """Operator-triggered sub-domain rebuild — see R6 in audit doc.
+
+    Error envelope mirrors ``promote_to_domain``:
+        404 — domain_id not found
+        422 — node is not a domain (state != "domain") OR
+              min_consistency below SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR
+        503 — DB OperationalError (transient contention)
+        500 — uncaught (logged with traceback)
+    """
+    from app.services.taxonomy import get_engine
+    engine = get_engine()
+    try:
+        result = await engine.rebuild_sub_domains(
+            db, domain_id,
+            min_consistency_override=request.min_consistency,
+            dry_run=request.dry_run,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        msg_lower = msg.lower()
+        if "not found" in msg_lower:
+            raise HTTPException(404, "Domain not found") from exc
+        if "is not a domain" in msg_lower or "not a domain" in msg_lower:
+            raise HTTPException(
+                422,
+                f"Cluster {domain_id} must be a domain node — {msg}",
+            ) from exc
+        raise HTTPException(422, msg) from exc
+    except OperationalError as exc:
+        await db.rollback()
+        logger.warning("rebuild_sub_domains DB contention: %s", exc)
+        raise HTTPException(503, "Database busy — retry in a moment") from exc
+
+    if not request.dry_run and result["created"]:
+        try:
+            await db.commit()
+        except OperationalError as exc:
+            await db.rollback()
+            logger.warning("rebuild_sub_domains commit failed: %s", exc)
+            raise HTTPException(503, "Database busy — retry in a moment") from exc
+
+    return RebuildSubDomainsResult(**result)

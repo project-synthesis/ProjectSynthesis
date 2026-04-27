@@ -2,7 +2,7 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.4.7 (released 2026-04-26). Reflects shipped state as of 2026-04-26.
+**Snapshot:** v0.4.8-dev (sub-domain dissolution hardening shipped 2026-04-27; audit `docs/audits/sub-domain-regression-2026-04-27.md` R1-R8 all closed). Last release: v0.4.7 (2026-04-26).
 
 ## Conventions
 
@@ -307,6 +307,84 @@ Living document tracking planned improvements. Items are prioritized but not sch
 ---
 
 ## Completed (recent)
+
+### v0.4.8-dev — 2026-04-27
+
+Sub-domain dissolution hardening — closes all 8 audit recommendations from
+`docs/audits/sub-domain-regression-2026-04-27.md`. Multi-cycle TDD via
+RED→GREEN→REFACTOR→VALIDATION subagent dispatches per recommendation,
+gated by independent spec verification, integration validation cycles
+(`cycle-12`/`cycle-13`/`cycle-14`), and a comprehensive PR-wide
+systematic check. 46 new tests + 8 adapted, full backend suite at 3153
+passed / 1 skipped.
+
+- **R1 — Bayesian shrinkage on consistency** — replace point-estimate
+  consistency in `_reevaluate_sub_domains()` with a Beta-Binomial
+  posterior using prior strength `SUB_DOMAIN_DISSOLUTION_PRIOR_STRENGTH=10`
+  centered at `SUB_DOMAIN_DISSOLUTION_PRIOR_CENTER=0.40`. Prevents
+  small-N noise (one off-topic member at N=5) from triggering
+  dissolution. Both `sub_domain_reevaluated` and `sub_domain_dissolved`
+  events now carry `shrunk_consistency_pct` + `prior_strength` keys
+  alongside the legacy `consistency_pct`. `TestSubDomainBayesianShrinkage`
+  (4 tests). Spec: `docs/specs/sub-domain-dissolution-hardening-2026-04-27.md` §R1.
+- **R2 — 24h dissolution grace period** — `SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS`
+  bumped from 6 to 24. Both observed dissolutions in the audit incident
+  fired at 6h 0m and 6h 8m post-creation — exactly at the gate.
+  24 hours gives one full daily cycle of bootstrap volatility. Two
+  tests in `TestSubDomainGracePeriod`.
+- **R3 — Empty-snapshot guardrail** — when a sub-domain's
+  `cluster_metadata.generated_qualifiers` is empty, the matcher would
+  fall through to v0.4.6 exact-equality behavior (the bug class v0.4.7
+  fixed). Now `_reevaluate_sub_domains()` skips dissolution and emits
+  `sub_domain_reevaluation_skipped` with `reason=empty_vocab_snapshot`.
+  Two tests in `TestSubDomainEmptySnapshotSkip`.
+- **R4 — Per-opt matcher extracted to shared primitive** — the inline
+  three-source matching cascade in `_reevaluate_sub_domains()` is now a
+  pure function `match_opt_to_sub_domain_vocab() -> SubDomainMatchResult`
+  in `services/taxonomy/sub_domain_readiness.py`. Engine consumes the
+  primitive. Same predicate available to future tools and the rebuild
+  endpoint. 7 unit tests + 1 byte-equivalence integration test.
+- **R5 — Forensic dissolution telemetry** — both reevaluated and
+  dissolved events now carry `matching_members` (int) and up to 3
+  `sample_match_failures` entries with `cluster_id` (preserved
+  unsanitized) + `domain_raw`/`intent_label` (truncated to 80 chars) +
+  `reason` (from `SubDomainMatchResult`). Closes the audit's "30
+  minutes of forensic work that should have been one log line" gap.
+  Two new constants `SUB_DOMAIN_FAILURE_SAMPLES=3`,
+  `SUB_DOMAIN_FAILURE_FIELD_TRUNCATE=80`. `TestSubDomainForensicTelemetry`
+  (5 tests).
+- **R6 — Operator rebuild endpoint** —
+  `POST /api/domains/{domain_id}/rebuild-sub-domains` (10/min) lets
+  operators force discovery on a single domain with optional
+  `min_consistency` override (Pydantic `ge=0.25` floor + runtime
+  defense-in-depth) and `dry_run` semantics. Idempotent. Single
+  `db.begin_nested()` SAVEPOINT for partial-failure rollback. Always
+  emits `sub_domain_rebuild_invoked` telemetry; publishes
+  `taxonomy_changed` only when sub-domains actually create AND
+  non-dry-run. 11 service tests + 6 router tests. Spec:
+  `docs/specs/sub-domain-dissolution-hardening-r4-r6.md` §R6.
+- **R7 — Vocab regeneration overlap telemetry** —
+  `vocab_generated_enriched` event gains `previous_groups`,
+  `new_groups`, `overlap_pct` (Jaccard %). WARNING log fires when
+  `overlap_pct < 50%` on a non-bootstrap regen — the audit's incident
+  saw vocab swap from `{metrics, tracing, pattern-instrumentation}` to
+  `{concurrency, observability, embeddings, security}` (zero overlap)
+  one minute after the second sub-domain dissolved; this telemetry
+  surfaces that correlation immediately. 5 tests in
+  `TestVocabRegenOverlap`.
+- **R8 — Threshold-collision invariant** — `_validate_threshold_invariants()`
+  callable in `_constants.py` invoked at module-import time; fails fast
+  if `SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW <= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR`.
+  Function-call form (rather than literal assert) lets tests exercise
+  the invariant logic without `importlib.reload` quirks.
+  `TestThresholdCollisionInvariant` (3 tests).
+
+**Audit:** `docs/audits/sub-domain-regression-2026-04-27.md` (Resolution
+status table — all 8 SHIPPED). **Specs:** three docs under
+`docs/specs/sub-domain-dissolution-hardening-{2026-04-27,r4-r6,r7-r8}.md`,
+each with companion `…-plan.md`. **Validation:** comprehensive PR-wide
+subagent check confirmed code, tests, CHANGELOG, spec status, and live
+behavior across all R1-R8.
 
 ### v0.4.7 — 2026-04-26
 

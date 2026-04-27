@@ -248,4 +248,112 @@ describe('keyMetric', () => {
       expect(out).not.toContain('coh');
     });
   });
+
+  // R1+R3+R5+R6+R7 — sub-domain dissolution hardening (audit
+  // docs/audits/sub-domain-regression-2026-04-27.md). All five new
+  // decision types route through `op="discover"`.
+  describe('discover (R1+R3+R5+R6+R7)', () => {
+    it('R1+R5 sub_domain_reevaluated surfaces raw + shrunk consistency', () => {
+      const out = keyMetric(ev('discover', 'sub_domain_reevaluated', {
+        sub_domain: 'embedding-health',
+        consistency_pct: 18.2,
+        shrunk_consistency_pct: 38.5,
+        matching_members: 3,
+        total_opts: 13,
+      }));
+      expect(out).toContain('embedding-health');
+      expect(out).toContain('3/13m');
+      expect(out).toContain('cons=18.2%');
+      expect(out).toContain('shrunk=38.5%');
+    });
+
+    it('R1+R5 sub_domain_dissolved surfaces sample failure count + reparent', () => {
+      const out = keyMetric(ev('discover', 'sub_domain_dissolved', {
+        sub_domain: 'audit',
+        consistency_pct: 0.0,
+        shrunk_consistency_pct: 13.3,
+        clusters_reparented: 3,
+        sample_match_failures: [
+          { cluster_id: 'a', domain_raw: 'backend: x', intent_label: 'foo', reason: 'no match' },
+          { cluster_id: 'b', domain_raw: 'backend: y', intent_label: 'bar', reason: 'no match' },
+        ],
+      }));
+      expect(out).toContain('audit');
+      expect(out).toContain('cons=0.0%');
+      expect(out).toContain('shrunk=13.3%');
+      expect(out).toContain('(2 samples)');
+      expect(out).toContain('→ 3 reparented');
+    });
+
+    it('R5 dissolution with no sample failures omits the parenthetical', () => {
+      const out = keyMetric(ev('discover', 'sub_domain_dissolved', {
+        sub_domain: 'foo',
+        consistency_pct: 0.0,
+        shrunk_consistency_pct: 13.3,
+        sample_match_failures: [],
+      }));
+      expect(out).not.toContain('samples');
+    });
+
+    it('R3 sub_domain_reevaluation_skipped surfaces reason', () => {
+      const out = keyMetric(ev('discover', 'sub_domain_reevaluation_skipped', {
+        sub_domain: 'embedding-health',
+        reason: 'empty_vocab_snapshot',
+        total_opts: 13,
+      }));
+      expect(out).toContain('embedding-health');
+      expect(out).toContain('13m');
+      expect(out).toContain('skipped');
+      expect(out).toContain('empty_vocab_snapshot');
+    });
+
+    it('R6 sub_domain_rebuild_invoked surfaces created/skipped counts and dry flag', () => {
+      const out = keyMetric(ev('discover', 'sub_domain_rebuild_invoked', {
+        domain: 'backend',
+        threshold_used: 0.30,
+        dry_run: true,
+        proposed_count: 2,
+        created_count: 0,
+        skipped_existing_count: 1,
+      }));
+      expect(out).toContain('backend');
+      expect(out).toContain('[dry]');
+      expect(out).toContain('thr=0.30');
+      expect(out).toContain('+0 created');
+      expect(out).toContain('1 skipped');
+    });
+
+    it('R6 non-dry rebuild omits the [dry] marker', () => {
+      const out = keyMetric(ev('discover', 'sub_domain_rebuild_invoked', {
+        domain: 'backend',
+        threshold_used: 0.40,
+        dry_run: false,
+        created_count: 1,
+        skipped_existing_count: 0,
+      }));
+      expect(out).not.toContain('[dry]');
+      expect(out).toContain('+1 created');
+    });
+
+    it('R7 vocab_generated_enriched surfaces overlap_pct', () => {
+      const out = keyMetric(ev('discover', 'vocab_generated_enriched', {
+        domain: 'backend',
+        groups: 4,
+        overlap_pct: 0.0,
+      }));
+      expect(out).toContain('backend');
+      expect(out).toContain('4 groups');
+      expect(out).toContain('overlap=0.0%');
+    });
+
+    it('R7 bootstrap (no overlap key) gracefully degrades', () => {
+      const out = keyMetric(ev('discover', 'vocab_generated_enriched', {
+        domain: 'devops',
+        groups: 3,
+      }));
+      expect(out).toContain('devops');
+      expect(out).toContain('3 groups');
+      expect(out).not.toContain('overlap=');
+    });
+  });
 });

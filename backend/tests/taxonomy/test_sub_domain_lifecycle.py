@@ -22,7 +22,7 @@ from app.services.taxonomy._constants import (
     SUB_DOMAIN_ARCHIVAL_IDLE_HOURS,
     SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS,
 )
-from app.services.taxonomy.cluster_meta import write_meta
+from app.services.taxonomy.cluster_meta import read_meta, write_meta
 
 EMBEDDING_DIM = 384
 
@@ -926,10 +926,22 @@ class TestMultipleSiblingSubDomains:
         )
         sub_healthy = _make_domain("audit", parent_id=parent.id)
         sub_healthy.created_at = old_age
+        # Non-empty generated_qualifiers so R3's empty-snapshot guard does
+        # NOT short-circuit the test before consistency is evaluated.
+        sub_healthy.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={"audit": ["audit", "verify", "review"]},
+        )
         # Degraded sibling: child has optimizations whose domain_raw doesn't
         # carry the sibling's qualifier, so consistency drops below floor.
         sub_degraded = _make_domain("legacy-tag", parent_id=parent.id)
         sub_degraded.created_at = old_age
+        sub_degraded.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={"legacy-tag": ["legacy", "deprecated"]},
+        )
         db.add_all([sub_healthy, sub_degraded])
         await db.flush()
 
@@ -1044,6 +1056,13 @@ class TestSubDomainDissolution:
         await db.flush()
 
         sub = _make_sub_domain("query", parent_id=domain.id, age_hours=24)
+        # Non-empty generated_qualifiers so R3's empty-snapshot guard does
+        # NOT short-circuit before the shrinkage decision runs.
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={"query": ["query", "select", "lookup"]},
+        )
         db.add(sub)
         await db.flush()
 
@@ -1054,9 +1073,14 @@ class TestSubDomainDissolution:
             await db.flush()
             cluster_ids.append(c.id)
 
-        # Only 1 out of 6 has "database: query" — consistency ~17%, below floor 25%
+        # N=12 chosen to clear the Bayesian shrinkage floor at K=10/center=0.40
+        # prior — see spec R1.  With 1 match at N=12, shrunk=5/22=0.227 < 0.25
+        # → dissolves.  At the original N=6/1-match the shrunk value 5/16=0.3125
+        # would KEEP, which would defeat the dissolution intent.  Test semantic
+        # unchanged: low consistency still dissolves; just at a sample size
+        # past the prior's small-N protection.
         db.add(_make_opt(cluster_ids[0], "database: query", seed=0))
-        for i in range(1, 6):
+        for i in range(1, 12):
             db.add(_make_opt(cluster_ids[i % 3], "database", seed=i))
         await db.commit()
 
@@ -1077,6 +1101,13 @@ class TestSubDomainDissolution:
         await db.flush()
 
         sub = _make_sub_domain("query", parent_id=domain.id, age_hours=24)
+        # Non-empty generated_qualifiers so R3's empty-snapshot guard does
+        # NOT short-circuit before the shrinkage decision runs.
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={"query": ["query", "select", "lookup"]},
+        )
         db.add(sub)
         await db.flush()
 
@@ -1087,8 +1118,11 @@ class TestSubDomainDissolution:
             await db.flush()
             cluster_ids.append(c.id)
 
-        # 0 out of 4 opts have "database: query" — well below floor
-        for i in range(4):
+        # N=10 chosen to clear the Bayesian shrinkage floor at K=10/center=0.40
+        # prior — see spec R1.  With 0 matches at N=10, shrunk=4/20=0.20 < 0.25
+        # → dissolves.  At the original N=4/0-match the shrunk value 4/14=0.286
+        # would KEEP under the new prior, defeating the reparenting test intent.
+        for i in range(10):
             db.add(_make_opt(cluster_ids[i % 2], "database", seed=i))
         await db.commit()
 
@@ -1115,6 +1149,13 @@ class TestSubDomainDissolution:
         await db.flush()
 
         sub = _make_sub_domain("query", parent_id=domain.id, age_hours=24)
+        # Non-empty generated_qualifiers so R3's empty-snapshot guard does
+        # NOT short-circuit before the shrinkage decision runs.
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={"query": ["query", "select", "lookup"]},
+        )
         db.add(sub)
         await db.flush()
 
@@ -1125,7 +1166,11 @@ class TestSubDomainDissolution:
             db.add(c)
             await db.flush()
             cluster_ids.append(c.id)
-        for i in range(4):
+        # N=10 chosen to clear the Bayesian shrinkage floor at K=10/center=0.40
+        # prior — see spec R1.  With 0 matches at N=10, shrunk=4/20=0.20 < 0.25
+        # → dissolves.  At the original N=4/0-match the shrunk value 4/14=0.286
+        # would KEEP under the new prior, leaving meta-patterns un-merged.
+        for i in range(10):
             db.add(_make_opt(cluster_ids[i % 2], "database", seed=i))  # no qualifier match
 
         # Add MetaPattern rows owned by the sub-domain
@@ -1441,12 +1486,19 @@ class TestSubDomainConsistencyVocabGroupMatch:
         db.add(c)
         await db.flush()
 
-        # All 6 opts mention auth/security topics — completely outside the
+        # N=10 chosen for margin past the Bayesian shrinkage floor at
+        # K=10/center=0.40 prior — see spec R1.  At N=6/0-match the shrunk
+        # consistency lands exactly at the 0.25 floor (4/16=0.25), so the
+        # gate's `>=` would KEEP rather than DISSOLVE.  At N=10/0-match
+        # shrunk = 4/20 = 0.20 < 0.25, restoring the original control intent.
+        # All opts mention auth/security topics — completely outside the
         # sub-domain's instrumentation vocabulary.  No vocab-group, term,
         # or intent-token match.
         for i, raw in enumerate([
             "backend: auth", "backend: jwt", "backend: oauth",
             "backend: security", "backend: validation", "backend: csrf",
+            "backend: encryption", "backend: authorization",
+            "backend: hashing", "backend: token",
         ]):
             opt = _make_opt(c.id, raw, seed=i)
             opt.intent_label = "Authentication Endpoint Audit"
@@ -1461,6 +1513,2030 @@ class TestSubDomainConsistencyVocabGroupMatch:
         assert "embedding-health" in dissolved, (
             "Unrelated qualifiers should still dissolve — fix must not be "
             f"so permissive it keeps every sub-domain alive. Got: {dissolved}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# R1 — Bayesian shrinkage on consistency metric
+# (spec: docs/specs/sub-domain-dissolution-hardening-2026-04-27.md §R1)
+# ---------------------------------------------------------------------------
+
+
+class TestSubDomainBayesianShrinkage:
+    """R1 (audit 2026-04-27): point-estimate consistency at small N is
+    statistically meaningless — one off-topic member at N=5 swings the
+    metric by 20 percentage points and triggers spurious dissolution.
+
+    The fix swaps the dissolution input from raw ``matching / total_opts``
+    to a Bayesian Beta-Binomial posterior:
+
+        shrunk = (matching + α_prior) / (total_opts + α_prior + β_prior)
+        with K=10, center=0.40 → α=4.0, β=6.0
+
+    Pre-fix ALL four tests fail (3 assertion errors on dissolution decision,
+    1 KeyError/assertion on missing telemetry key). Post-fix all four pass.
+
+    Acceptance criteria: AC-R1-1 .. AC-R1-4 in the spec. The control
+    case ``test_large_n_zero_match_still_dissolves`` must pass under
+    both regimes (pre-fix because raw=0.00, post-fix because
+    shrunk=0.133 < 0.25); it locks the contract that shrinkage does
+    not make dissolution unreachable.
+    """
+
+    @pytest.mark.asyncio
+    async def test_small_n_one_match_keeps_via_shrinkage(
+        self, db, mock_provider,
+    ):
+        """AC-R1-1: N=5, matching=1, raw=0.20 → KEEP (shrunk≈0.333 ≥ 0.25).
+
+        Pre-fix the raw 0.20 consistency falls below the 0.25 floor and the
+        sub-domain is dissolved despite 1/5 of children carrying a
+        topically-aligned qualifier. Post-fix the Beta(4,6) prior pulls
+        the estimate up to 5/15 = 0.333 ≥ 0.25 → kept.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # Age computed relative to the constant so the test stays correct
+        # under R2's bump from 6h → 24h.
+        sub = _make_sub_domain(
+            "observability",
+            parent_id=domain.id,
+            age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+        )
+        # Non-empty generated_qualifiers so R3's empty-snapshot guard does
+        # NOT short-circuit the test before the shrinkage decision runs.
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "observability": ["tracing", "monitoring"],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        cluster = _make_cluster(
+            "obs-cluster", domain="backend", parent_id=sub.id,
+        )
+        db.add(cluster)
+        await db.flush()
+
+        # 1 matching opt (vocab GROUP "observability") + 4 opts with
+        # qualifier outside the sub-domain's vocab.  Raw consistency = 0.20.
+        db.add(_make_opt(cluster.id, "backend: observability", seed=0))
+        for i in range(1, 5):
+            db.add(_make_opt(cluster.id, "backend: unrelated_qualifier", seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert dissolved == [], (
+            "Sub-domain with N=5 and 1 matching qualifier should be KEPT "
+            "via Bayesian shrinkage (shrunk=0.333 ≥ 0.25). "
+            f"Pre-fix raw=0.20 < 0.25 → dissolved. Got: {dissolved}"
+        )
+        await db.refresh(sub)
+        assert sub.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_small_n_zero_match_keeps_via_shrinkage(
+        self, db, mock_provider,
+    ):
+        """AC-R1-2: N=5, matching=0, raw=0.00 → KEEP (shrunk≈0.267 ≥ 0.25).
+
+        The prior's safety-net behavior: even with zero matches, too-few
+        samples do not justify dissolution. shrunk = 4/15 = 0.267.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain(
+            "observability",
+            parent_id=domain.id,
+            age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+        )
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "observability": ["tracing", "monitoring"],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        cluster = _make_cluster(
+            "obs-cluster", domain="backend", parent_id=sub.id,
+        )
+        db.add(cluster)
+        await db.flush()
+
+        # All 5 opts unrelated. Raw consistency = 0.00.
+        for i in range(5):
+            db.add(_make_opt(cluster.id, "backend: unrelated_qualifier", seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert dissolved == [], (
+            "Sub-domain with N=5 and 0 matches should be KEPT via "
+            "Bayesian shrinkage prior (shrunk=4/15=0.267 ≥ 0.25). "
+            f"Pre-fix raw=0.00 < 0.25 → dissolved. Got: {dissolved}"
+        )
+        await db.refresh(sub)
+        assert sub.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_large_n_zero_match_still_dissolves(
+        self, db, mock_provider,
+    ):
+        """AC-R1-3: N=20, matching=0 → DISSOLVE (shrunk=4/30=0.133 < 0.25).
+
+        Locks the contract that Bayesian shrinkage does NOT make dissolution
+        unreachable.  At large N the prior fades and the empirical rate
+        dominates.  Test passes pre-fix (raw=0.00 < 0.25 also dissolves)
+        and post-fix (shrunk=0.133 < 0.25 dissolves) — same outcome,
+        different arithmetic.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain(
+            "observability",
+            parent_id=domain.id,
+            age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+        )
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "observability": ["tracing", "monitoring"],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        cluster = _make_cluster(
+            "obs-cluster", domain="backend", parent_id=sub.id,
+        )
+        db.add(cluster)
+        await db.flush()
+
+        # All 20 opts unrelated.  Raw=0.00, shrunk=4/30=0.133 — both below
+        # the 0.25 floor.  Dissolution must fire under both regimes.
+        for i in range(20):
+            db.add(_make_opt(cluster.id, "backend: unrelated_qualifier", seed=i))
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert "observability" in dissolved, (
+            "Sub-domain with N=20 and 0 matches must STILL dissolve — "
+            "shrinkage prior must not make dissolution unreachable. "
+            f"shrunk=4/30=0.133 < 0.25. Got: {dissolved}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dissolution_event_carries_both_consistency_metrics(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R1-4: ``sub_domain_dissolved`` event must carry BOTH
+        ``consistency_pct`` (raw, existing) AND ``shrunk_consistency_pct``
+        (new, Bayesian posterior).  Existing keys are preserved — additive
+        contract only.
+
+        Reuses the N=20/0-match scenario so dissolution actually fires
+        and an event is emitted.  Pre-fix the event lacks
+        ``shrunk_consistency_pct`` → KeyError on the assertion.
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        # Install an isolated event logger so we can inspect the ring
+        # buffer without cross-test contamination.
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            sub = _make_sub_domain(
+                "observability",
+                parent_id=domain.id,
+                age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+            )
+            sub.cluster_metadata = write_meta(
+                None,
+                source="discovered",
+                generated_qualifiers={
+                    "observability": ["tracing", "monitoring"],
+                },
+            )
+            db.add(sub)
+            await db.flush()
+
+            cluster = _make_cluster(
+                "obs-cluster", domain="backend", parent_id=sub.id,
+            )
+            db.add(cluster)
+            await db.flush()
+
+            # N=20, matching=0 → dissolves under both regimes.
+            for i in range(20):
+                db.add(_make_opt(cluster.id, "backend: unrelated_qualifier", seed=i))
+            await db.commit()
+
+            existing_labels = {sub.label}
+            dissolved = await engine._reevaluate_sub_domains(
+                db, domain, existing_labels,
+            )
+            assert "observability" in dissolved, (
+                f"setup precondition: sub-domain must dissolve. Got: {dissolved}"
+            )
+
+            # Locate the dissolution event in the ring buffer.
+            buffer = list(get_event_logger()._buffer)
+            dissolution_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_dissolved"
+                and e.get("context", {}).get("sub_domain") == "observability"
+            ]
+            assert dissolution_events, (
+                "Expected a sub_domain_dissolved event for 'observability'. "
+                f"Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = dissolution_events[0]["context"]
+
+            # Existing key preserved.
+            assert "consistency_pct" in ctx, (
+                f"Expected raw consistency_pct in event context. Got keys: "
+                f"{sorted(ctx.keys())}"
+            )
+            assert isinstance(ctx["consistency_pct"], float), (
+                f"consistency_pct must be float. Got: {type(ctx['consistency_pct'])}"
+            )
+            assert ctx["consistency_pct"] == 0.0, (
+                f"Raw consistency for N=20/0-match must be 0.0. "
+                f"Got: {ctx['consistency_pct']}"
+            )
+
+            # NEW key — present only after R1 ships.  Pre-fix this fails
+            # with KeyError or assertion failure.
+            assert "shrunk_consistency_pct" in ctx, (
+                f"Expected NEW shrunk_consistency_pct key in dissolution event "
+                f"context (R1 spec AC-R1-4). Got keys: {sorted(ctx.keys())}"
+            )
+            assert isinstance(ctx["shrunk_consistency_pct"], float), (
+                f"shrunk_consistency_pct must be float. "
+                f"Got: {type(ctx['shrunk_consistency_pct'])}"
+            )
+            # shrunk = 4/30 = 0.1333... → rounded to 1 decimal place ≈ 13.3
+            assert abs(ctx["shrunk_consistency_pct"] - 13.3) < 0.1, (
+                f"shrunk_consistency_pct for N=20/0-match expected ≈ 13.3 "
+                f"(=100*4/30). Got: {ctx['shrunk_consistency_pct']}"
+            )
+        finally:
+            reset_event_logger()
+
+
+# ---------------------------------------------------------------------------
+# R2 — 24h grace period before sub-domains are eligible for dissolution
+# (spec: docs/specs/sub-domain-dissolution-hardening-2026-04-27.md §R2)
+# ---------------------------------------------------------------------------
+
+
+class TestSubDomainGracePeriod:
+    """R2 (audit 2026-04-27): both observed dissolutions on 2026-04-26 fired
+    at 6h 0m and 6h 8m post-creation — literally on the first cycle the age
+    gate allowed.  6 hours is shorter than typical bootstrap volatility
+    windows (overnight cadence + first vocab regen).  The fix bumps
+    ``SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS`` from 6 → 24 so a fresh
+    sub-domain gets one full daily cycle of grace before hostile
+    re-evaluation can dissolve it.
+
+    Test 1 (``test_age_below_grace_period_blocks_dissolution``) uses
+    age=12h, which previously fell PAST the 6h gate but now falls BEFORE
+    the 24h gate — pre-fix dissolves, post-fix kept.
+
+    Test 2 (``test_age_above_grace_period_proceeds_to_evaluation``) uses
+    age=25h, which clears both regimes — pre- and post-fix dissolve.
+    Acts as a regression guard against any future change that
+    accidentally over-permissive shifts the gate beyond 25 hours.
+
+    Both tests pin generated_qualifiers so R3's empty-snapshot guard
+    (cycle 3) does NOT short-circuit the test before the age gate runs.
+
+    Acceptance criteria: AC-R2-1, AC-R2-2 in the spec.
+    """
+
+    @pytest.mark.asyncio
+    async def test_age_below_grace_period_blocks_dissolution(
+        self, db, mock_provider,
+    ):
+        """AC-R2-1: sub-domain aged 12h with N=15 hostile members must NOT
+        be dissolved — the 24h age gate must skip it.
+
+        Pre-fix (gate=6h): 12h > 6h gate passes; shrunk = 4/25 = 0.16 < 0.25
+        → DISSOLVES.  Test FAILS.
+
+        Post-fix (gate=24h): 12h < 24h gate skips entirely; not even
+        evaluated → KEPT.  Test PASSES.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # Aged 12h — between the pre-fix 6h gate and the post-fix 24h gate.
+        sub = _make_sub_domain(
+            "embedding-health", parent_id=domain.id, age_hours=12,
+        )
+        # Non-empty generated_qualifiers so R3's empty-snapshot guard
+        # does NOT short-circuit when R3 ships later.
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "instrumentation": ["observability", "tracing"],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        cluster = _make_cluster(
+            "eh-cluster", domain="backend", parent_id=sub.id,
+        )
+        db.add(cluster)
+        await db.flush()
+
+        # N=15 with all unrelated qualifiers, each distinct to defeat any
+        # accidental deduplication.  Raw consistency = 0.00, shrunk = 4/25
+        # = 0.16 — well below the 0.25 floor; without the age gate this
+        # WOULD dissolve.
+        for i in range(15):
+            db.add(
+                _make_opt(cluster.id, f"backend: unrelated_{i}", seed=i),
+            )
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert dissolved == [], (
+            "Sub-domain aged 12h must be SKIPPED by the 24h grace period "
+            "gate even though its members are entirely unrelated. "
+            f"Pre-fix the 6h gate let dissolution fire. Got: {dissolved}"
+        )
+        await db.refresh(sub)
+        assert sub.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_age_above_grace_period_proceeds_to_evaluation(
+        self, db, mock_provider,
+    ):
+        """AC-R2-2: sub-domain aged 25h with N=15 hostile members IS
+        dissolved — the gate must let it through (pre- and post-fix).
+
+        Pre-fix (gate=6h): 25h > 6h gate passes; shrunk dissolves.
+        Post-fix (gate=24h): 25h > 24h gate passes; shrunk dissolves.
+
+        Regression guard: locks the contract that the gate does not
+        accidentally extend past 25h in some future refactor.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # Aged 25h — past both the 6h and 24h gate values.
+        sub = _make_sub_domain(
+            "embedding-health", parent_id=domain.id, age_hours=25,
+        )
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "instrumentation": ["observability", "tracing"],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        cluster = _make_cluster(
+            "eh-cluster", domain="backend", parent_id=sub.id,
+        )
+        db.add(cluster)
+        await db.flush()
+
+        # Same hostile setup as Test 1 (N=15, all distinct unrelated
+        # qualifiers) — shrunk = 4/25 = 0.16 < 0.25 → DISSOLVE.
+        for i in range(15):
+            db.add(
+                _make_opt(cluster.id, f"backend: unrelated_{i}", seed=i),
+            )
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert "embedding-health" in dissolved, (
+            "Sub-domain aged 25h must NOT be skipped by the grace period "
+            "gate.  The age gate must permit consistency evaluation, and "
+            "shrunk=0.16<0.25 must dissolve.  Got: "
+            f"{dissolved}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# R3 — Empty-snapshot guardrail: when generated_qualifiers is absent, the
+# matcher silently degrades to the v0.4.6 exact-equality bug.  Skip
+# dissolution defensively rather than fail-open.
+# (spec: docs/specs/sub-domain-dissolution-hardening-2026-04-27.md §R3)
+# ---------------------------------------------------------------------------
+
+
+class TestSubDomainEmptySnapshotSkip:
+    """R3 (audit 2026-04-27): ``_reevaluate_sub_domains`` reads
+    ``cluster_metadata.generated_qualifiers`` to build the matcher's
+    ``sub_vocab_groups`` / ``sub_vocab_terms`` / ``sub_vocab_tokens``
+    sets.  When the key is absent (cold-start, vocab-gen failure,
+    manual/legacy creation) all three sets are empty and matching falls
+    back to the v0.4.6 exact-equality clause (``q_norm == sub_qualifier``)
+    that the v0.4.7 fix was supposed to retire.  On healthy sub-domains
+    whose children carry GROUP-name qualifiers, this guarantees
+    ``matching=0`` and Bayesian shrinkage at N=15 collapses to
+    ``4/25 = 0.16 < 0.25`` — premature dissolution.
+
+    The fix inserts a defensive skip immediately after the snapshot load
+    and emits a ``sub_domain_reevaluation_skipped`` decision event so
+    operators can detect chronic empty-snapshot states (a useful signal
+    for vocab-gen failures).
+
+    Acceptance criteria: AC-R3-1, AC-R3-2 in the spec.
+
+    Both tests pin ``age_hours=30`` (well past R2's 24h gate) so the age
+    check does not short-circuit the test before the empty-snapshot
+    branch runs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_snapshot_skips_dissolution(
+        self, db, mock_provider,
+    ):
+        """AC-R3-1: a sub-domain whose ``cluster_metadata`` lacks
+        ``generated_qualifiers`` is NOT dissolved even when its members
+        carry mismatched qualifiers.
+
+        Pre-fix (R3 not merged): empty ``sub_vocab_*`` sets fall through
+        to exact-equality matching → matching=0 → shrunk=4/25=0.16 < 0.25
+        → DISSOLVES.  Test FAILS.
+
+        Post-fix: empty-snapshot skip block fires → ``dissolved == []``.
+        Test PASSES.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # Aged 30h (well past the 24h grace gate from R2) so the age
+        # check passes and we exercise the empty-snapshot branch.
+        sub = _make_sub_domain(
+            "embedding-health",
+            parent_id=domain.id,
+            age_hours=30,
+            source="discovered",
+        )
+        # Empty snapshot: write_meta WITHOUT generated_qualifiers.  The
+        # ``_make_sub_domain`` helper delegates to ``_make_domain`` which
+        # already calls ``write_meta(None, source=source)`` — so the
+        # node's metadata starts without ``generated_qualifiers``.  We
+        # don't override it.  Confirm the precondition explicitly so a
+        # future change to ``_make_domain`` cannot silently break the
+        # test's assumption.
+        meta_view = read_meta(sub.cluster_metadata)
+        assert not meta_view.get("generated_qualifiers"), (
+            "Test precondition: sub-domain metadata must lack a populated "
+            "generated_qualifiers entry so the empty-snapshot branch is "
+            f"exercised.  Got: {meta_view.get('generated_qualifiers')!r}"
+        )
+
+        db.add(sub)
+        await db.flush()
+
+        cluster = _make_cluster(
+            "eh-cluster", domain="backend", parent_id=sub.id,
+        )
+        db.add(cluster)
+        await db.flush()
+
+        # N=15 hostile members.  Each carries a distinct unrelated
+        # qualifier so even legacy exact-equality cannot accidentally
+        # match.  Pre-fix: matching=0, shrunk=0.16 < 0.25 → dissolves.
+        for i in range(15):
+            db.add(
+                _make_opt(cluster.id, f"backend: unrelated_{i}", seed=i),
+            )
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert dissolved == [], (
+            "Sub-domain with empty generated_qualifiers must be SKIPPED "
+            "by the R3 empty-snapshot guardrail — matching cannot be "
+            "evaluated reliably when the vocab snapshot is missing. "
+            "Pre-fix the matcher fell back to exact-equality, scored "
+            f"matching=0, and dissolved.  Got: {dissolved}"
+        )
+        await db.refresh(sub)
+        assert sub.state == "domain"
+
+    @pytest.mark.asyncio
+    async def test_empty_snapshot_emits_skip_event(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R3-2: when the empty-snapshot skip fires, a
+        ``sub_domain_reevaluation_skipped`` JSONL event is emitted with
+        ``reason="empty_vocab_snapshot"``, the sub-domain's ``cluster_id``,
+        and the parent domain's identity in ``context``.
+
+        Pre-fix: no such event exists — assertion that the event is
+        present fails.
+
+        Post-fix: the new event is emitted with the documented context
+        keys.  Test PASSES.
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        # Install an isolated event logger so we can inspect the ring
+        # buffer without cross-test contamination — same pattern as the
+        # R1 dissolution-event test in TestSubDomainBayesianShrinkage.
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            sub = _make_sub_domain(
+                "embedding-health",
+                parent_id=domain.id,
+                age_hours=30,
+                source="discovered",
+            )
+            meta_view = read_meta(sub.cluster_metadata)
+            assert not meta_view.get("generated_qualifiers"), (
+                "Test precondition: empty generated_qualifiers required."
+            )
+            db.add(sub)
+            await db.flush()
+
+            cluster = _make_cluster(
+                "eh-cluster", domain="backend", parent_id=sub.id,
+            )
+            db.add(cluster)
+            await db.flush()
+
+            # Same hostile setup as Test 1 — N=15 distinct unrelated
+            # qualifiers so the legacy exact-equality fallback yields 0.
+            for i in range(15):
+                db.add(
+                    _make_opt(cluster.id, f"backend: unrelated_{i}", seed=i),
+                )
+            await db.commit()
+
+            existing_labels = {sub.label}
+            await engine._reevaluate_sub_domains(
+                db, domain, existing_labels,
+            )
+
+            # Locate the skip event in the ring buffer.
+            buffer = list(get_event_logger()._buffer)
+            skip_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_reevaluation_skipped"
+                and e.get("cluster_id") == sub.id
+            ]
+            assert skip_events, (
+                "Expected a sub_domain_reevaluation_skipped event for "
+                f"cluster_id={sub.id!r}.  Buffer decisions: "
+                f"{[e.get('decision') for e in buffer]}"
+            )
+            ctx = skip_events[0]["context"]
+
+            assert ctx.get("reason") == "empty_vocab_snapshot", (
+                "Expected context.reason='empty_vocab_snapshot'.  Got: "
+                f"{ctx.get('reason')!r}"
+            )
+            assert ctx.get("domain") == "backend", (
+                f"Expected context.domain='backend'.  Got: "
+                f"{ctx.get('domain')!r}"
+            )
+            assert ctx.get("sub_domain") == "embedding-health", (
+                f"Expected context.sub_domain='embedding-health'.  Got: "
+                f"{ctx.get('sub_domain')!r}"
+            )
+            assert "domain_node_id" in ctx, (
+                f"Expected context.domain_node_id to be present.  Got "
+                f"keys: {sorted(ctx.keys())}"
+            )
+            assert ctx["domain_node_id"] == domain.id, (
+                "Expected context.domain_node_id to equal the parent "
+                f"domain's id ({domain.id!r}).  Got: "
+                f"{ctx.get('domain_node_id')!r}"
+            )
+        finally:
+            reset_event_logger()
+
+
+# ---------------------------------------------------------------------------
+# R5 — Forensic dissolution telemetry
+# (spec: docs/specs/sub-domain-dissolution-hardening-r4-r6.md §R5)
+# ---------------------------------------------------------------------------
+
+
+class TestSubDomainForensicTelemetry:
+    """R5 (spec ``sub-domain-dissolution-hardening-r4-r6.md``): the
+    ``sub_domain_dissolved`` and ``sub_domain_reevaluated`` events must
+    carry a forensic breakdown of *why* dissolution did or did not fire:
+
+    - ``matching_members`` (int): the engine's integer count of opts that
+      matched the sub-domain's vocab — surfaces the same number used in
+      the floor decision so the event tells the full story without
+      requiring the consumer to re-derive it from ``consistency_pct``.
+    - ``sample_match_failures`` (list, len ≤ ``SUB_DOMAIN_FAILURE_SAMPLES``):
+      a deterministic prefix of the non-matching opts including
+      ``cluster_id``, ``domain_raw``, ``intent_label``, and the matcher's
+      ``reason`` field — so an operator can reconstruct the dissolution
+      inputs from a single log line.
+
+    Pre-fix (R5 not merged): the events lack both keys.  Each test below
+    raises ``KeyError`` on the missing key.
+
+    Acceptance criteria: AC-R5-1 .. AC-R5-5 in the spec.
+
+    Conventions:
+    - Each sub-domain ages ``SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5``
+      so R2's grace gate is past.
+    - Each sub-domain carries a populated ``generated_qualifiers``
+      snapshot so R3's empty-snapshot skip does NOT short-circuit.
+    - The match expectations follow R1's Bayesian shrinkage
+      ``(matching + 4) / (total_opts + 10)`` against the 0.25 floor.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dissolution_event_carries_sample_failures(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R5-1: a hostile-N=20/0-match scenario dissolves and the
+        emitted ``sub_domain_dissolved`` event carries
+        ``sample_match_failures`` of length 1, 2, or 3 (cap is
+        ``SUB_DOMAIN_FAILURE_SAMPLES`` = 3) with each entry exposing
+        ``cluster_id`` / ``domain_raw`` / ``intent_label`` / ``reason``.
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        # Try to import the constant from its eventual home; if R5 hasn't
+        # shipped yet, fall back to the spec-mandated literal so the test
+        # is still meaningful in RED.
+        try:
+            from app.services.taxonomy._constants import (
+                SUB_DOMAIN_FAILURE_SAMPLES,
+            )
+        except ImportError:
+            SUB_DOMAIN_FAILURE_SAMPLES = 3  # noqa: N806 — spec literal fallback for RED-phase resilience
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            sub = _make_sub_domain(
+                "observability",
+                parent_id=domain.id,
+                age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+            )
+            sub.cluster_metadata = write_meta(
+                None,
+                source="discovered",
+                generated_qualifiers={
+                    "instrumentation": ["observability", "tracing"],
+                },
+            )
+            db.add(sub)
+            await db.flush()
+
+            cluster = _make_cluster(
+                "obs-cluster", domain="backend", parent_id=sub.id,
+            )
+            db.add(cluster)
+            await db.flush()
+
+            # N=20 hostile members, distinct unrelated qualifiers and
+            # distinct intent labels so each opt yields a unique failure
+            # signature.  shrunk = 4/30 = 0.133 < 0.25 → DISSOLVE.
+            for i in range(20):
+                opt = _make_opt(cluster.id, f"backend: unrelated_{i}", seed=i)
+                opt.intent_label = f"Unrelated Topic {i}"
+                db.add(opt)
+            await db.commit()
+
+            existing_labels = {sub.label}
+            dissolved = await engine._reevaluate_sub_domains(
+                db, domain, existing_labels,
+            )
+            assert "observability" in dissolved, (
+                f"setup precondition: sub-domain must dissolve. Got: {dissolved}"
+            )
+
+            # Locate the dissolution event in the ring buffer.
+            buffer = list(get_event_logger()._buffer)
+            dissolution_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_dissolved"
+                and e.get("context", {}).get("sub_domain") == "observability"
+            ]
+            assert dissolution_events, (
+                "Expected a sub_domain_dissolved event for 'observability'. "
+                f"Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = dissolution_events[0]["context"]
+
+            # AC-R5-1: forensic samples are present.
+            assert "sample_match_failures" in ctx, (
+                "Expected NEW sample_match_failures key in dissolution event "
+                f"context (R5 spec AC-R5-1). Got keys: {sorted(ctx.keys())}"
+            )
+            samples = ctx["sample_match_failures"]
+            assert isinstance(samples, list), (
+                f"sample_match_failures must be a list. Got: {type(samples)}"
+            )
+            assert 1 <= len(samples) <= SUB_DOMAIN_FAILURE_SAMPLES, (
+                f"sample_match_failures must have 1..{SUB_DOMAIN_FAILURE_SAMPLES} "
+                f"entries (cap SUB_DOMAIN_FAILURE_SAMPLES={SUB_DOMAIN_FAILURE_SAMPLES}). "
+                f"Got len={len(samples)}: {samples!r}"
+            )
+            required_keys = {"cluster_id", "domain_raw", "intent_label", "reason"}
+            for entry in samples:
+                assert isinstance(entry, dict), (
+                    f"Each sample_match_failures entry must be a dict. Got: "
+                    f"{type(entry)} → {entry!r}"
+                )
+                missing = required_keys - set(entry.keys())
+                assert not missing, (
+                    "Each sample_match_failures entry must carry "
+                    f"{sorted(required_keys)}. Missing: {sorted(missing)}. "
+                    f"Got entry keys: {sorted(entry.keys())}"
+                )
+                reason = entry["reason"]
+                assert isinstance(reason, str) and reason, (
+                    "sample_match_failures.reason must be a non-empty string. "
+                    f"Got: {reason!r}"
+                )
+        finally:
+            reset_event_logger()
+
+    @pytest.mark.asyncio
+    async def test_sample_failures_exclude_matched_opts(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R5-2: when ``matching_members > 0``, the failure samples
+        are drawn ONLY from non-matching opts.  No matched opt may
+        appear in ``sample_match_failures``.
+
+        Setup: 10 matched (vocab GROUP "observability") + 10 unmatched
+        (``backend: unrelated_<i>``).  Raw=0.50, shrunk=14/30=0.467 →
+        KEEP.  Captures the ``sub_domain_reevaluated`` event.
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            sub = _make_sub_domain(
+                "observability",
+                parent_id=domain.id,
+                age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+            )
+            sub.cluster_metadata = write_meta(
+                None,
+                source="discovered",
+                generated_qualifiers={
+                    "instrumentation": ["observability", "tracing"],
+                },
+            )
+            db.add(sub)
+            await db.flush()
+
+            cluster = _make_cluster(
+                "obs-cluster", domain="backend", parent_id=sub.id,
+            )
+            db.add(cluster)
+            await db.flush()
+
+            # First 10: vocab group "observability" → match=True (Source 1).
+            for i in range(10):
+                db.add(
+                    _make_opt(cluster.id, "backend: observability", seed=i),
+                )
+            # Last 10: distinct unrelated qualifiers → match=False.
+            for i in range(10, 20):
+                db.add(
+                    _make_opt(cluster.id, f"backend: unrelated_{i}", seed=i),
+                )
+            await db.commit()
+
+            existing_labels = {sub.label}
+            dissolved = await engine._reevaluate_sub_domains(
+                db, domain, existing_labels,
+            )
+            assert dissolved == [], (
+                "setup precondition: 14/30 = 0.467 ≥ 0.25 → KEEP. "
+                f"Got dissolved: {dissolved}"
+            )
+
+            # Locate the re-evaluation event.
+            buffer = list(get_event_logger()._buffer)
+            reeval_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_reevaluated"
+                and e.get("context", {}).get("sub_domain") == "observability"
+            ]
+            assert reeval_events, (
+                "Expected a sub_domain_reevaluated event for 'observability'. "
+                f"Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = reeval_events[-1]["context"]
+
+            assert "sample_match_failures" in ctx, (
+                "Expected sample_match_failures in re-evaluation context "
+                f"(AC-R5-2). Got keys: {sorted(ctx.keys())}"
+            )
+            samples = ctx["sample_match_failures"]
+            # Every sample must be from the non-matching cohort.  The
+            # matched cohort uses domain_raw="backend: observability";
+            # the unmatched cohort uses domain_raw="backend: unrelated_<i>".
+            for entry in samples:
+                raw = entry.get("domain_raw") or ""
+                assert raw.startswith("backend: unrelated_"), (
+                    "sample_match_failures may only contain non-matching "
+                    "opts. Found a matched opt in the failure samples: "
+                    f"{entry!r}"
+                )
+        finally:
+            reset_event_logger()
+
+    @pytest.mark.asyncio
+    async def test_long_text_truncated(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R5-3: text fields in ``sample_match_failures`` are
+        truncated to ``SUB_DOMAIN_FAILURE_FIELD_TRUNCATE`` = 80 chars.
+
+        Setup: 5 hostile opts each with a 200-char ``intent_label``.
+        Forces a dissolution; asserts each emitted entry's
+        ``intent_label`` is at most 80 chars.
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        try:
+            from app.services.taxonomy._constants import (
+                SUB_DOMAIN_FAILURE_FIELD_TRUNCATE,
+            )
+        except ImportError:
+            SUB_DOMAIN_FAILURE_FIELD_TRUNCATE = 80  # noqa: N806 — spec literal fallback for RED-phase resilience
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            sub = _make_sub_domain(
+                "observability",
+                parent_id=domain.id,
+                age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+            )
+            sub.cluster_metadata = write_meta(
+                None,
+                source="discovered",
+                generated_qualifiers={
+                    "instrumentation": ["observability", "tracing"],
+                },
+            )
+            db.add(sub)
+            await db.flush()
+
+            cluster = _make_cluster(
+                "obs-cluster", domain="backend", parent_id=sub.id,
+            )
+            db.add(cluster)
+            await db.flush()
+
+            # 5 hostile opts.  Each carries an over-long intent_label.
+            # shrunk = (0+4)/(5+10) = 4/15 = 0.267 — pre-R1 fix this would
+            # KEEP (≥ 0.25); but we want dissolution here, so use N=20.
+            # Actually 5 KEEPs under shrinkage; bump to 20 hostile opts.
+            long_text = "X" * 200
+            for i in range(20):
+                opt = _make_opt(cluster.id, f"backend: unrelated_{i}", seed=i)
+                opt.intent_label = long_text
+                db.add(opt)
+            await db.commit()
+
+            existing_labels = {sub.label}
+            dissolved = await engine._reevaluate_sub_domains(
+                db, domain, existing_labels,
+            )
+            assert "observability" in dissolved, (
+                f"setup precondition: sub-domain must dissolve. Got: {dissolved}"
+            )
+
+            buffer = list(get_event_logger()._buffer)
+            dissolution_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_dissolved"
+                and e.get("context", {}).get("sub_domain") == "observability"
+            ]
+            assert dissolution_events, (
+                "Expected a sub_domain_dissolved event for 'observability'. "
+                f"Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = dissolution_events[0]["context"]
+
+            assert "sample_match_failures" in ctx, (
+                "Expected sample_match_failures in dissolution context "
+                f"(AC-R5-3). Got keys: {sorted(ctx.keys())}"
+            )
+            samples = ctx["sample_match_failures"]
+            assert samples, (
+                "Hostile setup must produce at least one failure sample"
+            )
+            for entry in samples:
+                label = entry.get("intent_label")
+                assert label is not None, (
+                    f"intent_label must be present in sample. Got: {entry!r}"
+                )
+                assert len(label) <= SUB_DOMAIN_FAILURE_FIELD_TRUNCATE, (
+                    "sample_match_failures.intent_label must be truncated "
+                    f"to ≤ {SUB_DOMAIN_FAILURE_FIELD_TRUNCATE} chars "
+                    f"(SUB_DOMAIN_FAILURE_FIELD_TRUNCATE).  Got "
+                    f"len={len(label)}: {label!r}"
+                )
+        finally:
+            reset_event_logger()
+
+    @pytest.mark.asyncio
+    async def test_matching_members_matches_engine_count(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R5-4: ``context.matching_members`` exposes the integer
+        ``matching`` count and ``context.consistency_pct`` is computed
+        from the same value.
+
+        Setup: 13 children, 7 with vocab-group qualifier
+        ("observability"), 6 unrelated.  Raw consistency = 7/13 ≈ 0.538.
+        Shrunk = (7+4)/(13+10) = 11/23 ≈ 0.478 → KEEP.
+
+        Asserts:
+        - ``matching_members == 7``
+        - ``consistency_pct == round(7/13 * 100, 1)``
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            sub = _make_sub_domain(
+                "observability",
+                parent_id=domain.id,
+                age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+            )
+            sub.cluster_metadata = write_meta(
+                None,
+                source="discovered",
+                generated_qualifiers={
+                    "instrumentation": ["observability"],
+                },
+            )
+            db.add(sub)
+            await db.flush()
+
+            cluster = _make_cluster(
+                "obs-cluster", domain="backend", parent_id=sub.id,
+            )
+            db.add(cluster)
+            await db.flush()
+
+            # 7 matched (vocab group "observability") + 6 unrelated.
+            for i in range(7):
+                db.add(
+                    _make_opt(cluster.id, "backend: observability", seed=i),
+                )
+            for i in range(7, 13):
+                db.add(
+                    _make_opt(cluster.id, f"backend: unrelated_{i}", seed=i),
+                )
+            await db.commit()
+
+            existing_labels = {sub.label}
+            dissolved = await engine._reevaluate_sub_domains(
+                db, domain, existing_labels,
+            )
+            assert dissolved == [], (
+                "setup precondition: 11/23 ≈ 0.478 ≥ 0.25 → KEEP. "
+                f"Got dissolved: {dissolved}"
+            )
+
+            buffer = list(get_event_logger()._buffer)
+            reeval_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_reevaluated"
+                and e.get("context", {}).get("sub_domain") == "observability"
+            ]
+            assert reeval_events, (
+                "Expected a sub_domain_reevaluated event for 'observability'. "
+                f"Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = reeval_events[-1]["context"]
+
+            assert "matching_members" in ctx, (
+                "Expected matching_members in re-evaluation context "
+                f"(AC-R5-4). Got keys: {sorted(ctx.keys())}"
+            )
+            assert ctx["matching_members"] == 7, (
+                "matching_members must equal the engine's integer match "
+                f"count (= 7).  Got: {ctx['matching_members']!r}"
+            )
+            expected_pct = round(7 / 13 * 100, 1)
+            assert ctx["consistency_pct"] == expected_pct, (
+                "consistency_pct must equal round(matching/total * 100, 1) = "
+                f"{expected_pct}.  Got: {ctx['consistency_pct']!r}"
+            )
+        finally:
+            reset_event_logger()
+
+    @pytest.mark.asyncio
+    async def test_all_match_emits_empty_failures(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R5-5: when every opt matches, ``sample_match_failures`` is
+        ``[]`` and ``matching_members == total_opts``.
+
+        Setup: 20 children all carrying ``backend: observability`` (vocab
+        group hit, Source 1).  shrunk = (20+4)/(20+10) = 24/30 = 0.80 →
+        KEEP.  No failures should appear.
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            sub = _make_sub_domain(
+                "observability",
+                parent_id=domain.id,
+                age_hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS + 5,
+            )
+            sub.cluster_metadata = write_meta(
+                None,
+                source="discovered",
+                generated_qualifiers={
+                    "instrumentation": ["observability"],
+                },
+            )
+            db.add(sub)
+            await db.flush()
+
+            cluster = _make_cluster(
+                "obs-cluster", domain="backend", parent_id=sub.id,
+            )
+            db.add(cluster)
+            await db.flush()
+
+            for i in range(20):
+                db.add(
+                    _make_opt(cluster.id, "backend: observability", seed=i),
+                )
+            await db.commit()
+
+            existing_labels = {sub.label}
+            dissolved = await engine._reevaluate_sub_domains(
+                db, domain, existing_labels,
+            )
+            assert dissolved == [], (
+                "setup precondition: 24/30 = 0.80 ≥ 0.25 → KEEP. "
+                f"Got dissolved: {dissolved}"
+            )
+
+            buffer = list(get_event_logger()._buffer)
+            reeval_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_reevaluated"
+                and e.get("context", {}).get("sub_domain") == "observability"
+            ]
+            assert reeval_events, (
+                "Expected a sub_domain_reevaluated event for 'observability'. "
+                f"Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = reeval_events[-1]["context"]
+
+            assert "sample_match_failures" in ctx, (
+                "Expected sample_match_failures in re-evaluation context "
+                f"(AC-R5-5). Got keys: {sorted(ctx.keys())}"
+            )
+            assert ctx["sample_match_failures"] == [], (
+                "When all opts match, sample_match_failures must be the "
+                f"empty list.  Got: {ctx['sample_match_failures']!r}"
+            )
+
+            assert "matching_members" in ctx, (
+                "Expected matching_members in re-evaluation context "
+                f"(AC-R5-5). Got keys: {sorted(ctx.keys())}"
+            )
+            assert ctx["matching_members"] == 20, (
+                "matching_members must equal total_opts=20 when every "
+                f"opt matches.  Got: {ctx['matching_members']!r}"
+            )
+        finally:
+            reset_event_logger()
+
+
+# ---------------------------------------------------------------------------
+# R6: rebuild-sub-domains recovery endpoint (engine method tests)
+# ---------------------------------------------------------------------------
+
+
+class TestRebuildSubDomainsService:
+    """R6 (spec ``sub-domain-dissolution-hardening-r4-r6.md``): operator-
+    triggered sub-domain rebuild on a single domain.
+
+    The engine method ``rebuild_sub_domains(db, domain_id, *,
+    min_consistency_override=None, dry_run=False)`` extends
+    ``_propose_sub_domains`` semantics for ONE domain, reusing
+    ``compute_qualifier_cascade`` for the qualifier scan and
+    ``_create_domain_node`` for sub-domain creation.
+
+    Idempotency: existing sub-domain labels under the parent are listed
+    in ``skipped_existing`` and never recreated.
+
+    Threshold: defaults to the adaptive formula
+    ``max(0.40, 0.60 - 0.004 * total_opts)``; an override bypasses the
+    formula but is hard-floored at
+    ``SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR=0.25`` (the runtime check
+    raises ``ValueError`` for sub-floor inputs as defense-in-depth
+    against bypassing the Pydantic ``ge=0.25`` validator).
+
+    Telemetry: every call emits a ``sub_domain_rebuild_invoked`` event
+    (including dry runs and zero-creation calls) so the operator audit
+    trail is complete.  When ``created`` is non-empty AND non-dry, also
+    publishes a ``taxonomy_changed`` event to ``event_bus``.
+
+    Atomicity: all sub-domain creations in a single rebuild are atomic —
+    if any creation fails mid-batch, the entire transaction rolls back.
+
+    Acceptance criteria: AC-R6-3 / AC-R6-4 / AC-R6-5 / AC-R6-6 /
+    AC-R6-7 / AC-R6-8 / AC-R6-9 / AC-R6-10 / AC-R6-11.
+
+    Pre-fix (R6 not merged): each test below fails with
+    ``ImportError`` (the schemas don't exist) or ``AttributeError``
+    (the engine method doesn't exist).
+    """
+
+    @pytest.mark.asyncio
+    async def test_rebuild_default_threshold_matches_discovery(
+        self, db, mock_provider,
+    ):
+        """AC-R6-11: with no override, ``threshold_used`` equals the
+        adaptive formula ``max(0.40, 0.60 - 0.004 * total_opts)`` for
+        the actual N. Set up 5 child clusters with varied qualifiers
+        (10 total opts) so the formula is exercised.
+        """
+        # Importing the schemas here so RED fails before engine setup.
+        from app.schemas.domains import (  # noqa: F401
+            RebuildSubDomainsRequest,
+            RebuildSubDomainsResult,
+        )
+
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # 5 child clusters carrying various qualifiers.
+        cluster_ids: list[str] = []
+        for i in range(5):
+            c = _make_cluster(
+                f"backend-cluster-{i}", domain="backend", parent_id=domain.id,
+            )
+            db.add(c)
+            await db.flush()
+            cluster_ids.append(c.id)
+
+        # 10 opts spread across qualifiers.
+        for i in range(10):
+            qualifier = f"backend: qual_{i % 4}"
+            db.add(_make_opt(cluster_ids[i % 5], qualifier, seed=i))
+        await db.commit()
+
+        result = await engine.rebuild_sub_domains(db, domain.id)
+
+        # Adaptive formula with N total_opts.
+        # max(0.40, 0.60 - 0.004 * N)  — N = 10 here.
+        expected = max(0.40, 0.60 - 0.004 * 10)
+        assert "threshold_used" in result, (
+            f"result must carry threshold_used. Got keys: {sorted(result.keys())}"
+        )
+        assert abs(result["threshold_used"] - expected) < 1e-9, (
+            "threshold_used must match adaptive formula "
+            f"max(0.40, 0.60 - 0.004*{10}) = {expected}. "
+            f"Got: {result['threshold_used']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_with_override_uses_override(
+        self, db, mock_provider,
+    ):
+        """AC-R6-11 (override path): ``min_consistency_override=0.30``
+        sets ``threshold_used`` to exactly 0.30 (no adaptive formula).
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        cluster = _make_cluster(
+            "backend-cluster", domain="backend", parent_id=domain.id,
+        )
+        db.add(cluster)
+        await db.flush()
+
+        for i in range(5):
+            db.add(_make_opt(cluster.id, "backend: foo", seed=i))
+        await db.commit()
+
+        result = await engine.rebuild_sub_domains(
+            db, domain.id, min_consistency_override=0.30,
+        )
+
+        assert result["threshold_used"] == 0.30, (
+            "min_consistency_override=0.30 must set threshold_used to 0.30. "
+            f"Got: {result['threshold_used']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_idempotent_skips_existing(
+        self, db, mock_provider,
+    ):
+        """AC-R6-6: pre-existing sub-domain labels appear in
+        ``skipped_existing`` and never in ``created``.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # Pre-create ``audit`` sub-domain under backend.
+        sub = _make_sub_domain("audit", parent_id=domain.id, age_hours=24)
+        db.add(sub)
+        await db.flush()
+
+        # Add some opts so cascade has data.
+        cluster = _make_cluster(
+            "backend-cluster", domain="backend", parent_id=domain.id,
+        )
+        db.add(cluster)
+        await db.flush()
+        for i in range(5):
+            db.add(_make_opt(cluster.id, "backend: audit", seed=i))
+        await db.commit()
+
+        result = await engine.rebuild_sub_domains(
+            db, domain.id, min_consistency_override=0.30,
+        )
+
+        assert "audit" in result["skipped_existing"], (
+            "Pre-existing 'audit' sub-domain MUST appear in skipped_existing. "
+            f"Got skipped_existing: {result['skipped_existing']}"
+        )
+        assert "audit" not in result["created"], (
+            "Pre-existing sub-domain must NOT be re-created. "
+            f"Got created: {result['created']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_creates_new_sub_domain_below_default_threshold(
+        self, db, mock_provider,
+    ):
+        """AC-R6 happy path: with ``min_consistency_override=0.30`` and
+        a qualifier above 0.30 but below the default 0.40 floor, the
+        rebuild creates the sub-domain.
+
+        Setup: 10 opts; 4 carry qualifier ``concurrency`` (consistency=0.40
+        with default floor) spread across 2 distinct clusters (breadth gate
+        passes), 6 distinct unrelated qualifiers.  With override=0.30 the
+        cascade admits ``concurrency``.
+        """
+        from sqlalchemy import func, select
+
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # Two distinct clusters (breadth=2 gate passes).
+        c1 = _make_cluster(
+            "concurrency-cluster-a", domain="backend", parent_id=domain.id,
+        )
+        c2 = _make_cluster(
+            "concurrency-cluster-b", domain="backend", parent_id=domain.id,
+        )
+        c3 = _make_cluster(
+            "other-cluster", domain="backend", parent_id=domain.id,
+        )
+        db.add_all([c1, c2, c3])
+        await db.flush()
+
+        # 4 opts on "concurrency" qualifier across c1+c2 (breadth ≥ 2).
+        db.add(_make_opt(c1.id, "backend: concurrency", seed=0))
+        db.add(_make_opt(c1.id, "backend: concurrency", seed=1))
+        db.add(_make_opt(c2.id, "backend: concurrency", seed=2))
+        db.add(_make_opt(c2.id, "backend: concurrency", seed=3))
+        # 6 distinct unrelated opts on c3.
+        for i in range(6):
+            db.add(_make_opt(c3.id, f"backend: unrelated_{i}", seed=10 + i))
+        await db.commit()
+
+        # Snapshot the pre-rebuild domain-node count under this parent.
+        pre_count_q = await db.execute(
+            select(func.count()).where(
+                PromptCluster.state == "domain",
+                PromptCluster.parent_id == domain.id,
+            )
+        )
+        pre_count = int(pre_count_q.scalar() or 0)
+
+        result = await engine.rebuild_sub_domains(
+            db, domain.id, min_consistency_override=0.30,
+        )
+
+        assert "concurrency" in result["created"], (
+            "Expected 'concurrency' (consistency=0.40, breadth=2) to be "
+            f"created with override=0.30. Got created: {result['created']}, "
+            f"proposed: {result['proposed']}"
+        )
+
+        # Verify in DB: domain-node count under this parent increased by 1.
+        post_count_q = await db.execute(
+            select(func.count()).where(
+                PromptCluster.state == "domain",
+                PromptCluster.parent_id == domain.id,
+            )
+        )
+        post_count = int(post_count_q.scalar() or 0)
+        assert post_count == pre_count + 1, (
+            "Sub-domain count under parent must increase by 1. "
+            f"pre={pre_count} post={post_count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_dry_run_no_creation(
+        self, db, mock_provider,
+    ):
+        """AC-R6-5: ``dry_run=True`` returns ``proposed`` non-empty but
+        ``created == []`` and the DB is unchanged.
+        """
+        from sqlalchemy import func, select
+
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        c1 = _make_cluster(
+            "concurrency-cluster-a", domain="backend", parent_id=domain.id,
+        )
+        c2 = _make_cluster(
+            "concurrency-cluster-b", domain="backend", parent_id=domain.id,
+        )
+        c3 = _make_cluster(
+            "other-cluster", domain="backend", parent_id=domain.id,
+        )
+        db.add_all([c1, c2, c3])
+        await db.flush()
+
+        db.add(_make_opt(c1.id, "backend: concurrency", seed=0))
+        db.add(_make_opt(c1.id, "backend: concurrency", seed=1))
+        db.add(_make_opt(c2.id, "backend: concurrency", seed=2))
+        db.add(_make_opt(c2.id, "backend: concurrency", seed=3))
+        for i in range(6):
+            db.add(_make_opt(c3.id, f"backend: unrelated_{i}", seed=10 + i))
+        await db.commit()
+
+        pre_count_q = await db.execute(
+            select(func.count()).where(
+                PromptCluster.state == "domain",
+                PromptCluster.parent_id == domain.id,
+            )
+        )
+        pre_count = int(pre_count_q.scalar() or 0)
+
+        result = await engine.rebuild_sub_domains(
+            db, domain.id, min_consistency_override=0.30, dry_run=True,
+        )
+
+        assert result["dry_run"] is True, (
+            f"dry_run flag must echo back True. Got: {result['dry_run']!r}"
+        )
+        assert "concurrency" in result["proposed"], (
+            "Eligible qualifier 'concurrency' must appear in proposed even "
+            f"in dry-run mode. Got proposed: {result['proposed']}"
+        )
+        assert result["created"] == [], (
+            "dry_run=True MUST NOT create sub-domains. "
+            f"Got created: {result['created']}"
+        )
+
+        # Verify DB is unchanged.
+        post_count_q = await db.execute(
+            select(func.count()).where(
+                PromptCluster.state == "domain",
+                PromptCluster.parent_id == domain.id,
+            )
+        )
+        post_count = int(post_count_q.scalar() or 0)
+        assert post_count == pre_count, (
+            "Dry-run must leave DB unchanged. "
+            f"pre={pre_count} post={post_count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_emits_taxonomy_changed_when_creating(
+        self, db, mock_provider,
+    ):
+        """AC-R6-8: when ``created`` is non-empty (non-dry creation), a
+        ``taxonomy_changed`` event is published to ``event_bus`` so the
+        readiness TTL cache invalidates and the resident engine's
+        dirty_set picks up the new sub-domain.
+        """
+        import asyncio
+
+        from app.services.event_bus import event_bus
+
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        c1 = _make_cluster(
+            "concurrency-cluster-a", domain="backend", parent_id=domain.id,
+        )
+        c2 = _make_cluster(
+            "concurrency-cluster-b", domain="backend", parent_id=domain.id,
+        )
+        c3 = _make_cluster(
+            "other-cluster", domain="backend", parent_id=domain.id,
+        )
+        db.add_all([c1, c2, c3])
+        await db.flush()
+
+        db.add(_make_opt(c1.id, "backend: concurrency", seed=0))
+        db.add(_make_opt(c1.id, "backend: concurrency", seed=1))
+        db.add(_make_opt(c2.id, "backend: concurrency", seed=2))
+        db.add(_make_opt(c2.id, "backend: concurrency", seed=3))
+        for i in range(6):
+            db.add(_make_opt(c3.id, f"backend: unrelated_{i}", seed=10 + i))
+        await db.commit()
+
+        # Defend against a prior test that may have flipped the bus into
+        # shutdown mode (publish is a no-op while shutting down).
+        event_bus._shutting_down = False  # type: ignore[attr-defined]
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+        event_bus._subscribers.add(queue)
+        try:
+            result = await engine.rebuild_sub_domains(
+                db, domain.id, min_consistency_override=0.30,
+            )
+
+            assert result["created"], (
+                "Setup precondition: at least one sub-domain must be created "
+                f"so a taxonomy_changed event fires. Got created: {result['created']}"
+            )
+
+            taxonomy_events: list[dict] = []
+            while True:
+                try:
+                    evt = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if evt.get("event") == "taxonomy_changed":
+                    taxonomy_events.append(evt)
+        finally:
+            event_bus._subscribers.discard(queue)
+
+        assert len(taxonomy_events) >= 1, (
+            "AC-R6-8: rebuild that creates a sub-domain MUST publish at "
+            f"least one taxonomy_changed event. Got count: {len(taxonomy_events)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_no_taxonomy_changed_on_zero_creates(
+        self, db, mock_provider,
+    ):
+        """AC-R6-9: when ``created`` is empty (dry-run or idempotent
+        re-run), NO ``taxonomy_changed`` event fires.
+        """
+        import asyncio
+
+        from app.services.event_bus import event_bus
+
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        c1 = _make_cluster(
+            "concurrency-cluster-a", domain="backend", parent_id=domain.id,
+        )
+        c2 = _make_cluster(
+            "concurrency-cluster-b", domain="backend", parent_id=domain.id,
+        )
+        db.add_all([c1, c2])
+        await db.flush()
+
+        db.add(_make_opt(c1.id, "backend: concurrency", seed=0))
+        db.add(_make_opt(c1.id, "backend: concurrency", seed=1))
+        db.add(_make_opt(c2.id, "backend: concurrency", seed=2))
+        db.add(_make_opt(c2.id, "backend: concurrency", seed=3))
+        await db.commit()
+
+        event_bus._shutting_down = False  # type: ignore[attr-defined]
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+        event_bus._subscribers.add(queue)
+        try:
+            # Dry-run: created MUST be empty so no taxonomy_changed fires.
+            result = await engine.rebuild_sub_domains(
+                db, domain.id, min_consistency_override=0.30, dry_run=True,
+            )
+            assert result["created"] == [], (
+                "Setup precondition: dry_run=True MUST yield created=[]. "
+                f"Got: {result['created']}"
+            )
+
+            taxonomy_events: list[dict] = []
+            while True:
+                try:
+                    evt = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if evt.get("event") == "taxonomy_changed":
+                    taxonomy_events.append(evt)
+        finally:
+            event_bus._subscribers.discard(queue)
+
+        assert len(taxonomy_events) == 0, (
+            "AC-R6-9: zero-creation rebuild MUST NOT publish taxonomy_changed. "
+            f"Got count: {len(taxonomy_events)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_emits_telemetry_non_dry(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R6-7: a non-dry-run ``sub_domain_rebuild_invoked`` event is
+        emitted with the expected context keys.
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            c1 = _make_cluster(
+                "concurrency-cluster-a", domain="backend", parent_id=domain.id,
+            )
+            c2 = _make_cluster(
+                "concurrency-cluster-b", domain="backend", parent_id=domain.id,
+            )
+            db.add_all([c1, c2])
+            await db.flush()
+
+            db.add(_make_opt(c1.id, "backend: concurrency", seed=0))
+            db.add(_make_opt(c1.id, "backend: concurrency", seed=1))
+            db.add(_make_opt(c2.id, "backend: concurrency", seed=2))
+            db.add(_make_opt(c2.id, "backend: concurrency", seed=3))
+            await db.commit()
+
+            await engine.rebuild_sub_domains(
+                db, domain.id, min_consistency_override=0.30, dry_run=False,
+            )
+
+            buffer = list(get_event_logger()._buffer)
+            invoke_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_rebuild_invoked"
+            ]
+            assert invoke_events, (
+                "AC-R6-7: expected at least one sub_domain_rebuild_invoked "
+                f"event. Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = invoke_events[-1]["context"]
+            required = {
+                "domain", "min_consistency_override", "threshold_used",
+                "dry_run", "proposed_count", "created_count",
+                "skipped_existing_count",
+            }
+            missing = required - set(ctx.keys())
+            assert not missing, (
+                "Telemetry context must carry "
+                f"{sorted(required)}. Missing: {sorted(missing)}. "
+                f"Got context keys: {sorted(ctx.keys())}"
+            )
+            assert ctx["dry_run"] is False, (
+                f"dry_run in telemetry context must be False. Got: {ctx['dry_run']!r}"
+            )
+        finally:
+            reset_event_logger()
+
+    @pytest.mark.asyncio
+    async def test_rebuild_emits_telemetry_dry_run(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-R6-5 (telemetry side): the rebuild_invoked event fires for
+        dry runs as well, with ``dry_run=True`` and ``created_count=0``.
+        """
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = _make_engine(mock_provider)
+
+            domain = _make_domain("backend")
+            db.add(domain)
+            await db.flush()
+
+            c1 = _make_cluster(
+                "concurrency-cluster-a", domain="backend", parent_id=domain.id,
+            )
+            c2 = _make_cluster(
+                "concurrency-cluster-b", domain="backend", parent_id=domain.id,
+            )
+            db.add_all([c1, c2])
+            await db.flush()
+
+            db.add(_make_opt(c1.id, "backend: concurrency", seed=0))
+            db.add(_make_opt(c1.id, "backend: concurrency", seed=1))
+            db.add(_make_opt(c2.id, "backend: concurrency", seed=2))
+            db.add(_make_opt(c2.id, "backend: concurrency", seed=3))
+            await db.commit()
+
+            await engine.rebuild_sub_domains(
+                db, domain.id, min_consistency_override=0.30, dry_run=True,
+            )
+
+            buffer = list(get_event_logger()._buffer)
+            invoke_events = [
+                e for e in buffer
+                if e.get("decision") == "sub_domain_rebuild_invoked"
+            ]
+            assert invoke_events, (
+                "Dry-run rebuild must still emit sub_domain_rebuild_invoked. "
+                f"Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = invoke_events[-1]["context"]
+            assert ctx["dry_run"] is True, (
+                f"Dry-run telemetry must carry dry_run=True. Got: {ctx['dry_run']!r}"
+            )
+            assert ctx["created_count"] == 0, (
+                f"Dry-run telemetry must carry created_count=0. Got: {ctx['created_count']!r}"
+            )
+        finally:
+            reset_event_logger()
+
+    @pytest.mark.asyncio
+    async def test_rebuild_rejects_below_floor_runtime_check(
+        self, db, mock_provider,
+    ):
+        """AC-R6-4 (runtime defense-in-depth): the engine method itself
+        rejects ``min_consistency_override < SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR=0.25``
+        with a clear ``ValueError`` — Pydantic catches it at the router
+        layer first, but the engine MUST also enforce it for direct callers.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.commit()
+
+        with pytest.raises(ValueError) as exc_info:
+            await engine.rebuild_sub_domains(
+                db, domain.id, min_consistency_override=0.10,
+            )
+        msg = str(exc_info.value)
+        assert msg, (
+            "ValueError must carry a non-empty message explaining the floor. "
+            f"Got: {exc_info.value!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_rolls_back_on_partial_failure(
+        self, db, mock_provider,
+    ):
+        """AC-R6-10: if sub-domain creation raises mid-batch, the entire
+        transaction rolls back — no partial sub-domain leftovers.
+
+        Setup: 2 eligible qualifiers (``concurrency`` and ``audit``)
+        across 2 distinct clusters each.  Mock ``_create_domain_node``
+        to raise on the 2nd call.  Assert the exception propagates AND
+        no sub-domain is persisted.
+        """
+        from unittest.mock import patch
+
+        from sqlalchemy import func, select
+
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        # Two clusters per qualifier (breadth gate passes for both).
+        c_a1 = _make_cluster(
+            "concurrency-a", domain="backend", parent_id=domain.id,
+        )
+        c_a2 = _make_cluster(
+            "concurrency-b", domain="backend", parent_id=domain.id,
+        )
+        c_b1 = _make_cluster(
+            "audit-a", domain="backend", parent_id=domain.id,
+        )
+        c_b2 = _make_cluster(
+            "audit-b", domain="backend", parent_id=domain.id,
+        )
+        db.add_all([c_a1, c_a2, c_b1, c_b2])
+        await db.flush()
+
+        # 4 opts on "concurrency" across 2 clusters.
+        db.add(_make_opt(c_a1.id, "backend: concurrency", seed=0))
+        db.add(_make_opt(c_a1.id, "backend: concurrency", seed=1))
+        db.add(_make_opt(c_a2.id, "backend: concurrency", seed=2))
+        db.add(_make_opt(c_a2.id, "backend: concurrency", seed=3))
+        # 4 opts on "audit" across 2 clusters.
+        db.add(_make_opt(c_b1.id, "backend: audit", seed=4))
+        db.add(_make_opt(c_b1.id, "backend: audit", seed=5))
+        db.add(_make_opt(c_b2.id, "backend: audit", seed=6))
+        db.add(_make_opt(c_b2.id, "backend: audit", seed=7))
+        await db.commit()
+
+        pre_count_q = await db.execute(
+            select(func.count()).where(
+                PromptCluster.state == "domain",
+                PromptCluster.parent_id == domain.id,
+            )
+        )
+        pre_count = int(pre_count_q.scalar() or 0)
+
+        # Patch _create_domain_node to raise on the 2nd call.
+        original = engine._create_domain_node
+        call_counter = {"n": 0}
+
+        async def _flaky_create_domain_node(*args, **kwargs):
+            call_counter["n"] += 1
+            if call_counter["n"] == 2:
+                raise RuntimeError("Simulated failure on 2nd creation")
+            return await original(*args, **kwargs)
+
+        # Pre-flight: rebuild_sub_domains must exist so the patch has a
+        # real method to override.  This guards against the rollback
+        # check passing trivially via AttributeError in RED.
+        assert hasattr(engine, "rebuild_sub_domains"), (
+            "engine.rebuild_sub_domains must exist before this test can "
+            "exercise the rollback path. RED phase: AttributeError expected."
+        )
+
+        with patch.object(
+            engine, "_create_domain_node", side_effect=_flaky_create_domain_node,
+        ):
+            with pytest.raises(RuntimeError, match="Simulated failure"):
+                await engine.rebuild_sub_domains(
+                    db, domain.id, min_consistency_override=0.30,
+                )
+
+        # Use a fresh DB query (after rollback) — single transaction
+        # semantics demand zero sub-domains persisted.
+        post_count_q = await db.execute(
+            select(func.count()).where(
+                PromptCluster.state == "domain",
+                PromptCluster.parent_id == domain.id,
+            )
+        )
+        post_count = int(post_count_q.scalar() or 0)
+        assert post_count == pre_count, (
+            "AC-R6-10: partial-failure rebuild must roll back ALL sub-domain "
+            f"creations. pre={pre_count} post={post_count}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# R4: shared per-opt matcher byte-equivalence regression
+# ---------------------------------------------------------------------------
+
+
+class TestSubDomainReevalUsesSharedPrimitive:
+    """R4 (audit 2026-04-27): byte-equivalence regression — the engine's
+    ``_reevaluate_sub_domains`` must behave identically before and after
+    the matching cascade is extracted to ``match_opt_to_sub_domain_vocab``
+    in ``sub_domain_readiness.py``.
+
+    This test exercises the engine with a known input and asserts a
+    specific dissolution outcome.  It locks the integer math:
+    ``matching=0 → consistency=0 → shrunk=4/25=0.16 → < 0.25 floor → DISSOLVE``.
+
+    Today (RED): passes — the inline matching cascade gives this same
+    answer.  After GREEN swaps in the new primitive, this test catches
+    any drift in the per-opt cascade behavior.
+
+    Acceptance criteria: AC-R4-2, AC-R4-4.
+    """
+
+    @pytest.mark.asyncio
+    async def test_known_input_produces_known_dissolution(
+        self, db, mock_provider,
+    ):
+        """N=15 hostile members with no vocab match → dissolution fires.
+
+        The sub-domain is aged 30h (past the R2 24h grace gate) and
+        carries a populated ``generated_qualifiers`` snapshot (so the
+        R3 empty-snapshot guard does NOT short-circuit) whose vocab
+        groups (``observability``/``tracing``) deliberately do not
+        match any of the 15 children's ``backend: unrelated_<i>``
+        qualifiers.  Bayesian shrinkage at K=10/center=0.40 yields
+        ``(0 + 4) / (15 + 10) = 0.16``, which is below the 0.25 floor,
+        so the sub-domain dissolves.
+        """
+        engine = _make_engine(mock_provider)
+
+        domain = _make_domain("backend")
+        db.add(domain)
+        await db.flush()
+
+        sub = _make_sub_domain(
+            "embedding-health",
+            parent_id=domain.id,
+            age_hours=30,
+            source="discovered",
+        )
+        # Populated vocab snapshot: defeats R3's empty-snapshot skip so
+        # the matching cascade is exercised.  The vocab groups/terms are
+        # chosen so that NONE of the children's qualifiers
+        # (``unrelated_<i>``) overlap them — guaranteeing matching=0
+        # through Source 1, Source 2, Source 2b, and Source 3.
+        sub.cluster_metadata = write_meta(
+            None,
+            source="discovered",
+            generated_qualifiers={
+                "instrumentation": ["observability", "tracing"],
+            },
+        )
+        db.add(sub)
+        await db.flush()
+
+        c = _make_cluster("hostile-cluster", domain="backend", parent_id=sub.id)
+        db.add(c)
+        await db.flush()
+
+        for i in range(15):
+            opt = _make_opt(c.id, f"backend: unrelated_{i}", seed=i)
+            db.add(opt)
+        await db.commit()
+
+        existing_labels = {sub.label}
+        dissolved = await engine._reevaluate_sub_domains(
+            db, domain, existing_labels,
+        )
+
+        assert "embedding-health" in dissolved, (
+            "Expected 'embedding-health' in dissolved set: with N=15 "
+            "hostile members and unmatched vocab, Bayesian shrinkage "
+            "yields (0+4)/(15+10)=0.16 < 0.25 floor → DISSOLVE.  Got: "
+            f"{dissolved}"
         )
 
 
@@ -1825,3 +3901,455 @@ class TestEnrichedVocabulary:
             model="test-model",
         )
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# R7 (audit 2026-04-27): Vocab regeneration overlap telemetry
+# ---------------------------------------------------------------------------
+
+
+class TestVocabRegenOverlap:
+    """R7 (audit 2026-04-27): the ``vocab_generated_enriched`` event must
+    carry ``previous_groups``, ``new_groups`` and ``overlap_pct`` (Jaccard
+    intersection-over-union × 100) so operators can correlate
+    sub-domain mass-dissolutions with vocab churn at a glance.
+
+    The audit incident at 2026-04-26 03:47:57 UTC saw the backend domain's
+    vocabulary swap from ``{metrics, tracing, pattern-instrumentation}`` to
+    ``{concurrency, observability, embeddings, security}`` — **zero
+    overlap** — one minute after the second sub-domain dissolved.  Without
+    these fields the only way to spot the churn is to diff JSONL events by
+    hand.
+
+    The tests exercise the engine via ``_propose_sub_domains(vocab_only=True)``
+    with a mocked ``generate_qualifier_vocabulary`` so we control the
+    returned ``generated`` dict deterministically.
+    """
+
+    def _setup_domain_with_clusters(self, db, *, generated_qualifiers=None):
+        """Create a top-level domain with three child clusters carrying
+        centroids — enough to satisfy the ``len(child_ids) < 2`` guard and
+        the ``cached_cluster_count=0`` staleness check (3 > max(2, 0))
+        when ``generated_qualifiers`` is non-empty.
+
+        Returns the parent domain node so the caller can flush+commit and
+        introspect IDs.
+        """
+        meta = {"source": "discovered"}
+        if generated_qualifiers is not None:
+            meta["generated_qualifiers"] = generated_qualifiers
+            # Force staleness: cached_cluster_count=0 vs current=3 → stale.
+            meta["generated_qualifiers_cluster_count"] = 0
+
+        domain = PromptCluster(
+            label="backend",
+            state="domain",
+            domain="backend",
+            task_type="general",
+            parent_id=None,
+            persistence=1.0,
+            color_hex="#7c3aed",
+            centroid_embedding=_random_embedding(101),
+            cluster_metadata=write_meta(None, **meta),
+            created_at=datetime(2026, 4, 10, tzinfo=timezone.utc),
+        )
+        db.add(domain)
+        return domain
+
+    def _add_three_clusters(self, db, parent_id):
+        """Add three active child clusters under ``parent_id`` with
+        centroids — required for the vocab matrix path.
+        """
+        for i in range(3):
+            cluster = PromptCluster(
+                label=f"backend cluster {i}",
+                state="active",
+                domain="backend",
+                parent_id=parent_id,
+                member_count=5,
+                centroid_embedding=_random_embedding(200 + i),
+            )
+            db.add(cluster)
+
+    def _make_engine_with_embed(self, mock_provider):
+        """Like ``_make_engine`` but with a real-shaped ``aembed_single``
+        return so the vocab quality block (which ``np.linalg.norm()``s
+        the embedding) doesn't trip the surrounding try/except and silently
+        skip metric emission.  We don't assert on quality — we only need
+        the event itself to be emitted.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        mock_embedding = AsyncMock()
+        mock_embedding.aembed_single = AsyncMock(
+            return_value=np.random.RandomState(7).randn(EMBEDDING_DIM).astype(np.float32),
+        )
+        engine = TaxonomyEngine(
+            embedding_service=mock_embedding, provider=mock_provider,
+        )
+        for attr in ("_embedding_index", "_transformation_index", "_optimized_index"):
+            mock_idx = MagicMock()
+            mock_idx.remove = AsyncMock()
+            setattr(engine, attr, mock_idx)
+        return engine
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_no_previous_groups(self, db, mock_provider, tmp_path):
+        """AC-R7-1: First-time vocab generation (no prior
+        ``generated_qualifiers``) emits the event with
+        ``previous_groups=[]``, ``new_groups=sorted(generated.keys())``,
+        ``overlap_pct=0.0``.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = self._make_engine_with_embed(mock_provider)
+
+            # Bootstrap: NO ``generated_qualifiers`` in metadata.
+            domain = self._setup_domain_with_clusters(db, generated_qualifiers=None)
+            await db.flush()
+            self._add_three_clusters(db, domain.id)
+            await db.commit()
+
+            mock_gen = AsyncMock(return_value={"a": ["x"], "b": ["y"]})
+            with patch(
+                "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
+                mock_gen,
+            ):
+                await engine._propose_sub_domains(db, vocab_only=True)
+
+            buffer = list(get_event_logger()._buffer)
+            events = [
+                e for e in buffer
+                if e.get("decision") == "vocab_generated_enriched"
+                and e.get("context", {}).get("domain") == "backend"
+            ]
+            assert events, (
+                "Expected a vocab_generated_enriched event for 'backend'. "
+                f"Buffer decisions: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = events[-1]["context"]
+
+            assert "previous_groups" in ctx, (
+                f"Expected NEW previous_groups key in vocab_generated_enriched "
+                f"context (R7 spec AC-R7-1). Got keys: {sorted(ctx.keys())}"
+            )
+            assert ctx["previous_groups"] == [], (
+                f"Bootstrap must emit previous_groups=[]. Got: {ctx['previous_groups']}"
+            )
+            assert "new_groups" in ctx, (
+                f"Expected NEW new_groups key. Got keys: {sorted(ctx.keys())}"
+            )
+            assert ctx["new_groups"] == ["a", "b"], (
+                f"new_groups must be sorted list of generated keys. "
+                f"Got: {ctx['new_groups']}"
+            )
+            assert "overlap_pct" in ctx, (
+                f"Expected NEW overlap_pct key. Got keys: {sorted(ctx.keys())}"
+            )
+            assert ctx["overlap_pct"] == 0.0, (
+                f"Bootstrap must emit overlap_pct=0.0. Got: {ctx['overlap_pct']}"
+            )
+        finally:
+            # Reset to a fresh logger so subsequent tests don't see buffer
+            # contamination via the module-level singleton.
+            set_event_logger(TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False))
+
+    @pytest.mark.asyncio
+    async def test_full_overlap(self, db, mock_provider, tmp_path):
+        """AC-R7-2: Vocab regeneration with full overlap (previous and
+        new have identical group names) emits ``overlap_pct=100.0``.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = self._make_engine_with_embed(mock_provider)
+
+            domain = self._setup_domain_with_clusters(
+                db,
+                generated_qualifiers={"a": ["x"], "b": ["y"]},
+            )
+            await db.flush()
+            self._add_three_clusters(db, domain.id)
+            await db.commit()
+
+            # Same group names, different terms — Jaccard on names only.
+            mock_gen = AsyncMock(return_value={"a": ["x2"], "b": ["y2"]})
+            with patch(
+                "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
+                mock_gen,
+            ):
+                await engine._propose_sub_domains(db, vocab_only=True)
+
+            buffer = list(get_event_logger()._buffer)
+            events = [
+                e for e in buffer
+                if e.get("decision") == "vocab_generated_enriched"
+                and e.get("context", {}).get("domain") == "backend"
+            ]
+            assert events, (
+                f"Expected vocab_generated_enriched. "
+                f"Buffer: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = events[-1]["context"]
+
+            assert ctx.get("overlap_pct") == 100.0, (
+                f"Identical group names must yield overlap_pct=100.0. "
+                f"Got: {ctx.get('overlap_pct')}"
+            )
+            assert ctx.get("previous_groups") == ["a", "b"], (
+                f"previous_groups must list cached qualifier keys sorted. "
+                f"Got: {ctx.get('previous_groups')}"
+            )
+            assert ctx.get("new_groups") == ["a", "b"], (
+                f"new_groups must list new qualifier keys sorted. "
+                f"Got: {ctx.get('new_groups')}"
+            )
+        finally:
+            set_event_logger(TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False))
+
+    @pytest.mark.asyncio
+    async def test_zero_overlap_warns(self, db, mock_provider, tmp_path, caplog):
+        """AC-R7-3: Audit-incident reproducer.  Zero overlap on a
+        non-bootstrap regeneration must emit ``overlap_pct=0.0`` AND a
+        WARNING log line whose message contains "low overlap".
+        """
+        import logging
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        caplog.set_level(logging.WARNING, logger="app.services.taxonomy.engine")
+        try:
+            engine = self._make_engine_with_embed(mock_provider)
+
+            domain = self._setup_domain_with_clusters(
+                db,
+                generated_qualifiers={
+                    "metrics": [],
+                    "tracing": [],
+                    "pattern-instrumentation": [],
+                },
+            )
+            await db.flush()
+            self._add_three_clusters(db, domain.id)
+            await db.commit()
+
+            # New vocab — zero overlap (audit-incident reproduction).
+            mock_gen = AsyncMock(return_value={
+                "concurrency": [],
+                "observability": [],
+                "embeddings": [],
+                "security": [],
+            })
+            with patch(
+                "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
+                mock_gen,
+            ):
+                await engine._propose_sub_domains(db, vocab_only=True)
+
+            buffer = list(get_event_logger()._buffer)
+            events = [
+                e for e in buffer
+                if e.get("decision") == "vocab_generated_enriched"
+                and e.get("context", {}).get("domain") == "backend"
+            ]
+            assert events, (
+                f"Expected vocab_generated_enriched. "
+                f"Buffer: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = events[-1]["context"]
+            assert ctx.get("overlap_pct") == 0.0, (
+                f"Zero overlap incident must yield overlap_pct=0.0. "
+                f"Got: {ctx.get('overlap_pct')}"
+            )
+
+            # WARNING log was emitted, mentions "low overlap".
+            warn_records = [
+                rec for rec in caplog.records
+                if rec.levelno == logging.WARNING
+                and "low overlap" in rec.message.lower()
+            ]
+            assert warn_records, (
+                f"Expected WARNING log containing 'low overlap' "
+                f"(R7 AC-R7-3). Got messages: "
+                f"{[rec.message for rec in caplog.records]}"
+            )
+        finally:
+            set_event_logger(TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False))
+
+    @pytest.mark.asyncio
+    async def test_partial_overlap_jaccard_math(self, db, mock_provider, tmp_path):
+        """AC-R7-4: Partial overlap — Jaccard intersection-over-union math
+        correct.  prev={a,b}, new={b,c} → intersect={b}, union={a,b,c} →
+        1/3 × 100 = 33.3 (rounded to 1 decimal).
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            get_event_logger,
+            set_event_logger,
+        )
+
+        inst = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst)
+        try:
+            engine = self._make_engine_with_embed(mock_provider)
+
+            domain = self._setup_domain_with_clusters(
+                db,
+                generated_qualifiers={"a": [], "b": []},
+            )
+            await db.flush()
+            self._add_three_clusters(db, domain.id)
+            await db.commit()
+
+            mock_gen = AsyncMock(return_value={"b": [], "c": []})
+            with patch(
+                "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
+                mock_gen,
+            ):
+                await engine._propose_sub_domains(db, vocab_only=True)
+
+            buffer = list(get_event_logger()._buffer)
+            events = [
+                e for e in buffer
+                if e.get("decision") == "vocab_generated_enriched"
+                and e.get("context", {}).get("domain") == "backend"
+            ]
+            assert events, (
+                f"Expected vocab_generated_enriched. "
+                f"Buffer: {[e.get('decision') for e in buffer]}"
+            )
+            ctx = events[-1]["context"]
+
+            # Jaccard: |{b}| / |{a,b,c}| = 1/3 ≈ 0.3333 → 33.3%.
+            assert ctx.get("overlap_pct") == 33.3, (
+                f"Partial overlap (1/3 Jaccard) must yield overlap_pct=33.3. "
+                f"Got: {ctx.get('overlap_pct')}"
+            )
+        finally:
+            set_event_logger(TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False))
+
+    @pytest.mark.asyncio
+    async def test_warning_suppressed_on_bootstrap_and_high_overlap(
+        self, db, mock_provider, tmp_path, caplog,
+    ):
+        """AC-R7-5: WARNING log fires ONLY when ``overlap_pct < 50.0`` AND
+        ``previous_groups`` is non-empty (i.e., not on bootstrap).
+
+        Sub-case A: bootstrap (no previous groups) — no warning regardless
+        of overlap value.
+        Sub-case B: high overlap (60%, above 50% threshold) — no warning
+        despite the regen being non-bootstrap.
+        """
+        import logging
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            set_event_logger,
+        )
+
+        # ---- Sub-case A: bootstrap ------------------------------------
+        inst_a = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst_a)
+        caplog.set_level(logging.WARNING, logger="app.services.taxonomy.engine")
+        caplog.clear()
+        try:
+            engine_a = self._make_engine_with_embed(mock_provider)
+
+            domain_a = self._setup_domain_with_clusters(db, generated_qualifiers=None)
+            await db.flush()
+            self._add_three_clusters(db, domain_a.id)
+            await db.commit()
+
+            mock_gen_a = AsyncMock(return_value={"a": [], "b": []})
+            with patch(
+                "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
+                mock_gen_a,
+            ):
+                await engine_a._propose_sub_domains(db, vocab_only=True)
+
+            warn_records_a = [
+                rec for rec in caplog.records
+                if rec.levelno == logging.WARNING
+                and "low overlap" in rec.message.lower()
+            ]
+            assert not warn_records_a, (
+                f"Bootstrap (no previous groups) must NOT emit 'low overlap' "
+                f"WARNING. Got: {[rec.message for rec in warn_records_a]}"
+            )
+        finally:
+            set_event_logger(TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False))
+
+        # ---- Sub-case B: 60% overlap (above 50% threshold) ------------
+        # Run in a fresh database scope by deleting prior data — the ``db``
+        # fixture is per-test, but this method runs both cases in one test
+        # body so we must purge to avoid the prior bootstrap domain
+        # interfering.
+        from sqlalchemy import delete
+        await db.execute(delete(Optimization))
+        await db.execute(delete(PromptCluster))
+        await db.commit()
+
+        inst_b = TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False)
+        set_event_logger(inst_b)
+        caplog.clear()
+        try:
+            engine_b = self._make_engine_with_embed(mock_provider)
+
+            # 4 previous, 4 new, overlap=3 → Jaccard = 3/5 = 0.6 → 60%.
+            domain_b = self._setup_domain_with_clusters(
+                db,
+                generated_qualifiers={"a": [], "b": [], "c": [], "d": []},
+            )
+            await db.flush()
+            self._add_three_clusters(db, domain_b.id)
+            await db.commit()
+
+            mock_gen_b = AsyncMock(return_value={
+                "a": [], "b": [], "c": [], "e": [],
+            })
+            with patch(
+                "app.services.taxonomy.labeling.generate_qualifier_vocabulary",
+                mock_gen_b,
+            ):
+                await engine_b._propose_sub_domains(db, vocab_only=True)
+
+            warn_records_b = [
+                rec for rec in caplog.records
+                if rec.levelno == logging.WARNING
+                and "low overlap" in rec.message.lower()
+            ]
+            assert not warn_records_b, (
+                f"60% overlap (≥ 50% threshold) must NOT emit 'low overlap' "
+                f"WARNING. Got: {[rec.message for rec in warn_records_b]}"
+            )
+        finally:
+            set_event_logger(TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False))

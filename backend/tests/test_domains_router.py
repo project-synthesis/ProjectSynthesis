@@ -498,3 +498,231 @@ async def test_get_domain_readiness_history_404s_unknown_domain(
         "/api/domains/does-not-exist/readiness/history?window=24h",
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# R6: rebuild-sub-domains recovery endpoint (router tests)
+# ---------------------------------------------------------------------------
+
+
+class TestRebuildSubDomainsEndpoint:
+    """R6 router contract for ``POST /api/domains/{id}/rebuild-sub-domains``.
+
+    Error envelope (mirrors ``promote_to_domain``):
+      404 — ``domain_id`` not found
+      422 — node is not a domain (``state != "domain"``) OR ``min_consistency``
+            outside Pydantic ``ge=0.25`` / ``le=1.0`` bounds
+      503 — DB ``OperationalError`` (transient contention)
+      500 — uncaught (logged with traceback)
+
+    Acceptance criteria: AC-R6-1 / AC-R6-2 / AC-R6-3 / AC-R6-4 / AC-R6-5 /
+    AC-R6-6.
+
+    Pre-fix (R6 not merged): each test below fails with 404 (no route) or
+    422 (no schema).
+    """
+
+    @pytest.mark.asyncio
+    async def test_rebuild_endpoint_404_unknown_domain(
+        self, app_client, db_session,
+    ):
+        """AC-R6-1: nonexistent domain id → 404 with the router's
+        ``Domain not found`` envelope.
+
+        The detail-string check distinguishes RED-phase
+        ``404 Not Found`` (route absent) from GREEN-phase
+        ``404 {"detail": "Domain not found"}`` (route present, id absent).
+        Pre-fix the route doesn't exist, so FastAPI's default
+        ``"Not Found"`` body fails the substring check.
+        """
+        resp = await app_client.post(
+            "/api/domains/00000000-0000-0000-0000-000000000000/"
+            "rebuild-sub-domains",
+            json={},
+        )
+        assert resp.status_code == 404, (
+            f"Expected 404 for unknown domain id. Got: {resp.status_code} "
+            f"body={resp.text}"
+        )
+        body = resp.json()
+        detail = (body.get("detail") or "").lower()
+        # GREEN-phase router emits "Domain not found"; RED returns the
+        # FastAPI default "Not Found" without the ``Domain`` qualifier.
+        assert "domain not found" in detail, (
+            "Router 404 must surface a 'Domain not found' detail (RED "
+            "phase: FastAPI default 'Not Found' lacks the qualifier). "
+            f"Got body: {body!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_endpoint_422_non_domain_node(
+        self, app_client, db_session,
+    ):
+        """AC-R6-2: non-domain node (state != ``domain``) → 422 with
+        ``must be a domain``."""
+        cluster = PromptCluster(
+            id="rebuild-non-domain",
+            label="some-active-cluster",
+            state="active",
+            domain="backend",
+            task_type="coding",
+            member_count=5,
+            centroid_embedding=b"\x00" * 384,
+        )
+        db_session.add(cluster)
+        await db_session.commit()
+
+        resp = await app_client.post(
+            f"/api/domains/{cluster.id}/rebuild-sub-domains",
+            json={},
+        )
+        assert resp.status_code == 422, (
+            f"Expected 422 for non-domain node. Got: {resp.status_code} "
+            f"body={resp.text}"
+        )
+        body = resp.json()
+        # The router must surface a clear ``must be a domain``-style hint.
+        # Allow either the canonical phrase or any synonym that conveys
+        # "this id is not a domain node".
+        detail = (body.get("detail") or "").lower()
+        assert "must be a domain" in detail or "not a domain" in detail, (
+            "422 body should explain that the node is not a domain. "
+            f"Got body: {body!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_endpoint_422_min_consistency_above_range(
+        self, app_client, db_session,
+    ):
+        """AC-R6-3: ``min_consistency=2.0`` → 422 (Pydantic ``le=1.0``)."""
+        seed = await _get_seed_domain(db_session)
+        resp = await app_client.post(
+            f"/api/domains/{seed.id}/rebuild-sub-domains",
+            json={"min_consistency": 2.0},
+        )
+        assert resp.status_code == 422, (
+            f"Expected 422 for min_consistency=2.0. Got: {resp.status_code} "
+            f"body={resp.text}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_endpoint_422_min_consistency_below_floor(
+        self, app_client, db_session,
+    ):
+        """AC-R6-4: ``min_consistency=0.10`` → 422 (Pydantic ``ge=0.25``,
+        below ``SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR``)."""
+        seed = await _get_seed_domain(db_session)
+        resp = await app_client.post(
+            f"/api/domains/{seed.id}/rebuild-sub-domains",
+            json={"min_consistency": 0.10},
+        )
+        assert resp.status_code == 422, (
+            f"Expected 422 for min_consistency=0.10 (below 0.25 floor). "
+            f"Got: {resp.status_code} body={resp.text}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_endpoint_200_dry_run(
+        self, app_client, db_session,
+    ):
+        """AC-R6-5: dry-run on a valid domain → 200 with response shape
+        matching ``RebuildSubDomainsResult``; ``dry_run is True`` and
+        ``created == []``."""
+        seed = await _get_seed_domain(db_session)
+        resp = await app_client.post(
+            f"/api/domains/{seed.id}/rebuild-sub-domains",
+            json={"dry_run": True},
+        )
+        assert resp.status_code == 200, (
+            f"Expected 200 for dry_run on valid domain. Got: {resp.status_code} "
+            f"body={resp.text}"
+        )
+        body = resp.json()
+        required = {
+            "domain_id", "domain_label", "threshold_used",
+            "proposed", "created", "skipped_existing", "dry_run",
+        }
+        missing = required - set(body.keys())
+        assert not missing, (
+            f"Response missing required keys: {sorted(missing)}. "
+            f"Got body keys: {sorted(body.keys())}"
+        )
+        assert body["dry_run"] is True, (
+            f"dry_run flag must echo back True. Got: {body['dry_run']!r}"
+        )
+        assert body["created"] == [], (
+            f"Dry-run must yield created=[]. Got: {body['created']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_endpoint_200_idempotent_re_run(
+        self, app_client, db_session,
+    ):
+        """AC-R6-6: a domain that already has matching sub-domains
+        echoes them in ``skipped_existing``; ``created == []``.
+
+        Setup: pre-create a sub-domain ``audit`` under ``backend``, then
+        seed enough opts so the cascade would have proposed ``audit`` if
+        it didn't exist. The first POST must list ``audit`` in
+        ``skipped_existing``.
+        """
+        from app.models import Optimization
+
+        seed = await _get_seed_domain(db_session)
+
+        # Pre-create ``audit`` sub-domain under backend.
+        sub = PromptCluster(
+            id="rebuild-existing-audit",
+            label="audit",
+            state="domain",
+            domain="backend",
+            task_type="general",
+            parent_id=seed.id,
+            persistence=1.0,
+            color_hex="#aabbcc",
+            centroid_embedding=b"\x00" * 384,
+        )
+        db_session.add(sub)
+        await db_session.flush()
+
+        # Two distinct clusters carrying the audit qualifier (breadth=2).
+        for i in range(2):
+            cluster = PromptCluster(
+                id=f"audit-cluster-{i}",
+                label=f"audit-cluster-{i}",
+                state="active",
+                domain="backend",
+                task_type="coding",
+                member_count=5,
+                centroid_embedding=b"\x00" * 384,
+                parent_id=seed.id,
+            )
+            db_session.add(cluster)
+            await db_session.flush()
+            for j in range(3):
+                db_session.add(Optimization(
+                    raw_prompt=f"audit prompt {i}-{j}",
+                    status="completed",
+                    cluster_id=cluster.id,
+                    domain_raw="backend: audit",
+                    embedding=b"\x00" * (4 * 384),
+                ))
+        await db_session.commit()
+
+        resp = await app_client.post(
+            f"/api/domains/{seed.id}/rebuild-sub-domains",
+            json={"min_consistency": 0.30},
+        )
+        assert resp.status_code == 200, (
+            f"Expected 200 on idempotent re-run. Got: {resp.status_code} "
+            f"body={resp.text}"
+        )
+        body = resp.json()
+        assert "audit" in body["skipped_existing"], (
+            "Pre-existing 'audit' sub-domain must appear in skipped_existing. "
+            f"Got body: {body!r}"
+        )
+        assert "audit" not in body["created"], (
+            "Pre-existing sub-domain must NOT be re-created. "
+            f"Got created: {body['created']}"
+        )

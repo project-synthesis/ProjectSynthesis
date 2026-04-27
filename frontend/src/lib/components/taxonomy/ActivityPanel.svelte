@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import type { TaxonomyActivityEvent } from '$lib/api/clusters';
   import { clustersStore } from '$lib/stores/clusters.svelte';
-  import { pathColor } from '$lib/utils/activity-colors';
+  import { pathColor, decisionColor, severityLevel } from '$lib/utils/activity-colors';
   import { isErrorEvent } from '$lib/utils/activity-filters';
   import { keyMetric } from '$lib/utils/activity-summary';
 
@@ -27,60 +27,17 @@
     }),
   );
 
-  // -- Color coding --
-
-  function decisionColor(e: TaxonomyActivityEvent): string {
-    if (e.op === 'error') return 'var(--color-neon-red)';
-    const d = e.decision;
-    // Red — batch-level seed failure only
-    if (d === 'seed_failed') return 'var(--color-neon-red)';
-    // Amber — individual prompt failures (expected, fail-forward), dissolution
-    if (d === 'seed_prompt_failed' || d === 'dissolved') return 'var(--color-neon-yellow)';
-    // Green — successful operations
-    if (d === 'accepted' || d === 'merged' || d === 'merge_into' || d === 'complete'
-        || d === 'split_complete' || d === 'archived' || d === 'domain_created'
-        || d === 'created' || d === 'patterns_refreshed' || d === 'zombies_archived'
-        || d === 'seed_completed')
-      return 'var(--color-neon-green)';
-    // Cyan — new entities created
-    if (d === 'create_new' || d === 'child_created' || d === 'family_split')
-      return 'var(--color-neon-cyan)';
-    // Cyan — candidate created
-    if (d === 'candidate_created') return 'var(--color-neon-cyan)';
-    // Green — candidate promoted
-    if (d === 'candidate_promoted') return 'var(--color-neon-green)';
-    // Amber — candidate rejected, split fully reversed
-    if (d === 'candidate_rejected' || d === 'split_fully_reversed')
-      return 'var(--color-neon-yellow)';
-    // Amber — rejections, blocks, skips
-    if (d === 'rejected' || d === 'blocked' || d === 'skipped'
-        || d === 'candidates_filtered')
-      return 'var(--color-neon-yellow)';
-    // Informational — algorithm results, noise, seed progress, audit
-    if (d === 'algorithm_result' || d === 'noise_reassigned' || d === 'mega_clusters_detected'
-        || d === 'no_sub_structure' || d === 'scored'
-        || d === 'seed_started' || d === 'seed_explore_complete' || d === 'seed_agents_complete'
-        || d === 'seed_persist_complete' || d === 'seed_taxonomy_complete'
-        || d === 'seed_prompt_scored'
-        || d === 'q_computed' || d === 'repaired'
-        || d === 'domains_created' || d === 'sub_domains_created'
-        || d === 'sub_domain_readiness_computed' || d === 'domain_stability_computed')
-      return 'var(--color-text-secondary)';
-    return 'var(--color-text-dim)';
-  }
-
-  // pathColor — imported from $lib/utils/activity-colors (shared with DomainLifecycleTimeline).
+  // -- Color coding + severity --
+  //
+  // `decisionColor`, `severityLevel`, and `pathColor` are all imported from
+  // `$lib/utils/activity-colors` — single source of truth shared with
+  // `DomainLifecycleTimeline.svelte`. Adding a new decision is a one-line
+  // change in the relevant `Set` constant in that module, never a new
+  // branch here.
 
   // -- Key metric from context (extracted to $lib/utils/activity-summary.ts;
   //    Timeline imports the same formatter so lifecycle rows surface a
   //    meaningful one-liner instead of just `op + decision`.) --
-
-  function severityLevel(e: TaxonomyActivityEvent): 'error' | 'info' | 'normal' {
-    if (isErrorEvent(e)) return 'error';
-    const c = decisionColor(e);
-    if (c === 'var(--color-text-secondary)' || c === 'var(--color-text-dim)') return 'info';
-    return 'normal';
-  }
 
   function formatTs(ts: string): string {
     try {

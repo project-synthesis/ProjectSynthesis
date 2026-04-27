@@ -4,6 +4,23 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+
+- Hardened sub-domain dissolution: Bayesian shrinkage on consistency metric prevents premature dissolution at small member counts (audit `docs/audits/sub-domain-regression-2026-04-27.md` R1).
+- Sub-domain dissolution grace period extended from 6h to 24h (audit `docs/audits/sub-domain-regression-2026-04-27.md` R2).
+- Sub-domain dissolution now skips re-evaluation (with telemetry event `sub_domain_reevaluation_skipped`) when the sub-domain's `generated_qualifiers` snapshot is empty, preventing fall-through to legacy exact-equality matching (audit `docs/audits/sub-domain-regression-2026-04-27.md` R3).
+
+### Changed
+
+- Sub-domain re-evaluation matching cascade extracted to a shared pure primitive `match_opt_to_sub_domain_vocab` in `sub_domain_readiness.py` (audit `docs/audits/sub-domain-regression-2026-04-27.md` R4).
+- `_constants.py` now asserts the threshold-collision invariant (`SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW > SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR`) at module-load time via `_validate_threshold_invariants()`; degenerate configurations fail-fast (audit `docs/audits/sub-domain-regression-2026-04-27.md` R8).
+
+### Added
+
+- Sub-domain dissolution events now carry forensic detail: `matching_members` count + up to 3 `sample_match_failures` per `sub_domain_dissolved`/`sub_domain_reevaluated` event with cluster_id, domain_raw, intent_label, reason (audit `docs/audits/sub-domain-regression-2026-04-27.md` R5).
+- Operator endpoint `POST /api/domains/{id}/rebuild-sub-domains` for sub-domain recovery with optional threshold override and dry-run support; emits `sub_domain_rebuild_invoked` telemetry and `taxonomy_changed` event when sub-domains are created (audit `docs/audits/sub-domain-regression-2026-04-27.md` R6).
+- Vocab regeneration events (`vocab_generated_enriched`) now carry `previous_groups`, `new_groups`, `overlap_pct` (Jaccard) for forensic correlation with downstream sub-domain dissolutions; emits a WARNING log when overlap < 50% on a non-bootstrap regen (audit `docs/audits/sub-domain-regression-2026-04-27.md` R7).
+
 ## v0.4.7 — 2026-04-26
 
 ### Fixed

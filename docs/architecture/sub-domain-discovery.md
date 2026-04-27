@@ -1,6 +1,6 @@
 # Sub-Domain Discovery Architecture
 
-_Last reviewed: 2026-04-25. Reflects the fully-organic vocabulary pivot shipped across v0.3.32 → v0.3.38 and the re-evaluation / dissolution lifecycle from v0.3.37. **v0.4.5 (PR #55)**: `enrich_domain_qualifier()` now ALSO runs **post-LLM** in `pipeline_phases.resolve_post_analyze_state` (ordered BEFORE `domain_resolver.resolve()` so the resolver sees the canonical form), so Source 1 captures qualifier syntax even when the LLM analyzer returns a bare primary. Hyphen-style sub-domain syntax from the LLM (`backend-observability`) is normalized to colon syntax (`backend: observability`) by `_normalize_llm_domain` against the live `DomainResolver` registry. Sub-domain labels themselves go through the new shared `normalize_sub_domain_label()` canonicalizer (kebab-case, max 30 chars, word-boundary truncation) — used by both vocab generation and discovery._
+_Last reviewed: 2026-04-27. Reflects the fully-organic vocabulary pivot shipped across v0.3.32 → v0.3.38 and the re-evaluation / dissolution lifecycle from v0.3.37. **v0.4.5 (PR #55)**: `enrich_domain_qualifier()` now ALSO runs **post-LLM** in `pipeline_phases.resolve_post_analyze_state` (ordered BEFORE `domain_resolver.resolve()` so the resolver sees the canonical form), so Source 1 captures qualifier syntax even when the LLM analyzer returns a bare primary. Hyphen-style sub-domain syntax from the LLM (`backend-observability`) is normalized to colon syntax (`backend: observability`) by `_normalize_llm_domain` against the live `DomainResolver` registry. Sub-domain labels themselves go through the new shared `normalize_sub_domain_label()` canonicalizer (kebab-case, max 30 chars, word-boundary truncation) — used by both vocab generation and discovery. **v0.4.8 (audit `docs/audits/sub-domain-regression-2026-04-27.md`)**: dissolution gate now uses **shrunk** Bayesian consistency (R1, prior K=10 / center=0.40); grace period extended 6h → 24h (R2); empty-snapshot guard emits `sub_domain_reevaluation_skipped` (R3); per-opt matcher extracted to shared pure primitive `match_opt_to_sub_domain_vocab` (R4); dissolution events carry `matching_members` + ≤3 `sample_match_failures` for forensic reconstruction (R5); operator recovery `POST /api/domains/{id}/rebuild-sub-domains` (R6); `vocab_generated_enriched` adds `overlap_pct` (Jaccard) + WARNING on low-overlap regen (R7); module-import `_validate_threshold_invariants()` fails fast on degenerate constants (R8)._
 
 How sub-domains are organically discovered in the taxonomy engine.
 
@@ -203,7 +203,7 @@ Each progress bar shows how much signal has accumulated toward the threshold. Th
                       consistency drop)
      |                   |                    |                    |
      v                   v                    v                    v
- Signal scan  -->  Consistency < 0.25? --> 0 children? Archive --> Signal returns?
+ Signal scan  -->  Shrunk cons < 0.25? --> 0 children? Archive --> Signal returns?
  Threshold?        _dissolve_node():       1 child? Archive +      Create (skipped
  2+ clusters?      reparent children       reparent child          if on dissolved_
      |             to top-level domain,    clear resolver labels   this_cycle set)
@@ -217,9 +217,13 @@ Each progress bar shows how much signal has accumulated toward the threshold. Th
 ```
 
 Sub-domains are lightweight and expendable. Three dissolution paths:
-1. **Consistency collapse** (`_reevaluate_sub_domains()`): when `consistency < SUB_DOMAIN_DISSOLUTION_CONSISTYNCY_FLOOR = 0.25` (hysteresis gap vs the 0.40–0.60 creation band). Invokes the shared `_dissolve_node()` primitive: reparents clusters to the top-level domain, merges meta-patterns into the parent (prompts never lost), archives the sub-domain, clears resolver labels, clears all four in-memory indices.
+1. **Consistency collapse** (`_reevaluate_sub_domains()`): when **shrunk** consistency falls below `SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR = 0.25` (hysteresis gap vs the 0.40–0.60 creation band). The shrunk metric is a Bayesian Beta-Binomial posterior with prior strength `SUB_DOMAIN_DISSOLUTION_PRIOR_STRENGTH=10` centered at `SUB_DOMAIN_DISSOLUTION_PRIOR_CENTER=0.40`, computed as `(matching + α_prior) / (total_opts + K)` (R1, audit `docs/audits/sub-domain-regression-2026-04-27.md`). The check only runs once a sub-domain is at least `SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS=24` hours old (R2, bumped from 6h to give one full daily cycle of bootstrap volatility). When the sub-domain's `cluster_metadata.generated_qualifiers` is empty, the entire re-evaluation is skipped and a `sub_domain_reevaluation_skipped` event is emitted with `reason="empty_vocab_snapshot"` (R3 — prevents fall-through to legacy exact-equality matching). On dissolution, the shared `_dissolve_node()` primitive reparents clusters to the top-level domain, merges meta-patterns into the parent (prompts never lost), archives the sub-domain, clears resolver labels, and clears all four in-memory indices. Per-opt matching delegates to the pure `match_opt_to_sub_domain_vocab()` primitive in `sub_domain_readiness.py` (R4 — same predicate available to future tools and the rebuild endpoint). The dissolution event records `matching_members`, `shrunk_consistency_pct`, and up to 3 `sample_match_failures` with `cluster_id` + truncated `domain_raw`/`intent_label` + match-failure `reason` (R5).
 2. **Empty / near-empty** (`phase_archive_empty_sub_domains()` in Phase 5.5): when the sub-domain has 0 active-cluster children OR 1 child that dissolved. The single child is reparented to the top-level domain.
 3. **Flip-flop prevention**: a sub-domain dissolved in the current cycle is added to `dissolved_this_cycle`; Phase 5 re-discovery skips labels in this set until the next cycle.
+
+**Operator recovery** (R6): `POST /api/domains/{domain_id}/rebuild-sub-domains` (rate-limited 10/min) lets operators force a rebuild on a single domain with an optional `min_consistency` override (Pydantic `ge=0.25`). Idempotent — existing sub-domains are skipped. Optional `dry_run=true` returns the proposal list without mutating state. Always emits `sub_domain_rebuild_invoked` telemetry; publishes `taxonomy_changed` only when `created` is non-empty AND not dry-run. Single-transaction savepoint semantics for partial-failure rollback.
+
+**Observability invariants** (R7+R8): the `vocab_generated_enriched` event carries `previous_groups`, `new_groups`, and `overlap_pct` (Jaccard %) so operators can correlate parent-vocabulary churn with downstream dissolutions; a WARNING log fires when `overlap_pct < 50%` on a non-bootstrap regen (R7). The threshold-collision invariant `SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW > SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR` is enforced at module-import time via `_validate_threshold_invariants()` in `_constants.py` — degenerate configurations fail-fast (R8).
 
 The qualifier-based label ensures stability — "jwt" is always "jwt", unlike the old HDBSCAN labels that changed every cycle ("async-resilience-patterns" → "rate-limiting-&-retry-patterns" → "warm-path-taxonomy-concurrency"). A re-discovered sub-domain receives the same label as the one that was dissolved, so UI continuity is preserved across the dissolution cycle.
 
@@ -237,6 +241,11 @@ Every step of the pipeline is logged via `TaxonomyEventLogger.log_decision()`:
 | Sub-domain created | `sub_domain_created` | Qualifier name, parent domain, clusters reparented, consistency |
 | Sub-domain skipped | `sub_domain_skipped` | Why it didn't create: already_exists, single_cluster |
 | Domain skipped | `sub_domain_domain_skipped` | Domain already has sub-domains (idempotency guard) |
+| Sub-domain re-evaluation skipped | `sub_domain_reevaluation_skipped` | Why dissolution wasn't even attempted (R3): currently `reason="empty_vocab_snapshot"` |
+| Sub-domain re-evaluated | `sub_domain_reevaluated` | Per-sub-domain dissolution check: `consistency_pct` (raw), `shrunk_consistency_pct`, `prior_strength`, `floor_pct`, `matching_members`, `sample_match_failures` (R1+R5) |
+| Sub-domain dissolved | `sub_domain_dissolved` | Same payload as `sub_domain_reevaluated` plus `clusters_reparented`, `meta_patterns_merged`, `reason="qualifier_consistency_below_floor"` |
+| Sub-domain rebuild invoked | `sub_domain_rebuild_invoked` | Operator forced rebuild via `POST /api/domains/{id}/rebuild-sub-domains`: `min_consistency_override`, `threshold_used`, `dry_run`, `proposed_count`, `created_count`, `skipped_existing_count` (R6) |
+| Vocab generated enriched | `vocab_generated_enriched` | Per-domain vocab regen: `groups`, `quality_score`, `previous_groups`, `new_groups`, `overlap_pct` (Jaccard) — WARNING log at `<50%` non-bootstrap overlap (R7) |
 
 These events are written to `data/taxonomy_events/decisions-YYYY-MM-DD.jsonl` and streamed via SSE for real-time monitoring.
 
@@ -247,10 +256,12 @@ These events are written to `data/taxonomy_events/decisions-YYYY-MM-DD.jsonl` an
 | `services/domain_detector.py` | `_enrich_domain_qualifier()` enrichment using `DomainSignalLoader.generated_qualifiers` |
 | `services/domain_signal_loader.py` | Loads enriched vocabulary (`generated_qualifiers`) + `signal_keywords` for TF-IDF fallback |
 | `services/taxonomy/labeling.py` | `generate_qualifier_vocabulary()` LLM-based vocabulary generation (receives `ClusterVocabContext` dataclass) |
-| `services/taxonomy/sub_domain_readiness.py` | Shared `compute_qualifier_cascade()` primitive (consumed by both discovery + `/api/domains/readiness`), `compute_domain_stability()`, `compute_sub_domain_emergence()`, `compute_domain_readiness()`, tier-crossing detector |
-| `services/taxonomy/engine.py` | `_propose_sub_domains()` three-source pipeline with vocabulary tiering, `_reevaluate_sub_domains()` dissolution, shared `_dissolve_node()` primitive |
+| `services/taxonomy/sub_domain_readiness.py` | Shared `compute_qualifier_cascade()` primitive (consumed by both discovery + `/api/domains/readiness`), `compute_domain_stability()`, `compute_sub_domain_emergence()`, `compute_domain_readiness()`, tier-crossing detector. Also `match_opt_to_sub_domain_vocab() -> SubDomainMatchResult` (R4) — pure per-opt matcher consumed by `_reevaluate_sub_domains()` |
+| `services/taxonomy/engine.py` | `_propose_sub_domains()` three-source pipeline with vocabulary tiering, `_reevaluate_sub_domains()` dissolution (Bayesian-shrunk, R1), shared `_dissolve_node()` primitive, `rebuild_sub_domains()` operator-recovery method (R6) |
 | `services/taxonomy/warm_phases.py` | Phase 5 sub-domain discovery + re-evaluation, Phase 5.5 archival, Phase 4.95 vocab-only pass in isolated DB session |
-| `services/taxonomy/_constants.py` | Thresholds: `SUB_DOMAIN_QUALIFIER_*`, `SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR`, `SUB_DOMAIN_ARCHIVAL_IDLE_HOURS`, `_VOCAB_SIM_HIGH`/`_VOCAB_SIM_LOW` |
+| `services/taxonomy/_constants.py` | Thresholds: `SUB_DOMAIN_QUALIFIER_*`, `SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR=0.25`, `SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS=24` (R2), `SUB_DOMAIN_DISSOLUTION_PRIOR_STRENGTH=10` + `SUB_DOMAIN_DISSOLUTION_PRIOR_CENTER=0.40` (R1 Bayesian prior), `SUB_DOMAIN_FAILURE_SAMPLES=3` + `SUB_DOMAIN_FAILURE_FIELD_TRUNCATE=80` (R5 forensic), `SUB_DOMAIN_ARCHIVAL_IDLE_HOURS`, `_VOCAB_SIM_HIGH`/`_VOCAB_SIM_LOW`. Plus `_validate_threshold_invariants()` callable invoked at module-import time (R8) |
+| `routers/domains.py` | `POST /api/domains/{id}/rebuild-sub-domains` (R6) — 10/min rate limit |
+| `schemas/domains.py` | `RebuildSubDomainsRequest` (Pydantic `ge=0.25, le=1.0`) + `RebuildSubDomainsResult` (R6) |
 | `services/taxonomy/cold_path.py` | Sub-domain parent preservation during cold path refit |
 | `services/taxonomy/readiness_history.py` | JSONL snapshot writer (30-day retention, hourly buckets) backing `/api/domains/{id}/readiness/history` |
 | `services/taxonomy/cluster_meta.py` | `read_meta()`/`write_meta()` for cached vocabulary in `cluster_metadata` |
