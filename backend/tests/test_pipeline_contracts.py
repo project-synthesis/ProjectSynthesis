@@ -6,10 +6,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.pipeline_contracts import (
+    ANALYSIS_DIMENSION_WEIGHTS,
     DIMENSION_WEIGHTS,
     DimensionScores,
     OptimizationResult,
     PipelineResult,
+    get_dimension_weights,
 )
 
 
@@ -160,8 +162,6 @@ class TestDimensionWeights:
         Regression guard — all existing call sites that don't thread a
         task_type continue to use the v3 uniform schema.
         """
-        from app.schemas.pipeline_contracts import get_dimension_weights
-
         assert get_dimension_weights(None) == DIMENSION_WEIGHTS
 
     def test_analysis_returns_analysis_schema(self):
@@ -170,11 +170,6 @@ class TestDimensionWeights:
         Spec values: clarity 0.25, specificity 0.25, structure 0.20,
         faithfulness 0.20, conciseness 0.10.
         """
-        from app.schemas.pipeline_contracts import (
-            ANALYSIS_DIMENSION_WEIGHTS,
-            get_dimension_weights,
-        )
-
         result = get_dimension_weights("analysis")
         assert result == ANALYSIS_DIMENSION_WEIGHTS
         assert result["clarity"] == pytest.approx(0.25, abs=1e-9)
@@ -189,8 +184,6 @@ class TestDimensionWeights:
         Mirrors the module-level ``assert`` invariant that fails fast at
         import time if a future edit breaks the sum-to-1 property.
         """
-        from app.schemas.pipeline_contracts import ANALYSIS_DIMENSION_WEIGHTS
-
         assert sum(DIMENSION_WEIGHTS.values()) == pytest.approx(1.0, abs=1e-9)
         assert sum(ANALYSIS_DIMENSION_WEIGHTS.values()) == pytest.approx(
             1.0, abs=1e-9,

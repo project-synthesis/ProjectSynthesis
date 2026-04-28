@@ -35,8 +35,8 @@ DIMENSIONS = tuple(DIMENSION_WEIGHTS.keys())
 ZSCORE_MIN_SAMPLES = 30       # Minimum sample count for z-score stability (CLT threshold)
 ZSCORE_MIN_STDDEV = 0.5       # Skip normalization on narrow distributions (audits cluster
                               # at stddev≈0.35–0.45 — z-norm there floor-caps adequate
-                              # raw scores). Mirrors the narrow-distribution gate at
-                              # routers/health.py:392-394.
+                              # raw scores). Aligns with the count >= 50 tier of the
+                              # narrow-distribution gate at routers/health.py:394.
 ZSCORE_CENTER = 5.5           # Re-center normalized scores around midpoint
 ZSCORE_SPREAD = 1.5           # Map 1 stddev to ±1.5 on the 1-10 scale
 ZSCORE_CAP = 2.0              # |z| ceiling — guards against narrow-stddev amplification (C1)
@@ -235,7 +235,8 @@ def blend_scores(
         ):
             divergence_flags.append("possible_false_premise")
 
-    # Overall: weighted mean (faithfulness 0.25, structure 0.15, rest 0.20)
+    # Overall: weighted mean via get_dimension_weights(task_type) — see
+    # ANALYSIS_DIMENSION_WEIGHTS for the analysis-class schema.
     overall = round(
         sum(blended[dim] * w for dim, w in get_dimension_weights(task_type).items()),
         2,

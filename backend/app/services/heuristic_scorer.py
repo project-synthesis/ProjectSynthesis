@@ -249,6 +249,9 @@ class HeuristicScorer:
             # 10. Audience/tone/style
             (r"\b(?:first\s+person|third\s+person|formal|informal|tone|audience|voice|tense)\b", re.IGNORECASE, 2.0),
             # 11. Backtick-wrapped code identifiers
+            # Char class allows `:` for Python member-access (`engine.py::_func`) and
+            # namespace prefixes (`POST /api/...`); excludes spaces so prose-in-backticks
+            # (`arbitrary phrase`) doesn't earn structural credit.
             (r"`[a-zA-Z_][a-zA-Z0-9_./:-]*`", 0, 2.0),
         ]
 
