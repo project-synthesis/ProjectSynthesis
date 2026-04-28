@@ -38,7 +38,6 @@ class TestOptimizeRouter:
             OptimizationResult(
                 optimized_prompt="Better prompt",
                 changes_summary="Added specificity",
-                strategy_used="chain-of-thought",
             ),
             ScoreResult(
                 prompt_a_scores=DimensionScores(

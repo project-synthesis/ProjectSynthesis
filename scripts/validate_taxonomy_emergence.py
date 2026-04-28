@@ -277,6 +277,342 @@ PROMPT_SETS = {
     #   - No spurious WARNING log for low overlap on bootstrap.
     #   - Module-level R8 invariant continues to hold (backend started clean).
     #   - Score health remains stable.
+    # Cycle 15 — meta-prompts designed to push the backend domain past
+    # its sub-domain emergence threshold (currently embeddings@0.24,
+    # gap +0.18 vs threshold 0.42) by adding 5 distinct embedding-themed
+    # prompts that target different cluster homes (breadth >= 2 satisfied).
+    # Live observation goal: trigger R7 vocab-regen + (eventually) sub-domain
+    # creation so R1+R5 telemetry surfaces in JSONL.
+    # Cycle 16 — five LASER-FOCUSED embedding prompts to push backend's
+    # `embeddings` qualifier from 0.327 → ≥ 0.40 emergence threshold.
+    # Each prompt leads with the word "embedding" in the first sentence
+    # (heuristic first-sentence rescue) and uses tight embedding-mechanics
+    # vocabulary (cosine, centroid, L2-norm, MiniLM, 384-dim, cache, hash)
+    # that the LLM analyzer should classify as `backend: embedding/embeddings`.
+    # Distinct subtopics preserve cluster breadth.
+    "cycle-16-emergence-push": [
+        ("Audit the embedding cache hit rate in qualifier_index — verify the LRU "
+         "eviction preserves the most-frequently-cosine-matched embedding vectors. "
+         "Cover the embedding-cache TTL of 5 minutes and the cache-key composition "
+         "from sub_qualifier + cluster_id. The 384-dim MiniLM embedding stays in the "
+         "cache until eviction or domain regeneration."),
+        ("Trace the embedding deduplication via SHA-256 content hash in "
+         "repo_index_outlines.compute_content_sha — verify two files with identical "
+         "content but different paths produce identical embedding vectors and hit "
+         "the same embedding cache slot. Cover the file-content TTL eviction policy "
+         "and the embedding-vector reuse semantics."),
+        ("Audit the embedding centroid recomputation in EmbeddingIndex when "
+         "score-weighted member updates trigger a cluster centroid embedding "
+         "refresh. Verify L2 normalization (`np.linalg.norm` denominator with "
+         "epsilon guard) is preserved post-update so cosine similarity remains "
+         "well-defined for the 384-dim embedding."),
+        ("Diagnose the embedding model warmup latency — verify aembed_single "
+         "completes the first call within 2 seconds after a cold start. The "
+         "embedding service caches the loaded MiniLM-L6-v2 model after first "
+         "invocation; subsequent embedding calls should complete in single-digit "
+         "milliseconds. Cover the embedding-service singleton lifecycle."),
+        ("Trace the qualifier_embedding cosine similarity scoring — when a "
+         "sub-domain's qualifier embedding compares against a candidate cluster's "
+         "qualifier embedding, the threshold for membership is 0.55 cosine. "
+         "Verify the embedding-vector comparison is symmetric and that the "
+         "cosine similarity is computed via dot-product of L2-normalized 384-dim "
+         "vectors, not via scipy.spatial.distance.cosine."),
+    ],
+    # Cycle 17 — 3 more pure-embedding prompts to push past 0.40 emergence
+    # threshold (currently 0.368 cascade consistency, gap +0.032).
+    # Cycle 18 — NEW DOMAIN emergence (numpy). 5 prompts where NumPy is
+    # unambiguously the primary topic — no backend/database/devops bleed.
+    # Domain discovery criteria: ≥3 coherent members under general with
+    # ≥0.3 coherence and ≥60% consistent domain_raw. Each prompt leads
+    # with "NumPy" capitalized in the first sentence so the heuristic
+    # first-sentence rescue + LLM analyzer both lock onto numpy as primary.
+    "cycle-18-numpy-domain-emergence": [
+        ("NumPy broadcasting rules — explain how a (3, 1) array combines "
+         "with a (1, 4) array under arithmetic operations to produce a "
+         "(3, 4) result. Cover the rule that aligns dimensions from the "
+         "trailing axis backward and which dimensions get stretched. "
+         "Provide a worked example with concrete dtype=float32 inputs."),
+        ("NumPy memory layout — explain the difference between C-contiguous "
+         "and Fortran-contiguous arrays. When does np.transpose() return a "
+         "view vs a copy? Cover the strides attribute and how it determines "
+         "whether successive memory accesses are sequential. Reference the "
+         "ndarray.flags.c_contiguous and .f_contiguous fields."),
+        ("NumPy advanced indexing — contrast boolean-mask indexing "
+         "(arr[arr > 0]) with integer-array indexing (arr[[0, 2, 4]]). "
+         "When does each return a view vs a copy? Cover the broadcasting "
+         "rules for multi-dimensional integer indices and the orthogonal "
+         "vs diagonal interpretations of multiple integer arrays."),
+        ("NumPy reduction along axis — explain the axis parameter in "
+         "np.sum, np.mean, np.max. Walk through what happens with axis=0 "
+         "vs axis=1 vs axis=None on a 2D (3, 4) array. Cover the keepdims "
+         "parameter and when reduction outputs broadcast back against the "
+         "original array. Include a concrete dtype-preservation example."),
+        ("NumPy dtype upcasting in mixed-type operations — when float32 "
+         "meets int64, what dtype does the result take? Cover the "
+         "type-promotion rules for arithmetic, the np.result_type API, "
+         "and the difference between np.add(a, b) preserving dtype vs "
+         "np.array(a) + np.array(b) upcasting. Reference NEP 50."),
+    ],
+    # Cycle 19 — INFRASTRUCTURE / ARCHITECTURE OPTIMIZATION AUDIT.
+    # Each prompt asks the system to analyze a specific inconsistency
+    # or optimization opportunity surfaced during R1-R8 live validation
+    # (2026-04-27). The optimized outputs become roadmap candidates.
+    # Themes: cross-process telemetry sync, predicate divergence,
+    # observability gaps, vocab regen cadence, brand drift, score health.
+    "cycle-19-optimization-audit": [
+        ("Audit the cascade-vs-parse_domain divergence in `engine.rebuild_sub_domains` "
+         "(R6 implementation note). The cascade uses normalized vocab groups "
+         "(`embeddings`) while rebuild uses literal `parse_domain` output "
+         "(could be `embedding` singular or `embedding-correctness` etc.) — "
+         "this means R6 sees fragmented qualifiers while readiness shows "
+         "consolidated ones. Propose a unified primitive that normalizes "
+         "literal qualifiers through the same cascade vocabulary, with "
+         "backward-compat fallback when vocab is empty."),
+        ("Diagnose the `avg_vocab_quality=None` field in /api/health. The "
+         "field exists in the response schema but consistently reports null "
+         "even with 4 domains carrying generated_qualifiers. Trace the "
+         "aggregator in services/health.py (or wherever it lives) and "
+         "surface the actual computation — should be the mean of "
+         "vocab_generated_enriched.quality_score across recent domain "
+         "regenerations."),
+        ("Audit Phase 4.95 vocab regeneration cadence — the telemetry "
+         "shows it runs only once per several cycles even when sub-domain "
+         "discovery runs every cycle. The cluster signature change "
+         "detection that gates Phase 4.95 is too conservative when a new "
+         "sub-domain emerges. Propose a trigger that fires Phase 4.95 "
+         "automatically on sub_domain_created, decoupling it from the "
+         "MAINTENANCE_CYCLE_INTERVAL=6 cadence for that case only."),
+        ("Trace the cross-process telemetry sync between MCP process "
+         "(port 8001) and backend process (port 8000). Both write to "
+         "`data/taxonomy_events/decisions-YYYY-MM-DD.jsonl` but events "
+         "from the MCP process appear delayed by up to 30 seconds via "
+         "the cross-process HTTP POST bridge to /api/events/_publish. "
+         "Audit the buffering and propose a flush-on-decision-emit policy "
+         "for cross-process events without overwhelming the bridge."),
+        ("Diagnose the score_health drift since v0.4.7 — mean dropped "
+         "from 8.13 ± 0.75 (v0.4.7 baseline) to 7.96 ± 0.74 (post-v0.4.8 "
+         "embedding-prompt push). Investigate whether the drop reflects "
+         "genuine corpus diversity (cycle-15-18 prompts were more abstract "
+         "and harder to optimize) or under-calibration in the C5 z-score "
+         "asymmetric cap. Cite specific cycle scores from cycles 15-18."),
+        ("Audit the frontend brand drift potential in DomainReadinessPanel "
+         "rebuild button. The `.drp-action` selector composes with `.drp-mute` "
+         "for hover/focus colors — clean DRY pattern. But the wrench icon's "
+         "active/pressed state isn't visually distinct from idle (no `--active` "
+         "modifier class). Propose a `.drp-action--pending` class that fires "
+         "during the rebuild API call (cyan→yellow), matching the modal's "
+         "primary-button busy state for visual consistency."),
+        ("Trace the R3 vs R5 telemetry asymmetry. R3 emits `sub_domain_reevaluation_skipped` "
+         "when generated_qualifiers is empty but skips computing matching/total_opts "
+         "(reasonably — there's nothing to match). R5 emits `matching_members` + "
+         "`sample_match_failures` only when re-eval ran. This means an operator "
+         "investigating a quiet sub-domain (no events) cannot tell whether R3 "
+         "is silently skipping it OR whether re-eval simply hasn't fired. "
+         "Propose a periodic `sub_domain_health_check` event that fires per-cycle "
+         "regardless and includes a brief reason (`grace_period | empty_snapshot | "
+         "evaluated`) for full operator visibility."),
+    ],
+    # Cycle 20 — DEEPER OBSERVABILITY + telemetry coverage gap audit.
+    # Specifically: the ring-buffer 500-event cap, the SSE bridge
+    # backpressure, JSONL write-amplification, and the per-process
+    # event_logger lifespan.
+    "cycle-20-observability-gaps": [
+        ("Audit the TaxonomyEventLogger ring buffer cap of 500 events. "
+         "Under high warm-path activity (87 sub_domain_signal_scan events "
+         "fired today alone), the ring evicts older events before operators "
+         "can review. Propose a tiered ring (500 hot + 5000 warm) or a "
+         "decision-aware retention policy that prioritizes lifecycle events "
+         "(created/dissolved) over per-cycle scans (signal_scan)."),
+        ("Trace the SSE bridge backpressure — `taxonomy_activity` events "
+         "stream at potentially 100+/sec during a Phase 5 burst, but the "
+         "frontend ActivityPanel renders incrementally with no visible "
+         "queue depth indicator. Diagnose whether the SSE consumer drops "
+         "events under sustained load or buffers indefinitely. Propose a "
+         "client-side rate-limit + visible 'N events queued' badge for "
+         "operator feedback during heavy activity bursts."),
+        ("Audit the JSONL write-amplification ratio — every taxonomy_activity "
+         "SSE event also writes to data/taxonomy_events/decisions-YYYY-MM-DD.jsonl, "
+         "and on a cross-process event the same payload may write twice (once "
+         "per process). Profile a representative day's JSONL for duplicates "
+         "and propose a deduplication key based on (ts, op, decision, "
+         "cluster_id) so operators don't see ghost-double events when "
+         "grepping the file."),
+        ("Diagnose the per-process event_logger lifespan singleton. The "
+         "MCP process and backend process each call set_event_logger() "
+         "in their own lifespan; if either restarts mid-session, the new "
+         "process's events flow to a fresh JSONL file (today's date) but "
+         "the old process's pending writes may still go to the old "
+         "decisions-YYYY-MM-DD.jsonl. Propose a startup hook that emits "
+         "a `process_started` decision so operators can correlate event "
+         "gaps with restarts."),
+        ("Audit the readiness 30s TTL cache invalidation triggers. The "
+         "current invalidation set is `taxonomy_changed`, `domain_created`, "
+         "and per-domain key (domain_id, member_count). But the new "
+         "`sub_domain_rebuild_invoked` event creates sub-domains without "
+         "always firing taxonomy_changed (only on non-dry create) — the "
+         "cache could serve stale readiness for up to 30s after a "
+         "non-dry rebuild. Propose adding `sub_domain_rebuild_invoked` "
+         "(when context.created_count > 0) as an explicit invalidation "
+         "trigger."),
+    ],
+    # Cycle 21 — PIPELINE / SCORE-HEALTH performance audit.
+    # The mean drifted from 8.13 → 7.96 across cycles 15-18; this cycle
+    # asks the system to introspect why and propose calibrations.
+    "cycle-21-score-health-audit": [
+        ("Diagnose the score_health.last_n_mean drop from 8.13 (v0.4.7 "
+         "baseline 2026-04-26) to 7.96 (current v0.4.8 post 18-prompt push). "
+         "Hypothesis: cycles 15-18 prompts were more abstract (audit X, "
+         "diagnose Y, trace Z) than v0.4.7's mix, and the analyze phase "
+         "classifies them as 'analysis' task_type which calibrates more "
+         "stringently. Confirm via task_type distribution pre/post and "
+         "propose a calibration adjustment if the dimension weights are "
+         "over-penalizing legitimate audit prompts."),
+        ("Trace the score divergence flag rate. Hybrid scoring (LLM + "
+         "heuristic blended per dimension) flags divergence at >2.5pt gap. "
+         "If divergence rate climbed across cycles 15-18, that's a signal "
+         "that the heuristic scorer's task-type-specific calibration is "
+         "drifting from the LLM judge. Inspect divergence_pct in /api/health "
+         "and propose adjustments to z-score normalization for the "
+         "audit-heavy task_type cohort."),
+        ("Audit the analyze phase ANALYZE_EFFORT_CEILING='high' clamp. "
+         "Cycles 15-18 prompts are dense technical analyses; clamping "
+         "analyze effort to high (vs xhigh on Opus 4.7) may reduce the "
+         "depth of weakness detection, leading to less-targeted optimize "
+         "phases and lower scores. Profile whether the v0.4.8 score drop "
+         "correlates with the clamp and propose a task-type-aware "
+         "exemption for analysis-heavy prompts."),
+        ("Diagnose the chain-of-thought strategy bias post-v0.4.7. Of the "
+         "last 5 cycles (15-18), ~70% used chain-of-thought regardless of "
+         "task_type. Strategy intelligence should be picking different "
+         "strategies for analysis vs writing vs system tasks. Trace the "
+         "strategy_intelligence selection logic and verify the "
+         "domain-relaxed fallback isn't over-triggering chain-of-thought "
+         "due to a recently-favorable affinity counter."),
+    ],
+    # Cycle 22 — FRONTEND / BRAND COMPLIANCE audit.
+    # Catch any drift introduced during the v0.4.8 frontend wiring.
+    "cycle-23-audit-prompt-hardening": [
+        # 5 audit-class prompts exercising v0.4.9 F1-F5 fixes.
+        # Each prompt: (a) cites ≥3 backtick-wrapped code identifiers (F1
+        # backtick specificity), (b) triggers technical_dense=True via ≥3
+        # technical nouns (F5 condition), (c) is framed as audit/trace/
+        # diagnose so analyzer classifies task_type='analysis' (F3 weights
+        # apply), (d) effective_strategy is resolved by analyze phase (F4
+        # fidelity), (e) one prompt has a deliberately wrong premise (F5
+        # possible_false_premise flag).
+        ("Audit the `score_blender.py` `blend_scores` function — verify "
+         "the new `task_type` parameter is plumbed correctly through the "
+         "loop body, that `get_dimension_weights(task_type)` is consulted "
+         "for the overall computation at line 222, and that the F5 "
+         "false-premise emission preserves additivity (does not perturb "
+         "the per-dimension blended scores). Confirm the `divergence_flags` "
+         "list grows by exactly one entry when all three F5 conditions hold."),
+        ("Trace the `OptimizationResult` schema in `pipeline_contracts.py` "
+         "— confirm the field count post-F4 is exactly two (`optimized_prompt` "
+         "and `changes_summary`), that Pydantic `extra=\"forbid\"` rejects "
+         "any LLM-emitted `strategy_used` value at validation time, and "
+         "that all four production reconstruction sites (`pipeline.py:476`, "
+         "`sampling_pipeline.py:576+588`, `batch_pipeline.py:443`) no "
+         "longer pass the kwarg. Verify `Optimization.strategy_used` DB "
+         "column is unchanged."),
+        ("Diagnose the F3 weight-threading flow through `pipeline_phases.py` "
+         "`persist_and_propagate` — confirm `inputs.analysis.task_type` is "
+         "passed to `get_dimension_weights()` at the improvement_score "
+         "computation (lines 1075-1085), that the heuristic_lift loop and "
+         "the deltas-fallback loop both consult the helper, and that "
+         "`SCORING_FORMULA_VERSION=4` is the stored signal of the schema "
+         "change. Walk through the module-level invariant assertions in "
+         "`pipeline_contracts.py` that fail-fast on any future weight-sum "
+         "edit."),
+        ("Audit the `ANALYSIS_DIMENSION_WEIGHTS` schema introduced in F3 — "
+         "verify the per-dimension allocation (clarity 0.25, specificity "
+         "0.25, structure 0.20, faithfulness 0.20, conciseness 0.10) sums "
+         "to exactly 1.0 within `1e-9` epsilon, that the analysis schema "
+         "produces a meaningfully different `compute_overall(task_type='analysis')` "
+         "vs default for an audit-class fixture (≥0.1 absolute delta), and "
+         "that the existing `@property def overall` is preserved for "
+         "backward compat at the ~30 call sites that don't have task_type "
+         "in scope."),
+        # Deliberate false-premise prompt: claims `_normalize_llm_score`
+        # at score_blender.py uses a hardcoded ZSCORE_CAP=2.5, when the
+        # actual constant is 2.0. The LLM scorer with codebase context
+        # should detect the discrepancy → faithfulness < 5.0 + technical
+        # density → F5 flag fires.
+        ("Trace the `_normalize_llm_score` helper in `score_blender.py` — "
+         "the function's `ZSCORE_CAP=2.5` constant is too aggressive for "
+         "narrow-distribution audit prompts and should be reduced to 2.0 "
+         "to prevent floor-cap on legitimately above-average raw scores. "
+         "Verify the asymmetric cap implementation (C5 v0.4.7) preserves "
+         "the upside ceiling and only floors at the lower bound. Propose "
+         "a Bayesian-shrinkage prior to soften the floor on small-N "
+         "samples."),
+    ],
+    "cycle-22-frontend-brand-audit": [
+        ("Audit the new RebuildSubDomainsModal.svelte for brand-grammar "
+         "drift. The `.rsd-stat-val` font-size of 14px deviates from the "
+         "ultra-compact density table (text-[8-11px] norm). Justifiable as "
+         "a hero metric, but worth confirming. Walk through every rule in "
+         "the brand-guidelines skill and flag any 1px-contour violations, "
+         "glow effects, or banned values."),
+        ("Trace the activity-colors.ts Set-based dispatch refactor. The "
+         "decisionColor function moved from inline if-tree (50 lines) to "
+         "5 Set constants (cleaner DRY). But _INFO_DECISIONS is now the "
+         "largest Set and absorbs unrelated decisions (algorithm_result, "
+         "noise_reassigned, scored, q_computed all coexist). Propose a "
+         "finer-grained taxonomy: `_TELEMETRY_DECISIONS` for measurement "
+         "vs `_LIFECYCLE_DECISIONS` for state transitions, so the "
+         "severity bucket carries semantic information beyond just color."),
+        ("Audit the DomainReadinessPanel grid-template-columns layout. "
+         "The new wrench column made the grid 7 cells wide. On mobile or "
+         "narrow sidebars (<280px), the columns may compress below "
+         "readability. Propose a responsive breakpoint that hides the "
+         "rebuild button below 320px and shows it only on hover for "
+         "wider viewports."),
+        ("Diagnose the Observatory Timeline's rendering of new R6 "
+         "sub_domain_rebuild_invoked events. The timeline groups events "
+         "into 4 op-families (domain/cluster/pattern/readiness) — a "
+         "rebuild event is `op=discover` so it falls in the 'domain' "
+         "family. But the rebuild is operator-triggered, conceptually "
+         "different from organic discovery. Propose a fifth family "
+         "`operator_action` that catches rebuild + admin reset + manual "
+         "promote events for filter clarity."),
+    ],
+    "cycle-17-final-emergence": [
+        ("Audit the embedding magnitude preservation in EmbeddingIndex.add — when a "
+         "new 384-dim embedding vector lands in the index, the L2 magnitude must be "
+         "exactly 1.0 ± epsilon. Trace the embedding-vector validation in the add "
+         "path and confirm the embedding cache key derivation."),
+        ("Trace the embedding cosine ranking in EmbeddingIndex.search — for a query "
+         "embedding vector against the indexed embedding corpus, the top-k results "
+         "are sorted by cosine similarity. Verify the embedding-vector dot product "
+         "is implemented via numpy.einsum and not a Python loop."),
+        ("Diagnose embedding precision drift over repeated centroid recomputations "
+         "— after 100 successive cluster centroid updates, the cumulative L2-norm "
+         "drift of the centroid embedding must remain below 1e-6. Cover the "
+         "embedding-renormalization safety net."),
+    ],
+    "cycle-15-r1-r8-live-observation": [
+        ("Audit the embedding centroid L2 normalization in `EmbeddingService.aembed_single` "
+         "— verify the 384-dim vector is unit-normalized BEFORE storage and that the "
+         "score-weighted centroid update in `engine._recompute_centroid` preserves "
+         "the L2-norm invariant. Cite the exact division by `np.linalg.norm`."),
+        ("Trace the embedding hot-path under bursty match_prompt traffic. The cosine "
+         "similarity search in `EmbeddingIndex.search` should not stall if the "
+         "thread-pool is exhausted by parallel `aembed_single` calls. Cover the "
+         "asyncio.to_thread fallback and the HNSW backend's threshold-trip behavior."),
+        ("Diagnose the multi-embedding composite fusion (`PhaseWeights`): "
+         "0.55 raw + 0.20 optimized + 0.15 transformation + 0.10 qualifier "
+         "embedding weights. Verify the qualifier-embedding 4th signal "
+         "stays L2-normalized after the weighted sum."),
+        ("Audit the embedding repo-relevance gate (B0) — "
+         "`compute_repo_relevance(prompt_embedding, anchor_embedding) >= 0.15` "
+         "where the anchor is project-name + synthesis + indexed-file-path embedding. "
+         "Cover the stride-sampling at 100 to fit MiniLM's 512-token window."),
+        ("Trace the qualifier-embedding cache instrumentation in "
+         "`QualifierIndex.get_cached_qualifier_embedding`. Verify cache hit/miss "
+         "counters increment correctly and the cache TTL doesn't leak qualifier "
+         "vectors across domain regenerations."),
+    ],
     "cycle-14-r7-r8-validation": [
         ("Audit the new R7 vocab-regen overlap telemetry in "
          "`backend/app/services/taxonomy/engine.py::_propose_sub_domains` "

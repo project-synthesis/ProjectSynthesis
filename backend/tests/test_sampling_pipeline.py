@@ -231,8 +231,7 @@ async def test_run_sampling_pipeline_full():
 
     optimize_json = (
         '{"optimized_prompt": "Improved prompt text", '
-        '"changes_summary": "Added structure", '
-        '"strategy_used": "chain-of-thought"}'
+        '"changes_summary": "Added structure"}'
     )
 
     score_json = ScoreResult(
@@ -392,8 +391,7 @@ async def test_confidence_gate_overrides_strategy():
 
     optimize_json = (
         '{"optimized_prompt": "Better text", '
-        '"changes_summary": "Improved", '
-        '"strategy_used": "auto"}'
+        '"changes_summary": "Improved"}'
     )
 
     score_json = ScoreResult(
@@ -461,8 +459,7 @@ async def test_semantic_check_reduces_confidence():
 
     optimize_json = (
         '{"optimized_prompt": "Better text", '
-        '"changes_summary": "Improved", '
-        '"strategy_used": "auto"}'
+        '"changes_summary": "Improved"}'
     )
 
     score_json = ScoreResult(
@@ -530,8 +527,7 @@ async def test_strategy_override_bypasses_confidence_gate():
 
     optimize_json = (
         '{"optimized_prompt": "Better text", '
-        '"changes_summary": "Improved", '
-        '"strategy_used": "few-shot"}'
+        '"changes_summary": "Improved"}'
     )
 
     score_json = ScoreResult(

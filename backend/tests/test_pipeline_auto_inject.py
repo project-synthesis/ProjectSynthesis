@@ -251,7 +251,6 @@ class TestPipelineAutoInjectionIntegration:
         return OptimizationResult(
             optimized_prompt="Write a Python function that sorts a list.",
             changes_summary="Added specificity.",
-            strategy_used="chain-of-thought",
         )
 
     def _make_scores(self):

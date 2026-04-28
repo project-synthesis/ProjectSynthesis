@@ -943,7 +943,6 @@ class TestPassthroughEndToEnd:
             PipelineOptResult(
                 optimized_prompt="Normal optimized output",
                 changes_summary="Via provider",
-                strategy_used="auto",
             ),
             ScoreResult(
                 prompt_a_scores=DimensionScores(

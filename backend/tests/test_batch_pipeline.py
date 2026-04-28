@@ -66,7 +66,6 @@ def _optimization(**overrides: Any) -> OptimizationResult:
             "ascending order and returns the sorted list."
         ),
         changes_summary="Added specificity: language, input type, return value.",
-        strategy_used="chain-of-thought",
     )
     defaults.update(overrides)
     return OptimizationResult(**defaults)

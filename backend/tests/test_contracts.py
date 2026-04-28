@@ -169,16 +169,14 @@ class TestOptimizationResult:
         result = OptimizationResult(
             optimized_prompt="Write a Python function that...",
             changes_summary="Added context and constraints.",
-            strategy_used="chain-of-thought",
         )
-        assert result.strategy_used == "chain-of-thought"
+        assert result.optimized_prompt == "Write a Python function that..."
 
     def test_extra_fields_forbidden(self):
         with pytest.raises(ValidationError):
             OptimizationResult(
                 optimized_prompt="x",
                 changes_summary="x",
-                strategy_used="x",
                 sneaky="field",
             )
 

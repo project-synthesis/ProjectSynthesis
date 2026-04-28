@@ -425,7 +425,7 @@ class RefinementService:
                 optimized_prompt=refined.optimized_prompt,
                 scores=optimized_scores.model_dump(),
                 weaknesses=analysis.weaknesses,
-                strategy=refined.strategy_used,
+                strategy=strategy_name,
                 score_deltas=deltas_from_prev,
                 score_trajectory=_trajectory,
             )
@@ -457,7 +457,7 @@ class RefinementService:
             scores=scores_dict,
             deltas=deltas_from_prev,
             deltas_from_original=deltas,
-            strategy_used=refined.strategy_used,
+            strategy_used=strategy_name,
             suggestions=suggestions_list,
             trace_id=trace_id,
         )
