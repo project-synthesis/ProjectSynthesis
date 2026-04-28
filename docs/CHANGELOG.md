@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.9 — 2026-04-28
+
 ### Changed
 
 - **F1 — Specificity heuristic now credits backtick-wrapped code identifiers** — added an 11th category `(r"`[a-zA-Z_][a-zA-Z0-9_./:-]*`", 0, 2.0)` to `heuristic_specificity` so audit prompts citing real code references (`` `engine.py` ``, `` `_reevaluate_sub_domains` ``, `` `cluster_metadata.generated_qualifiers` ``) earn structural specificity credit. Previously these scored 0 from the citations despite being structurally more specific than vague feature prompts. Live: 3-backtick prompt scored 4.6 vs 3.0 (delta +1.6, well above the 0.5 acceptance floor). Cap=2.0 matches all other structural categories — 3 hits contribute +1.6, 5+ hits saturate. (audit `docs/audits/audit-prompt-class-deep-dive-2026-04-27.md` F1, `backend/app/services/heuristic_scorer.py:251-252`)
