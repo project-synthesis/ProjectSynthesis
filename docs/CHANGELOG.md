@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.11 — 2026-04-28
+
 ### Fixed
 
 - **v0.4.11 P0a — Domain proposal cluster-count floor** — `engine._propose_domains()` now requires ≥`DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS=2` distinct contributing clusters before promoting a top-level domain. Closes the "ghost domain" pathology surfaced live by the cycle-19→22 v2 replay where `fullstack` was promoted from a single cluster of 3 prompts (67% consistency, coherence 0.0/skipped), then merged out leaving an empty domain node frozen by the 48h dissolution gate. Both proposal paths enforce the floor: per-cluster pass refactored to aggregate by `top_primary` BEFORE creating domains (rejects primaries with only 1 contributor); pooled pass adds `len(bucket["clusters"]) >= MIN_SOURCE_CLUSTERS` check alongside the existing pooled-member gate. Rejected primaries emit `proposal_rejected_min_source_clusters` event with `{domain_label, source_cluster_count, required_min, source}` for forensic visibility. Module-level invariant assertion in `_constants.py` fails fast on `< 1` configuration drift. Test fixtures in `test_domain_discovery.py` updated to spread members across 2 clusters where they previously assumed single-cluster promotion as a happy-path artifact. Spec: `docs/specs/domain-proposal-hardening-2026-04-28.md` §P0a.
