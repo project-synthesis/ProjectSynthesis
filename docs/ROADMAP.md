@@ -71,57 +71,99 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ---
 
-### Validation tier — first-class regression detection alongside seed tier
+### Topic Probe — agentic targeted exploration of a user-specified concern against the linked codebase
 **Status:** Planned
-**Motivating use case:** the cycle-19→22 replay above. Today the validation harness is a CLI script with hardcoded `PROMPT_SETS`; results live in `data/validation/<cycle>.json` and are invisible to the running system. Productizing it closes the regression-detection gap that v0.4.9 surfaced.
+**Vision:** A user-driven, codebase-aware seed mode where the user specifies a topic, concern, or feature and the agentic seed system organically populates the taxonomy with focused prompts anchored in the user's actual code. The system reads the linked GitHub repo, generates 10–20 prompts targeted at the topic with real code references (`engine.py:_compute_centroid`, `services/taxonomy/matching.py`, etc.), runs them through the optimization pipeline, watches the taxonomy emerge new domains/sub-domains organically as signal concentrates, and delivers a final report of what shipped — taxonomy changes, top-scoring outputs, extracted patterns, recommended follow-ups.
 
-**Vision:** A `ValidationSuite` peer to seed agents — hot-reloaded markdown files in `prompts/validation-suites/*.md` with curated prompts + assertions + optional baseline run reference. Each suite captures pre/post snapshots (cluster tree, domain readiness, scoring distribution from `/api/health`), submits prompts sequentially through the live pipeline, computes per-prompt + aggregate metrics, and compares against an optional baseline run for delta analysis. Different intent than seed (which generates diverse content via LLM agents); same execution primitive (`batch_pipeline.run_single_prompt`).
+This is the productization of the manual workflow that emerged the `embeddings` sub-domain and `data` / `frontend` top-level domains during cycles 15–22. Today that flow requires human-curated prompts in `scripts/validate_taxonomy_emergence.py::PROMPT_SETS` and a CLI invocation; the user wants to specify a concern (e.g., "NumPy memory layout optimization", "auth middleware security review", "embedding cache invalidation correctness") and let the agentic system handle the rest with zero friction.
 
-**Core capabilities:**
+**User flow:**
+1. User opens "Topic Probe" in the SeedModal (new tab) or invokes `synthesis_probe` MCP tool from their IDE.
+2. Specifies topic + optional scope (e.g., specific files/dirs in linked repo, or "whole repo"). Optional intent hint (audit / refactor / explore / regression-test).
+3. System:
+   - **Phase 1 — Codebase grounding.** Reads linked codebase context (cached explore synthesis + curated retrieval against the topic embedding). Builds a `ProbeContext` object with relevant file references, dominant tech stack, project name.
+   - **Phase 2 — Agentic prompt generation.** LLM (Sonnet, configurable) generates `N` prompts (default 12, configurable 5–25) anchored in real code identifiers from `ProbeContext`. Prompts are diverse along an explore/audit/refactor axis to populate multiple intent labels — not all `Audit X` or all `Refactor Y`.
+   - **Phase 3 — Pipeline run.** Each prompt flows through the standard analyze → optimize → score pipeline using the existing `batch_pipeline.run_single_prompt` primitive. Configurable concurrency (3–10 default; sequential when sampling tier requires it).
+   - **Phase 4 — Live observability.** Per-prompt SSE events stream `probe_progress` (current/total, optimization_id, intent_label, current overall_score). Taxonomy events (`domain_created`, `sub_domain_created`, `cluster_split`) are correlated with the probe via `probe_id` so the user sees their topic literally growing the taxonomy in real time.
+   - **Phase 5 — Final report.** Structured summary: prompts generated (with the top 3 reproduced), score distribution (mean/p5/p95), patterns extracted, taxonomy changes (new domains/sub-domains/clusters with their cluster_ids), recommended follow-ups (e.g., "you have 2 prompts in the new `data:numpy-memory-layout` sub-domain; 3 more would cross the maturity threshold").
 
-1. **Hot-reloaded suites** — `prompts/validation-suites/*.md` with YAML frontmatter (name, description, tags, baseline_run_id) + prompts in markdown body + assertions block. Mirror seed agent loader pattern.
+**Examples (concrete usage):**
 
-2. **`ValidationRun` model + service** — captures pre/post snapshots, runs prompts sequentially (preserves the existing 35s warm-path debounce semantic), aggregates per-prompt scores, persists raw + summary, computes delta vs baseline. New `routers/validation.py`: `POST /api/validation/runs` (SSE), `GET /api/validation/runs`, `GET /api/validation/runs/{id}`, `GET /api/validation/runs/{id}/diff/{baseline_id}`.
+| Topic | Generates | Likely taxonomy outcome |
+|---|---|---|
+| "NumPy advanced indexing performance" | 12 prompts citing `np.take`, `np.choose`, `np.where`, `arr[mask]` patterns from the user's code | New `data:numpy-indexing` sub-domain |
+| "Embedding cache invalidation in EmbeddingIndex" | 10 prompts citing `_id_to_label`, `tombstones`, `_recompute_centroid` | New cluster under `backend:embeddings` |
+| "GitHub OAuth token rotation" | 8 prompts citing `github_service.encrypt_token`, `_get_session_token`, `refresh_token` flow | Cluster lift in `backend:auth` |
+| "Frontend brand-grammar drift" | 15 prompts citing `.rsd-stat-val`, `taxonomyColor`, `cubic-bezier` rules | Cluster growth in `frontend:brand-compliance` |
 
-3. **`synthesis_validate` MCP tool** — args: `suite_name`, `baseline_run_id` (optional). Returns structured `ValidationRunResult` with per-prompt scores, aggregate mean, delta vs baseline, flagged divergences (e.g., F5 fires on a prompt that didn't fire in baseline).
+**Cross-tier composition (this is the unifying view):**
 
-4. **Assertion DSL** — YAML frontmatter or per-prompt YAML blocks define assertions: `min_score`, `must_have_flags`, `must_not_have_flags`, run-level (`mean >= 7.7`, `p5 >= 6.5`). Pass/fail status persists on each run.
+The Topic Probe is the meta-prompting front door. **Validation/regression detection becomes a downstream save-as-suite capability**, not the primary feature. Two follow-ups crystallize from the same primitive:
 
-5. **Killer feature — automatic regression detection.** `/api/health` gains `validation` block reporting last-run-per-suite mean + delta vs registered baseline. StatusBar surfaces a red badge if any suite drops ≥0.5 from baseline. Optional `release.sh` hook runs registered validation suites against the dev branch before tagging — fail = block release. Catches what cycle-23 nearly missed.
+- **Save Probe → Validation Suite.** A successful probe run can be saved as a `ValidationSuite` — the generated prompts become a frozen fixture, optionally with assertions captured from the run's actual scores (e.g., "mean was 7.85, regression threshold = 7.35"). Re-running the suite later detects scoring drift against the same code. This is what closes the cycle-23/cycle-19→22 regression-detection gap, but as a *use case* of probes, not a separate feature.
 
-6. **UI integration** — new Navigator section `VALIDATION SUITES` (peer to STRATEGIES, HISTORY, CLUSTERS). Click suite → run dialog with baseline picker → live SSE progress → run-detail view with per-prompt score-delta heatmap vs baseline. Run history with score-trajectory sparkline per suite.
+- **Probe → Routine.** Save a probe topic to be re-run on a schedule (`/schedule` integration) — e.g., "every Monday, probe the auth middleware and report any score regressions on the auth-class clusters". Pairs with the existing release.sh CI integration: register critical probe topics as pre-release gates.
+
+**Core capabilities (architecture):**
+
+1. **`ProbeService`** — orchestrates the 5 phases. Owns the codebase-grounding step (cached, reuses `RepoIndexQuery`), the agentic generation step (delegates to a new `prompts/probe-agent.md` system prompt with `topic`/`scope`/`codebase_context` template variables), and the pipeline run step (delegates to `batch_pipeline`). Emits SSE events, persists `ProbeRun` row, produces final structured report.
+
+2. **`ProbeRun` model** — `id`, `topic`, `scope`, `intent_hint`, `repo_full_name`, `commit_sha`, `started_at`, `completed_at`, `prompts_generated` (count), `prompt_results` (JSON: per-prompt optimization_id + score + intent_label + emerged_cluster_id), `taxonomy_delta` (JSON: domains_created, sub_domains_created, clusters_split), `final_report` (markdown), `status` (`grounding|generating|running|reporting|completed|failed`).
+
+3. **REST surface** — `POST /api/probes` (SSE), `GET /api/probes`, `GET /api/probes/{id}`, `POST /api/probes/{id}/save-as-suite` (forks to ValidationSuite), `POST /api/probes/{id}/replay`.
+
+4. **MCP tool `synthesis_probe`** — args: `topic`, `scope?`, `intent_hint?`, `n_prompts?`. Returns structured `ProbeRunResult` with the final report. Streams progress via MCP server-sampling SSE bridge.
+
+5. **UI integration** — new SeedModal tab "Topic Probe" alongside existing seed agents. Topic input + scope selector (file picker on linked repo) + N slider + intent hint dropdown + Run button. During run: per-prompt progress strip + live taxonomy mini-view showing domain/sub-domain emergence. After run: final report card with copy-as-markdown + "Save as Validation Suite" + "Replay later" actions.
+
+6. **Observability** — every probe emits these taxonomy events with `probe_id` correlation: `probe_started`, `probe_grounding`, `probe_generating` (with the agentic LLM prompt + N), `probe_prompt_completed` (per prompt), `probe_taxonomy_change`, `probe_completed`, `probe_failed`. All flow through the existing `taxonomy_activity` SSE so the Observatory's Activity panel becomes the audit trail.
 
 **Architecture (concrete):**
 
 ```
-prompts/validation-suites/*.md     → ValidationSuite (hot-reloaded markdown)
+prompts/
+  probe-agent.md                     → System prompt for agentic generation
+                                       (template vars: topic, scope, codebase_context,
+                                        repo_full_name, intent_hint, n_prompts)
+
 backend/app/services/
-  validation_service.py            → ValidationRun lifecycle (snapshot → batch → assert → diff)
-backend/app/routers/validation.py  → REST surface
+  probe_service.py                   → ProbeRun lifecycle (5 phases, SSE emission)
+  probe_generation.py                → Agentic prompt-from-topic primitive
+                                       (consumes RepoIndexQuery + Sonnet generation)
+
+backend/app/routers/probes.py        → REST surface
+
 backend/app/models.py
-  ValidationRun                    → id, suite_name, commit_sha, started_at, completed_at,
-                                      pre_snapshot, post_snapshot, prompt_results JSON,
-                                      aggregate JSON, assertions_status JSON,
-                                      baseline_run_id FK, delta_vs_baseline JSON,
-                                      status (running|passed|failed|partial)
-synthesis_validate                 → MCP tool (extends existing 14 → 15 tools)
+  ProbeRun                           → id, topic, scope, intent_hint, repo_full_name,
+                                        commit_sha, started_at, completed_at,
+                                        prompts_generated, prompt_results JSON,
+                                        taxonomy_delta JSON, final_report TEXT,
+                                        status, suite_id (FK to ValidationSuite, NULL until
+                                        saved-as-suite)
+
+synthesis_probe                      → MCP tool (extends existing 14 → 15 tools)
 ```
 
-**Cross-pollination opportunities:**
-- Successful validation prompts (≥8.0 across 3 consecutive runs) graduate to seed material as "proven prompt" labels feeding seed-agent few-shot context.
-- Failed validation prompts surface as candidates for the next audit deep-dive.
-- Validation runs feed strategy intelligence — `resolve_strategy_intelligence()` can downweight strategies that consistently underperform.
+**Cross-pollination with seed tier:** A topic probe IS a runtime-defined seed agent. The execution layer (`batch_pipeline.run_single_prompt`) is shared. The difference is the prompt source: pre-defined (seed agents) vs runtime-generated-from-topic-and-codebase (probes). Long-term, the pre-defined seed agents become discoverable "saved probes" — a marketing seed agent is a saved probe with topic="marketing copy techniques" pinned to the marketing domain.
 
 **Minimum viable bite (ship-first):**
-1. `prompts/validation-suites/audit-class-regression.md` (move cycle 19-22 prompts here)
-2. `validation_service.py` + `ValidationRun` model + Alembic migration
-3. `routers/validation.py` (POST /run, GET /runs, GET /runs/{id})
-4. `synthesis_validate` MCP tool
-5. CLI shim — `scripts/validate_taxonomy_emergence.py` becomes a thin wrapper that calls `POST /api/validation/runs`
 
-**Defer to follow-up tier:** UI navigator panel, baseline-diff view, regression alarm in health endpoint, CI hook in `release.sh`, prompt-graduation cross-pollination.
+1. `prompts/probe-agent.md` — system prompt for the agentic generator
+2. `probe_service.py` + `ProbeRun` model + Alembic migration
+3. `routers/probes.py` (POST /probes SSE, GET /probes, GET /probes/{id})
+4. `synthesis_probe` MCP tool
+5. SSE event taxonomy with `probe_*` event types
+6. CLI shim — `scripts/validate_taxonomy_emergence.py::PROMPT_SETS` becomes "saved probe presets" callable via `python -m scripts.probe <topic>` for backward compat
 
-**Prerequisite:** none (uses existing `batch_pipeline.run_single_prompt` primitive). **Estimated scope:** ~600 LOC backend + new router + new model + 1 MCP tool. **Spec target:** `docs/specs/validation-tier-2026-04-28.md` (TBD).
+**Defer to follow-up tier (Tier 2+):**
+- UI SeedModal "Topic Probe" tab + live taxonomy mini-view + final report card
+- Save-as-Validation-Suite (regression-detection fork)
+- /api/health validation block + StatusBar regression badge
+- release.sh CI hook
+- /schedule integration for routine probes
+- Cross-tier promotion: probe → seed agent
+
+**Prerequisites:** GitHub integration linked (probes need a repo to ground against; non-linked sessions get a "link a repo first" prompt). **Estimated scope (Tier 1):** ~800 LOC backend + new router + new model + 1 MCP tool + 1 system prompt template. **Spec target:** `docs/specs/topic-probe-2026-04-28.md` (TBD).
 
 ---
 
