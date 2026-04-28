@@ -726,3 +726,108 @@ class TestRebuildSubDomainsEndpoint:
             "Pre-existing sub-domain must NOT be re-created. "
             f"Got created: {body['created']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# v0.4.11 P1: dissolve-empty operator endpoint (router tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _reset_rate_limit_storage_dissolve():
+    """Reset the rate-limit moving window before/after each dissolve test.
+
+    The storage is a process-level singleton. The rate-limit AC asserts the
+    11th call returns 429 within a 60s window — leaking quota from the
+    other dissolve tests would either trip the limiter early (false fail)
+    or pre-consume the budget (false pass when the assertion order is
+    flipped).
+    """
+    from app.dependencies.rate_limit import reset_rate_limit_storage
+    reset_rate_limit_storage()
+    yield
+    reset_rate_limit_storage()
+
+
+class TestDissolveEmptyEndpoint:
+    """v0.4.11 P1 router contract for
+    ``POST /api/domains/{id}/dissolve-empty``.
+
+    Status mapping (mirrors ``promote_to_domain`` / ``rebuild-sub-domains``):
+        200 + ``dissolved=True`` on success
+        200 + ``dissolved=False, reason='already_dissolved'``
+        404 ``Domain not found`` if the id doesn't exist
+        409 + ``not_empty`` / ``too_young`` for blocked recoveries
+        429 if the 10/min IP rate limit fires
+
+    Acceptance criteria covered here: AC-P1-4 (404), AC-P1-6 (429).
+    AC-P1-1/2/3/5 are covered by the engine-method tests in
+    ``backend/tests/taxonomy/test_dissolve_empty_domain.py``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dissolve_not_found(
+        self,
+        app_client,
+        db_session,
+        _reset_rate_limit_storage_dissolve,
+    ):
+        """AC-P1-4: nonexistent domain id → 404 with the canonical
+        ``Domain not found`` envelope.
+
+        The detail-string substring distinguishes an absent route
+        (FastAPI default ``Not Found`` body) from the live router's
+        ``Domain not found`` envelope, mirroring the rebuild surface.
+        """
+        resp = await app_client.post(
+            "/api/domains/non-existent-uuid/dissolve-empty",
+        )
+        assert resp.status_code == 404, (
+            f"Expected 404 for unknown domain id. Got: {resp.status_code} "
+            f"body={resp.text}"
+        )
+        body = resp.json()
+        detail = (body.get("detail") or "").lower()
+        assert "domain not found" in detail, (
+            "Router 404 must surface a 'Domain not found' detail. "
+            f"Got body: {body!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dissolve_rate_limit(
+        self,
+        app_client,
+        db_session,
+        _reset_rate_limit_storage_dissolve,
+    ):
+        """AC-P1-6: the endpoint is gated at 10/min per IP, so the 11th
+        call within the moving window must return 429.
+
+        We use a guaranteed-404 path (unknown id) so the rate-limit
+        dependency runs before the route handler returns its envelope.
+        That keeps the test focused on the rate-limit contract
+        regardless of any DB state — the 429 must override any other
+        status the handler would have produced.
+        """
+        path = (
+            "/api/domains/00000000-0000-0000-0000-000000000000/"
+            "dissolve-empty"
+        )
+
+        # First 10 calls succeed (per the 10/minute config). They will
+        # come back as 404 because the id doesn't exist, but we only
+        # care that none of them are 429 — the rate limit is supposed
+        # to permit ten calls per IP per minute.
+        for i in range(10):
+            resp = await app_client.post(path)
+            assert resp.status_code != 429, (
+                f"Call #{i + 1} of 10 must NOT be rate-limited. "
+                f"Got status={resp.status_code} body={resp.text}"
+            )
+
+        # The 11th call within the window must hit the 429.
+        resp = await app_client.post(path)
+        assert resp.status_code == 429, (
+            f"Expected 429 on the 11th call. Got status={resp.status_code} "
+            f"body={resp.text}"
+        )

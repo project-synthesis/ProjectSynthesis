@@ -215,6 +215,34 @@ DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR: float = 0.15   # well below 60% creation t
 DOMAIN_DISSOLUTION_MIN_AGE_HOURS: int = 48            # domains earn permanence through time
 DOMAIN_DISSOLUTION_MEMBER_CEILING: int = 5             # large domains don't dissolve on consistency alone
 
+# v0.4.11 P0a — Domain proposal cluster-count floor.
+# A single cluster's signal is insufficient to promote a top-level
+# domain. Both the per-cluster and pooled passes in
+# `engine._propose_domains()` enforce this floor so a single
+# coherent cluster cannot create a "ghost domain" that subsequently
+# loses its sole member to a cross-domain merge (e.g., the live
+# `fullstack` ghost from the v2 cycle-19→22 replay).
+DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS: int = 2
+
+# Module-level invariant — fail-fast on configuration drift.
+assert DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS >= 1, (
+    f"DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS must be >= 1, "
+    f"got {DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS}"
+)
+
+# v0.4.11 P1 — Ghost-domain operator dissolution.
+# Bypass the 48h DOMAIN_DISSOLUTION_MIN_AGE_HOURS gate when an
+# operator-triggered dissolve-empty call lands. Min 30 minutes
+# prevents instantaneous dissolution of just-promoted domains during
+# organic emergence (e.g., the warm path JUST created a domain and
+# this cycle's prompt batch hasn't reached it yet).
+DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES: int = 30
+
+assert DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES >= 0, (
+    f"DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES must be >= 0, "
+    f"got {DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES}"
+)
+
 
 # ---------------------------------------------------------------------------
 # Maintenance phase cadence

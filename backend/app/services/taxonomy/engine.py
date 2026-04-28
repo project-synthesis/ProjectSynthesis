@@ -1606,6 +1606,9 @@ class TaxonomyEngine:
             DOMAIN_DISCOVERY_MIN_MEMBERS,
             DOMAIN_DISCOVERY_POOL_MIN_MEMBERS,
         )
+        from app.services.taxonomy._constants import (
+            DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS,
+        )
         # --- Step a: Check domain ceiling ---
         ceiling_q = await db.execute(
             select(func.count()).select_from(PromptCluster).where(
@@ -1682,6 +1685,15 @@ class TaxonomyEngine:
 
         created: list[str] = []
 
+        # v0.4.11 P0a — aggregate primaries across all qualifying clusters
+        # BEFORE promotion so we can enforce the cluster-count floor.
+        # Each entry in primary_to_clusters[primary] is a tuple of
+        # (candidate, top_count, total) where the per-cluster consistency
+        # gate has already passed.
+        primary_to_clusters: dict[
+            str, list[tuple[PromptCluster, int, int]]
+        ] = {}
+
         for candidate in candidates:
             try:
                 # Query domain_raw from linked optimizations
@@ -1716,17 +1728,76 @@ class TaxonomyEngine:
                 if top_primary in existing_domains:
                     continue
 
-                # Check ceiling again (may have created domains in this loop)
+                primary_to_clusters.setdefault(top_primary, []).append(
+                    (candidate, top_count, total),
+                )
+            except Exception:
+                logger.error(
+                    "Domain discovery failed for cluster %s — skipping",
+                    candidate.id, exc_info=True,
+                )
+                continue
+
+        # v0.4.11 P0a — emit rejection events for primaries that fail
+        # the cluster-count floor (forensic visibility before we filter).
+        for _primary, _entries in primary_to_clusters.items():
+            if len(_entries) < DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm", op="discover",
+                        decision="proposal_rejected_min_source_clusters",
+                        context={
+                            "domain_label": _primary,
+                            "source_cluster_count": len(_entries),
+                            "required_min": DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS,
+                            "source": "per_cluster_pass",
+                        },
+                    )
+                except RuntimeError:
+                    pass
+
+        # Filter to only primaries with enough distinct contributing clusters.
+        eligible_primaries = {
+            primary: entries
+            for primary, entries in primary_to_clusters.items()
+            if len(entries) >= DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS
+        }
+
+        for top_primary, entries in eligible_primaries.items():
+            try:
+                # Re-check ceiling (may have created domains in this loop)
                 if (domain_count + len(created)) >= DOMAIN_COUNT_CEILING:
                     break
 
+                # Skip if domain already exists (another iteration may have
+                # created it; defensive — eligible_primaries was filtered
+                # against existing_domains during aggregation).
+                if top_primary in existing_domains:
+                    continue
+
+                # Use the largest-member-count cluster as the seed (parallel
+                # to the pooled pass), with deterministic tiebreak by id.
+                seed_candidate, seed_top_count, seed_total = max(
+                    entries,
+                    key=lambda e: (e[0].member_count or 0, e[0].id),
+                )
+
                 # Create the domain node
                 _domain_node, _members_reparented = await self._create_domain_node(
-                    db, top_primary, existing_domains, candidate,
+                    db, top_primary, existing_domains, seed_candidate,
                     general_node_id=general_node.id,
                 )
                 created.append(top_primary)
                 existing_domains.add(top_primary)
+
+                # Re-parent every other contributing cluster to the new
+                # domain so its evidence isn't stranded under "general".
+                for c, _tc, _tt in entries:
+                    if c.id == seed_candidate.id:
+                        continue
+                    c.parent_id = _domain_node.id
+                    c.domain = top_primary
+
                 try:
                     _total_domains_q = await db.execute(
                         select(func.count()).where(PromptCluster.state == "domain")
@@ -1740,9 +1811,12 @@ class TaxonomyEngine:
                         cluster_id=_domain_node.id,
                         context={
                             "domain_label": top_primary,
-                            "seed_cluster_id": candidate.id,
-                            "consistency_pct": round(top_count / total, 4),
+                            "seed_cluster_id": seed_candidate.id,
+                            "consistency_pct": round(
+                                seed_top_count / seed_total, 4,
+                            ),
                             "members_reparented": _members_reparented,
+                            "source_cluster_count": len(entries),
                             "total_domains_after": _total_domains_after,
                         },
                     )
@@ -1750,8 +1824,8 @@ class TaxonomyEngine:
                     pass
             except Exception:
                 logger.error(
-                    "Domain discovery failed for cluster %s — skipping",
-                    candidate.id, exc_info=True,
+                    "Domain discovery promotion failed for primary %s — skipping",
+                    top_primary, exc_info=True,
                 )
                 continue
 
@@ -1823,6 +1897,26 @@ class TaxonomyEngine:
                 if label in created:
                     continue
                 if label in existing_domains:
+                    continue
+                # v0.4.11 P0a — pooled cluster-count floor.  A single
+                # cluster's pooled signal cannot promote even when the
+                # member count is high; the proposal needs cross-cluster
+                # corroboration to avoid the fullstack-ghost pathology.
+                if len(bucket["clusters"]) < DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS:
+                    try:
+                        get_event_logger().log_decision(
+                            path="warm", op="discover",
+                            decision="proposal_rejected_min_source_clusters",
+                            context={
+                                "domain_label": label,
+                                "source_cluster_count": len(bucket["clusters"]),
+                                "required_min": DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS,
+                                "pooled_members": bucket["members"],
+                                "source": "pooled_pass",
+                            },
+                        )
+                    except RuntimeError:
+                        pass
                     continue
                 if bucket["members"] < effective_pool_min_members:
                     continue
@@ -3024,6 +3118,172 @@ class TaxonomyEngine:
             "created": list(created),
             "skipped_existing": list(skipped_existing),
             "dry_run": dry_run,
+        }
+
+    async def dissolve_empty_domain(
+        self,
+        db: AsyncSession,
+        domain_id: str,
+    ) -> dict:
+        """v0.4.11 P1: operator escape hatch — force-dissolve a ghost domain.
+
+        Bypasses the standard 48h ``DOMAIN_DISSOLUTION_MIN_AGE_HOURS`` gate
+        but enforces ``DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES`` (default
+        30 min) so an operator can't instantly dissolve a domain the warm
+        path just created during organic emergence.
+
+        Idempotent: returns ``dissolved=False`` (with ``reason`` populated)
+        when the target is already dissolved, has members, or is younger
+        than the floor. Never raises for these conditions — the router
+        converts ``reason`` codes into HTTP status as needed.
+
+        Mirrors the v0.4.8 R6 ``rebuild_sub_domains`` operator pattern:
+        single transaction, ``_dissolve_node`` as the existing primitive,
+        ``domain_ghost_dissolved`` decision event + ``taxonomy_changed``
+        SSE event on success only. Wrapped event-bus publish (existing
+        pattern); raises ``ValueError`` only if the id is not found.
+
+        Args:
+            db: Async SQLAlchemy session.
+            domain_id: PromptCluster.id of the domain to dissolve.
+
+        Returns:
+            dict with keys: dissolved, domain_id, domain_label, reason,
+            age_hours.
+
+        Raises:
+            ValueError: domain_id not found.
+        """
+        from app.services.event_bus import event_bus
+        from app.services.taxonomy._constants import (
+            DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES,
+        )
+
+        # 1. Look up the domain. Missing rows raise ValueError so the
+        # router can map to 404 (mirrors rebuild_sub_domains).
+        domain = await db.get(PromptCluster, domain_id)
+        if domain is None:
+            raise ValueError(f"domain not found: {domain_id}")
+
+        # 2. Idempotent: already-dissolved targets return without raising.
+        # The archived state is the post-dissolution sentinel _dissolve_node
+        # transitions nodes into.
+        if domain.state != "domain":
+            # Compute age for the response envelope even on the archived
+            # path so operators can still see when the original
+            # dissolution happened.
+            age_hours = 0.0
+            if domain.created_at is not None:
+                created = domain.created_at
+                if created.tzinfo is not None:
+                    created = created.replace(tzinfo=None)
+                age_hours = (_utcnow() - created).total_seconds() / 3600.0
+            return {
+                "dissolved": False,
+                "domain_id": domain_id,
+                "domain_label": None,
+                "reason": "already_dissolved",
+                "age_hours": round(age_hours, 4),
+            }
+
+        # 3. Compute current age for both the response envelope and the
+        # min-age floor check.
+        now = _utcnow()
+        age_hours = 0.0
+        if domain.created_at is not None:
+            created = domain.created_at
+            if created.tzinfo is not None:
+                created = created.replace(tzinfo=None)
+            age_hours = (now - created).total_seconds() / 3600.0
+
+        domain_label_str = domain.label
+
+        # 4. Empty check — only ghost domains qualify for this hatch.
+        if domain.member_count and domain.member_count > 0:
+            return {
+                "dissolved": False,
+                "domain_id": domain_id,
+                "domain_label": domain_label_str,
+                "reason": "not_empty",
+                "age_hours": round(age_hours, 4),
+            }
+
+        # 5. Min-age floor — prevents instant dissolution of just-promoted
+        # domains during organic emergence.
+        min_age_hours = DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES / 60.0
+        if age_hours < min_age_hours:
+            return {
+                "dissolved": False,
+                "domain_id": domain_id,
+                "domain_label": domain_label_str,
+                "reason": "too_young",
+                "age_hours": round(age_hours, 4),
+            }
+
+        # 6. Resolve the dissolution target — empty ghost domains have no
+        # children to reparent in practice, but the existing
+        # _dissolve_node primitive defensively reparents any straggler
+        # rows so the ``general`` canonical node is the right target.
+        from app.services.taxonomy.family_ops import get_canonical_general
+
+        general_node = await get_canonical_general(db)
+        if general_node is None:
+            # Without a canonical general node we have nowhere to reparent
+            # any potential stragglers safely. Treat as a transient
+            # condition (matches _reevaluate_domains' early-return
+            # behaviour) and report failure without raising.
+            return {
+                "dissolved": False,
+                "domain_id": domain_id,
+                "domain_label": domain_label_str,
+                "reason": "no_general_node",
+                "age_hours": round(age_hours, 4),
+            }
+
+        # 7. Perform the dissolution via the existing shared primitive.
+        # ``_dissolve_node`` already handles index cleanup, resolver/loader
+        # cache invalidation, member_count zeroing, and label release.
+        existing_labels: set[str] = {domain.label.lower()}
+        await self._dissolve_node(
+            db, domain,
+            dissolution_target_id=general_node.id,
+            existing_labels=existing_labels,
+            clear_signal_loader=True,
+        )
+
+        # 8. Telemetry — mirrors the rebuild surface's wrapped pattern.
+        try:
+            get_event_logger().log_decision(
+                path="warm",
+                op="discover",
+                decision="domain_ghost_dissolved",
+                cluster_id=domain_id,
+                context={
+                    "domain_label": domain_label_str,
+                    "age_hours": round(age_hours, 4),
+                    "dissolution_path": "operator_ghost_dissolve",
+                },
+            )
+        except RuntimeError:
+            pass
+
+        # 9. Cross-process notification so other engine instances refresh.
+        try:
+            event_bus.publish("taxonomy_changed", {
+                "source": "dissolve_empty_domain",
+                "domain": domain_label_str,
+                "domain_id": domain_id,
+            })
+        except Exception:
+            # Event bus failure must not undo a successful dissolution.
+            pass
+
+        return {
+            "dissolved": True,
+            "domain_id": domain_id,
+            "domain_label": domain_label_str,
+            "reason": None,
+            "age_hours": round(age_hours, 4),
         }
 
     async def _dissolve_node(
