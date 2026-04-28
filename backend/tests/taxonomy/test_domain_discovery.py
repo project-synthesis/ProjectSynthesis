@@ -22,26 +22,27 @@ async def _seed_general_domain(db):
 
 @pytest.mark.asyncio
 async def test_propose_domains_creates_domain_node(db, mock_embedding):
-    """When a cluster under 'general' has consistent domain_raw, a new domain is created."""
+    """When clusters under 'general' have consistent domain_raw, a new domain is created."""
     general = await _seed_general_domain(db)
 
-    # Create a cluster under general with enough members and coherence
-    cluster = PromptCluster(
-        label="marketing-emails", state="active", domain="general",
-        parent_id=general.id, member_count=8, coherence=0.75,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
-    )
-    db.add(cluster)
-    await db.flush()
-
-    # Create optimizations with consistent domain_raw
-    for i in range(8):
-        db.add(Optimization(
-            raw_prompt=f"marketing prompt {i}",
-            domain="general", domain_raw="marketing: email",
-            cluster_id=cluster.id,
-            status="completed",
-        ))
+    # v0.4.11 P0a: cluster-count floor requires ≥2 contributing clusters.
+    # Spread the 8 members across 2 clusters so the proposal has the
+    # required cross-cluster corroboration.
+    for ci in range(2):
+        cluster = PromptCluster(
+            label=f"marketing-emails-{ci}", state="active", domain="general",
+            parent_id=general.id, member_count=4, coherence=0.75,
+            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        )
+        db.add(cluster)
+        await db.flush()
+        for i in range(4):
+            db.add(Optimization(
+                raw_prompt=f"marketing cluster{ci} prompt {i}",
+                domain="general", domain_raw="marketing: email",
+                cluster_id=cluster.id,
+                status="completed",
+            ))
     await db.commit()
 
     engine = TaxonomyEngine(
@@ -159,20 +160,22 @@ async def test_re_promoted_seed_label_reclaims_brand_color(db, mock_embedding):
     """
     general = await _seed_general_domain(db)
 
-    # Cluster under 'general' with 8 members all consistently tagged 'backend'
-    cluster = PromptCluster(
-        label="api-middleware", state="active", domain="general",
-        parent_id=general.id, member_count=8, coherence=0.75,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
-    )
-    db.add(cluster)
-    await db.flush()
-    for i in range(8):
-        db.add(Optimization(
-            raw_prompt=f"build api endpoint {i}",
-            domain="general", domain_raw="backend",
-            cluster_id=cluster.id, status="completed",
-        ))
+    # v0.4.11 P0a: spread 8 'backend' members across 2 contributing
+    # clusters so the cluster-count floor is satisfied.
+    for ci in range(2):
+        cluster = PromptCluster(
+            label=f"api-middleware-{ci}", state="active", domain="general",
+            parent_id=general.id, member_count=4, coherence=0.75,
+            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        )
+        db.add(cluster)
+        await db.flush()
+        for i in range(4):
+            db.add(Optimization(
+                raw_prompt=f"build api endpoint cluster{ci} {i}",
+                domain="general", domain_raw="backend",
+                cluster_id=cluster.id, status="completed",
+            ))
     await db.commit()
 
     engine = TaxonomyEngine(
@@ -202,19 +205,22 @@ async def test_novel_domain_still_uses_max_distance(db, mock_embedding):
     """
     general = await _seed_general_domain(db)
 
-    cluster = PromptCluster(
-        label="campaign-copy", state="active", domain="general",
-        parent_id=general.id, member_count=8, coherence=0.75,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
-    )
-    db.add(cluster)
-    await db.flush()
-    for i in range(8):
-        db.add(Optimization(
-            raw_prompt=f"write launch email {i}",
-            domain="general", domain_raw="marketing",
-            cluster_id=cluster.id, status="completed",
-        ))
+    # v0.4.11 P0a: spread 8 'marketing' members across 2 contributing
+    # clusters so the cluster-count floor is satisfied.
+    for ci in range(2):
+        cluster = PromptCluster(
+            label=f"campaign-copy-{ci}", state="active", domain="general",
+            parent_id=general.id, member_count=4, coherence=0.75,
+            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        )
+        db.add(cluster)
+        await db.flush()
+        for i in range(4):
+            db.add(Optimization(
+                raw_prompt=f"write launch email cluster{ci} {i}",
+                domain="general", domain_raw="marketing",
+                cluster_id=cluster.id, status="completed",
+            ))
     await db.commit()
 
     engine = TaxonomyEngine(
@@ -429,23 +435,27 @@ async def test_pooled_does_not_duplicate_per_cluster_pass(db, mock_embedding):
 async def test_bootstrap_threshold_relaxes_when_db_sparse(db, mock_embedding):
     """Change B: total_opts<20 → per-cluster floor relaxes 3→2.
 
-    A single 2-member backend cluster on a sparse DB crosses the relaxed
-    per-cluster member gate and promotes via the per-cluster pass.
+    Two 2-member backend clusters on a sparse DB cross the relaxed
+    per-cluster member gate (Change B) and satisfy the v0.4.11 P0a
+    cluster-count floor (≥2 contributing clusters), so the per-cluster
+    pass promotes 'backend'.
     """
     general = await _seed_general_domain(db)
 
-    cluster = PromptCluster(
-        label="small-but-consistent", state="active", domain="general",
-        parent_id=general.id, member_count=2, coherence=0.7,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
-    )
-    db.add(cluster)
-    await db.flush()
-    for i in range(2):
-        db.add(Optimization(
-            raw_prompt=f"backend prompt {i}", domain="general",
-            domain_raw="backend", cluster_id=cluster.id, status="completed",
-        ))
+    # v0.4.11 P0a: cluster-count floor — use 2 contributing clusters.
+    for ci in range(2):
+        cluster = PromptCluster(
+            label=f"small-but-consistent-{ci}", state="active", domain="general",
+            parent_id=general.id, member_count=2, coherence=0.7,
+            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        )
+        db.add(cluster)
+        await db.flush()
+        for i in range(2):
+            db.add(Optimization(
+                raw_prompt=f"backend cluster{ci} prompt {i}", domain="general",
+                domain_raw="backend", cluster_id=cluster.id, status="completed",
+            ))
     await db.commit()
 
     engine = TaxonomyEngine(

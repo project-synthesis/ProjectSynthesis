@@ -18,6 +18,7 @@ from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.models import Optimization, PromptCluster
 from app.schemas.domains import (
+    DissolveEmptyResult,
     DomainInfo,
     RebuildSubDomainsRequest,
     RebuildSubDomainsResult,
@@ -402,3 +403,58 @@ async def rebuild_sub_domains(
             raise HTTPException(503, "Database busy — retry in a moment") from exc
 
     return RebuildSubDomainsResult(**result)
+
+
+@router.post(
+    "/{domain_id}/dissolve-empty",
+    response_model=DissolveEmptyResult,
+    dependencies=[Depends(RateLimit(lambda: "10/minute"))],
+)
+async def dissolve_empty_domain(
+    domain_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> DissolveEmptyResult:
+    """v0.4.11 P1 operator escape hatch — force-dissolve an empty (ghost)
+    domain, bypassing the standard 48h dissolution age gate.
+
+    Status mapping (mirrors ``promote_to_domain``):
+        200 + ``dissolved=True`` on success
+        200 + ``dissolved=False, reason='already_dissolved'`` on idempotent
+              re-call (target node is no longer a domain)
+        404 ``Domain not found`` if ``domain_id`` doesn't exist
+        409 ``not_empty`` if ``member_count > 0``
+        409 ``too_young`` if age < ``DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES``
+        429 if rate limit exceeded (10/min per IP)
+        503 on transient DB ``OperationalError``
+    """
+    from app.services.taxonomy import get_engine
+    engine = get_engine()
+    try:
+        result = await engine.dissolve_empty_domain(db, domain_id)
+    except ValueError as exc:
+        msg_lower = str(exc).lower()
+        if "not found" in msg_lower:
+            raise HTTPException(404, "Domain not found") from exc
+        raise HTTPException(422, str(exc)) from exc
+    except OperationalError as exc:
+        await db.rollback()
+        logger.warning("dissolve_empty_domain DB contention: %s", exc)
+        raise HTTPException(503, "Database busy — retry in a moment") from exc
+
+    # Map operator-actionable failure reasons to 409 so curl users get
+    # canonical REST semantics. The pure engine method always returns the
+    # full envelope so service-layer callers can branch on `reason`
+    # without exception handling.
+    reason = result.get("reason")
+    if reason in ("not_empty", "too_young"):
+        raise HTTPException(409, reason)
+
+    if result.get("dissolved"):
+        try:
+            await db.commit()
+        except OperationalError as exc:
+            await db.rollback()
+            logger.warning("dissolve_empty_domain commit failed: %s", exc)
+            raise HTTPException(503, "Database busy — retry in a moment") from exc
+
+    return DissolveEmptyResult(**result)

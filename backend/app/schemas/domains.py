@@ -58,3 +58,38 @@ class RebuildSubDomainsResult(BaseModel):
     created: list[str]
     skipped_existing: list[str]
     dry_run: bool
+
+
+class DissolveEmptyResult(BaseModel):
+    """v0.4.11 P1: response model for POST /api/domains/{id}/dissolve-empty.
+
+    Mirrors the operator-friendly envelope used by the rebuild surface
+    (always-200 + ``dissolved`` flag + reason on failure). The router
+    converts ``reason`` codes ``not_empty`` and ``too_young`` to 409
+    HTTPExceptions so curl operators see canonical REST semantics; the
+    pure engine method always returns this dataclass-style object.
+    """
+
+    dissolved: bool = Field(
+        description="True if dissolution actually occurred this call.",
+    )
+    domain_id: str = Field(
+        description="The domain id that was targeted.",
+    )
+    domain_label: str | None = Field(
+        default=None,
+        description=(
+            "The domain's label at time of dissolution "
+            "(None if already dissolved)."
+        ),
+    )
+    reason: str | None = Field(
+        default=None,
+        description=(
+            "Reason if dissolved=False: 'already_dissolved' | 'not_empty' | "
+            "'too_young' | None on success."
+        ),
+    )
+    age_hours: float = Field(
+        description="Domain age in hours at time of call.",
+    )
