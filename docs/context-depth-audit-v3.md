@@ -88,9 +88,11 @@ optimize_inject: trace_id=173b5912...
 | `INDEX_CURATED_MAX_PER_DIR` | 3 | Diversity cap per directory |
 | `INDEX_DOMAIN_BOOST` | 1.3 | Score multiplier for same-domain files |
 | `MAX_CODEBASE_CONTEXT_CHARS` | 100000 | Combined explore + curated cap |
-| `SCORING_FORMULA_VERSION` | 3 | Dimension weight version |
+| `SCORING_FORMULA_VERSION` | 3 | Dimension weight version *(historical — v0.4.9 bumped to 4 for per-task-type weights)* |
 
-## Dimension Weights (v3)
+## Dimension Weights (v3 — historical; superseded by v4 in v0.4.9)
+
+> v0.4.9 (2026-04-28) introduced per-task-type weights via `get_dimension_weights(task_type)`. Default schema below remains for non-analysis task types. Analysis-class prompts use `ANALYSIS_DIMENSION_WEIGHTS`: clarity 0.25, specificity 0.25, structure 0.20, faithfulness 0.20, conciseness 0.10.
 
 | Dimension | Weight | Rationale |
 |-----------|--------|-----------|

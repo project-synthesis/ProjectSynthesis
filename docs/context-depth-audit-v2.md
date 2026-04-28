@@ -208,7 +208,7 @@ New guidance: LLM decides format based on task scope, risk surface, and executor
 | `INDEX_CURATED_MAX_PER_DIR` | 3 | `config.py` |
 | `INDEX_DOMAIN_BOOST` | 1.3 | `config.py` |
 | `MAX_CODEBASE_CONTEXT_CHARS` | 100000 | `config.py` |
-| `SCORING_FORMULA_VERSION` | 3 | `pipeline_contracts.py` |
+| `SCORING_FORMULA_VERSION` | 3 | `pipeline_contracts.py` *(historical — v0.4.9 bumped to 4 for per-task-type weights via `get_dimension_weights(task_type)`; analysis-class uses clarity/specificity/structure 0.25/0.25/0.20, faithfulness/conciseness 0.20/0.10)* |
 
 ## Full Run History (V1 + V2)
 
