@@ -167,6 +167,52 @@ synthesis_probe                      → MCP tool (extends existing 14 → 15 to
 
 ---
 
+### v0.4.11 domain proposal hardening (post-replay forensic finding, 2026-04-28)
+**Status:** Planned
+**Trigger:** the cycle-19→22 replay surfaced a "ghost domain" pathology — `fullstack` was promoted to a top-level domain at 04:59:35 UTC on insufficient evidence, ended up with 0 members, and is now frozen by the 48h dissolution grace gate (`DOMAIN_DISSOLUTION_MIN_AGE_HOURS=48`) until ~02:59 UTC the next day. The empty domain node clutters `/api/domains` and `taxonomy/tree` for ~46 hours with no functional path to dissolve.
+
+**Root-cause analysis (live forensic):**
+
+`engine._propose_domains()` accepted `fullstack` as a new domain on:
+- **1 seed cluster** (single point of evidence — cluster `7461846c`, since merged out)
+- **66.67% consistency** — just 2-of-3 prompts agreeing on `domain_raw="fullstack"`
+- **Coherence = 0.0**, *skipped* the enrichment threshold (0.4) instead of failing the gate
+- **`signal_enrichment: skipped_coherence` event** logged the issue but did not block creation
+
+This violates the design intent. Domain emergence should be **signal concentration** — multiple clusters consistently labeling themselves with a new domain. One cluster of 3 prompts is not a domain; it's a cluster.
+
+**Two structural bugs:**
+
+1. **Single-cluster acceptance** — `_propose_domains()` does not enforce a minimum cluster-count floor. Sub-domain proposal already has equivalent `single_cluster` skip logic (visible in events: `sub_domain_skipped: reason=single_cluster, consistency_pct=83.3`). Domains lack the parallel gate.
+
+2. **Coherence skip semantics** — when coherence is 0.0 (uncomputable due to single cluster), `signal_enrichment` logs `skipped_coherence` but does NOT block creation. Should either fail the gate or require an alternate evidence threshold.
+
+**Compounding pathology:** subsequent prompts classifying `prompt_domain="fullstack"` get `tree_integrity_repair: domain_reset_to_general` (resolver cache race, or qualifier vocabulary mismatch) — meaning a ghost domain cannot organically accumulate followers. Worst of both worlds: created on weak evidence AND can't recover.
+
+**Fixes:**
+
+**P0 — `DOMAIN_PROPOSAL_MIN_SEED_CLUSTERS`** — add constant to `taxonomy/_constants.py` with default `3`. `_propose_domains()` rejects candidates below this floor. Module-level invariant assert at import time. R8-style fail-fast on configuration drift. Mirrors the existing sub-domain `single_cluster` gate. Estimated: ~50 LOC + 4 tests.
+
+**P0 — `DOMAIN_PROPOSAL_REQUIRE_COHERENCE`** — add boolean constant to `_constants.py` with default `True`. When set, `_propose_domains()` rejects candidates with `coherence < DOMAIN_COHERENCE_FLOOR (0.4)`. Replaces the soft `skipped_coherence` event with a hard `proposal_rejected_coherence` event. Estimated: ~30 LOC + 3 tests.
+
+**P1 — `POST /api/domains/{id}/dissolve-empty` operator endpoint** — bypasses the 48h age gate when `member_count == 0 AND age >= DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES (default 30)`. Mirrors v0.4.8 R6 (`rebuild-sub-domains`) — operator escape hatch for the current ghost. Pydantic `ge=0` runtime validation, idempotent on already-dissolved targets, emits `domain_ghost_dissolved` telemetry. Rate-limited 10/min. Estimated: ~80 LOC + 3 router tests + 4 service tests.
+
+**P2 — `ghost` readiness tier** — extend `compute_domain_readiness()` to return `ghost` tier when `member_count == 0 AND age < DOMAIN_DISSOLUTION_MIN_AGE_HOURS`. Surfaces in UI as "awaiting dissolution" instead of looking healthy in the topology. ToastDispatcher gates ghost-tier on a separate preference (default off — operator-only signal). Estimated: ~40 LOC + 2 tests.
+
+**Acceptance criteria for v0.4.11 ship:**
+
+1. Live verification: replay a fullstack-classifying prompt, confirm `_propose_domains()` rejects with `proposal_rejected_min_seed_clusters` event (P0.1)
+2. Live verification: same prompt path with single cluster + 0 coherence rejected with `proposal_rejected_coherence` event (P0.2)
+3. `POST /api/domains/{current-fullstack-id}/dissolve-empty` returns 200 + emits `domain_ghost_dissolved` + `taxonomy_changed`, with the ghost gone from `/api/domains` immediately (P1)
+4. Frontend topology shows `ghost` tier on empty domains awaiting dissolution (P2)
+5. Full backend suite passes ≥ 3187 (3180 + ~7 new)
+
+**Spec target:** `docs/specs/domain-proposal-hardening-2026-04-28.md` (TBD).
+
+**Cross-link:** the cycle-19→22 replay v2 (currently in flight) is the validation corpus for whether these proposal-gate changes affect organic domain emergence in the audit-class workload. Pre-fix `fullstack` was created from a cross-cutting prompt; post-fix the same evidence pattern would not promote — which may be desirable (no ghost) or undesirable (slower emergence). The replay's domain-creation event count tells us which.
+
+---
+
 ### v0.4.10+ audit-driven hardening (sourced from cycles 19–22 meta-prompts, 2026-04-27)
 
 Top 5 architectural audit findings surfaced by self-prompting the running v0.4.8 system about its own inconsistencies. Each is a candidate v0.4.10+ follow-up; scores are the system's own optimization-quality grade for the audit prompt that surfaced the gap. (Originally targeted at v0.4.9; that release was reallocated to ship F1-F5 audit-prompt scoring hardening from `docs/specs/audit-prompt-hardening-2026-04-28.md`.)
