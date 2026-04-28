@@ -2,7 +2,7 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.4.8-dev (sub-domain dissolution hardening shipped 2026-04-27; audit `docs/audits/sub-domain-regression-2026-04-27.md` R1-R8 all closed). Last release: v0.4.7 (2026-04-26).
+**Snapshot:** v0.4.9 (audit-prompt scoring hardening F1–F5 shipped 2026-04-28; audit `docs/audits/audit-prompt-class-deep-dive-2026-04-27.md` all closed; suite 3177 passing + 1 skipped). Last release: v0.4.8 (2026-04-27).
 
 ## Conventions
 
