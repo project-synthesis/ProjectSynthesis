@@ -4,6 +4,14 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+
+- **v0.4.11 P0a — Domain proposal cluster-count floor** — `engine._propose_domains()` now requires ≥`DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS=2` distinct contributing clusters before promoting a top-level domain. Closes the "ghost domain" pathology surfaced live by the cycle-19→22 v2 replay where `fullstack` was promoted from a single cluster of 3 prompts (67% consistency, coherence 0.0/skipped), then merged out leaving an empty domain node frozen by the 48h dissolution gate. Both proposal paths enforce the floor: per-cluster pass refactored to aggregate by `top_primary` BEFORE creating domains (rejects primaries with only 1 contributor); pooled pass adds `len(bucket["clusters"]) >= MIN_SOURCE_CLUSTERS` check alongside the existing pooled-member gate. Rejected primaries emit `proposal_rejected_min_source_clusters` event with `{domain_label, source_cluster_count, required_min, source}` for forensic visibility. Module-level invariant assertion in `_constants.py` fails fast on `< 1` configuration drift. Test fixtures in `test_domain_discovery.py` updated to spread members across 2 clusters where they previously assumed single-cluster promotion as a happy-path artifact. Spec: `docs/specs/domain-proposal-hardening-2026-04-28.md` §P0a.
+
+### Added
+
+- **v0.4.11 P1 — Operator dissolve-empty endpoint** — `POST /api/domains/{id}/dissolve-empty` (10/min) lets operators force-dissolve ghost domains (`member_count == 0`, age >= `DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES=30`) without waiting for the 48h `_reevaluate_domains` gate. Idempotent (200 + `dissolved=False, reason="already_dissolved"` on re-call); 409 + `reason="not_empty"` if domain has members; 409 + `reason="too_young"` if too recent; 404 if not found; 429 on rate limit. Mirrors v0.4.8 R6 (`POST /api/domains/{id}/rebuild-sub-domains`) — operator escape hatch pattern. Emits `domain_ghost_dissolved` decision event + `taxonomy_changed` SSE on success. Provides immediate operational drain for the existing live `fullstack` ghost (id=`139befac`) without the 46h wait. Spec: `docs/specs/domain-proposal-hardening-2026-04-28.md` §P1.
+
 ## v0.4.10 — 2026-04-28
 
 ### Fixed
