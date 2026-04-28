@@ -586,7 +586,10 @@ class PipelineOrchestrator:
                     "original_scores": scoring.original_scores.model_dump(),
                     "scores": scoring.optimized_scores.model_dump(),
                     "deltas": scoring.deltas,
-                    "overall_score": scoring.optimized_scores.overall,
+                    # F3.1: analysis-aware overall via compute_overall(task_type)
+                    "overall_score": scoring.optimized_scores.compute_overall(
+                        analysis.task_type if analysis else None
+                    ),
                 })
             else:
                 logger.info("Scoring phase skipped per user preferences. trace_id=%s", trace_id)
@@ -655,7 +658,10 @@ class PipelineOrchestrator:
             if scoring and scoring.optimized_scores:
                 logger.info(
                     "Pipeline completed: trace_id=%s duration=%dms strategy=%s overall=%.2f",
-                    trace_id, duration_ms, effective_strategy, scoring.optimized_scores.overall,
+                    trace_id, duration_ms, effective_strategy,
+                    scoring.optimized_scores.compute_overall(
+                        analysis.task_type if analysis else None
+                    ),
                 )
             else:
                 logger.info(

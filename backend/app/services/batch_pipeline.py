@@ -585,7 +585,10 @@ async def run_single_prompt(
             score_structure=optimized_scores.structure if optimized_scores else None,
             score_faithfulness=optimized_scores.faithfulness if optimized_scores else None,
             score_conciseness=optimized_scores.conciseness if optimized_scores else None,
-            overall_score=optimized_scores.overall if optimized_scores else None,
+            # F3.1: analysis-aware overall via compute_overall(task_type)
+            overall_score=optimized_scores.compute_overall(
+                analysis.task_type if analysis else None
+            ) if optimized_scores else None,
             improvement_score=improvement_score,
             scoring_mode=scoring_mode,
             intent_label=validate_intent_label(
