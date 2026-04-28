@@ -39,12 +39,12 @@ from app.config import DATA_DIR, PROMPTS_DIR
 from app.database import async_session_factory
 from app.models import Optimization
 from app.schemas.pipeline_contracts import (
-    DIMENSION_WEIGHTS,
     AnalysisResult,
     DimensionScores,
     OptimizationResult,
     ScoreResult,
     SuggestionsOutput,
+    get_dimension_weights,
 )
 from app.services.event_notification import notify_event_bus
 from app.services.heuristic_scorer import HeuristicScorer
@@ -573,7 +573,6 @@ async def run_sampling_pipeline(
             optimization = OptimizationResult(
                 optimized_prompt=cleaned,
                 changes_summary=summary,
-                strategy_used=effective_strategy,
             )
     # Post-cleanup: strip leaked ## Changes / ## Applied Patterns
     # from optimized_prompt on both structured and text-fallback paths.
@@ -585,7 +584,6 @@ async def run_sampling_pipeline(
     optimization = OptimizationResult(
         optimized_prompt=_clean_prompt,
         changes_summary=_clean_changes,
-        strategy_used=optimization.strategy_used,
     )
 
     model_ids["optimize"] = optimize_model
@@ -690,10 +688,12 @@ async def run_sampling_pipeline(
             blended_original = blend_scores(
                 llm_original, heur_original, historical_stats,
                 prompt_text=prompt,
+                task_type=analysis.task_type if analysis else None,
             )
             blended_optimized = blend_scores(
                 llm_optimized, heur_optimized, historical_stats,
                 prompt_text=optimization.optimized_prompt,
+                task_type=analysis.task_type if analysis else None,
             )
 
             original_scores = blended_original.to_dimension_scores()
@@ -880,7 +880,7 @@ async def run_sampling_pipeline(
         if deltas:
             _imp = sum(
                 deltas.get(dim, 0) * w
-                for dim, w in DIMENSION_WEIGHTS.items()
+                for dim, w in get_dimension_weights(analysis.task_type).items()
             )
             db_opt.improvement_score = round(max(0.0, min(10.0, _imp)), 2)
         db.add(db_opt)

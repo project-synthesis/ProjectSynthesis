@@ -112,7 +112,6 @@ def _make_optimization(**overrides):
     defaults = dict(
         optimized_prompt="Write a Python function that sorts a list.",
         changes_summary="Added specificity.",
-        strategy_used="chain-of-thought",
     )
     defaults.update(overrides)
     return OptimizationResult(**defaults)

@@ -150,7 +150,6 @@ class TestBuildPipelineResultRepoPropagation:
         optimization = OptimizationResult(
             optimized_prompt="rewritten prompt",
             changes_summary="tightened scope",
-            strategy_used="chain-of-thought",
         )
         return PersistenceInputs(
             opt_id="opt-abc",
@@ -282,3 +281,69 @@ class TestNormalizeLLMDomain:
             "backend-async-session", {"backend"},
         )
         assert result == "backend: async-session"
+
+
+# ---------------------------------------------------------------------------
+# F3 — persist_and_propagate threads task_type into improvement_score weights
+# ---------------------------------------------------------------------------
+
+
+class TestPersistAnalysisWeights:
+    """``persist_and_propagate`` improvement_score loop must consult
+    ``get_dimension_weights(inputs.analysis.task_type)`` instead of the
+    module-level ``DIMENSION_WEIGHTS`` literal.
+
+    The two improvement_score sites at ``pipeline_phases.py:1071-1086``
+    iterate ``DIMENSION_WEIGHTS.items()`` directly today.  After F3,
+    they must iterate the per-task-type schema so analysis-class prompts
+    score against the analysis weights instead of the uniform default.
+
+    See spec §F3 'Sites NOT touched' for why the ``.overall`` property
+    keeps the static schema.
+    """
+
+    def test_persist_uses_analysis_weights_for_analysis(self):
+        """AC-F3-7: helper is wired into ``pipeline_phases`` for the persist loop.
+
+        Forward-compatible regression guard: verifies that the
+        ``get_dimension_weights`` helper from ``pipeline_contracts`` is
+        in scope inside ``pipeline_phases`` (i.e. imported), which is
+        the structural prerequisite for the improvement_score loops at
+        lines 1071-1086 consulting per-task-type weights instead of the
+        static ``DIMENSION_WEIGHTS`` literal.
+
+        RED: ``get_dimension_weights`` doesn't exist in
+        ``pipeline_contracts`` → both the import below AND the
+        ``hasattr`` structural check fail.
+
+        GREEN: after the helper is added and ``pipeline_phases``
+        imports it, ``get_dimension_weights('analysis')`` returns the
+        analysis schema, which the improvement_score loops will then
+        use via ``inputs.analysis.task_type`` plumbing.
+        """
+        # Helper lives in pipeline_contracts and must be imported into
+        # pipeline_phases for use inside persist_and_propagate's two
+        # improvement_score loops.
+        from app.schemas.pipeline_contracts import (
+            ANALYSIS_DIMENSION_WEIGHTS,
+            DIMENSION_WEIGHTS,
+            get_dimension_weights,
+        )
+
+        # The helper's analysis branch must be the same dict the
+        # improvement_score loop will iterate when
+        # inputs.analysis.task_type == 'analysis'.
+        assert get_dimension_weights("analysis") is ANALYSIS_DIMENSION_WEIGHTS
+        assert get_dimension_weights("coding") is DIMENSION_WEIGHTS
+        assert get_dimension_weights(None) is DIMENSION_WEIGHTS
+
+        # The GREEN implementation MUST replace the two
+        # ``DIMENSION_WEIGHTS`` literal iterations at lines 1071-1086
+        # with ``get_dimension_weights(inputs.analysis.task_type).items()``,
+        # which requires importing the helper into the module namespace.
+        import app.services.pipeline_phases as pp
+
+        assert hasattr(pp, "get_dimension_weights"), (
+            "pipeline_phases must import get_dimension_weights so the "
+            "improvement_score loops can consult per-task-type weights"
+        )

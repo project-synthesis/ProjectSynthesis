@@ -1,5 +1,7 @@
 """Tests for HeuristicScorer — TDD: tests written before implementation."""
 
+import pytest
+
 from app.services.heuristic_scorer import HeuristicScorer
 
 # ---------------------------------------------------------------------------
@@ -535,3 +537,108 @@ def test_faithfulness_score_prompt_facade() -> None:
     # score_prompt facade also still accepts the original 2-arg shape
     scores = HeuristicScorer.score_prompt(optimized, original=_RAW_I5)
     assert 1.0 <= scores["faithfulness"] <= 10.0
+
+
+# ---------------------------------------------------------------------------
+# heuristic_specificity — backtick-wrapped code identifiers (F1)
+# ---------------------------------------------------------------------------
+
+
+class TestSpecificityBacktick:
+    """F1: backtick-wrapped code identifiers earn specificity credit.
+
+    Spec: docs/specs/audit-prompt-hardening-2026-04-28.md, section F1.
+    The new 11th specificity category matches `[a-zA-Z_][a-zA-Z0-9_./:-]*`
+    wrapped in backticks (cap=2.0, formula `min(1.0 + 0.3 * (hits - 1), cap)`).
+    """
+
+    def test_backtick_identifiers_credit(self) -> None:
+        """AC-F1-1: 3 backtick identifiers score >= +0.5 above stripped baseline.
+
+        Paired prompts differ only in the presence of backticks around
+        three audit-style code citations.  Per the spec formula, 3 hits
+        contribute +1.6 to the raw total, which yields >= +0.5 to the
+        final clamped score.
+        """
+        with_backticks = (
+            "Trace the regression in `engine.py` — verify the "
+            "`_reevaluate_sub_domains` pass and inspect `cluster_metadata` "
+            "matching against the snapshot."
+        )
+        without_backticks = (
+            "Trace the regression in engine.py — verify the "
+            "_reevaluate_sub_domains pass and inspect cluster_metadata "
+            "matching against the snapshot."
+        )
+        score_with = HeuristicScorer.heuristic_specificity(with_backticks)
+        score_without = HeuristicScorer.heuristic_specificity(without_backticks)
+        delta = score_with - score_without
+        assert delta >= 0.5, (
+            f"Expected backtick credit delta >= 0.5, got {delta} "
+            f"(with={score_with}, without={score_without})"
+        )
+
+    def test_backtick_prose_not_credited(self) -> None:
+        """AC-F1-2: backticks containing whitespace prose earn no credit.
+
+        The `[a-zA-Z0-9_./:-]` character class excludes spaces, so a
+        backticked region with internal whitespace must NOT match the
+        new pattern.  Pre-fix this passes trivially (no backtick
+        category exists yet); post-fix it must still pass.
+        """
+        with_prose_backticks = (
+            "Summarize the document and report "
+            "`arbitrary prose with spaces` clearly."
+        )
+        without_prose_backticks = (
+            "Summarize the document and report "
+            "arbitrary prose with spaces clearly."
+        )
+        score_with = HeuristicScorer.heuristic_specificity(with_prose_backticks)
+        score_without = HeuristicScorer.heuristic_specificity(without_prose_backticks)
+        assert score_with == score_without, (
+            f"Prose-with-spaces backticks must not contribute "
+            f"(with={score_with}, without={score_without})"
+        )
+
+    def test_no_backtick_baseline_unchanged(self) -> None:
+        """AC-F1-3: pure-prose prompt with no backticks scores at the
+        deterministic pre-change baseline.
+
+        Regression guard.  This prompt hits exactly one existing
+        category (10: audience/tone via "audience"), giving a base of
+        3.0 + 1.0 = 4.0.  No density bonus (categories_hit < 2).  The
+        new backtick category never fires (no backticks present).
+        """
+        prompt = (
+            "Please review the document and summarize the key takeaways "
+            "for the audience."
+        )
+        score = HeuristicScorer.heuristic_specificity(prompt)
+        assert score == pytest.approx(4.0, abs=1e-9), (
+            f"Pre-change baseline expected 4.0, got {score} — "
+            "fix must not change pure-prose scoring."
+        )
+
+    def test_backtick_cap_saturates(self) -> None:
+        """AC-F1-4: 6 vs 8 distinct backtick identifiers score identically.
+
+        Per the spec formula `min(1.0 + 0.3 * (hits - 1), 2.0)` the
+        category saturates at the 5th hit (5 hits -> +2.2 capped to
+        +2.0).  Both prompts must therefore produce identical
+        specificity scores.  Non-backtick framing kept identical so
+        saturation is the only behavioural variable.
+        """
+        six = (
+            "Audit `a.py` `b.py` `c.py` `d.py` `e.py` `f.py` for issues."
+        )
+        eight = (
+            "Audit `a.py` `b.py` `c.py` `d.py` `e.py` `f.py` "
+            "`g.py` `h.py` for issues."
+        )
+        score_six = HeuristicScorer.heuristic_specificity(six)
+        score_eight = HeuristicScorer.heuristic_specificity(eight)
+        assert score_six == score_eight, (
+            f"Cap must saturate at 5+ hits, but 6 hits -> {score_six} "
+            f"and 8 hits -> {score_eight}"
+        )

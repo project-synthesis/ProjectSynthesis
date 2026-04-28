@@ -34,12 +34,12 @@ from typing import TYPE_CHECKING, Any
 from app.config import DATA_DIR
 from app.providers.base import LLMProvider, call_provider_with_retry
 from app.schemas.pipeline_contracts import (
-    DIMENSION_WEIGHTS,
     AnalysisResult,
     DimensionScores,
     OptimizationResult,
     ScoreResult,
     SuggestionsOutput,
+    get_dimension_weights,
 )
 from app.services.batch_orchestrator import run_batch
 from app.services.batch_persistence import batch_taxonomy_assign, bulk_persist
@@ -440,7 +440,6 @@ async def run_single_prompt(
         optimization = OptimizationResult(
             optimized_prompt=_clean_prompt,
             changes_summary=_clean_changes,
-            strategy_used=optimization.strategy_used,
         )
 
         # --- Phase 3: Score ---
@@ -496,10 +495,12 @@ async def run_single_prompt(
             blended_original = blend_scores(
                 llm_original, heur_original, effective_stats,
                 prompt_text=raw_prompt,
+                task_type=analysis.task_type if analysis else None,
             )
             blended_optimized = blend_scores(
                 llm_optimized, heur_optimized, effective_stats,
                 prompt_text=optimization.optimized_prompt,
+                task_type=analysis.task_type if analysis else None,
             )
 
             original_scores = blended_original.to_dimension_scores()
@@ -516,7 +517,7 @@ async def run_single_prompt(
         if deltas:
             _imp = sum(
                 deltas.get(dim, 0) * w
-                for dim, w in DIMENSION_WEIGHTS.items()
+                for dim, w in get_dimension_weights(analysis.task_type).items()
             )
             improvement_score = round(max(0.0, min(10.0, _imp)), 2)
 

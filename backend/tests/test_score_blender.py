@@ -190,7 +190,7 @@ class TestZScoreNormalization:
             f"score_{dim}": {
                 "count": ZSCORE_MIN_SAMPLES,
                 "mean": 8.0,
-                "stddev": 0.5,  # > ZSCORE_MIN_STDDEV (0.3)
+                "stddev": 0.6,  # > ZSCORE_MIN_STDDEV (0.5)
             }
             for dim in DIMENSION_WEIGHTS
         }
@@ -228,7 +228,7 @@ class TestZScoreNormalization:
             "score_clarity": {
                 "count": ZSCORE_MIN_SAMPLES,
                 "mean": 5.0,
-                "stddev": 0.5,
+                "stddev": 0.6,
             }
         }
         # raw clarity well above mean → normalized clarity pulled toward
@@ -244,7 +244,7 @@ class TestZScoreNormalization:
             f"score_{dim}": {
                 "count": ZSCORE_MIN_SAMPLES,
                 "mean": 8.0,
-                "stddev": 0.5,
+                "stddev": 0.6,
             }
             for dim in DIMENSION_WEIGHTS
         }
@@ -254,6 +254,89 @@ class TestZScoreNormalization:
         r = blend_scores(_llm(), _heur(), historical_stats=stats)
         r_raw = blend_scores(_llm(), _heur())
         assert r.clarity < r_raw.clarity
+
+
+# ---------------------------------------------------------------------------
+# F2 — ZSCORE_MIN_STDDEV threshold (audit-prompt hardening 2026-04-28)
+# ---------------------------------------------------------------------------
+
+
+class TestZNormThreshold:
+    """Pin the narrow-distribution gate at stddev > 0.5 (was 0.3).
+
+    Audit-class corpora cluster at stddev ≈ 0.35–0.45 — z-norm at the old
+    threshold floor-capped legitimately adequate raw LLM scores.  The new
+    threshold mirrors the narrow-distribution flag in
+    ``routers/health.py:392-394``.  Strict inequality (``>``) means
+    stddev=0.5 itself bypasses; only stddev > 0.5 normalizes.
+    """
+
+    def test_wide_distribution_normalizes(self):
+        """AC-F2-1: wide distribution (stddev=1.0) still triggers z-norm."""
+        stats = {
+            f"score_{dim}": {
+                "count": ZSCORE_MIN_SAMPLES,
+                "mean": 5.0,
+                "stddev": 1.0,  # > 0.5 — z-norm fires
+            }
+            for dim in DIMENSION_WEIGHTS
+        }
+        # LLM=8.0, mean=5.0 → z=+3 → far from mean, normalization visible.
+        r = blend_scores(_llm(), _heur(), historical_stats=stats)
+        assert r.normalization_applied is True
+
+    def test_narrow_distribution_bypasses(self):
+        """AC-F2-2: narrow distribution (stddev=0.4) bypasses z-norm post-F2.
+
+        Pre-F2 (threshold 0.3): 0.4 > 0.3 → fires → would FAIL this test.
+        Post-F2 (threshold 0.5): 0.4 > 0.5 is FALSE → bypasses → passes.
+        """
+        stats = {
+            f"score_{dim}": {
+                "count": ZSCORE_MIN_SAMPLES,
+                "mean": 5.0,
+                "stddev": 0.4,
+            }
+            for dim in DIMENSION_WEIGHTS
+        }
+        r = blend_scores(_llm(), _heur(), historical_stats=stats)
+        assert r.normalization_applied is False
+
+    def test_degenerate_distribution_bypasses(self):
+        """AC-F2-3: degenerate distribution (stddev=0.1) bypasses both pre/post-F2.
+
+        Regression guard — ensures the bump didn't accidentally invert the
+        comparison or break the original "skip degenerate" intent.
+        """
+        stats = {
+            f"score_{dim}": {
+                "count": ZSCORE_MIN_SAMPLES,
+                "mean": 5.0,
+                "stddev": 0.1,
+            }
+            for dim in DIMENSION_WEIGHTS
+        }
+        r = blend_scores(_llm(), _heur(), historical_stats=stats)
+        assert r.normalization_applied is False
+
+    def test_boundary_stddev_bypasses(self):
+        """AC-F2-4: stddev=0.5 (exactly the threshold) bypasses (strict inequality).
+
+        Pre-F2: 0.5 > 0.3 → fires → would FAIL.
+        Post-F2: 0.5 > 0.5 is FALSE → bypasses → passes.
+        Pins the strict-inequality semantic — stddev MUST exceed
+        ZSCORE_MIN_STDDEV, equality alone does not trigger normalization.
+        """
+        stats = {
+            f"score_{dim}": {
+                "count": ZSCORE_MIN_SAMPLES,
+                "mean": 5.0,
+                "stddev": 0.5,
+            }
+            for dim in DIMENSION_WEIGHTS
+        }
+        r = blend_scores(_llm(), _heur(), historical_stats=stats)
+        assert r.normalization_applied is False
 
 
 # ---------------------------------------------------------------------------
@@ -285,3 +368,190 @@ class TestBlendedScoresSurface:
     def test_dimension_weights_sum_to_one(self):
         """The overall weighted mean is only meaningful if the weights sum to 1."""
         assert sum(DIMENSION_WEIGHTS.values()) == pytest.approx(1.0, abs=0.001)
+
+
+# ---------------------------------------------------------------------------
+# F3 — task_type plumbing (audit-prompt hardening 2026-04-28)
+# ---------------------------------------------------------------------------
+
+
+class TestBlendScoresTaskType:
+    """``blend_scores`` must thread ``task_type`` into the overall weighting.
+
+    Per spec §F3, ``score_blender.blend_scores`` accepts a
+    ``task_type: str | None = None`` kwarg.  When the caller is in
+    ``analyze`` task scope, the analysis schema (clarity/specificity ↑,
+    faithfulness/conciseness ↓) feeds the overall computation; the
+    five blended dimension values themselves are unchanged (they're
+    blends of LLM + heuristic), only the weighting that produces
+    ``BlendedScores.overall`` differs.
+    """
+
+    def test_blend_scores_threads_task_type(self):
+        """AC-F3-6: same dim-scores, different task_type → different overall.
+
+        Same LLM and heuristic inputs.  Call once with ``task_type=None``
+        and once with ``task_type='analysis'``; assert the resulting
+        ``BlendedScores.overall`` differs (the two schemas weight the
+        same five blended values differently, so the overall mean must
+        diverge for any non-uniform fixture).
+        """
+        # High clarity/specificity, low faithfulness — analysis schema
+        # rewards what default schema penalises, guaranteeing divergence.
+        llm = _llm(clarity=9.0, specificity=9.0, faithfulness=4.0)
+        heur = _heur(clarity=9.0, specificity=9.0, faithfulness=4.0)
+
+        default = blend_scores(llm, heur, task_type=None)
+        analysis = blend_scores(llm, heur, task_type="analysis")
+
+        assert default.overall != analysis.overall, (
+            f"Expected different overalls for different task_type; "
+            f"got default={default.overall}, analysis={analysis.overall}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# F5 — false-premise flag (audit-prompt hardening 2026-04-28)
+# ---------------------------------------------------------------------------
+
+
+# A technically-dense prompt: ≥ TECHNICAL_CONTEXT_THRESHOLD (3) distinct
+# hits from ``_TECHNICAL_NOUNS``.  This fixture cites ``pipeline``,
+# ``schema``, ``service``, ``api``, ``endpoint``, ``module`` — far above
+# the 3-hit floor so the technical_dense gate fires deterministically.
+_TECHNICAL_DENSE_PROMPT = (
+    "Audit the pipeline schema service: trace the api endpoint module "
+    "to confirm the database migration is correctly wired."
+)
+
+# A plain-prose prompt with zero technical-noun hits — guarantees
+# ``technical_dense=False`` so AC-F5-3 can pin the density-gate path.
+_PROSE_PROMPT = (
+    "Write a friendly letter to my grandmother about the lovely garden "
+    "we visited last Sunday afternoon during the warm summer breeze."
+)
+
+
+class TestFalsePremise:
+    """``possible_false_premise`` divergence flag (spec §F5).
+
+    Fires only when ALL THREE conditions hold:
+      1. ``task_type == 'analysis'``
+      2. ``llm_scores.faithfulness < 5.0`` on the faithfulness dimension
+      3. ``technical_dense == True`` (≥ TECHNICAL_CONTEXT_THRESHOLD
+         technical-noun hits in ``prompt_text``)
+
+    The flag is purely additive — it never changes any score, only
+    surfaces operator-review signal.
+    """
+
+    def test_flag_fires_on_analysis_low_faithfulness(self):
+        """AC-F5-1: all three conditions met → flag in divergence_flags."""
+        llm = _llm(faithfulness=4.5)
+        heur = _heur(faithfulness=4.5)  # avoid >2.5 divergence noise
+        r = blend_scores(
+            llm,
+            heur,
+            historical_stats=None,
+            prompt_text=_TECHNICAL_DENSE_PROMPT,
+            task_type="analysis",
+        )
+        assert "possible_false_premise" in r.divergence_flags, (
+            f"Expected 'possible_false_premise' flag; "
+            f"got divergence_flags={r.divergence_flags}"
+        )
+
+    def test_flag_does_not_fire_for_non_analysis(self):
+        """AC-F5-2: task_type='coding' → flag NOT raised."""
+        llm = _llm(faithfulness=4.5)
+        heur = _heur(faithfulness=4.5)
+        r = blend_scores(
+            llm,
+            heur,
+            historical_stats=None,
+            prompt_text=_TECHNICAL_DENSE_PROMPT,
+            task_type="coding",
+        )
+        assert "possible_false_premise" not in r.divergence_flags
+
+    def test_flag_does_not_fire_without_technical_density(self):
+        """AC-F5-3: prose prompt (technical_dense=False) → flag NOT raised."""
+        llm = _llm(faithfulness=4.5)
+        heur = _heur(faithfulness=4.5)
+        r = blend_scores(
+            llm,
+            heur,
+            historical_stats=None,
+            prompt_text=_PROSE_PROMPT,
+            task_type="analysis",
+        )
+        assert "possible_false_premise" not in r.divergence_flags
+
+    def test_flag_does_not_fire_above_threshold(self):
+        """AC-F5-4: faithfulness=6.0 (above 5.0 floor) → flag NOT raised."""
+        llm = _llm(faithfulness=6.0)
+        heur = _heur(faithfulness=6.0)
+        r = blend_scores(
+            llm,
+            heur,
+            historical_stats=None,
+            prompt_text=_TECHNICAL_DENSE_PROMPT,
+            task_type="analysis",
+        )
+        assert "possible_false_premise" not in r.divergence_flags
+
+    def test_flag_does_not_change_score(self):
+        """AC-F5-5: the flag is purely additive — overall + per-dim scores
+        identical when only ``task_type`` flips between firing (analysis)
+        and non-firing (coding) configurations.
+
+        NOTE: ``task_type`` already drives ``get_dimension_weights()`` per
+        F3, so the *overall* is allowed to diverge between schemas — this
+        test pins ``DIMENSION_WEIGHTS`` parity by holding ``task_type``
+        constant and varying only the prompt density: the flag fires for
+        the technical-dense fixture under analysis but not for the prose
+        fixture under analysis, while overall + per-dim scores stay
+        identical (since ``technical_dense`` only flips the conciseness
+        heuristic blend weight, which the prose prompt also bypasses).
+        """
+        llm = _llm(faithfulness=4.5)
+        heur = _heur(faithfulness=4.5)
+
+        # Call A: technical-dense + analysis → flag fires post-fix.
+        a = blend_scores(
+            llm,
+            heur,
+            historical_stats=None,
+            prompt_text=_TECHNICAL_DENSE_PROMPT,
+            task_type="analysis",
+        )
+        # Call B: same conditions but task_type='coding' → flag does NOT fire.
+        # Overall divergence is allowed (F3 weights differ); per-dim scores
+        # MUST be identical since dimension blends are task_type-agnostic.
+        b = blend_scores(
+            llm,
+            heur,
+            historical_stats=None,
+            prompt_text=_TECHNICAL_DENSE_PROMPT,
+            task_type="coding",
+        )
+
+        # Per-dimension blended scores are identical (task_type does not
+        # influence per-dim blending — only the overall weighting).
+        for dim in DIMENSION_WEIGHTS:
+            assert getattr(a, dim) == getattr(b, dim), (
+                f"Per-dim blend should be task_type-agnostic on {dim}: "
+                f"a={getattr(a, dim)} b={getattr(b, dim)}"
+            )
+
+        # Non-false-premise flags identical.
+        a_other = [f for f in a.divergence_flags if f != "possible_false_premise"]
+        b_other = [f for f in b.divergence_flags if f != "possible_false_premise"]
+        assert a_other == b_other, (
+            f"Non-false-premise divergence flags should match: "
+            f"a={a_other} b={b_other}"
+        )
+
+        # The ONLY difference between A and B is the presence of
+        # 'possible_false_premise' in A's flags.
+        assert "possible_false_premise" not in b.divergence_flags

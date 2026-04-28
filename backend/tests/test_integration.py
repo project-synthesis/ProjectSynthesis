@@ -72,7 +72,6 @@ class TestEndToEndFlow:
                     "that returns a new sorted list."
                 ),
                 changes_summary="Added language, function signature, return type.",
-                strategy_used="chain-of-thought",
             ),
             ScoreResult(
                 prompt_a_scores=DimensionScores(
@@ -161,7 +160,6 @@ class TestEndToEndFlow:
                     "is not a list."
                 ),
                 changes_summary="Added error handling.",
-                strategy_used="chain-of-thought",
             ),
             # score
             ScoreResult(
@@ -549,7 +547,6 @@ class TestPassthroughEndToEnd:
             OptimizationResult(
                 optimized_prompt="Optimized via provider pipeline.",
                 changes_summary="Provider-based optimization.",
-                strategy_used="auto",
             ),
             ScoreResult(
                 prompt_a_scores=DimensionScores(

@@ -33,7 +33,6 @@ def _make_optimization(**overrides):
     defaults = dict(
         optimized_prompt="Write a Python function that sorts a list in ascending order.",
         changes_summary="Added specificity: language, operation, order.",
-        strategy_used="chain-of-thought",
     )
     defaults.update(overrides)
     return OptimizationResult(**defaults)
@@ -134,7 +133,7 @@ class TestPipelineOrchestrator:
     async def test_low_confidence_overrides_to_auto(self, orchestrator, mock_provider, db_session):
         mock_provider.complete_parsed.side_effect = [
             _make_analysis(confidence=0.4, selected_strategy="few-shot"),
-            _make_optimization(strategy_used="auto"),
+            _make_optimization(),
             _make_scores(),
         ]
         events = []
@@ -281,7 +280,7 @@ class TestPipelineOrchestrator:
         """When analyzer selects a strategy that doesn't exist on disk, fall back to 'auto'."""
         mock_provider.complete_parsed.side_effect = [
             _make_analysis(selected_strategy="tree-of-thought", confidence=0.9),
-            _make_optimization(strategy_used="auto"),
+            _make_optimization(),
             _make_scores(),
         ]
         events = []
@@ -293,6 +292,53 @@ class TestPipelineOrchestrator:
         optimizer_call = mock_provider.complete_parsed.call_args_list[1]
         user_msg = optimizer_call.kwargs.get("user_message", "")
         assert "Auto-select" in user_msg
+
+
+class TestStrategyFidelity:
+    """F4 — persisted strategy must match the resolved ``effective_strategy``.
+
+    The optimizer LLM has historically been allowed to declare its own
+    ``strategy_used`` in the response.  After F4 the field is removed from
+    ``OptimizationResult``; the persisted ``strategy_used`` must always be
+    the orchestrator-side resolution, never an LLM freelance choice.
+    See ``docs/specs/audit-prompt-hardening-2026-04-28.md`` §F4.
+    """
+
+    async def test_persisted_strategy_matches_effective(
+        self, orchestrator, mock_provider, db_session,
+    ):
+        """AC-F4-3: persisted strategy is the resolved ``effective_strategy``.
+
+        Analyze chooses ``chain-of-thought`` with high confidence → resolver
+        produces ``effective_strategy='chain-of-thought'``.  Even if the
+        optimizer LLM mock returns a divergent ``strategy_used``, the
+        emitted ``optimization_complete`` event must carry the resolver's
+        choice — not the LLM's.
+        """
+        mock_provider.complete_parsed.side_effect = [
+            _make_analysis(selected_strategy="chain-of-thought", confidence=0.9),
+            # LLM "freelances" a different strategy than the resolver picked.
+            # Pre-fix: the field exists and the value flows through some
+            # downstream paths; post-fix: the field is removed entirely
+            # and the orchestrator's effective_strategy is the only source
+            # of truth for the persisted/emitted value.
+            _make_optimization(),
+            _make_scores(),
+        ]
+
+        events = []
+        async for event in orchestrator.run(
+            raw_prompt="Write a function to parse JSON",
+            provider=mock_provider,
+            db=db_session,
+        ):
+            events.append(event)
+
+        complete = next(e for e in events if e.event == "optimization_complete")
+        # The resolver picked chain-of-thought; the LLM tried to declare
+        # something else; the persisted/emitted value must be the resolver's.
+        assert complete.data["strategy_used"] == "chain-of-thought"
+        assert complete.data["strategy_used"] != "LLM-FREELANCE-CHOICE"
 
 
 class TestResolveFallbackStrategy:

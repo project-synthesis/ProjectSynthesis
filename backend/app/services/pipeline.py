@@ -473,7 +473,6 @@ class PipelineOrchestrator:
             optimization = OptimizationResult(
                 optimized_prompt=clean_prompt,
                 changes_summary=clean_changes,
-                strategy_used=optimization.strategy_used,
             )
 
             if isinstance(optimize_provider.last_model, str):

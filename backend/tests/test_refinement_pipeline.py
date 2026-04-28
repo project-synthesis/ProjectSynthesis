@@ -35,7 +35,6 @@ def _make_optimization(**overrides):
     defaults = dict(
         optimized_prompt="Write a Python function that sorts a list in ascending order.",
         changes_summary="Added specificity.",
-        strategy_used="chain-of-thought",
     )
     defaults.update(overrides)
     return OptimizationResult(**defaults)
@@ -249,3 +248,74 @@ class TestRollback:
             json={"to_version": 999},
         )
         assert resp.status_code == 404
+
+
+class TestRefinementStrategyFidelity:
+    """F4 — refinement turns must carry the orchestrator-side strategy.
+
+    ``RefinementService._refine_async`` reads the previous turn's
+    ``strategy_used`` into a local variable ``strategy_name`` (line 205 of
+    ``refinement_service.py``).  After F4 the field is removed from
+    ``OptimizationResult``; the persisted refinement turn's
+    ``strategy_used`` must match ``strategy_name`` rather than any value
+    the LLM might have emitted.
+    See ``docs/specs/audit-prompt-hardening-2026-04-28.md`` §F4 (AC-F4-4).
+    """
+
+    async def test_refinement_strategy_from_prev_turn(
+        self, app_client, mock_provider, db_session, sample_opt,
+    ):
+        """AC-F4-4: persisted ``strategy_used`` comes from the prev turn.
+
+        Seeds an initial turn with ``strategy_used="ORIGINAL-STRATEGY"``
+        then POSTs /api/refine.  The optimizer LLM mock declares a
+        divergent ``strategy_used="LLM-DIVERGENT-CHOICE"``.  The newly
+        persisted turn's ``strategy_used`` must be ``"ORIGINAL-STRATEGY"``
+        (the orchestrator-side ``strategy_name`` variable, sourced from
+        ``prev_turn.strategy_used``) — not the LLM's freelance value.
+
+        Pre-fix this fails because ``refinement_service.py:460`` uses
+        ``refined.strategy_used`` (the LLM's value) when persisting the
+        new turn.
+        """
+        from app.config import PROMPTS_DIR
+        from app.services.refinement_service import RefinementService
+
+        # Seed an initial turn carrying the "real" strategy chosen earlier.
+        ref_svc = RefinementService(db=db_session, provider=None, prompts_dir=PROMPTS_DIR)
+        await ref_svc.create_initial_turn(
+            optimization_id="refine-opt-1",
+            prompt="Write a Python function...",
+            scores_dict={"clarity": 7.0, "specificity": 7.0},
+            strategy_used="ORIGINAL-STRATEGY",
+        )
+
+        # LLM mock declares a DIFFERENT strategy than the prev turn.
+        mock_provider.complete_parsed.side_effect = [
+            _make_analysis(),
+            _make_optimization(),
+            _make_scores(),
+            _make_suggestions(),
+        ]
+
+        # Drive a refinement through the SSE endpoint.
+        resp = await app_client.post(
+            "/api/refine",
+            json={
+                "optimization_id": "refine-opt-1",
+                "refinement_request": "Add error handling",
+            },
+        )
+        assert resp.status_code == 200
+
+        # Read back the persisted versions and find the newly created turn.
+        versions_resp = await app_client.get("/api/refine/refine-opt-1/versions")
+        assert versions_resp.status_code == 200
+        versions = versions_resp.json()["versions"]
+        # The seeded turn is version 1; the refinement just created version 2.
+        new_turn = next(v for v in versions if v["version"] == 2)
+
+        # The persisted strategy MUST come from the prev turn's
+        # strategy_name (orchestrator-side), not from the LLM's response.
+        assert new_turn["strategy_used"] == "ORIGINAL-STRATEGY"
+        assert new_turn["strategy_used"] != "LLM-DIVERGENT-CHOICE"

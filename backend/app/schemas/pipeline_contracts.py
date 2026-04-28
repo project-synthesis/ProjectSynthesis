@@ -33,7 +33,31 @@ DIMENSION_WEIGHTS: dict[str, float] = {
     "conciseness": 0.15,
 }
 
-SCORING_FORMULA_VERSION: int = 3  # v1=equal-weight, v2=weighted, v3=reduced conciseness weight
+ANALYSIS_DIMENSION_WEIGHTS: dict[str, float] = {
+    "clarity":      0.25,  # ↑ from 0.22 — diagnostic clarity is the substance
+    "specificity":  0.25,  # ↑ from 0.22 — citations are the audit's content
+    "structure":    0.20,  # ↑ from 0.15 — finding-list structure matters more
+    "faithfulness": 0.20,  # ↓ from 0.26 — audit premises are often hypotheses
+    "conciseness":  0.10,  # ↓ from 0.15 — audits are structurally longer
+}
+
+
+def get_dimension_weights(task_type: str | None) -> dict[str, float]:
+    """Return the dimension weights for a given task_type.
+
+    `analysis` task_type uses a calibration that rewards
+    clarity/specificity/structure higher and de-emphasises conciseness,
+    matching audit-class output structure.  All other task_types use the
+    uniform `DIMENSION_WEIGHTS`.
+    """
+    if task_type == "analysis":
+        return ANALYSIS_DIMENSION_WEIGHTS
+    return DIMENSION_WEIGHTS
+
+
+SCORING_FORMULA_VERSION: int = 4
+# v1=equal-weight, v2=weighted, v3=reduced conciseness weight,
+# v4=per-task-type schema (analysis ↑clarity/specificity/structure ↓faithfulness/conciseness)
 
 # Strategy names are now fully adaptive — discovered from prompts/strategies/*.md files.
 # No hardcoded Literal. The analyzer outputs a string validated against available files.
@@ -88,6 +112,18 @@ class DimensionScores(BaseModel):
         """Weighted mean of the five dimension scores, rounded to 2 decimal places."""
         return round(
             sum(getattr(self, dim) * w for dim, w in DIMENSION_WEIGHTS.items()),
+            2,
+        )
+
+    def compute_overall(self, task_type: str | None = None) -> float:
+        """Weighted mean using per-task-type weights when supplied.
+
+        `task_type=None` falls through to global DIMENSION_WEIGHTS,
+        producing the same value as the `overall` property.
+        """
+        weights = get_dimension_weights(task_type)
+        return round(
+            sum(getattr(self, dim) * w for dim, w in weights.items()),
             2,
         )
 
@@ -150,9 +186,6 @@ class OptimizationResult(BaseModel):
     changes_summary: str = Field(
         description="Summary of what changed and why. Include all rationale "
         "and applied pattern notes here — never in optimized_prompt.",
-    )
-    strategy_used: str = Field(
-        description="Strategy name that was applied.",
     )
 
 
@@ -333,7 +366,16 @@ class PipelineResult(BaseModel):
         return {}
 
 
+# Module-level invariants — fail fast if any future edit breaks the sum-to-1.0 property
+_assertion_eps = 1e-9
+assert abs(sum(DIMENSION_WEIGHTS.values()) - 1.0) < _assertion_eps, \
+    f"DIMENSION_WEIGHTS must sum to 1.0, got {sum(DIMENSION_WEIGHTS.values())}"
+assert abs(sum(ANALYSIS_DIMENSION_WEIGHTS.values()) - 1.0) < _assertion_eps, \
+    f"ANALYSIS_DIMENSION_WEIGHTS must sum to 1.0, got {sum(ANALYSIS_DIMENSION_WEIGHTS.values())}"
+
+
 __all__ = [
+    "ANALYSIS_DIMENSION_WEIGHTS",
     "AnalysisResult",
     "AnalyzerInput",
     "DimensionScores",
@@ -343,4 +385,5 @@ __all__ = [
     "ScoreResult",
     "ScorerInput",
     "SuggestionsOutput",
+    "get_dimension_weights",
 ]

@@ -38,13 +38,13 @@ from app.config import settings
 from app.models import Optimization
 from app.providers.base import LLMProvider, TokenUsage
 from app.schemas.pipeline_contracts import (
-    DIMENSION_WEIGHTS,
     AnalysisResult,
     DimensionScores,
     OptimizationResult,
     PipelineResult,
     ScoreResult,
     SuggestionsOutput,
+    get_dimension_weights,
 )
 from app.services.classification_agreement import get_classification_agreement
 from app.services.domain_detector import enrich_domain_qualifier
@@ -802,10 +802,12 @@ async def run_hybrid_scoring(
     blended_original = blend_scores(
         llm_original_scores, heur_original, historical_stats,
         prompt_text=raw_prompt,
+        task_type=analysis.task_type if analysis else None,
     )
     blended_optimized = blend_scores(
         llm_optimized_scores, heur_optimized, historical_stats,
         prompt_text=optimization.optimized_prompt,
+        task_type=analysis.task_type if analysis else None,
     )
 
     original_scores = blended_original.to_dimension_scores()
@@ -1071,17 +1073,17 @@ async def persist_and_propagate(
     if heuristic_baseline and optimized_scores:
         heuristic_lift = {
             dim: getattr(optimized_scores, dim) - getattr(heuristic_baseline, dim)
-            for dim in DIMENSION_WEIGHTS
+            for dim in get_dimension_weights(inputs.analysis.task_type)
         }
         imp = sum(
             heuristic_lift.get(dim, 0) * w
-            for dim, w in DIMENSION_WEIGHTS.items()
+            for dim, w in get_dimension_weights(inputs.analysis.task_type).items()
         )
         db_opt.improvement_score = round(max(0.0, min(10.0, imp)), 2)
     elif deltas:
         imp = sum(
             deltas.get(dim, 0) * w
-            for dim, w in DIMENSION_WEIGHTS.items()
+            for dim, w in get_dimension_weights(inputs.analysis.task_type).items()
         )
         db_opt.improvement_score = round(max(0.0, min(10.0, imp)), 2)
     db.add(db_opt)
