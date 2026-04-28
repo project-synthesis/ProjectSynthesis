@@ -709,7 +709,9 @@ async def run_sampling_pipeline(
                     optimization_id=trace_id,
                     context={
                         "scoring_mode": "hybrid",
-                        "overall": optimized_scores.overall,
+                        "overall": optimized_scores.compute_overall(
+                            analysis.task_type if analysis else None
+                        ),
                         "intent_label": analysis.intent_label,
                         "blended": blended_optimized.as_dict(),
                         "raw_llm": blended_optimized.raw_llm,
@@ -858,7 +860,9 @@ async def run_sampling_pipeline(
             score_structure=optimized_scores.structure if optimized_scores else None,
             score_faithfulness=optimized_scores.faithfulness if optimized_scores else None,
             score_conciseness=optimized_scores.conciseness if optimized_scores else None,
-            overall_score=optimized_scores.overall if optimized_scores else None,
+            overall_score=optimized_scores.compute_overall(
+                analysis.task_type if analysis else None
+            ) if optimized_scores else None,
             provider="mcp_sampling",
             routing_tier="sampling",
             model_used=model_ids.get("optimize", "unknown"),
@@ -942,7 +946,9 @@ async def run_sampling_pipeline(
         "domain": effective_domain,
         "domain_raw": domain_raw,
         "strategy_used": effective_strategy,
-        "overall_score": optimized_scores.overall if optimized_scores else None,
+        "overall_score": optimized_scores.compute_overall(
+            analysis.task_type if analysis else None
+        ) if optimized_scores else None,
         "provider": "mcp_sampling",
         "status": "completed",
     })
@@ -950,7 +956,9 @@ async def run_sampling_pipeline(
     logger.info(
         "Sampling pipeline completed in %dms: id=%s strategy=%s overall=%s scoring=%s models=%s phases=%s",
         elapsed_ms, opt_id, effective_strategy,
-        optimized_scores.overall if optimized_scores else scoring_mode,
+        optimized_scores.compute_overall(
+            analysis.task_type if analysis else None
+        ) if optimized_scores else scoring_mode,
         scoring_mode, model_ids, phase_durations,
     )
 

@@ -812,13 +812,19 @@ async def run_hybrid_scoring(
 
     original_scores = blended_original.to_dimension_scores()
     optimized_scores = blended_optimized.to_dimension_scores()
+    # F3.1 (v0.4.10): persistence path must use compute_overall(task_type)
+    # so the stored overall_score reflects the analysis weights when
+    # task_type=='analysis'. The .overall property always uses default
+    # DIMENSION_WEIGHTS (preserved for backward compat at ~30 call sites
+    # without task_type in scope), but here task_type IS in scope.
+    _task_type = analysis.task_type if analysis else None
 
     logger.info(
         "Hybrid scoring complete: llm_opt=%.1f heur_opt=%s blended_opt=%.1f "
         "divergence=%s normalized=%s trace_id=%s",
-        llm_optimized_scores.overall,
+        llm_optimized_scores.compute_overall(_task_type),
         {k: round(v, 1) for k, v in heur_optimized.items()},
-        optimized_scores.overall,
+        optimized_scores.compute_overall(_task_type),
         blended_optimized.divergence_flags,
         blended_optimized.normalization_applied,
         trace_id,
@@ -834,7 +840,7 @@ async def run_hybrid_scoring(
             optimization_id=trace_id,
             context={
                 "scoring_mode": "hybrid",
-                "overall": optimized_scores.overall,
+                "overall": optimized_scores.compute_overall(_task_type),
                 "intent_label": analysis.intent_label,
                 "blended": blended_optimized.as_dict(),
                 "raw_llm": blended_optimized.raw_llm,
@@ -1023,6 +1029,9 @@ async def persist_and_propagate(
     original_scores = scoring.original_scores if scoring else None
     heuristic_baseline = scoring.heuristic_baseline_scores if scoring else None
     deltas = scoring.deltas if scoring else None
+    # F3.1 (v0.4.10): persistence sites use compute_overall(task_type)
+    # so analysis-class prompts store the analysis-weighted overall.
+    _task_type = analysis.task_type if analysis else None
 
     db_opt = Optimization(
         id=inputs.opt_id,
@@ -1043,7 +1052,7 @@ async def persist_and_propagate(
         score_structure=optimized_scores.structure if optimized_scores else None,
         score_faithfulness=optimized_scores.faithfulness if optimized_scores else None,
         score_conciseness=optimized_scores.conciseness if optimized_scores else None,
-        overall_score=optimized_scores.overall if optimized_scores else None,
+        overall_score=optimized_scores.compute_overall(_task_type) if optimized_scores else None,
         provider=inputs.provider_name,
         routing_tier="internal",
         model_used=inputs.model_ids.get("optimize", inputs.optimizer_model),
@@ -1144,7 +1153,7 @@ async def persist_and_propagate(
         from app.services.pattern_injection import record_pattern_usefulness
 
         _overall = (
-            optimized_scores.overall if optimized_scores is not None else None
+            optimized_scores.compute_overall(_task_type) if optimized_scores is not None else None
         )
         bumped = await record_pattern_usefulness(
             db,
@@ -1201,7 +1210,7 @@ async def persist_and_propagate(
             "domain": inputs.effective_domain,
             "domain_raw": inputs.domain_raw,
             "strategy_used": inputs.effective_strategy,
-            "overall_score": optimized_scores.overall if optimized_scores else None,
+            "overall_score": optimized_scores.compute_overall(_task_type) if optimized_scores else None,
             "provider": inputs.provider_name,
             "status": "completed",
         })
@@ -1221,6 +1230,10 @@ def build_pipeline_result(inputs: PersistenceInputs) -> PipelineResult:
     original_scores = scoring.original_scores if scoring else None
     heuristic_baseline = scoring.heuristic_baseline_scores if scoring else None
     deltas = scoring.deltas if scoring else None
+    # F3.1 (v0.4.10): use compute_overall(task_type) so the
+    # PipelineResult's overall_score matches the analysis-weighted value
+    # persisted to the DB (otherwise UI shows different number than DB).
+    _task_type = analysis.task_type if analysis else None
 
     result_kwargs = dict(
         id=inputs.opt_id,
@@ -1234,7 +1247,7 @@ def build_pipeline_result(inputs: PersistenceInputs) -> PipelineResult:
         original_scores=original_scores,
         heuristic_baseline_scores=heuristic_baseline,
         score_deltas=deltas,
-        overall_score=optimized_scores.overall if optimized_scores else None,
+        overall_score=optimized_scores.compute_overall(_task_type) if optimized_scores else None,
         provider=inputs.provider_name,
         routing_tier="internal",
         model_used=inputs.model_ids.get("optimize", inputs.optimizer_model),

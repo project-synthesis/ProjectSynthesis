@@ -555,3 +555,146 @@ class TestFalsePremise:
         # The ONLY difference between A and B is the presence of
         # 'possible_false_premise' in A's flags.
         assert "possible_false_premise" not in b.divergence_flags
+
+
+# ---------------------------------------------------------------------------
+# F3.1 (v0.4.10) — Persistence wiring for analysis-weighted overall
+# ---------------------------------------------------------------------------
+
+
+class TestPersistenceWeightWiring:
+    """v0.4.9 F3 wired analysis weights into ``score_blender.blend_scores``
+    but the persisted ``overall_score`` field reads from
+    ``DimensionScores.overall`` (the @property), which always uses the
+    default ``DIMENSION_WEIGHTS``. The analysis weights are computed but
+    never reach the database.
+
+    cycle-19→22 replay confirmed: stored mean 7.155 = v3 default;
+    computed-with-v4 mean 7.208. Delta lost: +0.053 across 19 prompts.
+
+    The fix wires ``compute_overall(task_type)`` into the persistence
+    path. These tests pin the bug and the fix.
+    """
+
+    def test_blended_overall_diverges_from_property_for_analysis(self):
+        """RED: ``BlendedScores.overall`` (analysis-weighted) and
+        ``BlendedScores.to_dimension_scores().overall`` (default-weighted
+        property) must produce different values for a fixture where v3
+        and v4 schemas would diverge.
+
+        This is the structural surface of the bug — converting Blended →
+        DimensionScores via ``to_dimension_scores()`` LOSES the
+        analysis-weighted overall.
+        """
+        # Fixture: high clarity/specificity/structure, low faithfulness/conciseness
+        # v3 default: 0.22*9 + 0.22*9 + 0.15*8 + 0.26*4 + 0.15*4 = 6.80
+        # v4 analysis: 0.25*9 + 0.25*9 + 0.20*8 + 0.20*4 + 0.10*4 = 7.30
+        llm = DimensionScores(
+            clarity=9.0, specificity=9.0, structure=8.0,
+            faithfulness=4.0, conciseness=4.0,
+        )
+        heur = {"clarity": 9.0, "specificity": 9.0, "structure": 8.0,
+                "faithfulness": 4.0, "conciseness": 4.0}
+
+        blended = blend_scores(
+            llm, heur, historical_stats=None,
+            prompt_text="Audit something.", task_type="analysis",
+        )
+
+        # The dataclass field stores the analysis-weighted overall.
+        assert blended.overall == pytest.approx(7.30, abs=0.05), (
+            f"Analysis-weighted overall should be ~7.30, got {blended.overall}"
+        )
+
+        # The property on DimensionScores uses DEFAULT weights — bug surface.
+        ds = blended.to_dimension_scores()
+        assert ds.overall == pytest.approx(6.80, abs=0.05), (
+            f"Property uses default weights, expected ~6.80, got {ds.overall}"
+        )
+
+        # Divergence ≥ 0.4 confirms the persistence sites that read
+        # `.overall` instead of `.compute_overall(task_type)` are storing
+        # the wrong value for analysis-class prompts.
+        assert blended.overall - ds.overall >= 0.4, (
+            f"Persistence-bug fixture must have ≥ 0.4 divergence between "
+            f"BlendedScores.overall ({blended.overall}) and "
+            f"DimensionScores.overall ({ds.overall})"
+        )
+
+    def test_compute_overall_recovers_analysis_weighting(self):
+        """GREEN: ``DimensionScores.compute_overall('analysis')`` recovers
+        the analysis-weighted value that the @property loses.
+
+        This is the call signature that persistence sites must use to
+        match ``BlendedScores.overall`` (the source of truth from
+        ``score_blender``).
+        """
+        llm = DimensionScores(
+            clarity=9.0, specificity=9.0, structure=8.0,
+            faithfulness=4.0, conciseness=4.0,
+        )
+        heur = {"clarity": 9.0, "specificity": 9.0, "structure": 8.0,
+                "faithfulness": 4.0, "conciseness": 4.0}
+
+        blended = blend_scores(
+            llm, heur, historical_stats=None,
+            prompt_text="Audit something.", task_type="analysis",
+        )
+        ds = blended.to_dimension_scores()
+
+        # compute_overall(task_type) recovers the analysis-weighted value.
+        assert ds.compute_overall("analysis") == pytest.approx(
+            blended.overall, abs=1e-9,
+        ), (
+            "DimensionScores.compute_overall('analysis') must equal "
+            "BlendedScores.overall (the analysis-weighted source of truth)"
+        )
+
+        # And compute_overall(None) matches the @property (default weights).
+        assert ds.compute_overall(None) == pytest.approx(
+            ds.overall, abs=1e-9,
+        )
+
+    def test_persistence_sites_use_compute_overall(self):
+        """REGRESSION: every ``optimized_scores.overall`` reference in
+        the persistence path of ``pipeline_phases.persist_and_propagate``
+        and the equivalent sites in ``sampling_pipeline``,
+        ``batch_pipeline``, ``pipeline`` MUST be ``compute_overall(task_type)``.
+
+        This is a code-structure assertion that catches regressions where
+        a future refactor reintroduces the bug. Refinement service is
+        exempt — refinement has no analysis re-classification, so passing
+        None and degrading to property semantics is the intended behavior.
+        """
+        from pathlib import Path
+
+        backend_root = Path(__file__).resolve().parent.parent / "app" / "services"
+        # Files where analysis.task_type is in scope and overall_score
+        # is persisted or emitted in events.
+        gated_files = [
+            "pipeline_phases.py",
+            "sampling_pipeline.py",
+            "batch_pipeline.py",
+            "pipeline.py",
+        ]
+
+        for fname in gated_files:
+            text = (backend_root / fname).read_text()
+            # The bug pattern: `optimized_scores.overall` (without
+            # `.compute_overall`). These call sites should use
+            # `compute_overall(task_type)` since task_type is in scope.
+            #
+            # We allow a single legitimate exception: log-line debug
+            # output where `optimized_scores.overall` may appear inside
+            # `logger.info` for human inspection of the property value.
+            for line_no, line in enumerate(text.splitlines(), 1):
+                stripped = line.strip()
+                # Skip log lines, comments, docstrings.
+                if stripped.startswith(("#", '"', "'", "logger.")):
+                    continue
+                if "optimized_scores.overall" in line and "compute_overall" not in line:
+                    pytest.fail(
+                        f"{fname}:{line_no} uses `optimized_scores.overall` "
+                        f"(default weights) — must be `compute_overall(task_type)` "
+                        f"for analysis-class fidelity. Line: {stripped}"
+                    )

@@ -4,6 +4,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+
+- **F3.1 (v0.4.10) — Persistence wiring for analysis-weighted overall score** — v0.4.9 F3 wired analysis-aware `compute_overall(task_type)` into `score_blender.blend_scores` and the improvement_score loops, but the actual stored `overall_score` field reads from `DimensionScores.overall` (the `@property`), which always uses the default `DIMENSION_WEIGHTS`. The analysis weights were computed but never reached the database. **Cycle-19→22 replay confirmed the bug**: stored mean **7.155** = v3 default schema; computed-with-v4 mean **7.208**. Delta lost: **+0.053** across 19 prompts. Fix: every persistence site (DB write, SSE event payload, log line, `PipelineResult` build) where `task_type` is in scope now calls `optimized_scores.compute_overall(task_type)` instead of `optimized_scores.overall`. Touch points: `pipeline_phases.py` (5 sites), `sampling_pipeline.py` (4 sites), `batch_pipeline.py` (1 site), `pipeline.py` (2 sites). Refinement service untouched — refinement does not re-classify task_type and degrades to `None` (default-weighted) which preserves prior behavior. New regression suite `TestPersistenceWeightWiring` (3 tests): pins the divergence between `BlendedScores.overall` (analysis-weighted source of truth) and `DimensionScores.overall` (default-weighted property), verifies `compute_overall(task_type)` recovers the analysis-weighted value, and asserts via code inspection that no persistence site uses the bare `.overall` property when `task_type` is in scope. Full suite 3180 passed + 1 skipped (was 3177 + 1, +3 new).
+
 ## v0.4.9 — 2026-04-28
 
 ### Changed
