@@ -20,6 +20,7 @@
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
   import { samplingGuide } from '$lib/stores/sampling-guide.svelte';
   import { routing } from '$lib/stores/routing.svelte';
+  import { rateLimitStore } from '$lib/stores/rate-limit.svelte';
   import { addToast } from '$lib/stores/toast.svelte';
   import { forceSamplingTooltip, forcePassthroughTooltip } from '$lib/utils/mcp-tooltips';
   import { STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
@@ -49,6 +50,38 @@
 
   let showProvider = $state(false);
   let showSystem = $state(false);
+  // Rate-limits accordion: auto-opens when a limit becomes active so
+  // users can immediately see the detail card without clicking. The
+  // accordion stays open across limit-clear so users aren't surprised
+  // by it collapsing mid-glance.
+  let showRateLimits = $state(false);
+  $effect(() => {
+    if (rateLimitStore.isAnyActive) showRateLimits = true;
+  });
+  const rateLimitActiveCount = $derived(rateLimitStore.activeList.length);
+
+  function providerLabel(p: string): string {
+    // Plan-agnostic label -- the Claude CLI provider works against any
+    // Anthropic plan (Pro / Team / Enterprise / MAX / Bedrock / Vertex).
+    // Don't bake a specific plan name into UI labels.
+    switch (p) {
+      case 'claude_cli':
+        return 'Claude CLI';
+      case 'anthropic_api':
+        return 'Anthropic API';
+      default:
+        return p;
+    }
+  }
+
+  function formatRateLimitWait(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m < 60) return `${m}m ${s}s`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+  }
 
   // One-time prefetch on mount (best effort)
   let settingsLoaded = false;
@@ -570,6 +603,75 @@
             {/if}
           </div>
         {/if}
+      {/if}
+    </div>
+
+    <!-- Rate limits (collapsible) -- always visible so users have a
+         single place to check provider rate-limit state, even when no
+         limit is currently active. v0.4.12: SSE-driven via
+         rate_limit_active / rate_limit_cleared events. When a limit is
+         active, the workbench renders a global banner above the editor;
+         this card is the canonical detail surface. -->
+    <div class="sub-section">
+      <button
+        class="accordion-heading"
+        onclick={() => showRateLimits = !showRateLimits}
+        aria-expanded={showRateLimits}
+      >
+        <span class="accordion-arrow" class:accordion-arrow--open={showRateLimits}>&#x25B8;</span>
+        <span class="sub-heading sub-heading--tier">Rate limits</span>
+        <span class="accordion-summary">
+          {#if rateLimitStore.isAnyActive}
+            <span style="color: var(--color-neon-amber, #f59e0b);">{rateLimitActiveCount} active</span>
+          {:else}
+            none
+          {/if}
+        </span>
+      </button>
+      {#if showRateLimits}
+        <div class="card-terminal">
+          {#if rateLimitStore.isAnyActive}
+            {#each rateLimitStore.activeList as entry (entry.provider)}
+              <div class="data-row">
+                <span class="data-label">{providerLabel(entry.provider)}</span>
+                <span class="data-value font-mono" style="color: var(--color-neon-amber, #f59e0b);">
+                  {#if entry.seconds_remaining != null}
+                    {formatRateLimitWait(entry.seconds_remaining)}
+                  {:else}
+                    rate-limited
+                  {/if}
+                </span>
+              </div>
+              {#if entry.reset_at_iso}
+                <div class="data-row">
+                  <span class="data-label" style="opacity: 0.6;">↳ resets at</span>
+                  <span class="data-value font-mono" style="opacity: 0.8;">
+                    {new Date(entry.reset_at_iso).toLocaleString()}
+                  </span>
+                </div>
+              {/if}
+            {/each}
+            <div class="data-row" style="margin-top: 0.5em;">
+              <span class="data-label">Fallback</span>
+              <span class="data-value font-mono neon-yellow">passthrough (heuristic-only)</span>
+            </div>
+          {:else}
+            <div class="data-row">
+              <span class="data-label">Status</span>
+              <span class="data-value font-mono" style="color: var(--color-neon-green);">
+                clear
+              </span>
+            </div>
+            <div class="data-row" style="opacity: 0.6;">
+              <span class="data-label">Behavior</span>
+              <span class="data-value">
+                When a provider returns 429 mid-batch, prompts continue in
+                passthrough mode (heuristic scoring) until the limit lifts.
+                Banner above the editor shows live countdown.
+              </span>
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
 

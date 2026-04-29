@@ -210,9 +210,19 @@ export interface FeedbackResponse {
 // ---- Error Class ----
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /**
+   * Backend-supplied error category (v0.4.12) — surfaced from
+   * ``app/main.py::_global_exception_handler`` on 500 responses.
+   * UIs can match on this to render category-aware copy
+   * ("Rate-limited", "Database is locked, retry", "Bad input", ...)
+   * instead of a generic "Internal server error".
+   */
+  public errorType: string | undefined;
+
+  constructor(public status: number, message: string, errorType?: string) {
     super(message);
     this.name = 'ApiError';
+    this.errorType = errorType;
   }
 }
 
@@ -244,7 +254,14 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   });
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new ApiError(resp.status, body.detail || resp.statusText);
+    // ``error_type`` (v0.4.12) carries the backend exception class name
+    // for category-aware UI handling. Falls through gracefully when the
+    // response body lacks the field (older backends or non-500 errors).
+    throw new ApiError(
+      resp.status,
+      body.detail || resp.statusText,
+      typeof body.error_type === 'string' ? body.error_type : undefined,
+    );
   }
   return resp.json();
 }
@@ -723,6 +740,14 @@ export function connectEventStream(
         'agent_changed',
         'update_available',
         'update_complete',
+        // v0.4.12: rate-limit observability + graceful degradation.
+        // Emitted by probe/seed batch paths when a provider returns 429
+        // and the pipeline falls back to passthrough mode.  The
+        // ``rate_limit_cleared`` companion fires when any batch
+        // succeeds against a previously-limited provider, so the UI
+        // banner clears without waiting for a stale reset_at to elapse.
+        'rate_limit_active',
+        'rate_limit_cleared',
     ];
     for (const type of eventTypes) {
         es.addEventListener(type, (e: MessageEvent) => {

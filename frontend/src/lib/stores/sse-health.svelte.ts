@@ -21,12 +21,20 @@ export const HEALTHY_THRESHOLD_MS = 2_000;
 export const DEGRADED_THRESHOLD_MS = 5_000;
 /** No event for this long → disconnected (2x server keepalive). */
 export const STALENESS_MS = 90_000;
-/** Maximum reconnection attempts before giving up. */
+/** Maximum exponential-backoff reconnection attempts before falling
+ *  into slow-poll mode. Pre-v0.4.12 this was the "give up forever"
+ *  point; now the store falls into a slow-poll cadence so the
+ *  connection eventually recovers without a manual page reload when
+ *  the backend is restarted (typical during dev). */
 export const MAX_RETRIES = 10;
 /** Initial backoff delay. */
 export const BASE_DELAY_MS = 1_000;
 /** Maximum backoff delay (cap). */
 export const MAX_DELAY_MS = 16_000;
+/** After ``MAX_RETRIES`` is reached, keep retrying at this slow-poll
+ *  cadence forever. Tuned to be unobtrusive (low backend load) but
+ *  fast enough to recover within 30s of a backend restart. */
+export const SLOW_POLL_DELAY_MS = 30_000;
 /** Jitter factor: delay varies by +/- this fraction. */
 export const JITTER_FACTOR = 0.2;
 
@@ -79,8 +87,13 @@ class SSEHealthStore {
             ].join('\n');
         }
         // disconnected
-        if (this.retryCapped) {
-            return 'SSE disconnected\nRetries exhausted';
+        if (this.retryCapped && this.retryAt != null) {
+            // Slow-poll mode (post-MAX_RETRIES). Connection still
+            // self-heals automatically; user shouldn't need to refresh.
+            const remaining = Math.max(
+                0, Math.ceil((this.retryAt - this._now) / 1000),
+            );
+            return `SSE disconnected\nSlow-poll retry in ${remaining}s`;
         }
         if (this.retryAt != null) {
             const remaining = Math.max(0, Math.ceil((this.retryAt - this._now) / 1000));
@@ -98,6 +111,7 @@ class SSEHealthStore {
     private _retryTimer: ReturnType<typeof setTimeout> | null = null;
     private _countdownTimer: ReturnType<typeof setInterval> | null = null;
     private _hadError = false;
+    private _visibilityHandler: (() => void) | null = null;
 
     // ------------------------------------------------------------------
     // Public API
@@ -118,6 +132,36 @@ class SSEHealthStore {
         this._onEvent = onEvent;
         this._onReconnect = onReconnect ?? null;
         this._createEventSource();
+
+        // Visibility-change handler: when the user comes back to the tab
+        // after the SSE connection failed (e.g. they let the laptop sleep
+        // or switched away during a backend restart), retry immediately
+        // instead of waiting out the slow-poll cadence. The browser's own
+        // EventSource auto-reconnect doesn't fire on visibility changes,
+        // so without this users see "disconnected" up to 30s after
+        // returning to the tab.
+        if (this._visibilityHandler == null) {
+            this._visibilityHandler = () => {
+                if (
+                    typeof document !== "undefined"
+                    && document.visibilityState === "visible"
+                    && this.connectionState === "disconnected"
+                    && this._eventSource == null
+                ) {
+                    // Cancel pending retry timer and reconnect now.
+                    if (this._retryTimer != null) {
+                        clearTimeout(this._retryTimer);
+                        this._retryTimer = null;
+                    }
+                    this.retryAt = null;
+                    this._stopCountdownTimer();
+                    this._createEventSource();
+                }
+            };
+            if (typeof document !== "undefined") {
+                document.addEventListener("visibilitychange", this._visibilityHandler);
+            }
+        }
     }
 
     /**
@@ -151,6 +195,10 @@ class SSEHealthStore {
         this._closeEventSource();
         this._clearTimers();
         this.connectionState = 'disconnected';
+        if (this._visibilityHandler != null && typeof document !== "undefined") {
+            document.removeEventListener("visibilitychange", this._visibilityHandler);
+            this._visibilityHandler = null;
+        }
     }
 
     /** User-initiated retry after the retry cap is reached. */
@@ -262,15 +310,28 @@ class SSEHealthStore {
             this._retryTimer = null;
         }
 
-        if (this.retryCount >= MAX_RETRIES) {
+        // Slow-poll fallback: when the exponential-backoff budget is
+        // exhausted, don't give up forever -- keep retrying at a slow
+        // cadence (every 30s) so the connection recovers automatically
+        // when the backend comes back. Pre-v0.4.12, the connection
+        // entered "Retries exhausted" terminal state and the user had
+        // to manually refresh the page; on a dev workflow with multiple
+        // ./init.sh restarts in quick succession, this trapped users in
+        // a "disconnected" UI state silently. The slow-poll cadence is
+        // unobtrusive (negligible backend load) but bounded enough that
+        // the user sees recovery within 30s of any backend restart.
+        const isCapped = this.retryCount >= MAX_RETRIES;
+        const delay = isCapped
+            ? this._computeSlowPollDelay()
+            : this._computeBackoff();
+        if (isCapped) {
+            // Keep retryCapped=true as a UI signal but DON'T stop -- the
+            // tooltip shows "slow-poll mode" so users know we're still
+            // trying without aggressive backoff.
             this.retryCapped = true;
-            this.retryAt = null;
-            this._stopCountdownTimer();
-            return;
+        } else {
+            this.retryCount++;
         }
-
-        const delay = this._computeBackoff();
-        this.retryCount++;
         this.retryAt = Date.now() + delay;
         this._now = Date.now();
         this._startCountdownTimer();
@@ -290,6 +351,15 @@ class SSEHealthStore {
         );
         const jitter = (Math.random() * 2 - 1) * JITTER_FACTOR;
         return Math.round(base * (1 + jitter));
+    }
+
+    private _computeSlowPollDelay(): number {
+        // Slow-poll cadence used after MAX_RETRIES is exceeded. Same
+        // jitter factor as the exponential-backoff path so several
+        // clients waking up at once (e.g. many tabs after a backend
+        // restart) don't thunder.
+        const jitter = (Math.random() * 2 - 1) * JITTER_FACTOR;
+        return Math.round(SLOW_POLL_DELAY_MS * (1 + jitter));
     }
 
     // ------------------------------------------------------------------

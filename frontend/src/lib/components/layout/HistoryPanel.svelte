@@ -583,19 +583,39 @@
         return;
       }
 
-      // Success path (may be partial when some ids are stale). Backend fires
-      // per-row `optimization_deleted` SSE + one aggregated `taxonomy_changed`
-      // — those drive surgical row removal + store invalidation via the SSE
-      // dispatcher. No inline reconcile needed on the definite-success branch.
+      // Success path (may be partial when some ids are stale).
+      //
+      // Reactive UX (v0.4.12): optimistically remove the deleted ids from
+      // ``historyItems`` IMMEDIATELY rather than waiting for the SSE
+      // ``optimization_deleted`` round-trip. The SSE chain still fires
+      // and drives store invalidation centrally; but the user sees rows
+      // disappear synchronously with the action they took, not after
+      // some indeterminate SSE delay. Pre-fix: clearing ``selectedIds``
+      // and closing the modal LOOKED like the action completed, but
+      // the rows lingered in the visible list until SSE arrived (or
+      // until manual refresh if SSE happened to drop). The optimistic
+      // filter + SSE listener is idempotent — filtering on an
+      // already-removed id is a no-op.
+      historyItems = historyItems.filter(i => !ids.includes(i.id));
       bulkModalOpen = false;
       selectMode = false;
       selectedIds.clear();
+
+      // Success toast confirms the action. Note: SSE chain still drives
+      // the centralised store invalidation (clusters / domains /
+      // readiness) -- only history list surgery is optimistic here.
       if (res.deleted < res.requested) {
         const missing = res.requested - res.deleted;
         toastsStore.push({
           kind: 'info',
           message: `Deleted ${res.deleted} of ${res.requested}. ${missing} were already gone.`,
           durationMs: 4000,
+        });
+      } else {
+        toastsStore.push({
+          kind: 'info',
+          message: res.deleted === 1 ? 'Deleted 1 optimization.' : `Deleted ${res.deleted} optimizations.`,
+          durationMs: 3000,
         });
       }
     } catch (e) {
@@ -650,14 +670,25 @@
       }
 
       // Translate remaining HTTP statuses into actionable copy. Raw
-      // "Not Found" / "Internal Server Error" strings aren't user-facing —
+      // "Not Found" / "Internal Server Error" strings aren't user-facing --
       // they're protocol artefacts. Modal state (open, selectMode,
       // selectedIds) is preserved so the user can retry without re-selecting.
+      // ``error_type`` (added in v0.4.12 server exception handler) is
+      // surfaced verbatim when present so users see the underlying
+      // category ("OperationalError", "RateLimitError", ...) rather than
+      // a generic 500.
+      const errorType = (e as ApiError).errorType;
       let friendly: string;
-      if (status === 429) {
+      if (status === undefined) {
+        // Network-level failure: server down, DNS, CORS preflight blocked,
+        // browser fetch aborted. Distinct from any HTTP response.
+        friendly = 'Network error reaching the server. Check the backend is running and retry.';
+      } else if (status === 429) {
         friendly = 'Too many deletes. Wait a moment, then retry.';
-      } else if (status !== undefined && status >= 500) {
-        friendly = 'Server error. Retry.';
+      } else if (status >= 500) {
+        friendly = errorType
+          ? `Server error (${errorType}). Retry.`
+          : 'Server error. Retry.';
       } else if (
         err.message &&
         err.message !== 'Not Found' &&
