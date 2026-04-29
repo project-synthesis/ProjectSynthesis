@@ -377,7 +377,7 @@ start_services() {
 # Provider detection + VS Code bridge
 # ---------------------------------------------------------------------------
 # Routing tiers (priority order):
-#   1. internal  — Claude CLI (OAuth/MAX) or Anthropic API key (primary)
+#   1. internal  — Claude CLI (OAuth, any Anthropic plan) or Anthropic API key (primary)
 #   2. sampling  — VS Code bridge (optional enhancement, uses Copilot's LLM)
 #   3. passthrough — assembles prompt for external processing (fallback)
 #
@@ -485,13 +485,13 @@ _VS_HEALTH=""          # Health check result: "" pending, "ok", or error message
 
 _detect_provider() {
     # Mirrors backend/app/providers/detector.py detection order:
-    # 1. claude CLI on PATH → OAuth/MAX subscription (zero marginal cost)
+    # 1. claude CLI on PATH → OAuth (any Anthropic plan: Pro/Team/Enterprise/MAX/Bedrock/Vertex)
     # 2. ANTHROPIC_API_KEY env var → API key
     # 3. Stored credentials in data/.api_credentials → API key (persisted)
     # 4. None → passthrough or sampling only
     if command -v claude &>/dev/null; then
         _PROVIDER_NAME="claude_cli"
-        _PROVIDER_LABEL="Claude CLI (OAuth/MAX)"
+        _PROVIDER_LABEL="Claude CLI (OAuth)"
     elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
         _PROVIDER_NAME="anthropic_api"
         _PROVIDER_LABEL="Anthropic API key (env)"

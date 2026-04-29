@@ -33,11 +33,55 @@ class ProviderError(Exception):
 
 
 class ProviderRateLimitError(ProviderError):
-    """Rate limit exceeded — safe to retry after backoff."""
+    """Rate limit exceeded — safe to retry after backoff.
 
-    def __init__(self, message: str, retry_after: int | None = None) -> None:
+    Attributes:
+        retry_after: Seconds to wait, parsed from ``Retry-After`` header
+            (Anthropic API) when available.
+        reset_at: Absolute UTC time when the rate limit resets, parsed
+            from provider-specific messages when present (e.g. some
+            Claude CLI plans emit ``"resets 3:40pm (America/Toronto)"``).
+            Distinct from ``retry_after`` because some providers emit
+            wall-clock reset times rather than relative seconds. ``None``
+            when the provider doesn't surface a reset wall-clock.
+        provider_name: Name of the provider that raised this — used in
+            user-facing rate-limit messages so multi-provider deployments
+            can identify which limit was hit. Plan-agnostic (the same
+            ``"claude_cli"`` value covers Pro / Team / Enterprise / MAX /
+            Bedrock / Vertex — the limit message format may differ but
+            the user-facing label does not).
+
+    Use ``estimated_wait_seconds`` to get a unified wait estimate
+    regardless of which field the provider populated.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        retry_after: int | None = None,
+        *,
+        reset_at: "datetime | None" = None,  # forward-ref; datetime imported lazily
+        provider_name: str = "",
+    ) -> None:
         super().__init__(message, retryable=True)
         self.retry_after = retry_after
+        self.reset_at = reset_at
+        self.provider_name = provider_name
+
+    @property
+    def estimated_wait_seconds(self) -> int | None:
+        """Best estimate of wait time before retry succeeds.
+
+        Returns:
+            ``reset_at`` delta from now if present, else ``retry_after``,
+            else ``None`` (caller decides default backoff).
+        """
+        if self.reset_at is not None:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            delta = (self.reset_at - now).total_seconds()
+            return max(0, int(delta))
+        return self.retry_after
 
 
 class ProviderAuthError(ProviderError):
@@ -253,10 +297,32 @@ async def call_provider_with_retry(
             if not exc.retryable:
                 raise  # Bad request, auth errors — fail immediately
             last_exc = exc
+            # Rate-limit handling: prefer the provider's own wait estimate
+            # (``reset_at`` -> seconds-until-reset, or ``retry_after``) over
+            # a constant backoff. If the wait exceeds ``_MAX_RETRY_AFTER_CAP``
+            # the call propagates the error after retries are exhausted so
+            # callers can take user-facing action (pause batch, surface
+            # reset_at to UI) rather than block their event loop for the
+            # full reset window.
+            if isinstance(exc, ProviderRateLimitError):
+                est = exc.estimated_wait_seconds
+                if est is not None and est > _MAX_RETRY_AFTER_CAP:
+                    _logger.warning(
+                        "Rate limit wait %ds exceeds cap %ds — propagating "
+                        "to caller (provider=%s, reset_at=%s)",
+                        est, _MAX_RETRY_AFTER_CAP, exc.provider_name,
+                        exc.reset_at,
+                    )
+                    raise
             if attempt < max_retries:
                 delay = retry_delay
-                if isinstance(exc, ProviderRateLimitError) and exc.retry_after:
-                    delay = min(float(exc.retry_after), _MAX_RETRY_AFTER_CAP)
+                if isinstance(exc, ProviderRateLimitError):
+                    est = exc.estimated_wait_seconds
+                    if est is not None:
+                        # Add 2s jitter so retry doesn't fire the moment
+                        # the limit lifts (the provider's clock skew vs ours
+                        # can leave the limit still in effect for a beat).
+                        delay = min(float(est) + 2.0, _MAX_RETRY_AFTER_CAP)
                 _logger.warning(
                     "Provider call failed (attempt %d/%d), retrying in %.0fs: %s",
                     attempt + 1, max_retries + 1, delay, exc,

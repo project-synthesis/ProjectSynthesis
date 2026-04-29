@@ -887,3 +887,101 @@ class TestDetector:
                 provider = det_module.detect_provider()
 
         assert provider is None
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit handling — CLI MAX subscription "resets X" parser
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeCLIRateLimitParser:
+    """Unit tests for ``_parse_cli_reset_time`` — the helper that turns
+    Claude CLI MAX rate-limit messages into UTC datetimes the retry loop
+    + probe service can act on.
+    """
+
+    def test_parse_pm_with_iana_tz(self):
+        """Standard MAX format: ``resets 3:40pm (America/Toronto)``."""
+        from datetime import datetime, timezone
+        from app.providers.claude_cli import _parse_cli_reset_time
+
+        msg = "HTTP 429: You've hit your limit · resets 3:40pm (America/Toronto)"
+        result = _parse_cli_reset_time(msg)
+        assert result is not None
+        # Result must be UTC and represent 3:40 PM Toronto today (or
+        # tomorrow if 3:40 PM ET has already passed). We don't pin to a
+        # specific timestamp because tests run at any wall-clock moment;
+        # we verify the structure: it's a future or near-now UTC datetime.
+        assert result.tzinfo == timezone.utc
+
+    def test_parse_am_format(self):
+        """AM format: ``resets 11:00am``."""
+        from app.providers.claude_cli import _parse_cli_reset_time
+
+        msg = "rate limit · resets 11:00am (UTC)"
+        result = _parse_cli_reset_time(msg)
+        assert result is not None
+        # When tz=UTC and "11:00am", the hour component should be 11.
+        # If 11am has passed today, it rolls forward to tomorrow.
+        assert result.hour == 11
+        assert result.minute == 0
+
+    def test_parse_no_minutes(self):
+        """Hour-only: ``resets 4pm``."""
+        from app.providers.claude_cli import _parse_cli_reset_time
+
+        msg = "resets 4pm (UTC)"
+        result = _parse_cli_reset_time(msg)
+        assert result is not None
+        assert result.hour == 16
+        assert result.minute == 0
+
+    def test_parse_unrecognized_returns_none(self):
+        """Non-matching messages return None so the retry loop falls
+        back to default backoff."""
+        from app.providers.claude_cli import _parse_cli_reset_time
+
+        assert _parse_cli_reset_time("something completely different") is None
+        assert _parse_cli_reset_time("") is None
+        assert _parse_cli_reset_time("HTTP 500: server error") is None
+
+
+class TestProviderRateLimitErrorEstimate:
+    """``ProviderRateLimitError.estimated_wait_seconds`` must unify
+    ``reset_at`` and ``retry_after`` so callers don't need to inspect
+    which field the provider populated."""
+
+    def test_uses_reset_at_when_present(self):
+        from datetime import datetime, timedelta, timezone
+        from app.providers.base import ProviderRateLimitError
+
+        future = datetime.now(timezone.utc) + timedelta(minutes=5)
+        err = ProviderRateLimitError(
+            "rate limited", reset_at=future, provider_name="claude_cli",
+        )
+        # Approximate -- 5 minutes = 300s, allow 5s tolerance for elapsed.
+        assert 290 <= (err.estimated_wait_seconds or 0) <= 305
+
+    def test_falls_back_to_retry_after(self):
+        from app.providers.base import ProviderRateLimitError
+
+        err = ProviderRateLimitError(
+            "rate limited", retry_after=42,
+        )
+        assert err.estimated_wait_seconds == 42
+
+    def test_returns_none_when_neither_set(self):
+        from app.providers.base import ProviderRateLimitError
+
+        err = ProviderRateLimitError("rate limited")
+        assert err.estimated_wait_seconds is None
+
+    def test_clamps_negative_at_zero(self):
+        """If reset_at is in the past (e.g. clock skew), wait is 0 not
+        negative -- caller should retry immediately."""
+        from datetime import datetime, timedelta, timezone
+        from app.providers.base import ProviderRateLimitError
+
+        past = datetime.now(timezone.utc) - timedelta(minutes=1)
+        err = ProviderRateLimitError("rate limited", reset_at=past)
+        assert err.estimated_wait_seconds == 0

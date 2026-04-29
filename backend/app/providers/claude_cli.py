@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from typing import TypeVar
 
 from pydantic import BaseModel
@@ -18,8 +20,14 @@ from app.providers.base import (
     LLMProvider,
     ProviderBadRequestError,
     ProviderError,
+    ProviderRateLimitError,
     TokenUsage,
 )
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # py < 3.9 -- not expected here, kept defensive
+    ZoneInfo = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +47,79 @@ T = TypeVar("T", bound=BaseModel)
 # under `call_provider_with_retry`, surfacing as `network_error: timed out`
 # at the script-level urlopen tier (cycle-23 prompts 3+4, ~590-642s).
 _CLI_TIMEOUT_SECONDS = 600
+
+
+# Claude CLI rate-limit reset wall-clock parser.
+#
+# Some Claude plans (currently MAX, possibly others in the future) emit
+# user-facing wall-clock reset strings like
+#   "HTTP 429: You've hit your limit · resets 3:40pm (America/Toronto)"
+# rather than a relative Retry-After header. When this format is present,
+# we parse it into a UTC datetime so the retry layer can wait the right
+# amount of time and the UI can render a precise countdown.
+#
+# Other plans / message formats fall through cleanly: the parser returns
+# ``None``, ProviderRateLimitError.reset_at stays unset, and
+# ``call_provider_with_retry`` falls back to the default rate-limit
+# backoff (or the ``retry_after`` field when populated by Anthropic-API
+# Retry-After headers).
+#
+# Capturing groups: hour, minute, am/pm, tz_name.
+_CLI_RATE_LIMIT_RESET_RX = re.compile(
+    r"resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\s*(?:[·•]\s*)?\(?([A-Za-z]+(?:/[A-Za-z_]+)?)?\)?",
+    re.IGNORECASE,
+)
+
+
+def _parse_cli_reset_time(message: str) -> datetime | None:
+    """Parse Claude CLI rate-limit reset wall-clock time → UTC datetime.
+
+    Plan-agnostic: handles message formats currently emitted by the MAX
+    plan (``"resets 3:40pm (America/Toronto)"``) and any other plan that
+    follows the same ``resets <time> (<TZ>)`` pattern. When the message
+    doesn't match -- e.g. a Claude API plan returning a structured
+    Retry-After header instead, or a future format change -- this returns
+    ``None`` and the caller falls back to default rate-limit backoff
+    behaviour. The pipeline degrades gracefully on either path; the
+    parser exists to provide a precise countdown when possible.
+
+    We anchor parsed time against the resolved IANA timezone's "today"
+    and roll forward 1 day if the reset time has already passed (limits
+    typically reset at the same wall-clock time daily).
+    """
+    if not message:
+        return None
+    m = _CLI_RATE_LIMIT_RESET_RX.search(message)
+    if not m:
+        return None
+    try:
+        hour = int(m.group(1))
+        minute = int(m.group(2) or "0")
+        ampm = (m.group(3) or "").lower()
+        tz_name = m.group(4) or "UTC"
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        if ampm == "am" and hour == 12:
+            hour = 0
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+        if ZoneInfo is not None:
+            try:
+                tz = ZoneInfo(tz_name)
+            except Exception:
+                tz = timezone.utc
+        else:
+            tz = timezone.utc
+        now_local = datetime.now(tz)
+        reset_local = now_local.replace(
+            hour=hour, minute=minute, second=0, microsecond=0,
+        )
+        # If reset time has already passed today, it resets tomorrow.
+        if reset_local <= now_local:
+            reset_local = reset_local + timedelta(days=1)
+        return reset_local.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 class ClaudeCLIProvider(LLMProvider):
@@ -173,18 +254,36 @@ class ClaudeCLIProvider(LLMProvider):
                     error_message = stdout_text
 
             haystack = (error_message + " " + stderr_text).lower()
-            retryable = (
+            is_rate_limit = (
                 "rate limit" in haystack
-                or "overloaded" in haystack
-                or "timeout" in haystack
+                or "you've hit your limit" in haystack
                 or "429" in haystack
+                or api_status == 429
+            )
+            full_message = (
+                f"Claude CLI exited with code {proc.returncode}: {error_message}"
+            )
+            if is_rate_limit:
+                # Typed rate-limit error -- caller can wait until reset.
+                # CLI MAX subscription emits wall-clock reset time
+                # ("resets 3:40pm (America/Toronto)"); we parse it into a
+                # UTC datetime so ``call_provider_with_retry`` and the
+                # batch primitives can wait the right amount of time
+                # (or surface reset_at to the UI when the wait exceeds
+                # the in-process retry cap).
+                reset_at = _parse_cli_reset_time(error_message)
+                raise ProviderRateLimitError(
+                    full_message,
+                    reset_at=reset_at,
+                    provider_name="claude_cli",
+                )
+            retryable = (
+                "overloaded" in haystack
+                or "timeout" in haystack
                 or "529" in haystack
-                or api_status in (429, 529, 503)
+                or api_status in (529, 503)
             )
-            raise ProviderError(
-                f"Claude CLI exited with code {proc.returncode}: {error_message}",
-                retryable=retryable,
-            )
+            raise ProviderError(full_message, retryable=retryable)
 
         # Parse the CLI JSON envelope
         try:

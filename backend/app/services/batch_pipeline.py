@@ -132,6 +132,26 @@ class PendingOptimization:
     project_id: str | None = None
     context_sources: dict | None = None
     error: str | None = None  # Non-None if this prompt failed
+    # v0.4.12 rate-limit observability. Separate from ``heuristic_flags``
+    # (which is a list of divergence_flags from the blender) to avoid a
+    # type collision -- the rate-limit fallback path was overloading
+    # heuristic_flags with a dict, causing AttributeError downstream
+    # when consumers called ``.get()`` on a list-typed flag from a
+    # different prompt in the same batch.
+    rate_limit_meta: dict | None = None
+    # v0.4.12 (task #97): pattern-injection provenance must be written
+    # POST-COMMIT (FK on Optimization), so we stash the auto-inject
+    # output here and let ``bulk_persist`` write the
+    # ``OptimizationPattern(relationship='injected')`` rows after the
+    # parent commit lands. Mirrors what ``pipeline_phases.persist_and_propagate``
+    # does for the canonical pipeline.py path. Without this, probe and
+    # seed rows had ZERO ``relationship='injected'`` join rows even
+    # when patterns were used during their generation -- the
+    # SAVEPOINT-inside-auto_inject_patterns silently rolled back on
+    # the FK miss.
+    auto_injected_patterns: list[Any] | None = None  # list[InjectedPattern]
+    auto_injected_cluster_ids: list[str] | None = None
+    auto_injected_similarity_map: dict[str, float] | None = None
 
 
 async def run_single_prompt(
@@ -288,6 +308,13 @@ async def run_single_prompt(
         divergence_alerts_text: str | None = None
         enrichment_sources: dict[str, Any] = {}
         context_flags: dict[str, bool] = {}
+        # Provenance-stash for task #97. Declared in OUTER scope so both
+        # the unified-enrichment path AND the legacy-inline path
+        # populate the same names; ``return PendingOptimization`` below
+        # reads them once at the bottom.
+        stashed_injected: list[Any] = []
+        stashed_cluster_ids: list[str] = []
+        stashed_similarity_map: dict[str, float] = {}
 
         if context_service is not None and session_factory is not None:
             try:
@@ -331,6 +358,31 @@ async def run_single_prompt(
                 if adaptation_text:
                     context_flags["strategy_intelligence"] = True
 
+                # Capture provenance hand-off (task #97). The unified
+                # enrichment path internally calls auto_inject_patterns
+                # with record_provenance=False (FK-on-Optimization not
+                # yet committed) and exposes the result via
+                # ``enrichment_meta["applied_pattern_texts"]``. We
+                # rebuild the cluster_ids + similarity_map from those
+                # dicts so ``bulk_persist`` can write topic-row
+                # provenance post-commit. Global / cross-cluster
+                # provenance remains pending a richer enrichment_meta
+                # surface; topic-row is the most important consumer
+                # (drives the Inspector's "applied patterns" section).
+                _ptn_details = (
+                    enrichment.enrichment_meta or {}
+                ).get("applied_pattern_texts") or []
+                if _ptn_details:
+                    for _d in _ptn_details:
+                        _cid = _d.get("cluster_id") or ""
+                        if not _cid or _d.get("source") == "explicit":
+                            continue
+                        if _cid not in stashed_cluster_ids:
+                            stashed_cluster_ids.append(_cid)
+                        _sim = _d.get("similarity")
+                        if _sim is not None:
+                            stashed_similarity_map[_cid] = float(_sim)
+
                 # E1: record heuristic-vs-LLM classification agreement.
                 # Mirrors pipeline.py so the health endpoint's agreement +
                 # strategy-intel-hit-rate counters reflect seed traffic too.
@@ -360,6 +412,12 @@ async def run_single_prompt(
         else:
             # Legacy inline enrichment path (kept for callers that haven't been
             # migrated to pass a context_service). Matches pre-Fix-2 behavior.
+            # Capture-only auto-injection: provenance is written by
+            # ``bulk_persist`` POST-commit (FK-on-Optimization fires
+            # otherwise; see PendingOptimization docstring). Same
+            # contract pipeline_phases uses for the canonical path.
+            # ``stashed_*`` declared in outer scope so both branches
+            # populate the same names.
             if taxonomy_engine is not None and session_factory is not None and prompt_embedding is not None:
                 try:
                     async with session_factory() as _enrich_db:
@@ -369,10 +427,21 @@ async def run_single_prompt(
                             db=_enrich_db,
                             trace_id=trace_id,
                             optimization_id=opt_id,
+                            record_provenance=False,  # post-commit only
                         )
                     if injected:
                         applied_patterns_text = format_injected_patterns(injected)
                         context_flags["cluster_injection"] = True
+                        stashed_injected = list(injected)
+                        stashed_cluster_ids = list(_cluster_ids)
+                        # Build similarity_map from per-pattern similarity
+                        # (same approach record_injection_provenance uses
+                        # when caller doesn't pass a map).
+                        for ip in injected:
+                            cid = getattr(ip, "cluster_id", None)
+                            sim = getattr(ip, "similarity", None)
+                            if cid and sim is not None:
+                                stashed_similarity_map[cid] = sim
                 except Exception as _pi_exc:
                     logger.debug("Pattern injection failed for prompt %d: %s", prompt_index, _pi_exc)
 
@@ -618,12 +687,45 @@ async def run_single_prompt(
                 **enrichment_sources,
                 **context_flags,
             },
+            # Provenance-on-commit hand-off (task #97): stash the
+            # injected-pattern triple here so ``bulk_persist`` can
+            # invoke ``record_injection_provenance`` after the parent
+            # row commits. Empty when no patterns matched.
+            auto_injected_patterns=stashed_injected or None,
+            auto_injected_cluster_ids=stashed_cluster_ids or None,
+            auto_injected_similarity_map=stashed_similarity_map or None,
         )
 
     except Exception as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
+        from app.providers.base import ProviderRateLimitError
+        if isinstance(exc, ProviderRateLimitError):
+            # Rate-limit fallback: instead of marking the prompt failed,
+            # downgrade to a passthrough-style row -- heuristic-only
+            # scoring, no LLM, optimized_prompt=raw_prompt. The user
+            # gets a usable (degraded) row rather than a broken probe;
+            # the heuristic_flags carry reset_at so the UI can render
+            # "rate-limited until X · running in passthrough mode" and
+            # the user can re-run after the limit clears for the full
+            # LLM pipeline. Mirrors the canonical passthrough tier
+            # contract (heuristic_scorer + optimized_prompt = raw)
+            # which already exists for users who explicitly select it.
+            return _build_passthrough_fallback_pending(
+                opt_id=opt_id,
+                trace_id=trace_id,
+                batch_id=batch_id,
+                raw_prompt=raw_prompt,
+                duration_ms=duration_ms,
+                provider_name=exc.provider_name or "claude_cli",
+                reset_at=exc.reset_at,
+                estimated_wait_seconds=exc.estimated_wait_seconds,
+                repo_full_name=repo_full_name,
+                project_id=project_id,
+                tier=tier,
+            )
         logger.warning(
-            "Batch prompt %d/%d failed: %s", prompt_index + 1, total_prompts, exc
+            "Batch prompt %d/%d failed: %s",
+            prompt_index + 1, total_prompts, exc,
         )
         return PendingOptimization(
             id=opt_id,
@@ -635,6 +737,98 @@ async def run_single_prompt(
             duration_ms=duration_ms,
             routing_tier=tier,
         )
+
+
+def _build_passthrough_fallback_pending(
+    *,
+    opt_id: str,
+    trace_id: str,
+    batch_id: str,
+    raw_prompt: str,
+    duration_ms: int,
+    provider_name: str,
+    reset_at: Any,
+    estimated_wait_seconds: int | None,
+    repo_full_name: str | None,
+    project_id: str | None,
+    tier: str,
+) -> "PendingOptimization":
+    """Rate-limit graceful-degradation fallback.
+
+    Builds a ``PendingOptimization`` row that mirrors the canonical
+    passthrough tier (heuristic-only scoring, no LLM call, no optimize
+    phase) but tags it as a *fallback* so consumers can distinguish it
+    from a user-selected passthrough invocation.
+
+    Why this exists: when ANY phase of ``run_single_prompt`` (analyze /
+    optimize / score) raises ``ProviderRateLimitError``, the alternative
+    is to mark the prompt failed and lose the user's batch. Falling
+    back to the passthrough path produces a usable row -- visible in
+    history, scored heuristically, taggable in the UI as "rate-limited
+    fallback (heuristic only)" -- so the probe/seed batch is still
+    productive and the user can re-run the full LLM pipeline after
+    the rate limit lifts.
+
+    The row carries ``heuristic_flags.rate_limited=True`` plus
+    ``reset_at_iso`` so the SSE event chain + final report can render
+    the rate-limit context globally.
+    """
+    from app.services.heuristic_scorer import HeuristicScorer
+
+    heur = HeuristicScorer.score_prompt(raw_prompt)
+    # F3.1 default weights -- compute_overall takes a DimensionScores
+    # instance; build it from the dict.
+    from app.schemas.pipeline_contracts import DimensionScores
+    scores = DimensionScores(**heur)
+    overall = scores.compute_overall(task_type=None)  # default weights
+
+    return PendingOptimization(
+        id=opt_id,
+        trace_id=trace_id,
+        batch_id=batch_id,
+        raw_prompt=raw_prompt,
+        # Passthrough contract: optimized_prompt mirrors raw (no LLM
+        # rewrite happened). UI labels this as "no rewrite -- fallback".
+        optimized_prompt=raw_prompt,
+        task_type="general",
+        strategy_used="passthrough_fallback",
+        changes_summary=(
+            f"Rate-limited by {provider_name}; ran in passthrough fallback "
+            f"(heuristic-only scoring, no LLM rewrite). Re-run after "
+            f"{(reset_at.isoformat() if reset_at else 'limit lifts')} "
+            f"for full pipeline."
+        ),
+        score_clarity=heur["clarity"],
+        score_specificity=heur["specificity"],
+        score_structure=heur["structure"],
+        score_faithfulness=heur["faithfulness"],
+        score_conciseness=heur["conciseness"],
+        overall_score=overall,
+        scoring_mode="heuristic",
+        intent_label="general",
+        domain="general",
+        domain_raw="general",
+        duration_ms=duration_ms,
+        status="completed",
+        provider=provider_name,
+        routing_tier="passthrough_fallback",
+        repo_full_name=repo_full_name,
+        project_id=project_id,
+        rate_limit_meta={
+            "rate_limited": True,
+            "fallback": "passthrough",
+            "provider": provider_name,
+            "reset_at_iso": reset_at.isoformat() if reset_at else None,
+            "estimated_wait_seconds": estimated_wait_seconds,
+        },
+        context_sources={
+            "source": "rate_limit_passthrough_fallback",
+            "batch_id": batch_id,
+        },
+        original_scores=heur,
+        score_deltas={k: 0.0 for k in heur},
+        improvement_score=0.0,
+    )
 
 
 def estimate_batch_cost(
