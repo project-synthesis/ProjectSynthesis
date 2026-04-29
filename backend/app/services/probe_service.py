@@ -47,6 +47,7 @@ from app.schemas.probes import (
 )
 from app.services.batch_orchestrator import BATCH_CONCURRENCY_BY_TIER
 from app.services.probe_generation import generate_probe_prompts
+from app.services.taxonomy.event_logger import get_event_logger
 
 logger = logging.getLogger(__name__)
 
@@ -413,9 +414,6 @@ class ProbeService:
             # Phase 1: Grounding
             # ----------------------------------------------------------
             try:
-                from app.services.taxonomy.event_logger import (
-                    get_event_logger,
-                )
                 get_event_logger().log_decision(
                     path="probe",
                     op="probe_started",
@@ -446,9 +444,6 @@ class ProbeService:
                 row.completed_at = datetime.now(timezone.utc)
                 await self.db.commit()
                 try:
-                    from app.services.taxonomy.event_logger import (
-                        get_event_logger,
-                    )
                     get_event_logger().log_decision(
                         path="probe",
                         op="probe_failed",
@@ -532,9 +527,6 @@ class ProbeService:
             )
 
             try:
-                from app.services.taxonomy.event_logger import (
-                    get_event_logger,
-                )
                 get_event_logger().log_decision(
                     path="probe",
                     op="probe_grounding",
@@ -570,9 +562,6 @@ class ProbeService:
                 row.completed_at = datetime.now(timezone.utc)
                 await self.db.commit()
                 try:
-                    from app.services.taxonomy.event_logger import (
-                        get_event_logger,
-                    )
                     get_event_logger().log_decision(
                         path="probe",
                         op="probe_failed",
@@ -599,9 +588,6 @@ class ProbeService:
                 (datetime.now(timezone.utc) - gen_t0).total_seconds() * 1000
             )
             try:
-                from app.services.taxonomy.event_logger import (
-                    get_event_logger,
-                )
                 get_event_logger().log_decision(
                     path="probe",
                     op="probe_generating",
@@ -640,9 +626,6 @@ class ProbeService:
                 result = await fut
                 prompt_results.append(result)
                 try:
-                    from app.services.taxonomy.event_logger import (
-                        get_event_logger,
-                    )
                     get_event_logger().log_decision(
                         path="probe",
                         op="probe_prompt_completed",
@@ -784,9 +767,6 @@ class ProbeService:
             await self.db.commit()
 
             try:
-                from app.services.taxonomy.event_logger import (
-                    get_event_logger,
-                )
                 get_event_logger().log_decision(
                     path="probe",
                     op="probe_completed",
