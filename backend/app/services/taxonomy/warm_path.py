@@ -629,6 +629,14 @@ async def execute_warm_path(
     The maintenance group (Phases 5–6) runs via ``execute_maintenance_phases()``
     on its own cadence or when retrying after a transient failure.
 
+    Concurrency contract: every ``AsyncSession`` opened via
+    ``session_factory()`` is a ``WriterLockedAsyncSession`` (see
+    ``app/database.py``). The session subclass automatically holds
+    ``db_writer_lock`` for the entire write-transaction span (first
+    ``flush()`` to ``commit()``/``rollback()``/``close()``), so the warm
+    cycle's writes serialize correctly against probe/seed batches and
+    other process-mate writers without explicit lock wrapping here.
+
     Args:
         engine: TaxonomyEngine instance.
         session_factory: Async context manager yielding fresh AsyncSession.

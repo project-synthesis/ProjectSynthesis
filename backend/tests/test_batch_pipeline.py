@@ -558,8 +558,8 @@ class TestContextEnrichmentIntegration:
 
 def _pending(
     *,
-    pid: str = "opt-1",
-    trace_id: str = "trace-1",
+    pid: str | None = None,
+    trace_id: str | None = None,
     batch_id: str = "batch-1",
     overall_score: float = 7.5,
     routing_tier: str = "internal",
@@ -570,7 +570,17 @@ def _pending(
     strategy_used: str = "chain-of-thought",
     provider: str = "mock",
 ) -> PendingOptimization:
-    """Build a minimal completed PendingOptimization suitable for bulk_persist."""
+    """Build a minimal completed PendingOptimization suitable for bulk_persist.
+
+    v0.4.12: ``bulk_persist`` enforces an ID-shape gate -- IDs must be valid
+    uuid4 strings. Tests that previously passed ``pid="opt-1"`` or similar
+    short test IDs now get an auto-generated uuid4 by default. Pass an
+    explicit valid uuid4 string when the test needs a stable ID for an
+    idempotency assertion.
+    """
+    from uuid import uuid4 as _u
+    pid = pid or str(_u())
+    trace_id = trace_id or str(_u())
     return PendingOptimization(
         id=pid,
         trace_id=trace_id,
@@ -646,10 +656,14 @@ class TestBulkPersistEvents:
         """
         from app.services.event_bus import event_bus
 
+        # IDs must be valid uuid4 (bulk_persist's ID-shape gate rejects
+        # non-uuid IDs as test-fixture leaks).
+        from uuid import uuid4 as _u
+        pid_a, pid_b, pid_c = str(_u()), str(_u()), str(_u())
         pendings = [
-            _pending(pid="opt-a", trace_id="trace-a", batch_id="batch-1"),
-            _pending(pid="opt-b", trace_id="trace-b", batch_id="batch-1"),
-            _pending(pid="opt-c", trace_id="trace-c", batch_id="batch-1"),
+            _pending(pid=pid_a, trace_id="trace-a", batch_id="batch-1"),
+            _pending(pid=pid_b, trace_id="trace-b", batch_id="batch-1"),
+            _pending(pid=pid_c, trace_id="trace-c", batch_id="batch-1"),
         ]
 
         queue: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -678,7 +692,7 @@ class TestBulkPersistEvents:
 
         # Event data must carry the key fields consumers rely on
         ids = {e["data"]["id"] for e in opt_events}
-        assert ids == {"opt-a", "opt-b", "opt-c"}
+        assert ids == {pid_a, pid_b, pid_c}
 
         for evt in opt_events:
             data = evt["data"]
@@ -700,18 +714,21 @@ class TestBulkPersistEvents:
         an optimization_created event — they never reach the DB."""
         from app.services.event_bus import event_bus
 
-        # Two rejected, one accepted
+        # Two rejected, one accepted. UUIDs required by bulk_persist's
+        # ID-shape gate.
+        from uuid import uuid4 as _u
+        pid_ok = str(_u())
         pendings = [
             _pending(
-                pid="opt-low1", trace_id="trace-1",
+                pid=str(_u()), trace_id="trace-1",
                 batch_id="batch-2", overall_score=3.0,
             ),
             _pending(
-                pid="opt-low2", trace_id="trace-2",
+                pid=str(_u()), trace_id="trace-2",
                 batch_id="batch-2", overall_score=4.9,
             ),
             _pending(
-                pid="opt-ok", trace_id="trace-3",
+                pid=pid_ok, trace_id="trace-3",
                 batch_id="batch-2", overall_score=7.5,
             ),
         ]
@@ -734,7 +751,7 @@ class TestBulkPersistEvents:
             captured.append(queue.get_nowait())
         opt_events = [e for e in captured if e["event"] == "optimization_created"]
         assert len(opt_events) == 1
-        assert opt_events[0]["data"]["id"] == "opt-ok"
+        assert opt_events[0]["data"]["id"] == pid_ok
 
     async def test_idempotency_skips_re_emission(
         self, real_session_factory: Any,
@@ -743,8 +760,10 @@ class TestBulkPersistEvents:
         already-persisted rows — no duplicate events."""
         from app.services.event_bus import event_bus
 
+        from uuid import uuid4 as _u
+        pid_dup = str(_u())
         pendings = [
-            _pending(pid="opt-dup", trace_id="trace-dup", batch_id="batch-3"),
+            _pending(pid=pid_dup, trace_id="trace-dup", batch_id="batch-3"),
         ]
 
         # First insert

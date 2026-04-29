@@ -96,6 +96,14 @@ async def run_batch(
     semaphore = asyncio.Semaphore(max_parallel)
     results: list[PendingOptimization] = [None] * len(prompts)  # type: ignore
 
+    # Rate-limit short-circuit: when one prompt hits a provider rate limit,
+    # every other in-flight prompt would hit the same limit. Mark a flag,
+    # let in-flight prompts finish naturally (they'll fail fast on the same
+    # 429), and abort any prompts that haven't started yet so the caller
+    # can surface ``reset_at`` to the user without burning the rest of
+    # the budget on certain-to-fail attempts.
+    _rate_limited_flag = {"hit": False, "reset_at_iso": None, "provider": None}
+
     # Pre-fetch the score distribution once per batch so every prompt shares
     # a single DB round-trip instead of N redundant aggregate queries
     # (previously run inside run_single_prompt per prompt — N+1 pattern).
@@ -183,8 +191,59 @@ async def run_batch(
             return result
 
         async with semaphore:
+            # Short-circuit: if a previous prompt already hit a rate limit,
+            # don't issue this one -- it would just fail with the same
+            # error and waste budget. Mark the slot as a synthetic
+            # rate_limited row so the caller sees a coherent batch.
+            if _rate_limited_flag["hit"]:
+                from datetime import datetime, timezone
+                from uuid import uuid4 as _u
+                results[index] = PendingOptimization(
+                    id=str(_u()),
+                    trace_id=str(_u()),
+                    batch_id=batch_id,
+                    raw_prompt=prompt,
+                    status="failed",
+                    error=(
+                        f"rate_limited: aborted after sibling prompt hit "
+                        f"{_rate_limited_flag['provider']} rate limit "
+                        f"(reset_at={_rate_limited_flag['reset_at_iso']})"
+                    )[:500],
+                    routing_tier=tier,
+                    rate_limit_meta={
+                        "rate_limited": True,
+                        "rate_limit_aborted_by_sibling": True,
+                        "provider": _rate_limited_flag["provider"],
+                        "reset_at_iso": _rate_limited_flag["reset_at_iso"],
+                    },
+                )
+                if on_progress:
+                    try:
+                        on_progress(index, len(prompts), results[index])
+                    except Exception:
+                        pass
+                return
+
             result = await _attempt()
             results[index] = result
+
+            # Detect rate-limit flag on the result and trip the short-circuit
+            # for any prompts that haven't acquired the semaphore yet.
+            # rate_limit_meta is the canonical rate-limit channel
+            # (separate from heuristic_flags which is a list of
+            # blender divergence flags -- different shape, would crash
+            # ``.get()`` here).
+            flags = getattr(result, "rate_limit_meta", None) or {}
+            if flags.get("rate_limited") and not _rate_limited_flag["hit"]:
+                _rate_limited_flag["hit"] = True
+                _rate_limited_flag["reset_at_iso"] = flags.get("reset_at_iso")
+                _rate_limited_flag["provider"] = flags.get("provider")
+                logger.warning(
+                    "Batch hit rate limit on prompt %d (provider=%s, "
+                    "reset_at=%s) -- aborting %d remaining prompts",
+                    index, flags.get("provider"), flags.get("reset_at_iso"),
+                    sum(1 for r in results if r is None),
+                )
 
             # Log per-prompt event
             try:

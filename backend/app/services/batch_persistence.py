@@ -54,14 +54,35 @@ async def bulk_persist(
     Includes retry logic — one retry after 5s on transient failures.
     """
     t0 = time.monotonic()
-    # Quality gate: filter out low-quality seeds before persisting.
-    # Seeds with overall_score < 5.0 or improvement_score <= 0.0 add noise
-    # to the taxonomy and few-shot pool without providing value.
-    seed_min_score = 5.0
+    # ID-shape gate: reject test-fixture-pattern IDs.  Production rows
+    # always use ``uuid4()`` (length 36, hyphens at positions 8/13/18/23).
+    # Test fixtures can leak `opt-NN-XX` / `tr-NN` shapes into production
+    # if the test harness's session-factory monkeypatch fails to reach
+    # the writer (in-process import-binding edge case observed in
+    # v0.4.12 — see docs/audits/test-leak-2026-04-29.md). Rejecting at
+    # the persistence boundary is the simplest belt-and-suspenders
+    # against future test-isolation regressions.
+    import uuid as _uuid
     completed_raw = [r for r in results if r.status == "completed"]
-    completed = []
+    id_rejected = 0
     quality_rejected = 0
+    completed = []
+    seed_min_score = 5.0
     for r in completed_raw:
+        try:
+            _uuid.UUID(r.id)  # raises if not a valid uuid
+        except (ValueError, AttributeError, TypeError):
+            id_rejected += 1
+            logger.warning(
+                "Bulk persist ID-shape gate: rejected non-uuid id %r "
+                "(batch_id=%s) -- this typically means a test fixture "
+                "leaked into production; investigate the caller.",
+                r.id, batch_id,
+            )
+            continue
+        # Quality gate: filter out low-quality seeds before persisting.
+        # Seeds with overall_score < 5.0 add noise to the taxonomy +
+        # few-shot pool without providing value.
         if r.overall_score is not None and r.overall_score < seed_min_score:
             quality_rejected += 1
             logger.info(
@@ -70,6 +91,11 @@ async def bulk_persist(
             )
             continue
         completed.append(r)
+    if id_rejected:
+        logger.warning(
+            "Bulk persist: rejected %d/%d rows on ID-shape gate",
+            id_rejected, len(completed_raw),
+        )
     if quality_rejected:
         logger.info("Seed quality gate: %d/%d rejected (min_score=%.1f)",
                      quality_rejected, len(completed_raw), seed_min_score)
@@ -79,7 +105,18 @@ async def bulk_persist(
 
     inserted = 0
     inserted_pendings: list[PendingOptimization] = []
-    for attempt in range(2):
+    # Writer serialization is handled automatically by
+    # ``WriterLockedAsyncSession`` (see app/database.py). The previous
+    # explicit ``async with db_writer_lock:`` wrapper is no longer
+    # needed -- every session opened via ``session_factory()`` acquires
+    # the writer lock at first ``flush()`` and releases it at
+    # ``commit()`` / ``rollback()`` / ``close()``. The retry loop is
+    # kept as defense-in-depth for transient cross-process contention
+    # (e.g. MCP server writers); 2 attempts with a 5s gap is sufficient
+    # because the writer lock guarantees no in-process concurrent writer.
+    _MAX_PERSIST_ATTEMPTS = 2
+    _PERSIST_BACKOFF_SECS = 5.0
+    for attempt in range(_MAX_PERSIST_ATTEMPTS):
         try:
             async with session_factory() as db:
                 # Idempotency check: find already-persisted IDs for this batch
@@ -142,11 +179,66 @@ async def bulk_persist(
                     inserted_pendings.append(pending)
 
                 await db.commit()
+
+                # Post-commit injection provenance (task #97). Probe and
+                # seed rows used to land with ZERO ``relationship='injected'``
+                # join rows because ``auto_inject_patterns`` ran during
+                # enrichment (BEFORE this commit) and its in-line SAVEPOINT
+                # silently rolled back on the FK-on-Optimization miss.
+                # Now that the parent rows are durable, replay the
+                # provenance write per row for any pending that captured
+                # injected patterns. Mirrors what
+                # ``pipeline_phases.persist_and_propagate`` does for the
+                # canonical pipeline.py path.
+                from app.services.pattern_injection import (
+                    record_injection_provenance,
+                )
+                provenance_written = 0
+                provenance_failed = 0
+                for pending in inserted_pendings:
+                    inj = pending.auto_injected_patterns
+                    cids = pending.auto_injected_cluster_ids or []
+                    sim_map = pending.auto_injected_similarity_map
+                    if not inj and not cids:
+                        continue
+                    try:
+                        await record_injection_provenance(
+                            db,
+                            optimization_id=pending.id,
+                            cluster_ids=list(cids),
+                            injected=list(inj or []),
+                            similarity_map=sim_map,
+                            trace_id=pending.trace_id,
+                        )
+                        provenance_written += 1
+                    except Exception as _prov_exc:
+                        provenance_failed += 1
+                        logger.warning(
+                            "Post-commit injection provenance failed for "
+                            "%s (non-fatal): %s",
+                            pending.id[:8], _prov_exc,
+                        )
+                if provenance_written or provenance_failed:
+                    try:
+                        await db.commit()
+                    except Exception as _c_exc:
+                        logger.warning(
+                            "Provenance commit failed (non-fatal): %s",
+                            _c_exc,
+                        )
+                    logger.info(
+                        "Bulk persist provenance: %d rows written, %d failed",
+                        provenance_written, provenance_failed,
+                    )
             break  # success
         except Exception as exc:
-            if attempt == 0:
-                logger.warning("Bulk persist failed, retrying in 5s: %s", exc)
-                await asyncio.sleep(5)
+            if attempt < _MAX_PERSIST_ATTEMPTS - 1:
+                delay = _PERSIST_BACKOFF_SECS * (2 ** attempt)
+                logger.warning(
+                    "Bulk persist attempt %d/%d failed (%s); retry in %.0fs",
+                    attempt + 1, _MAX_PERSIST_ATTEMPTS, exc, delay,
+                )
+                await asyncio.sleep(delay)
             else:
                 raise
 
@@ -156,6 +248,30 @@ async def bulk_persist(
     # from text-editor optimizations while batch-level `seed_*` events still
     # stream the coarser batch progress view.
     if inserted_pendings:
+        # Rate-limit auto-clear: when a batch successfully persists rows
+        # whose routing_tier is NOT the passthrough fallback (i.e. real
+        # LLM calls succeeded against a previously-limited provider), the
+        # rate limit has lifted. Publish ``rate_limit_cleared`` so the
+        # frontend banner clears without waiting for the stale reset_at
+        # countdown.  Idempotent at the consumer layer (the store
+        # ignores clear events for providers it doesn't track).
+        cleared_providers: set[str] = set()
+        for pending in inserted_pendings:
+            tier_val = pending.routing_tier or ""
+            prov = pending.provider or ""
+            if tier_val != "passthrough_fallback" and prov:
+                cleared_providers.add(prov)
+        for prov in cleared_providers:
+            try:
+                event_bus.publish("rate_limit_cleared", {
+                    "provider": prov,
+                    "source": "batch_seed",
+                    "batch_id": batch_id,
+                })
+            except Exception:
+                logger.debug(
+                    "rate_limit_cleared publish failed", exc_info=True,
+                )
         try:
             for pending in inserted_pendings:
                 event_bus.publish("optimization_created", {
@@ -218,6 +334,9 @@ async def batch_taxonomy_assign(
     engine = get_engine()
     assigned = 0
 
+    # Writer serialization is automatic via ``WriterLockedAsyncSession``
+    # (see app/database.py) -- the session acquires ``db_writer_lock`` at
+    # first flush and releases at commit/rollback/close.
     async with session_factory() as db:
         for pending in completed:
             try:

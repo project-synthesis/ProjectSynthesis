@@ -50,6 +50,18 @@ async def run_startup_gc(db: AsyncSession) -> None:
     total_cleaned += await _gc_archived_zero_member_clusters(db)
     total_cleaned += await _gc_orphan_meta_patterns(db)
     total_cleaned += await _gc_orphan_probe_runs(db)
+    # v0.4.12: defense-in-depth against test-leak (Optimization rows
+    # with non-uuid IDs). Production code uses uuid4() exclusively;
+    # any other shape is a test fixture leak (typically `opt-NN-XX` or
+    # `tr-NN`) caused by an in-process import-binding edge case in
+    # pytest's monkeypatch contract. Sweeping at startup keeps the DB
+    # clean across server restarts without manual intervention.
+    total_cleaned += await _gc_test_leak_optimizations(db)
+    # Reconcile cluster member_count against actual row counts. Drifts
+    # can occur on hard restart mid-warm-cycle, on cancelled probes that
+    # incremented but didn't decrement, or on data imports from older
+    # builds. Running on every startup keeps the topology view honest.
+    total_cleaned += await _gc_reconcile_member_counts(db)
 
     if total_cleaned > 0:
         await db.commit()
@@ -204,17 +216,22 @@ async def _gc_orphan_probe_runs(db: AsyncSession) -> int:
     pattern.
 
     Idempotent: safe to call on a DB with no orphan rows.
+
+    v0.4.12: at startup, ALL ``status='running'`` rows are orphans by
+    definition -- the orchestrator coroutine that was managing the
+    probe died with the previous process. The TTL gate (used by the
+    HOURLY ``run_recurring_gc`` sweep) is irrelevant on startup; a
+    probe in 'running' state with no live coroutine cannot recover
+    no matter how recent. The startup sweep therefore drops the TTL
+    gate -- any restart immediately reconciles every orphan probe
+    instead of leaving them dangling for an hour.
     """
     from app.models import ProbeRun
 
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=PROBE_ORPHAN_TTL_HOURS)
     result = await db.execute(
         update(ProbeRun)
-        .where(
-            ProbeRun.status == "running",
-            ProbeRun.started_at < cutoff,
-        )
+        .where(ProbeRun.status == "running")
         .values(
             status="failed",
             error="orphaned_at_startup",
@@ -224,9 +241,116 @@ async def _gc_orphan_probe_runs(db: AsyncSession) -> int:
     cleaned = result.rowcount or 0  # type: ignore[attr-defined]
     if cleaned:
         logger.info(
-            "GC: marked %d orphan probe_run rows as failed", cleaned,
+            "GC: marked %d orphan probe_run rows as failed at startup "
+            "(coroutine died with previous process)", cleaned,
         )
     return cleaned
+
+
+async def _gc_test_leak_optimizations(db: AsyncSession) -> int:
+    """Sweep Optimization rows that match test-fixture leak patterns.
+
+    Production uses ``uuid4()`` for every Optimization ``id`` AND
+    ``trace_id``; any row whose ``id`` or ``trace_id`` doesn't match
+    the canonical UUID shape is a test fixture leak. Two patterns
+    surfaced in v0.4.12:
+
+      1. ``id`` is non-uuid (e.g. ``opt-NN-XX``) -- direct fixture-id
+         leak. Caught by the ID-shape gate in ``bulk_persist``
+         prospectively.
+      2. ``id`` is a valid uuid BUT ``trace_id`` is non-uuid (e.g.
+         ``tr-NN``) -- the test fixture set a real uuid but a stub
+         trace_id. Causes ``/api/optimize/{trace_id}`` to raise
+         MultipleResultsFound (multiple rows share the stub trace_id).
+
+    Both patterns are swept here. Cascades through
+    ``OptimizationPattern`` via FK; cluster ``member_count`` drift is
+    reconciled by ``_gc_reconcile_member_counts`` below.
+
+    Idempotent: safe to call on a DB with no leaked rows.
+    """
+    from app.models import Optimization
+
+    from sqlalchemy import func as _func, or_, and_
+    # uuid4 always has length 36 + hyphens at positions 8/13/18/23.
+    _UUID_GLOB = "________-____-____-____-____________"
+    result = await db.execute(
+        delete(Optimization).where(
+            or_(
+                # Pattern 1: id is non-uuid
+                _func.length(Optimization.id) != 36,
+                ~Optimization.id.like(_UUID_GLOB),
+                # Pattern 2: trace_id is non-null and non-uuid
+                and_(
+                    Optimization.trace_id.is_not(None),
+                    or_(
+                        _func.length(Optimization.trace_id) != 36,
+                        ~Optimization.trace_id.like(_UUID_GLOB),
+                    ),
+                ),
+            )
+        )
+    )
+    cleaned = result.rowcount or 0  # type: ignore[attr-defined]
+    if cleaned:
+        logger.warning(
+            "GC: deleted %d test-leak Optimization rows (non-uuid "
+            "id or trace_id); this indicates pytest leaked into "
+            "production -- check the test harness's session-factory "
+            "monkeypatch and any PendingOptimization fixture that sets "
+            "a stub trace_id.",
+            cleaned,
+        )
+    return cleaned
+
+
+async def _gc_reconcile_member_counts(db: AsyncSession) -> int:
+    """Reconcile ``PromptCluster.member_count`` against actual rows.
+
+    Drifts can occur when:
+      * A probe is cancelled mid-batch after assign_cluster() ran
+        (incrementing) but before bulk_persist's commit fired.
+      * Optimization rows are deleted manually or via test-leak GC
+        (above) without triggering the cluster's denormalized counter.
+      * A hard server restart truncates the warm-path engine mid-cycle.
+      * Domain nodes have stale counters from older builds (domain
+        nodes never directly own optimizations -- their ``member_count``
+        should reflect descendant clusters' aggregate, not direct opts).
+
+    The fix is a single ``UPDATE ... SET member_count = (subquery)`` --
+    no additional storage, no need to track which clusters drifted.
+    """
+    from app.models import PromptCluster, Optimization
+
+    # Non-domain clusters: count direct optimization rows.
+    result = await db.execute(
+        update(PromptCluster)
+        .where(PromptCluster.state.in_(("candidate", "active", "mature")))
+        .values(
+            member_count=(
+                select(_count_func()).where(
+                    Optimization.cluster_id == PromptCluster.id,
+                ).scalar_subquery()
+            ),
+        )
+    )
+    cleaned = result.rowcount or 0  # type: ignore[attr-defined]
+
+    # Domain nodes: count optimizations across all descendant clusters
+    # (aggregate of children's member_counts). We skip this for now
+    # because the warm-path engine reconciles domain member_count
+    # itself from descendants -- our job is just to keep the leaf
+    # cluster counts honest, and the warm path will roll them up.
+
+    if cleaned:
+        logger.info("GC: reconciled member_count on %d clusters", cleaned)
+    return cleaned
+
+
+def _count_func():
+    """Lazy import for sqlalchemy.func.count to avoid top-level dep."""
+    from sqlalchemy import func as _f
+    return _f.count()
 
 
 async def run_recurring_gc(db: AsyncSession) -> None:
