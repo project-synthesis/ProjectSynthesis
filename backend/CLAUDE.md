@@ -79,6 +79,27 @@ Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (i
 - `TaskTypeTelemetry` — per-prompt record of heuristic vs LLM classification (`raw_prompt`, `task_type`, `domain`, `source` ∈ `{heuristic, llm}`). Feeds A4 fallback tuning + classifier drift analysis. Migration `2f3b0645e24d_add_task_type_telemetry.py`. `task_type_signal_extractor` INSERTs are wrapped in `try/except OperationalError` so unmigrated DBs (warn-log once per cycle) don't abort the warm-path cycle — `ClassificationAgreement` still records the comparison in-process; only the persistent record is skipped
 - `Feedback`, `StrategyAffinity`, `RefinementBranch`, `RefinementTurn`, `GitHubToken`, `RepoFileIndex`, `AuditLog`
 
+## Topic Probe (Tier 1, v0.4.12)
+
+User-driven, codebase-aware seed mode. The user specifies a `topic` (e.g., "embedding cache invalidation in EmbeddingIndex") and the agentic system runs a 5-phase orchestrator: (1) **grounding** — `RepoIndexQuery.query_curated_context(repo, branch, query=topic, max_chars=PROBE_CODEBASE_MAX_CHARS=40_000)` builds a `ProbeContext` with relevant_files (post-retrieval glob filter for `scope`), explore_synthesis_excerpt, known_domains; (2) **generating** — single Sonnet call to hot-reloaded `prompts/probe-agent.md` template via `services/probe_generation.generate_probe_prompts()` with `call_provider_with_retry(max_retries=3)`, F1-aligned backtick-density filter (`>50%` drop → `ProbeGenerationError`); (3) **running** — per-prompt `_execute_one()` calls `context_service.enrich(raw_prompt, tier="internal", db, repo_full_name, project_id, provider)` then deterministic dimension-score baseline; (4) **observability** interleaved with phase 3 — emits 7 `probe_*` taxonomy events via `event_logger.log_decision(path="probe", ...)` + `current_probe_id` ContextVar (declared in `services/probe_service.py`, re-exported by `services/probe_event_correlation.py`) injects `probe_id` into existing taxonomy events fired during the probe; (5) **reporting** — 5-section markdown final report (Top 3 prompts / Score Distribution / Taxonomy Delta / Recommended Follow-ups / Run Metadata) with 4 deterministic recommendation rules. F3.1 invariant: `aggregate.mean_overall` uses `compute_overall(task_type)` per persisted prompt.
+
+**Robustness hardening**:
+- `asyncio.CancelledError` handler under `asyncio.shield()` marks row `status='failed', error='cancelled'` before re-raising
+- Top-level `except Exception` handler marks row `status='failed', error='{class}: {msg} (phase={phase})'`, emits `probe_failed` decision event, then re-raises
+- Startup GC sweep `_gc_orphan_probe_runs()` cleans rows in `status='running'` for >`PROBE_ORPHAN_TTL_HOURS=1` (mirrors `_gc_failed_optimizations` pattern)
+
+**Surfaces**:
+- `POST /api/probes` (SSE via `StreamingResponse(media_type='text/event-stream')`, IP-keyed `RateLimit("5/minute")`, defensive backstop emits synthetic `probe_failed` if any uncaught error escapes the service)
+- `GET /api/probes` (paginated `ProbeListResponse`, sort by `started_at desc`, filters: `status?`, `project_id?`)
+- `GET /api/probes/{id}` (full `ProbeRunResult`, 404 with `probe_not_found`)
+- `synthesis_probe` MCP tool (15th tool, `structured_output=True`, `Annotated[..., Field(...)]` boundary validation: topic 3-500 chars, n_prompts 5-25, intent_hint Literal)
+- `scripts/probe.py` CLI shim translates `validate_taxonomy_emergence.py::PROMPT_SETS` presets → POST /api/probes
+- `dependencies/probes.py::build_probe_service(db, provider, context_service)` shared constructor consumed by REST factory + MCP runtime resolver
+- 7 `probe_*` events: `probe_started`, `probe_grounding`, `probe_generating`, `probe_prompt_completed`, `probe_taxonomy_change`, `probe_completed`, `probe_failed`
+- Optimizer timeout calibration: `_CLI_TIMEOUT_SECONDS=600` per-LLM-call (was 300 — caused silent retries on Opus 4.7 xhigh runs); `_post=1800s` and `probe.py httpx=3600s` cover the audit-class p99 with headroom
+
+All 4 Topic Probe tiers ship within v0.4.x: T1=v0.4.12 (this), T2=v0.4.13 (save-as-suite + replay + UI navigator), T3=v0.4.14 (cross-tier composition: probe → seed-agent promotion, drill-into-cluster from seed run), T4=v0.4.15 (substrate unification: SeedRun and ProbeRun collapse to one model).
+
 ## Pipeline architecture
 
 - **3 phases**: analyze → optimize → score. Each is an independent LLM call with fresh context. Orchestrated by `pipeline.py`

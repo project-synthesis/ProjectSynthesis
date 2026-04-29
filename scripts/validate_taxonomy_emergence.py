@@ -32,7 +32,14 @@ PROJECT_ID = os.environ.get(
 )
 
 
-def _post(path: str, body: dict, timeout: float = 600.0) -> dict | None:
+def _post(path: str, body: dict, timeout: float = 1800.0) -> dict | None:
+    # Timeout calibration (v0.4.12, 2026-04-29):
+    #   audit-class full-pipeline median ~354s, max ~491s, p99 ~600s.
+    #   Single-prompt POST /api/optimize spans the full pipeline.
+    #   1800s (30 min) covers p99 with 3× headroom for Opus 4.7 task-budget
+    #   xhigh runs that legitimately need >10 min on 128K outputs.
+    #   Was 600s — caused cycle-23 prompts 3+4 to fail at network_error
+    #   while server-side pipeline was still running.
     """POST JSON, parse response. SSE responses surface as text — this
     helper consumes the stream and returns the final ``optimization_complete``
     payload when present."""
