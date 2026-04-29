@@ -8,7 +8,9 @@ Honors:
 - Inline Pydantic PromptList(BaseModel) - mirrors seed_orchestrator pattern
 - Sonnet model for long-context codebase awareness
 - Backtick-density filter - drops prompts without >=1 backtick-wrapped
-  identifier (matches F1 specificity heuristic). >50% drop raises.
+  *code identifier* (regex aligned with F1 specificity heuristic in
+  heuristic_scorer.py: `[a-zA-Z_][a-zA-Z0-9_./:-]*` — excludes spaces so
+  `arbitrary phrase` does not earn structural credit). >50% drop raises.
 """
 from __future__ import annotations
 
@@ -41,7 +43,11 @@ class ProbeGenerationError(Exception):
 
 _MIN_PROMPTS = 5
 _MAX_PROMPTS = 25
-_BACKTICK_RX = re.compile(r"`[^`]+`")
+# Aligned with F1 specificity heuristic (heuristic_scorer.py category 11):
+# only matches backtick-wrapped *code identifiers* — letters/digits/`._-:/`,
+# starting with a letter/underscore. Prose-in-backticks (`free phrase`) is
+# rejected because spaces are excluded from the char class.
+_BACKTICK_RX = re.compile(r"`[a-zA-Z_][a-zA-Z0-9_./:-]*`")
 _DROP_THRESHOLD = 0.5  # > 50% dropped -> error
 
 
@@ -97,12 +103,23 @@ async def generate_probe_prompts(
     )
 
     # Backtick-density filter - drops prompts without >=1 backtick identifier.
+    total = len(result.prompts)
     valid = [p for p in result.prompts if _has_backtick(p)]
-    dropped = len(result.prompts) - len(valid)
-    if result.prompts and dropped / max(1, len(result.prompts)) > _DROP_THRESHOLD:
+    dropped = total - len(valid)
+    if total and dropped / total > _DROP_THRESHOLD:
+        logger.warning(
+            "probe_generation: drop-threshold exceeded for topic=%r "
+            "(%d/%d dropped, >%.0f%% threshold) — raising ProbeGenerationError",
+            probe_ctx.topic, dropped, total, _DROP_THRESHOLD * 100,
+        )
         raise ProbeGenerationError(
             f"Generator produced too many prompts without backtick identifiers: "
-            f"{dropped}/{len(result.prompts)} dropped (>{_DROP_THRESHOLD*100:.0f}% threshold)"
+            f"{dropped}/{total} dropped (>{_DROP_THRESHOLD*100:.0f}% threshold)"
+        )
+    if dropped:
+        logger.info(
+            "probe_generation: filtered %d/%d prompts without backtick "
+            "identifiers for topic=%r", dropped, total, probe_ctx.topic,
         )
 
     # Clamp to requested n_prompts (after filter - generator may overproduce).
