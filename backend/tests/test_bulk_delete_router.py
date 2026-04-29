@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.models import Optimization
 from app.services.event_bus import event_bus
@@ -19,10 +19,10 @@ from tests.conftest import drain_events_nonblocking as _drain_events_nonblocking
 
 
 @pytest.fixture(autouse=True)
-async def _enable_sqlite_fk_cascade(db_session):
-    """FK cascade requires the per-connection PRAGMA. Mirrors the
-    existing ``test_optimization_delete_router._enable_sqlite_fk_cascade``."""
-    await db_session.execute(text("PRAGMA foreign_keys=ON"))
+async def _enable_sqlite_fk_cascade(enable_sqlite_foreign_keys):
+    """FK cascade requires the per-connection PRAGMA. Delegates to the
+    shared ``enable_sqlite_foreign_keys`` fixture in ``conftest.py`` —
+    single source of truth replacing the previous inline ``PRAGMA``."""
     yield
 
 

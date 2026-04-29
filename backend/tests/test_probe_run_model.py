@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -182,15 +182,15 @@ class TestProbeRunModel:
         assert result.status == "completed"
 
     @pytest.mark.asyncio
-    async def test_proberun_project_id_fk_enforced(self, db_session: AsyncSession):
+    async def test_proberun_project_id_fk_enforced(self, enable_sqlite_foreign_keys):
         """AC-C2-4: FK on project_id enforced — non-existent project_id raises IntegrityError.
 
-        ``db_session``'s in-memory engine doesn't apply the production
-        ``PRAGMA foreign_keys=ON`` hook (see ``app/database.py``), so we
-        enable it explicitly here. The FK constraint is declared on the
-        model; this just makes SQLite enforce it at the connection level.
+        Uses the shared ``enable_sqlite_foreign_keys`` fixture (returns the
+        same ``db_session`` with ``PRAGMA foreign_keys=ON`` already applied
+        — see ``conftest.py``). The FK constraint is declared on the model;
+        the fixture just makes SQLite enforce it at the connection level.
         """
-        await db_session.execute(text("PRAGMA foreign_keys=ON"))
+        db_session = enable_sqlite_foreign_keys
 
         row = ProbeRun(
             id="test-probe-2",

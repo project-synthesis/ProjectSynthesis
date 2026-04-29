@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.models import (
     Feedback,
@@ -31,13 +31,13 @@ from tests.conftest import drain_events_nonblocking
 
 
 @pytest.fixture(autouse=True)
-async def _enable_sqlite_fk_cascade(db_session):
+async def _enable_sqlite_fk_cascade(enable_sqlite_foreign_keys):
     """The shared ``db_session`` fixture uses ``sqlite+aiosqlite:///:memory:``
     without the backend's PRAGMA event hook — FK enforcement (and therefore
-    ``ondelete="CASCADE"``) is OFF by default in SQLite. Turn it on for
-    this test module so DB-level cascade behaves like production.
+    ``ondelete="CASCADE"``) is OFF by default in SQLite. Delegates to the
+    shared ``enable_sqlite_foreign_keys`` fixture so DB-level cascade
+    behaves like production.
     """
-    await db_session.execute(text("PRAGMA foreign_keys=ON"))
     yield
 
 

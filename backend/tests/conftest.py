@@ -40,7 +40,17 @@ def drain_events_nonblocking(queue: asyncio.Queue) -> list[dict]:
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Create an in-memory SQLite session for testing."""
+    """Create an in-memory SQLite session for testing.
+
+    Note: this fixture intentionally does NOT apply the production PRAGMA
+    hook — many existing tests insert orphan FK rows (e.g. cluster_id
+    references to never-created clusters) for unit-test isolation, and
+    enabling FK enforcement globally would require a coordinated cleanup
+    well outside any single refactor's scope. Tests that need
+    FK-enforcement assertions opt in via the
+    ``enable_sqlite_foreign_keys`` fixture (see below) — single source of
+    truth replacing five inline ``PRAGMA foreign_keys=ON`` calls.
+    """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -53,6 +63,31 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def enable_sqlite_foreign_keys(db_session: AsyncSession) -> AsyncSession:
+    """Enable SQLite FK enforcement on ``db_session`` for the current test.
+
+    Replaces the inline ``await db_session.execute(text("PRAGMA foreign_keys=ON"))``
+    incantation that previously lived in five delete-related tests + the
+    cycle 2 ProbeRun FK test. Production ``app/database.py`` applies this
+    PRAGMA via an event hook on every pool checkout; the conftest engine
+    omits it because many existing tests insert orphan FK rows (see
+    ``db_session`` docstring).
+
+    Usage::
+
+        async def test_fk_constraint(enable_sqlite_foreign_keys):
+            db = enable_sqlite_foreign_keys  # is the same db_session
+            ...
+
+    Returns the same ``db_session`` instance for ergonomic single-arg use.
+    """
+    from sqlalchemy import text
+
+    await db_session.execute(text("PRAGMA foreign_keys=ON"))
+    return db_session
 
 
 @pytest_asyncio.fixture
