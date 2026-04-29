@@ -806,8 +806,52 @@ class ProbeService:
                         delta.proposal_rejected_min_source_clusters,
                 },
             )
+        except asyncio.CancelledError:
+            # Client disconnect mid-stream (e.g. FastAPI ClientDisconnect)
+            # cancels this generator. Pre-fix the row stayed at status=
+            # 'running' forever -- now we mark it failed with
+            # error='cancelled' before re-raising.
+            #
+            # asyncio.shield: when the cancelled task awaits in this except
+            # block, the await would re-raise CancelledError immediately
+            # *unless* the awaitable is shielded. Without shield the row
+            # write would not land. ``_mark_cancelled`` itself is wrapped
+            # in shield so the outer ``except Exception`` still catches a
+            # real DB failure (the GC sweep is the safety net).
+            try:
+                await asyncio.shield(self._mark_cancelled(row, probe_id))
+            except asyncio.CancelledError:
+                # Re-raised at await boundaries even with shield when the
+                # task is cancelled multiple times -- treat like commit
+                # failure and let GC reconcile.
+                logger.warning(
+                    "Probe %s cancelled twice; GC will reconcile row",
+                    probe_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Probe %s cancelled, row update failed; GC will reconcile",
+                    probe_id, exc_info=True,
+                )
+            raise
         finally:
-            current_probe_id.reset(token)
+            try:
+                current_probe_id.reset(token)
+            except ValueError:
+                # ContextVar token was created in a different context (can
+                # happen when CancelledError is raised from a consumer task).
+                # The ContextVar copy in this task will be discarded with
+                # the frame anyway, so this is benign.
+                pass
+
+    async def _mark_cancelled(
+        self, row: ProbeRun, probe_id: str,
+    ) -> None:
+        """Idempotent: mark row failed with error='cancelled' if still running."""
+        row.status = "failed"
+        row.error = "cancelled"
+        row.completed_at = datetime.now(timezone.utc)
+        await self.db.commit()
 
     # ------------------------------------------------------------------
     # Phase 2 helper -- prompt generation

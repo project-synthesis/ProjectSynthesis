@@ -4,6 +4,7 @@ AC-C4-1 through AC-C4-6 per docs/specs/topic-probe-2026-04-29.md §8 Cycle 4.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -20,6 +21,7 @@ from app.schemas.probes import (
     ProbeProgressEvent,
     ProbeRunRequest,
     ProbeRunResult,
+    ProbeStartedEvent,
 )
 from app.services.probe_service import ProbeService
 
@@ -361,3 +363,75 @@ class TestProbeService:
         row = await db_session.get(ProbeRun, "p-test-f31")
         assert row.aggregate["mean_overall"] == pytest.approx(7.30, abs=0.05)
         assert row.aggregate["scoring_formula_version"] == 4
+
+
+class TestProbeCancellation:
+    """Cancellation hardening: client disconnect mid-stream must not leave
+    the ProbeRun row stuck at ``status='running'`` forever.
+
+    Surfaced by validation probe ``97512f6a`` -- curl disconnected after
+    Phase 2, FastAPI raised ``ClientDisconnect`` which cancelled the
+    ``probe_service.run()`` async generator. Pre-fix: row stayed
+    ``running`` indefinitely with no error marker.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancellation_marks_row_as_failed(
+        self,
+        db_session,
+        mock_provider,
+        mock_context_service,
+        mock_event_bus,
+    ):
+        """When ``run()`` is cancelled mid-stream, ProbeRun row is marked
+        ``status='failed'`` with ``error='cancelled'`` (not left as
+        ``'running'``).
+
+        Mirrors FastAPI ``ClientDisconnect`` semantics: the SSE-streaming
+        task is cancelled while the generator is awaiting an internal
+        operation. ``asyncio.CancelledError`` is then injected into the
+        generator at its current await point (here:
+        ``query_curated_context``). We simulate that by stalling the
+        repo-query mock with a long sleep and cancelling the consumer
+        task while it's blocked there.
+        """
+        # Slow repo-query: hangs long enough for us to cancel mid-call.
+        slow_repo_query = MagicMock()
+
+        async def _hang(*args, **kwargs):
+            await asyncio.sleep(60.0)
+
+        slow_repo_query.query_curated_context = AsyncMock(side_effect=_hang)
+
+        svc = ProbeService(
+            db_session,
+            AsyncMock(),
+            slow_repo_query,
+            mock_context_service,
+            mock_event_bus,
+        )
+        probe_id = "p-test-cancellation"
+        started_seen = asyncio.Event()
+
+        async def consume():
+            async for ev in svc.run(
+                _make_request(n_prompts=5), probe_id=probe_id,
+            ):
+                if isinstance(ev, ProbeStartedEvent):
+                    started_seen.set()
+
+        task = asyncio.create_task(consume())
+        await started_seen.wait()
+        # Give the generator a tick to advance past `yield` and into the
+        # next await (query_curated_context, which hangs).
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Row should now be marked failed with error='cancelled'.
+        row = await db_session.get(ProbeRun, probe_id)
+        assert row is not None
+        assert row.status == "failed"
+        assert row.error == "cancelled"
+        assert row.completed_at is not None
