@@ -5,11 +5,21 @@ SSE events into a final ``ProbeRunResult``, streaming intermediate
 progress to the MCP ``Context`` via ``ctx.report_progress()`` when
 sampling-capable.
 
-The ``_service`` parameter is for test injection; production resolves
-``ProbeService`` via the canonical factory ``app.dependencies.probes.
-get_probe_service`` (post-C5 REFACTOR location). The MCP-process path
-constructs the service from ``_shared`` singletons + ``async_session_factory``
-because no FastAPI ``Request`` is available outside the REST router.
+Construction unification (post-C6 REFACTOR): both this MCP-runtime path
+and the FastAPI ``get_probe_service`` factory call the shared pure
+constructor ``app.dependencies.probes.build_probe_service`` — no
+duplicated wiring, single audit surface.
+
+Schema validation (post-C6 REFACTOR): ``handle_probe`` constructs
+``ProbeRunRequest(**kwargs)`` (validated, not ``model_construct``) so
+the production contract is enforced even when the caller bypasses the
+``@mcp.tool`` Field constraints (e.g. internal callers, integration
+tests). The MCP-tool boundary still validates first; this is defence
+in depth, not a duplicate gate.
+
+The ``_service`` parameter is for test injection only (``_`` prefix flags
+it as private); production callers leave it ``None`` and the MCP-runtime
+singletons resolve via ``_resolve_service``.
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
@@ -17,6 +27,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from app.dependencies.probes import build_probe_service
 from app.schemas.probes import (
     ProbeCompletedEvent,
     ProbeError,
@@ -26,18 +37,15 @@ from app.schemas.probes import (
 )
 from app.services.probe_service import ProbeService
 
-# Imported for canonical-factory awareness (post-C5 REFACTOR location).
-# The MCP path cannot invoke it directly because it depends on a FastAPI
-# Request; production construction happens inline in ``_resolve_service``
-# below using the MCP-process singletons threaded through ``_shared``.
-from app.dependencies.probes import get_probe_service  # noqa: F401
-
 
 async def _resolve_service() -> ProbeService:
     """Construct a ``ProbeService`` from MCP-process singletons.
 
-    Mirrors ``app.dependencies.probes.get_probe_service`` for the MCP
-    runtime where no ``Request`` / ``Depends`` machinery is available.
+    Resolves the routing provider + context service from the ``_shared``
+    module-level state set by the MCP server's lifespan, then delegates
+    actual construction to the canonical ``build_probe_service`` helper
+    in ``app.dependencies.probes`` — the same builder the FastAPI
+    factory uses.
     """
     from app.tools._shared import (
         async_session_factory,
@@ -45,8 +53,12 @@ async def _resolve_service() -> ProbeService:
         get_routing,
     )
 
-    routing = get_routing()
-    provider = routing.state.provider if routing is not None else None
+    try:
+        routing = get_routing()
+        provider = routing.state.provider if routing is not None else None
+    except ValueError:
+        provider = None
+
     try:
         context_service = get_context_service()
     except ValueError:
@@ -54,23 +66,10 @@ async def _resolve_service() -> ProbeService:
 
     db = async_session_factory()
 
-    repo_query = None
-    try:
-        from app.services.embedding_service import EmbeddingService
-        from app.services.repo_index_query import RepoIndexQuery
-
-        repo_query = RepoIndexQuery(db=db, embedding_service=EmbeddingService())
-    except Exception:  # noqa: BLE001 — degrade gracefully when index not available
-        repo_query = None
-
-    from app.services.event_bus import event_bus
-
-    return ProbeService(
+    return build_probe_service(
         db=db,
         provider=provider,
-        repo_query=repo_query,
         context_service=context_service,
-        event_bus=event_bus,
     )
 
 
@@ -84,17 +83,18 @@ async def handle_probe(
 ) -> ProbeRunResult:
     """MCP tool handler for ``synthesis_probe`` — see spec §4.7.
 
-    Iterates ``ProbeService.run()``; on each ``ProbeProgressEvent`` reports
+    Builds a validated ``ProbeRunRequest`` (Pydantic enforces
+    ``topic`` length 3-500 and ``n_prompts`` range 5-25), iterates
+    ``ProbeService.run()``; on each ``ProbeProgressEvent`` reports
     progress to the MCP ``Context`` (best-effort, errors swallowed); on
     ``ProbeCompletedEvent`` resolves the final ``ProbeRunResult`` via
     ``ProbeService.fetch_result()``.
+
+    ``ProbeError`` propagates unchanged so the FastMCP runtime can map
+    canonical reason codes (``link_repo_first``, ``topic_not_found_in_repo``,
+    ``generation_failed``) to client-facing remediation messages.
     """
-    # Use ``model_construct`` to bypass validation: the MCP boundary
-    # (``@mcp.tool`` Field constraints) already enforces ``topic`` length
-    # and ``n_prompts`` range. The service's domain logic raises
-    # canonical ``ProbeError`` codes for semantic errors that schema
-    # validation can't express (e.g. ``link_repo_first``).
-    request = ProbeRunRequest.model_construct(
+    request = ProbeRunRequest(
         topic=topic,
         scope=scope,
         intent_hint=intent_hint,
