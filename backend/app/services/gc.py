@@ -22,10 +22,15 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+# Probes are user-driven (typical run <30min). Rows stuck in
+# 'running' past this TTL are stragglers from client-disconnect or
+# server-restart scenarios — _gc_orphan_probe_runs marks them failed.
+PROBE_ORPHAN_TTL_HOURS = 1
 
 
 def _utcnow() -> datetime:
@@ -44,6 +49,7 @@ async def run_startup_gc(db: AsyncSession) -> None:
     total_cleaned += await _gc_failed_optimizations(db)
     total_cleaned += await _gc_archived_zero_member_clusters(db)
     total_cleaned += await _gc_orphan_meta_patterns(db)
+    total_cleaned += await _gc_orphan_probe_runs(db)
 
     if total_cleaned > 0:
         await db.commit()
@@ -187,6 +193,40 @@ async def _gc_orphan_meta_patterns(db: AsyncSession) -> int:
     if count > 0:
         logger.info("GC: deleted %d orphan meta_patterns", count)
     return count
+
+
+async def _gc_orphan_probe_runs(db: AsyncSession) -> int:
+    """Mark stale ``status='running'`` probe_run rows as failed at startup.
+
+    Probes are user-driven (typical run <30min); rows in 'running' state
+    for >``PROBE_ORPHAN_TTL_HOURS`` are stragglers from client-disconnect
+    or server-restart scenarios. Mirrors the ``_gc_failed_optimizations``
+    pattern.
+
+    Idempotent: safe to call on a DB with no orphan rows.
+    """
+    from app.models import ProbeRun
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=PROBE_ORPHAN_TTL_HOURS)
+    result = await db.execute(
+        update(ProbeRun)
+        .where(
+            ProbeRun.status == "running",
+            ProbeRun.started_at < cutoff,
+        )
+        .values(
+            status="failed",
+            error="orphaned_at_startup",
+            completed_at=now,
+        )
+    )
+    cleaned = result.rowcount or 0  # type: ignore[attr-defined]
+    if cleaned:
+        logger.info(
+            "GC: marked %d orphan probe_run rows as failed", cleaned,
+        )
+    return cleaned
 
 
 async def run_recurring_gc(db: AsyncSession) -> None:

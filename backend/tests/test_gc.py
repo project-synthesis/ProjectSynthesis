@@ -27,6 +27,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -35,6 +36,7 @@ from app.models import (
     MetaPattern,
     Optimization,
     OptimizationPattern,
+    ProbeRun,
     PromptCluster,
     RefinementTurn,
 )
@@ -42,6 +44,7 @@ from app.services.gc import (
     _gc_archived_zero_member_clusters,
     _gc_failed_optimizations,
     _gc_orphan_meta_patterns,
+    _gc_orphan_probe_runs,
     run_startup_gc,
 )
 
@@ -392,3 +395,51 @@ class TestRunStartupGC:
         """Orchestrator on a fresh DB must not raise and must not commit."""
         # Should simply log and return without touching anything.
         await run_startup_gc(db_session)
+
+
+# ---------------------------------------------------------------------------
+# _gc_orphan_probe_runs
+# ---------------------------------------------------------------------------
+
+class TestGCOrphanProbeRuns:
+    """Probes stuck in ``status='running'`` past the orphan TTL get marked
+    failed at startup. Mirrors the ``_gc_failed_optimizations`` pattern.
+
+    Surfaced by validation orphan ``97512f6a`` -- curl client disconnected
+    mid-stream and the row stayed ``running`` indefinitely. Without a
+    startup sweep, restart-scenario orphans accumulate forever.
+    """
+
+    async def test_marks_old_running_probes_failed(self, db_session):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        new = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+        # Old running probe -- should be marked failed.
+        old_row = ProbeRun(
+            id="orphan-old", topic="x", scope="**/*",
+            intent_hint="explore", repo_full_name="o/r",
+            started_at=old, status="running",
+        )
+        # New running probe -- should NOT be touched.
+        new_row = ProbeRun(
+            id="active-new", topic="y", scope="**/*",
+            intent_hint="explore", repo_full_name="o/r",
+            started_at=new, status="running",
+        )
+        db_session.add_all([old_row, new_row])
+        await db_session.commit()
+
+        cleaned = await _gc_orphan_probe_runs(db_session)
+        assert cleaned == 1
+
+        await db_session.refresh(old_row)
+        await db_session.refresh(new_row)
+        assert old_row.status == "failed"
+        assert old_row.error == "orphaned_at_startup"
+        assert old_row.completed_at is not None
+        assert new_row.status == "running"
+
+    async def test_no_orphans_returns_zero(self, db_session):
+        """Idempotent: safe to call on a DB with no orphan rows."""
+        cleaned = await _gc_orphan_probe_runs(db_session)
+        assert cleaned == 0
