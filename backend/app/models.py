@@ -565,3 +565,41 @@ class PromptTemplate(Base):
             sqlite_where=text("retired_at IS NULL"),
         ),
     )
+
+
+class ProbeRun(Base):
+    """Topic Probe run (Tier 1, v0.5.0).
+
+    Captures a single user-initiated probe execution: topic, scope, the
+    generated prompts (via probe-agent.md → Sonnet), each per-prompt
+    optimization outcome, the taxonomy delta over the run window, and
+    the final markdown report.
+    """
+    __tablename__ = "probe_run"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    topic: Mapped[str] = mapped_column(String, nullable=False)
+    scope: Mapped[str] = mapped_column(String, nullable=False, default="**/*")
+    intent_hint: Mapped[str] = mapped_column(String, nullable=False, default="explore")
+    repo_full_name: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("prompt_cluster.id"), nullable=True,
+    )
+    commit_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    prompts_generated: Mapped[int] = mapped_column(Integer, default=0)
+    prompt_results: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    aggregate: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    taxonomy_delta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    final_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="running")
+    suite_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_probe_run_status_started", "status", "started_at"),
+        Index("ix_probe_run_project_id", "project_id"),
+    )
