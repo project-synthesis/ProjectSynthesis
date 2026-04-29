@@ -50,6 +50,8 @@ def build_probe_service(
     provider: Any,
     context_service: Any,
     repo_query: Any | None = None,
+    embedding_service: Any | None = None,
+    session_factory: Any | None = None,
 ) -> ProbeService:
     """Pure constructor for ``ProbeService``.
 
@@ -61,12 +63,27 @@ def build_probe_service(
     ``repo_query`` defaults to ``None`` and is constructed lazily via
     ``_build_repo_query`` when the caller doesn't supply one — keeping the
     caller free of embedding-service imports unless they care.
+    ``embedding_service`` likewise defaults to ``None``; the probe will
+    construct one lazily inside ``_persist_and_assign`` when not supplied.
+    Threading the same singleton from app.state.embedding_service avoids
+    a redundant model load per probe in long-running processes.
+    ``session_factory`` defaults to ``app.database.async_session_factory``
+    so concurrent per-prompt persistence uses fresh sessions instead of
+    serializing on the orchestrator's request-scoped session. Tests that
+    don't supply one fall back to a lock-serialized path on ``db``.
     ``event_bus`` is the in-process singleton from ``app.services.event_bus``;
     accepting it as a parameter would invite tests to substitute partial
     fakes, so we resolve it here.
     """
     if repo_query is None:
         repo_query = _build_repo_query(db)
+
+    if session_factory is None:
+        try:
+            from app.database import async_session_factory as _default_factory
+            session_factory = _default_factory
+        except Exception:
+            session_factory = None
 
     from app.services.event_bus import event_bus
 
@@ -76,6 +93,8 @@ def build_probe_service(
         repo_query=repo_query,
         context_service=context_service,
         event_bus=event_bus,
+        embedding_service=embedding_service,
+        session_factory=session_factory,
     )
 
 
