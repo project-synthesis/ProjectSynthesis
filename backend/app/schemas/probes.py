@@ -49,7 +49,7 @@ class ProbeRunRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=500)
     scope: str | None = None
     intent_hint: Literal["audit", "refactor", "explore", "regression-test"] | None = None
-    n_prompts: int | None = Field(default=None, ge=5, le=25)
+    n_prompts: int | None = Field(default=None, ge=1, le=25)
     repo_full_name: str | None = None  # if None, server may resolve from session
 
 
