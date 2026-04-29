@@ -834,6 +834,27 @@ class ProbeService:
                     probe_id, exc_info=True,
                 )
             raise
+        except Exception as exc:
+            # Defense in depth: any uncaught exception in run() must
+            # mark the row as failed before propagating, otherwise we
+            # leak running rows. Per-phase try/except wrappers cover
+            # the documented failure modes; this handler covers
+            # unexpected raises (reporting-phase computation, DB commit
+            # retry exhaustion, future regressions).
+            try:
+                await asyncio.shield(self._mark_failed_with_error(
+                    row, probe_id,
+                    phase="running",
+                    error_class=type(exc).__name__,
+                    error_message=str(exc),
+                ))
+            except Exception:
+                logger.warning(
+                    "Probe %s mid-run failure (%s); row update failed; "
+                    "GC will reconcile",
+                    probe_id, type(exc).__name__, exc_info=True,
+                )
+            raise
         finally:
             try:
                 current_probe_id.reset(token)
@@ -852,6 +873,49 @@ class ProbeService:
         row.error = "cancelled"
         row.completed_at = datetime.now(timezone.utc)
         await self.db.commit()
+
+    async def _mark_failed_with_error(
+        self,
+        row: ProbeRun,
+        probe_id: str,
+        *,
+        phase: str,
+        error_class: str,
+        error_message: str,
+    ) -> None:
+        """Mark row failed with structured ``error`` info + emit a
+        ``probe_failed`` decision event.
+
+        Companion to ``_mark_cancelled`` for the top-level
+        ``except Exception`` handler in ``run()``. Truncates the
+        captured message so a runaway exception body can't blow out
+        the column. Event-logger call is wrapped in
+        ``try/except RuntimeError`` per the rest of this module so an
+        un-initialized logger (test harness) doesn't mask the actual
+        DB write.
+        """
+        row.status = "failed"
+        row.error = (
+            f"{error_class}: {_truncate(error_message, 500)} "
+            f"(phase={phase})"
+        )
+        row.completed_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        try:
+            get_event_logger().log_decision(
+                path="probe",
+                op="probe_failed",
+                decision="probe_failed",
+                context={
+                    "probe_id": probe_id,
+                    "phase": phase,
+                    "error_class": error_class,
+                    "error_message_truncated":
+                        _truncate(error_message, 200),
+                },
+            )
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------
     # Phase 2 helper -- prompt generation
@@ -902,12 +966,14 @@ class ProbeService:
         try:
             enriched = await self.context_service.enrich(
                 raw_prompt=prompt,
+                tier="internal",  # probe always runs Phase 3 on the
+                                  # internal provider (no sampling
+                                  # round-trip on per-prompt enrich).
+                db=self.db,
                 repo_full_name=ctx.repo_full_name,
                 project_id=ctx.project_id,
+                provider=self.provider,
             )
-        except TypeError:
-            # Tolerate enrich() signatures that take only the prompt.
-            enriched = await self.context_service.enrich(prompt)
         except Exception as exc:
             logger.warning(
                 "probe prompt %d enrich raised (%s) -- marking failed",
