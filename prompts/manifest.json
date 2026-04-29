@@ -10,9 +10,5 @@
   "passthrough.md": {"required": ["raw_prompt", "scoring_rubric_excerpt"], "optional": ["strategy_instructions", "codebase_context", "strategy_intelligence", "analysis_summary", "applied_patterns", "few_shot_examples", "divergence_alerts"]},
   "extract_patterns.md": {"required": ["raw_prompt", "optimized_prompt", "intent_label", "domain_raw", "strategy_used"], "optional": ["taxonomy_context"]},
   "seed.md": {"required": ["project_description", "prompts_per_run", "task_types", "phase_context"]},
-  "probe-agent.md": {
-    "variables": ["topic", "scope", "intent_hint", "n_prompts", "repo_full_name", "codebase_context", "known_domains", "existing_clusters_brief"],
-    "required": ["topic", "scope", "intent_hint", "n_prompts", "repo_full_name", "codebase_context", "known_domains", "existing_clusters_brief"],
-    "description": "Topic Probe agentic generator (Tier 1, v0.5.0)"
-  }
+  "probe-agent.md": {"required": ["topic", "scope", "intent_hint", "n_prompts", "repo_full_name", "codebase_context", "known_domains", "existing_clusters_brief"], "optional": []}
 }
