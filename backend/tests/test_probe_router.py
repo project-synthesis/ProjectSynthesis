@@ -127,7 +127,7 @@ def _stub_events(probe_id: str, n_prompts: int) -> list[Any]:
     out: list[Any] = [
         ProbeStartedEvent(
             probe_id=probe_id,
-            topic="x",
+            topic="probe-topic",
             scope="**/*",
             intent_hint="explore",
             n_prompts=n_prompts,
@@ -260,7 +260,11 @@ class TestProbeRouter:
         except Exception:
             get_probe_service = None  # type: ignore[assignment]
 
-        body = {"topic": "x", "n_prompts": 5, "repo_full_name": "owner/repo"}
+        body = {
+            "topic": "probe-failure-topic",
+            "n_prompts": 5,
+            "repo_full_name": "owner/repo",
+        }
         async with app_client.stream("POST", "/api/probes", json=body) as resp:
             assert resp.status_code == 200
             text = await resp.aread()
@@ -292,7 +296,11 @@ class TestProbeRouter:
         self, app_client: AsyncClient, stub_probe_service_happy,
     ):
         """AC-C5-4: 6th call within 60s returns 429."""
-        body = {"topic": "x", "n_prompts": 5, "repo_full_name": "owner/repo"}
+        body = {
+            "topic": "rate-limit-topic",
+            "n_prompts": 5,
+            "repo_full_name": "owner/repo",
+        }
         # Hit 5 times — must succeed
         for _ in range(5):
             async with app_client.stream("POST", "/api/probes", json=body) as r:

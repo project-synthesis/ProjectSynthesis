@@ -18,11 +18,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.dependencies.probes import get_probe_service
 from app.dependencies.rate_limit import RateLimit
 from app.models import ProbeRun
 from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
@@ -39,48 +41,18 @@ from app.schemas.probes import (
 from app.services.probe_service import ProbeService
 from app.utils.sse import format_sse
 
+# Re-export ``get_probe_service`` so callers (including tests overriding
+# via ``app.dependency_overrides[...]``) can import it from either the
+# router module or the canonical ``app.dependencies.probes`` location.
+# C6 (MCP tool) imports from ``app.dependencies.probes`` to avoid the
+# router→service cross-layer import.
+__all__ = ["router", "get_probe_service"]
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["probes"])
 
 _PROBE_RATE_LIMIT = RateLimit(lambda: settings.PROBE_RATE_LIMIT)
-
-
-# ---------------------------------------------------------------------------
-# Dependency factory
-# ---------------------------------------------------------------------------
-
-
-async def get_probe_service(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-) -> ProbeService:
-    """Construct a per-request ``ProbeService`` from app.state singletons.
-
-    Tests override via ``app.dependency_overrides[get_probe_service]``.
-    """
-    routing = getattr(request.app.state, "routing", None)
-    provider = routing.state.provider if routing is not None else None
-    context_service = getattr(request.app.state, "context_service", None)
-
-    repo_query: Any = None
-    try:
-        from app.services.embedding_service import EmbeddingService
-        from app.services.repo_index_query import RepoIndexQuery
-
-        repo_query = RepoIndexQuery(db=db, embedding_service=EmbeddingService())
-    except Exception:  # noqa: BLE001 — degrade gracefully when index not available
-        logger.debug("get_probe_service: RepoIndexQuery init failed", exc_info=True)
-
-    from app.services.event_bus import event_bus
-
-    return ProbeService(
-        db=db,
-        provider=provider,
-        repo_query=repo_query,
-        context_service=context_service,
-        event_bus=event_bus,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +128,9 @@ async def post_probe(
     remediation reason code without an open SSE stream. The repo gate
     runs before Pydantic validation so the canonical reason code wins
     over a generic 422 when ``repo_full_name`` is the only missing
-    field.
+    field. Body validation (topic length, n_prompts range, intent_hint
+    enum) then runs through ``ProbeRunRequest`` and surfaces any
+    failure as a 400 with reason ``invalid_request``.
     """
     try:
         raw = await request.json()
@@ -166,18 +140,17 @@ async def post_probe(
     if not isinstance(raw, dict) or not raw.get("repo_full_name"):
         raise HTTPException(status_code=400, detail="link_repo_first")
 
-    # Construct ProbeRunRequest by-hand from the raw dict so the route
-    # accepts test fixtures that intentionally use short topics. Genuine
-    # type errors (e.g. ``n_prompts="five"``) still surface as 400.
     try:
-        body = ProbeRunRequest.model_construct(
-            topic=str(raw.get("topic", "")),
-            scope=raw.get("scope"),
-            intent_hint=raw.get("intent_hint"),
-            n_prompts=raw.get("n_prompts"),
-            repo_full_name=raw.get("repo_full_name"),
+        body = ProbeRunRequest(**raw)
+    except ValidationError as exc:
+        # Translate Pydantic's 422 into the router's canonical 400
+        # ``invalid_request`` reason code so probe clients have a single
+        # error shape to switch on. Validation details are still
+        # available via the exception's ``errors()`` for logging.
+        logger.info(
+            "POST /api/probes: invalid request body — %s",
+            exc.errors(),
         )
-    except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail="invalid_request") from exc
 
     async def event_stream():
@@ -192,13 +165,15 @@ async def post_probe(
                     data = {}
                 yield format_sse(event_name, data)
         except ProbeError as exc:
-            # Phase-1/2 ProbeService failures already emit a probe_failed
-            # event before raising; the stream simply ends here. We log
-            # and return without re-yielding — closing the stream cleanly
-            # with HTTP 200 (tests assert errors live in the SSE payload,
-            # not the response status).
+            # ProbeService emits a ``ProbeFailedEvent`` on every internal
+            # failure path BEFORE raising — so we just log the reason and
+            # close the stream cleanly with HTTP 200. Tests assert that
+            # errors live in the SSE payload, not the response status.
             logger.info("probe stream ended with ProbeError: %s", exc.reason)
         except Exception as exc:  # noqa: BLE001 — never break the stream contract
+            # Defensive backstop for unexpected failures (DB connection
+            # broken mid-stream, etc.) that the service couldn't trap.
+            # ProbeError paths are handled above and never reach here.
             logger.error("probe stream error: %s", exc, exc_info=True)
             yield format_sse(
                 "probe_failed",
