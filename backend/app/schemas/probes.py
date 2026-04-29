@@ -136,6 +136,25 @@ class ProbeFailedEvent(BaseModel):
     error_message_truncated: str  # max 200 chars
 
 
+class ProbeRateLimitedEvent(BaseModel):
+    """Emitted when the probe's LLM provider returns a rate limit.
+
+    Surfaces structured ``reset_at`` so the UI can render a precise
+    "retry after X" countdown instead of a generic "request failed"
+    message. The probe's terminal status will be ``partial`` (some
+    prompts persisted before the limit hit) or ``failed`` (none did);
+    the row's ``error`` field is prefixed with ``rate_limited:`` so
+    list endpoints can filter / badge accordingly.
+    """
+    probe_id: str
+    provider: str  # "claude_cli" | "anthropic_api" | etc
+    reset_at_iso: str | None  # absolute UTC ISO-8601 string; None when unknown
+    estimated_wait_seconds: int | None  # for clients that prefer relative
+    completed_count: int
+    aborted_count: int  # prompts not started because the limit hit mid-batch
+    total: int
+
+
 class ProbeRunResult(BaseModel):
     """Final response after all 5 phases complete."""
     id: str
