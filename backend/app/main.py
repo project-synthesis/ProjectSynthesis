@@ -1629,7 +1629,27 @@ async def _global_exception_handler(request, exc):
         )
     except Exception:
         pass  # Error logger itself failed — don't recurse
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+    # CORS-safe error response. FastAPI's exception_handler runs OUTSIDE
+    # the CORSMiddleware in Starlette's stack, so a bare JSONResponse here
+    # ships without ``access-control-allow-origin`` and the browser
+    # rejects it with "Failed to fetch" + ERR_FAILED. The user sees a
+    # generic CORS error instead of the actual problem (the underlying
+    # exception that caused the 500). Echo the request's Origin back
+    # when it's in our allowlist so the frontend gets a proper 500
+    # response with a useful body.
+    headers: dict[str, str] = {}
+    origin = request.headers.get("origin")
+    if origin and origin in _cors_origins:
+        headers["access-control-allow-origin"] = origin
+        headers["access-control-allow-credentials"] = "true"
+    # Surface a stable error type the frontend can match on for
+    # category-aware UI handling (e.g., contention vs auth vs validation).
+    body = {
+        "detail": "Internal server error",
+        "error_type": type(exc).__name__,
+    }
+    return JSONResponse(status_code=500, content=body, headers=headers)
 
 
 # Routers (imported lazily — may not exist yet during phased development)

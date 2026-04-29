@@ -319,8 +319,23 @@ async def get_optimization(
     trace_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> OptimizationDetail:
+    """Fetch the optimization row for a given trace_id.
+
+    ``trace_id`` is *intended* to be unique per pipeline run, but the schema
+    doesn't enforce a UNIQUE constraint and historical data (e.g. test
+    fixture leaks where multiple rows shared a stub trace_id like
+    ``tr-04``) can produce duplicates. ``scalar_one_or_none()`` raises
+    ``MultipleResultsFound`` on duplicates, surfacing as a 500 in the UI
+    ("Failed to load optimization"). Defensive fix: select with
+    ``ORDER BY created_at DESC LIMIT 1`` so the most-recent row wins
+    deterministically -- the worst case under data corruption is showing
+    the user a slightly older row, not a hard error.
+    """
     result = await db.execute(
-        select(Optimization).where(Optimization.trace_id == trace_id)
+        select(Optimization)
+        .where(Optimization.trace_id == trace_id)
+        .order_by(Optimization.created_at.desc())
+        .limit(1)
     )
     opt = result.scalar_one_or_none()
     if not opt:
