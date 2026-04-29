@@ -79,17 +79,23 @@ def _make_optimization_mock(
 
 @pytest.fixture
 def mock_provider() -> AsyncMock:
-    """LLMProvider mock — generator returns a list of probe prompts."""
+    """LLMProvider mock — generator returns a list of probe prompts.
+
+    Each prompt embeds a backtick-wrapped code identifier so the production
+    ``generate_probe_prompts`` primitive (C3) clears the F1 backtick-density
+    gate (>50% drop threshold). The probe-agent template requires this in
+    real use too — see ``probe_generation._BACKTICK_RX``.
+    """
     provider = AsyncMock()
 
     async def _complete_parsed(*args, **kwargs):
         result = MagicMock()
         result.prompts = [
-            "Audit cache invalidation logic in repo_index_service.",
-            "Compare TTL strategies between explore_cache and curated cache.",
-            "Identify race conditions in concurrent cache writes.",
-            "Review cache key derivation for SHA collisions.",
-            "Find missing invalidation hooks on file rename.",
+            "Audit `repo_index_service.invalidate` cache invalidation logic.",
+            "Compare `explore_cache.py` TTL strategy vs curated cache.",
+            "Identify race conditions in `RepoIndexQuery.refresh` writes.",
+            "Review cache key derivation in `repo_index_service.py` for SHA collisions.",
+            "Find missing invalidation hooks for `file_rename` events.",
         ]
         result.model = "claude-haiku-4-5"
         return result
@@ -101,15 +107,25 @@ def mock_provider() -> AsyncMock:
 
 @pytest.fixture
 def mock_repo_query() -> MagicMock:
-    """RepoIndexQuery returning a non-empty curated context (all prompts succeed)."""
+    """RepoIndexQuery returning a curated context shaped like production.
+
+    Uses ``selected_files`` (list[dict] with ``path`` keys), matching the real
+    ``CuratedCodebaseContext`` dataclass in ``repo_index_query.py``. The
+    probe-specific ``explore_synthesis_excerpt``/``dominant_stack`` attrs are
+    additive — production grounding will source them from cached synthesis +
+    workspace_intelligence respectively (Tier 2 wiring).
+    """
     repo_query = MagicMock()
     curated = MagicMock()
-    curated.files = [
-        MagicMock(file_path="backend/app/services/repo_index_service.py"),
-        MagicMock(file_path="backend/app/services/explore_cache.py"),
-        MagicMock(file_path="backend/app/services/repo_index_query.py"),
+    curated.selected_files = [
+        {"path": "backend/app/services/repo_index_service.py", "score": 0.91},
+        {"path": "backend/app/services/explore_cache.py", "score": 0.88},
+        {"path": "backend/app/services/repo_index_query.py", "score": 0.85},
     ]
-    curated.synthesis_excerpt = "Repo index uses SHA-keyed file cache with TTL eviction."
+    curated.context_text = "Repo index uses SHA-keyed file cache with TTL eviction."
+    curated.explore_synthesis_excerpt = (
+        "Repo index uses SHA-keyed file cache with TTL eviction."
+    )
     curated.dominant_stack = ["python", "fastapi", "sqlalchemy"]
     repo_query.query_curated_context = AsyncMock(return_value=curated)
     return repo_query
@@ -117,28 +133,26 @@ def mock_repo_query() -> MagicMock:
 
 @pytest.fixture
 def mock_repo_query_partial() -> MagicMock:
-    """RepoIndexQuery configured so SOME per-prompt runs fail.
+    """RepoIndexQuery for AC-C4-3 partial-status path.
 
-    Used by AC-C4-3 (partial status). The 5-phase orchestrator persists
-    status='partial' when 1+ failures < n_prompts succeed.
+    Identical to ``mock_repo_query`` shape — the partial-failure injection
+    happens via ``mock_context_service_partial.enrich`` (alternating raise),
+    not via a flag on the repo-query mock. This keeps test affordances out
+    of the production code path.
     """
     repo_query = MagicMock()
     curated = MagicMock()
-    curated.files = [MagicMock(file_path="backend/app/services/repo_index_service.py")]
-    curated.synthesis_excerpt = "Partial index — only one file present."
+    curated.selected_files = [
+        {"path": "backend/app/services/repo_index_service.py", "score": 0.90},
+    ]
+    curated.context_text = "Partial index — only one file present."
+    curated.explore_synthesis_excerpt = "Partial index — only one file present."
     curated.dominant_stack = ["python"]
     repo_query.query_curated_context = AsyncMock(return_value=curated)
-    # The per-prompt run will be configured to fail on alternating indexes
-    # via context_service / batch_pipeline.run_single_prompt mock — see
-    # mock_context_service below for the partial-failure injection knob.
-    repo_query._partial_mode = True
     return repo_query
 
 
-@pytest.fixture
-def mock_context_service() -> MagicMock:
-    """ContextEnrichmentService mock — returns empty enrichment context."""
-    svc = MagicMock()
+def _make_enriched_mock() -> MagicMock:
     enriched = MagicMock()
     enriched.codebase_context = ""
     enriched.strategy_intelligence = ""
@@ -146,7 +160,36 @@ def mock_context_service() -> MagicMock:
     enriched.divergence_alerts = ""
     enriched.heuristic_analysis = MagicMock(task_type="analysis", domain="backend")
     enriched.enrichment_meta = {}
-    svc.enrich = AsyncMock(return_value=enriched)
+    return enriched
+
+
+@pytest.fixture
+def mock_context_service() -> MagicMock:
+    """ContextEnrichmentService mock — returns empty enrichment context."""
+    svc = MagicMock()
+    svc.enrich = AsyncMock(return_value=_make_enriched_mock())
+    return svc
+
+
+@pytest.fixture
+def mock_context_service_partial() -> MagicMock:
+    """ContextEnrichmentService that fails enrich() on every other call.
+
+    Drives AC-C4-3 partial-status via the orchestrator's natural exception
+    handler (``_execute_one`` catches and returns ``status='failed'``) — no
+    test-only flag in production code.
+    """
+    svc = MagicMock()
+    call_count = {"n": 0}
+
+    async def _enrich_alternating(*args, **kwargs):
+        call_count["n"] += 1
+        # Fail on the 2nd, 4th, ... calls (every other prompt).
+        if call_count["n"] % 2 == 0:
+            raise RuntimeError("simulated per-prompt enrichment failure")
+        return _make_enriched_mock()
+
+    svc.enrich = AsyncMock(side_effect=_enrich_alternating)
     return svc
 
 
@@ -176,12 +219,12 @@ class TestProbeService:
             mock_event_bus,
         )
         events = []
-        async for ev in svc.run(_make_request(n_prompts=3), probe_id="p-test-1"):
+        async for ev in svc.run(_make_request(n_prompts=5), probe_id="p-test-1"):
             events.append(type(ev).__name__)
         assert events[0] == "ProbeStartedEvent"
         assert events[1] == "ProbeGroundingEvent"
         assert events[2] == "ProbeGeneratingEvent"
-        assert events.count("ProbeProgressEvent") == 3
+        assert events.count("ProbeProgressEvent") == 5
         assert events[-1] == "ProbeCompletedEvent"
 
     @pytest.mark.asyncio
@@ -202,13 +245,13 @@ class TestProbeService:
             mock_event_bus,
         )
         probe_id = "p-test-running-completed"
-        async for _ in svc.run(_make_request(n_prompts=3), probe_id=probe_id):
+        async for _ in svc.run(_make_request(n_prompts=5), probe_id=probe_id):
             pass
         row = await db_session.get(ProbeRun, probe_id)
         assert row is not None
         assert row.status == "completed"
         assert row.completed_at is not None
-        assert row.prompts_generated == 3
+        assert row.prompts_generated == 5
 
     @pytest.mark.asyncio
     async def test_partial_status_on_some_failures(
@@ -216,7 +259,7 @@ class TestProbeService:
         db_session,
         mock_provider,
         mock_repo_query_partial,
-        mock_context_service,
+        mock_context_service_partial,
         mock_event_bus,
     ):
         """AC-C4-3: 1+ failures < n_prompts → status=partial; all-fail → status=failed; all-succeed → completed."""
@@ -224,11 +267,11 @@ class TestProbeService:
             db_session,
             mock_provider,
             mock_repo_query_partial,
-            mock_context_service,
+            mock_context_service_partial,
             mock_event_bus,
         )
         probe_id = "p-test-partial"
-        async for _ in svc.run(_make_request(n_prompts=3), probe_id=probe_id):
+        async for _ in svc.run(_make_request(n_prompts=5), probe_id=probe_id):
             pass
         row = await db_session.get(ProbeRun, probe_id)
         assert row.status == "partial"
@@ -313,7 +356,7 @@ class TestProbeService:
             mock_context_service,
             mock_event_bus,
         )
-        async for _ in svc.run(_make_request(n_prompts=3), probe_id="p-test-f31"):
+        async for _ in svc.run(_make_request(n_prompts=5), probe_id="p-test-f31"):
             pass
         row = await db_session.get(ProbeRun, "p-test-f31")
         assert row.aggregate["mean_overall"] == pytest.approx(7.30, abs=0.05)

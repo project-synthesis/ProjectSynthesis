@@ -38,14 +38,15 @@ from app.schemas.probes import (
     ProbeFailedEvent,
     ProbeGeneratingEvent,
     ProbeGroundingEvent,
-    ProbePromptResult,
     ProbeProgressEvent,
+    ProbePromptResult,
     ProbeRunRequest,
     ProbeRunResult,
     ProbeStartedEvent,
     ProbeTaxonomyDelta,
 )
 from app.services.batch_orchestrator import BATCH_CONCURRENCY_BY_TIER
+from app.services.probe_generation import generate_probe_prompts
 
 logger = logging.getLogger(__name__)
 
@@ -234,47 +235,35 @@ def _stub_dimension_scores() -> DimensionScores:
 
 
 def _resolve_curated_files(curated: Any) -> list[str]:
-    """Return list of file path strings from a curated-context object.
+    """Return file paths from a ``CuratedCodebaseContext``-shaped object.
 
-    Tolerates both the production ``CuratedCodebaseContext`` shape
-    (``selected_files: list[dict]``) and the simpler test-mock shape
-    (``files: list[obj-with-file_path-attr]``).
+    Production shape: ``selected_files: list[dict]`` with ``path`` keys
+    (see ``services/repo_index_query.py``). Returns ``[]`` on absent or
+    falsy input.
     """
     if curated is None:
         return []
-    files_attr = getattr(curated, "files", None)
-    if files_attr is not None:
-        out: list[str] = []
-        for f in files_attr:
-            path = getattr(f, "file_path", None) or getattr(f, "path", None)
-            if isinstance(f, dict):
-                path = f.get("file_path") or f.get("path")
+    selected = getattr(curated, "selected_files", None) or []
+    out: list[str] = []
+    for d in selected:
+        if isinstance(d, dict):
+            path = d.get("path") or d.get("file_path")
             if path:
                 out.append(str(path))
-        return out
-    selected = getattr(curated, "selected_files", None)
-    if selected is not None:
-        return [
-            d.get("file_path") or d.get("path") or ""
-            for d in selected
-            if isinstance(d, dict)
-        ]
-    return []
+    return out
 
 
 def _resolve_curated_synthesis(curated: Any) -> str | None:
-    """Return synthesis excerpt from a curated-context object.
+    """Return the cached explore-synthesis excerpt for the probe.
 
-    Mock fixtures expose ``synthesis_excerpt``; real code path may use
-    ``explore_synthesis_excerpt`` or ``context_text``.
+    The probe-specific ``explore_synthesis_excerpt`` attribute is preferred
+    (set by Tier 2 grounding when the cached synthesis is layered on top of
+    curated retrieval). Falls back to ``context_text`` from the production
+    ``CuratedCodebaseContext`` shape.
     """
     if curated is None:
         return None
-    for attr in (
-        "synthesis_excerpt",
-        "explore_synthesis_excerpt",
-        "context_text",
-    ):
+    for attr in ("explore_synthesis_excerpt", "context_text"):
         v = getattr(curated, attr, None)
         if v:
             return str(v)
@@ -282,6 +271,11 @@ def _resolve_curated_synthesis(curated: Any) -> str | None:
 
 
 def _resolve_dominant_stack(curated: Any) -> list[str]:
+    """Return dominant tech stack as a list of stable string tokens.
+
+    Tier 2 grounding will source this from ``WorkspaceIntelligence`` and
+    layer it onto the curated-context object before passing it here.
+    """
     if curated is None:
         return []
     stack = getattr(curated, "dominant_stack", None)
@@ -440,20 +434,14 @@ class ProbeService:
                 )
                 raise ProbeError("link_repo_first")
 
-            # Resolve project_id (best-effort -- absent fixtures simply
-            # leave it None).
-            try:
-                from app.services.project_service import resolve_project_id
-                row.project_id = await resolve_project_id(
-                    self.db, repo_full_name=request.repo_full_name,
-                )
-            except Exception as exc:
-                logger.debug(
-                    "probe %s: resolve_project_id failed (%s) -- continuing "
-                    "with project_id=None",
-                    probe_id, exc,
-                )
-                row.project_id = None
+            # Resolve project_id. ``resolve_project_id`` already returns the
+            # legacy fallback when no LinkedRepo row exists (and ``None`` if
+            # legacy isn't provisioned), so a try/except here would only
+            # mask genuine DB faults. Let those propagate.
+            from app.services.project_service import resolve_project_id
+            row.project_id = await resolve_project_id(
+                self.db, repo_full_name=request.repo_full_name,
+            )
 
             # Curated retrieval -- the topic itself is the query.
             curated = None
@@ -554,22 +542,11 @@ class ProbeService:
             tier = "internal"
             sem = asyncio.Semaphore(BATCH_CONCURRENCY_BY_TIER[tier])
 
-            # Mock fixtures expose `_partial_mode = True` to drive the
-            # AC-C4-3 partial-status path. Production uses real per-prompt
-            # exceptions; the flag stays a unit-test affordance.
-            # Use ``__dict__`` to bypass MagicMock's attribute auto-creation.
-            partial_mode = bool(
-                self.repo_query.__dict__.get("_partial_mode", False)
-                if hasattr(self.repo_query, "__dict__") else False
-            )
-
             async def _run_one(
                 idx: int, prompt: str,
             ) -> ProbePromptResult:
                 async with sem:
-                    return await self._execute_one(
-                        idx, prompt, ctx, partial_mode=partial_mode,
-                    )
+                    return await self._execute_one(idx, prompt, ctx)
 
             tasks = [_run_one(i, p) for i, p in enumerate(prompts)]
             prompt_results: list[ProbePromptResult] = []
@@ -724,34 +701,23 @@ class ProbeService:
     async def _generate_prompts(
         self, ctx: ProbeContext, n_prompts: int,
     ) -> list[str]:
-        """Generate ``n_prompts`` topic-grounded prompts via the provider.
+        """Delegate to the C3 ``generate_probe_prompts`` primitive.
 
-        Calls ``provider.complete_parsed`` directly with a lightweight
-        request shape so unit tests can stub the provider with a single
-        ``AsyncMock``. The full backtick-density gating logic lives in
-        ``probe_generation.generate_probe_prompts``; that primitive is the
-        production path -- this method is the orchestrator-internal
-        adapter that keeps the test surface narrow.
+        The primitive owns: prompt-template rendering, retry policy
+        (``call_provider_with_retry`` with ``max_retries=3``), and the F1
+        backtick-density filter (>50% drop -> ``ProbeGenerationError``).
+        Keeping this thin wrapper preserves a stable orchestrator-level
+        seam if/when probe generation grows additional inputs (e.g.
+        per-tier model overrides).
         """
-        result = await self.provider.complete_parsed(
-            model=settings.MODEL_SONNET,
-            system_prompt="",
-            user_message=(
-                f"Topic: {ctx.topic}\n"
-                f"Scope: {ctx.scope}\n"
-                f"Intent: {ctx.intent_hint}\n"
-                f"Repo: {ctx.repo_full_name}\n"
-                f"N prompts: {n_prompts}\n"
-            ),
-            output_format=None,
+        prompts = await generate_probe_prompts(
+            ctx, provider=self.provider, n_prompts=n_prompts,
         )
-        prompts = list(getattr(result, "prompts", []) or [])
         if not prompts:
             raise RuntimeError(
                 "probe-agent generator returned 0 prompts"
             )
-        # Clamp to requested count -- generator may overproduce.
-        return prompts[:n_prompts]
+        return prompts
 
     # ------------------------------------------------------------------
     # Phase 3 helper -- per-prompt execution
@@ -762,8 +728,6 @@ class ProbeService:
         idx: int,
         prompt: str,
         ctx: ProbeContext,
-        *,
-        partial_mode: bool,
     ) -> ProbePromptResult:
         """Execute one prompt: enrich -> score -> shape into result.
 
@@ -771,15 +735,11 @@ class ProbeService:
         (``task_type``) and a deterministic dimension-score baseline so the
         F3.1 ``compute_overall(task_type)`` invariant is exercised end to
         end without dragging the full pipeline into the test surface.
-        """
-        # AC-C4-3 partial-mode hook: alternate failure injection.
-        if partial_mode and idx % 2 == 1:
-            return ProbePromptResult(
-                prompt_idx=idx,
-                prompt_text=_truncate(prompt, 1000),
-                status="failed",
-            )
 
+        AC-C4-3 partial-status path is driven by genuine ``enrich()``
+        failures (e.g. provider errors mid-batch) -- caught here and
+        translated to ``status='failed'``. No test-only flag.
+        """
         try:
             enriched = await self.context_service.enrich(
                 raw_prompt=prompt,
