@@ -1759,4 +1759,10 @@ try:
 except ImportError:
     pass
 
+try:
+    from app.routers.probes import router as probes_router
+    app.include_router(probes_router)
+except ImportError:
+    pass
+
 asgi_app = app
