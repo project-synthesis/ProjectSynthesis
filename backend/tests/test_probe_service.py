@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -434,4 +434,112 @@ class TestProbeCancellation:
         assert row is not None
         assert row.status == "failed"
         assert row.error == "cancelled"
+        assert row.completed_at is not None
+
+
+class TestProbeServiceErrorPaths:
+    """Tier-1 production-bug regression guards.
+
+    Two related defects surfaced during integration validation
+    (probe ``470e21ce-31fc-4386-8b34-e7423c64096d``):
+
+      1. ``_execute_one`` called ``ContextEnrichmentService.enrich()``
+         without the required ``tier`` and ``db`` kwargs, so every
+         Phase-3 prompt failed with TypeError. The ``except TypeError``
+         fallback to ``enrich(prompt)`` re-raised TypeError (the second
+         TypeError isn't caught by the sibling ``except Exception``),
+         which propagated past ``run()`` unhandled.
+
+      2. The TypeError propagating past ``run()`` left the ProbeRun row
+         in ``status='running'`` forever — the existing CancelledError
+         handler does not cover generic exceptions.
+    """
+
+    @pytest.mark.asyncio
+    async def test_enrich_signature_real_kwargs(
+        self,
+        db_session,
+        mock_provider,
+        mock_repo_query,
+        mock_context_service,
+        mock_event_bus,
+    ):
+        """``ContextEnrichmentService.enrich()`` is called with the
+        canonical kwargs (``tier='internal'``, ``db=<AsyncSession>``).
+
+        Regression guard for the Tier-1 production bug where
+        ``_execute_one`` omitted these required args and probes failed
+        at Phase 3.
+        """
+        svc = ProbeService(
+            db_session,
+            mock_provider,
+            mock_repo_query,
+            mock_context_service,
+            mock_event_bus,
+        )
+        async for _ in svc.run(
+            _make_request(n_prompts=5),
+            probe_id="p-test-enrich-kwargs",
+        ):
+            pass
+
+        # mock_context_service.enrich must have been invoked with the
+        # canonical signature on every prompt.
+        enrich_calls = mock_context_service.enrich.call_args_list
+        assert len(enrich_calls) >= 1
+        for call in enrich_calls:
+            assert call.kwargs.get("tier") == "internal"
+            assert call.kwargs.get("db") is not None
+
+    @pytest.mark.asyncio
+    async def test_uncaught_exception_marks_row_as_failed(
+        self,
+        db_session,
+        mock_provider,
+        mock_repo_query,
+        mock_context_service,
+        mock_event_bus,
+    ):
+        """Any uncaught exception during ``run()`` marks the row failed
+        and propagates. Defense in depth against future regressions
+        where a code path beyond the existing per-phase try/except
+        wrappers raises (e.g. reporting-phase computation, db.commit
+        retry exhaustion).
+
+        Patches ``_render_final_report`` — invoked at module level in
+        the reporting phase, with NO surrounding try/except. Pre-fix,
+        any RuntimeError there propagated past ``run()`` and the row
+        stayed at ``status='running'`` forever.
+        """
+        def boom(*a, **k):
+            raise RuntimeError("synthetic uncaught failure")
+
+        from app.services import probe_service as probe_service_mod
+
+        probe_id = "p-test-uncaught"
+        with patch.object(
+            probe_service_mod,
+            "_render_final_report",
+            side_effect=boom,
+        ):
+            with pytest.raises(RuntimeError, match=r"synthetic uncaught failure"):
+                async for _ in ProbeService(
+                    db_session,
+                    mock_provider,
+                    mock_repo_query,
+                    mock_context_service,
+                    mock_event_bus,
+                ).run(
+                    _make_request(n_prompts=5),
+                    probe_id=probe_id,
+                ):
+                    pass
+
+        # Row must be marked failed with structured error info.
+        row = await db_session.get(ProbeRun, probe_id)
+        assert row is not None
+        assert row.status == "failed"
+        assert row.error is not None
+        assert "RuntimeError" in row.error
         assert row.completed_at is not None
