@@ -118,7 +118,39 @@ This violates the design intent. Domain emergence should be **signal concentrati
 ---
 
 ### Topic Probe — agentic targeted exploration of a user-specified concern against the linked codebase
-**Status:** Planned
+**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned** within the 0.4.x line: T2=v0.4.13, T3=v0.4.14, T4=v0.4.15.
+
+**Tier 1 deliverables (SHIPPED):**
+- `POST /api/probes` (SSE), `GET /api/probes`, `GET /api/probes/{id}`
+- `synthesis_probe` MCP tool (15th tool)
+- `prompts/probe-agent.md` hot-reloaded system prompt (8 template variables)
+- `ProbeRun` model + idempotent Alembic migration (`ec86c86ba298`)
+- 5-phase orchestrator (`grounding → generating → running → observability → reporting`) in `services/probe_service.py`
+- 7 `probe_*` taxonomy events + `current_probe_id` ContextVar correlation on existing taxonomy events
+- `scripts/probe.py` CLI shim translating `validate_taxonomy_emergence.py::PROMPT_SETS` presets to `POST /api/probes`
+- Robustness hardening: `asyncio.CancelledError` handler + top-level `Exception` handler + `_gc_orphan_probe_runs()` startup sweep (rows running >1h marked failed)
+- Optimizer timeout calibration: `_CLI_TIMEOUT_SECONDS=600`, `_post=1800s`, `probe.py httpx=3600s`
+- 8 TDD cycles + 2 hotfix cycles all RED→GREEN→REFACTOR→code-review approved; suite at 3237 passed + 1 skipped
+- Spec: `docs/specs/topic-probe-2026-04-29.md` (gitignored)
+- Plan: `docs/plans/topic-probe-tier-1-2026-04-29.md` (gitignored)
+
+**Tier 2 (v0.4.13) — Planned:**
+- `POST /api/probes/{id}/save-as-suite` — fork a probe run into a `ValidationSuite` (frozen prompt fixture + assertions captured from the run's actual scores)
+- `POST /api/probes/{id}/replay` — re-run a saved suite against current code state (regression detection)
+- UI Navigator panel: "Topic Probe" tab in SeedModal + live taxonomy mini-view + final report card with copy-as-markdown
+- `/api/health` regression alarm + StatusBar badge for suite-level mean drops ≥0.5 from baseline
+- Topic-only mode (no codebase grounding) for non-developer verticals — drops Phase 1, generates from topic alone (ADR-006 follow-up)
+- Replace blocking SSE with 202 Accepted + `GET /api/probes/{id}` polling for client-timeout decoupling on long probes (>10 prompts)
+
+**Tier 3 (v0.4.14) — Planned:**
+- `release.sh` CI hook: register critical probe topics as pre-release gates (fail = block release)
+- Probe → seed-agent promotion flow: a saved probe with consistently high scores can be promoted to `prompts/seed-agents/<topic-slug>.md`
+- "Drill into cluster" action on seed runs auto-launches a probe scoped to the cluster's intent_label
+- Cross-tier composition: probe-discovered prompts feed seed-agent few-shot context
+
+**Tier 4 (v0.4.15) — Planned:**
+- Substrate unification: migrate `Optimization.source="batch_seed"` semantics into a `SeedRun` model that's effectively a `ProbeRun` with `template=True`. Single history surface. SeedModal becomes one tab with two modes (template-driven / topic-driven) sharing the same form scaffold.
+
 **Vision:** A user-driven, codebase-aware seed mode where the user specifies a topic, concern, or feature and the agentic seed system organically populates the taxonomy with focused prompts anchored in the user's actual code. The system reads the linked GitHub repo, generates 10–20 prompts targeted at the topic with real code references (`engine.py:_compute_centroid`, `services/taxonomy/matching.py`, etc.), runs them through the optimization pipeline, watches the taxonomy emerge new domains/sub-domains organically as signal concentrates, and delivers a final report of what shipped — taxonomy changes, top-scoring outputs, extracted patterns, recommended follow-ups.
 
 This is the productization of the manual workflow that emerged the `embeddings` sub-domain and `data` / `frontend` top-level domains during cycles 15–22. Today that flow requires human-curated prompts in `scripts/validate_taxonomy_emergence.py::PROMPT_SETS` and a CLI invocation; the user wants to specify a concern (e.g., "NumPy memory layout optimization", "auth middleware security review", "embedding cache invalidation correctness") and let the agentic system handle the rest with zero friction.

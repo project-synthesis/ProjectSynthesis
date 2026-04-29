@@ -4,6 +4,55 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+
+- **v0.4.12 — Probe cancellation + orphan-recovery hotfix** — discovered during Tier 1 integration validation: a client disconnect mid-stream (curl `--max-time` cut off, FastAPI `ClientDisconnect` raised) cancelled the `ProbeService.run()` async generator, but the `ProbeRun` row stayed in `status='running'` forever — no cleanup, no failure marker. Two fixes: (1) `probe_service.run()` now catches `asyncio.CancelledError`, calls `_mark_cancelled(row)` under `asyncio.shield()` to mark the row `status='failed', error='cancelled'` before re-raising. The shield protects the cleanup commit from immediate re-cancellation. (2) `gc._gc_orphan_probe_runs()` runs at startup, marks rows in `status='running'` for >`PROBE_ORPHAN_TTL_HOURS=1` as failed with `error='orphaned_at_startup'`. Mirrors the existing `_gc_failed_optimizations` pattern. 2 new tests (`TestProbeCancellation`, `TestGCOrphanProbeRuns`).
+
+- **v0.4.12 — Optimizer timeout calibration** — calibrated against live audit-class duration distribution (cycle-19→22 v2 + cycle-23 + Topic Probe Tier 1 integration validation, 2026-04-29):
+  - **`ClaudeCLIProvider._CLI_TIMEOUT_SECONDS` 300 → 600s** — per-LLM-call ceiling. Median full-pipeline ~354s, p95 ~480s; the Opus 4.7 OPTIMIZE phase with `xhigh` effort + 80K codebase context can land at 400–500s on its own. Old 300s caused silent retries that surfaced as `network_error: timed out` at the script-level urlopen tier (cycle-23 prompts 3+4, ~590-642s).
+  - **`scripts/validate_taxonomy_emergence.py::_post` 600 → 1800s** — covers p99 with 3× headroom for Opus 4.7 task-budget xhigh runs that legitimately need >10 min on 128K outputs.
+  - **`scripts/probe.py` httpx client 900 → 3600s** — covers a 10-prompt probe with headroom; longer probes need Tier 2's 202 Accepted + polling architecture (deferred).
+
+### Added
+
+- **v0.4.12 — Topic Probe Tier 1** — agentic targeted exploration of a user-specified topic against the linked GitHub codebase. Productizes the manual cycle-15→22 workflow that emerged the `embeddings` sub-domain and `data` / `frontend` top-level domains. The user specifies a topic (e.g., "embedding cache invalidation in EmbeddingIndex"), and the agentic system reads the codebase, generates 5–25 code-grounded prompts citing real identifiers, runs them through the optimization pipeline, watches the taxonomy emerge new domains/sub-domains organically, and delivers a structured final report. Topic Probe is a peer of seed agents — same execution primitive (`batch_pipeline`), different generation strategy (LLM-agentic-from-topic-and-codebase vs pre-authored agent template).
+
+  **New surfaces:**
+  - `POST /api/probes` (SSE via `StreamingResponse`, IP-keyed `RateLimit("5/minute")`) — 5-phase orchestrator (`grounding → generating → running → observability → reporting`)
+  - `GET /api/probes` — paginated `ProbeListResponse` envelope
+  - `GET /api/probes/{id}` — full `ProbeRunResult` (404 with `probe_not_found` reason on miss)
+  - `synthesis_probe` MCP tool (15th tool, `structured_output=True`) — same 5-phase flow + `ctx.report_progress` per prompt
+  - `prompts/probe-agent.md` — hot-reloaded system prompt, 8 template variables (`topic`, `scope`, `intent_hint`, `n_prompts`, `repo_full_name`, `codebase_context`, `known_domains`, `existing_clusters_brief`)
+  - `ProbeRun` SQLAlchemy model + idempotent Alembic migration (`ec86c86ba298`, uses `inspector.get_table_names()` guard per codebase convention)
+  - 7 new `probe_*` taxonomy events (`probe_started`, `probe_grounding`, `probe_generating`, `probe_prompt_completed`, `probe_taxonomy_change`, `probe_completed`, `probe_failed`)
+  - `current_probe_id` ContextVar (declared in `probe_service.py`, re-exported by `probe_event_correlation.py`) injects `probe_id` into existing taxonomy events fired during a probe — backward-compat additive, consumers tolerate absent keys
+  - `scripts/probe.py` — CLI shim translating `validate_taxonomy_emergence.py::PROMPT_SETS` presets → `POST /api/probes` (backward-compat with v0.4.10/v0.4.11 chain runners; `PROMPT_SETS` dict unchanged)
+
+  **New configuration:**
+  - `PROBE_RATE_LIMIT: str = "5/minute"` — IP-keyed POST `/api/probes` rate limit
+  - `PROBE_CODEBASE_MAX_CHARS: int = 40_000` — codebase context budget for the agentic generator (half of `INDEX_CURATED_MAX_CHARS=80000`; topic-focused probes don't need full repo budget)
+  - `BATCH_CONCURRENCY_BY_TIER: dict[str, int]` extracted as module-level constant in `batch_orchestrator.py` (was inline `max_parallel: int = 10` parameter; values unchanged: internal=10, api=5, sampling=2)
+
+  **Calibration-aware assertion thresholds** (per `docs/specs/topic-probe-2026-04-29.md` § 5, grounded in cycle-19→22 v2 replay distribution):
+  - Mean overall (analysis): >= 6.9 (mean − 1σ; σ ≈ 0.5)
+  - p5 overall: >= 6.5 floor
+  - F5 false-premise flag fire rate: <= 1 per probe on healthy corpus
+  - F4 strategy fidelity: 100% (every persisted `strategy_used` ∈ available strategies)
+
+  **8 TDD cycles** (RED → GREEN → REFACTOR → code-review per cycle; substantive REFACTORs across all 8 per memory `feedback_tdd_protocol.md`):
+  - C1 (probe-agent.md template) — 5 ACs / 6 tests; REFACTOR canonicalized manifest shape + tightened `or` assertion
+  - C2 (ProbeRun model + migration) — 4 ACs; REFACTOR extracted shared `enable_sqlite_foreign_keys` fixture (deduplicated 5 tests)
+  - C3 (probe_generation primitive) — 5 ACs / 6 tests; REFACTOR aligned backtick regex with F1 specificity heuristic byte-for-byte + added operational logging
+  - C4 (probe_service 5-phase orchestrator) — 6 ACs; REFACTOR re-aligned 4 of 6 plan-vs-reality adaptations (n_prompts ≥5 floor, probe_generation delegation, partial-mode fixture leak, defensive resolve_project_id wrap)
+  - C5 (routers/probes.py REST surface) — 6 ACs / 7 tests; REFACTOR eliminated `model_construct` validation bypass + relocated `get_probe_service` to `dependencies/probes.py`
+  - C6 (synthesis_probe MCP tool) — 5 ACs; REFACTOR extracted shared `build_probe_service` constructor (eliminated REST/MCP factory duplication)
+  - C7 (SSE events + `probe_id` correlation) — 4 ACs; REFACTOR hoisted 6 inline event_logger imports to module level
+  - C8 (CLI shim) — 3 ACs; REFACTOR audited (no substantive change warranted at Tier 1)
+
+  **38 ACs total / 39 tests across 8 test files.** Full backend suite: 3232 passed + 1 skipped (was 3191 + 1, +41 net new tests). ruff + mypy clean. Spec: `docs/specs/topic-probe-2026-04-29.md` (gitignored). Plan: `docs/plans/topic-probe-tier-1-2026-04-29.md` (gitignored).
+
+  **All 4 Topic Probe tiers will ship within the 0.4.x line:** Tier 1 = v0.4.12 (this release), Tier 2 = v0.4.13 (save-as-suite + replay + UI navigator), Tier 3 = v0.4.14 (cross-tier composition: probe → seed-agent promotion, drill-into-cluster from seed run), Tier 4 = v0.4.15 (substrate unification: SeedRun and ProbeRun collapse to one model).
+
 ## v0.4.11 — 2026-04-28
 
 ### Fixed

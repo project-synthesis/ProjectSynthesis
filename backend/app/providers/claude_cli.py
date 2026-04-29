@@ -25,8 +25,20 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
-# Subprocess timeout — 5 minutes per call
-_CLI_TIMEOUT_SECONDS = 300
+# Subprocess timeout — per-LLM-call ceiling.
+#
+# Calibrated against live audit-class duration distribution (cycle-19→22 v2 +
+# cycle-23 + Topic Probe Tier 1 integration validation, 2026-04-29):
+#   median full-pipeline ~354s, p95 ~480s, max 491s.
+# These are *full pipeline* (analyze + optimize + score) durations. Per-call
+# is roughly 1/3 of that for non-Opus models, but the Opus 4.7 OPTIMIZE phase
+# with `xhigh` effort + 80K codebase context can land at 400–500s on its own.
+#
+# Set to 600s (10 min) — covers p99 of the optimize phase with headroom.
+# The 300s prior value caused silent retries to mask real long-running calls
+# under `call_provider_with_retry`, surfacing as `network_error: timed out`
+# at the script-level urlopen tier (cycle-23 prompts 3+4, ~590-642s).
+_CLI_TIMEOUT_SECONDS = 600
 
 
 class ClaudeCLIProvider(LLMProvider):

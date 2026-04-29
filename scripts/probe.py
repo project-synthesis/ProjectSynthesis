@@ -54,7 +54,12 @@ def main(argv: list[str]) -> int:
     }
 
     try:
-        with httpx.Client(timeout=900.0) as client:
+        # Timeout calibration (v0.4.12, 2026-04-29):
+        #   Each prompt = full pipeline ~354s median, max ~491s.
+        #   Probe runs N prompts (5-25). 3600s (1 hour) covers a
+        #   10-prompt probe with headroom; longer probes need Tier 2's
+        #   202 Accepted + polling architecture.
+        with httpx.Client(timeout=3600.0) as client:
             with client.stream("POST", f"{API_BASE}/api/probes", json=body) as resp:
                 count = 0
                 total = body["n_prompts"]
