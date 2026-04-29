@@ -172,6 +172,10 @@ class Settings(BaseSettings):
         default=40_000,
         description="Max chars of codebase context fed to probe-agent generator (Tier 1, v0.5.0).",
     )
+    PROBE_RATE_LIMIT: str = Field(
+        default="5/minute",
+        description="Rate limit for POST /api/probes per client IP (Tier 1, v0.4.12).",
+    )
 
     # --- Models ---
     MODEL_SONNET: str = Field(
