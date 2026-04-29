@@ -18,18 +18,17 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.models import Optimization, PromptCluster
 from app.services.event_bus import event_bus
 
 
 @pytest.fixture(autouse=True)
-async def _enable_sqlite_fk_cascade(db_session):
+async def _enable_sqlite_fk_cascade(enable_sqlite_foreign_keys):
     """The service relies on DB-level ``ondelete="CASCADE"``; SQLite needs
-    the per-connection PRAGMA to enforce FKs, which the in-memory test DB
-    doesn't apply by default. Mirrors ``test_optimization_service_delete``."""
-    await db_session.execute(text("PRAGMA foreign_keys=ON"))
+    the per-connection PRAGMA to enforce FKs. Delegates to the shared
+    ``enable_sqlite_foreign_keys`` fixture — single source of truth."""
     yield
 
 

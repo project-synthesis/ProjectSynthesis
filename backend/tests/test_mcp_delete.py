@@ -19,7 +19,7 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.models import Optimization, PromptCluster
 
@@ -27,8 +27,9 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture(autouse=True)
-async def _enable_sqlite_fk_cascade(db_session):
-    await db_session.execute(text("PRAGMA foreign_keys=ON"))
+async def _enable_sqlite_fk_cascade(enable_sqlite_foreign_keys):
+    """Delegates to the shared ``enable_sqlite_foreign_keys`` fixture in
+    ``conftest.py`` — single source of truth for FK-enforcement opt-in."""
     yield
 
 
