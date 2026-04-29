@@ -157,11 +157,22 @@ async def event_stream(
 
             while True:
                 try:
-                    # 45s timeout gives comfortable headroom over warm-path transactions
-                    # (~10-20s). The warm-path debounce (T7) reduces firing frequency,
-                    # so 45s keepalive intervals are safe and prevent EventSource
-                    # disconnects during busy warm-path windows.
-                    event = await asyncio.wait_for(queue.get(), timeout=45.0)
+                    # 30s timeout: comfortably under the frontend's 90s
+                    # staleness window so real events OR keepalive sync
+                    # reset the timer with margin. Pre-v0.4.12 this was
+                    # 45s + comment-only keepalive ("``: keepalive\\n\\n``")
+                    # which browsers consume at the TCP layer for
+                    # connection-keepalive but DO NOT fire any JS event
+                    # handler for. The frontend's staleness detector
+                    # therefore saw "no events for 90s" during long-
+                    # running probes (LLM calls in subprocesses, zero
+                    # DB activity → zero event_bus publishes) and
+                    # falsely reported the connection as disconnected
+                    # while it was actually healthy. We now emit a real
+                    # ``event: sync`` every 30s so the frontend's
+                    # ``recordSyncOrKeepalive`` handler fires, resetting
+                    # staleness regardless of write-side traffic.
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
                     if event_bus.is_shutdown_event(event):
                         return
                     # Skip events already sent during replay (deduplication)
@@ -172,8 +183,16 @@ async def event_stream(
                     data = json.dumps(event["data"])
                     yield f"id: {seq}\nevent: {event_type}\ndata: {data}\n\n"
                 except asyncio.TimeoutError:
-                    # SSE keepalive comment (ignored by EventSource, keeps connection alive)
-                    yield ": keepalive\n\n"
+                    # Periodic sync keepalive: a real, JS-visible
+                    # ``event: sync`` so the frontend's staleness timer
+                    # resets. Carries the current sequence so clients
+                    # that missed any events get the cue to reconcile.
+                    yield (
+                        f"id: {event_bus.current_sequence}\n"
+                        f"event: sync\n"
+                        f"data: {{\"seq\": {event_bus.current_sequence},"
+                        f" \"keepalive\": true}}\n\n"
+                    )
                 except asyncio.CancelledError:
                     # Uvicorn's graceful shutdown timer expired — exit cleanly
                     # instead of letting the CancelledError propagate through
