@@ -1,7 +1,15 @@
 """ProbeService dependency factory.
 
-Centralized so both ``routers/probes.py`` (REST) and the C6 MCP tool can
-construct a per-request ``ProbeService`` without cross-router imports.
+Centralized so both ``routers/probes.py`` (REST) and the C6 MCP tool
+(``app/tools/probe.py``) construct a ``ProbeService`` from a single,
+authoritative builder without cross-router imports or duplicated wiring.
+
+Public surface:
+    * ``build_probe_service(...)`` — pure constructor, no DI required.
+      Reusable from any runtime (REST, MCP, tests, scripts).
+    * ``get_probe_service(request, db)`` — FastAPI ``Depends(...)`` factory
+      that resolves runtime singletons from ``request.app.state`` and
+      delegates construction to ``build_probe_service``.
 
 Tests override via ``app.dependency_overrides[get_probe_service]`` (or the
 re-exported alias on the router module — both point to the same callable).
@@ -20,26 +28,45 @@ from app.services.probe_service import ProbeService
 logger = logging.getLogger(__name__)
 
 
-async def get_probe_service(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-) -> ProbeService:
-    """Construct a per-request ``ProbeService`` from app.state singletons.
+def _build_repo_query(db: AsyncSession) -> Any:
+    """Construct a ``RepoIndexQuery`` or return ``None`` if unavailable.
 
-    Tests override via ``app.dependency_overrides[get_probe_service]``.
+    Lazy imports keep the dependency module light and degrade gracefully
+    when the embedding stack is not initialised (e.g. minimal test setups).
     """
-    routing = getattr(request.app.state, "routing", None)
-    provider = routing.state.provider if routing is not None else None
-    context_service = getattr(request.app.state, "context_service", None)
-
-    repo_query: Any = None
     try:
         from app.services.embedding_service import EmbeddingService
         from app.services.repo_index_query import RepoIndexQuery
 
-        repo_query = RepoIndexQuery(db=db, embedding_service=EmbeddingService())
+        return RepoIndexQuery(db=db, embedding_service=EmbeddingService())
     except Exception:  # noqa: BLE001 — degrade gracefully when index not available
-        logger.debug("get_probe_service: RepoIndexQuery init failed", exc_info=True)
+        logger.debug("build_probe_service: RepoIndexQuery init failed", exc_info=True)
+        return None
+
+
+def build_probe_service(
+    *,
+    db: AsyncSession,
+    provider: Any,
+    context_service: Any,
+    repo_query: Any | None = None,
+) -> ProbeService:
+    """Pure constructor for ``ProbeService``.
+
+    No DI required — every dependency is passed explicitly. Both the
+    FastAPI ``get_probe_service`` factory and the MCP-runtime resolver in
+    ``app/tools/probe.py::_resolve_service`` call this helper so the
+    wiring stays in one place.
+
+    ``repo_query`` defaults to ``None`` and is constructed lazily via
+    ``_build_repo_query`` when the caller doesn't supply one — keeping the
+    caller free of embedding-service imports unless they care.
+    ``event_bus`` is the in-process singleton from ``app.services.event_bus``;
+    accepting it as a parameter would invite tests to substitute partial
+    fakes, so we resolve it here.
+    """
+    if repo_query is None:
+        repo_query = _build_repo_query(db)
 
     from app.services.event_bus import event_bus
 
@@ -49,4 +76,23 @@ async def get_probe_service(
         repo_query=repo_query,
         context_service=context_service,
         event_bus=event_bus,
+    )
+
+
+async def get_probe_service(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> ProbeService:
+    """FastAPI DI factory — wraps ``build_probe_service`` for REST runtime.
+
+    Tests override via ``app.dependency_overrides[get_probe_service]``.
+    """
+    routing = getattr(request.app.state, "routing", None)
+    provider = routing.state.provider if routing is not None else None
+    context_service = getattr(request.app.state, "context_service", None)
+
+    return build_probe_service(
+        db=db,
+        provider=provider,
+        context_service=context_service,
     )

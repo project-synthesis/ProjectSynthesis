@@ -2,9 +2,6 @@
 
 AC-C6-1 through AC-C6-5 per docs/specs/topic-probe-2026-04-29.md §8 Cycle 6.
 
-RED phase — handle_probe + synthesis_probe registration do not yet exist.
-All 5 tests should fail with ImportError or AttributeError until GREEN.
-
 Adaptations vs plan §Cycle 6 Step 1:
 - FastMCP's `Tool` object exposes `output_schema` (populated when
   `structured_output=True`), not a literal `structured_output` attribute.
@@ -13,6 +10,11 @@ Adaptations vs plan §Cycle 6 Step 1:
   which together prove the decorator's effect at registration time.
 - Mock fixtures (`mock_probe_service`, `mock_probe_service_no_repo`,
   `mock_mcp_ctx`) are defined inline in this file.
+
+Post-C6 REFACTOR: tests use schema-valid `topic="probe-mcp-test-topic"`
+(>=3 chars, mirrors the C5 router test alignment). The production
+`handle_probe` now validates inputs via `ProbeRunRequest(**kwargs)` —
+the production contract drives the test, not the reverse.
 """
 from __future__ import annotations
 
@@ -40,7 +42,7 @@ def _make_probe_run_result() -> ProbeRunResult:
     """Build a minimal ProbeRunResult mirroring the REST GET shape."""
     return ProbeRunResult(
         id="probe-123",
-        topic="x",
+        topic="probe-mcp-test-topic",
         scope="**/*",
         intent_hint="explore",
         repo_full_name="owner/repo",
@@ -151,7 +153,10 @@ class TestSynthesisProbe:
         from app.tools.probe import handle_probe
 
         await handle_probe(
-            topic="x", n_prompts=3, ctx=mock_mcp_ctx, _service=mock_probe_service,
+            topic="probe-mcp-test-topic",
+            n_prompts=5,
+            ctx=mock_mcp_ctx,
+            _service=mock_probe_service,
         )
         assert mock_mcp_ctx.report_progress.call_count >= 3
 
@@ -163,7 +168,10 @@ class TestSynthesisProbe:
         from app.tools.probe import handle_probe
 
         result = await handle_probe(
-            topic="x", n_prompts=3, ctx=None, _service=mock_probe_service,
+            topic="probe-mcp-test-topic",
+            n_prompts=5,
+            ctx=None,
+            _service=mock_probe_service,
         )
         for k in ("id", "topic", "aggregate", "taxonomy_delta", "final_report", "status"):
             assert hasattr(result, k)
@@ -177,5 +185,8 @@ class TestSynthesisProbe:
 
         with pytest.raises(Exception, match=r"link_repo_first|Link a GitHub repo"):
             await handle_probe(
-                topic="x", n_prompts=3, ctx=None, _service=mock_probe_service_no_repo,
+                topic="probe-mcp-test-topic",
+                n_prompts=5,
+                ctx=None,
+                _service=mock_probe_service_no_repo,
             )
