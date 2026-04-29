@@ -141,7 +141,7 @@ class TaxonomyEventLogger:
         """Log a taxonomy decision event.
 
         Args:
-            path: "hot", "warm", or "cold".
+            path: "hot", "warm", "cold", or "probe" (Tier 1, v0.4.12).
             op: Operation type (assign, split, merge, retire, phase, refit, etc.).
             decision: Outcome (merge_into, create_new, accepted, rejected, etc.).
             cluster_id: Affected cluster ID (nullable).
@@ -149,6 +149,13 @@ class TaxonomyEventLogger:
             duration_ms: Wall-clock time in ms (nullable).
             context: Operation-specific decision context dict.
         """
+        # Tier 1 (v0.4.12): if a Topic Probe is in flight, correlate this
+        # event with the probe by injecting probe_id into the context payload.
+        # Local import avoids circular import (probe_service imports from
+        # event_logger transitively via the taxonomy package).
+        from app.services.probe_event_correlation import inject_probe_id
+        context = inject_probe_id(context or {})
+
         # Consecutive dedup: suppress truly back-to-back identical events.
         # Only the immediately preceding event is checked — if ANY other
         # event was logged in between, the same payload is allowed through.
