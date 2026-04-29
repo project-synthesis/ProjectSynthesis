@@ -13,6 +13,7 @@ from app.tools.history import handle_history
 from app.tools.match import handle_match
 from app.tools.optimize import handle_optimize
 from app.tools.prepare import handle_prepare
+from app.tools.probe import handle_probe
 from app.tools.refine import handle_refine
 from app.tools.save_result import handle_save_result
 from app.tools.seed import handle_seed
@@ -29,6 +30,7 @@ __all__ = [
     "handle_match",
     "handle_optimize",
     "handle_prepare",
+    "handle_probe",
     "handle_refine",
     "handle_save_result",
     "handle_seed",
