@@ -167,6 +167,12 @@ class Settings(BaseSettings):
         default=3600, description="Explore result cache TTL in seconds.",
     )
 
+    # --- Topic Probe (Tier 1, v0.5.0) ---
+    PROBE_CODEBASE_MAX_CHARS: int = Field(
+        default=40_000,
+        description="Max chars of codebase context fed to probe-agent generator (Tier 1, v0.5.0).",
+    )
+
     # --- Models ---
     MODEL_SONNET: str = Field(
         default="claude-sonnet-4-6", description="Default Sonnet model ID for analyze/score phases.",
