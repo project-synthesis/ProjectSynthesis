@@ -897,18 +897,132 @@ class ProbeService:
 
             # Persist + cluster-assign via canonical batch primitives.
             # Use the self.db shim so the writer is single-connection.
+            persist_error: Exception | None = None
             try:
                 await bulk_persist(pendings, session_factory, batch_id=probe_id)
-            except Exception:
+            except Exception as _bp_exc:
+                persist_error = _bp_exc
                 logger.warning("probe bulk_persist failed", exc_info=True)
             try:
                 await batch_taxonomy_assign(
                     pendings, session_factory, batch_id=probe_id,
                 )
-            except Exception:
+            except Exception as _bta_exc:
+                persist_error = persist_error or _bta_exc
                 logger.warning(
                     "probe batch_taxonomy_assign failed", exc_info=True,
                 )
+
+            # Verify-after-persist gate (v0.4.12 P0a): the historical
+            # behavior of swallowing bulk_persist exceptions left the
+            # probe reporting status='completed' with mean_overall in
+            # the report even though ZERO Optimization rows landed --
+            # an outright correctness defect (not just a UX gap). The
+            # in-memory aggregate was computed from PendingOptimization
+            # objects whose status='completed' was set during scoring,
+            # not from actual DB rows. Now we query the DB for the
+            # canonical truth of what got persisted before we report
+            # anything to the user. Three outcomes:
+            #   * full (persisted_actual == expected): proceed normally
+            #   * partial (0 < persisted_actual < expected): drop the
+            #     ghost rows from prompt_results, mark probe 'partial',
+            #     surface the lost-prompt count in the error message.
+            #   * catastrophic (persisted_actual == 0): raise so the
+            #     top-level except handler marks the row 'failed' with
+            #     the underlying persistence exception preserved.
+            expected_completed = sum(
+                1 for p in pendings if p.status == "completed"
+            )
+            persisted_actual = 0
+            if expected_completed > 0:
+                pending_ids = [
+                    p.id for p in pendings if p.status == "completed"
+                ]
+                async with session_factory() as _verify_db:
+                    _verify_q = await _verify_db.execute(
+                        select(Optimization.id).where(
+                            Optimization.id.in_(pending_ids),
+                        )
+                    )
+                    persisted_actual = len(
+                        list(_verify_q.scalars().all())
+                    )
+            persisted_id_set: set[str] = set()
+            if expected_completed > 0 and persisted_actual == 0:
+                # Catastrophic: nothing landed. Raise so the top-level
+                # except handler in run() marks the probe row as failed
+                # with structured error info + emits probe_failed.
+                err_class = (
+                    type(persist_error).__name__
+                    if persist_error else "PersistenceVerificationFailed"
+                )
+                err_msg = (
+                    str(persist_error)
+                    if persist_error
+                    else "expected to persist {n} rows; 0 landed".format(
+                        n=expected_completed
+                    )
+                )
+                raise RuntimeError(
+                    f"probe persistence catastrophic: "
+                    f"{err_class}: {err_msg}"
+                ) from persist_error
+            if persisted_actual < expected_completed:
+                # Partial: some rows landed, some lost. Re-query the DB
+                # for the durable id-set and let downstream filtering
+                # drop the ghost rows so prompt_results / aggregate /
+                # taxonomy delta only count what's actually durable.
+                async with session_factory() as _verify_db:
+                    _verify_q = await _verify_db.execute(
+                        select(Optimization.id).where(
+                            Optimization.id.in_(
+                                [p.id for p in pendings
+                                 if p.status == "completed"]
+                            ),
+                        )
+                    )
+                    persisted_id_set = {
+                        row for row in _verify_q.scalars().all()
+                    }
+                logger.warning(
+                    "probe %s partial persistence: %d of %d rows landed",
+                    probe_id, persisted_actual, expected_completed,
+                )
+                try:
+                    get_event_logger().log_decision(
+                        path="probe",
+                        op="probe_partial_persistence",
+                        decision="probe_partial_persistence",
+                        context={
+                            "probe_id": probe_id,
+                            "expected": expected_completed,
+                            "persisted": persisted_actual,
+                            "lost": expected_completed - persisted_actual,
+                            "underlying_error": (
+                                f"{type(persist_error).__name__}: "
+                                f"{str(persist_error)[:200]}"
+                                if persist_error else None
+                            ),
+                        },
+                    )
+                except RuntimeError:
+                    pass
+
+            # Filter ghost rows out of pendings so downstream
+            # prompt_results, taxonomy delta, and aggregate only see
+            # what actually landed. ``persisted_id_set`` is empty on
+            # the full-success path (no filter applied).
+            if persisted_id_set:
+                for p in pendings:
+                    if (
+                        p.status == "completed"
+                        and p.id not in persisted_id_set
+                    ):
+                        p.status = "failed"
+                        # Stash a flag so _pending_to_prompt_result can
+                        # surface "persistence dropped" rather than a
+                        # silent skip.
+                        setattr(p, "_persist_dropped", True)
 
             # Tag persisted rows with source="probe" so downstream
             # analytics distinguish probe-originated from seed-originated
