@@ -915,13 +915,19 @@ class TestProbeServiceErrorPaths:
         from app.services.batch_pipeline import PendingOptimization
         captured = {}
 
+        from uuid import uuid4 as _uuid4
+
         async def _capture(prompts, provider, prompt_loader, embedding_service, **kwargs):
             captured["prompts"] = prompts
             captured["provider"] = provider
             captured["kwargs"] = kwargs
+            # Real UUID ids so bulk_persist's ID-shape gate accepts them
+            # and the verify-after-persist gate (v0.4.12 P0a) sees rows
+            # actually land in the DB. Pre-fix this test silently
+            # dropped every row through the ID-shape gate.
             return [
                 PendingOptimization(
-                    id=f"opt-{i}", trace_id=f"tr-{i}",
+                    id=str(_uuid4()), trace_id=f"tr-{i}",
                     batch_id=kwargs.get("batch_id"),
                     raw_prompt=p, optimized_prompt=f"OPT: {p[:30]}",
                     task_type="analysis", intent_label="x",
@@ -1015,4 +1021,66 @@ class TestProbeServiceErrorPaths:
         assert row.status == "failed"
         assert row.error is not None
         assert "RuntimeError" in row.error
+        assert row.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_catastrophic_persistence_failure_marks_row_failed(
+        self,
+        db_session,
+        mock_provider,
+        mock_repo_query,
+        mock_context_service,
+        mock_event_bus,
+        monkeypatch,
+    ):
+        """v0.4.12 P0a: when ``bulk_persist`` raises and ZERO rows
+        actually land in the DB, the probe must NOT report
+        ``status='completed'`` with an in-memory aggregate. The
+        verify-after-persist gate queries the DB for the canonical
+        truth of what got persisted; if 0 of N expected rows landed,
+        the orchestrator raises so the top-level except handler marks
+        the row failed with structured error info.
+
+        Pre-fix the bare ``except Exception`` swallowed bulk_persist
+        failures and the probe completed with mean_overall computed
+        from in-memory PendingOptimization objects -- a silent
+        correctness defect (probe v22 lost all 5 prompts this way).
+        """
+        from app.services import batch_persistence as bp_mod
+
+        async def _bp_raise(pendings, session_factory, batch_id):
+            raise RuntimeError("synthetic SQLite database is locked")
+
+        monkeypatch.setattr(bp_mod, "bulk_persist", _bp_raise)
+        # Also patch the binding inside probe_service since it uses
+        # ``from app.services.batch_persistence import bulk_persist``.
+        from app.services import probe_service as ps_mod
+        monkeypatch.setattr(
+            ps_mod, "bulk_persist", _bp_raise, raising=False,
+        )
+
+        probe_id = "p-test-catastrophic"
+        with pytest.raises(RuntimeError, match=r"persistence catastrophic"):
+            async for _ in ProbeService(
+                db_session,
+                mock_provider,
+                mock_repo_query,
+                mock_context_service,
+                mock_event_bus,
+            ).run(
+                _make_request(n_prompts=5),
+                probe_id=probe_id,
+            ):
+                pass
+
+        # The defense-in-depth top-level handler must have marked the
+        # row failed with structured error info preserving the
+        # underlying SQLite-locked cause.
+        row = await db_session.get(ProbeRun, probe_id)
+        assert row is not None
+        assert row.status == "failed", (
+            "probe must NOT report completed when 0 of N rows landed"
+        )
+        assert row.error is not None
+        assert "persistence catastrophic" in row.error or "RuntimeError" in row.error
         assert row.completed_at is not None
