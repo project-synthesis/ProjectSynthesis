@@ -19,7 +19,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
@@ -41,6 +41,7 @@ from app.schemas.mcp_models import (
     SaveResultOutput,
     StrategiesOutput,
 )
+from app.schemas.probes import ProbeRunResult
 from app.schemas.seed import SeedOutput
 from app.services.event_notification import notify_event_bus
 from app.services.mcp_session_file import MCPSessionFile
@@ -958,6 +959,7 @@ from app.tools.history import handle_history  # noqa: E402
 from app.tools.match import handle_match  # noqa: E402
 from app.tools.optimize import handle_optimize  # noqa: E402
 from app.tools.prepare import handle_prepare  # noqa: E402
+from app.tools.probe import handle_probe  # noqa: E402
 from app.tools.refine import handle_refine  # noqa: E402
 from app.tools.save_result import handle_save_result  # noqa: E402
 from app.tools.strategies import handle_strategies  # noqa: E402
@@ -1354,6 +1356,46 @@ async def synthesis_explain(
     then this tool to explain one.
     """
     return await handle_explain(optimization_id)
+
+
+@mcp.tool(structured_output=True)
+async def synthesis_probe(
+    topic: Annotated[str, Field(
+        description="Free-text topic to probe (3-500 chars). Drives prompt generation.",
+    )],
+    scope: Annotated[str | None, Field(
+        default=None,
+        description="Optional file glob within the linked repo (default = whole repo).",
+    )] = None,
+    intent_hint: Annotated[
+        Literal["audit", "refactor", "explore", "regression-test"] | None,
+        Field(
+            default=None,
+            description="Optional intent hint shaping prompt generation (default = explore).",
+        ),
+    ] = None,
+    n_prompts: Annotated[int | None, Field(
+        default=None,
+        description="Optional prompt count (5-25, default 12).",
+        ge=5,
+        le=25,
+    )] = None,
+    ctx: Context | None = None,
+) -> ProbeRunResult:
+    """Topic Probe — agentic targeted exploration of a topic against the linked codebase.
+
+    Generates 5-25 code-grounded prompts, runs them through the optimization
+    pipeline, watches taxonomy emerge, and returns a structured report
+    including taxonomy delta and recommended follow-ups. Requires a linked
+    GitHub repo (returns ProbeError('link_repo_first') otherwise).
+    """
+    return await handle_probe(
+        topic=topic,
+        scope=scope,
+        intent_hint=intent_hint,
+        n_prompts=n_prompts,
+        ctx=ctx,
+    )
 
 
 # ---------------------------------------------------------------------------
