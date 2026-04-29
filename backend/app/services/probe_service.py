@@ -412,6 +412,25 @@ class ProbeService:
             # ----------------------------------------------------------
             # Phase 1: Grounding
             # ----------------------------------------------------------
+            try:
+                from app.services.taxonomy.event_logger import (
+                    get_event_logger,
+                )
+                get_event_logger().log_decision(
+                    path="probe",
+                    op="probe_started",
+                    decision="probe_started",
+                    context={
+                        "topic": request.topic,
+                        "scope": scope,
+                        "intent_hint": intent_hint,
+                        "n_prompts": n_prompts,
+                        "repo_full_name": request.repo_full_name or "",
+                    },
+                )
+            except RuntimeError:
+                pass
+
             yield ProbeStartedEvent(
                 probe_id=probe_id,
                 topic=request.topic,
@@ -426,6 +445,22 @@ class ProbeService:
                 row.error = "link_repo_first"
                 row.completed_at = datetime.now(timezone.utc)
                 await self.db.commit()
+                try:
+                    from app.services.taxonomy.event_logger import (
+                        get_event_logger,
+                    )
+                    get_event_logger().log_decision(
+                        path="probe",
+                        op="probe_failed",
+                        decision="probe_failed",
+                        context={
+                            "phase": "grounding",
+                            "error_class": "ProbeError",
+                            "error_message_truncated": "link_repo_first",
+                        },
+                    )
+                except RuntimeError:
+                    pass
                 yield ProbeFailedEvent(
                     probe_id=probe_id,
                     phase="grounding",
@@ -496,6 +531,24 @@ class ProbeService:
                 existing_clusters_brief=[],
             )
 
+            try:
+                from app.services.taxonomy.event_logger import (
+                    get_event_logger,
+                )
+                get_event_logger().log_decision(
+                    path="probe",
+                    op="probe_grounding",
+                    decision="probe_grounding",
+                    context={
+                        "retrieved_files_count": len(relevant_files),
+                        "has_explore_synthesis":
+                            explore_excerpt is not None,
+                        "dominant_stack": list(ctx.dominant_stack),
+                    },
+                )
+            except RuntimeError:
+                pass
+
             yield ProbeGroundingEvent(
                 probe_id=probe_id,
                 retrieved_files_count=len(relevant_files),
@@ -516,6 +569,22 @@ class ProbeService:
                 )
                 row.completed_at = datetime.now(timezone.utc)
                 await self.db.commit()
+                try:
+                    from app.services.taxonomy.event_logger import (
+                        get_event_logger,
+                    )
+                    get_event_logger().log_decision(
+                        path="probe",
+                        op="probe_failed",
+                        decision="probe_failed",
+                        context={
+                            "phase": "generating",
+                            "error_class": type(e).__name__,
+                            "error_message_truncated": _truncate(str(e), 200),
+                        },
+                    )
+                except RuntimeError:
+                    pass
                 yield ProbeFailedEvent(
                     probe_id=probe_id,
                     phase="generating",
@@ -529,6 +598,23 @@ class ProbeService:
             gen_duration = int(
                 (datetime.now(timezone.utc) - gen_t0).total_seconds() * 1000
             )
+            try:
+                from app.services.taxonomy.event_logger import (
+                    get_event_logger,
+                )
+                get_event_logger().log_decision(
+                    path="probe",
+                    op="probe_generating",
+                    decision="probe_generating",
+                    duration_ms=gen_duration,
+                    context={
+                        "prompts_generated": len(prompts),
+                        "generator_model": settings.MODEL_SONNET,
+                    },
+                )
+            except RuntimeError:
+                pass
+
             yield ProbeGeneratingEvent(
                 probe_id=probe_id,
                 prompts_generated=len(prompts),
@@ -553,6 +639,26 @@ class ProbeService:
             for fut in asyncio.as_completed(tasks):
                 result = await fut
                 prompt_results.append(result)
+                try:
+                    from app.services.taxonomy.event_logger import (
+                        get_event_logger,
+                    )
+                    get_event_logger().log_decision(
+                        path="probe",
+                        op="probe_prompt_completed",
+                        decision="probe_prompt_completed",
+                        optimization_id=result.optimization_id or None,
+                        context={
+                            "prompt_idx": result.prompt_idx,
+                            "current": len(prompt_results),
+                            "total": len(prompts),
+                            "intent_label": result.intent_label,
+                            "overall_score": result.overall_score,
+                            "status": result.status,
+                        },
+                    )
+                except RuntimeError:
+                    pass
                 yield ProbeProgressEvent(
                     probe_id=probe_id,
                     current=len(prompt_results),
@@ -676,6 +782,35 @@ class ProbeService:
             row.final_report = final_report
             row.status = final_status
             await self.db.commit()
+
+            try:
+                from app.services.taxonomy.event_logger import (
+                    get_event_logger,
+                )
+                get_event_logger().log_decision(
+                    path="probe",
+                    op="probe_completed",
+                    decision="probe_completed",
+                    context={
+                        "status": final_status,
+                        "mean_overall": agg.mean_overall,
+                        "prompts_generated": len(prompt_results),
+                        "taxonomy_delta_summary": {
+                            "domains_created":
+                                len(delta.domains_created),
+                            "sub_domains_created":
+                                len(delta.sub_domains_created),
+                            "clusters_created":
+                                len(delta.clusters_created),
+                            "clusters_split":
+                                len(delta.clusters_split),
+                            "proposal_rejected_min_source_clusters":
+                                delta.proposal_rejected_min_source_clusters,
+                        },
+                    },
+                )
+            except RuntimeError:
+                pass
 
             yield ProbeCompletedEvent(
                 probe_id=probe_id,
