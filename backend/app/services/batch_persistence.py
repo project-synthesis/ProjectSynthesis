@@ -106,15 +106,18 @@ async def bulk_persist(
     inserted = 0
     inserted_pendings: list[PendingOptimization] = []
     # Writer serialization is handled automatically by
-    # ``WriterLockedAsyncSession`` (see app/database.py). The previous
-    # explicit ``async with db_writer_lock:`` wrapper is no longer
-    # needed -- every session opened via ``session_factory()`` acquires
-    # the writer lock at first ``flush()`` and releases it at
-    # ``commit()`` / ``rollback()`` / ``close()``. The retry loop is
-    # kept as defense-in-depth for transient cross-process contention
-    # (e.g. MCP server writers); 2 attempts with a 5s gap is sufficient
-    # because the writer lock guarantees no in-process concurrent writer.
-    _MAX_PERSIST_ATTEMPTS = 2
+    # ``WriterLockedAsyncSession`` (see app/database.py). The retry loop
+    # is defense-in-depth for CROSS-PROCESS contention -- the asyncio
+    # writer lock only serializes within ONE process. Other processes
+    # (MCP server, pytest test runner during dev workflows, anything
+    # using the same SQLite file) compete at the file lock layer where
+    # only ``busy_timeout=30s`` applies. Generous retry sizing here
+    # absorbs realistic contention windows (a long-held warm-engine
+    # write or a test-suite batch insert) without losing the batch.
+    # 5 attempts × exponential backoff (5/10/20/40s = ~75s total) is
+    # tuned for the worst case observed in v0.4.12: a full backend
+    # test suite (5min) running concurrently with a live probe.
+    _MAX_PERSIST_ATTEMPTS = 5
     _PERSIST_BACKOFF_SECS = 5.0
     for attempt in range(_MAX_PERSIST_ATTEMPTS):
         try:
