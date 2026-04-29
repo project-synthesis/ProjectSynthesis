@@ -1,5 +1,7 @@
 <script lang="ts">
   import EditorGroups from '$lib/components/layout/EditorGroups.svelte';
+  import RateLimitBanner from '$lib/components/shared/RateLimitBanner.svelte';
+  import { rateLimitStore } from '$lib/stores/rate-limit.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { domainStore } from '$lib/stores/domains.svelte';
@@ -107,6 +109,23 @@
         if (type === 'optimization_failed') {
           window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
           addToast('deleted', (data.error as string) || 'Optimization failed');
+        }
+        // Rate-limit observability + graceful-degradation banner.
+        // ``rate_limit_active`` fires when probe/seed batches detect a 429
+        // and the pipeline falls back to passthrough mode. The banner
+        // explains the degraded state and shows when full LLM mode resumes.
+        // ``rate_limit_cleared`` fires when a successful LLM call lands
+        // against a previously-limited provider.
+        if (type === 'rate_limit_active') {
+          rateLimitStore.applyActive(data as Parameters<typeof rateLimitStore.applyActive>[0]);
+          // One-shot toast on first hit per provider so the user notices
+          // even when scrolling through the workbench. Banner is the
+          // persistent surface; this is a nudge.
+          const provider = (data as { provider?: string }).provider || 'LLM provider';
+          addToast('info', `${provider} rate-limited — running in passthrough mode`);
+        }
+        if (type === 'rate_limit_cleared') {
+          rateLimitStore.applyCleared(data as Parameters<typeof rateLimitStore.applyCleared>[0]);
         }
         if (type === 'feedback_submitted') {
           window.dispatchEvent(new CustomEvent('feedback-event', { detail: data }));
@@ -398,6 +417,11 @@
     <button onclick={() => { forgeStore.error = null; forgeStore.status = 'idle'; }}>Dismiss</button>
   </div>
 {/if}
+
+<!-- Rate-limit banner: shown when ANY LLM provider is currently rate-limited.
+     Mounted above the main editor so it's visible regardless of which tab
+     is active. Auto-clears via rateLimitStore's per-second tick. -->
+<RateLimitBanner />
 
 <!-- Main Editor -->
 <EditorGroups />

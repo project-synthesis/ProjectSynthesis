@@ -204,12 +204,18 @@ describe('SSEHealthStore', () => {
     // ------------------------------------------------------------------
 
     describe('retry cap', () => {
-        it('caps at MAX_RETRIES attempts', () => {
+        it('enters slow-poll mode at MAX_RETRIES (does not give up)', () => {
+            // v0.4.12: pre-fix, retryCapped=true terminated retries
+            // forever. Now retryCapped is a SIGNAL that we're in slow-
+            // poll mode -- a retryAt timer is still scheduled, just at
+            // the SLOW_POLL_DELAY_MS cadence instead of exponential.
             sseHealthStore.retryCount = MAX_RETRIES;
 
             (sseHealthStore as any)._reconnect();
             expect(sseHealthStore.retryCapped).toBe(true);
-            expect(sseHealthStore.retryAt).toBeNull();
+            // retryAt is now SET (not null) -- we're scheduling a
+            // slow-poll attempt rather than giving up.
+            expect(sseHealthStore.retryAt).not.toBeNull();
         });
 
         it('retryNow resets cap and triggers reconnection', () => {
@@ -289,10 +295,20 @@ describe('SSEHealthStore', () => {
             expect(sseHealthStore.tooltipText).toContain('Retry 3/');
         });
 
-        it('shows "Retries exhausted" when capped', () => {
+        it('shows "Slow-poll retry" when in slow-poll mode', () => {
             sseHealthStore.connectionState = 'disconnected';
             sseHealthStore.retryCapped = true;
-            expect(sseHealthStore.tooltipText).toContain('Retries exhausted');
+            sseHealthStore.retryAt = Date.now() + 25000;
+            expect(sseHealthStore.tooltipText).toContain('Slow-poll retry');
+        });
+
+        it('shows base disconnected message when capped without timer', () => {
+            // Edge case: retryCapped=true but retryAt=null. Falls
+            // through to the generic "SSE disconnected" message.
+            sseHealthStore.connectionState = 'disconnected';
+            sseHealthStore.retryCapped = true;
+            sseHealthStore.retryAt = null;
+            expect(sseHealthStore.tooltipText).toContain('SSE disconnected');
         });
     });
 
