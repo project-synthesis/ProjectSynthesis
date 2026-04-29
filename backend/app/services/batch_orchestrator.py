@@ -49,6 +49,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+BATCH_CONCURRENCY_BY_TIER: dict[str, int] = {
+    "internal": 10,
+    "api": 5,
+    "sampling": 2,
+}
+
+
 async def run_batch(
     prompts: list[str],
     provider: LLMProvider,
