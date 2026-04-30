@@ -41,26 +41,129 @@
     return sources as Record<string, boolean>;
   });
   const hasEnrichmentData = $derived(contextSources != null && Object.keys(contextSources).length > 0);
-  const activeLayerCount = $derived(
-    contextSources ? Object.values(contextSources).filter(Boolean).length : 0
-  );
-  const totalLayerCount = $derived(
-    contextSources ? Object.keys(contextSources).length : 0
-  );
 
-  // Pipeline execution order for layer display (not alphabetical)
-  const LAYER_ORDER: { key: string; label: string }[] = [
-    { key: 'heuristic_analysis',    label: 'Heuristic Analysis' },
-    { key: 'codebase_context',      label: 'Codebase Context' },
-    { key: 'strategy_intelligence', label: 'Strategy Intelligence' },
-    { key: 'applied_patterns',      label: 'Applied Patterns' },
-    { key: 'cluster_injection',     label: 'Pattern Injection' },
-    { key: 'few_shot_examples',     label: 'Few-Shot Examples' },
-    // Deprecated keys — shown only if present in legacy data
-    { key: 'workspace_guidance',    label: 'Workspace Guidance' },
-    { key: 'adaptation',            label: 'Adaptation State' },
-    { key: 'performance_signals',   label: 'Performance Signals' },
+  // v0.4.12 P1 — UX consistency between header count and visible dots.
+  //
+  // Pre-fix: the header counted ``Object.keys(contextSources)`` (which
+  // includes metadata keys like ``source``, ``batch_id``, ``agent`` plus
+  // the 4 boolean enrichment-source flags) and rendered ~"7/9 layers",
+  // but only the 4 layers in ``LAYER_ORDER`` got dot indicators.
+  // Result: header read "7/9", eye counted 4 dots → mismatch.
+  //
+  // Post-fix: the 5 telemetry signals that already had dedicated detail
+  // sections below the dot list (RETRIEVAL, STRATEGY RANKINGS, DOMAIN
+  // SIGNALS, TASK-TYPE SCORES, CONTEXT INJECTION) now also render as
+  // dots in the layer list, and the count is computed from the layer
+  // definitions themselves -- so "X/Y" always matches the visible
+  // dot count, with each layer's active-check pulling from the right
+  // place in the enrichment payload (sources for the 4 source flags,
+  // enrichment_meta for the 5 telemetry signals). Each layer carries
+  // a self-contained ``isActive`` predicate so the rendering never
+  // needs to know where the underlying data lives.
+  type LayerDef = {
+    key: string;
+    label: string;
+    isActive: (
+      s: Record<string, boolean> | null,
+      m: Record<string, unknown> | undefined,
+    ) => boolean;
+  };
+
+  // Pipeline execution order for layer display (not alphabetical).
+  // First 4: backend ``ContextEnrichmentService`` source flags.
+  // Next 5: telemetry signals already rendered as detail sections
+  // below; promoted to first-class dots so the header count matches.
+  const LAYER_ORDER: LayerDef[] = [
+    {
+      key: 'heuristic_analysis',
+      label: 'Heuristic Analysis',
+      isActive: (s) => Boolean(s?.heuristic_analysis),
+    },
+    {
+      key: 'codebase_context',
+      label: 'Codebase Context',
+      isActive: (s) => Boolean(s?.codebase_context),
+    },
+    {
+      key: 'strategy_intelligence',
+      label: 'Strategy Intelligence',
+      isActive: (s) => Boolean(s?.strategy_intelligence),
+    },
+    {
+      key: 'applied_patterns',
+      label: 'Applied Patterns',
+      isActive: (s) => Boolean(s?.applied_patterns),
+    },
+    {
+      key: 'retrieval',
+      label: 'Retrieval',
+      isActive: (_, m) => {
+        const cr = m?.curated_retrieval as
+          { files_included?: number } | undefined;
+        const synth = m?.explore_synthesis as
+          { present?: boolean } | undefined;
+        const ctxChars = (m?.combined_context_chars as number | undefined) ?? 0;
+        return (cr?.files_included ?? 0) > 0
+          || Boolean(synth?.present)
+          || ctxChars > 0;
+      },
+    },
+    {
+      key: 'strategy_rankings',
+      label: 'Strategy Rankings',
+      isActive: (_, m) => {
+        const detail = m?.strategy_intelligence_detail;
+        return typeof detail === 'string' && detail.length > 0;
+      },
+    },
+    {
+      key: 'domain_signals',
+      label: 'Domain Signals',
+      isActive: (_, m) => {
+        const ds = m?.domain_signals as Record<string, unknown> | undefined;
+        if (!ds) return false;
+        // New shape: ``{resolved: string, score: number, ...}``
+        if (typeof ds.resolved === 'string') return true;
+        // Legacy ``{label: score}`` dict shape
+        return Object.keys(ds).length > 0;
+      },
+    },
+    {
+      key: 'task_type_scores',
+      label: 'Task-Type Scores',
+      isActive: (_, m) => {
+        const sc = m?.task_type_scores as
+          Record<string, number> | undefined;
+        if (!sc) return false;
+        // Active only when at least one task-type has a non-zero
+        // score -- a row of all-zeros is the bootstrap fallback and
+        // doesn't represent a real signal contribution.
+        return Object.values(sc).some((v) => (v as number) > 0);
+      },
+    },
+    {
+      key: 'context_injection',
+      label: 'Context Injection',
+      isActive: (_, m) => {
+        const inj = m?.injection_stats as {
+          patterns_injected?: number;
+          injection_clusters?: number;
+          has_explicit_patterns?: boolean;
+        } | undefined;
+        if (!inj) return false;
+        return (inj.patterns_injected ?? 0) > 0
+          || (inj.injection_clusters ?? 0) > 0
+          || Boolean(inj.has_explicit_patterns);
+      },
+    },
   ];
+
+  // Active/total computed from LAYER_ORDER so the header label and the
+  // visible dots are guaranteed to agree by construction.
+  const activeLayerCount = $derived(
+    LAYER_ORDER.filter((l) => l.isActive(contextSources, enrichmentMeta)).length
+  );
+  const totalLayerCount = $derived(LAYER_ORDER.length);
 
   // I-9: per-layer skip reason resolution. Backend populates
   // `enrichment_meta.profile_skipped_layers` (list of layer keys) and
@@ -293,20 +396,28 @@
               </div>
             {/if}
 
-            <!-- Layer list: pipeline execution order, single column -->
+            <!-- Layer list: pipeline execution order, single column.
+                 v0.4.12 P1: each LAYER_ORDER entry carries its own
+                 isActive predicate, so the dot fill state pulls from
+                 the right slice of context_sources / enrichment_meta
+                 without the rendering code needing to know where the
+                 underlying data lives. The 5 telemetry signals
+                 (Retrieval, Strategy Rankings, Domain Signals,
+                 Task-Type Scores, Context Injection) get dots here
+                 AND keep their detail sections below -- the dots are
+                 the at-a-glance summary, the detail sections are the
+                 drill-down. -->
             <div class="enrichment-layers">
               {#each LAYER_ORDER as layer (layer.key)}
-                {#if contextSources[layer.key] !== undefined}
-                  {@const active = contextSources[layer.key]}
-                  {@const skipReason = active ? null : skipReasonFor(layer.key)}
-                  <div class="enrichment-row" class:enrichment-row--active={active}>
-                    <span class="enrichment-dot"></span>
-                    <span class="enrichment-label">{layer.label}</span>
-                    {#if skipReason}
-                      <span class="enrichment-skip-reason">{skipReason}</span>
-                    {/if}
-                  </div>
-                {/if}
+                {@const active = layer.isActive(contextSources, enrichmentMeta)}
+                {@const skipReason = active ? null : skipReasonFor(layer.key)}
+                <div class="enrichment-row" class:enrichment-row--active={active}>
+                  <span class="enrichment-dot"></span>
+                  <span class="enrichment-label">{layer.label}</span>
+                  {#if skipReason}
+                    <span class="enrichment-skip-reason">{skipReason}</span>
+                  {/if}
+                </div>
               {/each}
             </div>
 
