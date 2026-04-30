@@ -346,6 +346,17 @@
     forgeStore.phaseDurations = (h.phase_durations && Object.keys(h.phase_durations).length > 0) ? h.phase_durations : null;
     forgeStore.domainCount = h.domain_count ?? null;
     forgeStore.domainCeiling = h.domain_ceiling ?? null;
+    
+    // Sync persistent rate-limit state from backend
+    if (h.rate_limit) {
+      rateLimitStore.applyActive(h.rate_limit as any);
+    } else if (h.rate_limit === null) {
+      // If health reports null, clear any active limits to recover from stale frontend state
+      for (const provider of rateLimitStore.active.keys()) {
+        rateLimitStore.applyCleared({ provider });
+      }
+    }
+
     if (!firstHealthReceived) {
       firstHealthReceived = true;
       // Defer ALL toggle auto-sync and guide trigger until preferences load.

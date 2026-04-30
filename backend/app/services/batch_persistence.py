@@ -41,6 +41,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Pool-aware serialization lock. With ``pool_size=1``, concurrent
+# ``bulk_persist`` calls (from ``probe_service._persist_one()`` per-prompt
+# concurrent invocations and the batch pipeline's post-batch flush) race
+# on pool checkout: each caller waits up to 30s for the sole connection,
+# then retries with exponential backoff — 5 attempts x 30s timeout = 150s
+# stall storms. This asyncio.Lock serializes callers in-process, so they
+# queue cleanly instead of racing to pool timeout. The
+# ``WriterLockedAsyncSession`` handles intra-session write serialization;
+# this lock prevents inter-call contention at the function boundary before
+# the session is even opened.
+_persist_lock = asyncio.Lock()
+
 
 async def bulk_persist(
     results: list[PendingOptimization],
@@ -114,136 +126,140 @@ async def bulk_persist(
     # only ``busy_timeout=30s`` applies. Generous retry sizing here
     # absorbs realistic contention windows (a long-held warm-engine
     # write or a test-suite batch insert) without losing the batch.
-    # 5 attempts × exponential backoff (5/10/20/40s = ~75s total) is
+    # 5 attempts x exponential backoff (5/10/20/40s = ~75s total) is
     # tuned for the worst case observed in v0.4.12: a full backend
     # test suite (5min) running concurrently with a live probe.
+    #
+    # ``_persist_lock`` serializes in-process callers at the function
+    # boundary so they queue cleanly instead of racing to pool timeout.
     _MAX_PERSIST_ATTEMPTS = 5
     _PERSIST_BACKOFF_SECS = 5.0
-    for attempt in range(_MAX_PERSIST_ATTEMPTS):
-        try:
-            async with session_factory() as db:
-                # Idempotency check: find already-persisted IDs for this batch
-                existing_ids_result = await db.execute(
-                    sa_select(Optimization.id).where(
-                        Optimization.context_sources.op("->>")(
-                            "batch_id"
-                        ) == batch_id
-                    )
-                )
-                existing_ids: set[str] = {row[0] for row in existing_ids_result}
-                inserted = 0  # Reset for retry
-                inserted_pendings = []  # Reset for retry
-                for pending in completed:
-                    if pending.id in existing_ids:
-                        logger.debug(
-                            "Skipping already-persisted optimization %s (batch_id=%s)",
-                            pending.id[:8], batch_id,
+    async with _persist_lock:
+        for attempt in range(_MAX_PERSIST_ATTEMPTS):
+            try:
+                async with session_factory() as db:
+                    # Idempotency check: find already-persisted IDs for this batch
+                    existing_ids_result = await db.execute(
+                        sa_select(Optimization.id).where(
+                            Optimization.context_sources.op("->>")(
+                                "batch_id"
+                            ) == batch_id
                         )
-                        continue
-
-                    db_opt = Optimization(
-                        id=pending.id,
-                        trace_id=pending.trace_id,
-                        raw_prompt=pending.raw_prompt,
-                        optimized_prompt=pending.optimized_prompt,
-                        task_type=pending.task_type,
-                        strategy_used=pending.strategy_used,
-                        changes_summary=pending.changes_summary,
-                        score_clarity=pending.score_clarity,
-                        score_specificity=pending.score_specificity,
-                        score_structure=pending.score_structure,
-                        score_faithfulness=pending.score_faithfulness,
-                        score_conciseness=pending.score_conciseness,
-                        overall_score=pending.overall_score,
-                        improvement_score=pending.improvement_score,
-                        scoring_mode=pending.scoring_mode,
-                        intent_label=pending.intent_label,
-                        domain=pending.domain,
-                        domain_raw=pending.domain_raw,
-                        embedding=pending.embedding,
-                        optimized_embedding=pending.optimized_embedding,
-                        transformation_embedding=pending.transformation_embedding,
-                        models_by_phase=pending.models_by_phase,
-                        original_scores=pending.original_scores,
-                        score_deltas=pending.score_deltas,
-                        duration_ms=pending.duration_ms,
-                        status=pending.status,
-                        provider=pending.provider,
-                        model_used=pending.model_used,
-                        routing_tier=pending.routing_tier,
-                        heuristic_flags=pending.heuristic_flags,
-                        suggestions=pending.suggestions,
-                        repo_full_name=pending.repo_full_name,
-                        project_id=pending.project_id,
-                        context_sources=pending.context_sources,
                     )
-                    db.add(db_opt)
-                    inserted += 1
-                    inserted_pendings.append(pending)
+                    existing_ids: set[str] = {row[0] for row in existing_ids_result}
+                    inserted = 0  # Reset for retry
+                    inserted_pendings = []  # Reset for retry
+                    for pending in completed:
+                        if pending.id in existing_ids:
+                            logger.debug(
+                                "Skipping already-persisted optimization %s (batch_id=%s)",
+                                pending.id[:8], batch_id,
+                            )
+                            continue
 
-                await db.commit()
-
-                # Post-commit injection provenance (task #97). Probe and
-                # seed rows used to land with ZERO ``relationship='injected'``
-                # join rows because ``auto_inject_patterns`` ran during
-                # enrichment (BEFORE this commit) and its in-line SAVEPOINT
-                # silently rolled back on the FK-on-Optimization miss.
-                # Now that the parent rows are durable, replay the
-                # provenance write per row for any pending that captured
-                # injected patterns. Mirrors what
-                # ``pipeline_phases.persist_and_propagate`` does for the
-                # canonical pipeline.py path.
-                from app.services.pattern_injection import (
-                    record_injection_provenance,
-                )
-                provenance_written = 0
-                provenance_failed = 0
-                for pending in inserted_pendings:
-                    inj = pending.auto_injected_patterns
-                    cids = pending.auto_injected_cluster_ids or []
-                    sim_map = pending.auto_injected_similarity_map
-                    if not inj and not cids:
-                        continue
-                    try:
-                        await record_injection_provenance(
-                            db,
-                            optimization_id=pending.id,
-                            cluster_ids=list(cids),
-                            injected=list(inj or []),
-                            similarity_map=sim_map,
+                        db_opt = Optimization(
+                            id=pending.id,
                             trace_id=pending.trace_id,
+                            raw_prompt=pending.raw_prompt,
+                            optimized_prompt=pending.optimized_prompt,
+                            task_type=pending.task_type,
+                            strategy_used=pending.strategy_used,
+                            changes_summary=pending.changes_summary,
+                            score_clarity=pending.score_clarity,
+                            score_specificity=pending.score_specificity,
+                            score_structure=pending.score_structure,
+                            score_faithfulness=pending.score_faithfulness,
+                            score_conciseness=pending.score_conciseness,
+                            overall_score=pending.overall_score,
+                            improvement_score=pending.improvement_score,
+                            scoring_mode=pending.scoring_mode,
+                            intent_label=pending.intent_label,
+                            domain=pending.domain,
+                            domain_raw=pending.domain_raw,
+                            embedding=pending.embedding,
+                            optimized_embedding=pending.optimized_embedding,
+                            transformation_embedding=pending.transformation_embedding,
+                            models_by_phase=pending.models_by_phase,
+                            original_scores=pending.original_scores,
+                            score_deltas=pending.score_deltas,
+                            duration_ms=pending.duration_ms,
+                            status=pending.status,
+                            provider=pending.provider,
+                            model_used=pending.model_used,
+                            routing_tier=pending.routing_tier,
+                            heuristic_flags=pending.heuristic_flags,
+                            suggestions=pending.suggestions,
+                            repo_full_name=pending.repo_full_name,
+                            project_id=pending.project_id,
+                            context_sources=pending.context_sources,
                         )
-                        provenance_written += 1
-                    except Exception as _prov_exc:
-                        provenance_failed += 1
-                        logger.warning(
-                            "Post-commit injection provenance failed for "
-                            "%s (non-fatal): %s",
-                            pending.id[:8], _prov_exc,
-                        )
-                if provenance_written or provenance_failed:
-                    try:
-                        await db.commit()
-                    except Exception as _c_exc:
-                        logger.warning(
-                            "Provenance commit failed (non-fatal): %s",
-                            _c_exc,
-                        )
-                    logger.info(
-                        "Bulk persist provenance: %d rows written, %d failed",
-                        provenance_written, provenance_failed,
+                        db.add(db_opt)
+                        inserted += 1
+                        inserted_pendings.append(pending)
+
+                    await db.commit()
+
+                    # Post-commit injection provenance (task #97). Probe and
+                    # seed rows used to land with ZERO ``relationship='injected'``
+                    # join rows because ``auto_inject_patterns`` ran during
+                    # enrichment (BEFORE this commit) and its in-line SAVEPOINT
+                    # silently rolled back on the FK-on-Optimization miss.
+                    # Now that the parent rows are durable, replay the
+                    # provenance write per row for any pending that captured
+                    # injected patterns. Mirrors what
+                    # ``pipeline_phases.persist_and_propagate`` does for the
+                    # canonical pipeline.py path.
+                    from app.services.pattern_injection import (
+                        record_injection_provenance,
                     )
-            break  # success
-        except Exception as exc:
-            if attempt < _MAX_PERSIST_ATTEMPTS - 1:
-                delay = _PERSIST_BACKOFF_SECS * (2 ** attempt)
-                logger.warning(
-                    "Bulk persist attempt %d/%d failed (%s); retry in %.0fs",
-                    attempt + 1, _MAX_PERSIST_ATTEMPTS, exc, delay,
-                )
-                await asyncio.sleep(delay)
-            else:
-                raise
+                    provenance_written = 0
+                    provenance_failed = 0
+                    for pending in inserted_pendings:
+                        inj = pending.auto_injected_patterns
+                        cids = pending.auto_injected_cluster_ids or []
+                        sim_map = pending.auto_injected_similarity_map
+                        if not inj and not cids:
+                            continue
+                        try:
+                            await record_injection_provenance(
+                                db,
+                                optimization_id=pending.id,
+                                cluster_ids=list(cids),
+                                injected=list(inj or []),
+                                similarity_map=sim_map,
+                                trace_id=pending.trace_id,
+                            )
+                            provenance_written += 1
+                        except Exception as _prov_exc:
+                            provenance_failed += 1
+                            logger.warning(
+                                "Post-commit injection provenance failed for "
+                                "%s (non-fatal): %s",
+                                pending.id[:8], _prov_exc,
+                            )
+                    if provenance_written or provenance_failed:
+                        try:
+                            await db.commit()
+                        except Exception as _c_exc:
+                            logger.warning(
+                                "Provenance commit failed (non-fatal): %s",
+                                _c_exc,
+                            )
+                        logger.info(
+                            "Bulk persist provenance: %d rows written, %d failed",
+                            provenance_written, provenance_failed,
+                        )
+                break  # success
+            except Exception as exc:
+                if attempt < _MAX_PERSIST_ATTEMPTS - 1:
+                    delay = _PERSIST_BACKOFF_SECS * (2 ** attempt)
+                    logger.warning(
+                        "Bulk persist attempt %d/%d failed (%s); retry in %.0fs",
+                        attempt + 1, _MAX_PERSIST_ATTEMPTS, exc, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise
 
     # Per-prompt event emission — parallels the regular pipeline contract so
     # frontend history refresh and cross-process MCP bridge fire reliably.

@@ -23,6 +23,7 @@ export interface HealthResponse {
   injection_stats?: Record<string, number>;
   project_count?: number;  // ADR-005
   global_patterns?: { active: number; demoted: number; retired: number; total: number };  // ADR-005 Phase 2B
+  rate_limit?: Record<string, unknown> | null;
 }
 
 export interface ApiKeyStatus {

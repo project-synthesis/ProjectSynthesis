@@ -299,19 +299,25 @@ async def call_provider_with_retry(
             last_exc = exc
             # Rate-limit handling: prefer the provider's own wait estimate
             # (``reset_at`` -> seconds-until-reset, or ``retry_after``) over
-            # a constant backoff. If the wait exceeds ``_MAX_RETRY_AFTER_CAP``
-            # the call propagates the error after retries are exhausted so
-            # callers can take user-facing action (pause batch, surface
-            # reset_at to UI) rather than block their event loop for the
-            # full reset window.
+            # a constant backoff. Three cases:
+            #
+            # 1. Wait is known and <= cap: use it as the retry delay.
+            # 2. Wait is known and > cap: propagate immediately — caller
+            #    takes user-facing action (pause batch, surface reset_at).
+            # 3. Wait is unknown (None): propagate immediately — the limit
+            #    is almost certainly long-lived (hours, daily cap) and
+            #    retrying with a 2s backoff is guaranteed to fail. Before
+            #    this fix, unknown-duration rate limits burned an extra
+            #    CLI subprocess + 429 round-trip per retry.
             if isinstance(exc, ProviderRateLimitError):
                 est = exc.estimated_wait_seconds
-                if est is not None and est > _MAX_RETRY_AFTER_CAP:
+                if est is None or est > _MAX_RETRY_AFTER_CAP:
                     _logger.warning(
-                        "Rate limit wait %ds exceeds cap %ds — propagating "
-                        "to caller (provider=%s, reset_at=%s)",
-                        est, _MAX_RETRY_AFTER_CAP, exc.provider_name,
-                        exc.reset_at,
+                        "Rate limit %s — propagating immediately "
+                        "(provider=%s, reset_at=%s)",
+                        f"wait {est}s exceeds cap {_MAX_RETRY_AFTER_CAP}s"
+                        if est is not None else "unknown duration",
+                        exc.provider_name, exc.reset_at,
                     )
                     raise
             if attempt < max_retries:

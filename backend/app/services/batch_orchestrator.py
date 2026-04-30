@@ -104,6 +104,12 @@ async def run_batch(
     # the budget on certain-to-fail attempts.
     _rate_limited_flag = {"hit": False, "reset_at_iso": None, "provider": None}
 
+    # Shared event for cooperative cancellation: when set, in-flight
+    # prompts that haven't started their next LLM call yet can bail
+    # early to passthrough-fallback instead of burning a guaranteed-429
+    # call. Set by the first prompt to detect a rate limit.
+    _rate_limit_event = asyncio.Event()
+
     # Pre-fetch the score distribution once per batch so every prompt shares
     # a single DB round-trip instead of N redundant aggregate queries
     # (previously run inside run_single_prompt per prompt — N+1 pattern).
@@ -129,12 +135,8 @@ async def run_batch(
         logger.debug("Batch project_id resolution failed: %s", _pid_exc)
 
     async def _run_with_semaphore(index: int, prompt: str) -> None:
-        # Rate limit (429) backoff: reduce semaphore by half on first 429, retry once
-        _rate_limited = False
-
         async def _attempt() -> PendingOptimization:
-            nonlocal _rate_limited
-            result = await run_single_prompt(
+            return await run_single_prompt(
                 raw_prompt=prompt,
                 provider=provider,
                 prompt_loader=prompt_loader,
@@ -151,44 +153,8 @@ async def run_batch(
                 context_service=context_service,
                 historical_stats=shared_stats,
                 project_id=_batch_project_id,
+                rate_limit_event=_rate_limit_event,
             )
-            # Check for rate limit error in result
-            if (
-                result.status == "failed"
-                and result.error
-                and ("429" in result.error or "rate_limit" in result.error.lower())
-                and not _rate_limited
-            ):
-                _rate_limited = True
-                logger.warning(
-                    "Rate limit hit on prompt %d — reducing concurrency and retrying", index
-                )
-                # Reduce effective parallelism by acquiring an extra slot
-                await semaphore.acquire()
-                try:
-                    await asyncio.sleep(5)
-                    retry = await run_single_prompt(
-                        raw_prompt=prompt,
-                        provider=provider,
-                        prompt_loader=prompt_loader,
-                        embedding_service=embedding_service,
-                        codebase_context=codebase_context,
-                        repo_full_name=repo_full_name,
-                        batch_id=batch_id,
-                        prompt_index=index,
-                        total_prompts=len(prompts),
-                        session_factory=session_factory,
-                        taxonomy_engine=taxonomy_engine,
-                        domain_resolver=domain_resolver,
-                        tier=tier,
-                        context_service=context_service,
-                        historical_stats=shared_stats,
-                        project_id=_batch_project_id,
-                    )
-                    return retry
-                finally:
-                    semaphore.release()
-            return result
 
         async with semaphore:
             # Short-circuit: if a previous prompt already hit a rate limit,
@@ -238,6 +204,8 @@ async def run_batch(
                 _rate_limited_flag["hit"] = True
                 _rate_limited_flag["reset_at_iso"] = flags.get("reset_at_iso")
                 _rate_limited_flag["provider"] = flags.get("provider")
+                # Signal in-flight prompts to bail at the next phase gate.
+                _rate_limit_event.set()
                 logger.warning(
                     "Batch hit rate limit on prompt %d (provider=%s, "
                     "reset_at=%s) -- aborting %d remaining prompts",

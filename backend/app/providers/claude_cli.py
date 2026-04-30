@@ -54,6 +54,8 @@ _CLI_TIMEOUT_SECONDS = 600
 # Some Claude plans (currently MAX, possibly others in the future) emit
 # user-facing wall-clock reset strings like
 #   "HTTP 429: You've hit your limit · resets 3:40pm (America/Toronto)"
+# or (newer format, observed 2026-04-29):
+#   "HTTP 429: You've hit your limit · resets May 1, 8pm (America/Toronto)"
 # rather than a relative Retry-After header. When this format is present,
 # we parse it into a UTC datetime so the retry layer can wait the right
 # amount of time and the UI can render a precise countdown.
@@ -64,28 +66,47 @@ _CLI_TIMEOUT_SECONDS = 600
 # backoff (or the ``retry_after`` field when populated by Anthropic-API
 # Retry-After headers).
 #
-# Capturing groups: hour, minute, am/pm, tz_name.
+# Capturing groups: month_name, day, hour, minute, am/pm, tz_name.
+# The month+day prefix is optional — handles both old ("resets 8pm")
+# and new ("resets May 1, 8pm") formats.
+_MONTH_ABBREVS = (
+    "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+)
 _CLI_RATE_LIMIT_RESET_RX = re.compile(
-    r"resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\s*(?:[·•]\s*)?\(?([A-Za-z]+(?:/[A-Za-z_]+)?)?\)?",
+    r"resets\s+"
+    rf"(?:({_MONTH_ABBREVS})\w*\s+(\d{{1,2}}),?\s+)?"
+    r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\s*"
+    r"(?:[·•]\s*)?\(?([A-Za-z]+(?:/[A-Za-z_]+)?)?\)?",
     re.IGNORECASE,
 )
+
+# Month name → number lookup for date-aware parsing.
+_MONTH_NUM = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
 
 
 def _parse_cli_reset_time(message: str) -> datetime | None:
     """Parse Claude CLI rate-limit reset wall-clock time → UTC datetime.
 
     Plan-agnostic: handles message formats currently emitted by the MAX
-    plan (``"resets 3:40pm (America/Toronto)"``) and any other plan that
-    follows the same ``resets <time> (<TZ>)`` pattern. When the message
-    doesn't match -- e.g. a Claude API plan returning a structured
-    Retry-After header instead, or a future format change -- this returns
-    ``None`` and the caller falls back to default rate-limit backoff
-    behaviour. The pipeline degrades gracefully on either path; the
-    parser exists to provide a precise countdown when possible.
+    plan and any other plan that follows one of these patterns:
 
-    We anchor parsed time against the resolved IANA timezone's "today"
-    and roll forward 1 day if the reset time has already passed (limits
-    typically reset at the same wall-clock time daily).
+    - Time-only:  ``"resets 3:40pm (America/Toronto)"``
+    - Date+time:  ``"resets May 1, 8pm (America/Toronto)"``
+
+    When the message doesn't match -- e.g. a Claude API plan returning a
+    structured Retry-After header instead, or a future format change --
+    this returns ``None`` and the caller falls back to default rate-limit
+    backoff behaviour. The pipeline degrades gracefully on either path;
+    the parser exists to provide a precise countdown when possible.
+
+    When a date prefix is present, the target day is computed from the
+    month+day fields. When absent, we anchor against "today" in the
+    resolved IANA timezone and roll forward 1 day if the reset time has
+    already passed (limits typically reset at the same wall-clock time
+    daily).
     """
     if not message:
         return None
@@ -93,10 +114,13 @@ def _parse_cli_reset_time(message: str) -> datetime | None:
     if not m:
         return None
     try:
-        hour = int(m.group(1))
-        minute = int(m.group(2) or "0")
-        ampm = (m.group(3) or "").lower()
-        tz_name = m.group(4) or "UTC"
+        # Groups: month_name(1), day(2), hour(3), minute(4), ampm(5), tz(6)
+        month_name = (m.group(1) or "").lower()
+        day_str = m.group(2)
+        hour = int(m.group(3))
+        minute = int(m.group(4) or "0")
+        ampm = (m.group(5) or "").lower()
+        tz_name = m.group(6) or "UTC"
         if ampm == "pm" and hour < 12:
             hour += 12
         if ampm == "am" and hour == 12:
@@ -111,12 +135,37 @@ def _parse_cli_reset_time(message: str) -> datetime | None:
         else:
             tz = timezone.utc
         now_local = datetime.now(tz)
-        reset_local = now_local.replace(
-            hour=hour, minute=minute, second=0, microsecond=0,
-        )
-        # If reset time has already passed today, it resets tomorrow.
-        if reset_local <= now_local:
-            reset_local = reset_local + timedelta(days=1)
+
+        if month_name and day_str:
+            # Date-aware: "resets May 1, 8pm" — compute the explicit date.
+            month_num = _MONTH_NUM.get(month_name[:3])
+            if month_num is None:
+                return None
+            day = int(day_str)
+            # Use current year; if the date has already passed this year,
+            # roll forward to next year.
+            year = now_local.year
+            try:
+                reset_local = now_local.replace(
+                    year=year, month=month_num, day=day,
+                    hour=hour, minute=minute, second=0, microsecond=0,
+                )
+            except ValueError:
+                return None  # Invalid date (e.g. Feb 30)
+            if reset_local <= now_local:
+                # Date+time is in the past → next year's occurrence.
+                try:
+                    reset_local = reset_local.replace(year=year + 1)
+                except ValueError:
+                    return None  # Leap year edge case (Feb 29)
+        else:
+            # Time-only: "resets 8pm" — anchor to today, roll forward if past.
+            reset_local = now_local.replace(
+                hour=hour, minute=minute, second=0, microsecond=0,
+            )
+            if reset_local <= now_local:
+                reset_local = reset_local + timedelta(days=1)
+
         return reset_local.astimezone(timezone.utc)
     except Exception:
         return None

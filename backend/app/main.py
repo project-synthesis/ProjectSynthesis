@@ -265,6 +265,21 @@ async def lifespan(app: FastAPI):
     # Start background disconnect checker
     await routing.start_disconnect_checker()
 
+    # Initialize rate-limit store and startup probe
+    from app.services.rate_limit_state import get_rate_limit_store, probe_rate_limit
+    rate_limit_store = get_rate_limit_store()
+    event_bus.subscribe("rate_limit_active", rate_limit_store.handle_rate_limit_active)
+    event_bus.subscribe("rate_limit_cleared", rate_limit_store.handle_rate_limit_cleared)
+    
+    async def _run_rate_limit_probe():
+        try:
+            result = await probe_rate_limit(provider, rate_limit_store)
+            logger.info("Startup rate limit probe completed: %s", result)
+        except Exception as exc:
+            logger.warning("Startup rate limit probe failed: %s", exc)
+
+    asyncio.create_task(_run_rate_limit_probe())
+
     # Validate prompt templates at startup
     from app.services.prompt_loader import PromptLoader
     from app.services.strategy_loader import StrategyLoader
