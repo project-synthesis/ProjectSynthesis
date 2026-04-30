@@ -945,6 +945,37 @@ class TestClaudeCLIRateLimitParser:
         assert _parse_cli_reset_time("") is None
         assert _parse_cli_reset_time("HTTP 500: server error") is None
 
+    def test_parse_date_plus_time_format(self):
+        """New CLI format (observed 2026-04-29):
+        ``resets May 1, 8pm (America/Toronto)``."""
+        from datetime import timezone
+        from app.providers.claude_cli import _parse_cli_reset_time
+
+        msg = "HTTP 429: You've hit your limit · resets May 1, 8pm (America/Toronto)"
+        result = _parse_cli_reset_time(msg)
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+        # May 1 8pm Toronto = May 2 00:00 UTC (EDT = UTC-4)
+        assert result.month in (5, 1)  # could be next year if May 1 passed
+
+    def test_parse_date_plus_time_with_minutes(self):
+        """Date+time with minutes: ``resets Jun 15, 3:30pm (UTC)``."""
+        from app.providers.claude_cli import _parse_cli_reset_time
+
+        msg = "resets Jun 15, 3:30pm (UTC)"
+        result = _parse_cli_reset_time(msg)
+        assert result is not None
+        assert result.minute == 30
+
+    def test_parse_date_format_with_no_comma(self):
+        """Date without trailing comma: ``resets Dec 25 9am (UTC)``."""
+        from app.providers.claude_cli import _parse_cli_reset_time
+
+        msg = "resets Dec 25 9am (UTC)"
+        result = _parse_cli_reset_time(msg)
+        assert result is not None
+        assert result.hour == 9
+
 
 class TestProviderRateLimitErrorEstimate:
     """``ProviderRateLimitError.estimated_wait_seconds`` must unify

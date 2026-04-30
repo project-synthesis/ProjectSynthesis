@@ -25,6 +25,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -173,6 +174,7 @@ async def run_single_prompt(
     context_service: Any | None = None,
     historical_stats: ScoreDistribution | None = None,
     project_id: str | None = None,
+    rate_limit_event: asyncio.Event | None = None,
 ) -> PendingOptimization:
     """Run one prompt through analyze → optimize → score → embed in memory.
 
@@ -198,6 +200,14 @@ async def run_single_prompt(
     it here to avoid the N+1 query pattern (one ``get_score_distribution``
     round-trip per prompt). When ``None``, falls back to a per-prompt
     fetch using ``session_factory`` for backward compat.
+
+    ``rate_limit_event`` — shared ``asyncio.Event`` set by the batch
+    orchestrator when any sibling prompt hits a rate limit. Checked
+    between pipeline phases: if set before an expensive LLM call
+    (optimize, score, suggest), the function bails early to
+    ``_build_passthrough_fallback_pending()`` with whatever partial
+    analysis is available. Prevents in-flight prompts from burning
+    $0.78+ Opus calls that are guaranteed to 429.
 
     Returns a PendingOptimization with all fields populated.
     On any phase failure, returns a PendingOptimization with error set
@@ -479,6 +489,24 @@ async def run_single_prompt(
                 logger.debug("Few-shot retrieval failed for prompt %d: %s", prompt_index, _fs_exc)
 
         # --- Phase 2: Optimize ---
+        # Cooperative cancellation: if a sibling hit a rate limit while we
+        # were in Phase 1 (analyze) or enrichment, bail to passthrough
+        # fallback before starting the expensive Opus optimize call.
+        if rate_limit_event is not None and rate_limit_event.is_set():
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            return _build_passthrough_fallback_pending(
+                opt_id=opt_id,
+                trace_id=trace_id,
+                batch_id=batch_id,
+                raw_prompt=raw_prompt,
+                duration_ms=duration_ms,
+                provider_name=provider.name,
+                reset_at=None,
+                estimated_wait_seconds=None,
+                repo_full_name=repo_full_name,
+                project_id=project_id,
+                tier=tier,
+            )
         # Prefer codebase context from enrichment (B0-gated + workspace fallback);
         # explicit `codebase_context` param acts as a caller-supplied override.
         _effective_codebase = codebase_context or enriched_codebase_context
@@ -512,6 +540,57 @@ async def run_single_prompt(
         )
 
         # --- Phase 3: Score ---
+        # Cooperative cancellation: bail before the scoring LLM call if
+        # a sibling hit a rate limit during our optimize phase.
+        if rate_limit_event is not None and rate_limit_event.is_set():
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            # We have a valid optimized prompt — build a partial result
+            # with heuristic-only scoring rather than wasting an LLM call.
+            heur_opt = HeuristicScorer.score_prompt(
+                optimization.optimized_prompt, original=raw_prompt,
+            )
+            from app.schemas.pipeline_contracts import DimensionScores as _DS
+            _scores_opt = _DS(**heur_opt)
+            return PendingOptimization(
+                id=opt_id,
+                trace_id=trace_id,
+                batch_id=batch_id,
+                raw_prompt=raw_prompt,
+                optimized_prompt=optimization.optimized_prompt,
+                task_type=task_type if analysis.task_type in VALID_TASK_TYPES else "general",
+                strategy_used=effective_strategy,
+                changes_summary=optimization.changes_summary,
+                score_clarity=heur_opt["clarity"],
+                score_specificity=heur_opt["specificity"],
+                score_structure=heur_opt["structure"],
+                score_faithfulness=heur_opt["faithfulness"],
+                score_conciseness=heur_opt["conciseness"],
+                overall_score=_scores_opt.compute_overall(analysis.task_type),
+                scoring_mode="heuristic",
+                intent_label=validate_intent_label(
+                    title_case_label(analysis.intent_label or "general"),
+                    raw_prompt,
+                ),
+                domain=effective_domain,
+                domain_raw=(analysis.domain or "general"),
+                duration_ms=duration_ms,
+                status="completed",
+                provider=provider.name,
+                routing_tier="passthrough_fallback",
+                repo_full_name=repo_full_name,
+                project_id=project_id,
+                rate_limit_meta={
+                    "rate_limited": True,
+                    "fallback": "cooperative_cancel",
+                    "provider": provider.name,
+                },
+                context_sources={
+                    "source": "rate_limit_cooperative_cancel",
+                    "batch_id": batch_id,
+                },
+                original_scores=HeuristicScorer.score_prompt(raw_prompt),
+                improvement_score=0.0,
+            )
         original_scores = None
         optimized_scores = None
         deltas = None

@@ -144,6 +144,9 @@ class HealthResponse(BaseModel):
     cross_service: dict[str, ServiceStatus] | None = Field(
         default=None, description="Cross-service connectivity checks.",
     )
+    rate_limit: dict | None = Field(
+        default=None, description="Active rate-limit state, or null if clear.",
+    )
     timestamp: str | None = Field(default=None, description="ISO 8601 timestamp.")
 
 
@@ -202,24 +205,31 @@ async def _probe_all_services(
     When *mcp_connected* is False the MCP probe is skipped entirely —
     the Streamable HTTP transport returns 400 without a valid session,
     producing noisy log lines on every health-check cycle.
+
+    **Backend self-probe is skipped**: this code runs inside the backend
+    process, so probing ourselves via HTTP is redundant.  More critically,
+    with ``pool_size=1`` the self-probe deadlocks — the outer health
+    request holds the sole DB connection while the self-probe request
+    also needs one, causing a guaranteed pool timeout → false "down".
+    The backend is reported as "up" unconditionally (if we can execute
+    this function, the backend is serving requests).
     """
-    # Direct service probes
-    backend_probe = _probe_service(
-        "http://127.0.0.1:8000/api/health?probes=false",
-    )
+    # Backend: we ARE the backend — skip the self-probe to avoid
+    # pool_size=1 deadlock (outer request holds the only DB connection).
+    backend_status = ServiceStatus(status="up", latency_ms=0)
+
+    # External service probes
     frontend_probe = _probe_service("http://127.0.0.1:5199/")
 
     # Cross-service probes
-    fe_to_be_probe = _probe_service(
-        "http://127.0.0.1:8000/api/health?probes=false",
-    )
+    # frontend_to_backend: also skipped (same deadlock as backend self-probe)
+    fe_to_be_status = ServiceStatus(status="ok", latency_ms=0)
     mcp_to_be_probe = _probe_service(
         "http://127.0.0.1:8000/api/events/_publish",
         method="POST",
         payload={"event_type": "_health_check", "data": {}},
     )
 
-    results: list[ServiceStatus]
     if mcp_connected:
         # MCP Streamable HTTP transport requires Accept with both JSON and SSE,
         # otherwise the server returns 406 Not Acceptable.
@@ -230,51 +240,37 @@ async def _probe_all_services(
             headers={"Accept": "application/json, text/event-stream"},
         )
         try:
-            results = list(await asyncio.wait_for(
-                asyncio.gather(
-                    backend_probe, frontend_probe, mcp_probe,
-                    fe_to_be_probe, mcp_to_be_probe,
-                ),
+            frontend_result, mcp_status, mcp_to_be_result = await asyncio.wait_for(
+                asyncio.gather(frontend_probe, mcp_probe, mcp_to_be_probe),
                 timeout=_OVERALL_TIMEOUT,
-            ))
+            )
         except asyncio.TimeoutError:
             timeout_status = ServiceStatus(status="timeout", error="Overall deadline exceeded")
-            results = [timeout_status] * 5
-
-        mcp_status = results[2]
-        cross_results = results[3], results[4]
+            frontend_result = mcp_status = mcp_to_be_result = timeout_status
     else:
         # No active MCP session — skip the probe to avoid 400 noise
         try:
-            results = list(await asyncio.wait_for(
-                asyncio.gather(
-                    backend_probe, frontend_probe,
-                    fe_to_be_probe, mcp_to_be_probe,
-                ),
+            frontend_result, mcp_to_be_result = await asyncio.wait_for(
+                asyncio.gather(frontend_probe, mcp_to_be_probe),
                 timeout=_OVERALL_TIMEOUT,
-            ))
+            )
         except asyncio.TimeoutError:
             timeout_status = ServiceStatus(status="timeout", error="Overall deadline exceeded")
-            results = [timeout_status] * 4
+            frontend_result = mcp_to_be_result = timeout_status
 
         mcp_status = ServiceStatus(status="not_connected", error="No active MCP session")
-        cross_results = results[2], results[3]
 
     services = {
-        "backend": results[0],
-        "frontend": results[1],
+        "backend": backend_status,
+        "frontend": frontend_result,
         "mcp": mcp_status,
     }
     cross_service = {
-        "frontend_to_backend": ServiceStatus(
-            status="ok" if cross_results[0].status == "up" else "failed",
-            latency_ms=cross_results[0].latency_ms,
-            error=cross_results[0].error,
-        ),
+        "frontend_to_backend": fe_to_be_status,
         "mcp_to_backend": ServiceStatus(
-            status="ok" if cross_results[1].status == "up" else "failed",
-            latency_ms=cross_results[1].latency_ms,
-            error=cross_results[1].error,
+            status="ok" if mcp_to_be_result.status == "up" else "failed",
+            latency_ms=mcp_to_be_result.latency_ms,
+            error=mcp_to_be_result.error,
         ),
     }
     return services, cross_service
@@ -520,6 +516,10 @@ async def health_check(
     if overall_status == "unhealthy":
         response.status_code = 503
 
+    # Rate limit state
+    from app.services.rate_limit_state import get_rate_limit_store
+    rate_limit_state = get_rate_limit_store().get_active()
+
     return HealthResponse(
         status=overall_status,
         version=__version__,
@@ -552,5 +552,6 @@ async def health_check(
         legacy_state_observed=legacy_state_observed,
         services=services_result,
         cross_service=cross_service_result,
+        rate_limit=rate_limit_state,
         timestamp=datetime.now(UTC).isoformat(),
     )

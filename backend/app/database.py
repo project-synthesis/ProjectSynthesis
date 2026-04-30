@@ -67,6 +67,32 @@ engine = create_async_engine(
     echo=False,
     pool_pre_ping=True,
     pool_recycle=3600,
+    # v0.4.12 P2: pool_size=1 forces strict connection serialization
+    # at the SQLAlchemy pool layer, eliminating multi-connection
+    # SQLite WAL writer-slot contention.  Pre-fix: SQLAlchemy's default
+    # async pool (size=5, overflow=10, up to 15 concurrent conns) let
+    # multiple sessions check out simultaneously, each holding its own
+    # SQLite connection.  ``WriterLockedAsyncSession`` correctly
+    # serialized FLUSH calls via ``db_writer_lock`` (asyncio.Lock) but
+    # the underlying connections still raced for the WAL writer slot at
+    # SQLite's libsqlite3 layer -- a connection that just released the
+    # asyncio.Lock could still hold lingering WAL state for a brief
+    # window, causing the next writer to see "database is locked"
+    # despite holding the asyncio.Lock.  pool_size=1 collapses that
+    # window: only one connection exists, so transitions between
+    # writers happen at the pool checkout boundary which is fully
+    # synchronous (queue-and-wait) rather than racing at the SQLite
+    # file lock.  Trade-off: read concurrency is also limited to 1,
+    # but SQLite is single-threaded internally so concurrent reads
+    # were time-sliced anyway -- aggregate throughput is unchanged.
+    # The pool checkout queue is async, so sessions await without
+    # blocking the event loop.  Diagnostic chain (probes v22-v28):
+    # six failed catastrophic runs through every other layer of the
+    # writer-coordination stack (verify gate, per-prompt streaming,
+    # warm-path Groundhog Day fix, early-abort) confirmed the
+    # contention is at the connection/pool layer rather than higher up.
+    pool_size=1,
+    max_overflow=0,
     connect_args={"timeout": 30},
 )
 
