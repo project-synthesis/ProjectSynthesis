@@ -81,6 +81,7 @@ class RoutingState:
     provider_name: str | None = None
     sampling_capable: bool | None = None
     mcp_connected: bool = False
+    rate_limited: bool = False
     last_capability_update: datetime | None = None
     last_activity: datetime | None = None
 
@@ -136,8 +137,8 @@ def _can_sample(state: RoutingState, ctx: RoutingContext) -> bool:
 
 
 def _can_internal(state: RoutingState) -> bool:
-    """Whether an internal provider is available."""
-    return state.provider is not None
+    """Whether an internal provider is available and not rate-limited."""
+    return state.provider is not None and not state.rate_limited
 
 
 # Tier chain: each entry is (tier, condition, reason).
@@ -359,7 +360,7 @@ class RoutingManager:
     def available_tiers(self) -> list[str]:
         """Which tiers are currently reachable (for frontend display)."""
         tiers: list[str] = []
-        if self._state.provider is not None:
+        if self._state.provider is not None and not self._state.rate_limited:
             tiers.append("internal")
         if self._state.sampling_capable is True and self._state.mcp_connected:
             tiers.append("sampling")
@@ -383,6 +384,17 @@ class RoutingManager:
                 old_name, new_name, ",".join(self.available_tiers),
             )
             self._broadcast_state_change("provider_changed")
+
+    def sync_rate_limit(self, is_active: bool) -> None:
+        """Called by event consumer when rate limits activate or clear."""
+        if self._state.rate_limited == is_active:
+            return
+        self._state = replace(self._state, rate_limited=is_active)
+        logger.info(
+            "routing.rate_limit_sync active=%s available_tiers=%s",
+            is_active, ",".join(self.available_tiers),
+        )
+        self._broadcast_state_change("rate_limit_state_changed")
 
     def on_mcp_initialize(self, sampling_capable: bool) -> None:
         """Called by ASGI middleware when MCP ``initialize`` is intercepted.
