@@ -761,6 +761,64 @@ class ProbeService:
             phase3_counter = {"n": 0}
             phase3_progress: list[Any] = []
 
+            # Per-prompt streaming persistence (v0.4.12 P0b).
+            #
+            # Pre-fix the probe ran ``run_batch`` to completion, then
+            # called ``bulk_persist(all_5_pendings)`` as ONE 5-row
+            # transaction at the end. That batched commit is the
+            # largest single SQLite write in the system and the most
+            # likely to lose the WAL writer-slot race against
+            # concurrent backend warm-path maintenance. Live diagnosis
+            # (probes v22-v24, all confirmed catastrophic via the
+            # verify-after-persist gate from commit ae379bf6): warm
+            # path's ``Warm path maintenance-only:
+            # snapshot=error-no-snapshot`` and ``Bulk persist
+            # attempt 1/5 failed`` consistently appeared in tandem.
+            #
+            # Per-prompt streaming makes each transaction a single
+            # INSERT + COMMIT (~tens of ms hold time on the WAL slot,
+            # vs hundreds of ms for the 5-row variant). Each prompt is
+            # idempotent via bulk_persist's ``existing_ids`` check, so
+            # the existing 5x exponential backoff inside bulk_persist
+            # still wraps the per-row attempt -- but the smaller window
+            # is far more likely to slip between concurrent writers.
+            #
+            # Bonus: the user's UX complaint (probe rows appearing all
+            # at once instead of as they complete) is resolved as a
+            # structural side effect. Each successful per-prompt persist
+            # fires its own ``optimization_created`` event-bus event
+            # (see batch_persistence.py:280), and the frontend's
+            # ``+page.svelte`` already routes those through HistoryPanel
+            # for surgical row insertion.
+            persist_tasks: list[Any] = []
+            persisted_ids: set[str] = set()
+            persist_errors: list[Exception] = []
+
+            async def _persist_one(p: Any) -> None:
+                """Single-prompt persistence task spawned per completion.
+
+                Reuses bulk_persist's idempotency + retry path but on a
+                1-element list. On success, records the id in
+                ``persisted_ids`` so the post-run verify gate sees it.
+                On failure, captures the exception for the gate to
+                classify partial vs catastrophic.
+                """
+                try:
+                    n = await bulk_persist(
+                        [p], session_factory, batch_id=probe_id,
+                    )
+                    if n > 0:
+                        persisted_ids.add(p.id)
+                except Exception as exc:
+                    persist_errors.append(exc)
+                    setattr(p, "_persist_dropped", True)
+                    logger.warning(
+                        "Per-prompt persist failed for %s: %s",
+                        p.id[:8] if p.id else "<no-id>",
+                        exc,
+                        exc_info=True,
+                    )
+
             def _on_progress(idx: int, total: int, pending: Any) -> None:
                 phase3_counter["n"] += 1
                 # Stash for SSE yield outside the callback (we can't
@@ -785,6 +843,16 @@ class ProbeService:
                     )
                 except RuntimeError:
                     pass
+
+                # Spawn the per-prompt persistence task immediately so
+                # the row lands in the DB while peer prompts are still
+                # in their LLM phase. Skipped for failed/rate-limited
+                # rows (their status != "completed" so bulk_persist
+                # would skip them anyway -- avoid the wasted round trip).
+                if pending.status == "completed":
+                    persist_tasks.append(
+                        asyncio.create_task(_persist_one(pending))
+                    )
 
             try:
                 pendings = await run_batch(
@@ -895,45 +963,72 @@ class ProbeService:
                         "rate_limit_active publish failed", exc_info=True,
                     )
 
-            # Persist + cluster-assign via canonical batch primitives.
-            # Use the self.db shim so the writer is single-connection.
-            persist_error: Exception | None = None
-            try:
-                await bulk_persist(pendings, session_factory, batch_id=probe_id)
-            except Exception as _bp_exc:
-                persist_error = _bp_exc
-                logger.warning("probe bulk_persist failed", exc_info=True)
-            try:
-                await batch_taxonomy_assign(
-                    pendings, session_factory, batch_id=probe_id,
-                )
-            except Exception as _bta_exc:
-                persist_error = persist_error or _bta_exc
-                logger.warning(
-                    "probe batch_taxonomy_assign failed", exc_info=True,
-                )
+            # Drain per-prompt persistence tasks. Each task was spawned
+            # by ``_on_progress`` as the corresponding prompt finished
+            # scoring -- so by the time ``run_batch`` returns, most are
+            # already done; ``gather`` just collects the stragglers.
+            # ``return_exceptions=True`` ensures one task's failure
+            # doesn't cancel the others (they're independent).
+            if persist_tasks:
+                await asyncio.gather(*persist_tasks, return_exceptions=True)
 
-            # Verify-after-persist gate (v0.4.12 P0a): the historical
-            # behavior of swallowing bulk_persist exceptions left the
-            # probe reporting status='completed' with mean_overall in
-            # the report even though ZERO Optimization rows landed --
-            # an outright correctness defect (not just a UX gap). The
-            # in-memory aggregate was computed from PendingOptimization
-            # objects whose status='completed' was set during scoring,
-            # not from actual DB rows. Now we query the DB for the
-            # canonical truth of what got persisted before we report
-            # anything to the user. Three outcomes:
-            #   * full (persisted_actual == expected): proceed normally
-            #   * partial (0 < persisted_actual < expected): drop the
-            #     ghost rows from prompt_results, mark probe 'partial',
-            #     surface the lost-prompt count in the error message.
-            #   * catastrophic (persisted_actual == 0): raise so the
-            #     top-level except handler marks the row 'failed' with
-            #     the underlying persistence exception preserved.
+            # Cluster assignment runs ONLY for rows that actually landed
+            # (stream-persisted ids). Pre-fix this assigned clusters for
+            # ghost rows that bulk_persist had silently dropped, polluting
+            # the taxonomy with cluster_ids referencing non-existent
+            # Optimization rows. ``persisted_pendings`` is the durable
+            # subset, ordered by their position in the run_batch result
+            # list so cluster centroids reflect the right embedding mix.
+            persisted_pendings = [p for p in pendings if p.id in persisted_ids]
+            persist_error: Exception | None = (
+                persist_errors[0] if persist_errors else None
+            )
+            if persisted_pendings:
+                try:
+                    await batch_taxonomy_assign(
+                        persisted_pendings,
+                        session_factory,
+                        batch_id=probe_id,
+                    )
+                except Exception as _bta_exc:
+                    persist_error = persist_error or _bta_exc
+                    logger.warning(
+                        "probe batch_taxonomy_assign failed",
+                        exc_info=True,
+                    )
+
+            # Verify-after-persist gate (v0.4.12 P0a/P0b).
+            #
+            # Pre-fix the probe reported status='completed' with a
+            # mean_overall computed from in-memory PendingOptimization
+            # objects (whose status='completed' was set during scoring)
+            # even when ZERO Optimization rows landed in the DB --
+            # an outright correctness defect, not a UX gap. Now we
+            # query the DB for the canonical truth of what got
+            # persisted before we report anything to the user.
+            #
+            # In the streaming-persistence world the per-prompt tasks
+            # already maintain ``persisted_ids`` as a set of believed-
+            # durable ids. The DB SELECT here is the source-of-truth
+            # confirmation -- and a SELECT can never deadlock on the
+            # writer lock (no dirty/new/deleted rows on the verify
+            # session, so WriterLockedAsyncSession's gate skips
+            # acquisition). Single query: capture the durable ids
+            # directly, then count = len(set), then drive the same
+            # three-outcome path as the bulk-persist version did.
+            #
+            # Outcomes:
+            #   * full   -- persisted_actual == expected: proceed normally
+            #   * partial -- 0 < persisted_actual < expected: drop the
+            #     ghost rows from prompt_results so aggregate +
+            #     taxonomy_delta only count what's durable
+            #   * catastrophic -- persisted_actual == 0: raise so the
+            #     top-level except handler marks the row failed with
+            #     the underlying persistence exception preserved
             expected_completed = sum(
                 1 for p in pendings if p.status == "completed"
             )
-            persisted_actual = 0
+            persisted_id_set: set[str] = set()
             if expected_completed > 0:
                 pending_ids = [
                     p.id for p in pendings if p.status == "completed"
@@ -944,10 +1039,10 @@ class ProbeService:
                             Optimization.id.in_(pending_ids),
                         )
                     )
-                    persisted_actual = len(
-                        list(_verify_q.scalars().all())
-                    )
-            persisted_id_set: set[str] = set()
+                    persisted_id_set = {
+                        row for row in _verify_q.scalars().all()
+                    }
+            persisted_actual = len(persisted_id_set)
             if expected_completed > 0 and persisted_actual == 0:
                 # Catastrophic: nothing landed. Raise so the top-level
                 # except handler in run() marks the probe row as failed
@@ -968,22 +1063,6 @@ class ProbeService:
                     f"{err_class}: {err_msg}"
                 ) from persist_error
             if persisted_actual < expected_completed:
-                # Partial: some rows landed, some lost. Re-query the DB
-                # for the durable id-set and let downstream filtering
-                # drop the ghost rows so prompt_results / aggregate /
-                # taxonomy delta only count what's actually durable.
-                async with session_factory() as _verify_db:
-                    _verify_q = await _verify_db.execute(
-                        select(Optimization.id).where(
-                            Optimization.id.in_(
-                                [p.id for p in pendings
-                                 if p.status == "completed"]
-                            ),
-                        )
-                    )
-                    persisted_id_set = {
-                        row for row in _verify_q.scalars().all()
-                    }
                 logger.warning(
                     "probe %s partial persistence: %d of %d rows landed",
                     probe_id, persisted_actual, expected_completed,
