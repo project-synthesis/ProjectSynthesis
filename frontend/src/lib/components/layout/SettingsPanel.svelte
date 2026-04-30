@@ -365,18 +365,18 @@
           <span class="data-label" use:tooltip={ROUTING_TOOLTIPS.force_passthrough_label}>Force passthrough</span>
           <button
             class="toggle-track toggle-track--yellow"
-            class:toggle-track--on={preferencesStore.pipeline.force_passthrough}
+            class:toggle-track--on={preferencesStore.pipeline.force_passthrough || rateLimitStore.isAnyActive}
             onclick={() => {
               const newVal = !preferencesStore.pipeline.force_passthrough;
               preferencesStore.setPipelineToggle('force_passthrough', newVal);
               if (newVal) passthroughGuide.show(true);
             }}
             role="switch"
-            aria-checked={preferencesStore.pipeline.force_passthrough}
+            aria-checked={preferencesStore.pipeline.force_passthrough || rateLimitStore.isAnyActive}
             aria-label="Toggle Force passthrough"
-            disabled={forcePassthroughDisabled}
-            use:tooltip={forcePassthroughTooltip(forcePassthroughDisabled)}
-            style={forcePassthroughDisabled ? 'opacity: 0.4; cursor: not-allowed;' : undefined}
+            disabled={forcePassthroughDisabled || rateLimitStore.isAnyActive}
+            use:tooltip={rateLimitStore.isAnyActive ? 'Gated by active rate limit' : forcePassthroughTooltip(forcePassthroughDisabled)}
+            style={(forcePassthroughDisabled || rateLimitStore.isAnyActive) ? 'opacity: 0.4; cursor: not-allowed;' : undefined}
           >
             <span class="toggle-thumb"></span>
           </button>

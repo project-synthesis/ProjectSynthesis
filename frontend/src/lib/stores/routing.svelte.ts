@@ -10,6 +10,7 @@
 
 import { preferencesStore } from './preferences.svelte';
 import { forgeStore } from './forge.svelte';
+import { rateLimitStore } from './rate-limit.svelte';
 
 export type EffectiveTier = 'internal' | 'sampling' | 'passthrough';
 
@@ -43,8 +44,8 @@ let _tier = $derived.by((): EffectiveTier => {
   }
 
   // --- Predicted tier: 5-tier priority chain ---
-  // 1. force_passthrough always wins
-  if (preferencesStore.pipeline.force_passthrough) return 'passthrough';
+  // 1. force_passthrough always wins (or rate limit active)
+  if (preferencesStore.pipeline.force_passthrough || rateLimitStore.isAnyActive) return 'passthrough';
 
   // 2. force_sampling (if capable + connected)
   if (
@@ -69,7 +70,7 @@ let _tier = $derived.by((): EffectiveTier => {
 
 /** What the user explicitly asked for via force toggles, or null (auto). */
 let _requestedTier = $derived.by((): EffectiveTier | null => {
-  if (preferencesStore.pipeline.force_passthrough) return 'passthrough';
+  if (preferencesStore.pipeline.force_passthrough || rateLimitStore.isAnyActive) return 'passthrough';
   if (preferencesStore.pipeline.force_sampling) return 'sampling';
   return null;
 });
