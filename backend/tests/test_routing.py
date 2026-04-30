@@ -231,10 +231,10 @@ class TestRateLimitRouting:
         ctx = _ctx(caller="rest")
         decision = resolve_route(state, ctx)
         assert decision.tier == "passthrough"
-        assert decision.degraded_from is None
+        assert decision.degraded_from == "internal"
 
-    def test_mcp_caller_degrades_to_passthrough(self) -> None:
-        # Rate limited forces passthrough, bypassing sampling entirely
+    def test_mcp_caller_degrades_to_sampling(self) -> None:
+        # Rate limited + MCP caller + sampling available -> degrade to sampling
         state = _state(
             provider_name="claude-cli", 
             sampling_capable=True, 
@@ -243,11 +243,11 @@ class TestRateLimitRouting:
         )
         ctx = _ctx(caller="mcp")
         decision = resolve_route(state, ctx)
-        assert decision.tier == "passthrough"
-        assert decision.degraded_from is None
+        assert decision.tier == "sampling"
+        assert decision.degraded_from == "internal"
 
-    def test_force_sampling_overridden_by_rate_limit(self) -> None:
-        # rate limit acts exactly like force_passthrough (Tier 1), winning over force_sampling
+    def test_force_sampling_overrides_rate_limit(self) -> None:
+        # force_sampling uses sampling anyway, independent of rate limits
         state = _state(
             provider_name="claude-cli", 
             sampling_capable=True, 
@@ -256,7 +256,7 @@ class TestRateLimitRouting:
         )
         ctx = _ctx(caller="mcp", force_sampling=True)
         decision = resolve_route(state, ctx)
-        assert decision.tier == "passthrough"
+        assert decision.tier == "sampling"
         assert decision.degraded_from is None
 
 
