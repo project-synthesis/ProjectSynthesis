@@ -259,6 +259,62 @@ class TestRateLimitRouting:
         assert decision.tier == "sampling"
         assert decision.degraded_from is None
 
+    def test_untoggling_force_sampling_during_rate_limit_falls_back_to_auto_sampling(self) -> None:
+        # User explicitly untoggles force_sampling (sets to False) while rate limited.
+        # It gracefully falls back into auto-sampling (Tier 4) since internal (Tier 3) is unavailable.
+        state = _state(
+            provider_name="claude-cli", 
+            sampling_capable=True, 
+            mcp_connected=True, 
+            rate_limited=True
+        )
+        ctx = _ctx(caller="mcp", force_sampling=False)
+        decision = resolve_route(state, ctx)
+        assert decision.tier == "sampling"
+        assert decision.degraded_from == "internal"
+        assert "auto, MCP client supports sampling" in decision.reason
+
+    def test_untoggling_force_sampling_during_rate_limit_falls_to_passthrough_if_no_mcp(self) -> None:
+        # User untoggles force_sampling while rate limited, but MCP is NOT capable.
+        # Falls through auto-sampling straight to passthrough (Tier 5).
+        state = _state(
+            provider_name="claude-cli", 
+            sampling_capable=False, 
+            mcp_connected=True, 
+            rate_limited=True
+        )
+        ctx = _ctx(caller="mcp", force_sampling=False)
+        decision = resolve_route(state, ctx)
+        assert decision.tier == "passthrough"
+        assert decision.degraded_from == "internal"
+
+    def test_force_passthrough_overrides_auto_sampling_during_rate_limit(self) -> None:
+        # If user truly wants to stop all sampling while rate limited, force_passthrough wins.
+        state = _state(
+            provider_name="claude-cli", 
+            sampling_capable=True, 
+            mcp_connected=True, 
+            rate_limited=True
+        )
+        ctx = _ctx(caller="mcp", force_passthrough=True)
+        decision = resolve_route(state, ctx)
+        assert decision.tier == "passthrough"
+        assert decision.degraded_from is None
+        assert "force_passthrough enabled" in decision.reason
+
+    def test_rate_limit_dissolves_restores_internal_tier(self) -> None:
+        # When rate limit is resolved (rate_limited=False), internal tier is natively restored.
+        state = _state(
+            provider_name="claude-cli", 
+            sampling_capable=True, 
+            mcp_connected=True, 
+            rate_limited=False
+        )
+        ctx = _ctx(caller="mcp")
+        decision = resolve_route(state, ctx)
+        assert decision.tier == "internal"
+        assert decision.degraded_from is None
+
 
 # ---------------------------------------------------------------------------
 # Dataclass properties
