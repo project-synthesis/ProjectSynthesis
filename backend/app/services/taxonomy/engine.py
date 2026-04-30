@@ -944,6 +944,24 @@ class TaxonomyEngine:
                 return await execute_warm_path(self, session_factory)
             except Exception as exc:
                 logger.error("Warm path failed: %s", exc, exc_info=True)
+                # v0.4.12 P0c: advance _warm_path_age on failure so the
+                # next cycle does NOT re-run is_first_warm_cycle()'s
+                # full-scan path. Pre-fix the age was only incremented
+                # by phase_audit() at the END of a successful cycle --
+                # so a cycle that failed early (e.g. autoflush hits
+                # "database is locked" during Phase 0's SELECT, session
+                # ends in PendingRollbackError) left age at 0, which
+                # made is_first_warm_cycle() stay True forever, which
+                # forced every subsequent cycle to do the full Phase 0
+                # scan that triggered the same failure -- a Groundhog
+                # Day loop visible in the live log as ``Warm path
+                # cycle: dirty_ids=all (first_cycle=True, ...)`` ->
+                # ``Warm path failed: PendingRollbackError`` repeating
+                # every cadence interval. Once age advances past 0, the
+                # next cycle uses ``snapshot_dirty_set`` which empties
+                # the dirty_set and skips when nothing changed -- a
+                # natural recovery path.
+                self._warm_path_age += 1
                 # Return a minimal result so callers don't break
                 try:
                     async with session_factory() as db:
