@@ -794,6 +794,29 @@ class ProbeService:
             persisted_ids: set[str] = set()
             persist_errors: list[Exception] = []
 
+            # v0.4.12 P1 — early-abort for sustained writer contention.
+            #
+            # When the FIRST per-prompt persist task exhausts its retry
+            # budget (5 attempts × exponential backoff = 75s of trying),
+            # the SQLite writer-slot contention is sustained -- the
+            # remaining peer prompts' persist tasks will also fail.
+            # Letting them complete their full LLM pipeline (optimize
+            # Opus 4.7 + score Sonnet 4.6) costs ~3-5 minutes of wall
+            # time + meaningful tokens per prompt that we KNOW won't
+            # land in the DB.  Pre-fix all 5 LLM pipelines ran to
+            # completion regardless of persistence outcome -- worst-case
+            # 12-20 minutes of Opus 4.7 audit-class calls wasted on a
+            # probe that the verify-gate would mark catastrophic anyway.
+            #
+            # The abort_event gates the run_batch task: when set, the
+            # watchdog cancels ``run_batch_task`` which propagates
+            # CancelledError through asyncio.gather to all in-flight
+            # _attempt() coroutines (each holding an LLM call). Already-
+            # spawned persist_tasks continue (their bulk_persist calls
+            # are idempotent + retried; we don't waste the work that
+            # was about to land if contention happens to clear).
+            abort_event = asyncio.Event()
+
             async def _persist_one(p: Any) -> None:
                 """Single-prompt persistence task spawned per completion.
 
@@ -801,7 +824,8 @@ class ProbeService:
                 1-element list. On success, records the id in
                 ``persisted_ids`` so the post-run verify gate sees it.
                 On failure, captures the exception for the gate to
-                classify partial vs catastrophic.
+                classify partial vs catastrophic AND signals
+                ``abort_event`` so peer LLM calls can be cancelled.
                 """
                 try:
                     n = await bulk_persist(
@@ -818,6 +842,9 @@ class ProbeService:
                         exc,
                         exc_info=True,
                     )
+                    # Signal early-abort. Idempotent at the consumer
+                    # (asyncio.Event.set is safe to call multiple times).
+                    abort_event.set()
 
             def _on_progress(idx: int, total: int, pending: Any) -> None:
                 phase3_counter["n"] += 1
@@ -854,8 +881,16 @@ class ProbeService:
                         asyncio.create_task(_persist_one(pending))
                     )
 
-            try:
-                pendings = await run_batch(
+            # Wrap run_batch in a Task so the abort_event watchdog can
+            # cancel it on sustained writer-slot contention. CancelledError
+            # propagates through asyncio.gather to every in-flight
+            # _attempt() coroutine, releasing the LLM-call coroutines and
+            # closing the provider stream early. Already-completed pendings
+            # are preserved via the on_progress callback (which appends to
+            # phase3_progress as each prompt finishes scoring), so the
+            # abort fallback recovers the work already done.
+            run_batch_task = asyncio.create_task(
+                run_batch(
                     prompts=prompts,
                     provider=self.provider,
                     prompt_loader=prompt_loader,
@@ -871,12 +906,77 @@ class ProbeService:
                     tier=tier,
                     context_service=self.context_service,
                 )
+            )
+
+            async def _abort_watcher() -> None:
+                """Cancel run_batch_task when ``abort_event`` fires.
+
+                Fires once at most -- ``abort_event`` is the event-driven
+                signal from ``_persist_one``'s catch block. Watcher exits
+                cleanly when run_batch finishes normally (parent task
+                cancellation in the finally clause below).
+                """
+                await abort_event.wait()
+                if not run_batch_task.done():
+                    n_completed = len(phase3_progress)
+                    n_total = len(prompts)
+                    logger.warning(
+                        "probe %s aborting run_batch -- per-prompt persist "
+                        "failed catastrophic (writer-slot contention). "
+                        "Cancelling %d in-flight LLM calls; preserving %d "
+                        "already-scored pendings.",
+                        probe_id, n_total - n_completed, n_completed,
+                    )
+                    try:
+                        get_event_logger().log_decision(
+                            path="probe",
+                            op="probe_early_abort",
+                            decision="probe_early_abort",
+                            context={
+                                "probe_id": probe_id,
+                                "completed_before_abort": n_completed,
+                                "cancelled_in_flight": n_total - n_completed,
+                                "reason": "persist_catastrophic",
+                            },
+                        )
+                    except RuntimeError:
+                        pass
+                    run_batch_task.cancel()
+
+            abort_watcher_task = asyncio.create_task(_abort_watcher())
+
+            try:
+                pendings = await run_batch_task
+            except asyncio.CancelledError:
+                # Early-abort path: the watchdog cancelled run_batch
+                # because the first per-prompt persist exhausted its
+                # retry budget. ``phase3_progress`` carries every
+                # PendingOptimization that managed to finish scoring
+                # before the abort fired; the rest never produced a
+                # PendingOptimization (their LLM calls were cancelled
+                # mid-flight). Treat the early-abort pendings as the
+                # full result set -- the verify-after-persist gate
+                # below will then either find some persisted (partial)
+                # or none (catastrophic).
+                pendings = [p for _, p in phase3_progress]
             except Exception as exc:
                 logger.warning(
                     "probe %s run_batch raised (%s) -- marking failed",
                     probe_id, exc, exc_info=True,
                 )
                 pendings = []
+            finally:
+                # Watcher cleanup: if run_batch finished cleanly, the
+                # abort_event never fired, so the watcher is still
+                # parked on ``await abort_event.wait()``. Cancel it
+                # so it doesn't outlive the run() generator. CancelledError
+                # is swallowed -- it's the expected signal here.
+                if not abort_watcher_task.done():
+                    abort_watcher_task.cancel()
+                    try:
+                        await abort_watcher_task
+                    except asyncio.CancelledError:
+                        pass
 
             # Detect rate-limit signal from run_batch results.  If ANY
             # PendingOptimization came back with heuristic_flags.rate_limited,
