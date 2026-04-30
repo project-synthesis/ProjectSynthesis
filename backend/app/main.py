@@ -268,8 +268,26 @@ async def lifespan(app: FastAPI):
     # Initialize rate-limit store and startup probe
     from app.services.rate_limit_state import get_rate_limit_store, probe_rate_limit
     rate_limit_store = get_rate_limit_store()
-    event_bus.subscribe("rate_limit_active", rate_limit_store.handle_rate_limit_active)
-    event_bus.subscribe("rate_limit_cleared", rate_limit_store.handle_rate_limit_cleared)
+    
+    # Synchronize initial routing state
+    routing.sync_rate_limit(rate_limit_store.is_rate_limited())
+
+    async def _rate_limit_event_consumer():
+        try:
+            async for payload in event_bus.subscribe():
+                evt = payload.get("event")
+                if evt == "rate_limit_active":
+                    rate_limit_store.handle_rate_limit_active(payload.get("data", {}))
+                    routing.sync_rate_limit(True)
+                elif evt == "rate_limit_cleared":
+                    rate_limit_store.handle_rate_limit_cleared(payload.get("data", {}))
+                    routing.sync_rate_limit(False)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("Rate limit event consumer failed: %s", exc)
+
+    app.state.rate_limit_consumer_task = asyncio.create_task(_rate_limit_event_consumer())
     
     async def _run_rate_limit_probe():
         try:

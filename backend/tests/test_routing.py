@@ -27,6 +27,7 @@ def _state(
     provider_name: str | None = None,
     sampling_capable: bool | None = None,
     mcp_connected: bool = False,
+    rate_limited: bool = False,
 ) -> RoutingState:
     provider = MagicMock(name=provider_name) if provider_name else None
     return RoutingState(
@@ -34,6 +35,7 @@ def _state(
         provider_name=provider_name,
         sampling_capable=sampling_capable,
         mcp_connected=mcp_connected,
+        rate_limited=rate_limited,
     )
 
 
@@ -216,6 +218,49 @@ class TestPassthroughFallback:
 
 
 # ---------------------------------------------------------------------------
+# Rate Limiting Behavior
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimitRouting:
+    """When rate_limited is True, internal tier is disconnected, falling back gracefully."""
+
+    def test_rest_caller_degrades_to_passthrough(self) -> None:
+        # Rate limited + REST caller (cannot sample) -> must degrade to passthrough
+        state = _state(provider_name="claude-cli", rate_limited=True)
+        ctx = _ctx(caller="rest")
+        decision = resolve_route(state, ctx)
+        assert decision.tier == "passthrough"
+        assert decision.degraded_from == "internal"
+
+    def test_mcp_caller_degrades_to_sampling(self) -> None:
+        # Rate limited + MCP caller + sampling available -> degrade to sampling
+        state = _state(
+            provider_name="claude-cli", 
+            sampling_capable=True, 
+            mcp_connected=True, 
+            rate_limited=True
+        )
+        ctx = _ctx(caller="mcp")
+        decision = resolve_route(state, ctx)
+        assert decision.tier == "sampling"
+        assert decision.degraded_from == "internal"
+
+    def test_force_sampling_overrides_rate_limit(self) -> None:
+        # force_sampling uses sampling anyway, independent of rate limits
+        state = _state(
+            provider_name="claude-cli", 
+            sampling_capable=True, 
+            mcp_connected=True, 
+            rate_limited=True
+        )
+        ctx = _ctx(caller="mcp", force_sampling=True)
+        decision = resolve_route(state, ctx)
+        assert decision.tier == "sampling"
+        assert decision.degraded_from is None
+
+
+# ---------------------------------------------------------------------------
 # Dataclass properties
 # ---------------------------------------------------------------------------
 
@@ -306,6 +351,28 @@ class TestManagerSetProvider:
         manager.set_provider(None)
         assert manager.state.provider is None
         assert manager.state.provider_name is None
+
+
+class TestManagerRateLimitSync:
+    def test_initial_state_not_limited(self, manager: RoutingManager) -> None:
+        assert manager.state.rate_limited is False
+
+    def test_sync_rate_limit_updates_state(self, manager: RoutingManager) -> None:
+        manager.sync_rate_limit(True)
+        assert manager.state.rate_limited is True
+        manager.sync_rate_limit(False)
+        assert manager.state.rate_limited is False
+
+    def test_sync_rate_limit_fires_event(self, manager: RoutingManager, event_bus: EventBus) -> None:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        event_bus._subscribers.add(queue)
+        manager.sync_rate_limit(True)
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["event"] == "routing_state_changed"
+        assert event["data"]["trigger"] == "rate_limit_state_changed"
+        # Tiers should omit internal
+        assert "internal" not in event["data"]["available_tiers"]
 
 
 class TestManagerMcpInitialize:
