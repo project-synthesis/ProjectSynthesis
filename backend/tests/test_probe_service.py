@@ -273,17 +273,35 @@ def _patch_canonical_batch(monkeypatch, request):
         return
 
     # Point the probe's default session_factory at the test's in-memory
-    # session so persisted rows land where the test reads them.
+    # engine so persisted rows land where the test reads them. v0.4.12
+    # P0b: yield FRESH sessions per call (was: yielded the shared
+    # ``db_session`` instance every time). Per-prompt streaming spawns
+    # multiple concurrent persistence tasks, and sharing one session
+    # across them causes interleaving SQLAlchemy state machine errors
+    # (``Session's transaction has been rolled back...``). Production
+    # ``async_session_factory`` already yields fresh sessions from the
+    # pool; the test fixture must mirror that to be a faithful stand-in.
     if "db_session" in request.fixturenames:
         from contextlib import asynccontextmanager
+        from sqlalchemy.ext.asyncio import async_sessionmaker
         from app import database as _database_mod
         from app.dependencies import probes as _probes_dep_mod
 
         db_session = request.getfixturevalue("db_session")
+        # The test's db_session is bound to an in-memory async engine;
+        # reuse that engine so commits from fresh sessions are visible
+        # to the test's session reads. ``get_bind()`` returns the sync
+        # Engine; ``bind`` returns the AsyncEngine instance that
+        # async_sessionmaker actually needs.
+        _test_async_engine = db_session.bind
+        _fresh_factory = async_sessionmaker(
+            _test_async_engine, expire_on_commit=False,
+        )
 
         @asynccontextmanager
         async def _factory():
-            yield db_session
+            async with _fresh_factory() as _fresh:
+                yield _fresh
 
         monkeypatch.setattr(_database_mod, "async_session_factory", _factory)
         # build_probe_service imports async_session_factory at call-time
@@ -925,7 +943,7 @@ class TestProbeServiceErrorPaths:
             # and the verify-after-persist gate (v0.4.12 P0a) sees rows
             # actually land in the DB. Pre-fix this test silently
             # dropped every row through the ID-shape gate.
-            return [
+            results = [
                 PendingOptimization(
                     id=str(_uuid4()), trace_id=f"tr-{i}",
                     batch_id=kwargs.get("batch_id"),
@@ -943,6 +961,18 @@ class TestProbeServiceErrorPaths:
                 )
                 for i, p in enumerate(prompts)
             ]
+            # v0.4.12 P0b streaming persistence: probe spawns the per-
+            # prompt persist task from the on_progress callback, so a
+            # faithful run_batch stub MUST fire that callback once per
+            # result. Pre-streaming the test relied on the post-run
+            # bulk_persist(pendings) call -- now removed. Without this
+            # loop the verify-after-persist gate sees 0 of N rows
+            # landed and raises catastrophic.
+            cb = kwargs.get("on_progress")
+            if cb:
+                for i, r in enumerate(results):
+                    cb(i, len(prompts), r)
+            return results
 
         monkeypatch.setattr(batch_orchestrator, "run_batch", _capture)
 
