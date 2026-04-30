@@ -44,8 +44,8 @@ let _tier = $derived.by((): EffectiveTier => {
   }
 
   // --- Predicted tier: 5-tier priority chain ---
-  // 1. force_passthrough always wins (or rate limit active)
-  if (preferencesStore.pipeline.force_passthrough || rateLimitStore.isAnyActive) return 'passthrough';
+  // 1. force_passthrough always wins
+  if (preferencesStore.pipeline.force_passthrough) return 'passthrough';
 
   // 2. force_sampling (if capable + connected)
   if (
@@ -56,8 +56,8 @@ let _tier = $derived.by((): EffectiveTier => {
     return 'sampling';
   }
 
-  // 3. Internal provider available
-  if (forgeStore.provider) return 'internal';
+  // 3. Internal provider available (and not rate limited)
+  if (forgeStore.provider && !rateLimitStore.isAnyActive) return 'internal';
 
   // 4. Auto-sampling
   if (forgeStore.samplingCapable === true && !forgeStore.mcpDisconnected) {
@@ -70,7 +70,7 @@ let _tier = $derived.by((): EffectiveTier => {
 
 /** What the user explicitly asked for via force toggles, or null (auto). */
 let _requestedTier = $derived.by((): EffectiveTier | null => {
-  if (preferencesStore.pipeline.force_passthrough || rateLimitStore.isAnyActive) return 'passthrough';
+  if (preferencesStore.pipeline.force_passthrough) return 'passthrough';
   if (preferencesStore.pipeline.force_sampling) return 'sampling';
   return null;
 });

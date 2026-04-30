@@ -246,11 +246,11 @@ def resolve_route(state: RoutingState, ctx: RoutingContext) -> RoutingDecision:
     force_passthrough = bool(pipeline.get("force_passthrough"))
     force_sampling = bool(pipeline.get("force_sampling"))
 
-    # Tier 1: force_passthrough always wins (or rate limit active)
-    if force_passthrough or state.rate_limited:
+    # Tier 1: force_passthrough always wins
+    if force_passthrough:
         return RoutingDecision(
             tier="passthrough",
-            reason="force_passthrough enabled" if force_passthrough else "rate limit active",
+            reason="force_passthrough enabled",
         )
 
     # Tier 2: force_sampling — walk fallback chain from sampling
