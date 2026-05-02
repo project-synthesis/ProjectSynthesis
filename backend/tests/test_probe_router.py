@@ -29,11 +29,9 @@ from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
 from app.schemas.probes import (
     ProbeAggregate,
     ProbeCompletedEvent,
-    ProbeFailedEvent,
     ProbeGeneratingEvent,
     ProbeGroundingEvent,
     ProbeProgressEvent,
-    ProbePromptResult,
     ProbeRunRequest,
     ProbeStartedEvent,
     ProbeTaxonomyDelta,
@@ -254,11 +252,10 @@ class TestProbeRouter:
         # Also override the router-level service lookup so the patched primitive
         # is exercised through a real ProbeService against the test db_session
         # rather than a stub.
-        from app.main import app
         try:
-            from app.routers.probes import get_probe_service  # type: ignore
+            pass  # type: ignore
         except Exception:
-            get_probe_service = None  # type: ignore[assignment]
+            pass  # type: ignore[assignment]
 
         body = {
             "topic": "probe-failure-topic",

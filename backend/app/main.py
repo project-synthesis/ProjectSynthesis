@@ -268,27 +268,35 @@ async def lifespan(app: FastAPI):
     # Initialize rate-limit store and startup probe
     from app.services.rate_limit_state import get_rate_limit_store, probe_rate_limit
     rate_limit_store = get_rate_limit_store()
-    
+
     # Synchronize initial routing state
-    routing.sync_rate_limit(rate_limit_store.is_rate_limited())
+    # Iterate through all active rate limits in the store and sync them
+    active_state = rate_limit_store._state
+    for provider_name in active_state:
+        routing.sync_rate_limit(provider_name, True)
+
+    # Start the proactive expiration watcher
+    rate_limit_store.start_watcher(event_bus, provider)
 
     async def _rate_limit_event_consumer():
         try:
             async for payload in event_bus.subscribe():
                 evt = payload.get("event")
                 if evt == "rate_limit_active":
-                    rate_limit_store.handle_rate_limit_active(payload.get("data", {}))
-                    routing.sync_rate_limit(True)
+                    data = payload.get("data", {})
+                    rate_limit_store.handle_rate_limit_active(data)
+                    routing.sync_rate_limit(data.get("provider"), True)
                 elif evt == "rate_limit_cleared":
-                    rate_limit_store.handle_rate_limit_cleared(payload.get("data", {}))
-                    routing.sync_rate_limit(False)
+                    data = payload.get("data", {})
+                    rate_limit_store.handle_rate_limit_cleared(data)
+                    routing.sync_rate_limit(data.get("provider"), False)
         except asyncio.CancelledError:
             pass
         except Exception as exc:
             logger.warning("Rate limit event consumer failed: %s", exc)
 
     app.state.rate_limit_consumer_task = asyncio.create_task(_rate_limit_event_consumer())
-    
+
     async def _run_rate_limit_probe():
         try:
             result = await probe_rate_limit(provider, rate_limit_store)
@@ -1612,6 +1620,16 @@ async def lifespan(app: FastAPI):
         pass
     app.state.taxonomy_engine = None
 
+    # Phase 4.5: Drain active request-scoped database sessions
+    try:
+        if hasattr(app.state, "request_tracker"):
+            logger.info("Draining active HTTP requests...")
+            drained = await app.state.request_tracker.wait_for_drain(timeout=3.0)
+            if not drained:
+                logger.warning("Proceeding to dispose database while requests are still in flight!")
+    except Exception as exc:
+        logger.error("Error while waiting for request drain: %s", exc)
+
     try:
         from app.database import dispose
         await dispose()
@@ -1636,6 +1654,17 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Cache-Control"],
 )
+
+# ruff: noqa: E402, I001 — request_tracker import below MUST come after CORS
+# middleware registration so the tracker wraps user requests correctly.
+from app.services.request_tracker import (  # noqa: E402, I001
+    RequestTracker,
+    RequestTrackerMiddleware,
+)
+
+_request_tracker = RequestTracker()
+app.state.request_tracker = _request_tracker
+app.add_middleware(RequestTrackerMiddleware, tracker=_request_tracker)
 
 # Global exception handler — captures unhandled 500s to structured error JSONL
 @app.exception_handler(Exception)

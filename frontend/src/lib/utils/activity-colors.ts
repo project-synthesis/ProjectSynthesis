@@ -15,13 +15,14 @@ import type { TaxonomyActivityEvent } from '$lib/api/clusters';
  * threading raw event payloads (e.g. ActivityPanel's `ev.path`) keep the
  * historical fallback semantics for unrecognised values.
  */
-export type ActivityPath = 'hot' | 'warm' | 'cold';
+export type ActivityPath = 'hot' | 'warm' | 'cold' | 'api';
 
 export function pathColor(path: ActivityPath | string): string {
   switch (path) {
     case 'hot': return 'var(--color-neon-red)';
     case 'warm': return 'var(--color-neon-yellow)';
     case 'cold': return 'var(--color-neon-cyan)';
+    case 'api': return '#ec4899'; // Fuchsia
     default: return 'var(--color-text-dim)';
   }
 }

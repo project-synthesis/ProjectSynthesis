@@ -506,6 +506,79 @@ class TestCallProviderWithRetryStreaming:
         provider.complete_parsed_streaming.assert_not_called()
 
 
+class TestCallProviderWithRetryLogic:
+    @pytest.mark.asyncio
+    async def test_short_circuits_when_wait_exceeds_cap(self):
+        """Propagates immediately if estimated wait > 30s."""
+        from app.providers.base import LLMProvider, ProviderRateLimitError, call_provider_with_retry
+
+        provider = MagicMock(spec=LLMProvider)
+        # Mock raises immediately on first attempt
+        exc = ProviderRateLimitError("rate limited", retry_after=35)
+        provider.complete_parsed = AsyncMock(side_effect=exc)
+
+        with pytest.raises(ProviderRateLimitError) as excinfo:
+            await call_provider_with_retry(
+                provider,
+                model="claude-opus-4-7",
+                system_prompt="sys",
+                user_message="msg",
+                output_format=AnalysisResult,
+            )
+
+        assert "rate limited" in str(excinfo.value)
+        # Verify it only tried once (no retry logic triggered)
+        provider.complete_parsed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_short_circuits_when_wait_is_unknown(self):
+        """Propagates immediately if estimated wait is None."""
+        from app.providers.base import LLMProvider, ProviderRateLimitError, call_provider_with_retry
+
+        provider = MagicMock(spec=LLMProvider)
+        # No retry_after and no reset_at -> None
+        exc = ProviderRateLimitError("rate limited without time")
+        provider.complete_parsed = AsyncMock(side_effect=exc)
+
+        with pytest.raises(ProviderRateLimitError) as excinfo:
+            await call_provider_with_retry(
+                provider,
+                model="claude-opus-4-7",
+                system_prompt="sys",
+                user_message="msg",
+                output_format=AnalysisResult,
+            )
+
+        assert "rate limited without time" in str(excinfo.value)
+        provider.complete_parsed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retries_when_wait_is_within_cap(self):
+        """Retries normally when wait is known and <= 30s."""
+
+        from app.providers.base import LLMProvider, ProviderRateLimitError, call_provider_with_retry
+
+        provider = MagicMock(spec=LLMProvider)
+        exc = ProviderRateLimitError("rate limited briefly", retry_after=1)
+        analysis = _make_analysis_result()
+        provider.complete_parsed = AsyncMock(side_effect=[exc, analysis])
+
+        # Patch asyncio.sleep so we don't actually wait
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await call_provider_with_retry(
+                provider,
+                model="claude-opus-4-7",
+                system_prompt="sys",
+                user_message="msg",
+                output_format=AnalysisResult,
+                max_retries=1,
+            )
+
+        assert result is analysis
+        assert provider.complete_parsed.call_count == 2
+        mock_sleep.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # ClaudeCLIProvider
 # ---------------------------------------------------------------------------
@@ -902,7 +975,8 @@ class TestClaudeCLIRateLimitParser:
 
     def test_parse_pm_with_iana_tz(self):
         """Standard MAX format: ``resets 3:40pm (America/Toronto)``."""
-        from datetime import datetime, timezone
+        from datetime import timezone
+
         from app.providers.claude_cli import _parse_cli_reset_time
 
         msg = "HTTP 429: You've hit your limit · resets 3:40pm (America/Toronto)"
@@ -949,6 +1023,7 @@ class TestClaudeCLIRateLimitParser:
         """New CLI format (observed 2026-04-29):
         ``resets May 1, 8pm (America/Toronto)``."""
         from datetime import timezone
+
         from app.providers.claude_cli import _parse_cli_reset_time
 
         msg = "HTTP 429: You've hit your limit · resets May 1, 8pm (America/Toronto)"
@@ -984,6 +1059,7 @@ class TestProviderRateLimitErrorEstimate:
 
     def test_uses_reset_at_when_present(self):
         from datetime import datetime, timedelta, timezone
+
         from app.providers.base import ProviderRateLimitError
 
         future = datetime.now(timezone.utc) + timedelta(minutes=5)
@@ -1011,6 +1087,7 @@ class TestProviderRateLimitErrorEstimate:
         """If reset_at is in the past (e.g. clock skew), wait is 0 not
         negative -- caller should retry immediately."""
         from datetime import datetime, timedelta, timezone
+
         from app.providers.base import ProviderRateLimitError
 
         past = datetime.now(timezone.utc) - timedelta(minutes=1)

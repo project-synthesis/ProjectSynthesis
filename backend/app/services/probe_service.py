@@ -723,6 +723,7 @@ class ProbeService:
             #   * Phase 3 running -> canonical batch (this block)
             #   * Phase 5 reporting -> aggregate + taxonomy delta + report
             tier = "internal"
+            from app.config import PROMPTS_DIR
             from app.database import async_session_factory as _sf
             from app.services.batch_orchestrator import run_batch
             from app.services.batch_persistence import (
@@ -733,7 +734,6 @@ class ProbeService:
             from app.services.embedding_service import EmbeddingService
             from app.services.prompt_loader import PromptLoader
             from app.services.taxonomy import get_engine
-            from app.config import PROMPTS_DIR
 
             # Both run_batch (enrichment reads) and the persist primitives
             # (bulk_persist + batch_taxonomy_assign) use the production
@@ -1614,6 +1614,7 @@ class ProbeService:
         partial-status semantics hold.
         """
         import time as _time
+
         from app.schemas.pipeline_contracts import DimensionScores
         from app.services.heuristic_scorer import HeuristicScorer
         from app.services.pipeline_constants import MAX_INTENT_LABEL_LENGTH

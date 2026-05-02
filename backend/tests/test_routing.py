@@ -27,15 +27,24 @@ def _state(
     provider_name: str | None = None,
     sampling_capable: bool | None = None,
     mcp_connected: bool = False,
-    rate_limited: bool = False,
+    rate_limited: bool | set[str] = False,
 ) -> RoutingState:
     provider = MagicMock(name=provider_name) if provider_name else None
+
+    # Handle legacy boolean rate_limited in tests
+    limited_set = frozenset()
+    if isinstance(rate_limited, bool):
+        if rate_limited and provider_name:
+            limited_set = frozenset([provider_name])
+    else:
+        limited_set = frozenset(rate_limited)
+
     return RoutingState(
         provider=provider,
         provider_name=provider_name,
         sampling_capable=sampling_capable,
         mcp_connected=mcp_connected,
-        rate_limited=rate_limited,
+        rate_limited=limited_set,
     )
 
 
@@ -236,9 +245,9 @@ class TestRateLimitRouting:
     def test_mcp_caller_degrades_to_sampling(self) -> None:
         # Rate limited + MCP caller + sampling available -> degrade to sampling
         state = _state(
-            provider_name="claude-cli", 
-            sampling_capable=True, 
-            mcp_connected=True, 
+            provider_name="claude-cli",
+            sampling_capable=True,
+            mcp_connected=True,
             rate_limited=True
         )
         ctx = _ctx(caller="mcp")
@@ -249,9 +258,9 @@ class TestRateLimitRouting:
     def test_force_sampling_overrides_rate_limit(self) -> None:
         # force_sampling uses sampling anyway, independent of rate limits
         state = _state(
-            provider_name="claude-cli", 
-            sampling_capable=True, 
-            mcp_connected=True, 
+            provider_name="claude-cli",
+            sampling_capable=True,
+            mcp_connected=True,
             rate_limited=True
         )
         ctx = _ctx(caller="mcp", force_sampling=True)
@@ -263,9 +272,9 @@ class TestRateLimitRouting:
         # User explicitly untoggles force_sampling (sets to False) while rate limited.
         # It gracefully falls back into auto-sampling (Tier 4) since internal (Tier 3) is unavailable.
         state = _state(
-            provider_name="claude-cli", 
-            sampling_capable=True, 
-            mcp_connected=True, 
+            provider_name="claude-cli",
+            sampling_capable=True,
+            mcp_connected=True,
             rate_limited=True
         )
         ctx = _ctx(caller="mcp", force_sampling=False)
@@ -278,9 +287,9 @@ class TestRateLimitRouting:
         # User untoggles force_sampling while rate limited, but MCP is NOT capable.
         # Falls through auto-sampling straight to passthrough (Tier 5).
         state = _state(
-            provider_name="claude-cli", 
-            sampling_capable=False, 
-            mcp_connected=True, 
+            provider_name="claude-cli",
+            sampling_capable=False,
+            mcp_connected=True,
             rate_limited=True
         )
         ctx = _ctx(caller="mcp", force_sampling=False)
@@ -291,9 +300,9 @@ class TestRateLimitRouting:
     def test_force_passthrough_overrides_auto_sampling_during_rate_limit(self) -> None:
         # If user truly wants to stop all sampling while rate limited, force_passthrough wins.
         state = _state(
-            provider_name="claude-cli", 
-            sampling_capable=True, 
-            mcp_connected=True, 
+            provider_name="claude-cli",
+            sampling_capable=True,
+            mcp_connected=True,
             rate_limited=True
         )
         ctx = _ctx(caller="mcp", force_passthrough=True)
@@ -305,9 +314,9 @@ class TestRateLimitRouting:
     def test_rate_limit_dissolves_restores_internal_tier(self) -> None:
         # When rate limit is resolved (rate_limited=False), internal tier is natively restored.
         state = _state(
-            provider_name="claude-cli", 
-            sampling_capable=True, 
-            mcp_connected=True, 
+            provider_name="claude-cli",
+            sampling_capable=True,
+            mcp_connected=True,
             rate_limited=False
         )
         ctx = _ctx(caller="mcp")
@@ -411,18 +420,18 @@ class TestManagerSetProvider:
 
 class TestManagerRateLimitSync:
     def test_initial_state_not_limited(self, manager: RoutingManager) -> None:
-        assert manager.state.rate_limited is False
+        assert len(manager.state.rate_limited) == 0
 
     def test_sync_rate_limit_updates_state(self, manager: RoutingManager) -> None:
-        manager.sync_rate_limit(True)
-        assert manager.state.rate_limited is True
-        manager.sync_rate_limit(False)
-        assert manager.state.rate_limited is False
+        manager.sync_rate_limit("claude_cli", True)
+        assert "claude_cli" in manager.state.rate_limited
+        manager.sync_rate_limit("claude_cli", False)
+        assert "claude_cli" not in manager.state.rate_limited
 
     def test_sync_rate_limit_fires_event(self, manager: RoutingManager, event_bus: EventBus) -> None:
         queue: asyncio.Queue = asyncio.Queue(maxsize=10)
         event_bus._subscribers.add(queue)
-        manager.sync_rate_limit(True)
+        manager.sync_rate_limit("claude_cli", True)
         assert not queue.empty()
         event = queue.get_nowait()
         assert event["event"] == "routing_state_changed"

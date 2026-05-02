@@ -549,7 +549,7 @@ async def run_single_prompt(
             heur_opt = HeuristicScorer.score_prompt(
                 optimization.optimized_prompt, original=raw_prompt,
             )
-            from app.schemas.pipeline_contracts import DimensionScores as _DS
+            from app.schemas.pipeline_contracts import DimensionScores as _DS  # noqa: N814
             _scores_opt = _DS(**heur_opt)
             return PendingOptimization(
                 id=opt_id,
@@ -557,7 +557,7 @@ async def run_single_prompt(
                 batch_id=batch_id,
                 raw_prompt=raw_prompt,
                 optimized_prompt=optimization.optimized_prompt,
-                task_type=task_type if analysis.task_type in VALID_TASK_TYPES else "general",
+                task_type=analysis.task_type if analysis.task_type in VALID_TASK_TYPES else "general",
                 strategy_used=effective_strategy,
                 changes_summary=optimization.changes_summary,
                 score_clarity=heur_opt["clarity"],

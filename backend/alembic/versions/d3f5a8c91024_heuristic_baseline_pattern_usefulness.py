@@ -18,6 +18,7 @@ this migration is intentionally narrow).
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "d3f5a8c91024"

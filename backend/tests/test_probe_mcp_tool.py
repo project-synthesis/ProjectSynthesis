@@ -32,7 +32,6 @@ from app.schemas.probes import (
     ProbeTaxonomyDelta,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (inline — defined per task constraints)
 # ---------------------------------------------------------------------------

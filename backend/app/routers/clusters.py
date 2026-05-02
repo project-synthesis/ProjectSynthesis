@@ -701,7 +701,7 @@ async def update_cluster(
             from app.services.taxonomy.event_logger import get_event_logger
             get_event_logger().log_decision(
                 path="api",
-                op="state_change",
+                op="operator_action",
                 cluster_id=cluster_id,
                 decision=f"{old_state}_to_{body.state}",
                 context={
@@ -872,6 +872,20 @@ async def reset_taxonomy(
     # 2. Run warm path synchronously so the caller gets a completed
     #    reconciliation before the response returns (no 30s debounce).
     from app.database import async_session_factory
+    try:
+        from app.services.taxonomy.event_logger import get_event_logger
+        get_event_logger().log_decision(
+            path="api",
+            op="operator_action",
+            decision="taxonomy_reset",
+            context={
+                "pruned_archived_count": archived_pruned,
+                "source": "manual"
+            }
+        )
+    except RuntimeError:
+        pass
+
     try:
         await engine.run_warm_path(async_session_factory)
     except OperationalError as exc:

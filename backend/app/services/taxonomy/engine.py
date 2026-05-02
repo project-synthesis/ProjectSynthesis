@@ -3103,7 +3103,7 @@ class TaxonomyEngine:
         try:
             get_event_logger().log_decision(
                 path="warm",
-                op="discover",
+                op="operator_action",
                 decision="sub_domain_rebuild_invoked",
                 cluster_id=domain_id_str,
                 context={
@@ -3273,7 +3273,7 @@ class TaxonomyEngine:
         try:
             get_event_logger().log_decision(
                 path="warm",
-                op="discover",
+                op="operator_action",
                 decision="domain_ghost_dissolved",
                 cluster_id=domain_id,
                 context={

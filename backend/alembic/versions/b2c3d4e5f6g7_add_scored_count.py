@@ -12,6 +12,7 @@ total member_count (which includes unscored members).
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "b2c3d4e5f6g7"

@@ -16,6 +16,8 @@ from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.config import settings
+
 
 def _register_hook(engine) -> None:
     """Mirror the hook from ``app/database.py`` against a test engine."""
@@ -24,9 +26,9 @@ def _register_hook(engine) -> None:
     def _set_sqlite_pragmas(dbapi_conn, _connection_record):  # noqa: ANN001
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute(f"PRAGMA busy_timeout={settings.DB_LOCK_TIMEOUT_SECONDS * 1000}")
         cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA cache_size=-64000")
+        cursor.execute(f"PRAGMA cache_size={settings.DB_CACHE_SIZE_KB}")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
@@ -40,7 +42,7 @@ async def test_pragma_hook_applies_to_every_pool_checkout(tmp_path) -> None:
         echo=False,
         pool_pre_ping=True,
         pool_recycle=3600,
-        connect_args={"timeout": 30},
+        connect_args={"timeout": settings.DB_LOCK_TIMEOUT_SECONDS},
     )
     _register_hook(engine)
 
@@ -52,7 +54,8 @@ async def test_pragma_hook_applies_to_every_pool_checkout(tmp_path) -> None:
                 busy = (await session.execute(text("PRAGMA busy_timeout"))).scalar()
                 fk = (await session.execute(text("PRAGMA foreign_keys"))).scalar()
                 sync = (await session.execute(text("PRAGMA synchronous"))).scalar()
-                assert busy == 30000, f"busy_timeout not propagated to pool: {busy}"
+                expected_busy = settings.DB_LOCK_TIMEOUT_SECONDS * 1000
+                assert busy == expected_busy, f"busy_timeout not propagated to pool: {busy}"
                 assert fk == 1, f"foreign_keys not enabled on pool connection: {fk}"
                 # SQLite returns 1 for NORMAL in PRAGMA synchronous
                 assert sync == 1, f"synchronous not NORMAL: {sync}"
@@ -68,7 +71,7 @@ async def test_journal_mode_is_wal(tmp_path) -> None:
         f"sqlite+aiosqlite:///{db_file}",
         echo=False,
         pool_pre_ping=True,
-        connect_args={"timeout": 30},
+        connect_args={"timeout": settings.DB_LOCK_TIMEOUT_SECONDS},
     )
     _register_hook(engine)
     try:
@@ -87,7 +90,7 @@ async def test_foreign_keys_enforced(tmp_path) -> None:
         f"sqlite+aiosqlite:///{db_file}",
         echo=False,
         pool_pre_ping=True,
-        connect_args={"timeout": 30},
+        connect_args={"timeout": settings.DB_LOCK_TIMEOUT_SECONDS},
     )
     _register_hook(engine)
     try:
@@ -140,5 +143,42 @@ async def test_app_database_engine_applies_pragmas_on_checkout() -> None:
     async with async_session_factory() as session:
         fk = (await session.execute(text("PRAGMA foreign_keys"))).scalar()
         busy = (await session.execute(text("PRAGMA busy_timeout"))).scalar()
+        expected_busy = settings.DB_LOCK_TIMEOUT_SECONDS * 1000
         assert fk == 1, f"foreign_keys not enabled on live engine: {fk}"
-        assert busy == 30000, f"busy_timeout not 30000 on live engine: {busy}"
+        assert busy == expected_busy, f"busy_timeout not {expected_busy} on live engine: {busy}"
+
+@pytest.mark.asyncio
+async def test_pragmas_persist_across_post_commit_query_pattern(tmp_path) -> None:
+    """A session retains its PRAGMAs for follow-up queries after a commit().
+
+    Verifies the prompt's concern: when a transaction commits and the DBAPI
+    connection is returned to the pool, the subsequent auto-begun transaction
+    (which checks out a connection again) still has all PRAGMAs active,
+    whether it receives the same physical connection or a new one.
+    """
+    db_file = tmp_path / "post_commit_test.db"
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{db_file}",
+        echo=False,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=0,
+        connect_args={"timeout": settings.DB_LOCK_TIMEOUT_SECONDS},
+    )
+    _register_hook(engine)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    try:
+        async with factory() as session:
+            # First transaction
+            busy1 = (await session.execute(text("PRAGMA busy_timeout"))).scalar()
+            expected_busy = settings.DB_LOCK_TIMEOUT_SECONDS * 1000
+            assert busy1 == expected_busy
+
+            await session.commit()
+
+            # Post-commit query pattern (triggers new checkout)
+            busy2 = (await session.execute(text("PRAGMA busy_timeout"))).scalar()
+            assert busy2 == expected_busy
+    finally:
+        await engine.dispose()

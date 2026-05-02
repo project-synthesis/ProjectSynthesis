@@ -10,9 +10,9 @@ Create Date: 2026-03-21 22:18:00.720442
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '60b437ebe4ef'
@@ -128,7 +128,10 @@ def upgrade() -> None:
         )
     """)
     op.execute("""
-        INSERT INTO optimization_patterns_new (id, optimization_id, cluster_id, meta_pattern_id, relationship, similarity, created_at)
+        INSERT INTO optimization_patterns_new (
+            id, optimization_id, cluster_id, meta_pattern_id,
+            relationship, similarity, created_at
+        )
         SELECT id, optimization_id, family_id, meta_pattern_id, relationship, NULL, created_at
         FROM optimization_patterns
     """)
