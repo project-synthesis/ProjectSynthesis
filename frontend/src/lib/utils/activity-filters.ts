@@ -22,7 +22,7 @@
 import type { TaxonomyActivityEvent } from '$lib/api/clusters';
 
 export type TimelineEvent = TaxonomyActivityEvent;
-export type OpFamily = 'domain' | 'cluster' | 'pattern' | 'readiness';
+export type OpFamily = 'domain' | 'cluster' | 'pattern' | 'readiness' | 'operator_action';
 
 const _ERROR_DECISIONS = new Set([
   'rejected',
@@ -56,6 +56,15 @@ export function isErrorEvent(e: Pick<TimelineEvent, 'op' | 'decision'>): boolean
  * also non-pattern bookkeeping decisions).
  */
 export function opFamily(op: string, decision?: string): OpFamily | null {
+  // Operator Action (including legacy 'discover' mapping)
+  if (
+    op === 'operator_action' ||
+    (op === 'discover' && (decision === 'sub_domain_rebuild_invoked' || decision === 'domain_ghost_dissolved')) ||
+    (op === 'state_change' && (decision === 'manual_promote_invoked' || decision === 'taxonomy_reset' || decision?.endsWith('_to_archived') || decision?.endsWith('_to_active')))
+  ) {
+    return 'operator_action';
+  }
+
   // Domain lifecycle
   if (op === 'discover' || op === 'emerge') return 'domain';
 

@@ -14,16 +14,11 @@ Copyright 2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import tempfile
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # 1. RateLimitStateStore — persistent JSON-backed state
@@ -38,8 +33,8 @@ class TestRateLimitStateStore:
         from app.services.rate_limit_state import RateLimitStateStore
 
         store = RateLimitStateStore(state_dir=tmp_path)
-        assert store.get_active() is None
-        assert store.is_rate_limited() is False
+        assert store.get_active("claude_cli") is None
+        assert store.is_rate_limited("claude_cli") is False
 
     def test_record_persists_to_disk(self, tmp_path: Path):
         """record() writes state to a JSON file that survives re-instantiation."""
@@ -55,18 +50,18 @@ class TestRateLimitStateStore:
         )
 
         # State is active
-        active = store.get_active()
+        active = store.get_active("claude_cli")
         assert active is not None
         assert active["provider"] == "claude_cli"
         assert active["reset_at_iso"] is not None
-        assert store.is_rate_limited() is True
+        assert store.is_rate_limited("claude_cli") is True
 
         # Re-instantiate (simulates process restart) — state survives
         store2 = RateLimitStateStore(state_dir=tmp_path)
-        active2 = store2.get_active()
+        active2 = store2.get_active("claude_cli")
         assert active2 is not None
         assert active2["provider"] == "claude_cli"
-        assert store2.is_rate_limited() is True
+        assert store2.is_rate_limited("claude_cli") is True
 
     def test_clear_removes_state(self, tmp_path: Path):
         """clear() removes the persisted state and reports no active limit."""
@@ -74,11 +69,11 @@ class TestRateLimitStateStore:
 
         store = RateLimitStateStore(state_dir=tmp_path)
         store.record(provider="claude_cli", reset_at=None)
-        assert store.is_rate_limited() is True
+        assert store.is_rate_limited("claude_cli") is True
 
         store.clear(provider="claude_cli")
-        assert store.is_rate_limited() is False
-        assert store.get_active() is None
+        assert store.is_rate_limited("claude_cli") is False
+        assert store.get_active("claude_cli") is None
 
     def test_expired_limit_auto_clears(self, tmp_path: Path):
         """A limit whose reset_at is in the past reports as not active."""
@@ -89,8 +84,8 @@ class TestRateLimitStateStore:
         store.record(provider="claude_cli", reset_at=past)
 
         # Should auto-expire
-        assert store.is_rate_limited() is False
-        assert store.get_active() is None
+        assert store.is_rate_limited("claude_cli") is False
+        assert store.get_active("claude_cli") is None
 
     def test_no_reset_at_uses_default_ttl(self, tmp_path: Path):
         """When reset_at is None, the limit stays active for DEFAULT_TTL."""
@@ -100,7 +95,7 @@ class TestRateLimitStateStore:
         store.record(provider="claude_cli", reset_at=None)
 
         # Immediately after recording, should be active
-        assert store.is_rate_limited() is True
+        assert store.is_rate_limited("claude_cli") is True
 
     def test_record_with_none_reset_at_and_estimated_wait(self, tmp_path: Path):
         """estimated_wait_seconds is used to compute reset_at when not provided."""
@@ -113,7 +108,7 @@ class TestRateLimitStateStore:
             estimated_wait_seconds=3600,
         )
 
-        active = store.get_active()
+        active = store.get_active("claude_cli")
         assert active is not None
         # Should have a computed reset_at ~1h from now
         assert active["reset_at_iso"] is not None
@@ -129,8 +124,25 @@ class TestRateLimitStateStore:
         state_file.write_text("not valid json {{{")
 
         store = RateLimitStateStore(state_dir=tmp_path)
-        assert store.is_rate_limited() is False
-        assert store.get_active() is None
+        assert store.is_rate_limited("claude_cli") is False
+        assert store.get_active("claude_cli") is None
+
+    def test_multi_tenant_isolation(self, tmp_path: Path):
+        """Rate limits are isolated by provider name."""
+        from app.services.rate_limit_state import RateLimitStateStore
+
+        store = RateLimitStateStore(state_dir=tmp_path)
+        store.record(provider="provider_a", reset_at=None)
+        store.record(provider="provider_b", reset_at=None)
+
+        assert store.is_rate_limited("provider_a") is True
+        assert store.is_rate_limited("provider_b") is True
+        assert store.is_rate_limited("provider_c") is False
+
+        # Clearing one does not clear the other
+        store.clear("provider_a")
+        assert store.is_rate_limited("provider_a") is False
+        assert store.is_rate_limited("provider_b") is True
 
 
 # ---------------------------------------------------------------------------
@@ -304,4 +316,80 @@ class TestStartupProbe:
         result = await probe_rate_limit(None, store)
         assert result["is_rate_limited"] is True
         assert result["source"] == "persisted"
+
+
+# ---------------------------------------------------------------------------
+# 5. Active Watcher — proactive expiration and probing
+# ---------------------------------------------------------------------------
+
+
+class TestWatcherBackgroundProbing:
+    """The watcher actively monitors rate limits and emits clear events."""
+
+    @pytest.mark.asyncio
+    async def test_watcher_emits_cleared_event_when_reset_at_arrives(self, tmp_path: Path):
+        from app.services.rate_limit_state import RateLimitStateStore
+
+        store = RateLimitStateStore(state_dir=tmp_path)
+        # Limit expires immediately
+        store.record(provider="claude_cli", reset_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+
+        mock_event_bus = MagicMock()
+        mock_event_bus.publish = AsyncMock()
+
+        # Start watcher task manually and give it a tiny sleep interval to fast-fail
+        store._watcher_sleep_interval = 0.01
+        watcher_task = asyncio.create_task(store._watcher_loop(mock_event_bus, None))
+
+        # Give it a moment to run
+        await asyncio.sleep(0.05)
+        watcher_task.cancel()
+
+        # It should have cleared the state and published the event
+        assert store.is_rate_limited("claude_cli") is False
+        mock_event_bus.publish.assert_called_once()
+        call_args = mock_event_bus.publish.call_args[0][0]
+        assert call_args["event"] == "rate_limit_cleared"
+        assert call_args["data"]["provider"] == "claude_cli"
+
+    @pytest.mark.asyncio
+    async def test_watcher_probes_unknown_ttl_before_clearing(self, tmp_path: Path):
+        from app.providers.base import ProviderRateLimitError
+        from app.services.rate_limit_state import RateLimitStateStore
+
+        store = RateLimitStateStore(state_dir=tmp_path)
+        # Unknown TTL defaults to 5 minutes, let's pretend it was detected 6 mins ago
+        detected_at = datetime.now(timezone.utc) - timedelta(minutes=6)
+        store._state["claude_cli"] = {
+            "provider": "claude_cli",
+            "detected_at_iso": detected_at.isoformat(),
+        }
+
+        mock_event_bus = MagicMock()
+        mock_event_bus.publish = AsyncMock()
+
+        # Setup provider to FAIL the probe (still rate limited)
+        mock_provider = MagicMock()
+        mock_provider.name = "claude_cli"
+        new_reset = datetime.now(timezone.utc) + timedelta(minutes=10)
+        mock_provider.complete_parsed = AsyncMock(
+            side_effect=ProviderRateLimitError(
+                "Still limited",
+                reset_at=new_reset,
+                provider_name="claude_cli"
+            )
+        )
+
+        store._watcher_sleep_interval = 0.01
+        watcher_task = asyncio.create_task(store._watcher_loop(mock_event_bus, mock_provider))
+
+        await asyncio.sleep(0.05)
+        watcher_task.cancel()
+
+        # Should NOT have cleared or published. Instead, the limit is updated with new reset_at!
+        assert store.is_rate_limited("claude_cli") is True
+        mock_event_bus.publish.assert_not_called()
+
+        active = store.get_active("claude_cli")
+        assert active["reset_at_iso"] == new_reset.isoformat()
 

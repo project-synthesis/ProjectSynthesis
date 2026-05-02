@@ -74,6 +74,8 @@ async def test_lifespan_startup_and_shutdown():
                     self.coro = coro
                     self.name = name or ""
                     self.cancelled = False
+                def done(self):
+                    return False
                 def cancel(self):
                     self.cancelled = True
                     if self.coro is not None:
@@ -90,7 +92,7 @@ async def test_lifespan_startup_and_shutdown():
                             self.coro.close()
                     return _inner().__await__()
 
-            with patch("app.main.asyncio.create_task", side_effect=DummyTask):
+            with patch("app.main.asyncio.create_task", side_effect=DummyTask), patch("app.database.dispose"):
                 async with lifespan(app):
                     assert app.state.routing is not None
                     mock_routing.set_provider.assert_called_once_with(mock_provider)
@@ -131,13 +133,15 @@ async def test_lifespan_startup_handler_errors_do_not_crash():
             class DummyTask:
                 def __init__(self, *args, **kwargs):
                     pass
+                def done(self):
+                    return False
                 def cancel(self):
                     pass
                 def __await__(self):
                     async def _inner(): raise asyncio.CancelledError()
                     return _inner().__await__()
 
-            with patch("app.main.asyncio.create_task", side_effect=DummyTask):
+            with patch("app.main.asyncio.create_task", side_effect=DummyTask), patch("app.database.dispose"):
                 async with lifespan(app):
                     pass
 

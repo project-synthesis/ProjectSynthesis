@@ -58,7 +58,7 @@
   });
 
   let activePaths = $state<Set<ActivityPath>>(new Set(['hot', 'warm', 'cold']));
-  let activeFamilies = $state<Set<OpFamily>>(new Set(['domain', 'cluster', 'pattern', 'readiness']));
+  let activeFamilies = $state<Set<OpFamily>>(new Set(['domain', 'cluster', 'pattern', 'readiness', 'operator_action']));
   let errorsOnly = $state(false);
   let expandedId = $state<string | null>(null);
 
@@ -169,6 +169,14 @@
       title="Readiness signals (stability, emergence)"
       aria-label="Readiness"
     >readiness</button>
+    <button
+      type="button"
+      class="chip"
+      class:chip--on={activeFamilies.has('operator_action')}
+      onclick={() => toggleFamily('operator_action')}
+      title="Operator actions (rebuild, reset, manual promote)"
+      aria-label="Operator actions"
+    >operator</button>
     <span class="filter-sep" aria-hidden="true">·</span>
     <button
       type="button"

@@ -5,7 +5,8 @@
 Per-connection PRAGMAs applied upon physical DBAPI connection creation:
 
 - ``journal_mode=WAL``     — concurrent readers + single writer; DB-wide state
-- ``busy_timeout``         — wait on SQLITE_BUSY (defense-in-depth backstop) sourced from ``Settings.DB_LOCK_TIMEOUT_SECONDS``
+- ``busy_timeout``         — wait on SQLITE_BUSY (backstop), value from
+  ``Settings.DB_LOCK_TIMEOUT_SECONDS``
 - ``synchronous=NORMAL``   — fsync on checkpoints only (safe with WAL)
 - ``cache_size``           — page cache sourced from ``Settings.DB_CACHE_SIZE_KB``
 - ``foreign_keys=ON``      — enforce ForeignKey(..., ondelete=...) cascades
@@ -201,7 +202,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def dispose() -> None:
     """Close all pooled connections. Called during application shutdown.
-    
+
     Performs an explicit WAL checkpoint to ensure the WAL file is merged
     and truncated. This prevents silent WAL checkpoint loss if the process
     is terminated abruptly after disposal but before SQLite can perform
@@ -209,8 +210,7 @@ async def dispose() -> None:
     """
     try:
         from sqlalchemy import text
-        import sqlalchemy.exc
-        
+
         async with engine.begin() as conn:
             # TRUNCATE ensures the WAL file is truncated to zero bytes
             await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
@@ -219,5 +219,5 @@ async def dispose() -> None:
         # If the DB is completely locked by an orphaned connection, we catch
         # the error and proceed to dispose anyway.
         logger.warning("Explicit WAL checkpoint failed (likely orphaned active connections): %s", exc)
-        
+
     await engine.dispose()

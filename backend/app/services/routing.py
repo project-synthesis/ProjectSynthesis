@@ -81,7 +81,7 @@ class RoutingState:
     provider_name: str | None = None
     sampling_capable: bool | None = None
     mcp_connected: bool = False
-    rate_limited: bool = False
+    rate_limited: frozenset[str] = field(default_factory=frozenset)
     last_capability_update: datetime | None = None
     last_activity: datetime | None = None
 
@@ -138,7 +138,7 @@ def _can_sample(state: RoutingState, ctx: RoutingContext) -> bool:
 
 def _can_internal(state: RoutingState) -> bool:
     """Whether an internal provider is available and not rate-limited."""
-    return state.provider is not None and not state.rate_limited
+    return state.provider is not None and state.provider_name not in state.rate_limited
 
 
 # Tier chain: each entry is (tier, condition, reason).
@@ -385,14 +385,30 @@ class RoutingManager:
             )
             self._broadcast_state_change("provider_changed")
 
-    def sync_rate_limit(self, is_active: bool) -> None:
+    def sync_rate_limit(self, provider: str | None, is_active: bool) -> None:
         """Called by event consumer when rate limits activate or clear."""
-        if self._state.rate_limited == is_active:
+        current_limited = set(self._state.rate_limited)
+
+        # If no provider specified (e.g. legacy/global fallback), we just use the active provider
+        target_provider = provider or self._state.provider_name
+        if not target_provider:
             return
-        self._state = replace(self._state, rate_limited=is_active)
+
+        changed = False
+        if is_active and target_provider not in current_limited:
+            current_limited.add(target_provider)
+            changed = True
+        elif not is_active and target_provider in current_limited:
+            current_limited.remove(target_provider)
+            changed = True
+
+        if not changed:
+            return
+
+        self._state = replace(self._state, rate_limited=frozenset(current_limited))
         logger.info(
-            "routing.rate_limit_sync active=%s available_tiers=%s",
-            is_active, ",".join(self.available_tiers),
+            "routing.rate_limit_sync active=%s provider=%s available_tiers=%s",
+            is_active, target_provider, ",".join(self.available_tiers),
         )
         self._broadcast_state_change("rate_limit_state_changed")
 

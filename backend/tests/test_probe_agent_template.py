@@ -6,13 +6,11 @@ and backtick-density of generator output. RED phase for cycle 1.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from app.config import PROMPTS_DIR
 from app.services.prompt_loader import PromptLoader
-
 
 _PROBE_VARS: dict[str, str | None] = {
     "topic": "embedding cache invalidation in EmbeddingIndex",

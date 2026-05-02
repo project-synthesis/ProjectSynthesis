@@ -334,12 +334,30 @@ async def promote_to_domain(
     logger.info("Cluster %s promoted to domain: label='%s'", domain_id, cluster.label)
 
     from app.services.event_bus import event_bus
+    from app.services.taxonomy.event_logger import get_event_logger
+
     event_bus.publish("domain_created", {
         "label": cluster.label,
         "color_hex": color_hex,
         "node_id": cluster.id,
         "source": "manual",
     })
+
+    try:
+        from app.services.taxonomy.event_logger import get_event_logger
+        get_event_logger().log_decision(
+            path="api",
+            op="operator_action",
+            decision="domain_created",
+            cluster_id=str(cluster.id),
+            context={
+                "label": cluster.label,
+                "color_hex": color_hex,
+                "source": "manual"
+            }
+        )
+    except RuntimeError:
+        pass
 
     return DomainInfo(
         id=cluster.id,

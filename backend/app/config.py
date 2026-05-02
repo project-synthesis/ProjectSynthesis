@@ -215,6 +215,14 @@ class Settings(BaseSettings):
         default=f"sqlite+aiosqlite:///{DATA_DIR / 'synthesis.db'}",
         description="SQLAlchemy async database URL.",
     )
+    DB_LOCK_TIMEOUT_SECONDS: int = Field(
+        default=30,
+        description="SQLite driver and busy_timeout wait in seconds. Both must match to prevent SQLITE_BUSY drift.",
+    )
+    DB_CACHE_SIZE_KB: int = Field(
+        default=-64000,
+        description="SQLite per-connection page cache. Negative = KiB, positive = pages. Do not flip sign.",
+    )
 
     def resolve_secret_key(self) -> str:
         """Auto-generate SECRET_KEY if not set, persist to data/.app_secrets."""

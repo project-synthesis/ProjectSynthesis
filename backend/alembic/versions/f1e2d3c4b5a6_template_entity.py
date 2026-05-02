@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "f1e2d3c4b5a6"

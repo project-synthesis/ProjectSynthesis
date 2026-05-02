@@ -269,11 +269,12 @@ async def _gc_test_leak_optimizations(db: AsyncSession) -> int:
 
     Idempotent: safe to call on a DB with no leaked rows.
     """
-    from app.models import Optimization
+    from sqlalchemy import and_, or_
+    from sqlalchemy import func as _func
 
-    from sqlalchemy import func as _func, or_, and_
+    from app.models import Optimization
     # uuid4 always has length 36 + hyphens at positions 8/13/18/23.
-    _UUID_GLOB = "________-____-____-____-____________"
+    _UUID_GLOB = "________-____-____-____-____________"  # noqa: N806 — local constant
     result = await db.execute(
         delete(Optimization).where(
             or_(
@@ -320,7 +321,7 @@ async def _gc_reconcile_member_counts(db: AsyncSession) -> int:
     The fix is a single ``UPDATE ... SET member_count = (subquery)`` --
     no additional storage, no need to track which clusters drifted.
     """
-    from app.models import PromptCluster, Optimization
+    from app.models import Optimization, PromptCluster
 
     # Non-domain clusters: count direct optimization rows.
     result = await db.execute(

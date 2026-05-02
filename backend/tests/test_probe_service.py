@@ -5,22 +5,17 @@ AC-C4-1 through AC-C4-6 per docs/specs/topic-probe-2026-04-29.md §8 Cycle 4.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ProbeRun, PromptCluster
 from app.schemas.probes import (
-    ProbeCompletedEvent,
     ProbeError,
     ProbeFailedEvent,
-    ProbeProgressEvent,
     ProbeRunRequest,
-    ProbeRunResult,
     ProbeStartedEvent,
 )
 from app.services.probe_service import ProbeService
@@ -283,7 +278,9 @@ def _patch_canonical_batch(monkeypatch, request):
     # pool; the test fixture must mirror that to be a faithful stand-in.
     if "db_session" in request.fixturenames:
         from contextlib import asynccontextmanager
+
         from sqlalchemy.ext.asyncio import async_sessionmaker
+
         from app import database as _database_mod
         from app.dependencies import probes as _probes_dep_mod
 
@@ -356,8 +353,14 @@ def _patch_canonical_batch(monkeypatch, request):
                 optimized_embedding=emb_bytes,
                 transformation_embedding=emb_bytes,
                 models_by_phase={"analyze": "haiku", "optimize": "opus", "score": "sonnet"},
-                original_scores={"clarity": 6.0, "specificity": 6.0, "structure": 6.0, "faithfulness": 6.0, "conciseness": 6.0},
-                score_deltas={"clarity": 2.0, "specificity": 2.0, "structure": 1.5, "faithfulness": 2.5, "conciseness": 1.0},
+                original_scores={
+                    "clarity": 6.0, "specificity": 6.0, "structure": 6.0,
+                    "faithfulness": 6.0, "conciseness": 6.0,
+                },
+                score_deltas={
+                    "clarity": 2.0, "specificity": 2.0, "structure": 1.5,
+                    "faithfulness": 2.5, "conciseness": 1.0,
+                },
                 duration_ms=120,
                 status="completed",
                 provider="claude_cli",
@@ -453,9 +456,10 @@ class TestProbeService:
         Patches ``run_batch`` to return alternating completed/failed
         PendingOptimizations (mirrors the prior alternating-enrich-mock).
         """
+        from uuid import uuid4
+
         from app.services import batch_orchestrator
         from app.services.batch_pipeline import PendingOptimization
-        from uuid import uuid4
 
         async def _alternating(prompts, **kwargs):
             results = []
@@ -487,8 +491,16 @@ class TestProbeService:
                         scoring_mode="hybrid",
                         embedding=emb, optimized_embedding=emb,
                         models_by_phase={"analyze": "haiku"},
-                        original_scores={"clarity": 6.0, "specificity": 6.0, "structure": 6.0, "faithfulness": 6.0, "conciseness": 6.0},
-                        score_deltas={"clarity": 2.0, "specificity": 2.0, "structure": 1.0, "faithfulness": 2.0, "conciseness": 1.0},
+                        original_scores={
+                            "clarity": 6.0, "specificity": 6.0,
+                            "structure": 6.0, "faithfulness": 6.0,
+                            "conciseness": 6.0,
+                        },
+                        score_deltas={
+                            "clarity": 2.0, "specificity": 2.0,
+                            "structure": 1.0, "faithfulness": 2.0,
+                            "conciseness": 1.0,
+                        },
                         status="completed",
                         provider="claude_cli",
                         routing_tier="internal",

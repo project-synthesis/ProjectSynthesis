@@ -162,7 +162,6 @@ async def run_batch(
             # error and waste budget. Mark the slot as a synthetic
             # rate_limited row so the caller sees a coherent batch.
             if _rate_limited_flag["hit"]:
-                from datetime import datetime, timezone
                 from uuid import uuid4 as _u
                 results[index] = PendingOptimization(
                     id=str(_u()),

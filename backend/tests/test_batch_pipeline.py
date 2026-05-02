@@ -654,11 +654,11 @@ class TestBulkPersistEvents:
         """Subscribe a queue to the event bus and assert N events fire for
         N completed + quality-passing rows.
         """
-        from app.services.event_bus import event_bus
-
         # IDs must be valid uuid4 (bulk_persist's ID-shape gate rejects
         # non-uuid IDs as test-fixture leaks).
         from uuid import uuid4 as _u
+
+        from app.services.event_bus import event_bus
         pid_a, pid_b, pid_c = str(_u()), str(_u()), str(_u())
         pendings = [
             _pending(pid=pid_a, trace_id="trace-a", batch_id="batch-1"),
@@ -712,11 +712,11 @@ class TestBulkPersistEvents:
     ) -> None:
         """Rows rejected by the quality gate (score < 5.0) must NOT emit
         an optimization_created event — they never reach the DB."""
-        from app.services.event_bus import event_bus
-
         # Two rejected, one accepted. UUIDs required by bulk_persist's
         # ID-shape gate.
         from uuid import uuid4 as _u
+
+        from app.services.event_bus import event_bus
         pid_ok = str(_u())
         pendings = [
             _pending(
@@ -758,9 +758,9 @@ class TestBulkPersistEvents:
     ) -> None:
         """A second bulk_persist call for the same batch_id must skip
         already-persisted rows — no duplicate events."""
-        from app.services.event_bus import event_bus
-
         from uuid import uuid4 as _u
+
+        from app.services.event_bus import event_bus
         pid_dup = str(_u())
         pendings = [
             _pending(pid=pid_dup, trace_id="trace-dup", batch_id="batch-3"),

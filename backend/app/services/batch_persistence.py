@@ -132,8 +132,8 @@ async def bulk_persist(
     #
     # ``_persist_lock`` serializes in-process callers at the function
     # boundary so they queue cleanly instead of racing to pool timeout.
-    _MAX_PERSIST_ATTEMPTS = 5
-    _PERSIST_BACKOFF_SECS = 5.0
+    _MAX_PERSIST_ATTEMPTS = 5  # noqa: N806 — local constant
+    _PERSIST_BACKOFF_SECS = 5.0  # noqa: N806 — local constant
     async with _persist_lock:
         for attempt in range(_MAX_PERSIST_ATTEMPTS):
             try:
