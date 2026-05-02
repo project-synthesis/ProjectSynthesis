@@ -2,18 +2,18 @@
 
 # Per-connection PRAGMA hook (SQLite)
 
-Per-connection PRAGMAs applied to every pool checkout:
+Per-connection PRAGMAs applied upon physical DBAPI connection creation:
 
 - ``journal_mode=WAL``     — concurrent readers + single writer; DB-wide state
-- ``busy_timeout=30000``   — 30s wait on SQLITE_BUSY (defense-in-depth backstop)
+- ``busy_timeout``         — wait on SQLITE_BUSY (defense-in-depth backstop) sourced from ``Settings.DB_LOCK_TIMEOUT_SECONDS``
 - ``synchronous=NORMAL``   — fsync on checkpoints only (safe with WAL)
-- ``cache_size=-64000``    — 64 MB page cache
+- ``cache_size``           — page cache sourced from ``Settings.DB_CACHE_SIZE_KB``
 - ``foreign_keys=ON``      — enforce ForeignKey(..., ondelete=...) cascades
 
-The PRAGMA event hook is required because busy_timeout, foreign_keys,
-synchronous, and cache_size are per-connection settings — setting them on a
-single throwaway connection does NOT carry over to the pool. Without this
-hook those PRAGMAs silently revert to SQLite defaults on every pool checkout.
+The PRAGMA event hook uses the ``connect`` event because busy_timeout, foreign_keys,
+synchronous, and cache_size are per-connection settings. By applying them when the
+underlying SQLite connection is first opened, the PRAGMAs persist for the lifetime
+of the connection, remaining active across all pool checkouts and post-commit queries.
 
 # Writer-lock architecture
 
@@ -45,8 +45,8 @@ write via HTTP POST events, not direct DB writes, so they don't compete here.
 - ``pool_pre_ping=True`` validates connections before checkout (catches stale
   connections after ``./init.sh restart`` without raising to callers).
 - ``pool_recycle=3600`` recycles connections older than 1h.
-- ``connect_args={"timeout": 30}`` — driver-level (aiosqlite) acquire-connection
-  timeout, distinct from PRAGMA ``busy_timeout``.
+- ``connect_args={"timeout": ...}`` — driver-level (aiosqlite) acquire-connection
+  timeout, distinct from PRAGMA ``busy_timeout`` but synced to ``Settings.DB_LOCK_TIMEOUT_SECONDS``.
 """
 
 import asyncio
@@ -67,33 +67,7 @@ engine = create_async_engine(
     echo=False,
     pool_pre_ping=True,
     pool_recycle=3600,
-    # v0.4.12 P2: pool_size=1 forces strict connection serialization
-    # at the SQLAlchemy pool layer, eliminating multi-connection
-    # SQLite WAL writer-slot contention.  Pre-fix: SQLAlchemy's default
-    # async pool (size=5, overflow=10, up to 15 concurrent conns) let
-    # multiple sessions check out simultaneously, each holding its own
-    # SQLite connection.  ``WriterLockedAsyncSession`` correctly
-    # serialized FLUSH calls via ``db_writer_lock`` (asyncio.Lock) but
-    # the underlying connections still raced for the WAL writer slot at
-    # SQLite's libsqlite3 layer -- a connection that just released the
-    # asyncio.Lock could still hold lingering WAL state for a brief
-    # window, causing the next writer to see "database is locked"
-    # despite holding the asyncio.Lock.  pool_size=1 collapses that
-    # window: only one connection exists, so transitions between
-    # writers happen at the pool checkout boundary which is fully
-    # synchronous (queue-and-wait) rather than racing at the SQLite
-    # file lock.  Trade-off: read concurrency is also limited to 1,
-    # but SQLite is single-threaded internally so concurrent reads
-    # were time-sliced anyway -- aggregate throughput is unchanged.
-    # The pool checkout queue is async, so sessions await without
-    # blocking the event loop.  Diagnostic chain (probes v22-v28):
-    # six failed catastrophic runs through every other layer of the
-    # writer-coordination stack (verify gate, per-prompt streaming,
-    # warm-path Groundhog Day fix, early-abort) confirmed the
-    # contention is at the connection/pool layer rather than higher up.
-    pool_size=1,
-    max_overflow=0,
-    connect_args={"timeout": 30},
+    connect_args={"timeout": settings.DB_LOCK_TIMEOUT_SECONDS},
 )
 
 
@@ -101,13 +75,15 @@ if "sqlite" in str(engine.url):
 
     @event.listens_for(engine.sync_engine, "connect")
     def _set_sqlite_pragmas(dbapi_conn, _connection_record):  # noqa: ANN001
-        """Apply per-connection PRAGMAs to every pool checkout.
+        """Apply per-connection PRAGMAs upon physical DBAPI connection creation.
 
         WAL persists on the DB file itself, but busy_timeout, foreign_keys,
-        synchronous, and cache_size are per-connection and would otherwise
-        reset to SQLite defaults on each pool connection.
+        synchronous, and cache_size are per-connection. By applying them on the
+        ``connect`` event, they persist for the lifetime of the physical DBAPI
+        handle, remaining active across all subsequent pool checkouts and
+        post-commit transactions.
 
-        ``busy_timeout=30s`` is a defense-in-depth backstop. The primary
+        ``busy_timeout`` is a defense-in-depth backstop. The primary
         write-contention defense is ``WriterLockedAsyncSession`` (see below)
         which holds ``db_writer_lock`` across the entire write transaction.
         With the lock in place, no write should ever wait for the SQLite
@@ -115,9 +91,9 @@ if "sqlite" in str(engine.url):
         """
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute(f"PRAGMA busy_timeout={settings.DB_LOCK_TIMEOUT_SECONDS * 1000}")
         cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA cache_size=-64000")
+        cursor.execute(f"PRAGMA cache_size={settings.DB_CACHE_SIZE_KB}")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
@@ -224,5 +200,24 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def dispose() -> None:
-    """Close all pooled connections. Called during application shutdown."""
+    """Close all pooled connections. Called during application shutdown.
+    
+    Performs an explicit WAL checkpoint to ensure the WAL file is merged
+    and truncated. This prevents silent WAL checkpoint loss if the process
+    is terminated abruptly after disposal but before SQLite can perform
+    its auto-checkpoint-on-close.
+    """
+    try:
+        from sqlalchemy import text
+        import sqlalchemy.exc
+        
+        async with engine.begin() as conn:
+            # TRUNCATE ensures the WAL file is truncated to zero bytes
+            await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            logger.info("Executed explicit SQLite WAL checkpoint on shutdown")
+    except Exception as exc:
+        # If the DB is completely locked by an orphaned connection, we catch
+        # the error and proceed to dispose anyway.
+        logger.warning("Explicit WAL checkpoint failed (likely orphaned active connections): %s", exc)
+        
     await engine.dispose()
