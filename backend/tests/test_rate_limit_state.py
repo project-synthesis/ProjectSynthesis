@@ -335,7 +335,11 @@ class TestWatcherBackgroundProbing:
         store.record(provider="claude_cli", reset_at=datetime.now(timezone.utc) - timedelta(seconds=1))
 
         mock_event_bus = MagicMock()
-        mock_event_bus.publish = AsyncMock()
+        # event_bus.publish is sync, NOT async. Using MagicMock (not
+        # AsyncMock) here ensures the test catches signature drift --
+        # an async mock would silently accept ``await pub(dict)`` even
+        # though production raises TypeError. (C2 from v0.4.12 review.)
+        mock_event_bus.publish = MagicMock()
 
         # Start watcher task manually and give it a tiny sleep interval to fast-fail
         store._watcher_sleep_interval = 0.01
@@ -345,12 +349,14 @@ class TestWatcherBackgroundProbing:
         await asyncio.sleep(0.05)
         watcher_task.cancel()
 
-        # It should have cleared the state and published the event
+        # It should have cleared the state and published the event with the
+        # canonical (event_type: str, data: dict) signature.
         assert store.is_rate_limited("claude_cli") is False
         mock_event_bus.publish.assert_called_once()
-        call_args = mock_event_bus.publish.call_args[0][0]
-        assert call_args["event"] == "rate_limit_cleared"
-        assert call_args["data"]["provider"] == "claude_cli"
+        event_type, data = mock_event_bus.publish.call_args[0]
+        assert event_type == "rate_limit_cleared"
+        assert data["provider"] == "claude_cli"
+        assert data["source"] == "watcher"
 
     @pytest.mark.asyncio
     async def test_watcher_probes_unknown_ttl_before_clearing(self, tmp_path: Path):

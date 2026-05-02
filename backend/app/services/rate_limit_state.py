@@ -257,10 +257,18 @@ class RateLimitStateStore:
                     logger.info("Watcher detected expired rate limit for provider=%s", p_name)
                     # We clear the limit locally, then publish the event so other consumers hear it
                     self.clear(p_name)
-                    await event_bus.publish({
-                        "event": "rate_limit_cleared",
-                        "data": {"provider": p_name, "source": "watcher"}
-                    })
+                    # event_bus.publish is sync (def, not async def) and takes
+                    # two positional args (event_type: str, data: dict). The
+                    # prior dict-form call against an async-mock test fixture
+                    # silently passed in tests but raised TypeError in
+                    # production -- watcher loop's bare ``except Exception``
+                    # caught it and the watcher died. Result: only the cleaner
+                    # expiry path (provider success) cleared rate-limit
+                    # banners; the watcher-detected expiry path was dead.
+                    event_bus.publish(
+                        "rate_limit_cleared",
+                        {"provider": p_name, "source": "watcher"},
+                    )
 
         except asyncio.CancelledError:
             pass

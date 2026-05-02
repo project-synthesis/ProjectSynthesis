@@ -821,11 +821,23 @@ class ProbeService:
                 """Single-prompt persistence task spawned per completion.
 
                 Reuses bulk_persist's idempotency + retry path but on a
-                1-element list. On success, records the id in
-                ``persisted_ids`` so the post-run verify gate sees it.
-                On failure, captures the exception for the gate to
-                classify partial vs catastrophic AND signals
-                ``abort_event`` so peer LLM calls can be cancelled.
+                1-element list. Three outcomes:
+
+                * Success (``n > 0``): record the id in ``persisted_ids``
+                  so the post-run verify gate sees it.
+                * Intentional rejection (``n == 0`` with no exception):
+                  bulk_persist's quality gate (``overall_score < 5.0``)
+                  or ID-shape gate (non-uuid id, test-fixture indicator)
+                  rejected the row at insert-time. NOT a persistence
+                  failure -- the row was correctly NOT durable. Tag the
+                  pending so the verify-gate excludes it from
+                  ``expected_completed`` and doesn't misclassify a
+                  legitimate quality outcome as catastrophic
+                  contention. (v0.4.12 review C1.)
+                * Exception (e.g. SQLite "database is locked"): real
+                  persistence failure. Capture for the gate's
+                  partial/catastrophic classification AND signal
+                  ``abort_event`` so peer LLM calls can be cancelled.
                 """
                 try:
                     n = await bulk_persist(
@@ -833,6 +845,17 @@ class ProbeService:
                     )
                     if n > 0:
                         persisted_ids.add(p.id)
+                    else:
+                        # Quality-gate or ID-shape gate dropped the row.
+                        # Not a persistence failure -- the row was never
+                        # going to be durable, by design.
+                        setattr(p, "_persist_intentionally_rejected", True)
+                        logger.info(
+                            "Per-prompt persist intentionally rejected "
+                            "%s (score=%s) -- bulk_persist quality/id gate",
+                            p.id[:8] if p.id else "<no-id>",
+                            p.overall_score,
+                        )
                 except Exception as exc:
                     persist_errors.append(exc)
                     setattr(p, "_persist_dropped", True)
@@ -1125,13 +1148,27 @@ class ProbeService:
             #   * catastrophic -- persisted_actual == 0: raise so the
             #     top-level except handler marks the row failed with
             #     the underlying persistence exception preserved
+            # ``expected_completed`` counts pendings that should have
+            # produced a durable Optimization row. Excludes pendings
+            # tagged ``_persist_intentionally_rejected=True`` by
+            # ``_persist_one`` -- those are quality-gate / ID-shape
+            # rejections that bulk_persist correctly DROPPED at insert
+            # time. Without this exclusion, a probe whose 5 prompts
+            # all scored below the seed quality floor (5.0) would have
+            # ``expected=5, actual=0`` and the verify-gate would
+            # misclassify the legitimate quality outcome as catastrophic
+            # persistence contention. (v0.4.12 review C1 fix.)
             expected_completed = sum(
-                1 for p in pendings if p.status == "completed"
+                1 for p in pendings
+                if p.status == "completed"
+                and not getattr(p, "_persist_intentionally_rejected", False)
             )
             persisted_id_set: set[str] = set()
             if expected_completed > 0:
                 pending_ids = [
-                    p.id for p in pendings if p.status == "completed"
+                    p.id for p in pendings
+                    if p.status == "completed"
+                    and not getattr(p, "_persist_intentionally_rejected", False)
                 ]
                 async with session_factory() as _verify_db:
                     _verify_q = await _verify_db.execute(
