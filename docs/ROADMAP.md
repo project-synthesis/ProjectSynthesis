@@ -134,7 +134,7 @@ This violates the design intent. Domain emergence should be **signal concentrati
 - Spec: `docs/specs/topic-probe-2026-04-29.md` (gitignored)
 - Plan: `docs/plans/topic-probe-tier-1-2026-04-29.md` (gitignored)
 
-**Tier 2 (v0.4.13) — Planned:**
+**Tier 2 (v0.4.13) — Planned. PREREQUISITE: SQLite writer-slot contention fix (see "SQLite writer-slot contention — architectural fix" entry below). Tier 2 features depend on reliable persistence for save-as-suite + replay regression detection to produce trustworthy results. Same v0.4.13 release; contention fix lands first.**
 - `POST /api/probes/{id}/save-as-suite` — fork a probe run into a `ValidationSuite` (frozen prompt fixture + assertions captured from the run's actual scores)
 - `POST /api/probes/{id}/replay` — re-run a saved suite against current code state (regression detection)
 - UI Navigator panel: "Topic Probe" tab in SeedModal + live taxonomy mini-view + final report card with copy-as-markdown
@@ -463,15 +463,53 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 ---
 
-### PostgreSQL migration
-**Status:** Exploring
-**Context:** SQLite's single-writer limitation causes `database is locked` errors when the MCP server pipeline (optimization write) and backend warm path (taxonomy mutations) write concurrently. WAL mode + busy_timeout=30s mitigates but doesn't eliminate the issue. At scale (concurrent users, parallel optimizations), SQLite becomes a bottleneck.
+### SQLite writer-slot contention — architectural fix (v0.4.13 P0)
+**Status:** **Planned for v0.4.13** (trigger met by v0.4.12 probe integration validation)
 
-**Scope:** Replace `aiosqlite` with `asyncpg` + PostgreSQL. Requires: Alembic migration infrastructure (already present), connection pooling config, Docker Compose for local dev, production deployment update, test fixture changes.
+**Context:** Probes v22 → v29 (live integration validation against the v0.4.12 probe Tier 1 surface, 2026-04-29) catalogued a sustained `database is locked` failure mode that defeats every layer of the existing writer-coordination stack (`busy_timeout=30s`, app-level `bulk_persist` retries 5×, `WriterLockedAsyncSession` asyncio.Lock, per-prompt streaming, early-abort, warm-path Groundhog Day fix). The orphan audit on `probe_run` found **11 of 26 historical runs** (every probe since v9's canonical-batch refactor) silently lost all 5 optimization rows.
 
-**Trigger:** When `database is locked` errors become user-facing despite busy_timeout, or when concurrent multi-user access is needed.
+**Diagnostic chain (v22 → v29):**
+- **v22**: pytest racing + warm-path concurrent → 0 of 5 persisted, silent-success defect surfaced (probe reported `status='completed'` from in-memory aggregate). Verify-after-persist gate added in `ae379bf6` to make failures loud.
+- **v23/v24**: clean services, no pytest. Still catastrophic. Confirmed contention is not test-fixture-driven.
+- **v25**: rate-limit fallback path. All 5 persists collapsed into a tight window. Catastrophic. Per-prompt streaming added in `e32515eb` to reduce per-attempt window size.
+- **v26**: full architectural fix stack (verify-gate + streaming + warm-path-age fix + early-abort). Still catastrophic. Confirmed the contention is at a layer below all the orchestration fixes.
+- **v27**: **MCP server stopped, only backend running**. Still catastrophic. **This proves the contention is purely within-backend, not cross-process** — refining the framing in the original ROADMAP entry which suspected MCP-vs-backend was the dominant case.
+- **v28**: pool_size=1 + early-abort. Different failure mode (`QueuePool limit of size 1 overflow 0 reached, connection timed out, timeout 30.00`) — pool deadlocks when LLM calls hold connections inside `ContextEnrichmentService.enrich()` and peer Phase 3 tasks need a connection. Confirmed contention IS at the connection/pool layer, but pool_size=1 is too restrictive. Reverted in `7693efc8`.
+- **v29**: clean revert. Catastrophic again — same failure as v22-v27.
 
-**Files:** `database.py` (engine), `config.py` (DATABASE_URL), `main.py`/`mcp_server.py` (PRAGMA removal), `docker-compose.yml` (new), all test fixtures.
+**Root-cause analysis:** Within a single backend process, `WriterLockedAsyncSession` correctly serializes FLUSH calls via the process-wide asyncio.Lock. But SQLAlchemy's connection pool checks out separate underlying SQLite connections per session — the asyncio.Lock guards the flush moment, NOT the underlying connection's WAL writer-slot acquisition. When a connection releases the asyncio.Lock after commit, it may still hold lingering WAL state during transition cleanup; the next writer's connection sees `database is locked` despite holding the asyncio.Lock.
+
+**Two implementation options for v0.4.13:**
+
+#### Option A — Single-writer queue worker (in-process, ~300 lines)
+Route ALL writes through one dedicated async worker that owns a single SQLite connection. Other code wanting to write enqueues a task and awaits its `Future`. Eliminates connection-pool races without changing the database engine.
+
+- **Pros:** Lower scope (no migration), preserves SQLite simplicity, no infrastructure changes, no test-fixture rewrites.
+- **Cons:** Doesn't help cross-process contention (MCP write paths) — but v27 proved cross-process is not the dominant case anyway. Throughput-bound by the single worker.
+- **Files:** new `app/services/write_queue.py` (worker + queue + `submit()` API), `bulk_persist`, `optimization_service`, `feedback_service`, `taxonomy/family_ops`, `taxonomy/warm_path` callsites refactored to enqueue. ~30 callsites total.
+- **Risk:** Higher latency on individual writes (queue serialization), debuggability harder during failure cascades.
+
+#### Option B — PostgreSQL migration
+Replace `aiosqlite` with `asyncpg` + PostgreSQL. MVCC handles reader/writer contention natively at the DB layer.
+
+- **Pros:** Permanent architectural fix, supports concurrent multi-user access, scales horizontally.
+- **Cons:** Significant infrastructure change — Alembic migration, connection pooling re-config, Docker Compose for local dev, production deployment update, ~all test fixtures rewritten (in-memory PostgreSQL via `pgserver` or testcontainer).
+- **Files:** `database.py` (engine), `config.py` (DATABASE_URL), `main.py`/`mcp_server.py` (PRAGMA removal), `docker-compose.yml` (new), every test fixture.
+- **Risk:** Migration timing — if the user has existing local SQLite DBs with active probe data, need a migration tool.
+
+**Recommendation:** Ship **Option A first** as the immediate v0.4.13 P0. Cheaper, faster, addresses the actually-observed failure mode (within-backend contention). Move PostgreSQL to a parallel track (v0.5.x) when concurrent multi-user access becomes a real requirement.
+
+**Prerequisite for Topic Probe Tier 2** (v0.4.13 save-as-suite + replay): persistence MUST be reliable for replay-mode regression detection to produce trustworthy results. Topic Probe Tier 2 ships AFTER the contention fix — same v0.4.13 release, Option A first.
+
+**v0.4.12 partial mitigations already shipped** (see `docs/CHANGELOG.md`):
+- Verify-after-persist gate — no silent success
+- Per-prompt streaming — smaller transactions
+- Early-abort on catastrophic — saves 12-20 min of LLM tokens per failed run
+- Warm-path Groundhog Day fix — no compounding
+
+These make failures loud and structured but don't fix the root cause. Probes under realistic concurrent-writer load still fail catastrophic.
+
+**Files:** see Option A scope above. Tracking commit references: probes v22-v29 diagnostic chain in `docs/CHANGELOG.md`.
 
 ---
 
