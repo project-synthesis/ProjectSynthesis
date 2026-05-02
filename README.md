@@ -108,7 +108,7 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 |---------|------|---------|
 | Backend | 8000 | FastAPI API + pipeline orchestration |
 | Frontend | 5199 | SvelteKit dev server |
-| MCP Server | 8001 | 14-tool MCP server for IDE integration |
+| MCP Server | 8001 | 15-tool MCP server for IDE integration |
 
 ```bash
 ./init.sh start        # start all (provider detection + bridge install + health probes)
@@ -129,6 +129,10 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **3 suggestions per turn** — score-driven, analysis-driven, and strategic
 - **Adaptive strategies** — file-driven from `prompts/strategies/*.md` with YAML frontmatter. Add/remove/edit `.md` files and they auto-appear in the UI. `auto` strategy resolves to task-type-appropriate strategy at runtime
 - **Hybrid scoring** — LLM scores blended with heuristic analysis + z-score normalization against historical distribution. **Per-task-type dimension weights v4 (v0.4.9)**: analysis-class prompts use a calibration favoring clarity / specificity / structure (0.25 / 0.25 / 0.20) and de-emphasizing faithfulness / conciseness (0.20 / 0.10), recognizing that audit-class prompts carry their substance in framing and citations rather than asserting truth. Default schema unchanged. **Backtick specificity credit (F1, v0.4.9)** rewards prompts that cite real code identifiers (`engine.py`, `_reevaluate_sub_domains`). **Z-norm threshold raised 0.3 → 0.5 (F2, v0.4.9)** bypasses normalization on narrow-distribution task types like audits, where it previously floor-capped legitimately adequate raw scores. **Strategy fidelity (F4, v0.4.9)**: the optimizer LLM no longer declares the strategy — the persisted `strategy_used` is always the resolved `effective_strategy` from the analyze phase. **`possible_false_premise` divergence flag (F5, v0.4.9)** fires when an analysis-class prompt scores LLM faithfulness < 5.0 on a technical-dense prompt, surfacing audits whose surface symbol density may mask a wrong premise. Standard divergence flags still fire when LLM and heuristic disagree by >2.5 points
+
+### Topic Probe (Tier 1, v0.4.12)
+- **Agentic targeted exploration** — specify a `topic` (e.g., "embedding cache invalidation in EmbeddingIndex"); the system reads the linked GitHub codebase, generates 5–25 code-grounded prompts citing real identifiers, runs them through the full optimization pipeline, watches the taxonomy emerge new domains/sub-domains organically, and delivers a structured 5-section markdown final report (Top 3 / Score Distribution / Taxonomy Delta / Recommended Follow-ups / Run Metadata) with 4 deterministic recommendation rules. Surfaces: `POST /api/probes` (SSE), `GET /api/probes`, `GET /api/probes/{id}`, `synthesis_probe` MCP tool (15th tool), `scripts/probe.py` CLI shim. 5-phase orchestrator: `grounding → generating → running → observability → reporting`. 7 new `probe_*` taxonomy events + `current_probe_id` ContextVar for cross-event correlation. **All 4 Topic Probe tiers ship within the 0.4.x line:** T1=v0.4.12 (this), T2=v0.4.13 (save-as-suite + replay + UI navigator), T3=v0.4.14 (cross-tier composition), T4=v0.4.15 (substrate unification with seeds)
+- **Probe persistence resilience (v0.4.12)** — verify-after-persist gate (no silent success: probe queries DB for canonical truth before reporting; three outcomes — full / partial / catastrophic), per-prompt streaming persistence (smaller transactions + real-time UI updates as each prompt scores via `optimization_created` events), early-abort on catastrophic (cancels in-flight LLM calls within ~75s of first persist trip-wire — saves 12-20 min of Opus 4.7 audit-class calls per failed run). _Known limitation_: SQLite writer-slot contention is unresolved at the architectural level under realistic concurrent-writer load — failures are loud and structured but not yet eliminated. v0.4.13 P0 carries the architectural fix (single-writer queue worker, see `docs/ROADMAP.md`)
 
 ### Knowledge Engine
 - **Evolutionary taxonomy** — self-organizing hierarchical clustering with multi-project isolation. Project → domain → sub-domain → cluster → optimizations. Fully organic domain and sub-domain discovery from user behavior via enriched Haiku-generated qualifier vocabulary (cluster centroid similarity matrix + intent labels + qualifier distribution fed forward, post-generation quality metric tracked). Unified lifecycle: domains and sub-domains re-evaluated every warm cycle with parameterized guards (consistency, age, member count, sub-domain anchoring). **Sub-domain dissolution hardening (v0.4.8 — audit `docs/audits/sub-domain-regression-2026-04-27.md`)**: Bayesian Beta-Binomial shrinkage on consistency prevents single-prompt small-N noise from dissolving healthy sub-domains (R1); grace gate extended 6h → 24h (R2); empty-snapshot guard skips re-eval on missing vocab (R3); per-opt matcher extracted to shared pure primitive `match_opt_to_sub_domain_vocab` (R4); forensic dissolution telemetry (`matching_members` + `sample_match_failures`, R5); operator recovery endpoint `POST /api/domains/{id}/rebuild-sub-domains` (R6); vocab regeneration overlap telemetry (R7); module-import threshold-collision invariant (R8). Graceful dissolution reparents clusters and merges meta-patterns — prompts are never lost. Qualifier-augmented embeddings (4th signal) enable cross-project specialization-aware clustering. No hardcoded domain assumptions — seed domains dissolve organically when unused (ADR-006)
@@ -174,10 +178,13 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 - **Destructive-action UX** — 5-second pre-commit grace window for row-level deletes (API call deferred until undo-window closes — click Undo to cancel without a server round-trip) + type-to-confirm bulk-delete modal (case-sensitive `DELETE` literal gate) + `UndoToast` with RAF-driven progress bar, pause-on-hover, and online/offline pause/resume. Reusable primitives (`toastsStore`, `UndoToast.svelte`, `DestructiveConfirmModal.svelte`) so future surfaces (unlink repo, retire template, archive cluster) plug in with zero bespoke styling
 - **History keyboard shortcuts** — file-manager-style selection grammar: `Ctrl/Cmd+Click` toggles row into selection (auto-seeds currently-active row on first modifier-click), `Shift+Click` extends range, `Ctrl+A` selects all, `Esc` exits select mode, `Delete/Backspace` opens bulk-confirm, arrow keys navigate with wrap
 - **Trace logging** — per-phase JSONL traces with daily rotation
+- **Rate-limit graceful degradation (v0.4.12)** — provider-layer typed `ProviderRateLimitError` with `reset_at: datetime` + `provider_name` + unified `estimated_wait_seconds`. Plan-agnostic CLI message parsing (works for Pro/Team/Enterprise/MAX/Bedrock/Vertex). When a prompt hits 429, falls back to heuristic-only `passthrough_fallback` row instead of failure — user gets a usable degraded result. Frontend surfaces: `rate_limit_active`/`rate_limit_cleared` SSE events + `rateLimitStore` (per-second tick, multi-provider) + `RateLimitBanner.svelte` global banner with live countdown + Settings panel "Rate limits" accordion (auto-opens on hit) + one-shot info toast on first hit per provider
+- **Resilient SSE infrastructure (v0.4.12)** — periodic `event: sync` keepalive every 30s (real JS-visible event, not invisible TCP comment) keeps the connection "healthy" indefinitely regardless of write-side traffic. After exponential-backoff exhaustion, SSE store enters slow-poll cadence (30s) instead of permanent "Retries exhausted" state. Visibility-change handler retries immediately when user returns to tab and SSE is disconnected
+- **CORS-safe error handler (v0.4.12)** — `@app.exception_handler(Exception)` echoes the request's `Origin` back when in the allowlist + sets `access-control-allow-credentials: true`, so 500 responses surface the real exception in the browser instead of a misleading "ERR_FAILED" CORS error. Body gains `error_type` (the exception class name) for category-aware UI handling
 
 ## MCP Integration
 
-The MCP server provides 14 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
+The MCP server provides 15 tools with `synthesis_` prefix on port 8001. All tools use `structured_output=True` (return Pydantic models, expose `outputSchema` to MCP clients).
 
 ### Core pipeline tools
 
@@ -201,6 +208,7 @@ The MCP server provides 14 tools with `synthesis_` prefix on port 8001. All tool
 | `synthesis_feedback` | Submit quality feedback to drive strategy adaptation |
 | `synthesis_refine` | Iteratively improve an optimized prompt with specific instructions |
 | `synthesis_seed` | Batch-seed the taxonomy — generate + optimize + persist + cluster |
+| `synthesis_probe` | **Topic Probe Tier 1 (v0.4.12)** — agentic targeted exploration of a user-specified topic against the linked GitHub codebase. 5-phase orchestrator (`grounding → generating → running → observability → reporting`); generates 5–25 code-grounded prompts citing real identifiers, runs them through the optimization pipeline, watches the taxonomy emerge new domains/sub-domains, returns a structured 5-section markdown final report. Same execution primitive as seed agents (`batch_pipeline`); requires linked repo (returns `link_repo_first` otherwise) |
 | `synthesis_explain` | Plain-English explanation of what an optimization changed and why |
 
 Connect via `.mcp.json` (auto-loaded by Claude Code) or manually at `http://127.0.0.1:8001/mcp`.
@@ -215,13 +223,13 @@ docker compose up --build -d
 ## Development
 
 ```bash
-# Backend tests (3177 tests)
+# Backend tests (3290 tests)
 cd backend && source .venv/bin/activate && pytest --cov=app -v
 
 # Frontend type check
 cd frontend && npx svelte-check
 
-# Frontend tests (1544 tests)
+# Frontend tests (1546 tests)
 cd frontend && npm test
 
 # Frontend build
@@ -254,6 +262,10 @@ cd frontend && npm run build
 | `/api/domains/{id}/readiness` | GET | Single-domain readiness (three-source cascade + dissolution guards, `?fresh=true` bypass) |
 | `/api/domains/{id}/readiness/history` | GET | Hourly-bucketed readiness time-series (`?window=24h\|7d\|30d`, 30-day retention) |
 | `/api/domains/{id}/rebuild-sub-domains` | POST | Operator recovery — force-rebuild sub-domains under one domain with optional `min_consistency` override (Pydantic `ge=0.25`) and `dry_run` toggle (10/min, v0.4.8+, audit R6) |
+| `/api/domains/{id}/dissolve-empty` | POST | Operator recovery — force-dissolve a ghost domain (`member_count == 0`, age >= 30min) without waiting for the 48h `_reevaluate_domains` gate. Idempotent (200 + `dissolved=False, reason="already_dissolved"`); 409 + `reason="not_empty"` if domain has members; 409 + `reason="too_young"` if too recent. Emits `domain_ghost_dissolved` event + `taxonomy_changed` SSE on success (10/min, v0.4.11+, P1) |
+| `/api/probes` | POST (SSE) | **Topic Probe Tier 1 (v0.4.12)** — agentic targeted exploration. Body: `{topic, scope?, intent_hint?, n_prompts?, repo_full_name}`. 5-phase orchestrator streams 7 `probe_*` events to SSE + final `ProbeRunResult`. IP-keyed rate-limited (5/min). Returns 400 + `link_repo_first` if no `repo_full_name` |
+| `/api/probes` | GET | Paginated `ProbeListResponse`. Sort by `started_at desc`, filters: `status?`, `project_id?` (v0.4.12+) |
+| `/api/probes/{id}` | GET | Full `ProbeRunResult` (404 with `probe_not_found` reason on miss). v0.4.12+ |
 | `/api/clusters` | GET | List clusters (paginated, state/domain filter) |
 | `/api/clusters/{id}` | GET | Cluster detail (children, breadcrumb, optimizations, project breakdown) |
 | `/api/clusters/{id}` | PATCH | Rename/state override |

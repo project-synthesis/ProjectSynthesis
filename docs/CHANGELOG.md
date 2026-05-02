@@ -53,7 +53,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
   - **`scripts/validate_taxonomy_emergence.py::_post` 600 → 1800s** — covers p99 with 3× headroom for Opus 4.7 task-budget xhigh runs that legitimately need >10 min on 128K outputs.
   - **`scripts/probe.py` httpx client 900 → 3600s** — covers a 10-prompt probe with headroom; longer probes need Tier 2's 202 Accepted + polling architecture (deferred).
 
-### Added
+### Topic Probe Tier 1 (headline feature)
 
 - **v0.4.12 — Topic Probe Tier 1** — agentic targeted exploration of a user-specified topic against the linked GitHub codebase. Productizes the manual cycle-15→22 workflow that emerged the `embeddings` sub-domain and `data` / `frontend` top-level domains. The user specifies a topic (e.g., "embedding cache invalidation in EmbeddingIndex"), and the agentic system reads the codebase, generates 5–25 code-grounded prompts citing real identifiers, runs them through the optimization pipeline, watches the taxonomy emerge new domains/sub-domains organically, and delivers a structured final report. Topic Probe is a peer of seed agents — same execution primitive (`batch_pipeline`), different generation strategy (LLM-agentic-from-topic-and-codebase vs pre-authored agent template).
 
