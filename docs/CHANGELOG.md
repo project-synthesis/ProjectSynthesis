@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.12 — 2026-05-02
+
 ### Added
 
 - **v0.4.12 — Probe Phase 3 wired to canonical `batch_pipeline`** — fulfils the Tier 1 spec's "peer of seed agents — same execution primitive" mandate. Pre-fix, probe ran a hand-rolled per-prompt loop that called `enrich()` and used only `.analysis`, discarding `codebase_context`, `applied_patterns`, `divergence_alerts`, `enrichment_meta`. Persisted rows were structurally hollow — NULL `optimized_prompt`, identical 6.80 stub scores across every prompt, no `OptimizationPattern(relationship='injected')` rows. Now delegates to `run_batch + bulk_persist + batch_taxonomy_assign` exactly as the seed path does. Probe rows are first-class Optimization rows with full hybrid LLM-blended scoring, multi-embedding, normalized intent_label, canonicalized domain via DomainResolver, cluster assignment + post-commit pattern provenance.
