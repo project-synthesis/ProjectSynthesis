@@ -30,7 +30,7 @@
   // header) because Readiness is current-state and the asymmetry is owned
   // by the period-aware panels. See TaxonomyObservatory legend (TO3).
   const PERIODS: readonly ObservatoryPeriod[] = ['24h', '7d', '30d'];
-  const ALL_FAMILIES: readonly OpFamily[] = ['domain', 'cluster', 'pattern', 'readiness'];
+  const ALL_FAMILIES: readonly OpFamily[] = ['domain', 'cluster', 'pattern', 'readiness', 'operator_action'];
   const TIMELINE_EVENT_CAP = 200;
 
   /**
