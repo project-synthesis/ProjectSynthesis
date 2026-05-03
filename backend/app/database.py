@@ -221,3 +221,169 @@ async def dispose() -> None:
         logger.warning("Explicit WAL checkpoint failed (likely orphaned active connections): %s", exc)
 
     await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Writer engine + audit hook (v0.4.13)
+# ---------------------------------------------------------------------------
+# See docs/specs/sqlite-writer-queue-2026-05-02.md for full design rationale.
+#
+# Architecture: a SECOND engine (`writer_engine`) with `pool_size=1,
+# max_overflow=0` is used exclusively by the WriteQueue worker. The main
+# `engine` above stays unchanged for read paths. This eliminates within-
+# backend WAL writer-slot races that defeated the v0.4.12 stack
+# (busy_timeout + WriterLockedAsyncSession + per-callsite mutex + retries).
+#
+# Read paths continue to use `async_session_factory()` against the main
+# engine. WAL allows unlimited concurrent readers — read-side concurrency
+# is preserved.
+import re
+from collections.abc import Callable
+from dataclasses import dataclass
+
+
+writer_engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    pool_size=1,
+    max_overflow=0,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+    connect_args={"timeout": settings.DB_LOCK_TIMEOUT_SECONDS},
+)
+
+
+if "sqlite" in str(writer_engine.url):
+
+    @event.listens_for(writer_engine.sync_engine, "connect")
+    def _set_writer_pragmas(dbapi_conn, _connection_record):  # noqa: ANN001
+        """Mirror the read engine's PRAGMA setup for the writer connection."""
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA busy_timeout={settings.DB_LOCK_TIMEOUT_SECONDS * 1000}")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute(f"PRAGMA cache_size={settings.DB_CACHE_SIZE_KB}")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
+writer_session_factory = async_sessionmaker(
+    writer_engine, class_=AsyncSession, expire_on_commit=False,
+)
+
+
+@dataclass
+class _ReadEngineMeta:
+    """Allow-list flags for read-engine writes that ARE expected.
+
+    Invariant: at most ONE flag may be True at a time. Set/cleared in
+    try/finally blocks at their respective entry points (lifespan
+    migrations + cold-path full-refit).
+    """
+    migration_mode: bool = False
+    cold_path_mode: bool = False
+
+
+read_engine_meta = _ReadEngineMeta()
+
+
+class WriteOnReadEngineError(RuntimeError):
+    """Raised by audit hook when a write is detected on the read engine
+    outside of the migration_mode/cold_path_mode allow-list.
+    """
+
+
+def _is_write_statement(statement: str) -> bool:
+    """Detect SQL writes including REPLACE, prefixed CTEs, block AND line comments.
+
+    Catches: INSERT, UPDATE, DELETE, REPLACE, WITH ... INSERT/UPDATE/DELETE/REPLACE.
+    Does NOT match: SELECT, PRAGMA, BEGIN, COMMIT, ROLLBACK, SAVEPOINT, RELEASE.
+    """
+    s = statement
+    while True:
+        s2 = re.sub(
+            r"^\s*(?:/\*.*?\*/|--[^\n]*\n?)\s*",
+            "",
+            s,
+            flags=re.DOTALL,
+        )
+        if s2 == s:
+            break
+        s = s2
+    upper = s.upper().lstrip()
+    if upper.startswith(("INSERT", "UPDATE", "DELETE", "REPLACE")):
+        return True
+    if upper.startswith("WITH"):
+        return bool(re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE)\b", upper))
+    return False
+
+
+# Module-level so uninstall can reach the listener; idempotency guard.
+_audit_listener: Callable | None = None
+_audit_installed_engine = None
+
+
+def install_read_engine_audit_hook(target_engine) -> None:  # noqa: ANN001
+    """Register a before_cursor_execute hook on the read engine that catches
+    writes outside of the allow-list flags.
+
+    Idempotent: raises RuntimeError if already installed.
+
+    Bypass conditions: `migration_mode=True` OR `cold_path_mode=True`.
+    Asserts only ONE flag is set at a time (dual-flag invariant always raises,
+    REGARDLESS of WRITE_QUEUE_AUDIT_HOOK_RAISE — programmer error, not write).
+
+    Behavior on detected write:
+      WRITE_QUEUE_AUDIT_HOOK_RAISE=True  (CI): raises WriteOnReadEngineError
+      WRITE_QUEUE_AUDIT_HOOK_RAISE=False (dev/prod): logs WARNING
+    """
+    global _audit_listener, _audit_installed_engine
+    if _audit_listener is not None:
+        raise RuntimeError(
+            "read engine audit hook already installed; "
+            "call uninstall_read_engine_audit_hook() first"
+        )
+
+    def _audit(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        if read_engine_meta.migration_mode and read_engine_meta.cold_path_mode:
+            raise RuntimeError(
+                "read_engine_meta: both migration_mode and cold_path_mode True; "
+                "this is a programmer error, not a write-detection event"
+            )
+        if read_engine_meta.migration_mode or read_engine_meta.cold_path_mode:
+            return
+        if not _is_write_statement(statement):
+            return
+        err = WriteOnReadEngineError(
+            f"write statement on read engine outside allow-list: {statement[:120]}..."
+        )
+        if settings.WRITE_QUEUE_AUDIT_HOOK_RAISE:
+            raise err
+        logger.warning("read-engine audit: %s", err)
+
+    event.listen(target_engine.sync_engine, "before_cursor_execute", _audit)
+    _audit_listener = _audit
+    _audit_installed_engine = target_engine
+
+
+def uninstall_read_engine_audit_hook() -> None:
+    """Remove the hook on lifespan shutdown / test fixture teardown.
+    Idempotent on already-uninstalled.
+    """
+    global _audit_listener, _audit_installed_engine
+    if _audit_listener is None or _audit_installed_engine is None:
+        return
+    event.remove(
+        _audit_installed_engine.sync_engine,
+        "before_cursor_execute",
+        _audit_listener,
+    )
+    _audit_listener = None
+    _audit_installed_engine = None
+
+
+async def dispose_writer() -> None:
+    """Close writer engine pool. Called during application shutdown
+    AFTER the WriteQueue worker has fully drained.
+    """
+    await writer_engine.dispose()
