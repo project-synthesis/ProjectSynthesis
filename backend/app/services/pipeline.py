@@ -660,12 +660,21 @@ class PipelineOrchestrator:
             # v0.4.13 cycle 7.5: persist_and_propagate requires write_queue
             # post-collapse. When the orchestrator caller doesn't supply
             # one (legacy / test paths), build a transient queue from
-            # the global engine.
+            # the engine the request-scoped db is bound to (so test
+            # in-memory engines work too) -- falling back to the global
+            # engine only if db.bind is unresolvable.
             _wq = write_queue
             _transient_pwq = False
             if _wq is None:
                 from app.services.write_queue import WriteQueue
-                from app.database import engine as _engine
+                _engine = None
+                try:
+                    _engine = db.bind
+                except Exception:
+                    _engine = None
+                if _engine is None:
+                    from app.database import engine as _global_engine
+                    _engine = _global_engine
                 _wq = WriteQueue(_engine)
                 await _wq.start()
                 _transient_pwq = True

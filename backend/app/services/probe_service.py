@@ -515,6 +515,17 @@ class ProbeService:
                 "found on session_factory and no global engine import. "
                 "Inject self.write_queue explicitly.",
             )
+        # ``self.db.bind`` can return AsyncEngine | AsyncConnection -- the
+        # WriteQueue requires AsyncEngine specifically. Tests using
+        # request-scoped sessions always have an engine, but narrow the
+        # type defensively for mypy.
+        from sqlalchemy.ext.asyncio import AsyncEngine
+        if not isinstance(engine, AsyncEngine):
+            raise RuntimeError(
+                "ProbeService resolved a non-AsyncEngine binding "
+                f"(type={type(engine).__name__}); WriteQueue requires "
+                "AsyncEngine. Inject self.write_queue explicitly.",
+            )
         queue = WriteQueue(engine)
         await queue.start()
         self._transient_write_queue = queue
@@ -1464,11 +1475,11 @@ class ProbeService:
             # (probe_topic + probe_intent_hint), and rehydrate cluster_id
             # from the Optimization rows (batch_taxonomy_assign wrote it
             # there post-PendingOptimization construction).
-            persisted_ids = [
+            persisted_id_list = [
                 p.id for p in pendings if p.status == "completed"
             ]
             cluster_id_by_opt = await self._tag_probe_rows(
-                session_factory, persisted_ids,
+                session_factory, persisted_id_list,
                 probe_topic=request.topic,
                 probe_intent_hint=intent_hint,
             )
@@ -1813,7 +1824,8 @@ class ProbeService:
                         "transient write queue stop failed (non-fatal)",
                         exc_info=True,
                     )
-                self._transient_write_queue = None
+                # Clear so a re-entrant run() doesn't reuse a stopped queue.
+                self._transient_write_queue = None  # type: ignore[assignment]
 
     async def _mark_cancelled(
         self, row: ProbeRun, probe_id: str,
@@ -1838,7 +1850,7 @@ class ProbeService:
         a healthy run as ``failed/cancelled``.
         """
         completed_at = datetime.now(timezone.utc)
-        TERMINAL_STATUSES = ("completed", "partial", "failed")
+        terminal_statuses = ("completed", "partial", "failed")
 
         if self.write_queue is not None:
             async def _do_mark(write_db: AsyncSession) -> None:
@@ -1850,7 +1862,7 @@ class ProbeService:
                     return
                 # Idempotency guard: late-arrival cancel must not
                 # corrupt a terminal-state row.
-                if fresh.status in TERMINAL_STATUSES:
+                if fresh.status in terminal_statuses:
                     return
                 fresh.status = "failed"
                 fresh.error = "cancelled"
@@ -1865,14 +1877,14 @@ class ProbeService:
             # the in-memory copy is still ``running``. Skip the
             # mutation for terminal states so the helper is fully
             # idempotent at the in-memory layer too.
-            if getattr(row, "status", None) not in TERMINAL_STATUSES:
+            if getattr(row, "status", None) not in terminal_statuses:
                 row.status = "failed"
                 row.error = "cancelled"
                 row.completed_at = completed_at
             return
 
         # Legacy: write through self.db (v0.4.12 path).
-        if getattr(row, "status", None) in TERMINAL_STATUSES:
+        if getattr(row, "status", None) in terminal_statuses:
             return
         row.status = "failed"
         row.error = "cancelled"

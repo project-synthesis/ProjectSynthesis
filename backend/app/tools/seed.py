@@ -285,10 +285,20 @@ async def handle_seed(
     # WriteQueue post-polymorphic-collapse. Resolve from app.state via
     # the explicit ``write_queue`` parameter; fall back to a transient
     # in-process queue when not supplied (tests + cold-start boot).
+    # Engine resolution prefers the session_factory's bind (so test
+    # in-memory engines pass through correctly) before falling back to
+    # the global engine.
     _wq = write_queue
     if _wq is None:
         from app.services.write_queue import WriteQueue
-        from app.database import engine as _engine
+        _engine = None
+        try:
+            _engine = getattr(async_session_factory, "kw", {}).get("bind")
+        except Exception:
+            _engine = None
+        if _engine is None:
+            from app.database import engine as _global_engine
+            _engine = _global_engine
         _wq = WriteQueue(_engine)
         await _wq.start()
         _transient_wq = True
