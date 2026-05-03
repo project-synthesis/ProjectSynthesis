@@ -176,10 +176,19 @@ async def writer_engine_inmem(tmp_path):
     is implicitly single-connection — so ``pool_size``/``max_overflow`` are
     not applicable here and SQLAlchemy raises ``TypeError`` if passed. The
     single-writer semantic is preserved by the pool topology itself.
+
+    The schema (``Base.metadata.create_all``) is materialized so tests that
+    submit ORM work to ``WriteQueue`` (e.g. v0.4.13 cycle 2's
+    ``test_bulk_persist_routes_through_write_queue``) can insert into the
+    canonical tables. Tests that don't touch ORM tables are unaffected — the
+    extra DDL is one-shot and idempotent.
     """
     engine = create_async_engine(
         "sqlite+aiosqlite:///file:memdb_writer_unit?mode=memory&cache=shared&uri=true",
     )
+    from app.models import Base
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield engine
     await engine.dispose()
 
