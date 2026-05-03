@@ -14,6 +14,14 @@ Two entry points:
 All operations are idempotent and safe to re-run. Failures are logged
 but never prevent startup or interrupt the recurring loop.
 
+v0.4.13 cycle 8: both entry points accept an optional ``write_queue``
+keyword argument. When supplied, the final commit routes through
+``write_queue.submit()`` under ``operation_label='gc_startup_commit'``
+or ``'gc_recurring_commit'``. The per-pass mutations still build up on
+the supplied ``db`` (which under cycle 9 lifespan wiring is a writer
+session anyway); this preserves the existing single-transaction
+semantics of the GC sweep.
+
 Copyright 2025-2026 Project Synthesis contributors.
 """
 
@@ -21,9 +29,13 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +50,47 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-async def run_startup_gc(db: AsyncSession) -> None:
+async def run_startup_gc(
+    db: AsyncSession,
+    *,
+    write_queue: "WriteQueue | None" = None,
+) -> None:
     """Run all garbage collection passes in a single transaction.
 
     Called during backend lifespan startup. Each pass is independent —
     if one fails, the others still run.
+
+    v0.4.13 cycle 8: when ``write_queue`` is supplied, the entire sweep
+    (read + DELETEs + UPDATE + commit) runs inside a single
+    ``write_queue.submit()`` callback under
+    ``operation_label='gc_startup_commit'`` so the cumulative writes
+    serialize against every other backend writer through the
+    single-writer queue. The legacy direct-session path is retained
+    behind the ``write_queue is None`` branch.
     """
+    if write_queue is not None:
+        async def _do_sweep(write_db: AsyncSession) -> int:
+            total = 0
+            total += await _gc_failed_optimizations(write_db)
+            total += await _gc_archived_zero_member_clusters(write_db)
+            total += await _gc_orphan_meta_patterns(write_db)
+            total += await _gc_orphan_probe_runs(write_db)
+            total += await _gc_test_leak_optimizations(write_db)
+            total += await _gc_reconcile_member_counts(write_db)
+            if total > 0:
+                await write_db.commit()
+            return total
+
+        total_cleaned = await write_queue.submit(
+            _do_sweep, operation_label="gc_startup_commit",
+        )
+        if total_cleaned > 0:
+            logger.info("Startup GC: cleaned %d records total", total_cleaned)
+        else:
+            logger.debug("Startup GC: nothing to clean")
+        return
+
+    # Legacy: write through ``db`` directly.
     total_cleaned = 0
 
     total_cleaned += await _gc_failed_optimizations(db)
@@ -354,12 +401,40 @@ def _count_func():
     return _f.count()
 
 
-async def run_recurring_gc(db: AsyncSession) -> None:
+async def run_recurring_gc(
+    db: AsyncSession,
+    *,
+    write_queue: "WriteQueue | None" = None,
+) -> None:
     """Run all recurring garbage collection passes in a single transaction.
 
     Called hourly by ``recurring_gc_task`` in ``main.py``. Keeps token and
     session state from accumulating between restarts.
+
+    v0.4.13 cycle 8: when ``write_queue`` is supplied, the entire sweep
+    runs inside a single ``write_queue.submit()`` callback under
+    ``operation_label='gc_recurring_commit'`` so the cumulative writes
+    serialize against every other backend writer.
     """
+    if write_queue is not None:
+        async def _do_sweep(write_db: AsyncSession) -> int:
+            total = 0
+            total += await _gc_expired_github_tokens(write_db)
+            total += await _gc_orphan_linked_repos(write_db)
+            if total > 0:
+                await write_db.commit()
+            return total
+
+        total_cleaned = await write_queue.submit(
+            _do_sweep, operation_label="gc_recurring_commit",
+        )
+        if total_cleaned > 0:
+            logger.info("Recurring GC: cleaned %d records total", total_cleaned)
+        else:
+            logger.debug("Recurring GC: nothing to clean")
+        return
+
+    # Legacy: write through ``db`` directly.
     total_cleaned = 0
 
     total_cleaned += await _gc_expired_github_tokens(db)

@@ -1,15 +1,25 @@
-"""FeedbackService — CRUD and aggregation for the feedbacks table."""
+"""FeedbackService — CRUD and aggregation for the feedbacks table.
+
+v0.4.13 cycle 8: writer paths route through ``self._write_queue`` when
+set; ``self._session`` becomes read-side only. Legacy direct-session
+writes survive in the ``self._write_queue is None`` branch for
+backward-compat with tests + callers that haven't been wired through
+the lifespan queue yet.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Feedback, Optimization
 from app.services.adaptation_tracker import AdaptationTracker
+
+if TYPE_CHECKING:
+    from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +31,22 @@ class FeedbackService:
 
     Persists feedback rows and synchronously drives strategy-affinity
     adaptation via :class:`AdaptationTracker`.
+
+    v0.4.13 cycle 8: when ``write_queue`` is supplied, ``create_feedback``
+    routes its commit through ``write_queue.submit()`` under
+    ``operation_label='feedback_create'`` so the write serializes against
+    every other backend writer. The legacy ``self._session.commit()``
+    path is retained behind the ``write_queue is None`` guard.
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        write_queue: "WriteQueue | None" = None,
+    ) -> None:
         self._session = session
+        self._write_queue = write_queue
 
     # ------------------------------------------------------------------
     # Write
@@ -53,7 +75,7 @@ class FeedbackService:
         if rating not in _VALID_RATINGS:
             raise ValueError(f"Invalid rating {rating!r}: must be 'thumbs_up' or 'thumbs_down'")
 
-        # Validate parent optimization exists
+        # Validate parent optimization exists (read-side, fine on self._session).
         result = await self._session.execute(
             select(Optimization).where(Optimization.id == optimization_id)
         )
@@ -61,6 +83,113 @@ class FeedbackService:
         if opt is None:
             raise ValueError(f"Optimization {optimization_id!r} not found")
 
+        # ------------------------------------------------------------------
+        # v0.4.13 cycle 8: route the INSERT + post-insert side-effect
+        # writes (AdaptationTracker affinity update + MetaPattern source_count
+        # bump) through ``self._write_queue.submit`` when set, so all the
+        # writes serialize against every other backend writer through the
+        # single-writer queue. Legacy direct-session path retained behind
+        # the ``write_queue is None`` branch for tests + callers that
+        # haven't yet been wired through the lifespan queue.
+        # ------------------------------------------------------------------
+        opt_task_type = opt.task_type
+        opt_strategy = opt.strategy_used
+
+        if self._write_queue is not None:
+            from sqlalchemy import update as sa_update
+
+            from app.models import MetaPattern, OptimizationPattern
+
+            async def _do_create(write_db: AsyncSession) -> Feedback:
+                _fb = Feedback(
+                    optimization_id=optimization_id,
+                    rating=rating,
+                    comment=comment,
+                )
+                write_db.add(_fb)
+                await write_db.commit()
+                await write_db.refresh(_fb)
+
+                # Adaptation tracker side-effect: same writer session.
+                if opt_task_type and opt_strategy:
+                    try:
+                        tracker = AdaptationTracker(write_db)
+                        if await tracker.check_degenerate(opt_task_type, opt_strategy):
+                            logger.info(
+                                "Skipping affinity update — degenerate feedback "
+                                "detected for task_type=%s strategy=%s",
+                                opt_task_type, opt_strategy,
+                            )
+                        else:
+                            await tracker.update_affinity(
+                                opt_task_type, opt_strategy, rating,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "AdaptationTracker.update_affinity failed for "
+                            "optimization %s — ignoring",
+                            optimization_id,
+                        )
+
+                # Pattern feedback loop on the same writer session.
+                try:
+                    pat_q = await write_db.execute(
+                        select(OptimizationPattern.meta_pattern_id).where(
+                            OptimizationPattern.optimization_id == optimization_id,
+                            OptimizationPattern.meta_pattern_id.isnot(None),
+                        )
+                    )
+                    pattern_ids = [r[0] for r in pat_q.all()]
+                    if pattern_ids and rating == "thumbs_up":
+                        await write_db.execute(
+                            sa_update(MetaPattern)
+                            .where(MetaPattern.id.in_(pattern_ids))
+                            .values(source_count=MetaPattern.source_count + 1)
+                        )
+                        await write_db.commit()
+                        logger.info(
+                            "pattern_feedback: optimization=%s rating=%s "
+                            "patterns_boosted=%d",
+                            optimization_id, rating, len(pattern_ids),
+                        )
+                    elif pattern_ids:
+                        logger.info(
+                            "pattern_feedback: optimization=%s rating=%s "
+                            "patterns=%d (no boost for thumbs_down)",
+                            optimization_id, rating, len(pattern_ids),
+                        )
+                except Exception:
+                    logger.debug(
+                        "Pattern feedback tracking failed (non-fatal)",
+                        exc_info=True,
+                    )
+                return _fb
+
+            fb = await self._write_queue.submit(
+                _do_create, operation_label="feedback_create",
+            )
+
+            logger.info(
+                "Feedback created: id=%s optimization_id=%s rating=%s",
+                fb.id, optimization_id, rating,
+            )
+
+            # Publish real-time event for cross-source notifications
+            try:
+                from app.services.event_bus import event_bus
+                event_bus.publish("feedback_submitted", {
+                    "optimization_id": optimization_id,
+                    "rating": rating,
+                    "feedback_id": fb.id,
+                })
+            except Exception:
+                logger.debug("Event bus publish failed for feedback — ignoring")
+
+            return fb
+
+        # ------------------------------------------------------------------
+        # Legacy: write through self._session directly (write_queue is None).
+        # ------------------------------------------------------------------
         fb = Feedback(
             optimization_id=optimization_id,
             rating=rating,

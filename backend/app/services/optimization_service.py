@@ -1,4 +1,11 @@
-"""OptimizationService — CRUD, sort/filter, and score distribution for Optimizations."""
+"""OptimizationService — CRUD, sort/filter, and score distribution for Optimizations.
+
+v0.4.13 cycle 8: ``delete_optimizations`` routes the bulk DELETE through
+``self._write_queue`` when set; ``self._session`` becomes read-side only
+on that path. Legacy direct-session writes survive in the
+``write_queue is None`` branch for backward-compat with tests + callers
+that haven't been wired through the lifespan queue yet.
+"""
 
 from __future__ import annotations
 
@@ -6,13 +13,16 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import asc, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Optimization
 from app.services.event_bus import event_bus
+
+if TYPE_CHECKING:
+    from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +75,25 @@ _SCORE_COLUMNS: list[str] = [
 
 
 class OptimizationService:
-    """Data-access service for the ``optimizations`` table."""
+    """Data-access service for the ``optimizations`` table.
 
-    def __init__(self, session: AsyncSession) -> None:
+    v0.4.13 cycle 8: when ``write_queue`` is supplied,
+    ``delete_optimizations`` routes its commit through
+    ``write_queue.submit()`` under
+    ``operation_label='optimization_bulk_delete'`` so the write
+    serializes against every other backend writer through the
+    single-writer queue. The legacy ``self._session.commit()`` path is
+    retained behind the ``write_queue is None`` guard.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        write_queue: "WriteQueue | None" = None,
+    ) -> None:
         self._session = session
+        self._write_queue = write_queue
 
     # ------------------------------------------------------------------
     # Lookups
@@ -304,6 +329,8 @@ class OptimizationService:
 
         # Snapshot cluster_id / project_id for each target so we can emit
         # events and report affected clusters after the DELETE fires.
+        # Read-side: safe on self._session (which is bound to the read
+        # engine when the queue is in use).
         rows = (
             await self._session.execute(
                 select(
@@ -322,12 +349,31 @@ class OptimizationService:
             if project_id:
                 result.affected_project_ids.add(project_id)
 
-        # Single DELETE — DB cascade handles dependents.
-        deleted = await self._session.execute(
-            delete(Optimization).where(Optimization.id.in_(ids))
-        )
-        result.deleted = int(deleted.rowcount or 0)
-        await self._session.commit()
+        # ------------------------------------------------------------------
+        # v0.4.13 cycle 8: route the DELETE + commit through the
+        # write-queue when set, so the bulk delete serializes against
+        # every other backend writer through the single-writer queue.
+        # operation_label='optimization_bulk_delete'.
+        # ------------------------------------------------------------------
+        if self._write_queue is not None:
+            async def _do_delete(write_db: AsyncSession) -> int:
+                deleted = await write_db.execute(
+                    delete(Optimization).where(Optimization.id.in_(ids))
+                )
+                rc = int(deleted.rowcount or 0)
+                await write_db.commit()
+                return rc
+
+            result.deleted = await self._write_queue.submit(
+                _do_delete, operation_label="optimization_bulk_delete",
+            )
+        else:
+            # Legacy: write through self._session directly.
+            deleted = await self._session.execute(
+                delete(Optimization).where(Optimization.id.in_(ids))
+            )
+            result.deleted = int(deleted.rowcount or 0)
+            await self._session.commit()
 
         for opt_id, cluster_id, project_id in rows:
             event_bus.publish(
