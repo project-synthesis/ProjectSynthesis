@@ -520,3 +520,84 @@ class TestBulkPersistOperate:
         # the queue, but we want pytest to keep the fixture in scope so
         # writer cleanup runs deterministically.
         _ = writer_engine_inmem
+
+
+# ---------------------------------------------------------------------------
+# Cycle 3: batch_taxonomy_assign migration to WriteQueue
+# ---------------------------------------------------------------------------
+
+
+class TestBatchTaxonomyAssignViaWriteQueue:
+    """RED phase: pin the new
+    ``batch_taxonomy_assign(results, write_queue, batch_id)`` signature that
+    GREEN will implement. Under the v0.4.12 ``session_factory`` signature the
+    test fails — confirming the migration target before any production code
+    changes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_batch_taxonomy_assign_routes_through_queue(
+        self, write_queue_inmem, writer_engine_inmem, monkeypatch,
+    ):
+        """RED: batch_taxonomy_assign must call write_queue.submit with
+        operation_label='batch_taxonomy_assign'.
+
+        Currently FAILS because ``batch_taxonomy_assign`` still has its
+        v0.4.12 ``session_factory`` signature ((``WriteQueue`` is not
+        callable as a context manager). GREEN will swap the signature so
+        the queue receives the work via the same Option C dual-typed
+        pattern ``bulk_persist`` adopted in cycle 2.
+        """
+        import numpy as np
+
+        from app.services import batch_persistence
+
+        # Pre-stage a cluster row so the OptimizationPattern FK on
+        # cluster_id resolves cleanly when assign_cluster reuses an
+        # existing centroid (defensive — the per-prompt path also adds
+        # new clusters from scratch, but we want both paths covered).
+        await create_prestaged_cluster(
+            writer_engine_inmem, cluster_id="ta-prestaged-cluster",
+        )
+
+        # Capture submit() invocations on the queue so we can assert that
+        # the canonical path went through it.
+        captured: list[str] = []
+        original_submit = write_queue_inmem.submit
+
+        async def _capture_submit(work, *, timeout=None, operation_label=None):
+            captured.append(operation_label or "")
+            return await original_submit(
+                work, timeout=timeout, operation_label=operation_label,
+            )
+
+        monkeypatch.setattr(write_queue_inmem, "submit", _capture_submit)
+
+        # Pre-persist a row so taxonomy_assign has something to operate on.
+        # The pending must carry a non-None embedding because
+        # batch_taxonomy_assign filters on ``r.embedding``.
+        pending = _make_passing_pending(batch_id="ta-test")
+        pending.embedding = np.zeros(384, dtype=np.float32).tobytes()
+        await batch_persistence.bulk_persist(
+            [pending], write_queue_inmem, batch_id="ta-test",
+        )
+        # Discard the bulk_persist label so we only assert on the
+        # taxonomy-assign submission below.
+        captured.clear()
+
+        # Migration target: batch_taxonomy_assign now takes write_queue,
+        # not session_factory.
+        result = await batch_persistence.batch_taxonomy_assign(
+            [pending], write_queue_inmem, batch_id="ta-test",
+        )
+
+        assert "batch_taxonomy_assign" in captured, (
+            f"expected 'batch_taxonomy_assign' in captured submit labels, "
+            f"got {captured!r}"
+        )
+        # The function returns a dict summary; clusters_assigned should be
+        # >= 0 (could be 0 if the assign_cluster path raised internally,
+        # 1 if a new cluster was created — both acceptable for a routing
+        # check that just confirms the queue received the work).
+        assert isinstance(result, dict)
+        assert result.get("clusters_assigned", -1) >= 0
