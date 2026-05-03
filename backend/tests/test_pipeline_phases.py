@@ -538,3 +538,677 @@ class TestPersistAndPropagateViaQueue:
             "async_session_factory() inside the queue callback; "
             f"got {len(factory_calls)} call(s)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Cycle 4 OPERATE: dynamic concurrency + legacy-path stress + provenance/usage
+#                  propagation under realistic load
+# ---------------------------------------------------------------------------
+#
+# Per ``feedback_tdd_protocol.md`` Phase 5, dynamic verification under
+# realistic concurrent load — proves the migrated ``persist_and_propagate``
+# actually delivers on the queue's promises (no ``database is locked`` under
+# N=5 contention) AND pins five invariants the integrate review surfaced:
+#
+# * Test #1 — N=5 concurrent QUEUE callers: queue serialization eliminates
+#   writer contention, all 5 events fire, all 5 rows land, queue depth never
+#   exceeds the cap.
+# * Test #2 — N=5 concurrent LEGACY callers: documents the v0.4.13 cycle 4
+#   transitional risk surfaced by integrate concern #2 — the legacy
+#   ``(db, inputs)`` path is still in use by ``pipeline.py`` until cycle 5
+#   migrates it. Verifies whether ``database is locked`` is recoverable via
+#   ``WriterLockedAsyncSession`` or surfaces to the caller. Findings inform
+#   cycle 5 migration scope.
+# * Test #3 — provenance writes after commit: pins the v0.4.5 invariant
+#   surfaced by integrate concern #3 (full ``auto_injected_*`` propagation)
+#   surviving cycle 4. ``OptimizationPattern(relationship='injected')`` rows
+#   land because the parent commit happens BEFORE
+#   ``record_injection_provenance``.
+# * Test #4 — usage propagation through queue: pins integrate concern #3 —
+#   ``taxonomy_engine.increment_usage`` fires for ``auto_injected_cluster_ids``
+#   AND ``applied_pattern_ids`` paths inside the same queue callback, with
+#   ``PromptCluster.usage_count`` actually incremented (no separate
+#   ``usage_db`` session).
+# * Test #5 — event emission ordering: ``optimization_created`` fires AFTER
+#   ``submit()`` returns; if ``submit()`` raises, no event fires (failure
+#   semantics from cycle 2/3 contract).
+# ---------------------------------------------------------------------------
+
+
+class TestPersistAndPropagateOperate:
+    """OPERATE phase: mirrors cycle 2/3 ``Test*Operate`` structure for
+    cycle 4 ``persist_and_propagate``.
+
+    Test #1 uses ``writer_engine_file`` for real WAL contention. Test #2
+    uses a separate file-mode engine + ``WriterLockedAsyncSession`` to
+    exercise the legacy path without the queue. Tests #3-5 use the
+    in-memory queue fixture (logic-only, no contention required).
+
+    The autouse ``_reset_taxonomy_engine`` fixture below ensures every
+    test starts with a fresh ``TaxonomyEngine`` singleton + dirty-set so
+    accumulated state from prior tests doesn't bleed into assert paths.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_taxonomy_engine(self):
+        """Each test gets a fresh process singleton.
+
+        ``persist_and_propagate`` reads ``inputs.taxonomy_engine`` for
+        usage propagation; tests that don't pass an engine still touch
+        the singleton transitively through the event_bus + decision
+        logger paths. Reusing a singleton across tests makes the engine
+        state path-dependent on test ordering.
+        """
+        from app.services.taxonomy import reset_engine
+        reset_engine()
+        yield
+        reset_engine()
+
+    # -- Test #1: N=5 concurrent QUEUE callers, real WAL contention ---------
+
+    @pytest.mark.asyncio
+    async def test_persist_and_propagate_n5_concurrent_via_queue(
+        self, writer_engine_file, caplog,
+    ):
+        """N=5 concurrent ``persist_and_propagate`` callers, each with a
+        distinct trace_id + opt_id, routing through the ``WriteQueue``.
+
+        The queue's serialization is the only defense against SQLite
+        writer contention — without it, file-mode WAL with concurrent
+        writers surfaces 'database is locked' in SQLAlchemy ERROR-level
+        logs. Five commits per call (Optimization + applied + provenance
+        + usefulness + usage) all collapse into ONE ``submit()``.
+
+        Asserts:
+        - All 5 ``optimization_created`` events fire (one per call).
+        - All 5 ``Optimization`` rows in DB (verifiable via SELECT).
+        - Zero 'database is locked' log records.
+        - Queue depth never exceeds ``max_depth`` during the run.
+        - Wall-clock budget < 30s.
+        """
+        import asyncio as _asyncio
+        import logging as _logging
+        import time as _time
+        import uuid as _uuid
+
+        from sqlalchemy import text as _sa_text
+
+        from app.models import Base
+        from app.services import pipeline_phases as pp
+        from app.services.event_bus import event_bus
+        from app.services.write_queue import WriteQueue
+
+        # Materialize schema on the file-mode engine (writer_engine_file
+        # does NOT auto-create tables, only writer_engine_inmem does).
+        async with writer_engine_file.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        queue = WriteQueue(writer_engine_file, max_depth=64)
+        await queue.start()
+
+        # Subscribe BEFORE persists fire so we don't miss events.
+        ev_queue: _asyncio.Queue = _asyncio.Queue(maxsize=500)
+        event_bus._subscribers.add(ev_queue)
+
+        # Track queue depth across callers — a sentinel sample loop.
+        observed_depths: list[int] = []
+        depth_sampler_done = _asyncio.Event()
+
+        async def _sample_depth() -> None:
+            while not depth_sampler_done.is_set():
+                observed_depths.append(queue.queue_depth)
+                try:
+                    await _asyncio.wait_for(
+                        depth_sampler_done.wait(), timeout=0.05,
+                    )
+                except _asyncio.TimeoutError:
+                    pass
+
+        sampler_task = _asyncio.create_task(_sample_depth())
+
+        try:
+            # Build 5 distinct PersistenceInputs with unique opt_ids/trace_ids.
+            inputs_list = [
+                _build_persistence_inputs_fixture(opt_id=str(_uuid.uuid4()))
+                for _ in range(5)
+            ]
+            for i, inp in enumerate(inputs_list):
+                # Pin trace_id so we can map events back to callers.
+                # PersistenceInputs is a frozen-style dataclass via
+                # ``@dataclass`` — assignment works, no immutability.
+                object.__setattr__(inp, "trace_id", f"trace-c4-op-{i}")
+
+            t0 = _time.monotonic()
+            with caplog.at_level(_logging.WARNING):
+                await _asyncio.gather(*[
+                    pp.persist_and_propagate(inp, write_queue=queue)
+                    for inp in inputs_list
+                ])
+            elapsed = _time.monotonic() - t0
+            depth_sampler_done.set()
+            await sampler_task
+
+            # O1: SELECT to verify user-visible state. 5 rows in DB.
+            opt_ids = [inp.opt_id for inp in inputs_list]
+            ids_param = ",".join(f"'{oid}'" for oid in opt_ids)
+            async with writer_engine_file.connect() as conn:
+                count_q = await conn.execute(_sa_text(
+                    f"SELECT COUNT(*) FROM optimizations "  # noqa: S608
+                    f"WHERE id IN ({ids_param})"
+                ))
+                row = count_q.first()
+                row_count = int(row[0]) if row else 0
+            assert row_count == 5, (
+                f"expected 5 Optimization rows from N=5 concurrent persists, "
+                f"got {row_count}"
+            )
+
+            # O2: zero 'database is locked' anywhere in caplog.
+            locked_records = [
+                r for r in caplog.records
+                if "database is locked" in r.getMessage().lower()
+            ]
+            assert locked_records == [], (
+                f"got {len(locked_records)} 'database is locked' records "
+                f"under N=5 queue concurrency: "
+                f"{[r.getMessage() for r in locked_records[:3]]}"
+            )
+
+            # 5 ``optimization_created`` events fired (one per call).
+            collected: list[dict] = []
+            while True:
+                try:
+                    collected.append(ev_queue.get_nowait())
+                except _asyncio.QueueEmpty:
+                    break
+            created_events = [
+                e for e in collected if e.get("event") == "optimization_created"
+            ]
+            assert len(created_events) == 5, (
+                f"expected 5 optimization_created events, "
+                f"got {len(created_events)}"
+            )
+            # Each trace_id appears exactly once in event payloads.
+            trace_ids_in_events = sorted(
+                e["data"].get("trace_id") for e in created_events
+            )
+            expected_traces = sorted(
+                f"trace-c4-op-{i}" for i in range(5)
+            )
+            assert trace_ids_in_events == expected_traces, (
+                f"trace_id set mismatch: got {trace_ids_in_events}, "
+                f"expected {expected_traces}"
+            )
+
+            # Queue depth bounded — never exceeded our max_depth (64).
+            max_seen_depth = max(observed_depths) if observed_depths else 0
+            assert max_seen_depth <= 64, (
+                f"queue depth peaked at {max_seen_depth}, exceeded cap"
+            )
+
+            # Wall-clock budget: 5 persists under N=5 concurrency comfortably <30s.
+            assert elapsed < 30.0, (
+                f"queue stress run took {elapsed:.1f}s, > 30s budget"
+            )
+        finally:
+            depth_sampler_done.set()
+            if not sampler_task.done():
+                await sampler_task
+            event_bus._subscribers.discard(ev_queue)
+            await queue.stop(drain_timeout=5.0)
+
+    # -- Test #2: legacy (db, inputs) path under contention -----------------
+
+    @pytest.mark.asyncio
+    async def test_persist_and_propagate_legacy_path_under_contention(
+        self, tmp_path, caplog,
+    ):
+        """N=5 concurrent ``persist_and_propagate(db, inputs)`` callers
+        on the LEGACY two-positional shape, each opening its own session
+        via ``async_sessionmaker``.
+
+        This is the path ``pipeline.py:651`` uses today — cycle 5 hasn't
+        migrated it. The OPERATE intent here is to DOCUMENT (not assert
+        zero) ``database is locked`` recovery behavior because the
+        legacy path explicitly removed retry semantics in v0.4.13:
+        single-attempt commits, exceptions propagate to the caller.
+
+        Asserts:
+        - All 5 calls complete (success or recoverable exception).
+        - Successful rows are present in the DB.
+        - If ``database is locked`` records appear, they're documented
+          as a transitional risk for cycle 5 migration scope. The
+          ``WriterLockedAsyncSession`` writer mutex (held across the
+          flush→commit span) is the production mitigation.
+
+        This test does NOT use the queue fixture — it directly exercises
+        the legacy path that the queue replaces.
+        """
+        import asyncio as _asyncio
+        import logging as _logging
+        import uuid as _uuid
+
+        from sqlalchemy import event as _sa_event
+        from sqlalchemy import text as _sa_text
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from app.config import settings as _settings
+        from app.database import WriterLockedAsyncSession
+        from app.models import Base
+        from app.services import pipeline_phases as pp
+
+        # Build a fresh file-mode engine + production session class so the
+        # writer-mutex contract from the prod code applies. We do NOT use
+        # the ``writer_engine_file`` fixture here because we want each
+        # caller to open its OWN session (mirrors pipeline.py's pattern).
+        db_path = tmp_path / "legacy_test.db"
+        engine = create_async_engine(
+            f"sqlite+aiosqlite:///{db_path}",
+            pool_size=5,
+            max_overflow=5,
+        )
+
+        # Apply production PRAGMAs so the test mirrors prod lock topology.
+
+        @_sa_event.listens_for(engine.sync_engine, "connect")
+        def _set_pragmas(dbapi_conn, _record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute(
+                f"PRAGMA busy_timeout="
+                f"{_settings.DB_LOCK_TIMEOUT_SECONDS * 1000}",
+            )
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+
+            session_factory = async_sessionmaker(
+                engine,
+                class_=WriterLockedAsyncSession,
+                expire_on_commit=False,
+            )
+
+            inputs_list = [
+                _build_persistence_inputs_fixture(opt_id=str(_uuid.uuid4()))
+                for _ in range(5)
+            ]
+            for i, inp in enumerate(inputs_list):
+                object.__setattr__(inp, "trace_id", f"trace-c4-leg-{i}")
+
+            async def _legacy_call(inp):
+                """Open own session per caller — mirrors pipeline.py."""
+                async with session_factory() as db:
+                    await pp.persist_and_propagate(db, inp)
+
+            with caplog.at_level(_logging.WARNING):
+                results = await _asyncio.gather(
+                    *[_legacy_call(inp) for inp in inputs_list],
+                    return_exceptions=True,
+                )
+
+            # Documented finding: count successes vs recoverable exceptions.
+            successes = [r for r in results if not isinstance(r, BaseException)]
+            failures = [r for r in results if isinstance(r, BaseException)]
+
+            # SELECT to count rows that actually landed.
+            opt_ids = [inp.opt_id for inp in inputs_list]
+            ids_param = ",".join(f"'{oid}'" for oid in opt_ids)
+            async with engine.connect() as conn:
+                count_q = await conn.execute(_sa_text(
+                    f"SELECT COUNT(*) FROM optimizations "  # noqa: S608
+                    f"WHERE id IN ({ids_param})"
+                ))
+                row = count_q.first()
+                rows_landed = int(row[0]) if row else 0
+
+            # Documented invariant: # successes == # rows landed.
+            # ``WriterLockedAsyncSession`` should serialize the 5 callers
+            # via ``db_writer_lock``, eliminating ``database is locked``.
+            # If failures appear, they're propagated unhandled to the
+            # caller (cycle 5 migration scope).
+            assert len(successes) == rows_landed, (
+                f"successes ({len(successes)}) != rows landed ({rows_landed}); "
+                f"successes/failures inconsistent with DB state. "
+                f"failures={[type(f).__name__ for f in failures]}"
+            )
+
+            # If WriterLockedAsyncSession does its job, all 5 succeed.
+            # Pin the expectation but document the failure mode.
+            if failures:
+                # Diagnostic: log out the failure types for cycle 5 scoping.
+                # We don't fail the test on this — the legacy path is
+                # documented as having no retry; we want this test green
+                # AND informative if behavior changes.
+                fail_types = sorted({type(f).__name__ for f in failures})
+                # The expected 'database is locked' surfaces as
+                # OperationalError. Document if other exception types appear.
+                pp.logger.warning(
+                    "Legacy path under N=5 contention surfaced "
+                    "%d/%d failures: types=%s",
+                    len(failures), len(results), fail_types,
+                )
+
+            # Production assertion: writer mutex eliminates lock contention
+            # under in-process callers. This is the mitigation cited in
+            # the legacy-path docstring. If this fails, cycle 5 needs to
+            # migrate pipeline.py URGENTLY.
+            assert len(successes) == 5, (
+                f"WriterLockedAsyncSession should serialize N=5 callers; "
+                f"got {len(successes)}/5 successes, "
+                f"failures={[type(f).__name__ for f in failures]}. "
+                f"Cycle 5 migration scope must address this if surfaced."
+            )
+
+            # ``database is locked`` records ARE acceptable here (recovery
+            # by busy_timeout retry inside SQLite is normal); the test
+            # passes as long as all 5 rows landed. We grep for diagnostic
+            # purposes only.
+            locked_records = [
+                r for r in caplog.records
+                if "database is locked" in r.getMessage().lower()
+            ]
+            # Documented finding for cycle 5 plan.
+            if locked_records:
+                pp.logger.info(
+                    "Legacy path emitted %d 'database is locked' records "
+                    "(recoverable via busy_timeout); cycle 5 should migrate "
+                    "pipeline.py for full elimination",
+                    len(locked_records),
+                )
+        finally:
+            await engine.dispose()
+
+    # -- Test #3: provenance writes after commit ----------------------------
+
+    @pytest.mark.asyncio
+    async def test_persist_and_propagate_provenance_writes_after_commit(
+        self, write_queue_inmem, writer_engine_inmem,
+    ):
+        """A ``persist_and_propagate`` call with non-empty
+        ``auto_injected_*`` fields must result in
+        ``OptimizationPattern(relationship='injected')`` rows being
+        written post-commit inside the same queue callback.
+
+        Pins the v0.4.5 invariant (cited in INTEGRATE concern #3): the
+        FK on ``Optimization.id`` requires the parent row to be durable
+        BEFORE provenance SAVEPOINTs run. The cycle 4 migration moves
+        all 5 commits inside the queue callback; the parent commit
+        (step 3) must precede ``record_injection_provenance`` (step 4).
+
+        Asserts:
+        - Optimization row landed.
+        - At least one OptimizationPattern row with relationship='injected'.
+        - The injected row carries the supplied cluster_id + similarity.
+        """
+        import uuid as _uuid
+
+        from sqlalchemy import text as _sa_text
+
+        from app.services import pipeline_phases as pp
+        from tests._write_queue_helpers import create_prestaged_cluster
+
+        # Pre-create cluster for FK resolution.
+        cluster_id = await create_prestaged_cluster(
+            writer_engine_inmem, cluster_id="c4-prov-cluster",
+        )
+
+        opt_id = str(_uuid.uuid4())
+        inputs = _build_persistence_inputs_fixture(opt_id=opt_id)
+        # Wire up auto_injected_* — both cluster_ids AND patterns must be
+        # set so persist_and_propagate hits the ``cluster_ids`` branch
+        # of record_injection_provenance.
+        object.__setattr__(inputs, "auto_injected_cluster_ids", [cluster_id])
+        object.__setattr__(
+            inputs, "auto_injected_similarity_map",
+            {cluster_id: 0.91},
+        )
+        # Empty injected patterns list — topic provenance only (no
+        # cross-cluster meta-pattern injection). This keeps the test
+        # focused on the post-commit ordering invariant.
+        object.__setattr__(inputs, "auto_injected_patterns", [])
+
+        await pp.persist_and_propagate(inputs, write_queue=write_queue_inmem)
+
+        # O1: SELECT both the parent + the join row.
+        async with writer_engine_inmem.connect() as conn:
+            opt_check = await conn.execute(_sa_text(
+                "SELECT id FROM optimizations WHERE id = :oid"
+            ), {"oid": opt_id})
+            assert opt_check.first() is not None, (
+                "Optimization row was not committed"
+            )
+
+            prov_check = await conn.execute(_sa_text(
+                "SELECT cluster_id, relationship, similarity "
+                "FROM optimization_patterns "
+                "WHERE optimization_id = :oid AND relationship = 'injected'"
+            ), {"oid": opt_id})
+            prov_rows = list(prov_check.fetchall())
+
+        assert len(prov_rows) >= 1, (
+            "expected >=1 OptimizationPattern row with "
+            "relationship='injected' after persist_and_propagate via queue, "
+            f"got {len(prov_rows)} — provenance write was skipped or "
+            "rolled back (FK error if parent commit ordering inverted)"
+        )
+        assert prov_rows[0].cluster_id == cluster_id
+        assert prov_rows[0].relationship == "injected"
+        assert prov_rows[0].similarity is not None
+        assert abs(prov_rows[0].similarity - 0.91) < 1e-6, (
+            f"expected similarity=0.91 (from similarity_map), "
+            f"got {prov_rows[0].similarity}"
+        )
+
+    # -- Test #4: usage propagation via queue (no separate usage_db) --------
+
+    @pytest.mark.asyncio
+    async def test_persist_and_propagate_usage_propagation_via_queue(
+        self, write_queue_inmem, writer_engine_inmem,
+    ):
+        """``auto_injected_cluster_ids`` MUST trigger
+        ``taxonomy_engine.increment_usage`` inside the queue callback
+        (no separate ``usage_db = async_session_factory()`` session, per
+        cycle 4 spec § 3.4).
+
+        Builds a stub ``taxonomy_engine`` whose ``increment_usage``
+        method directly bumps ``PromptCluster.usage_count`` against the
+        provided session. Verifies that after the queue callback
+        resolves, the cluster's ``usage_count`` is incremented.
+
+        Pins INTEGRATE concern #3 — usage propagation works in the
+        queue callback's session (no separate usage_db needed). Both
+        ``auto_injected_cluster_ids`` AND ``applied_pattern_ids`` paths
+        accumulate into ``local_applied_cluster_ids``; this test
+        focuses on the ``auto_injected_cluster_ids`` path.
+
+        Asserts:
+        - cluster.usage_count incremented from 0 to 1.
+        - increment_usage was called exactly once with the right cid.
+        """
+        import uuid as _uuid
+
+        from sqlalchemy import text as _sa_text
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.services import pipeline_phases as pp
+        from tests._write_queue_helpers import create_prestaged_cluster
+
+        cluster_id = await create_prestaged_cluster(
+            writer_engine_inmem, cluster_id="c4-usage-cluster",
+        )
+
+        # Verify cluster starts at usage_count=0.
+        async with writer_engine_inmem.connect() as conn:
+            initial_q = await conn.execute(_sa_text(
+                "SELECT usage_count FROM prompt_cluster WHERE id = :cid"
+            ), {"cid": cluster_id})
+            initial_row = initial_q.first()
+            initial_usage = int(initial_row[0]) if initial_row else 0
+        assert initial_usage == 0, (
+            f"baseline usage_count expected 0, got {initial_usage}"
+        )
+
+        # Stub taxonomy engine: real ``increment_usage`` issues an atomic
+        # SQL UPDATE on the supplied session. Mirror that contract
+        # minimally — bump the cluster's usage_count by 1.
+        increment_calls: list[tuple[str, AsyncSession]] = []
+
+        class _StubTaxonomyEngine:
+            async def increment_usage(self, cid: str, db) -> None:
+                from sqlalchemy import update as sa_upd
+
+                from app.models import PromptCluster
+                increment_calls.append((cid, db))
+                await db.execute(
+                    sa_upd(PromptCluster)
+                    .where(PromptCluster.id == cid)
+                    .values(usage_count=PromptCluster.usage_count + 1)
+                )
+
+        opt_id = str(_uuid.uuid4())
+        inputs = _build_persistence_inputs_fixture(opt_id=opt_id)
+        # Wire up the path to taxonomy_engine.increment_usage:
+        # auto_injected_cluster_ids feeds local_applied_cluster_ids
+        # at line 1280, then taxonomy_engine.increment_usage fires at 1293.
+        object.__setattr__(inputs, "auto_injected_cluster_ids", [cluster_id])
+        object.__setattr__(
+            inputs, "auto_injected_similarity_map",
+            {cluster_id: 0.85},
+        )
+        object.__setattr__(inputs, "auto_injected_patterns", [])
+        object.__setattr__(inputs, "taxonomy_engine", _StubTaxonomyEngine())
+
+        await pp.persist_and_propagate(inputs, write_queue=write_queue_inmem)
+
+        # O1: usage_count incremented to 1 in DB.
+        async with writer_engine_inmem.connect() as conn:
+            final_q = await conn.execute(_sa_text(
+                "SELECT usage_count FROM prompt_cluster WHERE id = :cid"
+            ), {"cid": cluster_id})
+            final_row = final_q.first()
+            final_usage = int(final_row[0]) if final_row else 0
+        assert final_usage == 1, (
+            f"expected usage_count incremented from 0 → 1 via queue "
+            f"callback, got {final_usage}"
+        )
+
+        # increment_usage was invoked once with the right cluster_id.
+        assert len(increment_calls) == 1, (
+            f"expected exactly 1 increment_usage() call from "
+            f"auto_injected_cluster_ids path, got {len(increment_calls)}"
+        )
+        called_cid, _called_db = increment_calls[0]
+        assert called_cid == cluster_id, (
+            f"increment_usage called with wrong cid: "
+            f"got {called_cid}, expected {cluster_id}"
+        )
+
+    # -- Test #5: event emission AFTER queue resolves -----------------------
+
+    @pytest.mark.asyncio
+    async def test_persist_and_propagate_event_emission_after_queue_resolves(
+        self, write_queue_inmem, writer_engine_inmem, monkeypatch,
+    ):
+        """``optimization_created`` event fires AFTER ``submit()`` returns.
+        If ``submit()`` raises, no event fires (failure semantics from
+        cycle 2/3 contract carry over to cycle 4).
+
+        Asserts (success path):
+        - Subscriber queue empty before invocation.
+        - Exactly 1 ``optimization_created`` event after invocation.
+
+        Asserts (failure path):
+        - Forced ``WriteQueueOverloadedError`` from a mocked submit
+          raises out to caller.
+        - NO ``optimization_created`` event fires.
+        """
+        import asyncio as _asyncio
+        import uuid as _uuid
+
+        from app.services import pipeline_phases as pp
+        from app.services.event_bus import event_bus
+        from app.services.write_queue import WriteQueueOverloadedError
+
+        # ---- Success path ----
+        ev_queue: _asyncio.Queue = _asyncio.Queue(maxsize=200)
+        event_bus._subscribers.add(ev_queue)
+        try:
+            assert ev_queue.qsize() == 0, (
+                "test setup error: subscriber queue had pre-existing events"
+            )
+
+            opt_id_ok = str(_uuid.uuid4())
+            inputs_ok = _build_persistence_inputs_fixture(opt_id=opt_id_ok)
+
+            await pp.persist_and_propagate(
+                inputs_ok, write_queue=write_queue_inmem,
+            )
+
+            collected: list[dict] = []
+            while True:
+                try:
+                    collected.append(ev_queue.get_nowait())
+                except _asyncio.QueueEmpty:
+                    break
+            created_events = [
+                e for e in collected
+                if e.get("event") == "optimization_created"
+                and e["data"].get("id") == opt_id_ok
+            ]
+            assert len(created_events) == 1, (
+                f"expected 1 optimization_created event after success, "
+                f"got {len(created_events)}"
+            )
+        finally:
+            event_bus._subscribers.discard(ev_queue)
+
+        # ---- Failure path: forced submit raise ----
+        ev_queue_fail: _asyncio.Queue = _asyncio.Queue(maxsize=200)
+        event_bus._subscribers.add(ev_queue_fail)
+        try:
+            opt_id_fail = str(_uuid.uuid4())
+            inputs_fail = _build_persistence_inputs_fixture(
+                opt_id=opt_id_fail,
+            )
+
+            # Monkeypatch submit to raise WriteQueueOverloadedError.
+            async def _raise_overloaded(*_a, **_kw):
+                raise WriteQueueOverloadedError(
+                    "simulated overload for failure-path test",
+                )
+
+            monkeypatch.setattr(
+                write_queue_inmem, "submit", _raise_overloaded,
+            )
+
+            with pytest.raises(WriteQueueOverloadedError):
+                await pp.persist_and_propagate(
+                    inputs_fail, write_queue=write_queue_inmem,
+                )
+
+            # No optimization_created event fired for the failed call.
+            collected_fail: list[dict] = []
+            while True:
+                try:
+                    collected_fail.append(ev_queue_fail.get_nowait())
+                except _asyncio.QueueEmpty:
+                    break
+            failed_events = [
+                e for e in collected_fail
+                if e.get("event") == "optimization_created"
+                and e["data"].get("id") == opt_id_fail
+            ]
+            assert failed_events == [], (
+                f"expected NO optimization_created event for failed submit, "
+                f"got {len(failed_events)} — phantom event would represent "
+                f"a row that never persisted"
+            )
+        finally:
+            event_bus._subscribers.discard(ev_queue_fail)
+
+        # Suppress unused-fixture warning — engine reachable via the queue.
+        _ = writer_engine_inmem
