@@ -541,3 +541,303 @@ async def test_execute_maintenance_phases_clears_retry_on_success(
 
     assert engine._maintenance_pending is False
     assert result.snapshot_id == "maint-ok"
+
+
+# ---------------------------------------------------------------------------
+# Cycle 6 RED tests — warm-path phase-level routing through the WriteQueue
+# ---------------------------------------------------------------------------
+#
+# Per spec § 3.6 + plan task 6.2: each warm-path phase function becomes ONE
+# ``submit()`` to the single-writer queue. The 12 v0.4.12 commit sites in
+# ``warm_path.py`` collapse into ~6 phase-level submits. The savepoint +
+# autobegin pattern preserves the v0.4.12 split_failures persistence semantics
+# WITHOUT a separate ``meta_db`` session. Phase 4.5 sub-steps preserve
+# H-v4-3 isolation as 3 separate submits with try/except per sub-step.
+#
+# These tests pin the cycle-6 contract:
+#
+# * ``_run_speculative_phase`` accepts ``write_queue=`` and routes the
+#   Q-gate decision (commit-or-rollback) INSIDE the submit callback.
+# * Split-rejection metadata persists on Q-gate rollback even though the
+#   v0.4.12 ``async with session_factory() as meta_db`` block is gone --
+#   the savepoint pattern + autobegin lets the same writer session that
+#   ran the speculative phase persist the post-rejection writes.
+# * Phase 4.5 (global pattern lifecycle) sub-steps are 3 separate
+#   ``submit()`` calls (promote, validate, retire); a transient failure
+#   in any one sub-step does NOT prevent the others from running --
+#   matches v0.4.12's per-sub-step ``begin_nested()`` SAVEPOINT semantics.
+#
+# Mirrors cycle 2/3/4/5 Option C dual-typed signature. Until cycle 7
+# wires write_queue into engine.py callers, ``write_queue=None`` keeps
+# the legacy ``session_factory`` path live.
+# ---------------------------------------------------------------------------
+
+
+class TestWarmPathPhaseRouting:
+    """Cycle 6 RED → GREEN: warm-path phases route through ``WriteQueue``.
+
+    Mirrors cycles 2-5 Option C dual-typed signatures
+    (``session_factory`` legacy → ``write_queue`` canonical with
+    ``write_queue is not None`` dispatch).
+    """
+
+    pytestmark = pytest.mark.usefixtures("reset_taxonomy_engine")
+
+    @pytest.mark.asyncio
+    async def test_speculative_phase_q_gate_decision_inside_submit_callback(
+        self, write_queue_inmem, monkeypatch,
+    ):
+        """RED: passing ``write_queue=`` to ``_run_speculative_phase`` must
+        produce at least one ``submit()`` call labelled
+        ``warm_phase_<phase_name>``. Q-gate decision (commit-or-rollback)
+        must happen INSIDE the submit callback per spec § 3.6.
+
+        FAILS pre-GREEN with ``TypeError: _run_speculative_phase() got an
+        unexpected keyword argument 'write_queue'`` -- the v0.4.12 signature
+        is ``(phase_name, phase_fn, engine, session_factory, ...)`` only.
+
+        After GREEN, the queue captures one submit per phase invocation;
+        legacy path (when ``write_queue=None``) continues to operate on
+        ``session_factory`` directly.
+        """
+        from app.models import Base
+        from app.services.taxonomy.engine import TaxonomyEngine
+        from app.services.taxonomy.warm_path import _run_speculative_phase
+
+        # Pre-stage two active clusters on the writer engine so Q computes
+        # to a real number (≥2 active non-structural clusters required by
+        # the Q-system). Mirrors cycle 4's prestaged-cluster pattern but
+        # for the warm-path (writer-engine) case.
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        async with write_queue_inmem._writer_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        sf = async_sessionmaker(
+            write_queue_inmem._writer_engine,
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        async with sf() as setup_db:
+            for label in ("Cycle6-SeedA", "Cycle6-SeedB"):
+                setup_db.add(
+                    PromptCluster(
+                        label=label,
+                        state="active",
+                        domain="general",
+                        centroid_embedding=np.random.randn(EMBEDDING_DIM)
+                        .astype(np.float32).tobytes(),
+                        member_count=3,
+                        coherence=0.8,
+                        separation=0.8,
+                        color_hex="#a855f7",
+                    )
+                )
+            await setup_db.commit()
+
+        # Build a minimal engine — same fixture the cycle 4 OPERATE tests use.
+        from app.services.embedding_service import EmbeddingService
+        engine = TaxonomyEngine(embedding_service=EmbeddingService())
+
+        captured: list[str | None] = []
+        original_submit = write_queue_inmem.submit
+
+        async def _capture_submit(work, *, timeout=None, operation_label=None):
+            captured.append(operation_label)
+            return await original_submit(
+                work, timeout=timeout, operation_label=operation_label,
+            )
+
+        monkeypatch.setattr(write_queue_inmem, "submit", _capture_submit)
+
+        # No-op phase function — keeps Q_after == Q_before so the gate accepts.
+        async def no_op_phase(eng, session, split_protected_ids, dirty_ids=None):
+            return PhaseResult(
+                phase="cycle6_test",
+                q_before=0.5,
+                q_after=0.5,
+                accepted=False,  # _run_speculative_phase overwrites this
+                ops_attempted=0,
+                ops_accepted=0,
+            )
+
+        # Pre-GREEN: TypeError because ``_run_speculative_phase`` does not
+        # accept ``write_queue=``. Post-GREEN: routes via the queue worker.
+        await _run_speculative_phase(  # type: ignore[call-arg]
+            "split_emerge", no_op_phase, engine,
+            session_factory=None,  # canonical: queue replaces session_factory
+            write_queue=write_queue_inmem,
+        )
+
+        assert any(
+            (label or "").startswith("warm_phase_") for label in captured
+        ), (
+            "expected at least one submit() with operation_label "
+            f"prefix='warm_phase_'; got {captured!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_split_failures_persist_when_speculative_phase_rolls_back(
+        self, write_queue_inmem,
+    ):
+        """RED: when speculative phase rolls back (Q regression), the
+        split_failures counter on attempted clusters must still increment.
+
+        Pin spec § 3.6: split_failures metadata persists on Q-rejection
+        WITHOUT requiring a separate ``meta_db`` session — the savepoint
+        + autobegin pattern lets the same writer session persist the
+        post-rejection writes after ``savepoint.rollback()``.
+
+        FAILS pre-GREEN: ``write_queue=`` is rejected (TypeError) before
+        the phase even runs. Post-GREEN: the counter increments because
+        the queue callback runs split_failures persistence inside the
+        same writer session that performed the speculative rollback.
+        """
+        from app.models import Base
+        from app.services.embedding_service import EmbeddingService
+        from app.services.taxonomy.cluster_meta import read_meta
+        from app.services.taxonomy.engine import TaxonomyEngine
+        from app.services.taxonomy.warm_path import _run_speculative_phase
+
+        async with write_queue_inmem._writer_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+        sf = async_sessionmaker(
+            write_queue_inmem._writer_engine,
+            class_=AsyncSession, expire_on_commit=False,
+        )
+
+        # Pre-create one cluster that will be the split-attempt target.
+        target_cid = "test-split-fail-cluster-cycle6"
+        async with sf() as setup_db:
+            setup_db.add(
+                PromptCluster(
+                    id=target_cid,
+                    label="cycle6-split-target",
+                    state="active",
+                    domain="general",
+                    centroid_embedding=np.random.randn(EMBEDDING_DIM)
+                    .astype(np.float32).tobytes(),
+                    member_count=10,
+                    coherence=0.8,
+                    separation=0.8,
+                    color_hex="#a855f7",
+                    cluster_metadata={"split_failures": 0},
+                )
+            )
+            # Need a 2nd active cluster so Q is defined.
+            setup_db.add(
+                PromptCluster(
+                    label="cycle6-secondary",
+                    state="active",
+                    domain="general",
+                    centroid_embedding=np.random.randn(EMBEDDING_DIM)
+                    .astype(np.float32).tobytes(),
+                    member_count=3,
+                    coherence=0.8,
+                    separation=0.8,
+                    color_hex="#a855f7",
+                )
+            )
+            await setup_db.commit()
+
+        engine = TaxonomyEngine(embedding_service=EmbeddingService())
+
+        async def force_reject_phase(eng, session, split_protected_ids, dirty_ids=None):
+            """Phase function that returns split_attempted_ids for the
+            target cluster and a Q regression that triggers rollback."""
+            return PhaseResult(
+                phase="split_emerge",
+                q_before=0.7,
+                q_after=0.0,  # massive regression -> Q-gate rejects
+                accepted=False,
+                ops_attempted=1,
+                ops_accepted=1,
+                split_attempted_ids=[target_cid],
+                split_content_hashes={target_cid: "deadbeef0123abcd"},
+            )
+
+        # Force is_non_regressive to return False so we hit the rollback path
+        # regardless of whether Q_before/Q_after computation drifts.
+        with patch(
+            "app.services.taxonomy.warm_path.is_non_regressive", return_value=False,
+        ):
+            result = await _run_speculative_phase(  # type: ignore[call-arg]
+                "split_emerge", force_reject_phase, engine,
+                session_factory=None,
+                write_queue=write_queue_inmem,
+            )
+
+        assert result.accepted is False, "Q-gate must reject"
+
+        # Verify split_failures counter incremented (i.e., metadata persisted
+        # after the speculative rollback).
+        async with sf() as verify_db:
+            cluster = await verify_db.get(PromptCluster, target_cid)
+            assert cluster is not None
+            meta = read_meta(cluster.cluster_metadata)
+            assert meta["split_failures"] >= 1, (
+                "split_failures must persist on Q-rejection (savepoint + "
+                "autobegin). Got cluster_metadata="
+                f"{cluster.cluster_metadata!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_phase_4_5_sub_step_failure_does_not_poison_other_steps(
+        self, write_queue_inmem, monkeypatch,
+    ):
+        """RED: each Phase 4.5 sub-step is its own submit; a transient
+        failure in one sub-step does NOT prevent the others from running.
+
+        Pin spec § 3.6 H-v4-3. v0.4.12 used ``db.begin_nested()`` SAVEPOINTs
+        per sub-step inside ``run_global_pattern_phase``; v0.4.13 cycle 6
+        moves the per-sub-step boundary to ``submit()`` calls so the queue
+        owns the transaction lifecycle.
+
+        FAILS pre-GREEN: the new ``run_phase_4_5(write_queue)`` helper
+        does not yet exist. Post-GREEN: the helper invokes 3 separate
+        submits (promote / validate / retire) with try/except around each.
+        """
+        from app.models import Base
+        from app.services.taxonomy import warm_path
+
+        async with write_queue_inmem._writer_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        called: list[str] = []
+
+        async def _ok_promote(db):
+            called.append("promote")
+            return (0, 0)  # mirrors _discover_promotion_candidates signature
+
+        async def _failing_validate(db):
+            called.append("validate")
+            raise RuntimeError("simulated validate failure")
+
+        async def _ok_retire(db):
+            called.append("retire")
+            return 0  # mirrors _enforce_retention_cap signature
+
+        # Patch the underlying sub-steps in global_patterns module so the
+        # cycle 6 helper invokes them via 3 separate submits.
+        monkeypatch.setattr(
+            "app.services.taxonomy.global_patterns._discover_promotion_candidates",
+            _ok_promote,
+        )
+        monkeypatch.setattr(
+            "app.services.taxonomy.global_patterns._validate_existing_patterns",
+            _failing_validate,
+        )
+        monkeypatch.setattr(
+            "app.services.taxonomy.global_patterns._enforce_retention_cap",
+            _ok_retire,
+        )
+
+        # Pre-GREEN: AttributeError because ``run_phase_4_5`` doesn't exist.
+        await warm_path.run_phase_4_5(write_queue_inmem)  # type: ignore[attr-defined]
+
+        # All three sub-steps were attempted despite middle one raising.
+        assert called == ["promote", "validate", "retire"], (
+            "Phase 4.5 sub-step isolation broken: expected all three "
+            f"sub-steps to run; got {called}"
+        )
