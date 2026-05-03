@@ -1016,90 +1016,35 @@ class PersistenceInputs:
 
 
 async def persist_and_propagate(
-    db_or_inputs: AsyncSession | PersistenceInputs | None = None,
-    inputs: PersistenceInputs | None = None,
+    inputs: PersistenceInputs,
     *,
-    write_queue: WriteQueue | None = None,
+    write_queue: WriteQueue,
 ) -> None:
     """Build Optimization row, track applied patterns, commit, propagate usage.
 
-    v0.4.13 cycle 4: writes go through ``WriteQueue.submit`` when a
-    ``WriteQueue`` is supplied. The five v0.4.12 commit sites
-    (Optimization row at line 1122, post-persist injection provenance at
-    line 1140, pattern usefulness counters at line 1164, usage_db
-    separate-session at line 1198, terminal write at line 1306 in the
-    failed-row helper) collapse into ONE ``submit()`` callback per spec
-    § 3.4. The queue serializes against every other backend writer so the
-    legacy ORM-expiration workaround (a fresh ``async_session_factory()``
-    session for usage propagation) is no longer needed -- the callback
-    session does ALL writes serially with ``expire_on_commit=False`` on
-    the writer engine.
+    v0.4.13 cycle 7.5: collapsed to a single canonical signature.
+    The five v0.4.12 commit sites (Optimization row, post-persist
+    injection provenance, pattern usefulness counters, usage_db
+    separate-session, terminal write in the failed-row helper) all live
+    inside ONE ``submit()`` callback per spec § 3.4. The queue serializes
+    against every other backend writer so the legacy ORM-expiration
+    workaround (fresh ``async_session_factory()`` session for usage
+    propagation) is no longer needed -- the callback session does ALL
+    writes serially with ``expire_on_commit=False`` on the writer engine.
 
-    Three calling conventions, retained until cycle 7:
-
-    * ``persist_and_propagate(inputs, write_queue=q)`` -- canonical.
-      Used by callers already migrated to the single-writer queue. The
-      queue opens a fresh session, runs ``_do_persist`` against it, and
-      commits as the callback's last step.
-    * ``persist_and_propagate(db, inputs)`` -- **legacy**, retained so
-      the still-unmigrated ``pipeline.py`` orchestrator can land cycle 4
-      without a same-PR caller migration. Uses the caller-supplied
-      ``AsyncSession`` directly. Single-attempt commit (the legacy
-      retry/lock path is gone -- the canonical contention solution lives
-      on the queue path now). Slated for removal in cycle 5+ when
-      ``pipeline.py``/orchestrator threads the queue.
-    * ``persist_and_propagate(db, inputs, write_queue=q)`` -- transitional
-      mixed-mode. Ignores ``db`` and uses the queue. Lets cycle 5 callers
-      migrate without churning the legacy positional arg shape.
-
-    Detection is ``write_queue is not None``; mypy narrows the parameter
-    to ``WriteQueue`` in the queue branch.
+    The cycle 4-6 polymorphic dispatch (``persist_and_propagate(db,
+    inputs)`` / ``persist_and_propagate(inputs, write_queue=q)`` /
+    mixed-mode) is gone -- every caller now threads ``write_queue``.
 
     Failure semantics:
         If ``submit()`` raises (e.g. ``WriteQueueOverloadedError``,
         ``WriteQueueDeadError``, ``WriteQueueStoppedError``,
         ``asyncio.TimeoutError``), the exception propagates to the
         caller WITHOUT publishing the ``optimization_created`` event.
-        This matches the cycle 2/3 contract: events represent durable
-        persistence, so a failed submit cannot fire them. Callers handle
-        retry/recovery at the orchestrator boundary.
-
-        Future maintainers: do NOT wrap ``submit()`` in a try/except
-        that swallows the exception and continues to the event-emission
-        block -- that would fire phantom ``optimization_created`` events
-        for rows that never persisted.
+        Events represent durable persistence, so a failed submit cannot
+        fire them. Callers handle retry/recovery at the orchestrator
+        boundary.
     """
-    # ------------------------------------------------------------------
-    # Positional-arg dispatch: the function must accept three call shapes
-    # without a callsite migration this cycle:
-    #
-    #   persist_and_propagate(db, inputs)                    # legacy
-    #   persist_and_propagate(inputs, write_queue=q)         # canonical
-    #   persist_and_propagate(db, inputs, write_queue=q)     # mixed
-    #
-    # ``db_or_inputs`` is the polymorphic first slot. When it's a
-    # ``PersistenceInputs`` we treat it as ``inputs`` and require a
-    # ``write_queue``; when it's an ``AsyncSession`` (or session-like)
-    # we keep the v0.4.12 positional contract intact.
-    # ------------------------------------------------------------------
-    db: AsyncSession | None
-    if isinstance(db_or_inputs, PersistenceInputs):
-        # Canonical queue form: inputs supplied as the first positional.
-        if inputs is not None:
-            raise TypeError(
-                "persist_and_propagate received PersistenceInputs as "
-                "positional arg 1 AND a separate ``inputs=`` keyword; "
-                "pass it once.",
-            )
-        inputs = db_or_inputs
-        db = None
-    else:
-        db = db_or_inputs
-    if inputs is None:
-        raise TypeError(
-            "persist_and_propagate requires PersistenceInputs (positional arg 2 "
-            "in legacy form, or arg 1 in queue form).",
-        )
     analysis = inputs.analysis
     scoring = inputs.scoring
     optimized_scores = scoring.optimized_scores if scoring else None
@@ -1309,35 +1254,14 @@ async def persist_and_propagate(
             except Exception as exc:
                 logger.warning("Post-commit usage propagation failed: %s", exc)
 
-    # ------------------------------------------------------------------
-    # Dispatch: Option C dual path. write_queue takes precedence; legacy
-    # ``db`` is used only when no queue is supplied. Mirrors cycle 2/3.
-    # ------------------------------------------------------------------
-    if write_queue is not None:
-        # Canonical path: the queue serializes ``_do_persist`` against
-        # every other backend writer. ``operation_label`` surfaces in
-        # ``WriteQueueMetrics`` snapshots and ``write_queue.complete``
-        # decision events so health-endpoint consumers can attribute
-        # latency to the persist-and-propagate op.
-        await write_queue.submit(
-            _do_persist, operation_label="persist_and_propagate",
-        )
-    else:
-        # Legacy ``AsyncSession`` path -- retired in cycle 5+ once the
-        # ``pipeline.py`` orchestrator threads the queue. Single-attempt
-        # commit semantics: the v0.4.12 retry/lock path is gone, the
-        # canonical contention solution lives on the queue path now.
-        # Known transitional risk: under heavy concurrent writer pressure,
-        # ``database is locked`` exceptions will propagate to the caller
-        # instead of retrying. Mitigated by ``WriterLockedAsyncSession``
-        # in production (it acquires the writer lock at first flush) and
-        # closes fully when the orchestrator migrates.
-        if db is None:
-            raise TypeError(
-                "persist_and_propagate requires either write_queue= or "
-                "a positional AsyncSession (legacy form).",
-            )
-        await _do_persist(db)
+    # The queue serializes ``_do_persist`` against every other backend
+    # writer. ``operation_label`` surfaces in ``WriteQueueMetrics``
+    # snapshots and ``write_queue.complete`` decision events so
+    # health-endpoint consumers can attribute latency to the
+    # persist-and-propagate op.
+    await write_queue.submit(
+        _do_persist, operation_label="persist_and_propagate",
+    )
 
     # Publish real-time event AFTER successful persist (queue or legacy).
     # Failure semantics: if ``submit()`` raised above, control never

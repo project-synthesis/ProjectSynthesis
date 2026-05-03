@@ -442,6 +442,85 @@ class ProbeService:
         self.write_queue = write_queue
 
     # ------------------------------------------------------------------
+    # Cycle 7.5: bulk_persist / batch_taxonomy_assign queue resolver
+    # ------------------------------------------------------------------
+
+    async def _resolve_write_queue(self, session_factory: Any) -> Any:
+        """Return a ``WriteQueue`` for use with ``bulk_persist`` /
+        ``batch_taxonomy_assign``.
+
+        v0.4.13 cycle 7.5: those primitives no longer accept a session
+        factory after polymorphic collapse. When the probe has its
+        injected ``self.write_queue``, we use it; otherwise we construct
+        a transient in-process queue against ``session_factory``'s engine.
+        Tests that override the canonical batch primitives (e.g.
+        ``_patch_canonical_batch``) typically bypass this code path
+        because their stubs short-circuit the bulk_persist call.
+
+        Returns:
+            ``WriteQueue`` instance ready for ``submit()``.
+
+        Raises:
+            RuntimeError: When no engine can be resolved from the
+                session_factory or global engine import. Callers should
+                inject ``self.write_queue`` explicitly in that case.
+        """
+        if self.write_queue is not None:
+            return self.write_queue
+        # Cache the transient queue per ProbeService instance so
+        # repeated bulk_persist calls within the same probe share the
+        # worker. The queue is bound to the same engine the probe's
+        # session_factory yields against, so writes hit the same DB.
+        cached = getattr(self, "_transient_write_queue", None)
+        if cached is not None:
+            return cached
+        from app.services.write_queue import WriteQueue
+        # ``session_factory`` is an ``async_sessionmaker`` or compatible
+        # callable. We need its engine for the queue. Try multiple
+        # extraction paths in priority order:
+        #   1. ``self.db.bind`` (request-scoped session is bound to the
+        #      same engine the orchestrator's own queries use; tests
+        #      that supply their own db fixture get the right engine)
+        #   2. ``async_sessionmaker.kw["bind"]`` (production path: the
+        #      session_factory is a real async_sessionmaker)
+        #   3. ``app.database.async_session_factory.kw["bind"]`` (when
+        #      session_factory is a custom shim but app.database is
+        #      properly initialized)
+        #   4. global engine import (boot path)
+        engine = None
+        try:
+            engine = self.db.bind
+        except Exception:
+            engine = None
+        if engine is None:
+            try:
+                engine = getattr(session_factory, "kw", {}).get("bind")
+            except Exception:
+                engine = None
+        if engine is None:
+            try:
+                from app.database import async_session_factory as _sf
+                engine = getattr(_sf, "kw", {}).get("bind")
+            except Exception:
+                engine = None
+        if engine is None:
+            try:
+                from app.database import engine as _global_engine
+                engine = _global_engine
+            except Exception:
+                engine = None
+        if engine is None:
+            raise RuntimeError(
+                "ProbeService cannot resolve a WriteQueue: no engine "
+                "found on session_factory and no global engine import. "
+                "Inject self.write_queue explicitly.",
+            )
+        queue = WriteQueue(engine)
+        await queue.start()
+        self._transient_write_queue = queue
+        return queue
+
+    # ------------------------------------------------------------------
     # Cycle 7c: probe row mutation helpers
     # ------------------------------------------------------------------
 
@@ -966,14 +1045,15 @@ class ProbeService:
                   ``abort_event`` so peer LLM calls can be cancelled.
                 """
                 try:
-                    # v0.4.13 cycle 7d: prefer ``self.write_queue`` when
-                    # set so the per-prompt INSERT serializes through the
-                    # single-writer queue worker. Falls back to the
-                    # ``session_factory`` legacy path so queue-less callers
-                    # (tests, pre-cycle-9 production paths) still work.
+                    # v0.4.13 cycle 7.5: bulk_persist requires a WriteQueue
+                    # post-polymorphic-collapse. When the probe doesn't
+                    # have an injected queue (legacy / tests), we use
+                    # ``_resolve_write_queue`` which builds a transient
+                    # one on the request-scoped session factory.
+                    _wq = await self._resolve_write_queue(session_factory)
                     n = await bulk_persist(
                         [p],
-                        self.write_queue or session_factory,
+                        _wq,
                         batch_id=probe_id,
                     )
                     if n > 0:
@@ -1241,13 +1321,14 @@ class ProbeService:
             )
             if persisted_pendings:
                 try:
-                    # v0.4.13 cycle 7d: prefer ``self.write_queue`` so the
-                    # cluster-assign loop serializes through the single-
-                    # writer queue worker. Falls back to ``session_factory``
-                    # for queue-less callers.
+                    # v0.4.13 cycle 7.5: batch_taxonomy_assign requires
+                    # a WriteQueue post-polymorphic-collapse. Resolve via
+                    # the helper which builds an in-process queue from
+                    # the session_factory when no queue is injected.
+                    _wq = await self._resolve_write_queue(session_factory)
                     await batch_taxonomy_assign(
                         persisted_pendings,
-                        self.write_queue or session_factory,
+                        _wq,
                         batch_id=probe_id,
                     )
                 except Exception as _bta_exc:
@@ -1720,6 +1801,19 @@ class ProbeService:
                 # The ContextVar copy in this task will be discarded with
                 # the frame anyway, so this is benign.
                 pass
+            # v0.4.13 cycle 7.5: tear down the transient write queue
+            # if one was constructed for this probe. Idempotent on
+            # already-stopped queues.
+            transient = getattr(self, "_transient_write_queue", None)
+            if transient is not None:
+                try:
+                    await transient.stop(drain_timeout=2.0)
+                except Exception:
+                    logger.debug(
+                        "transient write queue stop failed (non-fatal)",
+                        exc_info=True,
+                    )
+                self._transient_write_queue = None
 
     async def _mark_cancelled(
         self, row: ProbeRun, probe_id: str,

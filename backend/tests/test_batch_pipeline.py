@@ -618,11 +618,14 @@ def _pending(
 
 @pytest_asyncio.fixture
 async def real_session_factory() -> AsyncGenerator[Any, None]:
-    """In-memory sqlite factory that creates a fresh session per call.
+    """In-memory sqlite WriteQueue (post-cycle 7.5 collapse).
 
-    bulk_persist() uses `async with session_factory() as db:` — the factory
-    must return a fresh session each invocation so transaction boundaries
-    match production behavior.
+    Pre-cycle 7.5 this was an ``async_sessionmaker`` directly. Cycle 7.5
+    collapsed ``bulk_persist`` + ``batch_taxonomy_assign`` to require a
+    ``WriteQueue`` argument; the fixture name is kept for parity with
+    pre-existing tests, but it now yields a started queue bound to the
+    same in-memory engine the tests previously opened against the
+    factory directly.
     """
     from sqlalchemy.ext.asyncio import (
         AsyncSession,
@@ -631,15 +634,26 @@ async def real_session_factory() -> AsyncGenerator[Any, None]:
     )
 
     from app.models import Base
+    from app.services.write_queue import WriteQueue
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # Sessionmaker preserved as an attribute on the queue so legacy
+    # fixtures that referenced ``real_session_factory()`` directly (rare;
+    # the bulk-persist callers are the dominant consumer) can still
+    # access it via ``real_session_factory.session_factory``. The
+    # fixture's primary surface is now ``WriteQueue``.
+    queue = WriteQueue(engine)
+    queue.session_factory = async_sessionmaker(  # type: ignore[attr-defined]
+        engine, class_=AsyncSession, expire_on_commit=False,
+    )
+    await queue.start()
     try:
-        yield factory
+        yield queue
     finally:
+        await queue.stop(drain_timeout=2.0)
         await engine.dispose()
 
 

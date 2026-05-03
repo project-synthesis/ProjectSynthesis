@@ -934,8 +934,23 @@ async def run_sampling_pipeline(
         await db.commit()
 
     # Increment usage counts AFTER successful commit (Spec 7.8)
+    # v0.4.13 cycle 7.5: increment_pattern_usage now requires a
+    # WriteQueue. The sampling_pipeline runs in the MCP process where
+    # the queue may not be a singleton; build a transient one.
     if applied_cluster_ids:
-        await increment_pattern_usage(applied_cluster_ids)
+        from app.services.write_queue import WriteQueue
+        from app.database import engine as _engine
+        _wq = WriteQueue(_engine)
+        await _wq.start()
+        try:
+            await increment_pattern_usage(applied_cluster_ids, write_queue=_wq)
+        finally:
+            try:
+                await _wq.stop(drain_timeout=2.0)
+            except Exception:
+                logger.debug(
+                    "sampling transient write_queue stop failed", exc_info=True,
+                )
 
     # Notify backend event bus (MCP runs in a separate process)
     await notify_event_bus("optimization_created", {

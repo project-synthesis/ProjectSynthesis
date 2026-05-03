@@ -758,22 +758,16 @@ class TestPersistAndPropagateOperate:
         on the LEGACY two-positional shape, each opening its own session
         via ``async_sessionmaker``.
 
-        This is the path ``pipeline.py:651`` uses today — cycle 5 hasn't
-        migrated it. The OPERATE intent here is to DOCUMENT (not assert
-        zero) ``database is locked`` recovery behavior because the
-        legacy path explicitly removed retry semantics in v0.4.13:
-        single-attempt commits, exceptions propagate to the caller.
+        v0.4.13 cycle 7.5: the legacy positional ``persist_and_propagate(
+        db, inputs)`` form is gone. This test now exercises the canonical
+        queue path under N=5 concurrent callers. The single-writer queue
+        serializes against every other writer by construction, so the
+        cycle 4 transitional risk window is fully closed.
 
         Asserts:
-        - All 5 calls complete (success or recoverable exception).
-        - Successful rows are present in the DB.
-        - If ``database is locked`` records appear, they're documented
-          as a transitional risk for cycle 5 migration scope. The
-          ``WriterLockedAsyncSession`` writer mutex (held across the
-          flush→commit span) is the production mitigation.
-
-        This test does NOT use the queue fixture — it directly exercises
-        the legacy path that the queue replaces.
+        - All 5 calls complete (success).
+        - All 5 rows present in the DB (verified via SELECT).
+        - Zero ``database is locked`` records (queue serialization).
         """
         import asyncio as _asyncio
         import logging as _logging
@@ -781,26 +775,21 @@ class TestPersistAndPropagateOperate:
 
         from sqlalchemy import event as _sa_event
         from sqlalchemy import text as _sa_text
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import create_async_engine
 
         from app.config import settings as _settings
-        from app.database import WriterLockedAsyncSession
         from app.models import Base
         from app.services import pipeline_phases as pp
+        from app.services.write_queue import WriteQueue
 
-        # Build a fresh file-mode engine + production session class so the
-        # writer-mutex contract from the prod code applies. We do NOT use
-        # the ``writer_engine_file`` fixture here because we want each
-        # caller to open its OWN session (mirrors pipeline.py's pattern).
-        db_path = tmp_path / "legacy_test.db"
+        db_path = tmp_path / "queue_test.db"
         engine = create_async_engine(
             f"sqlite+aiosqlite:///{db_path}",
-            pool_size=5,
-            max_overflow=5,
+            pool_size=1,
+            max_overflow=0,
         )
 
         # Apply production PRAGMAs so the test mirrors prod lock topology.
-
         @_sa_event.listens_for(engine.sync_engine, "connect")
         def _set_pragmas(dbapi_conn, _record):
             cursor = dbapi_conn.cursor()
@@ -817,99 +806,59 @@ class TestPersistAndPropagateOperate:
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
 
-            session_factory = async_sessionmaker(
-                engine,
-                class_=WriterLockedAsyncSession,
-                expire_on_commit=False,
-            )
+            queue = WriteQueue(engine)
+            await queue.start()
+            try:
+                inputs_list = [
+                    _build_persistence_inputs_fixture(opt_id=str(_uuid.uuid4()))
+                    for _ in range(5)
+                ]
+                for i, inp in enumerate(inputs_list):
+                    object.__setattr__(inp, "trace_id", f"trace-c4-q-{i}")
 
-            inputs_list = [
-                _build_persistence_inputs_fixture(opt_id=str(_uuid.uuid4()))
-                for _ in range(5)
-            ]
-            for i, inp in enumerate(inputs_list):
-                object.__setattr__(inp, "trace_id", f"trace-c4-leg-{i}")
+                async def _queue_call(inp):
+                    await pp.persist_and_propagate(inp, write_queue=queue)
 
-            async def _legacy_call(inp):
-                """Open own session per caller — mirrors pipeline.py."""
-                async with session_factory() as db:
-                    await pp.persist_and_propagate(db, inp)
+                with caplog.at_level(_logging.WARNING):
+                    results = await _asyncio.gather(
+                        *[_queue_call(inp) for inp in inputs_list],
+                        return_exceptions=True,
+                    )
 
-            with caplog.at_level(_logging.WARNING):
-                results = await _asyncio.gather(
-                    *[_legacy_call(inp) for inp in inputs_list],
-                    return_exceptions=True,
+                successes = [r for r in results if not isinstance(r, BaseException)]
+                failures = [r for r in results if isinstance(r, BaseException)]
+
+                # Verify rows landed via direct SELECT.
+                opt_ids = [inp.opt_id for inp in inputs_list]
+                ids_param = ",".join(f"'{oid}'" for oid in opt_ids)
+                async with engine.connect() as conn:
+                    count_q = await conn.execute(_sa_text(
+                        f"SELECT COUNT(*) FROM optimizations "  # noqa: S608
+                        f"WHERE id IN ({ids_param})"
+                    ))
+                    row = count_q.first()
+                    rows_landed = int(row[0]) if row else 0
+
+                assert len(successes) == 5, (
+                    f"queue path failed under N=5 contention: "
+                    f"successes={len(successes)}/5, "
+                    f"failures={[type(f).__name__ for f in failures]}"
+                )
+                assert rows_landed == 5, (
+                    f"expected 5 rows landed, got {rows_landed}"
                 )
 
-            # Documented finding: count successes vs recoverable exceptions.
-            successes = [r for r in results if not isinstance(r, BaseException)]
-            failures = [r for r in results if isinstance(r, BaseException)]
-
-            # SELECT to count rows that actually landed.
-            opt_ids = [inp.opt_id for inp in inputs_list]
-            ids_param = ",".join(f"'{oid}'" for oid in opt_ids)
-            async with engine.connect() as conn:
-                count_q = await conn.execute(_sa_text(
-                    f"SELECT COUNT(*) FROM optimizations "  # noqa: S608
-                    f"WHERE id IN ({ids_param})"
-                ))
-                row = count_q.first()
-                rows_landed = int(row[0]) if row else 0
-
-            # Documented invariant: # successes == # rows landed.
-            # ``WriterLockedAsyncSession`` should serialize the 5 callers
-            # via ``db_writer_lock``, eliminating ``database is locked``.
-            # If failures appear, they're propagated unhandled to the
-            # caller (cycle 5 migration scope).
-            assert len(successes) == rows_landed, (
-                f"successes ({len(successes)}) != rows landed ({rows_landed}); "
-                f"successes/failures inconsistent with DB state. "
-                f"failures={[type(f).__name__ for f in failures]}"
-            )
-
-            # If WriterLockedAsyncSession does its job, all 5 succeed.
-            # Pin the expectation but document the failure mode.
-            if failures:
-                # Diagnostic: log out the failure types for cycle 5 scoping.
-                # We don't fail the test on this — the legacy path is
-                # documented as having no retry; we want this test green
-                # AND informative if behavior changes.
-                fail_types = sorted({type(f).__name__ for f in failures})
-                # The expected 'database is locked' surfaces as
-                # OperationalError. Document if other exception types appear.
-                pp.logger.warning(
-                    "Legacy path under N=5 contention surfaced "
-                    "%d/%d failures: types=%s",
-                    len(failures), len(results), fail_types,
+                # Queue serialization eliminates 'database is locked'.
+                locked_records = [
+                    r for r in caplog.records
+                    if "database is locked" in r.getMessage().lower()
+                ]
+                assert locked_records == [], (
+                    f"queue path produced {len(locked_records)} 'database "
+                    f"is locked' records; queue serialization broken"
                 )
-
-            # Production assertion: writer mutex eliminates lock contention
-            # under in-process callers. This is the mitigation cited in
-            # the legacy-path docstring. If this fails, cycle 5 needs to
-            # migrate pipeline.py URGENTLY.
-            assert len(successes) == 5, (
-                f"WriterLockedAsyncSession should serialize N=5 callers; "
-                f"got {len(successes)}/5 successes, "
-                f"failures={[type(f).__name__ for f in failures]}. "
-                f"Cycle 5 migration scope must address this if surfaced."
-            )
-
-            # ``database is locked`` records ARE acceptable here (recovery
-            # by busy_timeout retry inside SQLite is normal); the test
-            # passes as long as all 5 rows landed. We grep for diagnostic
-            # purposes only.
-            locked_records = [
-                r for r in caplog.records
-                if "database is locked" in r.getMessage().lower()
-            ]
-            # Documented finding for cycle 5 plan.
-            if locked_records:
-                pp.logger.info(
-                    "Legacy path emitted %d 'database is locked' records "
-                    "(recoverable via busy_timeout); cycle 5 should migrate "
-                    "pipeline.py for full elimination",
-                    len(locked_records),
-                )
+            finally:
+                await queue.stop(drain_timeout=5.0)
         finally:
             await engine.dispose()
 

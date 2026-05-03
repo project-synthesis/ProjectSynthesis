@@ -70,33 +70,16 @@ async def resolve_applied_pattern_text(
 async def increment_pattern_usage(
     cluster_ids: set[str],
     *,
-    write_queue: WriteQueue | None = None,
+    write_queue: WriteQueue,
 ) -> None:
     """Increment usage counts for applied pattern families (post-optimization).
 
-    v0.4.13 cycle 5: writes go through ``WriteQueue.submit`` when a
-    ``WriteQueue`` is supplied. The single v0.4.12 commit site
-    (``await db.commit()`` at line 88, inside the per-cluster
-    ``increment_usage`` loop) collapses into ONE ``submit()`` callback
-    per spec § 3.4. The queue serializes against every other backend
-    writer so the legacy ``async_session_factory()`` separate-session
-    pattern is no longer needed -- the callback session does ALL writes
-    serially with ``expire_on_commit=False`` on the writer engine.
-
-    Two calling conventions, retained until cycle 7:
-
-    * ``increment_pattern_usage(cluster_ids, write_queue=q)`` -- canonical.
-      Used by callers already migrated to the single-writer queue. The
-      queue opens a fresh session, runs ``_do_increment`` against it,
-      and commits as the callback's last step.
-    * ``increment_pattern_usage(cluster_ids)`` -- **legacy**, retained
-      so the still-unmigrated ``sampling_pipeline.py`` orchestrator can
-      land cycle 5 without a same-PR caller migration. Uses
-      ``async_session_factory()`` directly. Slated for removal in
-      cycle 7+ when ``sampling_pipeline.py`` threads the queue.
-
-    Detection is ``write_queue is not None``; mypy narrows the parameter
-    to ``WriteQueue`` in the queue branch.
+    v0.4.13 cycle 7.5: collapsed to a single canonical signature. Writes
+    always route through ``write_queue.submit()``. The cycle 5
+    polymorphic ``write_queue: WriteQueue | None = None`` is gone --
+    every caller threads a queue. The queue serializes against every
+    other backend writer so the legacy ``async_session_factory()``
+    separate-session pattern is no longer needed.
 
     Failure semantics:
         If ``submit()`` raises (e.g. ``WriteQueueOverloadedError``,
@@ -110,15 +93,11 @@ async def increment_pattern_usage(
         does not poison the rest of the batch.
 
         This differs from cycle 2/3/4 (where ``submit`` errors propagate
-        to the caller) because the cycle 5 commit site is post-commit
-        usage telemetry: the parent ``Optimization`` row has already
-        been persisted by ``persist_and_propagate`` (cycle 4). Losing
-        the usage_count bump degrades pattern-quality decay slightly
-        but never blocks the user-visible optimization result.
-
-        Future maintainers: do NOT raise ``WriteQueue*Error`` from this
-        helper -- callers expect post-commit warnings, not failure
-        propagation, on the increment path.
+        to the caller) because this commit site is post-commit usage
+        telemetry: the parent ``Optimization`` row has already been
+        persisted by ``persist_and_propagate``. Losing the usage_count
+        bump degrades pattern-quality decay slightly but never blocks
+        the user-visible optimization result.
     """
     if not cluster_ids:
         return
@@ -133,9 +112,7 @@ async def increment_pattern_usage(
 
         async def _do_increment(write_db: AsyncSession) -> None:
             """Per-cluster increment_usage loop + final commit, run in
-            a single writer session opened by the caller (queue worker
-            or legacy ``async_session_factory()``). All v0.4.12 commit
-            sites collapse into one ``commit()`` here.
+            the writer-engine session opened by the queue worker.
             """
             for fid in cluster_ids:
                 try:
@@ -151,26 +128,13 @@ async def increment_pattern_usage(
                     )
             await write_db.commit()
 
-        # ------------------------------------------------------------------
-        # Dispatch: Option C dual path. write_queue takes precedence; legacy
-        # async_session_factory() is used only when no queue is supplied.
-        # Mirrors cycle 2/3/4.
-        # ------------------------------------------------------------------
-        if write_queue is not None:
-            # Canonical path: the queue serializes ``_do_increment`` against
-            # every other backend writer. ``operation_label`` surfaces in
-            # ``WriteQueueMetrics`` snapshots and ``write_queue.complete``
-            # decision events so health-endpoint consumers can attribute
-            # latency to the sampling-persist op.
-            await write_queue.submit(
-                _do_increment, operation_label="sampling_persist",
-            )
-        else:
-            # Legacy ``async_session_factory()`` path -- retired in cycle 7+
-            # once the ``sampling_pipeline.py`` orchestrator threads the
-            # queue. Single-session commit semantics preserved from v0.4.12.
-            async with async_session_factory() as db:
-                await _do_increment(db)
+        # The queue serializes ``_do_increment`` against every other
+        # backend writer. ``operation_label`` surfaces in
+        # ``WriteQueueMetrics`` snapshots so health consumers can
+        # attribute latency to the sampling-persist op.
+        await write_queue.submit(
+            _do_increment, operation_label="sampling_persist",
+        )
     except Exception as exc:
         logger.warning("Sampling usage increment failed: %s", exc)
 
