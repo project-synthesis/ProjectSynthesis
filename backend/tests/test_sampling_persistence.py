@@ -77,7 +77,7 @@ class TestSamplingPersistViaQueue:
 
         monkeypatch.setattr(write_queue_inmem, "submit", _capture_submit)
 
-        await sp.increment_pattern_usage(  # type: ignore[call-arg]
+        await sp.increment_pattern_usage(
             {cid}, write_queue=write_queue_inmem,
         )
 
@@ -134,7 +134,7 @@ class TestSamplingPersistViaQueue:
             "app.services.sampling.persistence.async_session_factory", _spy,
         )
 
-        await sp.increment_pattern_usage(  # type: ignore[call-arg]
+        await sp.increment_pattern_usage(
             {cid}, write_queue=write_queue_inmem,
         )
 
