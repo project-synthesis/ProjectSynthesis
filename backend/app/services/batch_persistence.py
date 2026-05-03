@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 from sqlalchemy import select as sa_select
@@ -42,6 +42,28 @@ if TYPE_CHECKING:
     from app.services.batch_pipeline import PendingOptimization, SessionFactory
 
 logger = logging.getLogger(__name__)
+
+
+class TaxonomyAssignSummary(TypedDict):
+    """Return shape of ``batch_taxonomy_assign``.
+
+    Stable contract:
+
+    * ``clusters_assigned`` — count of pendings successfully wired to a
+      cluster + ``OptimizationPattern(relationship='source')`` row.
+    * ``clusters_created`` — subset of ``clusters_assigned`` where the
+      target cluster was net-new (``member_count == 1`` after assign).
+    * ``domains_touched`` — sorted, de-duplicated list of domain labels
+      affected by this batch (input source: ``pending.domain``).
+
+    The post-queue ``seed_taxonomy_complete`` decision event and
+    ``taxonomy_changed`` event-bus payload index by these keys verbatim;
+    keep them stable across cycles.
+    """
+
+    clusters_assigned: int
+    clusters_created: int
+    domains_touched: list[str]
 
 
 async def bulk_persist(
@@ -331,7 +353,7 @@ async def batch_taxonomy_assign(
     results: list[PendingOptimization],
     queue_or_session_factory: WriteQueue | SessionFactory,
     batch_id: str,
-) -> dict[str, Any]:
+) -> TaxonomyAssignSummary:
     """Assign clusters for all persisted optimizations in one transaction.
 
     v0.4.13 cycle 3: writes go through ``WriteQueue.submit`` when a
@@ -357,8 +379,13 @@ async def batch_taxonomy_assign(
     Pattern extraction is deferred (``pattern_stale=True``) — the warm
     path handles it after the batch completes.
 
-    Returns summary dict with ``clusters_assigned``, ``clusters_created``,
-    ``domains_touched``.
+    Returns ``TaxonomyAssignSummary`` (``TypedDict``) with
+    ``clusters_assigned``, ``clusters_created``, ``domains_touched``.
+    Empty/no-embedding inputs short-circuit and return zeros without
+    calling ``submit()`` — no queue work, no events, no log decision.
+    Per-pending failures inside ``_do_assign`` are absorbed (warning
+    logged, counters NOT incremented), so partial-batch progress is
+    durable.
 
     Failure semantics:
         If ``submit()`` raises (e.g. ``WriteQueueOverloadedError``,
@@ -379,11 +406,13 @@ async def batch_taxonomy_assign(
     completed = [r for r in results if r.status == "completed" and r.embedding]
 
     if not completed:
-        return {"clusters_assigned": 0, "clusters_created": 0, "domains_touched": []}
+        return TaxonomyAssignSummary(
+            clusters_assigned=0, clusters_created=0, domains_touched=[],
+        )
 
     engine = get_engine()
 
-    async def _do_assign(db: AsyncSession) -> dict[str, Any]:
+    async def _do_assign(db: AsyncSession) -> TaxonomyAssignSummary:
         clusters_created = 0
         domains_touched: set[str] = set()
         assigned = 0
@@ -435,11 +464,11 @@ async def batch_taxonomy_assign(
                 )
 
         await db.commit()
-        return {
-            "clusters_assigned": assigned,
-            "clusters_created": clusters_created,
-            "domains_touched": sorted(domains_touched),
-        }
+        return TaxonomyAssignSummary(
+            clusters_assigned=assigned,
+            clusters_created=clusters_created,
+            domains_touched=sorted(domains_touched),
+        )
 
     if isinstance(queue_or_session_factory, WriteQueue):
         # Canonical path: the queue serializes ``_do_assign`` against
@@ -500,4 +529,4 @@ async def batch_taxonomy_assign(
     return summary
 
 
-__all__ = ["batch_taxonomy_assign", "bulk_persist"]
+__all__ = ["TaxonomyAssignSummary", "batch_taxonomy_assign", "bulk_persist"]
