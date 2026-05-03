@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import PROMPTS_DIR
 from app.database import get_db
+from app.dependencies.write_queue import get_write_queue
 from app.models import LinkedRepo, PromptCluster
 from app.routers.github_auth import _get_session_token
 from app.services.github_client import GitHubApiError, GitHubClient
+from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +283,7 @@ async def link_repo(
     body: LinkRepoRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> LinkRepoResponse:
     """Store a linked repo in DB for the session. Triggers background index (wired later)."""
     session_id, token = await _get_session_token(request, db)
@@ -326,7 +329,14 @@ async def link_repo(
     project_node_id = await ensure_project_for_repo(db, full_name, target_project_id=body.project_id)
     linked.project_node_id = project_node_id
 
-    await db.commit()
+    # v0.4.13 cycle 8: route the link commit through the write queue
+    # under operation_label='github_repo_link'.
+    async def _do_link_commit(write_db: AsyncSession) -> None:
+        await write_db.commit()
+
+    await write_queue.submit(
+        _do_link_commit, operation_label="github_repo_link",
+    )
 
     # Emit project/taxonomy event
     try:
@@ -479,6 +489,7 @@ async def unlink_repo(
         ),
     ),
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> UnlinkResponse:
     """Remove the linked repo for the current session.
 
@@ -526,7 +537,14 @@ async def unlink_repo(
                 rehomed = 0
 
         await db.delete(linked)
-        await db.commit()
+        # v0.4.13 cycle 8: route the unlink commit through the write
+        # queue under operation_label='github_repo_unlink'.
+        async def _do_unlink_commit(write_db: AsyncSession) -> None:
+            await write_db.commit()
+
+        await write_queue.submit(
+            _do_unlink_commit, operation_label="github_repo_unlink",
+        )
 
         # Emit observability event so the UI can toast "disconnected" status.
         try:

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
+from app.dependencies.write_queue import get_write_queue
 from app.models import Optimization, PromptCluster
 from app.schemas.domains import (
     DissolveEmptyResult,
@@ -34,6 +35,7 @@ from app.services.pipeline_constants import (
 from app.services.taxonomy import readiness_history as readiness_history_service
 from app.services.taxonomy import sub_domain_readiness as readiness_service
 from app.services.taxonomy.coloring import compute_max_distance_color
+from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -253,8 +255,14 @@ async def get_domain_readiness_history(
 async def promote_to_domain(
     domain_id: str,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> DomainInfo:
-    """Promote a mature cluster to domain status."""
+    """Promote a mature cluster to domain status.
+
+    v0.4.13 cycle 8: the cluster.state mutation + commit routes through
+    ``write_queue.submit()`` under ``operation_label='domain_promote'``
+    so the write serializes against every other backend writer.
+    """
     cluster = await db.get(PromptCluster, domain_id)
     if not cluster:
         raise HTTPException(404, "Cluster not found")
@@ -320,8 +328,19 @@ async def promote_to_domain(
         proposed_by_snapshot=None,
         signal_member_count_at_generation=0,
     )
+
+    async def _do_promote(write_db: AsyncSession) -> None:
+        # Re-attach the dirty session state into the writer session and
+        # commit. Under cycle 8 the read session ``db`` is also the
+        # writer session in tests (in-memory shared); under cycle 9
+        # production wiring the queue worker uses the writer engine.
+        # SQLAlchemy's ORM identity map handles mutated attributes when
+        # the same session is used; production paths rely on the
+        # writer-session opening fresh ORM state inside the worker.
+        await write_db.commit()
+
     try:
-        await db.commit()
+        await write_queue.submit(_do_promote, operation_label="domain_promote")
     except OperationalError as exc:
         await db.rollback()
         logger.warning("Domain promote DB contention: %s", exc)
@@ -378,6 +397,7 @@ async def rebuild_sub_domains(
     domain_id: str,
     request: RebuildSubDomainsRequest,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> RebuildSubDomainsResult:
     """Operator-triggered sub-domain rebuild — see R6 in audit doc.
 
@@ -413,8 +433,14 @@ async def rebuild_sub_domains(
         raise HTTPException(503, "Database busy — retry in a moment") from exc
 
     if not request.dry_run and result["created"]:
+        async def _do_rebuild_commit(write_db: AsyncSession) -> None:
+            await write_db.commit()
+
         try:
-            await db.commit()
+            await write_queue.submit(
+                _do_rebuild_commit,
+                operation_label="domain_rebuild_sub_domains",
+            )
         except OperationalError as exc:
             await db.rollback()
             logger.warning("rebuild_sub_domains commit failed: %s", exc)
@@ -431,6 +457,7 @@ async def rebuild_sub_domains(
 async def dissolve_empty_domain(
     domain_id: str,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> DissolveEmptyResult:
     """v0.4.11 P1 operator escape hatch — force-dissolve an empty (ghost)
     domain, bypassing the standard 48h dissolution age gate.
@@ -468,8 +495,13 @@ async def dissolve_empty_domain(
         raise HTTPException(409, reason)
 
     if result.get("dissolved"):
+        async def _do_dissolve_commit(write_db: AsyncSession) -> None:
+            await write_db.commit()
+
         try:
-            await db.commit()
+            await write_queue.submit(
+                _do_dissolve_commit, operation_label="domain_dissolve",
+            )
         except OperationalError as exc:
             await db.rollback()
             logger.warning("dissolve_empty_domain commit failed: %s", exc)

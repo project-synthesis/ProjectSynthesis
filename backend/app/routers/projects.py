@@ -18,9 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
+from app.dependencies.write_queue import get_write_queue
 from app.models import Optimization, PromptCluster
 from app.services.event_bus import event_bus
 from app.services.project_service import migrate_optimizations
+from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +98,15 @@ class MigrateResponse(BaseModel):
 async def post_migrate_projects(
     body: MigrateRequest,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> MigrateResponse:
     """Bulk-migrate optimizations between projects (ADR-005 B3).
 
     Always explicit — no automatic routing, the user is the decider.
+
+    v0.4.13 cycle 8: the migration UPDATE + commit routes through
+    ``write_queue.submit()`` under ``operation_label='projects_migrate'``.
+    Dry-run still uses the read session — no commit.
     """
     try:
         count = await migrate_optimizations(
@@ -115,7 +122,11 @@ async def post_migrate_projects(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not body.dry_run:
-        await db.commit()
+        async def _do_commit(write_db: AsyncSession) -> None:
+            await write_db.commit()
+
+        await write_queue.submit(_do_commit, operation_label="projects_migrate")
+
         # Notify the tree to re-fetch scoped views for both projects.
         try:
             event_bus.publish("taxonomy_changed", {
