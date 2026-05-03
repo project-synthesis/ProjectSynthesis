@@ -309,7 +309,11 @@ async def handle_seed(
         )
     except Exception as exc:
         logger.warning("Taxonomy integration failed (non-fatal): %s", exc)
-        taxonomy_result = {"clusters_created": 0, "domains_touched": []}
+        taxonomy_result = {
+            "clusters_assigned": 0,
+            "clusters_created": 0,
+            "domains_touched": [],
+        }
 
     # Final summary
     completed = sum(1 for r in results if r.status == "completed")
