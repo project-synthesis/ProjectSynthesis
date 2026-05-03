@@ -162,3 +162,48 @@ async def app_client(mock_provider, db_session, tmp_path):
 
     app.dependency_overrides.clear()
     _cfg.DATA_DIR = original_data_dir
+
+
+# WriteQueue fixtures (v0.4.13 — see docs/specs/sqlite-writer-queue-2026-05-02.md §9.10)
+
+
+@pytest_asyncio.fixture
+async def writer_engine_inmem(tmp_path):
+    """In-memory writer engine for unit tests (NOT for WAL semantics — use
+    writer_engine_file for those).
+
+    Uses ``StaticPool`` (the SQLAlchemy default for SQLite memory URLs), which
+    is implicitly single-connection — so ``pool_size``/``max_overflow`` are
+    not applicable here and SQLAlchemy raises ``TypeError`` if passed. The
+    single-writer semantic is preserved by the pool topology itself.
+    """
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///file:memdb_writer_unit?mode=memory&cache=shared&uri=true",
+    )
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def writer_engine_file(tmp_path):
+    """File-mode writer engine for WAL semantics tests."""
+    db_path = tmp_path / "writer_test.db"
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{db_path}",
+        pool_size=1,
+        max_overflow=0,
+    )
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def write_queue_inmem(writer_engine_inmem):
+    """Started write queue, no audit hook."""
+    from app.services.write_queue import WriteQueue
+    queue = WriteQueue(writer_engine_inmem)
+    await queue.start()
+    try:
+        yield queue
+    finally:
+        await queue.stop(drain_timeout=2.0)
