@@ -1110,11 +1110,6 @@ async def persist_and_propagate(
     # so analysis-class prompts store the analysis-weighted overall.
     _task_type = analysis.task_type if analysis else None
 
-    # Capture the side-effect set from inside ``_do_persist`` so the
-    # post-submit usage propagation + event emission outside the queue
-    # callback see the same cluster IDs the inner work touched.
-    applied_cluster_ids: set[str] = set()
-
     async def _do_persist(write_db: AsyncSession) -> None:
         """All five v0.4.12 commit sites collapsed into one callback.
 
@@ -1144,8 +1139,6 @@ async def persist_and_propagate(
            ``write_db`` directly. Final ``write_db.commit()`` only if
            taxonomy increments fired.
         """
-        nonlocal applied_cluster_ids
-
         db_opt = Optimization(
             id=inputs.opt_id,
             raw_prompt=inputs.raw_prompt,
@@ -1315,12 +1308,6 @@ async def persist_and_propagate(
                 await write_db.commit()
             except Exception as exc:
                 logger.warning("Post-commit usage propagation failed: %s", exc)
-
-        # Surface accumulated cluster IDs to the caller for any
-        # observability layered on top of ``persist_and_propagate``
-        # (the canonical pipeline.py path doesn't read this; future
-        # cycle-5 callers may want it).
-        applied_cluster_ids = local_applied_cluster_ids
 
     # ------------------------------------------------------------------
     # Dispatch: Option C dual path. write_queue takes precedence; legacy
