@@ -28,67 +28,11 @@ import uuid as _uuid
 import pytest
 from sqlalchemy import text
 
-
-def _make_passing_pending(batch_id: str = "test-batch", *, opt_id: str | None = None):
-    """Build a minimal ``PendingOptimization`` passing ID-shape + quality gates.
-
-    Per plan task 2.1 — fields chosen so ``bulk_persist`` accepts the row:
-    valid uuid4 ``id``, ``status='completed'``, ``overall_score >= 5.0``.
-
-    ``opt_id`` allows callers (e.g. idempotency tests) to pin the row's UUID
-    so two parallel ``bulk_persist`` calls collide on the same primary key.
-    """
-    from app.services.batch_pipeline import PendingOptimization
-    return PendingOptimization(
-        id=opt_id or str(_uuid.uuid4()),
-        trace_id=str(_uuid.uuid4()),
-        raw_prompt="test prompt",
-        optimized_prompt="optimized test prompt",
-        task_type="general",
-        strategy_used="auto",
-        changes_summary="test",
-        score_clarity=7.0,
-        score_specificity=7.0,
-        score_structure=7.0,
-        score_faithfulness=7.0,
-        score_conciseness=7.0,
-        overall_score=7.0,
-        improvement_score=1.0,
-        scoring_mode="hybrid",
-        intent_label="test",
-        domain="general",
-        domain_raw="general",
-        embedding=None,
-        optimized_embedding=None,
-        transformation_embedding=None,
-        models_by_phase={},
-        original_scores={},
-        score_deltas={},
-        duration_ms=100,
-        status="completed",
-        provider="test",
-        model_used="test-model",
-        routing_tier="internal",
-        heuristic_flags={},
-        suggestions=[],
-        repo_full_name=None,
-        project_id=None,
-        context_sources={"batch_id": batch_id},
-        auto_injected_patterns=[],
-        auto_injected_cluster_ids=[],
-        auto_injected_similarity_map={},
-    )
-
-
-def _make_failing_pending(batch_id: str = "test-batch", overall_score: float = 3.0):
-    """Build a ``PendingOptimization`` that the quality gate must reject.
-
-    Used by ``test_bulk_persist_quality_gate_under_load`` to verify the
-    score < 5.0 rejection still fires under concurrent load.
-    """
-    p = _make_passing_pending(batch_id=batch_id)
-    p.overall_score = overall_score
-    return p
+from tests._write_queue_helpers import (
+    _make_failing_pending,
+    _make_passing_pending,
+    create_prestaged_cluster,
+)
 
 
 class TestBulkPersistViaWriteQueue:
@@ -441,30 +385,15 @@ class TestBulkPersistOperate:
         - At least one OptimizationPattern row with relationship='injected'
           and similarity matching the supplied map.
         """
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-        from app.models import PromptCluster
         from app.services import batch_persistence
 
         # Pre-create a cluster row so the OptimizationPattern FK on
-        # cluster_id resolves cleanly.  FK enforcement is OFF on the
-        # in-memory test engine by default, but the row is needed so we
-        # can verify the join in the assertion below.  Use the ORM so
-        # all NOT NULL columns get their model-level defaults (raw SQL
-        # would have to spell every default explicitly).
-        cluster_id = "test-cluster-prov"
-        sf = async_sessionmaker(
-            writer_engine_inmem, class_=AsyncSession, expire_on_commit=False,
+        # cluster_id resolves cleanly. Uses the shared helper so cycles 3+
+        # share the same pre-staging primitive across taxonomy +
+        # injection-provenance tests.
+        cluster_id = await create_prestaged_cluster(
+            writer_engine_inmem, cluster_id="test-cluster-prov",
         )
-        async with sf() as setup_db:
-            setup_db.add(PromptCluster(
-                id=cluster_id,
-                label="test-cluster",
-                state="active",
-                domain="general",
-                task_type="general",
-            ))
-            await setup_db.commit()
 
         # Build a pending with non-empty auto_inject fields.
         pending = _make_passing_pending(batch_id="prov-test")

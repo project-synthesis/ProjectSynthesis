@@ -167,6 +167,35 @@ async def app_client(mock_provider, db_session, tmp_path):
 # WriteQueue fixtures (v0.4.13 — see docs/specs/sqlite-writer-queue-2026-05-02.md §9.10)
 
 
+def _apply_writer_pragmas(engine):
+    """Apply production PRAGMAs (journal_mode=WAL, busy_timeout, synchronous,
+    cache_size, foreign_keys) to a test engine so contention tests exercise
+    real WAL semantics rather than the SQLAlchemy-default rollback journaling.
+    Mirrors ``backend/app/database.py:_set_writer_pragmas``.
+
+    SQLite limitation: in-memory databases (including ``cache=shared`` URIs)
+    silently report ``journal_mode=memory`` and reject WAL — the lock topology
+    differs from production but no other journal mode is available for memory
+    DBs. This helper is a no-op on the journal_mode line for in-memory
+    engines; the other PRAGMAs (busy_timeout, foreign_keys, etc.) still apply.
+    Use ``writer_engine_file`` for tests that depend on WAL contention
+    semantics (e.g. ``test_bulk_persist_n5_concurrent_callers_serialize_via_queue``).
+    """
+    from sqlalchemy import event
+
+    from app.config import settings
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_pragmas(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA busy_timeout={settings.DB_LOCK_TIMEOUT_SECONDS * 1000}")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute(f"PRAGMA cache_size={settings.DB_CACHE_SIZE_KB}")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
 @pytest_asyncio.fixture
 async def writer_engine_inmem(tmp_path):
     """In-memory writer engine for unit tests (NOT for WAL semantics — use
@@ -177,6 +206,12 @@ async def writer_engine_inmem(tmp_path):
     not applicable here and SQLAlchemy raises ``TypeError`` if passed. The
     single-writer semantic is preserved by the pool topology itself.
 
+    Production PRAGMAs (busy_timeout, synchronous, cache_size, foreign_keys)
+    are applied via ``_apply_writer_pragmas``. ``journal_mode=WAL`` is
+    requested but SQLite silently downgrades to ``journal_mode=memory`` on
+    in-memory DBs — verified empirically. Tests that depend on real WAL
+    writer contention must use ``writer_engine_file``.
+
     The schema (``Base.metadata.create_all``) is materialized so tests that
     submit ORM work to ``WriteQueue`` (e.g. v0.4.13 cycle 2's
     ``test_bulk_persist_routes_through_write_queue``) can insert into the
@@ -186,6 +221,7 @@ async def writer_engine_inmem(tmp_path):
     engine = create_async_engine(
         "sqlite+aiosqlite:///file:memdb_writer_unit?mode=memory&cache=shared&uri=true",
     )
+    _apply_writer_pragmas(engine)
     from app.models import Base
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -195,13 +231,22 @@ async def writer_engine_inmem(tmp_path):
 
 @pytest_asyncio.fixture
 async def writer_engine_file(tmp_path):
-    """File-mode writer engine for WAL semantics tests."""
+    """File-mode writer engine for WAL semantics tests.
+
+    Production PRAGMAs (journal_mode=WAL, busy_timeout, synchronous,
+    cache_size, foreign_keys) applied via ``_apply_writer_pragmas`` so
+    contention tests (e.g. N=10 concurrent submits) exercise the same lock
+    topology as production. Without WAL, file-mode SQLite would default to
+    rollback journaling and the "no database is locked" assertion could pass
+    for the wrong reason.
+    """
     db_path = tmp_path / "writer_test.db"
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{db_path}",
         pool_size=1,
         max_overflow=0,
     )
+    _apply_writer_pragmas(engine)
     yield engine
     await engine.dispose()
 
