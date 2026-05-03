@@ -27,8 +27,6 @@ Copyright 2025-2026 Project Synthesis contributors.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 
