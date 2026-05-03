@@ -212,6 +212,203 @@ class TestLifecycle:
         await asyncio.gather(queue.stop(), queue.stop())
         assert queue._stop_done.is_set()
 
+    @pytest.mark.asyncio
+    async def test_drain_on_stop_completes_inflight(self, writer_engine_inmem):
+        """Pin spec § 12: stop() with default (generous) drain_timeout completes
+        in-flight work before returning.
+
+        Distinct from the OPERATE stress test ``test_session_cleanup_under_worker_cancellation_is_shielded``
+        which uses a SHORT drain_timeout to test the timeout escape — this test
+        pins the success path: drain finishes, all submitted work completes.
+        """
+        from app.services.write_queue import WriteQueue
+        queue = WriteQueue(writer_engine_inmem)
+        await queue.start()
+
+        completed: list[int] = []
+
+        async def _make_slow(idx: int):
+            async def _do(db: AsyncSession) -> None:
+                await asyncio.sleep(0.1)
+                completed.append(idx)
+            return await queue.submit(_do, operation_label=f"work-{idx}")
+
+        # Submit 3 work items; stop() should drain all 3 before returning.
+        tasks = [asyncio.create_task(_make_slow(i)) for i in range(3)]
+        await asyncio.sleep(0.05)  # let first one start
+        await queue.stop(drain_timeout=5.0)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        assert sorted(completed) == [0, 1, 2], (
+            f"drain did not complete all in-flight + queued work: {sorted(completed)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_per_test_queue_disposes_writer_engine_cleanly(
+        self, writer_engine_file,
+    ):
+        """Pin spec § 12: per-test queue lifecycle leaves no leaked connections.
+
+        Asserts pool.checkedout() == 0 after queue.stop() and that the queue
+        is in a stopped state (subsequent submit raises WriteQueueStopped).
+        """
+        from app.services.write_queue import WriteQueue, WriteQueueStopped
+        queue = WriteQueue(writer_engine_file)
+        await queue.start()
+
+        # Do real work to actually exercise the connection.
+        async def _work(db: AsyncSession) -> None:
+            await db.execute(text("SELECT 1"))
+            await db.commit()
+        await queue.submit(_work)
+
+        await queue.stop(drain_timeout=5.0)
+
+        # Pool stats: connection returned cleanly. checkedout MUST equal 0.
+        pool = writer_engine_file.sync_engine.pool
+        assert pool.checkedout() == 0, (
+            f"writer engine has {pool.checkedout()} checked-out connections "
+            "after queue.stop() — leak!"
+        )
+
+        # Subsequent submit must raise (queue is stopped).
+        with pytest.raises(WriteQueueStopped):
+            await queue.submit(_work)
+
+
+class TestSupervisor:
+    @pytest.mark.asyncio
+    async def test_double_crash_within_60s_sets_dead_and_fails_pending(
+        self, writer_engine_inmem, monkeypatch,
+    ):
+        """Pin spec § 12: worker crash budget = 1 respawn within 60s, then dead.
+
+        After two crashes inside the 60s window, _dead is set and subsequent
+        submit() raises WriteQueueDead immediately.
+
+        Note on patching strategy: the natural ``_run_one`` path catches
+        non-CancelledError exceptions internally and never propagates them up
+        to ``_worker_loop``. To trigger the supervisor's two-strikes path we
+        replace ``_run_one`` with a function that fails the future cleanly
+        (so callers get WriteQueueDead, matching the contract) and then
+        re-raises a plain ``RuntimeError`` so ``_worker_loop`` dies and the
+        supervisor sees the crash.
+        """
+        from app.services.write_queue import WriteQueue, WriteQueueDead
+        queue = WriteQueue(writer_engine_inmem)
+        await queue.start()
+        try:
+            crashes = {"count": 0}
+
+            async def _crashing_run_one(item):
+                _, future, _, _ = item
+                crashes["count"] += 1
+                if not future.done():
+                    with contextlib.suppress(asyncio.InvalidStateError):
+                        future.set_exception(
+                            WriteQueueDead(f"forced crash {crashes['count']}")
+                        )
+                # Mimic the original's task_done bookkeeping so the queue stays
+                # in a consistent state (the supervisor doesn't drain it; only
+                # the second crash triggers _fail_all_pending).
+                queue._queue.task_done()
+                queue._inflight_label = None
+                raise RuntimeError(f"forced crash {crashes['count']}")
+
+            monkeypatch.setattr(queue, "_run_one", _crashing_run_one)
+
+            async def _work(db: AsyncSession) -> None:
+                return None
+
+            # Fire submit #1 — worker pulls it, _run_one raises, supervisor
+            # records crash #1 and respawns the worker.
+            f1 = asyncio.create_task(queue.submit(_work))
+            await asyncio.sleep(0.1)  # let first crash + respawn complete
+
+            # Fire submit #2 — new worker pulls it, _run_one raises, supervisor
+            # records crash #2 (within 60s window) → _dead = True.
+            f2 = asyncio.create_task(queue.submit(_work))
+            await asyncio.sleep(0.5)  # let second crash declare queue dead
+
+            # Both Futures should now have WriteQueueDead exceptions.
+            with pytest.raises(WriteQueueDead):
+                await f1
+            with pytest.raises(WriteQueueDead):
+                await f2
+
+            # The queue is dead — subsequent submits raise immediately at the
+            # entry guard, NOT via _fail_all_pending.
+            assert queue._dead is True
+            with pytest.raises(WriteQueueDead):
+                await queue.submit(_work)
+        finally:
+            # Don't call stop() on a dead queue (drain semantics aren't
+            # meaningful when the worker is gone) — cancel tasks directly.
+            if queue._supervisor_task and not queue._supervisor_task.done():
+                queue._supervisor_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await queue._supervisor_task
+            if queue._worker_task and not queue._worker_task.done():
+                queue._worker_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await queue._worker_task
+
+
+class TestWALVisibility:
+    @pytest.mark.asyncio
+    async def test_writer_engine_commit_visible_via_read_engine_under_wal_file_mode(
+        self, writer_engine_file,
+    ):
+        """Pin spec § 12: file-mode SQLite — writer engine's commit is visible
+        to a separate read engine on the next fresh transaction.
+
+        Raw SQL bypasses ORM identity-map caching per H-v4-5.
+        """
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        from app.services.write_queue import WriteQueue
+
+        # Setup: enable WAL on the writer engine and create a test table.
+        async with writer_engine_file.begin() as conn:
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS rw_visibility_test "
+                "(id INTEGER PRIMARY KEY, marker TEXT)"
+            ))
+
+        # Spin up a SEPARATE read engine pointing at the same DB file.
+        db_url = str(writer_engine_file.url)
+        read_engine = create_async_engine(db_url)
+        try:
+            queue = WriteQueue(writer_engine_file)
+            await queue.start()
+            try:
+                async def _do_insert(db: AsyncSession) -> None:
+                    await db.execute(text(
+                        "INSERT INTO rw_visibility_test (id, marker) "
+                        "VALUES (42, 'visible')"
+                    ))
+                    await db.commit()
+                await queue.submit(_do_insert, operation_label="rw_test")
+
+                # On the SEPARATE read engine, fresh transaction → see the write.
+                async with read_engine.begin() as conn:
+                    result = await conn.execute(
+                        text(
+                            "SELECT marker FROM rw_visibility_test "
+                            "WHERE id = :i"
+                        ),
+                        {"i": 42},
+                    )
+                    row = result.first()
+                    assert row is not None, (
+                        "writer commit not visible to read engine"
+                    )
+                    assert row.marker == "visible"
+            finally:
+                await queue.stop(drain_timeout=5.0)
+        finally:
+            await read_engine.dispose()
+
 
 class TestReentrancy:
     @pytest.mark.asyncio
