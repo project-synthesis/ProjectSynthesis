@@ -447,12 +447,37 @@ class ProbeService:
         ``running`` -- callers can invoke this idempotently from
         cancellation / partial-success branches without re-overwriting
         a terminal-state write.
+
+        Cycle 7 migration scope:
+            Migrated this cycle:
+                * ``_set_probe_status`` (this helper)
+                * ``_mark_cancelled``
+                * ``_mark_failed_with_error``
+
+            Deferred to cycle 8 (6 of 8 ``self.db.commit()`` /
+            ``db.commit()`` sites still on the legacy path):
+                * ``_commit_with_retry`` retry loop -- start-of-run ProbeRun
+                  INSERT (low risk: idempotent on retry).
+                * ``run()``'s ``self.db.add(row); await self.db.commit()``
+                  block -- initial running-state INSERT.
+                * ``run()``'s ``link_repo_first`` failure branch.
+                * ``run()``'s grounding-failure branch
+                  (``f"generation_failed: ...""``).
+                * ``_tag_probe_rows`` -- probe-source attribution commit
+                  on completion.
+                * ``_persist_and_assign`` -- per-prompt persist + cluster
+                  assignment in the as_completed loop.
+
+            Cycle 8/9 will collapse the polymorphic ``self.db`` /
+            ``write_queue`` plumbing into a uniform queue-only flow once
+            the read-only ``self.db`` conversion lands and the lifespan
+            wires the singleton.
         """
         async def _do_update(write_db: AsyncSession) -> None:
             row = await write_db.get(ProbeRun, probe_id)
             if row is None:
                 return
-            row.status = status  # type: ignore[assignment]
+            row.status = status
             if error is not None:
                 row.error = error
             if completed_at is not None:
@@ -471,7 +496,7 @@ class ProbeService:
         row = await self.db.get(ProbeRun, probe_id)
         if row is None:
             return
-        row.status = status  # type: ignore[assignment]
+        row.status = status
         if error is not None:
             row.error = error
         if completed_at is not None:
@@ -1646,7 +1671,7 @@ class ProbeService:
                 fresh = await write_db.get(ProbeRun, probe_id)
                 if fresh is None:
                     return
-                fresh.status = "failed"  # type: ignore[assignment]
+                fresh.status = "failed"
                 fresh.error = "cancelled"
                 fresh.completed_at = completed_at
                 await write_db.commit()
@@ -1656,13 +1681,13 @@ class ProbeService:
             )
             # Keep the in-memory reference consistent for any caller
             # that inspects ``row`` after this returns.
-            row.status = "failed"  # type: ignore[assignment]
+            row.status = "failed"
             row.error = "cancelled"
             row.completed_at = completed_at
             return
 
         # Legacy: write through self.db (v0.4.12 path).
-        row.status = "failed"  # type: ignore[assignment]
+        row.status = "failed"
         row.error = "cancelled"
         row.completed_at = completed_at
         await self.db.commit()
