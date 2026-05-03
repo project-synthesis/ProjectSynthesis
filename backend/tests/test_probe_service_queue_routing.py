@@ -1,10 +1,16 @@
-"""Cycle 7c RED → GREEN: ProbeService routes status writes through WriteQueue.
+"""Cycle 7c/7.5 RED → GREEN: ProbeService routes status writes through WriteQueue.
 
 The probe service has 8+ ``self.db.commit()`` / ``db.commit()`` sites
 spanning the 5-phase orchestrator + lifecycle helpers. Cycle 7c migrates
 each to a ``submit()`` callback so probe row mutations (status
 transitions, terminal writes, cancellation marks, persistence) serialize
 against every other backend writer through the single-writer queue.
+
+Cycle 7.5 finishes the migration: 7 remaining ``self.db.commit()`` sites
+(initial INSERT, link_repo_first branch, generation-failure branch,
+``_tag_probe_rows``, ``_mark_failed_with_error``, ``_commit_with_retry``
+in the run path, ``_persist_and_assign``) all route through the queue;
+``self.db`` becomes read-only and ``_persist_lock`` is removed.
 
 Test design constraint: the full ProbeService.run() pipeline pulls in
 the entire batch_pipeline + repo_index + embedding stack — heavy
@@ -289,4 +295,638 @@ class TestCycle7Operate:
             "Failure semantics violated: helper appended downstream events "
             "after submit() raised. Queue contract requires zero side "
             f"effects on failed submit. Got: {events_fired_after_raise}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cycle 7.5: probe service migration completion
+# ---------------------------------------------------------------------------
+
+
+class TestCycle75ProbeMigrationCompletion:
+    """Cycle 7.5 RED: complete the probe_service migration.
+
+    Pins the elimination of ALL ``self.db.add`` / ``self.db.commit`` /
+    ``self.db.delete`` / ``self.db.flush`` / ``self.db.rollback`` calls in
+    ``probe_service.py``. After GREEN: only read-side ``self.db.execute(...)``
+    + ``self.db.get(...)`` remain. Every write routes through
+    ``self.write_queue.submit()`` instead.
+
+    Also pins removal of ``self._persist_lock`` (redundant once writes
+    are queue-serialized) and ``_mark_failed_with_error`` queue routing
+    (cycle 7 docstring documented intent but the helper still wrote
+    through ``self.db`` directly).
+    """
+
+    pytestmark = pytest.mark.usefixtures("reset_taxonomy_engine")
+
+    def test_no_self_db_writes_in_probe_service_module(self):
+        """RED: source-level audit — no ``self.db.add`` / ``self.db.commit``
+        / ``self.db.delete`` / ``self.db.flush`` calls remain.
+
+        Pre-GREEN this scans the module source and asserts a count of zero
+        on the write API. Post-GREEN every write either routes through
+        ``self.write_queue.submit()`` or uses an explicit alternate
+        session (e.g. queue callback's ``write_db`` arg).
+        """
+        import re
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        # Strip docstrings + comments so audit-class symbols mentioned in
+        # prose ("self.db.commit()" inside a `"""..."""`) don't trip the
+        # check. Naive but sufficient: we only need to catch live code.
+        # Strip line comments + block-string literals.
+        source_stripped = re.sub(
+            r'""".*?"""', "", source, flags=re.DOTALL,
+        )
+        source_stripped = re.sub(
+            r"'''.*?'''", "", source_stripped, flags=re.DOTALL,
+        )
+        # Strip line comments (#).
+        source_stripped = re.sub(
+            r"^[ \t]*#.*$", "", source_stripped, flags=re.MULTILINE,
+        )
+
+        forbidden = [
+            r"\bself\.db\.add\(",
+            r"\bself\.db\.commit\(",
+            r"\bself\.db\.delete\(",
+            r"\bself\.db\.flush\(",
+        ]
+        violations: list[str] = []
+        for pat in forbidden:
+            matches = re.findall(pat, source_stripped)
+            if matches:
+                violations.append(f"{pat}: {len(matches)} hits")
+        assert not violations, (
+            f"probe_service.py still has self.db write calls: {violations}. "
+            "All writes must route through self.write_queue.submit()."
+        )
+
+    def test_no_persist_lock_attribute(self):
+        """RED: ``_persist_lock`` attribute removed.
+
+        Once probe_service uses queue + read-only self.db, the
+        ``_persist_lock`` (cycle 7 review I0) is redundant. Post-GREEN
+        ProbeService instances must NOT have it.
+        """
+        svc = ProbeService(
+            db=MagicMock(),
+            provider=MagicMock(),
+            repo_query=MagicMock(),
+            context_service=MagicMock(),
+            event_bus=MagicMock(),
+        )
+        assert not hasattr(svc, "_persist_lock"), (
+            "_persist_lock should be removed (cycle 7.5 review I0). "
+            "Queue serialization replaces in-process locking."
+        )
+
+    def test_no_persist_lock_references_in_module(self):
+        """RED: ``_persist_lock`` is no longer referenced anywhere in
+        probe_service.py source.
+        """
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        # Strip docstrings/comments mention of _persist_lock isn't worth
+        # the regex; we want zero references including the attribute access.
+        assert "_persist_lock" not in source, (
+            "probe_service.py still references _persist_lock. "
+            "Remove the attribute and all consumers."
+        )
+
+    @pytest.mark.asyncio
+    async def test_mark_failed_with_error_routes_through_queue(self):
+        """RED: ``_mark_failed_with_error`` with ``write_queue`` set must
+        produce a submit() with operation_label
+        ``probe_mark_failed_with_error``.
+
+        Cycle 7 documented the intent but the helper still wrote through
+        ``self.db.commit()``. Cycle 7.5 actually routes it.
+        """
+        captured: list[str | None] = []
+
+        async def _fake_submit(work, *, timeout=None, operation_label=None):
+            captured.append(operation_label)
+            mock_db = AsyncMock()
+            mock_db.get = AsyncMock(return_value=MagicMock(status="running"))
+            return await work(mock_db)
+
+        write_queue = MagicMock()
+        write_queue.submit = _fake_submit
+
+        svc = ProbeService(
+            db=MagicMock(),
+            provider=MagicMock(),
+            repo_query=MagicMock(),
+            context_service=MagicMock(),
+            event_bus=MagicMock(),
+            write_queue=write_queue,
+        )
+        row = MagicMock()
+        await svc._mark_failed_with_error(
+            row, "test-probe-id",
+            phase="running",
+            error_class="RuntimeError",
+            error_message="boom",
+        )
+        assert "probe_mark_failed_with_error" in captured
+
+    @pytest.mark.asyncio
+    async def test_mark_failed_with_error_legacy_path_no_queue(self):
+        """RED: ``_mark_failed_with_error`` must continue to work when
+        ``write_queue`` is ``None`` -- not all callers (older tests +
+        legacy paths during the cycle 7-9 transition) supply a queue.
+
+        Pre-cycle 7.5 the helper writes through self.db directly. Post-
+        cycle 7.5 it raises a clear error: queue is now mandatory or
+        the helper accepts a session_factory fallback. We pick the
+        ``self.db``-write retention with read-only-binding to keep the
+        test surface stable.
+
+        Note: After cycle 7.5 ``self.db`` is bound to the READ engine,
+        so writing through it would fail under the audit hook. The
+        legacy path should therefore raise/fall back gracefully when
+        write_queue is None — we accept either explicit raise OR a
+        documented session_factory bridge.
+        """
+        # Build a session that simulates "write attempted on read engine"
+        # -- the audit hook in production raises
+        # ``WriteOnReadEngineError`` when WRITE_QUEUE_AUDIT_HOOK_RAISE=True.
+        svc = ProbeService(
+            db=AsyncMock(),
+            provider=MagicMock(),
+            repo_query=MagicMock(),
+            context_service=MagicMock(),
+            event_bus=MagicMock(),
+            # No write_queue -- legacy path.
+        )
+        row = MagicMock()
+        # Legacy path is acceptable iff it raises a clear error OR
+        # gracefully no-ops (no DB write attempted). Either way it
+        # must NOT silently corrupt state. We assert it doesn't raise
+        # AttributeError or TypeError -- an explicit RuntimeError is OK.
+        try:
+            await svc._mark_failed_with_error(
+                row, "test-probe-id",
+                phase="running",
+                error_class="X",
+                error_message="m",
+            )
+        except (AttributeError, TypeError) as exc:
+            pytest.fail(
+                f"Legacy path crashed with {type(exc).__name__}: {exc}. "
+                "Should either raise RuntimeError or no-op cleanly.",
+            )
+
+    @pytest.mark.asyncio
+    async def test_initial_probe_run_insert_routes_through_queue(self):
+        """RED: the initial ``ProbeRun`` row INSERT in ``_run_impl`` (the
+        ``self.db.add(row); await self.db.commit()`` block) must route
+        through the write queue under operation_label
+        ``probe_initial_insert`` when ``write_queue`` is set.
+
+        This cannot be tested in isolation easily because ``_run_impl``
+        pulls in the whole 5-phase orchestrator. We assert it indirectly
+        by introspecting the source: the write must dispatch on
+        ``self.write_queue is not None`` ahead of any ``self.db.add``.
+        """
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        assert '"probe_initial_insert"' in source or "'probe_initial_insert'" in source, (
+            "probe_service.py must use operation_label='probe_initial_insert' "
+            "for the initial ProbeRun row INSERT.  Cycle 7.5 spec § A."
+        )
+
+    @pytest.mark.asyncio
+    async def test_link_repo_first_failure_branch_routes_through_queue(self):
+        """RED: the ``link_repo_first`` branch's terminal write (status=
+        failed, error=link_repo_first) must route through the queue.
+
+        Pinned via source introspection (label probe_mark_failed*).
+        """
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        # The branch should re-use _mark_failed_with_error or _set_probe_status
+        # (both queue-aware) rather than the direct self.db.commit().
+        # Look for the inline failure-write near 'link_repo_first':
+        idx = source.find('"link_repo_first"')
+        assert idx >= 0, "link_repo_first error string not found in source"
+        # Window around the assignment site -- 800 chars before.
+        window = source[max(0, idx - 800):idx + 200]
+        assert "self.db.commit()" not in window, (
+            "link_repo_first branch still calls self.db.commit() inline. "
+            "Route through self.write_queue.submit() instead."
+        )
+
+    @pytest.mark.asyncio
+    async def test_generating_failure_branch_routes_through_queue(self):
+        """RED: the ``generation_failed`` branch's terminal write (status=
+        failed, error=generation_failed:...) must NOT use self.db.commit().
+        """
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        idx = source.find('"generation_failed"')
+        # The string is also matched as ``ProbeError("generation_failed", ...)``.
+        if idx < 0:
+            idx = source.find("'generation_failed'")
+        assert idx >= 0, "generation_failed not found in source"
+        # Look back ~600 chars for the failure-handling block.
+        window = source[max(0, idx - 600):idx]
+        # The helper call should be visible; inline self.db.commit() is forbidden.
+        assert "self.db.commit()" not in window, (
+            "generation_failed branch still calls self.db.commit() inline. "
+            "Route through self.write_queue.submit() / _mark_failed_with_error."
+        )
+
+    @pytest.mark.asyncio
+    async def test_tag_probe_rows_routes_through_queue(self):
+        """RED: ``_tag_probe_rows`` must route through ``self.write_queue``
+        when set, with operation_label ``probe_tag_rows``.
+
+        Source-introspection check.
+        """
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        # Find the function header.
+        assert "_tag_probe_rows" in source
+        # Confirm the operation_label is present in source.
+        assert "probe_tag_rows" in source, (
+            "probe_service.py must use operation_label='probe_tag_rows' "
+            "for the _tag_probe_rows callback."
+        )
+
+    def test_self_db_uses_read_engine_via_signature_or_factory(self):
+        """RED: ProbeService accepts a session bound to the READ engine
+        only.  The constructor signature documents this expectation; the
+        runtime check is delegated to the audit hook in production.
+
+        We cannot easily check the engine binding without a real session,
+        so this test is intentionally a contract-level check on the docstring
+        / module-level commentary that documents the read-only nature of
+        ``self.db``.
+        """
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        # The class docstring or __init__ docstring must mention that
+        # self.db is the READ-only session.
+        assert (
+            "read-only" in source.lower()
+            or "read engine" in source.lower()
+            or "READ engine" in source
+        ), (
+            "probe_service.py must document that self.db is bound to "
+            "the READ engine (write paths use self.write_queue)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cycle 7.5: yield-boundary cancellation tests (spec § 8 #5a-5e)
+# ---------------------------------------------------------------------------
+
+
+class TestCycle75CancellationBoundaries:
+    """Cycle 7.5 RED: cancellation at every yield boundary in the probe
+    orchestrator must leave the ProbeRun row in a terminal state, never
+    ``running``.
+
+    Per spec § 8 #5a-5e, cancellation can happen between any two phase
+    boundaries. The probe must:
+      - mark the row failed=cancelled (or terminal-completed if persist
+        landed before the cancel).
+      - never leak a running row that the GC sweep will have to
+        eventually reconcile.
+
+    Test infrastructure note: the full pipeline harness is too heavy for
+    boundary-precision testing. These tests pin the INVARIANT (that
+    ``_mark_cancelled`` is invoked under ``asyncio.shield`` from the
+    ``asyncio.CancelledError`` handler) at the contract level, by
+    introspecting the source + invoking the helper directly under a
+    cancel.
+    """
+
+    pytestmark = pytest.mark.usefixtures("reset_taxonomy_engine")
+
+    @pytest.mark.asyncio
+    async def test_5a_mark_cancelled_invoked_under_shield(self):
+        """5a: the CancelledError handler in ``_run_impl`` MUST call
+        ``_mark_cancelled`` under ``asyncio.shield`` so the terminal-
+        state write lands even on re-cancellation.
+        """
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        assert "asyncio.shield(self._mark_cancelled" in source, (
+            "_run_impl must call self._mark_cancelled under asyncio.shield "
+            "from the CancelledError handler. Without shield, the terminal "
+            "write is cancelled before it lands."
+        )
+
+    @pytest.mark.asyncio
+    async def test_5b_mark_failed_with_error_invoked_under_shield(self):
+        """5b: the top-level ``except Exception`` handler MUST call
+        ``_mark_failed_with_error`` under ``asyncio.shield`` so a mid-
+        run uncaught exception cannot leak a running row.
+        """
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "app" / "services" / "probe_service.py"
+        source = path.read_text()
+        assert "asyncio.shield(self._mark_failed_with_error" in source, (
+            "_run_impl must call self._mark_failed_with_error under "
+            "asyncio.shield from the top-level except handler."
+        )
+
+    @pytest.mark.asyncio
+    async def test_5c_mark_cancelled_under_queue_uses_shield_semantics(self):
+        """5c: when ``write_queue`` is set, ``_mark_cancelled`` submits a
+        callback that re-reads the row inside the writer session and
+        commits the terminal-state write atomically.
+        """
+        captured_writes: list[dict[str, Any]] = []
+
+        async def _fake_submit(work, *, timeout=None, operation_label=None):
+            mock_db = AsyncMock()
+            row_obj = MagicMock(status="running")
+            mock_db.get = AsyncMock(return_value=row_obj)
+            await work(mock_db)
+            captured_writes.append({
+                "label": operation_label,
+                "status_after": row_obj.status,
+                "error_after": row_obj.error,
+            })
+            return None
+
+        write_queue = MagicMock()
+        write_queue.submit = _fake_submit
+
+        svc = ProbeService(
+            db=MagicMock(),
+            provider=MagicMock(),
+            repo_query=MagicMock(),
+            context_service=MagicMock(),
+            event_bus=MagicMock(),
+            write_queue=write_queue,
+        )
+        row = MagicMock()
+        await svc._mark_cancelled(row, "5c-probe")
+
+        assert len(captured_writes) == 1
+        assert captured_writes[0]["label"] == "probe_mark_cancelled"
+        assert captured_writes[0]["status_after"] == "failed"
+        assert captured_writes[0]["error_after"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_5d_mark_failed_with_error_terminal_state_committed(self):
+        """5d: the queue callback in ``_mark_failed_with_error`` writes a
+        composed terminal error ("ErrClass: msg (phase=...)").
+        """
+        captured_writes: list[dict[str, Any]] = []
+
+        async def _fake_submit(work, *, timeout=None, operation_label=None):
+            mock_db = AsyncMock()
+            row_obj = MagicMock(status="running")
+            mock_db.get = AsyncMock(return_value=row_obj)
+            await work(mock_db)
+            captured_writes.append({
+                "label": operation_label,
+                "status_after": row_obj.status,
+                "error_after": row_obj.error,
+            })
+
+        write_queue = MagicMock()
+        write_queue.submit = _fake_submit
+
+        svc = ProbeService(
+            db=MagicMock(),
+            provider=MagicMock(),
+            repo_query=MagicMock(),
+            context_service=MagicMock(),
+            event_bus=MagicMock(),
+            write_queue=write_queue,
+        )
+        row = MagicMock()
+        await svc._mark_failed_with_error(
+            row, "5d-probe",
+            phase="reporting",
+            error_class="ValueError",
+            error_message="boom",
+        )
+
+        assert len(captured_writes) == 1
+        assert captured_writes[0]["label"] == "probe_mark_failed_with_error"
+        assert captured_writes[0]["status_after"] == "failed"
+        # Composed error: contains class, message, phase.
+        err = captured_writes[0]["error_after"]
+        assert "ValueError" in err
+        assert "boom" in err
+        assert "reporting" in err
+
+    @pytest.mark.asyncio
+    async def test_5e_mark_cancelled_idempotent_on_second_invocation(self):
+        """5e: when the row has already moved past 'running' (e.g. a
+        cancellation arrived AFTER persist completed), ``_mark_cancelled``
+        must not regress the terminal state.
+
+        Note: the current helper unconditionally overwrites status='failed'
+        + error='cancelled'. Cycle 7.5 hardens this to skip the overwrite
+        when status is already terminal, preventing late-arrival cancels
+        from corrupting completed runs.
+        """
+        captured_writes: list[dict[str, Any]] = []
+
+        async def _fake_submit(work, *, timeout=None, operation_label=None):
+            # Simulate a row that's already completed (e.g. persist landed
+            # then cancel arrived).
+            mock_db = AsyncMock()
+            row_obj = MagicMock(status="completed")
+            mock_db.get = AsyncMock(return_value=row_obj)
+            await work(mock_db)
+            captured_writes.append({
+                "status_after": row_obj.status,
+                "error_after": getattr(row_obj, "error", None),
+            })
+
+        write_queue = MagicMock()
+        write_queue.submit = _fake_submit
+
+        svc = ProbeService(
+            db=MagicMock(),
+            provider=MagicMock(),
+            repo_query=MagicMock(),
+            context_service=MagicMock(),
+            event_bus=MagicMock(),
+            write_queue=write_queue,
+        )
+        row = MagicMock()
+        await svc._mark_cancelled(row, "5e-probe")
+
+        # Idempotency: row stays at 'completed' (the helper checks the
+        # current state inside the callback before overwriting).
+        # Pre-GREEN this would assert a corrupted state ('failed') because
+        # the v0.4.13 cycle 7c body overwrites unconditionally.
+        # Post-GREEN cycle 7.5 the row stays 'completed'.
+        assert captured_writes[0]["status_after"] == "completed", (
+            "Late-arrival cancel must not corrupt a terminal row. "
+            "Got status_after=" + str(captured_writes[0]["status_after"])
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cycle 7.5: polymorphic collapse audit
+# ---------------------------------------------------------------------------
+
+
+class TestCycle75PolymorphicCollapse:
+    """Cycle 7.5 RED: after the migration, the dual-typed signatures
+    (WriteQueue | SessionFactory or db | inputs) collapse to queue-only.
+    """
+
+    def test_bulk_persist_signature_is_write_queue_only(self):
+        """RED: ``bulk_persist`` second arg type must be ``WriteQueue``
+        (not ``WriteQueue | SessionFactory``).
+        """
+        import inspect
+
+        from app.services.batch_persistence import bulk_persist
+
+        sig = inspect.signature(bulk_persist)
+        params = list(sig.parameters.values())
+        # The second positional arg is `write_queue`.
+        annotation = params[1].annotation
+        # After collapse the annotation should NOT include the SessionFactory
+        # union member.
+        ann_str = str(annotation)
+        assert "SessionFactory" not in ann_str, (
+            f"bulk_persist still takes WriteQueue | SessionFactory: "
+            f"{ann_str}. Collapse to WriteQueue."
+        )
+
+    def test_batch_taxonomy_assign_signature_is_write_queue_only(self):
+        """RED: same for ``batch_taxonomy_assign``."""
+        import inspect
+
+        from app.services.batch_persistence import batch_taxonomy_assign
+
+        sig = inspect.signature(batch_taxonomy_assign)
+        params = list(sig.parameters.values())
+        annotation = params[1].annotation
+        ann_str = str(annotation)
+        assert "SessionFactory" not in ann_str, (
+            f"batch_taxonomy_assign still takes WriteQueue | SessionFactory: "
+            f"{ann_str}. Collapse to WriteQueue."
+        )
+
+    def test_persist_and_propagate_signature_is_inputs_first(self):
+        """RED: ``persist_and_propagate`` first positional arg is
+        ``PersistenceInputs`` (not ``AsyncSession | PersistenceInputs |
+        None``). Mixed-mode and legacy positional dispatch are removed.
+        """
+        import inspect
+
+        from app.services.pipeline_phases import persist_and_propagate
+
+        sig = inspect.signature(persist_and_propagate)
+        params = list(sig.parameters.values())
+        annotation = params[0].annotation
+        ann_str = str(annotation)
+        assert "AsyncSession" not in ann_str, (
+            f"persist_and_propagate still polymorphic: {ann_str}. "
+            "Collapse to PersistenceInputs."
+        )
+
+    def test_persist_and_propagate_write_queue_required(self):
+        """RED: ``write_queue`` must be required (no default ``None``)."""
+        import inspect
+
+        from app.services.pipeline_phases import persist_and_propagate
+
+        sig = inspect.signature(persist_and_propagate)
+        wq_param = sig.parameters.get("write_queue")
+        assert wq_param is not None, "write_queue kwarg missing"
+        assert wq_param.default is inspect.Parameter.empty, (
+            "write_queue must not default to None; collapse to required."
+        )
+
+    def test_increment_pattern_usage_write_queue_required(self):
+        """RED: ``increment_pattern_usage(cluster_ids, *, write_queue)``
+        no longer defaults ``write_queue=None``.
+        """
+        import inspect
+
+        from app.services.sampling.persistence import increment_pattern_usage
+
+        sig = inspect.signature(increment_pattern_usage)
+        wq_param = sig.parameters.get("write_queue")
+        assert wq_param is not None
+        assert wq_param.default is inspect.Parameter.empty, (
+            "increment_pattern_usage write_queue must be required."
+        )
+
+    def test_no_isinstance_writequeue_branches_in_services(self):
+        """RED: ``isinstance(..., WriteQueue)`` polymorphic dispatch is
+        removed from services after collapse.
+        """
+        import re
+        from pathlib import Path
+
+        services_dir = Path(__file__).resolve().parents[1] / "app" / "services"
+        offenders: list[tuple[str, list[str]]] = []
+        for py in services_dir.rglob("*.py"):
+            text = py.read_text()
+            # Strip docstrings/comments.
+            stripped = re.sub(
+                r'""".*?"""', "", text, flags=re.DOTALL,
+            )
+            stripped = re.sub(
+                r"'''.*?'''", "", stripped, flags=re.DOTALL,
+            )
+            stripped = re.sub(
+                r"^[ \t]*#.*$", "", stripped, flags=re.MULTILINE,
+            )
+            matches = re.findall(
+                r"isinstance\s*\([^,)]+,\s*WriteQueue\)", stripped,
+            )
+            if matches:
+                offenders.append((str(py), matches))
+        assert not offenders, (
+            "Polymorphic isinstance(..., WriteQueue) branches still present: "
+            f"{offenders}. Collapse them — write_queue is required."
+        )
+
+    def test_no_queue_or_session_factory_param_name(self):
+        """RED: ``queue_or_session_factory`` param name (the polymorphic
+        dispatch hint) is removed.
+        """
+        import re
+        from pathlib import Path
+
+        services_dir = Path(__file__).resolve().parents[1] / "app" / "services"
+        offenders: list[str] = []
+        for py in services_dir.rglob("*.py"):
+            text = py.read_text()
+            # Strip docstrings to skip prose mentions.
+            stripped = re.sub(
+                r'""".*?"""', "", text, flags=re.DOTALL,
+            )
+            if re.search(r"\bqueue_or_session_factory\b", stripped):
+                offenders.append(str(py))
+        assert not offenders, (
+            f"queue_or_session_factory still present: {offenders}. "
+            "Rename to write_queue after collapse."
         )
