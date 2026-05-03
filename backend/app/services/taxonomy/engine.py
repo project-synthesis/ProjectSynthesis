@@ -528,8 +528,10 @@ class TaxonomyEngine:
     async def process_optimization(
         self,
         optimization_id: str,
-        db: AsyncSession,
+        db: AsyncSession | None = None,
         repo_full_name: str | None = None,  # ADR-005 Phase 2A
+        *,
+        write_queue: Any = None,
     ) -> None:
         """Full extraction pipeline for a single completed optimization.
 
@@ -544,10 +546,47 @@ class TaxonomyEngine:
 
         Args:
             optimization_id: PK of the Optimization row to process.
-            db: Async SQLAlchemy session.
+            db: Async SQLAlchemy session (legacy form). Pass ``None``
+                when threading ``write_queue``.
             repo_full_name: Optional repo (e.g. "owner/repo") to resolve project.
                 Falls back to ``opt.repo_full_name`` when *None*.
+            write_queue: Optional ``WriteQueue`` instance. When supplied,
+                the entire extraction body runs inside a single ``submit()``
+                callback labelled ``hot_path_assign_cluster`` so writes
+                serialize against every other backend writer. Detection is
+                ``write_queue is not None``; legacy callers continue to
+                pass ``db=`` directly.
         """
+        if write_queue is not None:
+            async def _do_extract(write_db: AsyncSession) -> None:
+                await self._process_optimization_impl(
+                    optimization_id,
+                    write_db,
+                    repo_full_name=repo_full_name,
+                )
+
+            await write_queue.submit(
+                _do_extract, operation_label="hot_path_assign_cluster",
+            )
+            return
+
+        if db is None:
+            raise TypeError(
+                "process_optimization requires either write_queue= or "
+                "a positional AsyncSession (legacy form).",
+            )
+        await self._process_optimization_impl(
+            optimization_id, db, repo_full_name=repo_full_name,
+        )
+
+    async def _process_optimization_impl(
+        self,
+        optimization_id: str,
+        db: AsyncSession,
+        *,
+        repo_full_name: str | None = None,
+    ) -> None:
+        """Internal: hot-path extraction body. See ``process_optimization``."""
         try:
             result = await db.execute(
                 select(Optimization).where(Optimization.id == optimization_id)
@@ -2885,11 +2924,12 @@ class TaxonomyEngine:
 
     async def rebuild_sub_domains(
         self,
-        db: AsyncSession,
+        db: AsyncSession | None,
         domain_id: str,
         *,
         min_consistency_override: float | None = None,
         dry_run: bool = False,
+        write_queue: Any = None,
     ) -> dict:
         """Operator recovery: re-run sub-domain discovery on ONE domain.
 
@@ -2898,6 +2938,14 @@ class TaxonomyEngine:
         emits a ``sub_domain_rebuild_invoked`` event (including dry runs).
         Publishes ``taxonomy_changed`` only when ``created`` is non-empty AND
         non-dry.
+
+        v0.4.13 cycle 7b: when ``write_queue`` is supplied, the entire body
+        (including the SAVEPOINT-protected batch insert at step 7) runs
+        inside a single ``submit()`` callback labelled
+        ``engine_rebuild_sub_domains``. The SAVEPOINT semantics are
+        unchanged -- partial failure still rolls back the in-flight inserts
+        without poisoning the outer queue session. Detection is
+        ``write_queue is not None``.
 
         Implementation note — cascade deviation:
             The R6 spec proposed reusing ``compute_qualifier_cascade`` for the
@@ -2934,6 +2982,45 @@ class TaxonomyEngine:
         Raises:
             ValueError: domain_id not found OR not a domain node OR
                 min_consistency_override below dissolution floor.
+        """
+        if write_queue is not None:
+            async def _do_rebuild(write_db: AsyncSession) -> dict:
+                return await self._rebuild_sub_domains_impl(
+                    write_db, domain_id,
+                    min_consistency_override=min_consistency_override,
+                    dry_run=dry_run,
+                )
+
+            return await write_queue.submit(
+                _do_rebuild, operation_label="engine_rebuild_sub_domains",
+            )
+
+        if db is None:
+            raise TypeError(
+                "rebuild_sub_domains requires either write_queue= or "
+                "a positional AsyncSession (legacy form).",
+            )
+        return await self._rebuild_sub_domains_impl(
+            db, domain_id,
+            min_consistency_override=min_consistency_override,
+            dry_run=dry_run,
+        )
+
+    async def _rebuild_sub_domains_impl(
+        self,
+        db: AsyncSession,
+        domain_id: str,
+        *,
+        min_consistency_override: float | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Internal: rebuild_sub_domains body.
+
+        See ``rebuild_sub_domains`` for the public contract -- this helper
+        receives an ``AsyncSession`` directly and is invoked either by
+        the legacy positional path or by the queue submit() callback.
+        The single-transaction SAVEPOINT semantics are identical in both
+        modes.
         """
         from collections import Counter
 
