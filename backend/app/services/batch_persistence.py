@@ -228,11 +228,19 @@ async def bulk_persist(
     else:
         # Legacy ``SessionFactory`` path — retired in cycle 7 once
         # ``app/tools/seed.py`` + ``app/services/probe_service.py`` inject
-        # the queue. Single-attempt commit semantics: the v0.4.12 retry
-        # loop is gone because the only callers still on this branch run
-        # against in-memory test engines with no contention. Production
-        # contention will already be on the queue path by the time this
-        # branch executes against a file-mode SQLite database.
+        # the queue. Single-attempt commit semantics: the v0.4.12
+        # ``_persist_lock`` + 5-attempt retry loop are gone — the canonical
+        # contention solution lives on the queue path now. **Known
+        # transitional risk between cycles 2 and 7**: real production
+        # callers (``tools/seed.py`` + ``probe_service.py``) still use this
+        # branch with the ``async_session_factory``; under heavy concurrent
+        # writer pressure, ``database is locked`` exceptions will propagate
+        # to the caller instead of retrying. Mitigated by:
+        # (a) ``probe_service._persist_lock`` still serializes per-prompt
+        # persists in-process for that orchestrator, and
+        # (b) cycle 7 migrates both callers, fully closing the gap.
+        # Until cycle 7 lands, avoid running probes + concurrent /api/seed
+        # batches simultaneously in production.
         session_factory = queue_or_session_factory
         async with session_factory() as db:
             inserted, inserted_pendings = await _do_persist(db)
