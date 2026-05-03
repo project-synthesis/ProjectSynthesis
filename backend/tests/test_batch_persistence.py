@@ -548,8 +548,6 @@ class TestBatchTaxonomyAssignViaWriteQueue:
         the queue receives the work via the same Option C dual-typed
         pattern ``bulk_persist`` adopted in cycle 2.
         """
-        import numpy as np
-
         from app.services import batch_persistence
 
         # Pre-stage a cluster row so the OptimizationPattern FK on
@@ -574,10 +572,10 @@ class TestBatchTaxonomyAssignViaWriteQueue:
         monkeypatch.setattr(write_queue_inmem, "submit", _capture_submit)
 
         # Pre-persist a row so taxonomy_assign has something to operate on.
-        # The pending must carry a non-None embedding because
-        # batch_taxonomy_assign filters on ``r.embedding``.
-        pending = _make_passing_pending(batch_id="ta-test")
-        pending.embedding = np.zeros(384, dtype=np.float32).tobytes()
+        # ``with_embedding=True`` populates the three embedding fields with
+        # zero-vector bytes — ``batch_taxonomy_assign`` filters on
+        # ``r.embedding``, so a None embedding silently skips the row.
+        pending = _make_passing_pending(batch_id="ta-test", with_embedding=True)
         await batch_persistence.bulk_persist(
             [pending], write_queue_inmem, batch_id="ta-test",
         )
@@ -601,3 +599,426 @@ class TestBatchTaxonomyAssignViaWriteQueue:
         # check that just confirms the queue received the work).
         assert isinstance(result, dict)
         assert result.get("clusters_assigned", -1) >= 0
+
+
+# ---------------------------------------------------------------------------
+# Cycle 3 OPERATE: dynamic concurrency + duplicate-detection + per-pending
+#                  isolation under realistic load
+# ---------------------------------------------------------------------------
+
+
+class TestBatchTaxonomyAssignOperate:
+    """OPERATE phase: mirrors cycle 2 ``TestBulkPersistOperate`` structure for
+    the cycle 3 ``batch_taxonomy_assign`` migration.
+
+    Per ``feedback_tdd_protocol.md`` Phase 5, dynamic verification under
+    realistic concurrent load — proves the migrated code actually delivers on
+    the queue's promises (no ``database is locked`` under N=5 contention) AND
+    pins four invariants the integrate review surfaced:
+
+    * Test #1 — N=5 stress: queue serialization eliminates writer contention.
+    * Test #2 — duplicate-detection: ``batch_taxonomy_assign`` does NOT have
+      idempotency (unlike ``bulk_persist``); calling it twice on the same
+      batch creates 2× ``OptimizationPattern(relationship='source')`` rows.
+      Pinning the v0.4.12 behavior so a future safety-net retry loop won't
+      be silently added.
+    * Test #3 — event ordering: ``taxonomy_changed`` event fires AFTER the
+      queue resolves, never before.
+    * Test #4 — per-pending isolation: a single corrupt embedding does NOT
+      poison the rest of the batch (existing ``try/except Exception``
+      handler pinned).
+
+    Test #1 uses ``writer_engine_file`` for real WAL contention. Tests #2-4
+    use the in-memory queue fixture (logic-only, no contention required).
+    The autouse ``_reset_taxonomy_engine`` fixture below ensures every test
+    starts with a fresh ``TaxonomyEngine`` singleton + ``EmbeddingIndex`` so
+    accumulated centroids from prior tests don't bleed into assert paths.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_taxonomy_engine(self):
+        """Each test gets a fresh process singleton.
+
+        ``batch_taxonomy_assign`` reads ``engine._embedding_index`` and
+        every successful ``assign_cluster()`` call upserts the new cluster
+        into that index. Reusing a singleton across tests makes the
+        embedding-index state path-dependent on test ordering, which is
+        exactly the kind of flake the autouse reset prevents.
+        """
+        from app.services.taxonomy import reset_engine
+        reset_engine()
+        yield
+        reset_engine()
+
+    # -- Test #1: N=5 concurrent callers, real WAL contention ----------------
+
+    @pytest.mark.asyncio
+    async def test_batch_taxonomy_assign_n5_concurrent_callers_serialize_via_queue(
+        self, writer_engine_file, caplog,
+    ):
+        """N=5 concurrent ``batch_taxonomy_assign`` callers, each assigning
+        3 pre-persisted optimizations to clusters.
+
+        Each caller's batch is pre-persisted via ``bulk_persist`` first
+        (parent rows must be durable before ``OptimizationPattern`` FKs
+        resolve), then 5 concurrent ``batch_taxonomy_assign`` callers race
+        on the same engine + write_queue.
+
+        Asserts:
+        - Total ``clusters_assigned`` across 5 summaries == 15 (5×3).
+        - Zero ``database is locked`` log records.
+        - 15 ``OptimizationPattern(relationship='source')`` rows in DB.
+        """
+        from app.services import batch_persistence
+        from app.services.write_queue import WriteQueue
+
+        await _create_schema_on_engine(writer_engine_file)
+
+        queue = WriteQueue(writer_engine_file, max_depth=64)
+        await queue.start()
+
+        try:
+            # Pre-persist 5 separate batches (3 rows each). Each row needs
+            # ``with_embedding=True`` — taxonomy_assign filters on
+            # ``r.embedding`` truthiness.
+            batches = [
+                [
+                    _make_passing_pending(
+                        batch_id=f"ta-op-{i}", with_embedding=True,
+                    )
+                    for _ in range(3)
+                ]
+                for i in range(5)
+            ]
+            for i, batch in enumerate(batches):
+                inserted = await batch_persistence.bulk_persist(
+                    batch, queue, batch_id=f"ta-op-{i}",
+                )
+                assert inserted == 3, (
+                    f"pre-persist batch {i} expected 3 rows, got {inserted}"
+                )
+
+            t0 = time.monotonic()
+            with caplog.at_level(logging.WARNING):
+                summaries = await asyncio.gather(*[
+                    batch_persistence.batch_taxonomy_assign(
+                        batches[i], queue, batch_id=f"ta-op-{i}",
+                    )
+                    for i in range(5)
+                ])
+            elapsed = time.monotonic() - t0
+
+            # Sum of ``clusters_assigned`` across all 5 summaries == 15.
+            total_assigned = sum(s["clusters_assigned"] for s in summaries)
+            assert total_assigned == 15, (
+                f"expected 15 total clusters_assigned across 5 callers, "
+                f"got {total_assigned}: per-caller={[s['clusters_assigned'] for s in summaries]}"
+            )
+
+            # O2: zero 'database is locked' anywhere in captured records.
+            locked_records = [
+                r for r in caplog.records
+                if "database is locked" in r.getMessage().lower()
+            ]
+            assert locked_records == [], (
+                f"got {len(locked_records)} 'database is locked' records: "
+                f"{[r.getMessage() for r in locked_records[:3]]}"
+            )
+
+            # O1: SELECT to verify the OptimizationPattern(relationship='source')
+            # rows actually landed for every assigned pending.
+            async with writer_engine_file.connect() as conn:
+                source_check = await conn.execute(text(
+                    "SELECT COUNT(*) FROM optimization_patterns "
+                    "WHERE relationship = 'source'"
+                ))
+                row = source_check.first()
+                source_rows = int(row[0]) if row else 0
+            assert source_rows == 15, (
+                f"expected 15 OptimizationPattern(relationship='source') rows, "
+                f"got {source_rows}"
+            )
+
+            # Wall-clock budget: 5×3 = 15 assigns under N=5 concurrency
+            # should comfortably finish under 30s.
+            assert elapsed < 30.0, (
+                f"taxonomy-assign stress run took {elapsed:.1f}s, > 30s budget"
+            )
+        finally:
+            await queue.stop(drain_timeout=5.0)
+
+    # -- Test #2: NOT-idempotent (calling twice creates duplicate sources) ---
+
+    @pytest.mark.asyncio
+    async def test_batch_taxonomy_assign_does_not_skip_duplicate_calls(
+        self, write_queue_inmem, writer_engine_inmem,
+    ):
+        """``batch_taxonomy_assign`` does NOT have an idempotency check
+        (unlike ``bulk_persist``). Submitting the same batch twice in
+        serial creates duplicate ``OptimizationPattern(relationship='source')``
+        rows — one per call.
+
+        Pinning this v0.4.12 behavior so a future safety-net retry loop
+        won't be silently added without explicit dedup. If cycle 7+ adds
+        idempotency, this test breaks loudly and forces an explicit
+        decision (rename to ``test_..._is_idempotent`` and flip the
+        assertions).
+
+        Asserts:
+        - After call #1: exactly 1 source pattern row per pending.
+        - After call #2: exactly 2 source pattern rows per pending.
+        """
+        from app.services import batch_persistence
+
+        # Pre-persist a 3-pending batch.
+        pendings = [
+            _make_passing_pending(batch_id="dup-tax", with_embedding=True)
+            for _ in range(3)
+        ]
+        inserted = await batch_persistence.bulk_persist(
+            pendings, write_queue_inmem, batch_id="dup-tax",
+        )
+        assert inserted == 3
+
+        # Call #1.
+        summary_1 = await batch_persistence.batch_taxonomy_assign(
+            pendings, write_queue_inmem, batch_id="dup-tax",
+        )
+        assert summary_1["clusters_assigned"] == 3, (
+            f"call #1 expected 3 assignments, got {summary_1['clusters_assigned']}"
+        )
+
+        # After call #1: 1 source row per pending.
+        opt_ids = [p.id for p in pendings]
+        async with writer_engine_inmem.connect() as conn:
+            for opt_id in opt_ids:
+                src_count = await conn.execute(text(
+                    "SELECT COUNT(*) FROM optimization_patterns "
+                    "WHERE optimization_id = :oid AND relationship = 'source'"
+                ), {"oid": opt_id})
+                row = src_count.first()
+                count_1 = int(row[0]) if row else 0
+                assert count_1 == 1, (
+                    f"after call #1, opt {opt_id[:8]} expected 1 source row, "
+                    f"got {count_1}"
+                )
+
+        # Call #2 — same batch_id, same pendings. No idempotency check;
+        # a second source row per pending is the EXPECTED v0.4.12 outcome.
+        summary_2 = await batch_persistence.batch_taxonomy_assign(
+            pendings, write_queue_inmem, batch_id="dup-tax",
+        )
+        assert summary_2["clusters_assigned"] == 3, (
+            f"call #2 expected 3 assignments (no skip), "
+            f"got {summary_2['clusters_assigned']}"
+        )
+
+        # After call #2: 2 source rows per pending — duplicate, intentional.
+        async with writer_engine_inmem.connect() as conn:
+            for opt_id in opt_ids:
+                src_count = await conn.execute(text(
+                    "SELECT COUNT(*) FROM optimization_patterns "
+                    "WHERE optimization_id = :oid AND relationship = 'source'"
+                ), {"oid": opt_id})
+                row = src_count.first()
+                count_2 = int(row[0]) if row else 0
+                assert count_2 == 2, (
+                    f"after call #2, opt {opt_id[:8]} expected 2 source "
+                    f"rows (NOT 1 — no idempotency), got {count_2}. "
+                    f"If a dedup pass landed, rename this test."
+                )
+
+    # -- Test #3: event emission AFTER queue resolves -------------------------
+
+    @pytest.mark.asyncio
+    async def test_batch_taxonomy_assign_event_emission_after_queue_resolves(
+        self, write_queue_inmem, writer_engine_inmem, tmp_path,
+    ):
+        """``taxonomy_changed`` event fires AFTER ``batch_taxonomy_assign``
+        returns — i.e. AFTER the queue has resolved the assign work.
+
+        Also pins ``seed_taxonomy_complete`` decision-event ordering
+        (recorded via ``log_decision`` AFTER ``submit()`` returns).
+
+        Asserts:
+        - Subscriber queue empty before ``batch_taxonomy_assign`` invoked.
+        - Exactly 1 ``taxonomy_changed`` event AFTER the call returns.
+        - Event payload carries ``trigger='batch_seed'`` + correct
+          ``batch_id`` + ``clusters_created``.
+        - Event-logger ring buffer contains a ``seed_taxonomy_complete``
+          decision (path='hot', op='seed') after the call returns.
+        """
+        from app.services import batch_persistence
+        from app.services.event_bus import event_bus
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            reset_event_logger,
+            set_event_logger,
+        )
+
+        # Install an isolated TaxonomyEventLogger so we can observe
+        # ``seed_taxonomy_complete`` deterministically (the conftest does
+        # not set one — without this, ``get_event_logger()`` raises
+        # RuntimeError and the log_decision call is silently swallowed
+        # by the ``except RuntimeError: pass`` in batch_persistence).
+        tel = TaxonomyEventLogger(
+            events_dir=tmp_path / "tax_events",
+            publish_to_bus=False,
+        )
+        set_event_logger(tel)
+
+        # Subscribe to event_bus BEFORE invocation.
+        ev_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+        event_bus._subscribers.add(ev_queue)
+
+        try:
+            # Pre-persist a 3-pending batch.
+            pendings = [
+                _make_passing_pending(batch_id="evt-tax", with_embedding=True)
+                for _ in range(3)
+            ]
+            await batch_persistence.bulk_persist(
+                pendings, write_queue_inmem, batch_id="evt-tax",
+            )
+
+            # Drain subscriber queue (bulk_persist fired its own events).
+            while True:
+                try:
+                    ev_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+            assert ev_queue.qsize() == 0, (
+                "test setup error: subscriber queue not drained before "
+                "batch_taxonomy_assign was invoked"
+            )
+
+            summary = await batch_persistence.batch_taxonomy_assign(
+                pendings, write_queue_inmem, batch_id="evt-tax",
+            )
+            assert summary["clusters_assigned"] == 3
+
+            # AFTER the call returns: exactly 1 ``taxonomy_changed`` event
+            # is in the subscriber queue. ``event_bus.publish`` is sync
+            # ``put_nowait``, so by the time the function returns the
+            # event is visible.
+            collected: list[dict] = []
+            while True:
+                try:
+                    collected.append(ev_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+
+            tax_changed = [
+                e for e in collected if e.get("event") == "taxonomy_changed"
+            ]
+            assert len(tax_changed) == 1, (
+                f"expected exactly 1 taxonomy_changed event after submit "
+                f"returned, got {len(tax_changed)}"
+            )
+            payload = tax_changed[0]["data"]
+            assert payload.get("trigger") == "batch_seed"
+            assert payload.get("batch_id") == "evt-tax"
+            assert payload.get("clusters_created") == summary["clusters_created"]
+
+            # ``seed_taxonomy_complete`` decision recorded post-submit.
+            recent = tel.get_recent(limit=50, path="hot", op="seed")
+            seed_decisions = [
+                e for e in recent if e.get("decision") == "seed_taxonomy_complete"
+            ]
+            assert len(seed_decisions) >= 1, (
+                f"expected >=1 'seed_taxonomy_complete' decision in ring "
+                f"buffer, got {len(seed_decisions)}: "
+                f"recent ops={[(e.get('op'), e.get('decision')) for e in recent[:5]]}"
+            )
+            ctx = seed_decisions[0].get("context", {})
+            assert ctx.get("batch_id") == "evt-tax"
+            assert ctx.get("clusters_assigned") == 3
+        finally:
+            event_bus._subscribers.discard(ev_queue)
+            reset_event_logger()
+
+    # -- Test #4: per-pending failure isolates --------------------------------
+
+    @pytest.mark.asyncio
+    async def test_batch_taxonomy_assign_per_pending_failure_isolates(
+        self, write_queue_inmem, writer_engine_inmem, caplog,
+    ):
+        """A single per-pending failure (corrupt embedding) does NOT
+        poison the rest of the batch.
+
+        The v0.4.12 ``_do_assign`` body wraps each per-pending block in
+        ``try: ... except Exception as exc: logger.warning(...)`` — so
+        partial-batch progress is durable. Pin this invariant so a future
+        refactor doesn't accidentally hoist the try/except outside the
+        loop and turn one bad embedding into a full-batch abort.
+
+        Asserts:
+        - 2 of 3 pendings successfully assigned.
+        - 1 warning log record cites the corrupt pending's id prefix.
+        - Summary's ``clusters_assigned`` == 2.
+        - DB has 2 ``OptimizationPattern(relationship='source')`` rows
+          for this batch (not 0, not 3).
+        """
+        from app.services import batch_persistence
+
+        # Build 3 pendings, corrupt the middle one's embedding.
+        pendings = [
+            _make_passing_pending(batch_id="iso-tax", with_embedding=True)
+            for _ in range(3)
+        ]
+        # Corrupt: 0-byte buffer fails ``np.frombuffer(..., dtype=float32)``
+        # cleanly with a ValueError raised by the assign_cluster downstream
+        # path (or fails the cosine search dim check). Either way the
+        # per-pending except block catches it.
+        # NB: pending.embedding is checked truthy by the
+        # ``r.embedding`` filter at the top of batch_taxonomy_assign;
+        # ``b""`` is falsy and would silently skip the row entirely (no
+        # warning, no failure isolation observable). We need a non-empty
+        # but malformed buffer instead — 7 bytes is not divisible by
+        # float32's 4-byte stride, so np.frombuffer raises ValueError.
+        pendings[1].embedding = b"\x00" * 7
+
+        inserted = await batch_persistence.bulk_persist(
+            pendings, write_queue_inmem, batch_id="iso-tax",
+        )
+        assert inserted == 3
+
+        with caplog.at_level(logging.WARNING):
+            summary = await batch_persistence.batch_taxonomy_assign(
+                pendings, write_queue_inmem, batch_id="iso-tax",
+            )
+
+        # Summary reflects partial success.
+        assert summary["clusters_assigned"] == 2, (
+            f"expected 2 successful assigns (1 corrupt embedding skipped), "
+            f"got {summary['clusters_assigned']}"
+        )
+
+        # The corrupt row's id-prefix shows up in a warning log.
+        bad_id_prefix = pendings[1].id[:8]
+        warn_records = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING
+            and "Taxonomy assign failed" in r.getMessage()
+            and bad_id_prefix in r.getMessage()
+        ]
+        assert len(warn_records) >= 1, (
+            f"expected >=1 warning citing {bad_id_prefix} after corrupt-embedding "
+            f"per-pending failure, got {len(warn_records)}"
+        )
+
+        # O1: SELECT — exactly 2 source rows for this batch's pendings.
+        async with writer_engine_inmem.connect() as conn:
+            ids_param = ",".join(f"'{p.id}'" for p in pendings)
+            count_q = await conn.execute(text(
+                f"SELECT COUNT(*) FROM optimization_patterns "  # noqa: S608
+                f"WHERE optimization_id IN ({ids_param}) "
+                f"  AND relationship = 'source'"
+            ))
+            row = count_q.first()
+            source_rows = int(row[0]) if row else 0
+        assert source_rows == 2, (
+            f"expected exactly 2 OptimizationPattern(relationship='source') "
+            f"rows after partial-batch isolation, got {source_rows}"
+        )

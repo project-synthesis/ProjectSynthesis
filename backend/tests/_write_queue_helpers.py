@@ -9,7 +9,10 @@ Helpers:
 
 * ``_make_passing_pending`` — build a minimal ``PendingOptimization`` that
   passes the ID-shape gate (valid uuid4) AND the quality gate
-  (overall_score >= 5.0).
+  (overall_score >= 5.0). ``with_embedding`` (cycle 3+) populates
+  ``embedding``/``optimized_embedding``/``transformation_embedding`` with
+  zero-vector bytes so taxonomy-assign callers don't repeat the inline
+  ``np.zeros(384, ...).tobytes()`` construction.
 * ``_make_failing_pending`` — build a ``PendingOptimization`` whose score
   the quality gate must reject. Used by stress tests verifying the
   rejection still fires under concurrent load.
@@ -25,6 +28,8 @@ from __future__ import annotations
 import uuid as _uuid
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -32,7 +37,10 @@ if TYPE_CHECKING:
 
 
 def _make_passing_pending(
-    batch_id: str = "test-batch", *, opt_id: str | None = None,
+    batch_id: str = "test-batch",
+    *,
+    opt_id: str | None = None,
+    with_embedding: bool = False,
 ) -> PendingOptimization:
     """Build a minimal ``PendingOptimization`` passing ID-shape + quality gates.
 
@@ -41,8 +49,17 @@ def _make_passing_pending(
 
     ``opt_id`` allows callers (e.g. idempotency tests) to pin the row's UUID
     so two parallel ``bulk_persist`` calls collide on the same primary key.
+
+    ``with_embedding`` (cycle 3+) populates the three embedding fields with
+    a zero-vector ``bytes`` payload (384-dim, float32). ``batch_taxonomy_assign``
+    filters on ``r.embedding`` truthiness, so taxonomy-assign tests need
+    this set to avoid silent skip. Defaulting to ``False`` keeps every cycle
+    1-2 caller's behavior unchanged.
     """
     from app.services.batch_pipeline import PendingOptimization
+    embedding_bytes: bytes | None = None
+    if with_embedding:
+        embedding_bytes = np.zeros(384, dtype=np.float32).tobytes()
     return PendingOptimization(
         id=opt_id or str(_uuid.uuid4()),
         trace_id=str(_uuid.uuid4()),
@@ -62,9 +79,9 @@ def _make_passing_pending(
         intent_label="test",
         domain="general",
         domain_raw="general",
-        embedding=None,
-        optimized_embedding=None,
-        transformation_embedding=None,
+        embedding=embedding_bytes,
+        optimized_embedding=embedding_bytes,
+        transformation_embedding=embedding_bytes,
         models_by_phase={},
         original_scores={},
         score_deltas={},
