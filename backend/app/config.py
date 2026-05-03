@@ -224,6 +224,32 @@ class Settings(BaseSettings):
         description="SQLite per-connection page cache. Negative = KiB, positive = pages. Do not flip sign.",
     )
 
+    # --- Write queue (v0.4.13 single-writer queue worker) ---
+    WRITE_QUEUE_MAX_QUEUE_DEPTH: int = Field(
+        default=256,
+        description="Maximum queued write items before submit() raises WriteQueueOverloaded.",
+    )
+    WRITE_QUEUE_DEFAULT_TIMEOUT_SECONDS: float = Field(
+        default=300.0,
+        description="Per-submit deadline; wraps work() in asyncio.wait_for.",
+    )
+    WRITE_QUEUE_DRAIN_TIMEOUT_SECONDS: float = Field(
+        default=30.0,
+        description="Graceful shutdown budget for stop() drain.",
+    )
+    WRITE_QUEUE_RESERVOIR_SIZE: int = Field(
+        default=1024,
+        description="Latency reservoir sample size for p95/p99 metrics.",
+    )
+    WRITE_QUEUE_RESERVOIR_WINDOW_SECONDS: float = Field(
+        default=300.0,
+        description="Rolling window for latency reservoir (5 minutes).",
+    )
+    WRITE_QUEUE_AUDIT_HOOK_RAISE: bool = Field(
+        default=False,
+        description="If True (CI), audit hook RAISES on read-engine writes; otherwise WARN.",
+    )
+
     def resolve_secret_key(self) -> str:
         """Auto-generate SECRET_KEY if not set, persist to data/.app_secrets."""
         if self.SECRET_KEY:
