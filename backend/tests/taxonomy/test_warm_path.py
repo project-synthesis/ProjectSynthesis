@@ -600,15 +600,15 @@ class TestWarmPathPhaseRouting:
         legacy path (when ``write_queue=None``) continues to operate on
         ``session_factory`` directly.
         """
-        from app.models import Base
-        from app.services.taxonomy.engine import TaxonomyEngine
-        from app.services.taxonomy.warm_path import _run_speculative_phase
-
         # Pre-stage two active clusters on the writer engine so Q computes
         # to a real number (≥2 active non-structural clusters required by
         # the Q-system). Mirrors cycle 4's prestaged-cluster pattern but
         # for the warm-path (writer-engine) case.
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from app.models import Base
+        from app.services.taxonomy.engine import TaxonomyEngine
+        from app.services.taxonomy.warm_path import _run_speculative_phase
 
         async with write_queue_inmem._writer_engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

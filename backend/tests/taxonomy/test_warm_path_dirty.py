@@ -78,7 +78,9 @@ async def test_idle_cycle_runs_maintenance_on_cadence(db):
 
     maintenance_called = []
 
-    async def fake_maintenance(eng, sf, phase_results=None, q_baseline=None):
+    async def fake_maintenance(
+        eng, sf=None, phase_results=None, q_baseline=None, **_kwargs,
+    ):
         maintenance_called.append(True)
         from app.services.taxonomy.warm_path import WarmPathResult
         return WarmPathResult(
@@ -119,7 +121,9 @@ async def test_idle_cycle_skips_maintenance_off_cadence(db):
 
     maintenance_called = []
 
-    async def fake_maintenance(eng, sf, phase_results=None, q_baseline=None):
+    async def fake_maintenance(
+        eng, sf=None, phase_results=None, q_baseline=None, **_kwargs,
+    ):
         maintenance_called.append(True)
         from app.services.taxonomy.warm_path import WarmPathResult
         return WarmPathResult(
@@ -161,7 +165,9 @@ async def test_idle_cycle_runs_maintenance_on_retry(db):
 
     maintenance_called = []
 
-    async def fake_maintenance(eng, sf, phase_results=None, q_baseline=None):
+    async def fake_maintenance(
+        eng, sf=None, phase_results=None, q_baseline=None, **_kwargs,
+    ):
         maintenance_called.append(True)
         # Simulate successful discovery clearing the flag
         eng._maintenance_pending = False
