@@ -149,27 +149,27 @@ class TestTimeoutAndCancellation:
 class TestLifecycle:
     @pytest.mark.asyncio
     async def test_submit_after_stop_raises_writequeuestopped(self, writer_engine_inmem):
-        from app.services.write_queue import WriteQueue, WriteQueueStopped
+        from app.services.write_queue import WriteQueue, WriteQueueStoppedError
         queue = WriteQueue(writer_engine_inmem)
         await queue.start()
         await queue.stop()
         async def _work(db: AsyncSession) -> None:
             return None
-        with pytest.raises(WriteQueueStopped):
+        with pytest.raises(WriteQueueStoppedError):
             await queue.submit(_work)
 
     @pytest.mark.asyncio
     async def test_submit_before_start_raises_writequeuestopped(self, writer_engine_inmem):
-        from app.services.write_queue import WriteQueue, WriteQueueStopped
+        from app.services.write_queue import WriteQueue, WriteQueueStoppedError
         queue = WriteQueue(writer_engine_inmem)
         async def _work(db: AsyncSession) -> None:
             return None
-        with pytest.raises(WriteQueueStopped):
+        with pytest.raises(WriteQueueStoppedError):
             await queue.submit(_work)
 
     @pytest.mark.asyncio
     async def test_overload_raises_when_queue_full(self, writer_engine_inmem):
-        from app.services.write_queue import WriteQueue, WriteQueueOverloaded
+        from app.services.write_queue import WriteQueue, WriteQueueOverloadedError
         queue = WriteQueue(writer_engine_inmem, max_depth=2)
         await queue.start()
         try:
@@ -186,7 +186,7 @@ class TestLifecycle:
             queued2 = asyncio.create_task(queue.submit(_quick))
             await asyncio.sleep(0.02)
             # Third submit overloads
-            with pytest.raises(WriteQueueOverloaded):
+            with pytest.raises(WriteQueueOverloadedError):
                 await queue.submit(_quick)
             # Cleanup
             blocker_done.set()
@@ -249,9 +249,9 @@ class TestLifecycle:
         """Pin spec § 12: per-test queue lifecycle leaves no leaked connections.
 
         Asserts pool.checkedout() == 0 after queue.stop() and that the queue
-        is in a stopped state (subsequent submit raises WriteQueueStopped).
+        is in a stopped state (subsequent submit raises WriteQueueStoppedError).
         """
-        from app.services.write_queue import WriteQueue, WriteQueueStopped
+        from app.services.write_queue import WriteQueue, WriteQueueStoppedError
         queue = WriteQueue(writer_engine_file)
         await queue.start()
 
@@ -271,7 +271,7 @@ class TestLifecycle:
         )
 
         # Subsequent submit must raise (queue is stopped).
-        with pytest.raises(WriteQueueStopped):
+        with pytest.raises(WriteQueueStoppedError):
             await queue.submit(_work)
 
 
@@ -283,17 +283,17 @@ class TestSupervisor:
         """Pin spec § 12: worker crash budget = 1 respawn within 60s, then dead.
 
         After two crashes inside the 60s window, _dead is set and subsequent
-        submit() raises WriteQueueDead immediately.
+        submit() raises WriteQueueDeadError immediately.
 
         Note on patching strategy: the natural ``_run_one`` path catches
         non-CancelledError exceptions internally and never propagates them up
         to ``_worker_loop``. To trigger the supervisor's two-strikes path we
         replace ``_run_one`` with a function that fails the future cleanly
-        (so callers get WriteQueueDead, matching the contract) and then
+        (so callers get WriteQueueDeadError, matching the contract) and then
         re-raises a plain ``RuntimeError`` so ``_worker_loop`` dies and the
         supervisor sees the crash.
         """
-        from app.services.write_queue import WriteQueue, WriteQueueDead
+        from app.services.write_queue import WriteQueue, WriteQueueDeadError
         queue = WriteQueue(writer_engine_inmem)
         await queue.start()
         try:
@@ -305,7 +305,7 @@ class TestSupervisor:
                 if not future.done():
                     with contextlib.suppress(asyncio.InvalidStateError):
                         future.set_exception(
-                            WriteQueueDead(f"forced crash {crashes['count']}")
+                            WriteQueueDeadError(f"forced crash {crashes['count']}")
                         )
                 # Mimic the original's task_done bookkeeping so the queue stays
                 # in a consistent state (the supervisor doesn't drain it; only
@@ -329,16 +329,16 @@ class TestSupervisor:
             f2 = asyncio.create_task(queue.submit(_work))
             await asyncio.sleep(0.5)  # let second crash declare queue dead
 
-            # Both Futures should now have WriteQueueDead exceptions.
-            with pytest.raises(WriteQueueDead):
+            # Both Futures should now have WriteQueueDeadError exceptions.
+            with pytest.raises(WriteQueueDeadError):
                 await f1
-            with pytest.raises(WriteQueueDead):
+            with pytest.raises(WriteQueueDeadError):
                 await f2
 
             # The queue is dead — subsequent submits raise immediately at the
             # entry guard, NOT via _fail_all_pending.
             assert queue._dead is True
-            with pytest.raises(WriteQueueDead):
+            with pytest.raises(WriteQueueDeadError):
                 await queue.submit(_work)
         finally:
             # Don't call stop() on a dead queue (drain semantics aren't
@@ -413,12 +413,12 @@ class TestWALVisibility:
 class TestReentrancy:
     @pytest.mark.asyncio
     async def test_reentrancy_raises_writequeuereentrancy(self, write_queue_inmem):
-        from app.services.write_queue import WriteQueueReentrancy
+        from app.services.write_queue import WriteQueueReentrancyError
         async def _outer(db: AsyncSession) -> None:
             async def _inner(db2: AsyncSession) -> None:
                 return None
             await write_queue_inmem.submit(_inner)
-        with pytest.raises(WriteQueueReentrancy):
+        with pytest.raises(WriteQueueReentrancyError):
             await write_queue_inmem.submit(_outer)
 
     @pytest.mark.asyncio

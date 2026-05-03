@@ -20,10 +20,10 @@ T = TypeVar("T")
 _SHUTDOWN_SENTINEL = object()
 
 
-class WriteQueueStopped(RuntimeError): ...  # noqa: N818 — public name fixed by spec/tests
-class WriteQueueOverloaded(RuntimeError): ...  # noqa: N818 — public name fixed by spec/tests
-class WriteQueueDead(RuntimeError): ...  # noqa: N818 — public name fixed by spec/tests
-class WriteQueueReentrancy(RuntimeError): ...  # noqa: N818 — public name fixed by spec/tests
+class WriteQueueStoppedError(RuntimeError): ...
+class WriteQueueOverloadedError(RuntimeError): ...
+class WriteQueueDeadError(RuntimeError): ...
+class WriteQueueReentrancyError(RuntimeError): ...
 
 
 def _emit_worker_event(decision: str, context: dict[str, Any]) -> None:
@@ -192,18 +192,123 @@ class WriteQueue:
         timeout: float | None = None,
         operation_label: str | None = None,
     ) -> T:
+        """Submit ``work`` to the single-writer queue and await its result.
+
+        ``work`` is a coroutine factory that takes a freshly-opened
+        ``AsyncSession`` bound to the writer engine and performs all DB
+        mutations the caller needs serialized against every other writer.
+        The session is opened by the worker (NOT the caller), entered via
+        ``__aenter__``, passed to ``work``, then exited under
+        ``asyncio.shield`` so cleanup survives worker cancellation.
+
+        Parameters
+        ----------
+        work : Callable[[AsyncSession], Awaitable[T]]
+            The unit of work. MUST commit (or explicitly rollback) before
+            returning — the queue does not commit on the caller's behalf.
+            Receives an open ``AsyncSession``; returns ``T``.
+        timeout : float | None, keyword-only, default ``None``
+            Per-submit deadline in seconds. ``None`` falls back to
+            ``settings.WRITE_QUEUE_DEFAULT_TIMEOUT_SECONDS`` (300s). The
+            worker wraps ``work(db)`` in ``asyncio.wait_for`` so a runaway
+            callback cannot wedge the queue forever.
+        operation_label : str | None, keyword-only, default ``None``
+            Free-form label for metrics + observability events. Surfaces
+            in ``WriteQueueMetrics`` snapshots and the ``write_queue``
+            decision events emitted on completion.
+
+        Returns
+        -------
+        T
+            The value returned by ``work(db)``. Whatever the callback
+            yields is passed through unchanged.
+
+        Raises
+        ------
+        WriteQueueDeadError
+            The worker crashed twice within 60s and the queue declared
+            itself dead. All future ``submit()`` calls raise this until
+            the queue is replaced. Pending work is failed with the same
+            exception.
+        WriteQueueStoppedError
+            ``stop()`` is in progress or completed, OR ``start()`` was
+            never called. Recoverable only by spinning up a new queue.
+        WriteQueueReentrancyError
+            ``submit()`` was invoked from inside the worker task itself
+            (i.e., from within a ``work`` callback that is currently
+            executing on the worker). Such a call would deadlock — the
+            worker is blocked on the outer ``work`` and would never get
+            around to running the inner submission. See "Reentrancy
+            patterns" below for the canonical alternative.
+        WriteQueueOverloadedError
+            The queue is at ``max_depth`` (default 256). The submit was
+            rejected synchronously without enqueuing. Callers should
+            shed load (degrade, retry with backoff) rather than spin.
+        asyncio.TimeoutError
+            ``work(db)`` did not complete within ``timeout``. The worker
+            cancels ``work``, runs session cleanup under shield, and
+            propagates the timeout to the caller.
+
+        Reentrancy patterns
+        -------------------
+        Three concurrency patterns matter. Two deadlock; one is canonical.
+
+        1. **DIRECT REENTRANCY (FORBIDDEN — raises ``WriteQueueReentrancyError``).**
+           ``work`` calls ``submit`` synchronously. The worker is blocked
+           on the outer ``work`` so the inner submit can never run::
+
+               async def outer(db):
+                   async def inner(db2):
+                       return None
+                   await queue.submit(inner)   # raises immediately
+               await queue.submit(outer)
+
+        2. **SPAWN-AND-AWAIT FROM INSIDE work (FORBIDDEN — DEADLOCKS).**
+           ``work`` spawns a background task that calls ``submit`` and
+           awaits its Future. The reentrancy guard does NOT catch this
+           (the task is a different ``asyncio.current_task()``), but the
+           worker is still blocked on the outer ``work`` so the inner
+           submit's Future never resolves. The whole chain hangs until
+           the per-submit timeout fires::
+
+               async def outer(db):
+                   async def inner(db2):
+                       return None
+                   t = asyncio.create_task(queue.submit(inner))
+                   return await t                # DEADLOCK — never resolves
+
+        3. **SPAWN-FROM-OUTSIDE work (CANONICAL).**
+           Regular orchestration code (NOT a ``work`` callback running on
+           the worker) spawns tasks that call ``submit``. This is the
+           pattern probe_service uses — the on-progress callback runs on
+           the caller's event loop, OUTSIDE any ``work``::
+
+               async def _persist_one(idx: int):
+                   async def _do(db: AsyncSession):
+                       await db.execute(text("INSERT ..."))
+                       await db.commit()
+                   await queue.submit(_do)
+
+               # Orchestration code (NOT inside any work callback):
+               tasks = [asyncio.create_task(_persist_one(i)) for i in range(N)]
+               await asyncio.gather(*tasks)
+
+        When you have multi-step DB work, compose it into a single
+        ``work`` callback rather than chaining nested ``submit()`` calls.
+        """
         if self._dead:
-            raise WriteQueueDead("queue worker died and could not respawn")
+            raise WriteQueueDeadError("queue worker died and could not respawn")
         if self._stopping:
-            raise WriteQueueStopped("queue is shutting down")
+            raise WriteQueueStoppedError("queue is shutting down")
         if self._worker_task is None:
-            raise WriteQueueStopped(
+            raise WriteQueueStoppedError(
                 "queue not started yet — call WriteQueue.start() before submit()"
             )
         current = asyncio.current_task()
         if current is self._worker_task:
-            raise WriteQueueReentrancy(
-                "submit() called from within the worker task — would deadlock"
+            raise WriteQueueReentrancyError(
+                "submit() called from within the worker task — would deadlock. "
+                "Compose multi-step work into a single callback instead."
             )
         timeout_s = timeout if timeout is not None else self._default_timeout
         loop = asyncio.get_running_loop()
@@ -213,7 +318,7 @@ class WriteQueue:
             self._metrics.record_submit(current_depth=self.queue_depth)
         except asyncio.QueueFull:
             self._metrics.record_overload()
-            raise WriteQueueOverloaded(
+            raise WriteQueueOverloadedError(
                 f"queue at max depth {self._max_depth}; degrade or retry later"
             ) from None
         return await future
@@ -280,7 +385,7 @@ class WriteQueue:
             except asyncio.CancelledError:
                 if not future.done():
                     with contextlib.suppress(asyncio.InvalidStateError):
-                        future.set_exception(WriteQueueDead("worker cancelled"))
+                        future.set_exception(WriteQueueDeadError("worker cancelled"))
                 raise
         finally:
             self._inflight_label = None
@@ -313,10 +418,10 @@ class WriteQueue:
                     worker_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await worker_task
-                self._fail_all_pending(WriteQueueDead("drain timeout exceeded"))
+                self._fail_all_pending(WriteQueueDeadError("drain timeout exceeded"))
             except BaseException as exc:
                 self._fail_all_pending(
-                    WriteQueueDead(f"worker died during drain: {exc}")
+                    WriteQueueDeadError(f"worker died during drain: {exc}")
                 )
             if self._supervisor_task and not self._supervisor_task.done():
                 self._supervisor_task.cancel()
@@ -350,7 +455,7 @@ class WriteQueue:
                         "WriteQueue worker crashed twice in 60s; declaring queue dead",
                         exc_info=exc,
                     )
-                    self._fail_all_pending(WriteQueueDead("worker died twice in 60s"))
+                    self._fail_all_pending(WriteQueueDeadError("worker died twice in 60s"))
                     _emit_worker_event("dead", {
                         "exception": f"{type(exc).__name__}: {str(exc)[:200]}",
                     })
@@ -366,9 +471,9 @@ class WriteQueue:
 
 __all__ = [
     "WriteQueue",
-    "WriteQueueStopped",
-    "WriteQueueOverloaded",
-    "WriteQueueDead",
-    "WriteQueueReentrancy",
+    "WriteQueueStoppedError",
+    "WriteQueueOverloadedError",
+    "WriteQueueDeadError",
+    "WriteQueueReentrancyError",
     "WriteQueueMetrics",
 ]
