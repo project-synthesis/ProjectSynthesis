@@ -296,6 +296,7 @@ async def optimize(
                 heuristic_task_type=enrichment.task_type,
                 heuristic_domain=enrichment.domain_value,
                 divergence_alerts=enrichment.divergence_alerts,
+                write_queue=getattr(request.app.state, "write_queue", None),
             ):
                 yield format_sse(event.event, event.data)
         except Exception as exc:

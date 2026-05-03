@@ -32,6 +32,7 @@ async def handle_seed(
     ctx: Any | None = None,  # MCP Context — reserved for future sampling-tier support
     routing: Any | None = None,  # Injected by REST endpoint from request.app.state.routing
     context_service: Any | None = None,  # Injected by REST/MCP: ContextEnrichmentService
+    write_queue: Any | None = None,  # v0.4.13 cycle 7.5: required by bulk_persist after collapse
 ) -> SeedOutput:
     """Full batch seeding flow: explore → generate → optimize → persist → taxonomy.
 
@@ -46,6 +47,15 @@ async def handle_seed(
     When provided, batch prompts go through the same unified enrichment as the
     regular pipeline (pattern injection, strategy intelligence, B0 repo
     relevance gate, B1/B2 divergence detection).
+
+    Write queue (v0.4.13 cycle 7.5):
+    - REST context: caller passes write_queue=request.app.state.write_queue.
+    - MCP context: caller passes explicitly (mcp_server.py reads from app.state).
+    Required after the polymorphic collapse of bulk_persist /
+    batch_taxonomy_assign signatures. When ``None`` we fall back to
+    constructing a transient in-process queue against
+    ``async_session_factory``'s engine -- adequate for tests + cold-start
+    boots; cycle 9 lifespan wiring removes the fallback path.
     """
     batch_id = str(uuid.uuid4())
     t0 = time.monotonic()
@@ -271,9 +281,23 @@ async def handle_seed(
         1 for r in results if r.status == "completed"
     )
 
-    # Bulk persist (async_session_factory already imported above)
+    # v0.4.13 cycle 7.5: bulk_persist + batch_taxonomy_assign require a
+    # WriteQueue post-polymorphic-collapse. Resolve from app.state via
+    # the explicit ``write_queue`` parameter; fall back to a transient
+    # in-process queue when not supplied (tests + cold-start boot).
+    _wq = write_queue
+    if _wq is None:
+        from app.services.write_queue import WriteQueue
+        from app.database import engine as _engine
+        _wq = WriteQueue(_engine)
+        await _wq.start()
+        _transient_wq = True
+    else:
+        _transient_wq = False
+
+    # Bulk persist
     try:
-        await bulk_persist(results, async_session_factory, batch_id)
+        await bulk_persist(results, _wq, batch_id)
     except Exception as exc:
         logger.error("Seed persist failed: %s", exc, exc_info=True)
         completed = sum(1 for r in results if r.status == "completed")
@@ -305,7 +329,7 @@ async def handle_seed(
     # Taxonomy integration
     try:
         taxonomy_result = await batch_taxonomy_assign(
-            results, async_session_factory, batch_id,
+            results, _wq, batch_id,
         )
     except Exception as exc:
         logger.warning("Taxonomy integration failed (non-fatal): %s", exc)
@@ -314,6 +338,13 @@ async def handle_seed(
             "clusters_created": 0,
             "domains_touched": [],
         }
+    finally:
+        # Cleanup transient queue (only if we constructed one).
+        if _transient_wq:
+            try:
+                await _wq.stop(drain_timeout=2.0)
+            except Exception:
+                logger.debug("transient write_queue stop failed", exc_info=True)
 
     # Final summary
     completed = sum(1 for r in results if r.status == "completed")

@@ -29,6 +29,7 @@ async def seed_taxonomy(body: SeedRequest, request: Request) -> SeedOutput:
         # regular /api/optimize pipeline.
         routing = getattr(request.app.state, "routing", None)
         context_service = getattr(request.app.state, "context_service", None)
+        write_queue = getattr(request.app.state, "write_queue", None)
         return await handle_seed(
             project_description=body.project_description,
             workspace_path=body.workspace_path,
@@ -38,6 +39,7 @@ async def seed_taxonomy(body: SeedRequest, request: Request) -> SeedOutput:
             prompts=body.prompts,
             routing=routing,
             context_service=context_service,
+            write_queue=write_queue,
         )
     except Exception as exc:
         logger.error("POST /api/seed failed: %s", exc, exc_info=True)

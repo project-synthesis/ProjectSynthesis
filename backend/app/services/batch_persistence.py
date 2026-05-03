@@ -39,7 +39,7 @@ from app.services.taxonomy.family_ops import assign_cluster
 from app.services.write_queue import WriteQueue
 
 if TYPE_CHECKING:
-    from app.services.batch_pipeline import PendingOptimization, SessionFactory
+    from app.services.batch_pipeline import PendingOptimization
 
 logger = logging.getLogger(__name__)
 
@@ -68,29 +68,18 @@ class TaxonomyAssignSummary(TypedDict):
 
 async def bulk_persist(
     results: list[PendingOptimization],
-    queue_or_session_factory: WriteQueue | SessionFactory,
+    write_queue: WriteQueue,
     batch_id: str,
 ) -> int:
     """Persist all completed optimizations in a single transaction.
 
-    v0.4.13 cycle 2: writes go through ``WriteQueue.submit`` when a
-    ``WriteQueue`` is supplied. The queue serializes against every other
-    backend writer, so the v0.4.12 ``_persist_lock`` and 5-attempt retry
-    loop are removed — contention is eliminated by construction.
-
-    The second positional argument is a transitional union:
-
-    * ``WriteQueue`` — canonical form. Used by callers already migrated to
-      the single-writer queue (v0.4.13 batch_pipeline + new probe paths).
-    * ``async_sessionmaker``-style ``SessionFactory`` — **legacy**, retained
-      only so cycles 3–6 can land without breaking the still-unmigrated
-      callers ``app/tools/seed.py`` and ``app/services/probe_service.py``.
-      Slated for removal in **cycle 7** when those callers inject the
-      queue. After cycle 7, the parameter type collapses to ``WriteQueue``.
-
-    Detection is ``isinstance(queue_or_session_factory, WriteQueue)``;
-    mypy narrows the parameter to ``WriteQueue`` in the ``if`` branch and
-    to ``SessionFactory`` in the ``else``.
+    v0.4.13 cycle 7.5: collapsed to a single canonical signature. Writes
+    always route through ``write_queue.submit()``. The v0.4.13 cycle 2
+    ``WriteQueue | SessionFactory`` polymorphic dispatch is gone — every
+    caller (batch_pipeline, probe_service, tools/seed.py) now threads a
+    queue.  The queue serializes against every other backend writer, so
+    the v0.4.12 ``_persist_lock`` and 5-attempt retry loop stay removed
+    — contention is eliminated by construction.
 
     Returns count of rows inserted. Skips failed optimizations.
     Idempotent: skips prompts already persisted for this ``batch_id``.
@@ -100,13 +89,9 @@ async def bulk_persist(
         ``WriteQueueDeadError``, ``WriteQueueStoppedError``,
         ``asyncio.TimeoutError``), the exception propagates to the caller
         WITHOUT emitting ``optimization_created`` or ``rate_limit_cleared``
-        events. This is intentional: events represent durable persistence,
-        so a failed submit cannot fire them. Callers handle batch-level
-        error recovery (e.g. retry the whole submit, log and skip).
-
-        Future maintainers: do NOT wrap ``submit()`` in a try/except that
-        swallows the exception and continues to the event-emission block —
-        that would fire phantom events for rows that never persisted.
+        events. Events represent durable persistence, so a failed submit
+        cannot fire them. Callers handle batch-level error recovery (e.g.
+        retry the whole submit, log and skip).
     """
     t0 = time.monotonic()
     # ID-shape gate: reject test-fixture-pattern IDs.  Production rows
@@ -251,34 +236,13 @@ async def bulk_persist(
         # own SAVEPOINTs per call (v0.4.5 pattern).
         return inserted_local, inserted_pendings_local
 
-    if isinstance(queue_or_session_factory, WriteQueue):
-        # Canonical path: the queue serializes ``_do_persist`` against
-        # every other backend writer. ``operation_label`` surfaces in
-        # ``WriteQueueMetrics`` snapshots and ``write_queue.complete``
-        # decision events so health-endpoint consumers can attribute
-        # latency to the bulk-persist op.
-        inserted, inserted_pendings = await queue_or_session_factory.submit(
-            _do_persist, operation_label="bulk_persist",
-        )
-    else:
-        # Legacy ``SessionFactory`` path — retired in cycle 7 once
-        # ``app/tools/seed.py`` + ``app/services/probe_service.py`` inject
-        # the queue. Single-attempt commit semantics: the v0.4.12
-        # ``_persist_lock`` + 5-attempt retry loop are gone — the canonical
-        # contention solution lives on the queue path now. **Known
-        # transitional risk between cycles 2 and 7**: real production
-        # callers (``tools/seed.py`` + ``probe_service.py``) still use this
-        # branch with the ``async_session_factory``; under heavy concurrent
-        # writer pressure, ``database is locked`` exceptions will propagate
-        # to the caller instead of retrying. Mitigated by:
-        # (a) ``probe_service._persist_lock`` still serializes per-prompt
-        # persists in-process for that orchestrator, and
-        # (b) cycle 7 migrates both callers, fully closing the gap.
-        # Until cycle 7 lands, avoid running probes + concurrent /api/seed
-        # batches simultaneously in production.
-        session_factory = queue_or_session_factory
-        async with session_factory() as db:
-            inserted, inserted_pendings = await _do_persist(db)
+    # The queue serializes ``_do_persist`` against every other backend
+    # writer. ``operation_label`` surfaces in ``WriteQueueMetrics``
+    # snapshots and ``write_queue.complete`` decision events so
+    # health-endpoint consumers can attribute latency to the bulk-persist op.
+    inserted, inserted_pendings = await write_queue.submit(
+        _do_persist, operation_label="bulk_persist",
+    )
 
     # Per-prompt event emission — parallels the regular pipeline contract so
     # frontend history refresh and cross-process MCP bridge fire reliably.
@@ -351,38 +315,22 @@ async def bulk_persist(
 
 async def batch_taxonomy_assign(
     results: list[PendingOptimization],
-    queue_or_session_factory: WriteQueue | SessionFactory,
+    write_queue: WriteQueue,
     batch_id: str,
 ) -> TaxonomyAssignSummary:
     """Assign clusters for all persisted optimizations in one transaction.
 
-    v0.4.13 cycle 3: writes go through ``WriteQueue.submit`` when a
-    ``WriteQueue`` is supplied. Mirrors the cycle 2 ``bulk_persist``
-    Option C dual-typed pattern — same isinstance dispatch, same
-    transitional ``SessionFactory`` retention until cycle 7.
-
-    The second positional argument is a transitional union:
-
-    * ``WriteQueue`` — canonical form. The queue serializes the
-      assign-loop callback against every other backend writer, so
-      file-mode WAL contention is eliminated by construction.
-    * ``async_sessionmaker``-style ``SessionFactory`` — **legacy**, retained
-      so cycles 3–6 can land without breaking the still-unmigrated
-      callers ``app/tools/seed.py`` and ``app/services/probe_service.py``.
-      Slated for removal in **cycle 7**. After cycle 7 the parameter
-      type collapses to ``WriteQueue``.
-
-    Detection is ``isinstance(queue_or_session_factory, WriteQueue)``;
-    mypy narrows the parameter to ``WriteQueue`` in the ``if`` branch and
-    to ``SessionFactory`` in the ``else``.
-
-    Pattern extraction is deferred (``pattern_stale=True``) — the warm
-    path handles it after the batch completes.
+    v0.4.13 cycle 7.5: collapsed to a single canonical signature. Writes
+    always route through ``write_queue.submit()``. The v0.4.13 cycle 3
+    ``WriteQueue | SessionFactory`` polymorphic dispatch is gone -- every
+    caller threads a queue. Pattern extraction is deferred
+    (``pattern_stale=True``) -- the warm path handles it after the
+    batch completes.
 
     Returns ``TaxonomyAssignSummary`` (``TypedDict``) with
     ``clusters_assigned``, ``clusters_created``, ``domains_touched``.
     Empty/no-embedding inputs short-circuit and return zeros without
-    calling ``submit()`` — no queue work, no events, no log decision.
+    calling ``submit()`` -- no queue work, no events, no log decision.
     Per-pending failures inside ``_do_assign`` are absorbed (warning
     logged, counters NOT incremented), so partial-batch progress is
     durable.
@@ -392,15 +340,10 @@ async def batch_taxonomy_assign(
         ``WriteQueueDeadError``, ``WriteQueueStoppedError``,
         ``asyncio.TimeoutError``), the exception propagates to the caller
         WITHOUT publishing the ``taxonomy_changed`` event or logging
-        ``seed_taxonomy_complete``. This is intentional: those events
-        represent durable taxonomy state, so a failed submit cannot fire
-        them. Callers handle batch-level error recovery (the probe path
-        already wraps the call in try/except and logs a non-fatal warning).
-
-        Future maintainers: do NOT wrap ``submit()`` in a try/except that
-        swallows the exception and continues to the event-emission block —
-        that would fire phantom ``taxonomy_changed`` events for taxonomy
-        state that never persisted.
+        ``seed_taxonomy_complete``. Those events represent durable
+        taxonomy state, so a failed submit cannot fire them. Callers
+        handle batch-level error recovery (the probe path already wraps
+        the call in try/except and logs a non-fatal warning).
     """
     t0 = time.monotonic()
     completed = [r for r in results if r.status == "completed" and r.embedding]
@@ -470,27 +413,14 @@ async def batch_taxonomy_assign(
             domains_touched=sorted(domains_touched),
         )
 
-    if isinstance(queue_or_session_factory, WriteQueue):
-        # Canonical path: the queue serializes ``_do_assign`` against
-        # every other backend writer. ``operation_label`` surfaces in
-        # ``WriteQueueMetrics`` snapshots and ``write_queue.complete``
-        # decision events so health-endpoint consumers can attribute
-        # latency to the taxonomy-assign op.
-        summary = await queue_or_session_factory.submit(
-            _do_assign, operation_label="batch_taxonomy_assign",
-        )
-    else:
-        # Legacy ``SessionFactory`` path — retired in cycle 7 once
-        # ``app/tools/seed.py`` + ``app/services/probe_service.py`` inject
-        # the queue. Single-attempt commit semantics: writer serialization
-        # is automatic via ``WriterLockedAsyncSession`` (see
-        # app/database.py) -- the session acquires ``db_writer_lock`` at
-        # first flush and releases at commit/rollback/close. Same
-        # transitional risk window as ``bulk_persist`` (see its docstring);
-        # closes when both callers migrate in cycle 7.
-        session_factory = queue_or_session_factory
-        async with session_factory() as db:
-            summary = await _do_assign(db)
+    # The queue serializes ``_do_assign`` against every other backend
+    # writer. ``operation_label`` surfaces in ``WriteQueueMetrics``
+    # snapshots and ``write_queue.complete`` decision events so
+    # health-endpoint consumers can attribute latency to the
+    # taxonomy-assign op.
+    summary = await write_queue.submit(
+        _do_assign, operation_label="batch_taxonomy_assign",
+    )
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 

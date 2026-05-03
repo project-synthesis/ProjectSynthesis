@@ -178,6 +178,7 @@ class PipelineOrchestrator:
         heuristic_task_type: str | None = None,
         heuristic_domain: str | None = None,
         divergence_alerts: str | None = None,
+        write_queue: Any | None = None,
     ) -> AsyncGenerator[PipelineEvent, None]:
         """Execute the full pipeline, yielding SSE events.
 
@@ -188,6 +189,14 @@ class PipelineOrchestrator:
         Pass ``None`` only when the caller has no way to resolve it; the
         row will land with ``project_id=NULL`` and the next
         ``_backfill_project_ids`` sweep at startup will repair it.
+
+        ``write_queue`` (v0.4.13 cycle 7.5) threads the WriteQueue
+        singleton through to ``persist_and_propagate``, which collapsed
+        to require a queue argument after the polymorphic dispatch
+        retirement. Callers should pass ``request.app.state.write_queue``.
+        When ``None`` the helper builds a transient in-process queue
+        from the global engine -- adequate for tests + boot but the
+        canonical path is explicit injection.
         """
         trace_id = str(uuid.uuid4())
         opt_id = str(uuid.uuid4())
@@ -648,7 +657,28 @@ class PipelineOrchestrator:
                 taxonomy_engine=taxonomy_engine,
                 divergence_flags=scoring.divergence_flags if scoring else [],
             )
-            await persist_and_propagate(db, persist_inputs)
+            # v0.4.13 cycle 7.5: persist_and_propagate requires write_queue
+            # post-collapse. When the orchestrator caller doesn't supply
+            # one (legacy / test paths), build a transient queue from
+            # the global engine.
+            _wq = write_queue
+            _transient_pwq = False
+            if _wq is None:
+                from app.services.write_queue import WriteQueue
+                from app.database import engine as _engine
+                _wq = WriteQueue(_engine)
+                await _wq.start()
+                _transient_pwq = True
+            try:
+                await persist_and_propagate(persist_inputs, write_queue=_wq)
+            finally:
+                if _transient_pwq:
+                    try:
+                        await _wq.stop(drain_timeout=2.0)
+                    except Exception:
+                        logger.debug(
+                            "transient write_queue stop failed", exc_info=True,
+                        )
 
             # ---------------------------------------------------------------
             # Final event
