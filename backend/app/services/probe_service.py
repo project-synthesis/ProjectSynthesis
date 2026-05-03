@@ -903,8 +903,15 @@ class ProbeService:
                   ``abort_event`` so peer LLM calls can be cancelled.
                 """
                 try:
+                    # v0.4.13 cycle 7d: prefer ``self.write_queue`` when
+                    # set so the per-prompt INSERT serializes through the
+                    # single-writer queue worker. Falls back to the
+                    # ``session_factory`` legacy path so queue-less callers
+                    # (tests, pre-cycle-9 production paths) still work.
                     n = await bulk_persist(
-                        [p], session_factory, batch_id=probe_id,
+                        [p],
+                        self.write_queue or session_factory,
+                        batch_id=probe_id,
                     )
                     if n > 0:
                         persisted_ids.add(p.id)
@@ -1171,9 +1178,13 @@ class ProbeService:
             )
             if persisted_pendings:
                 try:
+                    # v0.4.13 cycle 7d: prefer ``self.write_queue`` so the
+                    # cluster-assign loop serializes through the single-
+                    # writer queue worker. Falls back to ``session_factory``
+                    # for queue-less callers.
                     await batch_taxonomy_assign(
                         persisted_pendings,
-                        session_factory,
+                        self.write_queue or session_factory,
                         batch_id=probe_id,
                     )
                 except Exception as _bta_exc:

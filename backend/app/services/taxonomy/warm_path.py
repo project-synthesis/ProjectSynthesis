@@ -574,6 +574,20 @@ async def run_phase_4_5(
     with a try/except around each so an exception in one sub-step does
     NOT prevent the others from running.
 
+    **Cycle 6 review I1 clarification (cycle 7d, v0.4.13):** each sub-step
+    durably commits BEFORE the next submit fires -- cycle 6 promoted the
+    SAVEPOINT-release-on-outer-commit pattern to per-submit independent
+    commits. Failure isolation is strictly stronger than the v0.4.12
+    nested-SAVEPOINT model. Cross-step transactional dependencies are
+    NOT supported and would require a single-callback design (one
+    submit() that runs all 3 steps in one queue session). If a future
+    sub-step needs to read a committed value from an earlier step, that
+    is fine -- the per-submit commit ordering guarantees it. If a sub-
+    step needs to roll back BOTH its own writes and an earlier sibling's
+    on a late failure, that scenario is not expressible in the current
+    architecture and the design needs to revert to a single-callback
+    composition.
+
     The 3 sub-steps mirror v0.4.12:
 
     1. ``_discover_promotion_candidates`` — promote MetaPattern siblings
