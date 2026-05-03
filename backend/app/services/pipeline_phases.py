@@ -74,6 +74,7 @@ from app.services.task_type_classifier import (
     rescue_task_type_via_structural_evidence,
 )
 from app.services.trace_logger import TraceLogger
+from app.services.write_queue import WriteQueue
 from app.utils.text_cleanup import title_case_label, validate_intent_label
 
 logger = logging.getLogger(__name__)
@@ -1015,14 +1016,90 @@ class PersistenceInputs:
 
 
 async def persist_and_propagate(
-    db: AsyncSession, inputs: PersistenceInputs,
+    db_or_inputs: AsyncSession | PersistenceInputs | None = None,
+    inputs: PersistenceInputs | None = None,
+    *,
+    write_queue: WriteQueue | None = None,
 ) -> None:
     """Build Optimization row, track applied patterns, commit, propagate usage.
 
-    Commits the main DB session; opens a fresh session for post-commit
-    usage propagation so expired objects from the committed session
-    can't leak.  Publishes ``optimization_created`` to the event bus.
+    v0.4.13 cycle 4: writes go through ``WriteQueue.submit`` when a
+    ``WriteQueue`` is supplied. The five v0.4.12 commit sites
+    (Optimization row at line 1122, post-persist injection provenance at
+    line 1140, pattern usefulness counters at line 1164, usage_db
+    separate-session at line 1198, terminal write at line 1306 in the
+    failed-row helper) collapse into ONE ``submit()`` callback per spec
+    § 3.4. The queue serializes against every other backend writer so the
+    legacy ORM-expiration workaround (a fresh ``async_session_factory()``
+    session for usage propagation) is no longer needed -- the callback
+    session does ALL writes serially with ``expire_on_commit=False`` on
+    the writer engine.
+
+    Three calling conventions, retained until cycle 7:
+
+    * ``persist_and_propagate(inputs, write_queue=q)`` -- canonical.
+      Used by callers already migrated to the single-writer queue. The
+      queue opens a fresh session, runs ``_do_persist`` against it, and
+      commits as the callback's last step.
+    * ``persist_and_propagate(db, inputs)`` -- **legacy**, retained so
+      the still-unmigrated ``pipeline.py`` orchestrator can land cycle 4
+      without a same-PR caller migration. Uses the caller-supplied
+      ``AsyncSession`` directly. Single-attempt commit (the legacy
+      retry/lock path is gone -- the canonical contention solution lives
+      on the queue path now). Slated for removal in cycle 5+ when
+      ``pipeline.py``/orchestrator threads the queue.
+    * ``persist_and_propagate(db, inputs, write_queue=q)`` -- transitional
+      mixed-mode. Ignores ``db`` and uses the queue. Lets cycle 5 callers
+      migrate without churning the legacy positional arg shape.
+
+    Detection is ``write_queue is not None``; mypy narrows the parameter
+    to ``WriteQueue`` in the queue branch.
+
+    Failure semantics:
+        If ``submit()`` raises (e.g. ``WriteQueueOverloadedError``,
+        ``WriteQueueDeadError``, ``WriteQueueStoppedError``,
+        ``asyncio.TimeoutError``), the exception propagates to the
+        caller WITHOUT publishing the ``optimization_created`` event.
+        This matches the cycle 2/3 contract: events represent durable
+        persistence, so a failed submit cannot fire them. Callers handle
+        retry/recovery at the orchestrator boundary.
+
+        Future maintainers: do NOT wrap ``submit()`` in a try/except
+        that swallows the exception and continues to the event-emission
+        block -- that would fire phantom ``optimization_created`` events
+        for rows that never persisted.
     """
+    # ------------------------------------------------------------------
+    # Positional-arg dispatch: the function must accept three call shapes
+    # without a callsite migration this cycle:
+    #
+    #   persist_and_propagate(db, inputs)                    # legacy
+    #   persist_and_propagate(inputs, write_queue=q)         # canonical
+    #   persist_and_propagate(db, inputs, write_queue=q)     # mixed
+    #
+    # ``db_or_inputs`` is the polymorphic first slot. When it's a
+    # ``PersistenceInputs`` we treat it as ``inputs`` and require a
+    # ``write_queue``; when it's an ``AsyncSession`` (or session-like)
+    # we keep the v0.4.12 positional contract intact.
+    # ------------------------------------------------------------------
+    db: AsyncSession | None
+    if isinstance(db_or_inputs, PersistenceInputs):
+        # Canonical queue form: inputs supplied as the first positional.
+        if inputs is not None:
+            raise TypeError(
+                "persist_and_propagate received PersistenceInputs as "
+                "positional arg 1 AND a separate ``inputs=`` keyword; "
+                "pass it once.",
+            )
+        inputs = db_or_inputs
+        db = None
+    else:
+        db = db_or_inputs
+    if inputs is None:
+        raise TypeError(
+            "persist_and_propagate requires PersistenceInputs (positional arg 2 "
+            "in legacy form, or arg 1 in queue form).",
+        )
     analysis = inputs.analysis
     scoring = inputs.scoring
     optimized_scores = scoring.optimized_scores if scoring else None
@@ -1033,154 +1110,194 @@ async def persist_and_propagate(
     # so analysis-class prompts store the analysis-weighted overall.
     _task_type = analysis.task_type if analysis else None
 
-    db_opt = Optimization(
-        id=inputs.opt_id,
-        raw_prompt=inputs.raw_prompt,
-        optimized_prompt=inputs.optimization.optimized_prompt,
-        task_type=analysis.task_type if analysis.task_type in VALID_TASK_TYPES else "general",
-        intent_label=validate_intent_label(
-            title_case_label(analysis.intent_label or "general"),
-            inputs.raw_prompt,
-        )[:MAX_INTENT_LABEL_LENGTH],
-        domain=inputs.effective_domain,
-        domain_raw=inputs.domain_raw,
-        cluster_id=inputs.cluster_id,
-        strategy_used=inputs.effective_strategy,
-        changes_summary=inputs.optimization.changes_summary,
-        score_clarity=optimized_scores.clarity if optimized_scores else None,
-        score_specificity=optimized_scores.specificity if optimized_scores else None,
-        score_structure=optimized_scores.structure if optimized_scores else None,
-        score_faithfulness=optimized_scores.faithfulness if optimized_scores else None,
-        score_conciseness=optimized_scores.conciseness if optimized_scores else None,
-        overall_score=optimized_scores.compute_overall(_task_type) if optimized_scores else None,
-        provider=inputs.provider_name,
-        routing_tier="internal",
-        model_used=inputs.model_ids.get("optimize", inputs.optimizer_model),
-        scoring_mode="hybrid" if optimized_scores else "skipped",
-        duration_ms=inputs.duration_ms,
-        status="completed",
-        trace_id=inputs.trace_id,
-        repo_full_name=inputs.repo_full_name,
-        project_id=inputs.project_id,
-        context_sources=inputs.context_sources or {},
-        original_scores=original_scores.model_dump() if original_scores else None,
-        heuristic_baseline_scores=(
-            heuristic_baseline.model_dump() if heuristic_baseline else None
-        ),
-        score_deltas=deltas,
-        tokens_by_phase=inputs.phase_durations,
-        models_by_phase=inputs.model_ids,
-        heuristic_flags=inputs.divergence_flags or None,
-        suggestions=inputs.suggestions,
-    )
-    # C4: Compute improvement_score from the deterministic heuristic
-    # baseline when available — shields the score from LLM-judge noise on
-    # the original-side A/B presentation.  Falls back to the LLM-blended
-    # ``deltas`` when no heuristic baseline is recorded (legacy rows or
-    # heuristic-only scoring mode).  ``deltas`` itself is preserved as-is
-    # for backward compat, callers, and side-by-side comparison.
-    if heuristic_baseline and optimized_scores:
-        heuristic_lift = {
-            dim: getattr(optimized_scores, dim) - getattr(heuristic_baseline, dim)
-            for dim in get_dimension_weights(inputs.analysis.task_type)
-        }
-        imp = sum(
-            heuristic_lift.get(dim, 0) * w
-            for dim, w in get_dimension_weights(inputs.analysis.task_type).items()
-        )
-        db_opt.improvement_score = round(max(0.0, min(10.0, imp)), 2)
-    elif deltas:
-        imp = sum(
-            deltas.get(dim, 0) * w
-            for dim, w in get_dimension_weights(inputs.analysis.task_type).items()
-        )
-        db_opt.improvement_score = round(max(0.0, min(10.0, imp)), 2)
-    db.add(db_opt)
-
-    # Track applied patterns in join table (relationship: "applied")
+    # Capture the side-effect set from inside ``_do_persist`` so the
+    # post-submit usage propagation + event emission outside the queue
+    # callback see the same cluster IDs the inner work touched.
     applied_cluster_ids: set[str] = set()
-    if inputs.applied_pattern_ids:
-        try:
-            from app.models import MetaPattern, OptimizationPattern
 
-            for pid in inputs.applied_pattern_ids:
-                mp_result = await db.execute(
-                    select(MetaPattern).where(MetaPattern.id == pid)
+    async def _do_persist(write_db: AsyncSession) -> None:
+        """All five v0.4.12 commit sites collapsed into one callback.
+
+        Order matters and matches v0.4.12 step-for-step:
+
+        1. Build + add the ``Optimization`` row, including
+           ``improvement_score`` derivation (heuristic_baseline path C4
+           preferred, deltas fallback) using ``get_dimension_weights``
+           per-task-type schema (F3 invariant).
+        2. Track applied patterns (``relationship='applied'`` join rows)
+           and accumulate ``applied_cluster_ids`` for the post-commit
+           usage-propagation step.
+        3. ``await write_db.commit()`` -- parent ``Optimization`` row
+           must be durable BEFORE provenance writes hit the FK.
+        4. Post-persist injection provenance via
+           ``record_injection_provenance`` (the helper handles its own
+           SAVEPOINTs per row; we do NOT commit here -- the helper's
+           per-row commits are sufficient).
+        5. T1.3-lite ``record_pattern_usefulness`` counter bump --
+           wrapped in try/except so a counter failure never rolls back
+           provenance. Commits inline only on success.
+        6. Usage propagation -- v0.4.12 opened a fresh
+           ``async_session_factory()`` session here for ORM-expiration
+           safety; that's no longer needed because the writer engine's
+           sessionmaker uses ``expire_on_commit=False`` and the queue
+           serializes against every other writer. Runs against
+           ``write_db`` directly. Final ``write_db.commit()`` only if
+           taxonomy increments fired.
+        """
+        nonlocal applied_cluster_ids
+
+        db_opt = Optimization(
+            id=inputs.opt_id,
+            raw_prompt=inputs.raw_prompt,
+            optimized_prompt=inputs.optimization.optimized_prompt,
+            task_type=analysis.task_type if analysis.task_type in VALID_TASK_TYPES else "general",
+            intent_label=validate_intent_label(
+                title_case_label(analysis.intent_label or "general"),
+                inputs.raw_prompt,
+            )[:MAX_INTENT_LABEL_LENGTH],
+            domain=inputs.effective_domain,
+            domain_raw=inputs.domain_raw,
+            cluster_id=inputs.cluster_id,
+            strategy_used=inputs.effective_strategy,
+            changes_summary=inputs.optimization.changes_summary,
+            score_clarity=optimized_scores.clarity if optimized_scores else None,
+            score_specificity=optimized_scores.specificity if optimized_scores else None,
+            score_structure=optimized_scores.structure if optimized_scores else None,
+            score_faithfulness=optimized_scores.faithfulness if optimized_scores else None,
+            score_conciseness=optimized_scores.conciseness if optimized_scores else None,
+            overall_score=optimized_scores.compute_overall(_task_type) if optimized_scores else None,
+            provider=inputs.provider_name,
+            routing_tier="internal",
+            model_used=inputs.model_ids.get("optimize", inputs.optimizer_model),
+            scoring_mode="hybrid" if optimized_scores else "skipped",
+            duration_ms=inputs.duration_ms,
+            status="completed",
+            trace_id=inputs.trace_id,
+            repo_full_name=inputs.repo_full_name,
+            project_id=inputs.project_id,
+            context_sources=inputs.context_sources or {},
+            original_scores=original_scores.model_dump() if original_scores else None,
+            heuristic_baseline_scores=(
+                heuristic_baseline.model_dump() if heuristic_baseline else None
+            ),
+            score_deltas=deltas,
+            tokens_by_phase=inputs.phase_durations,
+            models_by_phase=inputs.model_ids,
+            heuristic_flags=inputs.divergence_flags or None,
+            suggestions=inputs.suggestions,
+        )
+        # C4: Compute improvement_score from the deterministic heuristic
+        # baseline when available -- shields the score from LLM-judge
+        # noise on the original-side A/B presentation. Falls back to the
+        # LLM-blended ``deltas`` when no heuristic baseline is recorded
+        # (legacy rows or heuristic-only scoring mode). ``deltas`` itself
+        # is preserved as-is for backward compat, callers, and
+        # side-by-side comparison. F3 invariant: per-task-type weights.
+        if heuristic_baseline and optimized_scores:
+            heuristic_lift = {
+                dim: getattr(optimized_scores, dim) - getattr(heuristic_baseline, dim)
+                for dim in get_dimension_weights(inputs.analysis.task_type)
+            }
+            imp = sum(
+                heuristic_lift.get(dim, 0) * w
+                for dim, w in get_dimension_weights(inputs.analysis.task_type).items()
+            )
+            db_opt.improvement_score = round(max(0.0, min(10.0, imp)), 2)
+        elif deltas:
+            imp = sum(
+                deltas.get(dim, 0) * w
+                for dim, w in get_dimension_weights(inputs.analysis.task_type).items()
+            )
+            db_opt.improvement_score = round(max(0.0, min(10.0, imp)), 2)
+        write_db.add(db_opt)
+
+        # Step 2: Track applied patterns in join table (relationship: "applied")
+        local_applied_cluster_ids: set[str] = set()
+        if inputs.applied_pattern_ids:
+            try:
+                from app.models import MetaPattern, OptimizationPattern
+
+                for pid in inputs.applied_pattern_ids:
+                    mp_result = await write_db.execute(
+                        select(MetaPattern).where(MetaPattern.id == pid)
+                    )
+                    mp = mp_result.scalar_one_or_none()
+                    if mp:
+                        write_db.add(OptimizationPattern(
+                            optimization_id=inputs.opt_id,
+                            cluster_id=mp.cluster_id,
+                            meta_pattern_id=mp.id,
+                            relationship="applied",
+                        ))
+                        local_applied_cluster_ids.add(mp.cluster_id)
+            except Exception as exc:
+                logger.warning("Failed to track applied patterns: %s", exc)
+
+        # Step 3: Commit parent + applied join rows (FK durability for step 4).
+        await write_db.commit()
+
+        # Step 4: Post-persist injection provenance. ``auto_inject_patterns``
+        # ran PRE-persist (the patterns had to flow into the optimizer
+        # prompt) with ``record_provenance=False`` so the FK-on-Optimization
+        # check would not fire inside a SAVEPOINT and silently rollback
+        # every ``relationship='injected'`` row. Now that the parent row
+        # is committed, provenance writes cleanly. The helper handles its
+        # own SAVEPOINTs per record, so no commit needed here.
+        if inputs.auto_injected_cluster_ids or inputs.auto_injected_patterns:
+            try:
+                await record_injection_provenance(
+                    write_db,
+                    optimization_id=inputs.opt_id,
+                    cluster_ids=list(inputs.auto_injected_cluster_ids),
+                    injected=list(inputs.auto_injected_patterns),
+                    similarity_map=inputs.auto_injected_similarity_map,
+                    trace_id=inputs.trace_id,
                 )
-                mp = mp_result.scalar_one_or_none()
-                if mp:
-                    db.add(OptimizationPattern(
-                        optimization_id=inputs.opt_id,
-                        cluster_id=mp.cluster_id,
-                        meta_pattern_id=mp.id,
-                        relationship="applied",
-                    ))
-                    applied_cluster_ids.add(mp.cluster_id)
-        except Exception as exc:
-            logger.warning("Failed to track applied patterns: %s", exc)
+            except Exception as prov_exc:
+                logger.warning(
+                    "Post-persist injection provenance write failed (non-fatal): %s",
+                    prov_exc,
+                )
 
-    await db.commit()
-
-    # Post-persist injection provenance.  ``auto_inject_patterns`` ran
-    # PRE-persist (the patterns had to flow into the optimizer prompt)
-    # with ``record_provenance=False`` so the FK-on-Optimization check
-    # would not fire inside a SAVEPOINT and silently rollback every
-    # ``relationship='injected'`` row.  Now that the parent row is
-    # committed, we can write provenance cleanly.
-    if inputs.auto_injected_cluster_ids or inputs.auto_injected_patterns:
+        # Step 5: T1.3-lite -- increment useful/unused counters on every
+        # ``OptimizationPattern`` row attached to this optimization based
+        # on the host's overall_score. Builds attribution data without
+        # paying the cost of pattern-ablation re-scoring. Wrapped so a
+        # counter failure can never roll back provenance.
         try:
-            await record_injection_provenance(
-                db,
+            from app.services.pattern_injection import record_pattern_usefulness
+
+            _overall = (
+                optimized_scores.compute_overall(_task_type)
+                if optimized_scores is not None else None
+            )
+            bumped = await record_pattern_usefulness(
+                write_db,
                 optimization_id=inputs.opt_id,
-                cluster_ids=list(inputs.auto_injected_cluster_ids),
-                injected=list(inputs.auto_injected_patterns),
-                similarity_map=inputs.auto_injected_similarity_map,
-                trace_id=inputs.trace_id,
+                overall_score=_overall,
             )
-            await db.commit()
-        except Exception as prov_exc:
-            logger.warning(
-                "Post-persist injection provenance write failed (non-fatal): %s",
-                prov_exc,
+            if bumped:
+                await write_db.commit()
+        except Exception as cnt_exc:
+            logger.debug(
+                "Pattern usefulness bump skipped (non-fatal): %s", cnt_exc,
             )
 
-    # T1.3-lite — increment useful/unused counters on every
-    # ``OptimizationPattern`` row attached to this optimization based on
-    # the host's overall_score.  Builds attribution data without paying
-    # the cost of pattern-ablation re-scoring.  A separate commit so a
-    # counter failure can never roll back provenance.
-    try:
-        from app.services.pattern_injection import record_pattern_usefulness
+        # Include auto-injected cluster IDs in usage propagation
+        if inputs.auto_injected_cluster_ids:
+            local_applied_cluster_ids.update(inputs.auto_injected_cluster_ids)
 
-        _overall = (
-            optimized_scores.compute_overall(_task_type) if optimized_scores is not None else None
-        )
-        bumped = await record_pattern_usefulness(
-            db,
-            optimization_id=inputs.opt_id,
-            overall_score=_overall,
-        )
-        if bumped:
-            await db.commit()
-    except Exception as cnt_exc:
-        logger.debug(
-            "Pattern usefulness bump skipped (non-fatal): %s", cnt_exc,
-        )
-
-    # Include auto-injected cluster IDs in usage propagation
-    if inputs.auto_injected_cluster_ids:
-        applied_cluster_ids.update(inputs.auto_injected_cluster_ids)
-
-    # Propagate usage counts AFTER successful commit (Spec 7.8)
-    # Use a fresh session — the original db session may be expired post-commit
-    if applied_cluster_ids and inputs.taxonomy_engine:
-        try:
-            from app.database import async_session_factory
-
-            async with async_session_factory() as usage_db:
-                for fid in applied_cluster_ids:
+        # Step 6: Propagate usage counts (Spec 7.8). v0.4.12 opened a
+        # separate ``async_session_factory()`` here for ORM-expiration
+        # safety; the queue path eliminates that need because the writer
+        # session uses ``expire_on_commit=False`` AND the queue serializes
+        # against every other writer (no expired-row contention). The
+        # usage-increment loop runs against ``write_db`` directly.
+        if local_applied_cluster_ids and inputs.taxonomy_engine:
+            try:
+                for fid in local_applied_cluster_ids:
                     try:
-                        await inputs.taxonomy_engine.increment_usage(fid, usage_db)
+                        await inputs.taxonomy_engine.increment_usage(fid, write_db)
                     except Exception as usage_exc:
                         logger.warning("Usage propagation failed for %s: %s", fid, usage_exc)
                         # Fallback: atomic SQL increment (no tree walk)
@@ -1188,18 +1305,57 @@ async def persist_and_propagate(
                             from sqlalchemy import update as sa_upd
 
                             from app.models import PromptCluster
-                            await usage_db.execute(
+                            await write_db.execute(
                                 sa_upd(PromptCluster)
                                 .where(PromptCluster.id == fid)
                                 .values(usage_count=PromptCluster.usage_count + 1)
                             )
                         except Exception:
                             pass
-                await usage_db.commit()
-        except Exception as exc:
-            logger.warning("Post-commit usage propagation failed: %s", exc)
+                await write_db.commit()
+            except Exception as exc:
+                logger.warning("Post-commit usage propagation failed: %s", exc)
 
-    # Publish real-time event
+        # Surface accumulated cluster IDs to the caller for any
+        # observability layered on top of ``persist_and_propagate``
+        # (the canonical pipeline.py path doesn't read this; future
+        # cycle-5 callers may want it).
+        applied_cluster_ids = local_applied_cluster_ids
+
+    # ------------------------------------------------------------------
+    # Dispatch: Option C dual path. write_queue takes precedence; legacy
+    # ``db`` is used only when no queue is supplied. Mirrors cycle 2/3.
+    # ------------------------------------------------------------------
+    if write_queue is not None:
+        # Canonical path: the queue serializes ``_do_persist`` against
+        # every other backend writer. ``operation_label`` surfaces in
+        # ``WriteQueueMetrics`` snapshots and ``write_queue.complete``
+        # decision events so health-endpoint consumers can attribute
+        # latency to the persist-and-propagate op.
+        await write_queue.submit(
+            _do_persist, operation_label="persist_and_propagate",
+        )
+    else:
+        # Legacy ``AsyncSession`` path -- retired in cycle 5+ once the
+        # ``pipeline.py`` orchestrator threads the queue. Single-attempt
+        # commit semantics: the v0.4.12 retry/lock path is gone, the
+        # canonical contention solution lives on the queue path now.
+        # Known transitional risk: under heavy concurrent writer pressure,
+        # ``database is locked`` exceptions will propagate to the caller
+        # instead of retrying. Mitigated by ``WriterLockedAsyncSession``
+        # in production (it acquires the writer lock at first flush) and
+        # closes fully when the orchestrator migrates.
+        if db is None:
+            raise TypeError(
+                "persist_and_propagate requires either write_queue= or "
+                "a positional AsyncSession (legacy form).",
+            )
+        await _do_persist(db)
+
+    # Publish real-time event AFTER successful persist (queue or legacy).
+    # Failure semantics: if ``submit()`` raised above, control never
+    # reaches here -- the event does not fire for rows that never
+    # persisted. Same contract as cycle 2 ``bulk_persist``.
     try:
         from app.services.event_bus import event_bus
         event_bus.publish("optimization_created", {
