@@ -630,25 +630,16 @@ class TestBatchTaxonomyAssignOperate:
 
     Test #1 uses ``writer_engine_file`` for real WAL contention. Tests #2-4
     use the in-memory queue fixture (logic-only, no contention required).
-    The autouse ``_reset_taxonomy_engine`` fixture below ensures every test
-    starts with a fresh ``TaxonomyEngine`` singleton + ``EmbeddingIndex`` so
-    accumulated centroids from prior tests don't bleed into assert paths.
+    The class-level ``reset_taxonomy_engine`` fixture (promoted to
+    ``conftest.py``) ensures every test starts with a fresh
+    ``TaxonomyEngine`` singleton + ``EmbeddingIndex`` so accumulated
+    centroids from prior tests don't bleed into assert paths —
+    ``batch_taxonomy_assign`` reads ``engine._embedding_index`` and every
+    successful ``assign_cluster()`` call upserts the new cluster into that
+    index, making the state path-dependent on test ordering otherwise.
     """
 
-    @pytest.fixture(autouse=True)
-    def _reset_taxonomy_engine(self):
-        """Each test gets a fresh process singleton.
-
-        ``batch_taxonomy_assign`` reads ``engine._embedding_index`` and
-        every successful ``assign_cluster()`` call upserts the new cluster
-        into that index. Reusing a singleton across tests makes the
-        embedding-index state path-dependent on test ordering, which is
-        exactly the kind of flake the autouse reset prevents.
-        """
-        from app.services.taxonomy import reset_engine
-        reset_engine()
-        yield
-        reset_engine()
+    pytestmark = pytest.mark.usefixtures("reset_taxonomy_engine")
 
     # -- Test #1: N=5 concurrent callers, real WAL contention ----------------
 
