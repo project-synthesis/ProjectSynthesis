@@ -584,25 +584,16 @@ class TestPersistAndPropagateOperate:
     exercise the legacy path without the queue. Tests #3-5 use the
     in-memory queue fixture (logic-only, no contention required).
 
-    The autouse ``_reset_taxonomy_engine`` fixture below ensures every
-    test starts with a fresh ``TaxonomyEngine`` singleton + dirty-set so
-    accumulated state from prior tests doesn't bleed into assert paths.
+    The class-level ``reset_taxonomy_engine`` fixture (promoted to
+    ``conftest.py``) ensures every test starts with a fresh
+    ``TaxonomyEngine`` singleton + dirty-set so accumulated state from
+    prior tests doesn't bleed into assert paths —
+    ``persist_and_propagate`` reads ``inputs.taxonomy_engine`` for usage
+    propagation; tests that don't pass an engine still touch the
+    singleton transitively through the event_bus + decision logger paths.
     """
 
-    @pytest.fixture(autouse=True)
-    def _reset_taxonomy_engine(self):
-        """Each test gets a fresh process singleton.
-
-        ``persist_and_propagate`` reads ``inputs.taxonomy_engine`` for
-        usage propagation; tests that don't pass an engine still touch
-        the singleton transitively through the event_bus + decision
-        logger paths. Reusing a singleton across tests makes the engine
-        state path-dependent on test ordering.
-        """
-        from app.services.taxonomy import reset_engine
-        reset_engine()
-        yield
-        reset_engine()
+    pytestmark = pytest.mark.usefixtures("reset_taxonomy_engine")
 
     # -- Test #1: N=5 concurrent QUEUE callers, real WAL contention ---------
 

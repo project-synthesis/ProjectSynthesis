@@ -261,3 +261,28 @@ async def write_queue_inmem(writer_engine_inmem):
         yield queue
     finally:
         await queue.stop(drain_timeout=2.0)
+
+
+# Shared TaxonomyEngine reset fixture (v0.4.13 — see docs/specs/sqlite-writer-queue-2026-05-02.md)
+#
+# Promoted from the cycle 3/4/5 OPERATE-class autouse copies. Sync ``@pytest.fixture``
+# (no autouse) so consumers opt-in via class-level
+# ``pytestmark = pytest.mark.usefixtures("reset_taxonomy_engine")`` — keeps the
+# autouse semantic at class scope without slowing every unrelated test in the
+# broader suite.
+
+import pytest  # noqa: E402  (intentional: kept after pytest_asyncio imports)
+
+
+@pytest.fixture
+def reset_taxonomy_engine():
+    """Reset the singleton TaxonomyEngine before/after each test that needs
+    a fresh engine (e.g., cycle 3+ taxonomy/persist tests).
+
+    Used by tests that touch get_engine() under concurrent load — without
+    reset, prior tests' state leaks into the next test's engine instance.
+    """
+    from app.services.taxonomy import reset_engine
+    reset_engine()
+    yield
+    reset_engine()
