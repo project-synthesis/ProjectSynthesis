@@ -19,12 +19,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import TaxonomySnapshot
+from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
 
 async def create_snapshot(
-    db: AsyncSession,
+    db: AsyncSession | None,
     *,
     trigger: str,
     q_system: float | None,
@@ -38,6 +39,7 @@ async def create_snapshot(
     nodes_retired: int = 0,
     nodes_merged: int = 0,
     nodes_split: int = 0,
+    write_queue: WriteQueue | None = None,
 ) -> TaxonomySnapshot:
     """Create and persist a TaxonomySnapshot.
 
@@ -64,24 +66,63 @@ async def create_snapshot(
         but is intentionally not populated — recovery uses the live
         PromptCluster table instead.  The parameter was removed to prevent
         dead-data accumulation (~50KB per snapshot).
+
+    v0.4.13 cycle 7b: when ``write_queue`` is supplied the persist runs
+    through the single-writer queue worker; ``db`` may be ``None`` in that
+    form. Detection is ``write_queue is not None``. The legacy
+    ``AsyncSession`` form is retained for callers not yet migrated.
+
+    Failure semantics:
+        Queue path: ``submit()`` exceptions (``WriteQueueOverloadedError``,
+        ``WriteQueueDeadError``, ``WriteQueueStoppedError``,
+        ``asyncio.TimeoutError``) propagate to the caller -- no half-
+        constructed ``TaxonomySnapshot`` is returned.
+        Legacy path: errors propagate; partial commit semantics depend on
+        the caller-supplied session.
     """
     # A5: TaxonomySnapshot.q_system is NOT NULL at the DB layer; coerce a
     # None (insufficient-clusters) Q to 0.0 for persistence. Live endpoints
     # recompute Q from current cluster state and surface None to consumers.
-    snap = TaxonomySnapshot(
-        trigger=trigger,
-        q_system=0.0 if q_system is None else q_system,
-        q_coherence=q_coherence,
-        q_separation=q_separation,
-        q_coverage=q_coverage,
-        q_dbcv=q_dbcv,
-        q_health=q_health,
-        operations=json.dumps(operations if operations is not None else []),
-        nodes_created=nodes_created,
-        nodes_retired=nodes_retired,
-        nodes_merged=nodes_merged,
-        nodes_split=nodes_split,
-    )
+    def _build() -> TaxonomySnapshot:
+        return TaxonomySnapshot(
+            trigger=trigger,
+            q_system=0.0 if q_system is None else q_system,
+            q_coherence=q_coherence,
+            q_separation=q_separation,
+            q_coverage=q_coverage,
+            q_dbcv=q_dbcv,
+            q_health=q_health,
+            operations=json.dumps(operations if operations is not None else []),
+            nodes_created=nodes_created,
+            nodes_retired=nodes_retired,
+            nodes_merged=nodes_merged,
+            nodes_split=nodes_split,
+        )
+
+    if write_queue is not None:
+        async def _do_persist(write_db: AsyncSession) -> TaxonomySnapshot:
+            snap_local = _build()
+            write_db.add(snap_local)
+            await write_db.commit()
+            await write_db.refresh(snap_local)
+            # Detach from the writer session so the caller can inspect
+            # ``snap_local.id`` after the session closes (the queue
+            # callback exits the session under shield right after this
+            # returns; without expunge the ORM proxy object would error
+            # on attribute access).
+            write_db.expunge(snap_local)
+            return snap_local
+
+        return await write_queue.submit(
+            _do_persist, operation_label="snapshot_persist",
+        )
+
+    if db is None:
+        raise TypeError(
+            "create_snapshot requires either write_queue= or "
+            "a positional AsyncSession (legacy form).",
+        )
+    snap = _build()
     db.add(snap)
     await db.commit()
     await db.refresh(snap)
@@ -119,7 +160,11 @@ async def get_snapshot_history(
     return list(result.scalars().all())
 
 
-async def prune_snapshots(db: AsyncSession) -> int:
+async def prune_snapshots(
+    db: AsyncSession | None,
+    *,
+    write_queue: WriteQueue | None = None,
+) -> int:
     """Apply retention policy and delete excess snapshots.
 
     Retention tiers:
@@ -127,16 +172,22 @@ async def prune_snapshots(db: AsyncSession) -> int:
     - 1–30 days: keep the best q_system per calendar day.
     - 30+ days: keep the best q_system per ISO week.
 
+    v0.4.13 cycle 7b: when ``write_queue`` is supplied, the SELECT +
+    DELETE + commit sequence runs inside a single submit() callback so
+    the lifecycle stays atomic against concurrent backend writers.
+
     Returns:
-        Number of snapshots deleted.
+        Number of snapshots deleted (0 on the queue path when nothing
+        is eligible AND on legacy-path failure -- the function is
+        idempotent and best-effort).
     """
-    try:
+    async def _do_prune(write_db: AsyncSession) -> int:
         now = datetime.now(timezone.utc)
         cutoff_24h = now - timedelta(hours=24)
         cutoff_30d = now - timedelta(days=30)
 
         # Fetch all snapshots outside the 24h keep-all window.
-        result = await db.execute(
+        result = await write_db.execute(
             select(TaxonomySnapshot).where(TaxonomySnapshot.created_at < cutoff_24h)
         )
         old_snapshots = list(result.scalars().all())
@@ -169,12 +220,29 @@ async def prune_snapshots(db: AsyncSession) -> int:
         if not ids_to_delete:
             return 0
 
-        await db.execute(
+        await write_db.execute(
             delete(TaxonomySnapshot).where(TaxonomySnapshot.id.in_(list(ids_to_delete)))
         )
-        await db.commit()
+        await write_db.commit()
         logger.info("Pruned %d snapshots", len(ids_to_delete))
         return len(ids_to_delete)
+
+    if write_queue is not None:
+        try:
+            return await write_queue.submit(
+                _do_prune, operation_label="snapshot_record",
+            )
+        except Exception as exc:
+            logger.error("Snapshot pruning failed: %s", exc, exc_info=True)
+            return 0
+
+    if db is None:
+        raise TypeError(
+            "prune_snapshots requires either write_queue= or "
+            "a positional AsyncSession (legacy form).",
+        )
+    try:
+        return await _do_prune(db)
     except Exception as exc:
         logger.error("Snapshot pruning failed: %s", exc, exc_info=True)
         return 0

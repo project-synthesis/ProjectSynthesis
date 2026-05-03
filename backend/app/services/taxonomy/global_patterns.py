@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from statistics import mean
+from typing import TYPE_CHECKING
 
 import numpy as np
 from sqlalchemy import func, select
@@ -29,6 +30,9 @@ from app.services.taxonomy._constants import (
     GLOBAL_PATTERN_PROMOTION_MIN_SCORE,
     _utcnow,
 )
+
+if TYPE_CHECKING:
+    from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -465,7 +469,11 @@ async def _enforce_retention_cap(db: AsyncSession) -> int:
 # ------------------------------------------------------------------
 
 
-async def repair_legacy_only_promotions(db: AsyncSession) -> dict[str, int]:
+async def repair_legacy_only_promotions(
+    db: AsyncSession | None,
+    *,
+    write_queue: "WriteQueue | None" = None,
+) -> dict[str, int]:
     """One-shot audit of existing GlobalPatterns against the tightened gate.
 
     Patterns promoted under the old gate (``MIN_PROJECTS=1``) may have
@@ -476,51 +484,76 @@ async def repair_legacy_only_promotions(db: AsyncSession) -> dict[str, int]:
 
     Intended to run once at startup, idempotent, non-fatal.  Returns a
     stats dict with ``demoted`` and ``retired`` counts.
+
+    v0.4.13 cycle 7b: when ``write_queue`` is supplied, the audit runs
+    inside a single submit() callback; no caller-supplied ``db`` is
+    needed. Detection is ``write_queue is not None``.
     """
     stats = {"demoted": 0, "retired": 0}
-    try:
-        stmt = select(GlobalPattern).where(
-            GlobalPattern.state.in_(["active", "demoted"]),
-        )
-        result = await db.execute(stmt)
-        patterns = list(result.scalars().all())
 
-        for gp in patterns:
-            project_ids = set(gp.source_project_ids or [])
-            if len(project_ids) >= GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS:
-                continue
-
-            if gp.state == "active":
-                gp.state = "demoted"
-                stats["demoted"] += 1
-                _log_event("demoted", gp.id, {
-                    "reason": "b8_startup_repair",
-                    "project_count": len(project_ids),
-                    "min_projects": GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
-                })
-            else:  # demoted — retire it
-                gp.state = "retired"
-                stats["retired"] += 1
-                _log_event("retired", gp.id, {
-                    "reason": "b8_startup_repair",
-                    "project_count": len(project_ids),
-                    "min_projects": GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
-                })
-
-        if stats["demoted"] or stats["retired"]:
-            await db.commit()
-            logger.info(
-                "B8 startup repair: demoted=%d retired=%d (min_projects=%d)",
-                stats["demoted"], stats["retired"],
-                GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
-            )
-    except Exception as exc:
-        logger.warning("B8 startup repair failed (non-fatal): %s", exc)
+    async def _do_repair(write_db: AsyncSession) -> dict[str, int]:
+        local_stats = {"demoted": 0, "retired": 0}
         try:
-            await db.rollback()
-        except Exception:
-            pass
-    return stats
+            stmt = select(GlobalPattern).where(
+                GlobalPattern.state.in_(["active", "demoted"]),
+            )
+            result = await write_db.execute(stmt)
+            patterns = list(result.scalars().all())
+
+            for gp in patterns:
+                project_ids = set(gp.source_project_ids or [])
+                if len(project_ids) >= GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS:
+                    continue
+
+                if gp.state == "active":
+                    gp.state = "demoted"
+                    local_stats["demoted"] += 1
+                    _log_event("demoted", gp.id, {
+                        "reason": "b8_startup_repair",
+                        "project_count": len(project_ids),
+                        "min_projects": GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
+                    })
+                else:  # demoted — retire it
+                    gp.state = "retired"
+                    local_stats["retired"] += 1
+                    _log_event("retired", gp.id, {
+                        "reason": "b8_startup_repair",
+                        "project_count": len(project_ids),
+                        "min_projects": GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
+                    })
+
+            if local_stats["demoted"] or local_stats["retired"]:
+                await write_db.commit()
+                logger.info(
+                    "B8 startup repair: demoted=%d retired=%d (min_projects=%d)",
+                    local_stats["demoted"], local_stats["retired"],
+                    GLOBAL_PATTERN_PROMOTION_MIN_PROJECTS,
+                )
+        except Exception as exc:
+            logger.warning("B8 startup repair failed (non-fatal): %s", exc)
+            try:
+                await write_db.rollback()
+            except Exception:
+                pass
+        return local_stats
+
+    if write_queue is not None:
+        try:
+            return await write_queue.submit(
+                _do_repair, operation_label="global_pattern_persist",
+            )
+        except Exception as exc:
+            logger.warning(
+                "B8 startup repair queue submit failed (non-fatal): %s", exc,
+            )
+            return stats
+
+    if db is None:
+        raise TypeError(
+            "repair_legacy_only_promotions requires either write_queue= or "
+            "a positional AsyncSession (legacy form).",
+        )
+    return await _do_repair(db)
 
 
 # ------------------------------------------------------------------
