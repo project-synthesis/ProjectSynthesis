@@ -989,6 +989,7 @@ async def test_optimize_emits_routing_event(tmp_path: Path, db_session) -> None:
     from httpx import ASGITransport, AsyncClient
 
     from app.database import get_db
+    from app.dependencies.write_queue import get_write_queue
     from app.main import app
 
     # Create a routing manager with NO provider → passthrough tier
@@ -1008,6 +1009,15 @@ async def test_optimize_emits_routing_event(tmp_path: Path, db_session) -> None:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+
+    # v0.4.13 cycle 8: install a synthetic write_queue that runs submit
+    # callbacks against db_session so the passthrough INSERT commit
+    # routes through the same in-memory DB as the request session.
+    class _TestWriteQueue:
+        async def submit(self, work, *, timeout=None, operation_label=None):
+            return await work(db_session)
+
+    app.dependency_overrides[get_write_queue] = lambda: _TestWriteQueue()
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
