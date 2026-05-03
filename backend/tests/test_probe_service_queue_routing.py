@@ -15,14 +15,12 @@ session.
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.services.probe_service import ProbeService
-
 
 # ---------------------------------------------------------------------------
 # Constructor + helper dispatch

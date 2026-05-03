@@ -17,15 +17,12 @@ existing callers don't break in the same PR. Detection is
 """
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models import Base, Optimization
+from app.models import Optimization
 from tests.taxonomy.conftest import EMBEDDING_DIM
-
 
 # ---------------------------------------------------------------------------
 # Snapshot — create + prune routes through queue
@@ -221,7 +218,6 @@ class TestRebuildSubDomainsQueueRouting:
     ):
         """RED: rebuild_sub_domains under queue dispatch produces one
         submit labelled ``engine_rebuild_sub_domains``."""
-        from sqlalchemy import select
 
         from app.models import PromptCluster
         from app.services.taxonomy.engine import TaxonomyEngine
