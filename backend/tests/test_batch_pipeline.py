@@ -670,8 +670,8 @@ class TestBulkPersistEvents:
         event_bus._subscribers.add(queue)
         try:
             inserted = await bulk_persist(
-                results=pendings,
-                session_factory=real_session_factory,
+                pendings,
+                real_session_factory,
                 batch_id="batch-1",
             )
         finally:
@@ -737,8 +737,8 @@ class TestBulkPersistEvents:
         event_bus._subscribers.add(queue)
         try:
             inserted = await bulk_persist(
-                results=pendings,
-                session_factory=real_session_factory,
+                pendings,
+                real_session_factory,
                 batch_id="batch-2",
             )
         finally:
@@ -768,8 +768,8 @@ class TestBulkPersistEvents:
 
         # First insert
         inserted_1 = await bulk_persist(
-            results=pendings,
-            session_factory=real_session_factory,
+            pendings,
+            real_session_factory,
             batch_id="batch-3",
         )
         assert inserted_1 == 1
@@ -779,8 +779,8 @@ class TestBulkPersistEvents:
         event_bus._subscribers.add(queue)
         try:
             inserted_2 = await bulk_persist(
-                results=pendings,
-                session_factory=real_session_factory,
+                pendings,
+                real_session_factory,
                 batch_id="batch-3",
             )
         finally:
