@@ -72,6 +72,19 @@ async def bulk_persist(
 
     Returns count of rows inserted. Skips failed optimizations.
     Idempotent: skips prompts already persisted for this ``batch_id``.
+
+    Failure semantics:
+        If ``submit()`` raises (e.g. ``WriteQueueOverloadedError``,
+        ``WriteQueueDeadError``, ``WriteQueueStoppedError``,
+        ``asyncio.TimeoutError``), the exception propagates to the caller
+        WITHOUT emitting ``optimization_created`` or ``rate_limit_cleared``
+        events. This is intentional: events represent durable persistence,
+        so a failed submit cannot fire them. Callers handle batch-level
+        error recovery (e.g. retry the whole submit, log and skip).
+
+        Future maintainers: do NOT wrap ``submit()`` in a try/except that
+        swallows the exception and continues to the event-emission block —
+        that would fire phantom events for rows that never persisted.
     """
     t0 = time.monotonic()
     # ID-shape gate: reject test-fixture-pattern IDs.  Production rows
