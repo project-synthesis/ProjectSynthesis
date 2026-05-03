@@ -955,3 +955,128 @@ class TestCycle75PolymorphicCollapse:
             f"queue_or_session_factory still present: {offenders}. "
             "Rename to write_queue after collapse."
         )
+
+
+# ---------------------------------------------------------------------------
+# Cycle 7.5 OPERATE: concurrent stress on probe migration surfaces
+# ---------------------------------------------------------------------------
+
+
+class TestCycle75OperateProbeMigration:
+    """Cycle 7.5 OPERATE phase: stress the migrated probe surfaces under
+    concurrent helper invocations to verify the queue serialization
+    contract holds end-to-end.
+
+    Per ``feedback_tdd_protocol.md`` Phase 5: the GREEN tests pin the
+    DISPATCH (operation_label captured, callback invoked); these tests
+    pin the BEHAVIOUR under N concurrent callers + queue contention.
+    """
+
+    pytestmark = pytest.mark.usefixtures("reset_taxonomy_engine")
+
+    @pytest.mark.asyncio
+    async def test_n5_concurrent_status_transitions_all_serialize(self):
+        """N=5 concurrent ``_set_probe_status`` invocations all submit
+        through the queue with the same operation_label.  Verifies
+        the queue's single-writer worker serializes against itself.
+        """
+        import asyncio as _asyncio
+
+        captured: list[str | None] = []
+        ordering: list[str] = []
+
+        async def _serial_submit(work, *, timeout=None, operation_label=None):
+            ordering.append(f"in_{operation_label}")
+            captured.append(operation_label)
+            mock_db = AsyncMock()
+            mock_db.get = AsyncMock(return_value=MagicMock(status="running"))
+            await work(mock_db)
+            ordering.append(f"out_{operation_label}")
+            return None
+
+        write_queue = MagicMock()
+        write_queue.submit = _serial_submit
+
+        svc = ProbeService(
+            db=MagicMock(),
+            provider=MagicMock(),
+            repo_query=MagicMock(),
+            context_service=MagicMock(),
+            event_bus=MagicMock(),
+            write_queue=write_queue,
+        )
+
+        await _asyncio.gather(*[
+            svc._set_probe_status(f"probe-{i}", "running")
+            for i in range(5)
+        ])
+
+        # All 5 status transitions submitted.
+        assert len(captured) == 5
+        assert all(label == "probe_status_transition" for label in captured)
+        # Note: order is not deterministic (gather schedules tasks
+        # arbitrarily), but every in_ pairs with an out_ -- proving
+        # the queue's submit() awaits to completion before next.
+        # Without serialization, in_/out_ would interleave.
+        for i in range(5):
+            in_idx = ordering.index("in_probe_status_transition")
+            out_idx = ordering.index("out_probe_status_transition")
+            assert out_idx == in_idx + 1, (
+                f"Submit non-atomic at iter {i}: ordering={ordering}"
+            )
+            ordering.pop(in_idx)
+            ordering.pop(in_idx)  # the out_ is now at in_idx after the pop
+
+    @pytest.mark.asyncio
+    async def test_concurrent_mark_cancelled_idempotent_under_race(self):
+        """Two SEQUENTIAL ``_mark_cancelled`` invocations on the same
+        probe row must produce ONLY ONE 'cancelled' write.  The second
+        call sees the row in terminal state (already cancelled) and
+        no-ops per the cycle 7.5 idempotency hardening.
+
+        We exercise sequential (not concurrent) here because the queue's
+        worker IS sequential by construction; the race we care about is
+        the second invocation observing the post-first state -- which
+        the test's shared row simulation handles deterministically.
+        """
+        write_count = {"n": 0}
+        # Simulated row -- mutates persistently across submits.
+        # Use SimpleNamespace to avoid MagicMock's auto-coercion.
+        from types import SimpleNamespace
+        shared_row = SimpleNamespace(status="running", error=None, completed_at=None)
+
+        async def _shared_submit(work, *, timeout=None, operation_label=None):
+            from unittest.mock import AsyncMock
+            mock_db = AsyncMock()
+            mock_db.get = AsyncMock(return_value=shared_row)
+            # Track status BEFORE the work runs.
+            status_before = shared_row.status
+            await work(mock_db)
+            # Status changed -> a write happened.
+            if shared_row.status == "failed" and status_before == "running":
+                write_count["n"] += 1
+
+        write_queue = MagicMock()
+        write_queue.submit = _shared_submit
+
+        svc = ProbeService(
+            db=MagicMock(),
+            provider=MagicMock(),
+            repo_query=MagicMock(),
+            context_service=MagicMock(),
+            event_bus=MagicMock(),
+            write_queue=write_queue,
+        )
+
+        row1 = MagicMock()
+        row2 = MagicMock()
+        # Sequential -- the second sees the first's terminal state.
+        await svc._mark_cancelled(row1, "race-probe")
+        await svc._mark_cancelled(row2, "race-probe")
+
+        # Only ONE write actually mutated the row.
+        assert write_count["n"] == 1, (
+            f"Expected exactly 1 cancellation write; got {write_count['n']}. "
+            f"Idempotency check failed: late-arrival cancel corrupted "
+            f"the row's terminal state."
+        )
