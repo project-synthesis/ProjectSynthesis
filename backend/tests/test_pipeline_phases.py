@@ -347,3 +347,194 @@ class TestPersistAnalysisWeights:
             "pipeline_phases must import get_dimension_weights so the "
             "improvement_score loops can consult per-task-type weights"
         )
+
+
+# ---------------------------------------------------------------------------
+# Cycle 4: persist_and_propagate migration to WriteQueue
+#
+# Per spec § 3.4 + plan task 4: the 5 commit sites in ``persist_and_propagate``
+# (Optimization row, injection provenance, pattern usefulness, usage_db
+# separate-session usage propagation, and any terminal write) collapse into
+# ONE submit() callback. The ``usage_db = async_session_factory()`` separate
+# session pattern (pre-fix lines 1180-1198) is subsumed: the queue callback's
+# session does all writes serially.
+#
+# Mirrors cycle 2 (bulk_persist) + cycle 3 (batch_taxonomy_assign) Option C
+# dual-typed dispatch. Until cycle 7, ``write_queue=None`` keeps the legacy
+# session-based path live for the still-unmigrated orchestrator caller.
+# ---------------------------------------------------------------------------
+
+
+def _build_persistence_inputs_fixture(
+    *, opt_id: str | None = None,
+) -> "object":
+    """Construct a minimal ``PersistenceInputs`` for cycle 4 queue tests.
+
+    Mirrors ``TestBuildPipelineResultRepoPropagation._persistence_inputs``
+    above but exposes a module-level helper so the queue tests don't
+    depend on instance-method scoping. Score fields populated so the
+    improvement_score branch fires (heuristic_baseline path stays unused
+    -- ``scoring=None`` keeps the test focused on the queue-dispatch
+    contract, not on F3.1/F4 score-blending invariants tested elsewhere).
+    """
+    import uuid as _uuid
+
+    from app.schemas.pipeline_contracts import (
+        AnalysisResult,
+        OptimizationResult,
+    )
+    from app.services.pipeline_phases import PersistenceInputs
+
+    analysis = AnalysisResult(
+        task_type="coding",
+        weaknesses=["vague"],
+        strengths=["concise"],
+        selected_strategy="chain-of-thought",
+        strategy_rationale="ok",
+        confidence=0.9,
+    )
+    optimization = OptimizationResult(
+        optimized_prompt="rewritten prompt",
+        changes_summary="tightened scope",
+    )
+    return PersistenceInputs(
+        opt_id=opt_id or str(_uuid.uuid4()),
+        raw_prompt="raw prompt body",
+        analysis=analysis,
+        optimization=optimization,
+        effective_strategy="chain-of-thought",
+        effective_domain="general",
+        domain_raw="general",
+        cluster_id=None,
+        scoring=None,
+        suggestions=[],
+        phase_durations={"analyze_ms": 1},
+        model_ids={"optimize": "claude-opus-4-7"},
+        optimizer_model="claude-opus-4-7",
+        provider_name="claude_cli",
+        repo_full_name=None,
+        project_id=None,
+        context_sources={},
+        trace_id="trace-c4",
+        duration_ms=100,
+        applied_pattern_ids=None,
+        auto_injected_cluster_ids=[],
+        taxonomy_engine=None,
+    )
+
+
+class TestPersistAndPropagateViaQueue:
+    """Cycle 4 RED → GREEN: ``persist_and_propagate`` routes through the
+    single-writer ``WriteQueue`` instead of operating directly on a
+    caller-supplied ``AsyncSession``.
+
+    Acceptance per spec § 3.4 + plan task 4:
+
+    * ``write_queue`` keyword arg accepted on the function signature.
+    * When supplied, ALL 5 v0.4.12 commit sites collapse into ONE
+      ``submit()`` call carrying ``operation_label='persist_and_propagate'``.
+    * The ``usage_db = async_session_factory()`` separate-session pattern is
+      gone — usage propagation runs inside the queue callback's session.
+    * Failure semantics propagate ``WriteQueue*Error`` to the caller; events
+      do not fire on a failed submit (parallels cycle 2/3 contract).
+
+    Until cycle 5+ migrates the orchestrator caller, ``write_queue=None``
+    keeps the legacy session-based path live. The signature must default to
+    ``None`` so existing call sites compile unchanged.
+    """
+
+    @pytest.mark.asyncio
+    async def test_persist_and_propagate_routes_through_queue(
+        self, write_queue_inmem, monkeypatch,
+    ):
+        """RED: passing ``write_queue=`` to ``persist_and_propagate`` must
+        produce ONE ``submit()`` call labelled ``persist_and_propagate``.
+
+        FAILS pre-GREEN with ``TypeError: persist_and_propagate() got an
+        unexpected keyword argument 'write_queue'`` -- the v0.4.12 signature
+        is ``(db, inputs)`` only.
+
+        After GREEN, the queue captures exactly one submit; legacy path
+        (when ``write_queue=None``) continues to operate on ``db`` directly.
+        """
+        import pytest as _pytest
+
+        from app.services import pipeline_phases as pp
+
+        captured: list[str | None] = []
+        original_submit = write_queue_inmem.submit
+
+        async def _capture_submit(work, *, timeout=None, operation_label=None):
+            captured.append(operation_label)
+            return await original_submit(
+                work, timeout=timeout, operation_label=operation_label,
+            )
+
+        monkeypatch.setattr(write_queue_inmem, "submit", _capture_submit)
+        inputs = _build_persistence_inputs_fixture()
+
+        # Pre-GREEN: TypeError because ``persist_and_propagate`` does not
+        # accept ``write_queue=``. Post-GREEN: returns None and ``captured``
+        # contains exactly the ``persist_and_propagate`` label.
+        await pp.persist_and_propagate(  # type: ignore[call-arg]
+            inputs, write_queue=write_queue_inmem,
+        )
+
+        assert "persist_and_propagate" in captured, (
+            "expected one submit() with operation_label='persist_and_propagate'; "
+            f"got {captured!r}"
+        )
+        # Pin: exactly one submit (5 commits collapse into 1). If a future
+        # refactor reintroduces a second submit (e.g. usage_db re-extracted),
+        # this assertion fires and forces a spec re-read.
+        assert captured.count("persist_and_propagate") == 1, (
+            "5 commit sites must collapse into ONE submit; "
+            f"got {captured.count('persist_and_propagate')} submits"
+        )
+        # Suppress unused-import warning -- pytest is referenced for the
+        # @pytest.mark.asyncio decorator on this method.
+        _ = _pytest
+
+    @pytest.mark.asyncio
+    async def test_pipeline_phases_uses_single_writer_session_inside_submit(
+        self, write_queue_inmem, monkeypatch,
+    ):
+        """RED: the queue callback must NOT open a second
+        ``async_session_factory()`` for usage propagation. The v0.4.12 code
+        opened ``usage_db`` as a fresh session post-commit (lines 1180-1198);
+        post-GREEN that block is gone -- the single writer session inside
+        ``_do_persist`` does both the commit AND the usage propagation.
+
+        Failure mode pre-GREEN: ``persist_and_propagate`` rejects
+        ``write_queue=`` (TypeError). Same RED signal as the sibling test.
+
+        Failure mode if a future refactor re-introduces ``usage_db``: the
+        async_session_factory spy fires and the test fails LOUDLY with the
+        offending call site in the traceback.
+        """
+        from app.services import pipeline_phases as pp
+
+        # Spy on async_session_factory imports anywhere in pipeline_phases'
+        # transitive call graph. The v0.4.12 code grabbed it via local
+        # ``from app.database import async_session_factory`` -- patching
+        # that attribute on the database module catches both the local and
+        # any transitive reference.
+        factory_calls: list[str] = []
+
+        def _spy(*args, **kwargs):
+            factory_calls.append("called")
+            from app.database import async_session_factory as _real
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr("app.database.async_session_factory", _spy)
+        inputs = _build_persistence_inputs_fixture()
+
+        await pp.persist_and_propagate(  # type: ignore[call-arg]
+            inputs, write_queue=write_queue_inmem,
+        )
+
+        assert factory_calls == [], (
+            "post-GREEN persist_and_propagate must NOT call "
+            "async_session_factory() inside the queue callback; "
+            f"got {len(factory_calls)} call(s)"
+        )
