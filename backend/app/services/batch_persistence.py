@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Union
+import uuid
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from sqlalchemy import select as sa_select
@@ -45,20 +46,29 @@ logger = logging.getLogger(__name__)
 
 async def bulk_persist(
     results: list[PendingOptimization],
-    queue_or_session_factory: Union["WriteQueue", "SessionFactory"],
+    queue_or_session_factory: WriteQueue | SessionFactory,
     batch_id: str,
 ) -> int:
-    """Persist all completed optimizations through the write queue.
+    """Persist all completed optimizations in a single transaction.
 
-    v0.4.13 cycle 2: routed through ``WriteQueue.submit``. The
-    ``_persist_lock`` and 5-attempt retry loop from v0.4.12 are removed —
-    the queue serializes by construction.
+    v0.4.13 cycle 2: writes go through ``WriteQueue.submit`` when a
+    ``WriteQueue`` is supplied. The queue serializes against every other
+    backend writer, so the v0.4.12 ``_persist_lock`` and 5-attempt retry
+    loop are removed — contention is eliminated by construction.
 
-    The second positional argument accepts EITHER a ``WriteQueue`` (the new
-    canonical form, used by callers migrated to the queue) OR the legacy
-    ``async_sessionmaker``-style ``session_factory``. Detection is by
-    ``isinstance(arg, WriteQueue)``. The legacy branch will be removed once
-    cycle 7 finishes migrating ``probe_service`` and ``seed_orchestrator``.
+    The second positional argument is a transitional union:
+
+    * ``WriteQueue`` — canonical form. Used by callers already migrated to
+      the single-writer queue (v0.4.13 batch_pipeline + new probe paths).
+    * ``async_sessionmaker``-style ``SessionFactory`` — **legacy**, retained
+      only so cycles 3–6 can land without breaking the still-unmigrated
+      callers ``app/tools/seed.py`` and ``app/services/probe_service.py``.
+      Slated for removal in **cycle 7** when those callers inject the
+      queue. After cycle 7, the parameter type collapses to ``WriteQueue``.
+
+    Detection is ``isinstance(queue_or_session_factory, WriteQueue)``;
+    mypy narrows the parameter to ``WriteQueue`` in the ``if`` branch and
+    to ``SessionFactory`` in the ``else``.
 
     Returns count of rows inserted. Skips failed optimizations.
     Idempotent: skips prompts already persisted for this ``batch_id``.
@@ -72,7 +82,6 @@ async def bulk_persist(
     # v0.4.12 — see docs/audits/test-leak-2026-04-29.md). Rejecting at
     # the persistence boundary is the simplest belt-and-suspenders
     # against future test-isolation regressions.
-    import uuid as _uuid
     completed_raw = [r for r in results if r.status == "completed"]
     id_rejected = 0
     quality_rejected = 0
@@ -80,7 +89,7 @@ async def bulk_persist(
     seed_min_score = 5.0
     for r in completed_raw:
         try:
-            _uuid.UUID(r.id)  # raises if not a valid uuid
+            uuid.UUID(r.id)  # raises if not a valid uuid
         except (ValueError, AttributeError, TypeError):
             id_rejected += 1
             logger.warning(
@@ -208,16 +217,22 @@ async def bulk_persist(
         return inserted_local, inserted_pendings_local
 
     if isinstance(queue_or_session_factory, WriteQueue):
+        # Canonical path: the queue serializes ``_do_persist`` against
+        # every other backend writer. ``operation_label`` surfaces in
+        # ``WriteQueueMetrics`` snapshots and ``write_queue.complete``
+        # decision events so health-endpoint consumers can attribute
+        # latency to the bulk-persist op.
         inserted, inserted_pendings = await queue_or_session_factory.submit(
             _do_persist, operation_label="bulk_persist",
         )
     else:
-        # Legacy session_factory path. Removed in cycle 7 once
-        # probe_service + seed_orchestrator inject the queue. Preserves
-        # the v0.4.12 single-attempt commit semantics minus the retry
-        # loop (the queue is the canonical retry-eliminator; the legacy
-        # path's retry loop is no longer needed because tests using this
-        # branch run against in-memory engines without contention).
+        # Legacy ``SessionFactory`` path — retired in cycle 7 once
+        # ``app/tools/seed.py`` + ``app/services/probe_service.py`` inject
+        # the queue. Single-attempt commit semantics: the v0.4.12 retry
+        # loop is gone because the only callers still on this branch run
+        # against in-memory test engines with no contention. Production
+        # contention will already be on the queue path by the time this
+        # branch executes against a file-mode SQLite database.
         session_factory = queue_or_session_factory
         async with session_factory() as db:
             inserted, inserted_pendings = await _do_persist(db)
