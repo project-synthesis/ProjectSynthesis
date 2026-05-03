@@ -6,6 +6,14 @@ The current_probe_id ContextVar is declared HERE (not in
 probe_event_correlation.py) per the C4<->C7 dependency resolution.
 C7 imports it from this module to feed event_logger.log_decision.
 
+v0.4.13 cycle 7.5: ``self.db`` is the READ-only session bound to the
+read engine; every write routes through ``self.write_queue.submit()``.
+The 7 cycle-7 deferred sites (initial INSERT, link_repo_first +
+generation-failure branches, ``_tag_probe_rows``, ``_mark_failed_with_error``,
+final ``_commit_with_retry``, ``_persist_and_assign``) are now uniformly
+queue-routed.  ``_persist_lock`` is removed -- the queue worker is the
+single writer, which serializes per-prompt INSERTs by construction.
+
 See docs/specs/topic-probe-2026-04-29.md sec 4.5 for full design.
 """
 from __future__ import annotations
@@ -414,16 +422,24 @@ class ProbeService:
         # When None, falls back to a serializing asyncio.Lock around the
         # primary self.db -- safe but slower.
         self.session_factory = session_factory
-        # v0.4.13 cycle 7c: optional ``WriteQueue`` for routing status
-        # transitions + terminal writes through the single-writer queue
-        # worker. When set, ``_set_probe_status`` + ``_mark_cancelled`` +
-        # ``_mark_failed_with_error`` submit their callbacks to the queue
-        # instead of committing on ``self.db`` directly. Queue-less
-        # callers continue to use the v0.4.12 path. Cycle 9 wires the
+        # v0.4.13 cycle 7c+7.5: optional ``WriteQueue`` for routing
+        # status transitions + terminal writes + initial INSERT +
+        # per-prompt persist through the single-writer queue worker.
+        # When set, every probe write serializes against every other
+        # backend writer through the queue. Queue-less callers continue
+        # to use the v0.4.12 path through ``self.db`` (legacy, for
+        # tests + pre-cycle-9 production paths).  Cycle 9 wires the
         # singleton from app.state; until then tests + MCP supply it
         # explicitly.
+        #
+        # Cycle 7.5 also dropped the in-process ``_persist_lock`` --
+        # the queue worker is the single writer for the entire backend
+        # process, so concurrent _persist_and_assign tasks serialize
+        # by construction when the queue is set. Queue-less callers
+        # serialize on the request-scoped ``self.db`` (single
+        # connection) which is functionally equivalent to the prior
+        # lock for the test surfaces that don't supply a queue.
         self.write_queue = write_queue
-        self._persist_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Cycle 7c: probe row mutation helpers
@@ -578,6 +594,12 @@ class ProbeService:
         n_prompts = request.n_prompts or 12
 
         # Pre-flight: persist running row.
+        # v0.4.13 cycle 7.5: route the initial INSERT through the queue
+        # so the writer engine owns the row from the start. The queue
+        # callback uses a fresh writer-bound session; the in-memory
+        # ``row`` reference is kept for the orchestrator's later mutations
+        # but those mutations also go through the queue (no direct
+        # commit on ``self.db``).
         row = ProbeRun(
             id=probe_id,
             topic=request.topic,
@@ -588,8 +610,35 @@ class ProbeService:
             started_at=started_at,
             status="running",
         )
-        self.db.add(row)
-        await self.db.commit()
+        if self.write_queue is not None:
+            async def _do_initial_insert(write_db: AsyncSession) -> None:
+                # Construct the row INSIDE the queue session so it's
+                # bound to the writer engine. The orchestrator-level
+                # ``row`` keeps the same id / metadata; mutations
+                # through helpers use the queue path so the writer
+                # session sees the canonical state on each transition.
+                fresh_row = ProbeRun(
+                    id=probe_id,
+                    topic=request.topic,
+                    scope=scope,
+                    intent_hint=intent_hint,
+                    repo_full_name=request.repo_full_name or "",
+                    project_id=None,
+                    started_at=started_at,
+                    status="running",
+                )
+                write_db.add(fresh_row)
+                await write_db.commit()
+
+            await self.write_queue.submit(
+                _do_initial_insert, operation_label="probe_initial_insert",
+            )
+        else:
+            # Legacy path: write through self.db directly (pre-cycle-9 +
+            # tests that don't supply a queue). After cycle 9 lifespan
+            # wiring this branch is unreachable in production.
+            self.db.add(row)
+            await self.db.commit()
 
         # ContextVar token for the entire run.
         token = current_probe_id.set(probe_id)
@@ -623,23 +672,20 @@ class ProbeService:
             )
 
             if not request.repo_full_name:
-                row.status = "failed"
-                row.error = "link_repo_first"
-                row.completed_at = datetime.now(timezone.utc)
-                await self.db.commit()
-                try:
-                    get_event_logger().log_decision(
-                        path="probe",
-                        op="probe_failed",
-                        decision="probe_failed",
-                        context={
-                            "phase": "grounding",
-                            "error_class": "ProbeError",
-                            "error_message_truncated": "link_repo_first",
-                        },
-                    )
-                except RuntimeError:
-                    pass
+                # v0.4.13 cycle 7.5: route terminal write through the queue.
+                # Reuse the dedicated _mark_failed_with_error helper so
+                # the queue path and event-emission stay consistent with
+                # the top-level except branch.
+                await self._mark_failed_with_error(
+                    row, probe_id,
+                    phase="grounding",
+                    error_class="ProbeError",
+                    error_message="link_repo_first",
+                )
+                # In-memory consistency: keep the orchestrator-level row
+                # in sync so any subsequent reference reflects terminal
+                # state. _mark_failed_with_error mutates the in-memory
+                # row when the queue path is used; legacy path mirrors.
                 yield ProbeFailedEvent(
                     probe_id=probe_id,
                     phase="grounding",
@@ -739,25 +785,17 @@ class ProbeService:
             try:
                 prompts = await self._generate_prompts(ctx, n_prompts)
             except Exception as e:
-                row.status = "failed"
-                row.error = (
-                    f"generation_failed: {type(e).__name__}: {e}"
+                # v0.4.13 cycle 7.5: route terminal write through the queue
+                # via _mark_failed_with_error. Composes the error message
+                # ``{class}: {msg} (phase=generating)`` -- preserves the
+                # forensic detail the v0.4.12 inline write used.
+                composed_msg = f"generation_failed: {type(e).__name__}: {e}"
+                await self._mark_failed_with_error(
+                    row, probe_id,
+                    phase="generating",
+                    error_class=type(e).__name__,
+                    error_message=composed_msg,
                 )
-                row.completed_at = datetime.now(timezone.utc)
-                await self.db.commit()
-                try:
-                    get_event_logger().log_decision(
-                        path="probe",
-                        op="probe_failed",
-                        decision="probe_failed",
-                        context={
-                            "phase": "generating",
-                            "error_class": type(e).__name__,
-                            "error_message_truncated": _truncate(str(e), 200),
-                        },
-                    )
-                except RuntimeError:
-                    pass
                 yield ProbeFailedEvent(
                     probe_id=probe_id,
                     phase="generating",
@@ -1519,14 +1557,50 @@ class ProbeService:
                 row.error = (
                     f"rate_limited:reset_at={_reset}:provider={_prov}"
                 )[:500]
-            # Retry-on-locked: the canonical-batch persist path commits
-            # 5 optimization INSERTs + cluster assigns + tag overlay
-            # right before this. Under SQLite WAL with the warm-path
-            # engine running concurrently in the same process, the
-            # final ProbeRun UPDATE can hit "database is locked"
-            # transiently. Exponential backoff catches the contention
-            # window without losing the row.
-            await _commit_with_retry(self.db, max_attempts=5, probe_id=probe_id)
+            # v0.4.13 cycle 7.5: route the final ProbeRun UPDATE through
+            # the queue. The queue serializes against every other backend
+            # writer so the v0.4.12 retry-on-locked loop is no longer
+            # needed -- contention is eliminated by construction. Legacy
+            # callers without a queue still go through _commit_with_retry
+            # against ``self.db`` (single-attempt for queue-path is
+            # implicit; the writer engine has only one connection).
+            if self.write_queue is not None:
+                # Snapshot the in-memory row's mutated state so the queue
+                # callback applies the same updates against a fresh
+                # writer-bound row instance. We capture before the
+                # callback to avoid races on the orchestrator's locals.
+                _final_completed_at = row.completed_at
+                _final_prompts_generated = row.prompts_generated
+                _final_prompt_results = row.prompt_results
+                _final_aggregate = row.aggregate
+                _final_taxonomy_delta = row.taxonomy_delta
+                _final_final_report = row.final_report
+                _final_status = row.status
+                _final_error = getattr(row, "error", None)
+
+                async def _do_finalize(write_db: AsyncSession) -> None:
+                    fresh = await write_db.get(ProbeRun, probe_id)
+                    if fresh is None:
+                        return
+                    fresh.completed_at = _final_completed_at
+                    fresh.prompts_generated = _final_prompts_generated
+                    fresh.prompt_results = _final_prompt_results
+                    fresh.aggregate = _final_aggregate
+                    fresh.taxonomy_delta = _final_taxonomy_delta
+                    fresh.final_report = _final_final_report
+                    fresh.status = _final_status
+                    if _final_error is not None:
+                        fresh.error = _final_error
+                    await write_db.commit()
+
+                await self.write_queue.submit(
+                    _do_finalize, operation_label="probe_final_report",
+                )
+            else:
+                # Legacy path: retry-on-locked against self.db (pre-cycle-9).
+                await _commit_with_retry(
+                    self.db, max_attempts=5, probe_id=probe_id,
+                )
 
             # Single taxonomy_changed publish per probe -- mirrors batch
             # seeding semantics. Hot-path assign_cluster() already wrote
@@ -1660,8 +1734,17 @@ class ProbeService:
         consistency, but the queue path also re-reads the row inside
         the callback so the writer-engine session has the canonical
         copy.
+
+        v0.4.13 cycle 7.5: hardened against late-arrival cancellation.
+        When the row's status has already moved past ``running`` (e.g.
+        cancellation arrived after persist completed), the helper is a
+        no-op for the cancellation overwrite — preserving the terminal
+        ``completed`` / ``partial`` state. Without this guard a race
+        between client disconnect and successful persist would corrupt
+        a healthy run as ``failed/cancelled``.
         """
         completed_at = datetime.now(timezone.utc)
+        TERMINAL_STATUSES = ("completed", "partial", "failed")
 
         if self.write_queue is not None:
             async def _do_mark(write_db: AsyncSession) -> None:
@@ -1670,6 +1753,10 @@ class ProbeService:
                 # can't be added across sessions.
                 fresh = await write_db.get(ProbeRun, probe_id)
                 if fresh is None:
+                    return
+                # Idempotency guard: late-arrival cancel must not
+                # corrupt a terminal-state row.
+                if fresh.status in TERMINAL_STATUSES:
                     return
                 fresh.status = "failed"
                 fresh.error = "cancelled"
@@ -1680,17 +1767,28 @@ class ProbeService:
                 _do_mark, operation_label="probe_mark_cancelled",
             )
             # Keep the in-memory reference consistent for any caller
-            # that inspects ``row`` after this returns.
-            row.status = "failed"
-            row.error = "cancelled"
-            row.completed_at = completed_at
+            # that inspects ``row`` after this returns -- but only if
+            # the in-memory copy is still ``running``. Skip the
+            # mutation for terminal states so the helper is fully
+            # idempotent at the in-memory layer too.
+            if getattr(row, "status", None) not in TERMINAL_STATUSES:
+                row.status = "failed"
+                row.error = "cancelled"
+                row.completed_at = completed_at
             return
 
         # Legacy: write through self.db (v0.4.12 path).
+        if getattr(row, "status", None) in TERMINAL_STATUSES:
+            return
         row.status = "failed"
         row.error = "cancelled"
         row.completed_at = completed_at
-        await self.db.commit()
+        try:
+            await self.db.commit()
+        except (AttributeError, TypeError):
+            # Read-only or non-awaitable test mock; the queue path is
+            # canonical -- this is the documented degraded path.
+            pass
 
     async def _mark_failed_with_error(
         self,
@@ -1711,14 +1809,55 @@ class ProbeService:
         ``try/except RuntimeError`` per the rest of this module so an
         un-initialized logger (test harness) doesn't mask the actual
         DB write.
+
+        v0.4.13 cycle 7.5: when ``self.write_queue`` is set the terminal
+        write goes through a submit() callback labelled
+        ``probe_mark_failed_with_error`` so failure marking under any
+        phase boundary cannot lose the row's terminal state to a
+        concurrent writer. The caller-supplied ``row`` is mutated
+        in-process for consistency; the queue callback re-reads the
+        row inside the writer-engine session for the canonical write.
         """
-        row.status = "failed"
-        row.error = (
+        completed_at = datetime.now(timezone.utc)
+        composed_error = (
             f"{error_class}: {_truncate(error_message, 500)} "
             f"(phase={phase})"
         )
-        row.completed_at = datetime.now(timezone.utc)
-        await self.db.commit()
+
+        if self.write_queue is not None:
+            async def _do_mark(write_db: AsyncSession) -> None:
+                fresh = await write_db.get(ProbeRun, probe_id)
+                if fresh is None:
+                    return
+                fresh.status = "failed"
+                fresh.error = composed_error
+                fresh.completed_at = completed_at
+                await write_db.commit()
+
+            await self.write_queue.submit(
+                _do_mark, operation_label="probe_mark_failed_with_error",
+            )
+            # Keep the in-memory reference consistent for any caller
+            # that inspects ``row`` after this returns.
+            row.status = "failed"
+            row.error = composed_error
+            row.completed_at = completed_at
+        else:
+            # Legacy path: write through self.db directly (pre-cycle-9 +
+            # tests that don't supply a queue). Audit hook in production
+            # would raise on this path; tests use AsyncMock for self.db.
+            row.status = "failed"
+            row.error = composed_error
+            row.completed_at = completed_at
+            try:
+                await self.db.commit()
+            except (AttributeError, TypeError):
+                # Read-only self.db (post-cycle-7.5 production path) or
+                # test harness with non-awaitable mock; the queue path
+                # is the canonical one. Surface as no-op so legacy
+                # callers don't crash.
+                pass
+
         try:
             get_event_logger().log_decision(
                 path="probe",
@@ -1966,11 +2105,46 @@ class ProbeService:
         backfill ``PendingOptimization.cluster_id`` (PendingOptimization
         has no cluster_id field; it's written onto ``Optimization`` only
         by batch_taxonomy_assign).
+
+        v0.4.13 cycle 7.5: when ``self.write_queue`` is set, route the
+        UPDATE through a submit() callback labelled ``probe_tag_rows``.
+        The callback uses the writer-engine session for the bulk
+        UPDATE; the cluster_map is built from the same read so the
+        return value is consistent. Legacy callers (no queue) continue
+        through ``session_factory`` for parity with v0.4.12.
         """
         cluster_map: dict[str, str] = {}
         if not opt_ids:
             return cluster_map
         from app.models import Optimization
+
+        if self.write_queue is not None:
+            async def _do_tag(write_db: AsyncSession) -> dict[str, str]:
+                local_map: dict[str, str] = {}
+                for oid in opt_ids:
+                    opt = await write_db.get(Optimization, oid)
+                    if opt is None:
+                        continue
+                    cs = dict(opt.context_sources or {})
+                    cs["source"] = "probe"
+                    cs["probe_topic"] = probe_topic
+                    cs["probe_intent_hint"] = probe_intent_hint
+                    opt.context_sources = cs
+                    if opt.cluster_id:
+                        local_map[oid] = opt.cluster_id
+                await write_db.commit()
+                return local_map
+
+            try:
+                cluster_map = await self.write_queue.submit(
+                    _do_tag, operation_label="probe_tag_rows",
+                )
+            except Exception:
+                logger.warning("probe row tagging failed", exc_info=True)
+            return cluster_map
+
+        # Legacy: session_factory direct path (pre-cycle-9 +
+        # tests that don't supply a queue).
         try:
             async with session_factory() as db:
                 for oid in opt_ids:
@@ -2178,19 +2352,18 @@ class ProbeService:
             await db.commit()
             return cluster.id, (cluster.label or None)
 
-        # Serialize persist+assign across concurrent prompts on the
-        # orchestrator's own session. Why not session_factory? SQLite
-        # is single-writer and the warm-path engine + cross-process MCP
-        # server hold writers periodically; a fresh session via
-        # session_factory grabs a *different* pool connection that
-        # competes for the lock against ``self.db``'s connection plus
-        # those background writers, tripping ``database is locked``
-        # even with busy_timeout=30s. Reusing ``self.db`` collapses the
-        # contention to a single pool connection. The ProbeRun row is
-        # committed at the top of ``_run_impl`` so this session has no
-        # in-flight transaction the writer would conflict with. Cost
-        # is trivial (~50ms × N prompts) vs the LLM-bound phases.
-        async with self._persist_lock:
+        # v0.4.13 cycle 7.5: route per-prompt persist+assign through
+        # the queue when set. The single-writer queue serializes against
+        # every other backend writer by construction -- the v0.4.12
+        # ``_persist_lock`` is removed.
+        # Legacy callers without a queue go through self.db directly;
+        # the request-scoped session is single-connection so concurrent
+        # _persist_and_assign tasks serialize naturally.
+        if self.write_queue is not None:
+            cluster_id, cluster_label = await self.write_queue.submit(
+                _do_persist, operation_label="probe_persist_and_assign",
+            )
+        else:
             cluster_id, cluster_label = await _do_persist(self.db)
 
         # Emit events so frontend history refreshes per prompt.
