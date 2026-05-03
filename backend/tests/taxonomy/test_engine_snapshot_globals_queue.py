@@ -792,3 +792,179 @@ class TestCycle7Operate:
         empty_req.app = empty_app
         with pytest.raises(RuntimeError, match="not initialized"):
             get_write_queue(empty_req)
+
+
+# ---------------------------------------------------------------------------
+# Cycle 7.5 review I2: SAVEPOINT atomicity test for rebuild_sub_domains
+# ---------------------------------------------------------------------------
+
+
+class TestCycle75RebuildSubDomainsSavepoint:
+    """Cycle 7.5 review I2: ``rebuild_sub_domains`` partial-failure rollback.
+
+    The cycle 7 OPERATE test used ``dry_run=True`` which short-circuits
+    BEFORE the SAVEPOINT, so it didn't actually verify atomicity. This
+    test monkey-patches ``_create_domain_node`` to raise on the SECOND
+    invocation, proving that:
+      * The savepoint rolls back ALL eligible insertions when any one
+        fails — zero sub-domain rows persist.
+      * The OUTER session stays alive after the rollback.
+      * The exception propagates to the caller (operator sees failure).
+    """
+
+    pytestmark = pytest.mark.usefixtures("reset_taxonomy_engine")
+
+    @pytest.mark.asyncio
+    async def test_savepoint_rolls_back_partial_failures(
+        self, writer_engine_file, mock_embedding, mock_provider,
+    ):
+        """RED: monkey-patch ``_create_domain_node`` to raise on the second
+        invocation. Assert: zero sub-domains persisted after the failure.
+        """
+        from app.models import (
+            Base,
+            Optimization,
+            PromptCluster,
+        )
+        from app.services.taxonomy.engine import TaxonomyEngine
+        from sqlalchemy import select
+
+        async with writer_engine_file.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        sf = async_sessionmaker(
+            writer_engine_file, class_=AsyncSession, expire_on_commit=False,
+        )
+
+        # Pre-stage: domain node with four child clusters that have enough
+        # opts with distinct domain_raw qualifiers to satisfy the eligibility
+        # gates: MIN_CLUSTER_BREADTH=2 distinct clusters per qualifier so we
+        # need 2 clusters mentioning qualifier1 and 2 clusters mentioning
+        # qualifier2. Total 4 child clusters.
+        import uuid as _uuid
+
+        async with sf() as setup_db:
+            domain_node = PromptCluster(
+                label="dom",
+                state="domain",
+                domain="dom",
+                centroid_embedding=np.zeros(EMBEDDING_DIM, dtype=np.float32).tobytes(),
+                color_hex="#a855f7",
+            )
+            setup_db.add(domain_node)
+            await setup_db.commit()
+            await setup_db.refresh(domain_node)
+            domain_id = domain_node.id
+
+            # Four child clusters under the domain.
+            cluster_ids: list[str] = []
+            for i in range(4):
+                child = PromptCluster(
+                    label=f"child-{i}",
+                    state="active",
+                    domain="dom",
+                    parent_id=domain_id,
+                    centroid_embedding=np.zeros(EMBEDDING_DIM, dtype=np.float32).tobytes(),
+                    color_hex="#a855f7",
+                )
+                setup_db.add(child)
+                await setup_db.commit()
+                await setup_db.refresh(child)
+                cluster_ids.append(child.id)
+
+            # Distribute opts so qualifier1 spans cluster_ids[0]+[1] and
+            # qualifier2 spans cluster_ids[2]+[3]. Each qualifier hits
+            # >= MIN_CLUSTER_BREADTH=2 clusters and 50% consistency
+            # (10/20 each), comfortably above CONSISTENCY_LOW=0.4 floor.
+            for i in range(5):
+                # qualifier1 in clusters 0 and 1 (5 opts each)
+                setup_db.add(Optimization(
+                    id=str(_uuid.uuid4()),
+                    raw_prompt=f"q1-c0-{i}",
+                    optimized_prompt="t",
+                    task_type="general",
+                    domain_raw="dom: qualifier1",
+                    cluster_id=cluster_ids[0],
+                    status="completed",
+                ))
+                setup_db.add(Optimization(
+                    id=str(_uuid.uuid4()),
+                    raw_prompt=f"q1-c1-{i}",
+                    optimized_prompt="t",
+                    task_type="general",
+                    domain_raw="dom: qualifier1",
+                    cluster_id=cluster_ids[1],
+                    status="completed",
+                ))
+                # qualifier2 in clusters 2 and 3 (5 opts each)
+                setup_db.add(Optimization(
+                    id=str(_uuid.uuid4()),
+                    raw_prompt=f"q2-c2-{i}",
+                    optimized_prompt="t",
+                    task_type="general",
+                    domain_raw="dom: qualifier2",
+                    cluster_id=cluster_ids[2],
+                    status="completed",
+                ))
+                setup_db.add(Optimization(
+                    id=str(_uuid.uuid4()),
+                    raw_prompt=f"q2-c3-{i}",
+                    optimized_prompt="t",
+                    task_type="general",
+                    domain_raw="dom: qualifier2",
+                    cluster_id=cluster_ids[3],
+                    status="completed",
+                ))
+            await setup_db.commit()
+
+        engine = TaxonomyEngine(
+            embedding_service=mock_embedding, provider=mock_provider,
+        )
+
+        # Monkey-patch _create_domain_node to raise on second call. The
+        # SAVEPOINT must roll back the first insert before the second
+        # raises to the caller.
+        call_count = {"n": 0}
+        original = engine._create_domain_node
+
+        async def _raising_create(
+            db, label, existing_labels, *,
+            seed_cluster=None, parent_domain_id=None,
+        ):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                raise RuntimeError("synthetic-create-failure")
+            return await original(
+                db, label, existing_labels,
+                seed_cluster=seed_cluster,
+                parent_domain_id=parent_domain_id,
+            )
+
+        engine._create_domain_node = _raising_create  # type: ignore[method-assign]
+
+        # Override consistency to allow any qualifier to qualify.
+        async with sf() as run_db:
+            with pytest.raises(RuntimeError, match="synthetic-create-failure"):
+                await engine._rebuild_sub_domains_impl(
+                    run_db,
+                    domain_id,
+                    min_consistency_override=0.25,
+                    dry_run=False,
+                )
+            # SAVEPOINT must have rolled back BOTH proposed sub-domain rows.
+            await run_db.rollback()
+
+        # Verify: zero sub-domain rows under this domain.
+        async with sf() as verify_db:
+            sub_q = await verify_db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.parent_id == domain_id,
+                    PromptCluster.state == "domain",
+                )
+            )
+            sub_rows = list(sub_q.scalars().all())
+            assert len(sub_rows) == 0, (
+                f"SAVEPOINT did not roll back: {len(sub_rows)} "
+                "sub-domain rows persisted after partial failure. "
+                "Atomicity invariant violated."
+            )
