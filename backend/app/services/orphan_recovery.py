@@ -27,6 +27,7 @@ from app.utils.text_cleanup import parse_domain
 
 if TYPE_CHECKING:
     from app.services.taxonomy.engine import TaxonomyEngine
+    from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,8 @@ class OrphanRecoveryService:
         self,
         session_factory: Callable[..., Any],
         engine: TaxonomyEngine,
+        *,
+        write_queue: "WriteQueue | None" = None,
     ) -> dict[str, Any]:
         """Run a full orphan scan and recovery cycle.
 
@@ -306,13 +309,18 @@ class OrphanRecoveryService:
                 yielding an ``AsyncSession``.
             engine: The ``TaxonomyEngine`` instance for embeddings and
                 cluster assignment.
+            write_queue: v0.4.13 cycle 8 — optional ``WriteQueue`` for
+                routing the per-orphan commit + retry-flag commit through
+                the single-writer queue. Cycle 9 lifespan will set this
+                from ``app.state.write_queue``; until then, callers may
+                pass ``None`` (legacy direct-session path is preserved).
 
         Returns:
             Dict with scan/recovery statistics.
         """
         self._last_scan_at = _utcnow()
 
-        # Phase 1: scan in one session
+        # Phase 1: scan in one session (read-only, safe).
         async with session_factory() as scan_db:
             orphans = await self._scan_orphans(scan_db)
             orphan_ids = [o.id for o in orphans]
@@ -344,9 +352,64 @@ class OrphanRecoveryService:
         recovered = 0
         failed = 0
 
-        # Phase 2: per-orphan recovery in fresh sessions
+        # Phase 2: per-orphan recovery in fresh sessions.
+        # When ``write_queue`` is supplied, the per-orphan recovery work
+        # runs inside a queue.submit() callback under
+        # ``operation_label='orphan_recover_one'`` so the embedding +
+        # cluster-assignment writes serialize against every other
+        # backend writer. The session_factory still creates the read-
+        # side session; the queue worker provides its own writer
+        # session for the commit.
         for oid in orphan_ids:
             try:
+                if write_queue is not None:
+                    async def _do_recover_one(
+                        write_db: AsyncSession, _oid: str = oid,
+                    ) -> tuple[bool, str | None, str | None]:
+                        success = await self._recover_one(_oid, write_db, engine)
+                        cluster_id: str | None = None
+                        cluster_label: str | None = None
+                        if success:
+                            await write_db.commit()
+                            opt_row = (await write_db.execute(
+                                select(Optimization.cluster_id)
+                                .where(Optimization.id == _oid)
+                            )).scalar_one_or_none()
+                            if opt_row:
+                                cluster_id = opt_row
+                                cl = (await write_db.execute(
+                                    select(PromptCluster.label)
+                                    .where(PromptCluster.id == cluster_id)
+                                )).scalar_one_or_none()
+                                cluster_label = cl
+                        else:
+                            # Skipped (idempotent or exhausted) — still commit flags
+                            await write_db.commit()
+                        return success, cluster_id, cluster_label
+
+                    success, cluster_id, cluster_label = await write_queue.submit(
+                        _do_recover_one,
+                        operation_label="orphan_recover_one",
+                    )
+                    if success:
+                        recovered += 1
+                        self._last_recovery_at = _utcnow()
+                        try:
+                            get_event_logger().log_decision(
+                                path="warm",
+                                op="recovery",
+                                decision="success",
+                                optimization_id=oid,
+                                cluster_id=cluster_id,
+                                context={
+                                    "cluster_label": cluster_label,
+                                },
+                            )
+                        except (RuntimeError, Exception):
+                            pass
+                    continue
+
+                # Legacy: direct-session path (no queue).
                 async with session_factory() as db:
                     success = await self._recover_one(oid, db, engine)
                     if success:
@@ -391,8 +454,21 @@ class OrphanRecoveryService:
                     "Orphan recovery failed for %s: %s", oid, exc,
                 )
                 try:
-                    async with session_factory() as retry_db:
-                        await self._increment_retry(oid, retry_db, exc)
+                    if write_queue is not None:
+                        async def _do_increment_retry(
+                            write_db: AsyncSession,
+                            _oid: str = oid,
+                            _exc: Exception = exc,
+                        ) -> None:
+                            await self._increment_retry(_oid, write_db, _exc)
+
+                        await write_queue.submit(
+                            _do_increment_retry,
+                            operation_label="orphan_increment_retry",
+                        )
+                    else:
+                        async with session_factory() as retry_db:
+                            await self._increment_retry(oid, retry_db, exc)
                 except Exception:
                     logger.exception("Failed to increment retry for %s", oid)
 
