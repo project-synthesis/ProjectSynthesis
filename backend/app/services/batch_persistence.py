@@ -329,31 +329,64 @@ async def bulk_persist(
 
 async def batch_taxonomy_assign(
     results: list[PendingOptimization],
-    session_factory: SessionFactory,
+    queue_or_session_factory: WriteQueue | SessionFactory,
     batch_id: str,
 ) -> dict[str, Any]:
     """Assign clusters for all persisted optimizations in one transaction.
 
-    Pattern extraction is deferred (pattern_stale=True) — the warm path
-    handles it after the batch completes.
+    v0.4.13 cycle 3: writes go through ``WriteQueue.submit`` when a
+    ``WriteQueue`` is supplied. Mirrors the cycle 2 ``bulk_persist``
+    Option C dual-typed pattern — same isinstance dispatch, same
+    transitional ``SessionFactory`` retention until cycle 7.
 
-    Returns summary dict with clusters_assigned, clusters_created, domains_touched.
+    The second positional argument is a transitional union:
+
+    * ``WriteQueue`` — canonical form. The queue serializes the
+      assign-loop callback against every other backend writer, so
+      file-mode WAL contention is eliminated by construction.
+    * ``async_sessionmaker``-style ``SessionFactory`` — **legacy**, retained
+      so cycles 3–6 can land without breaking the still-unmigrated
+      callers ``app/tools/seed.py`` and ``app/services/probe_service.py``.
+      Slated for removal in **cycle 7**. After cycle 7 the parameter
+      type collapses to ``WriteQueue``.
+
+    Detection is ``isinstance(queue_or_session_factory, WriteQueue)``;
+    mypy narrows the parameter to ``WriteQueue`` in the ``if`` branch and
+    to ``SessionFactory`` in the ``else``.
+
+    Pattern extraction is deferred (``pattern_stale=True``) — the warm
+    path handles it after the batch completes.
+
+    Returns summary dict with ``clusters_assigned``, ``clusters_created``,
+    ``domains_touched``.
+
+    Failure semantics:
+        If ``submit()`` raises (e.g. ``WriteQueueOverloadedError``,
+        ``WriteQueueDeadError``, ``WriteQueueStoppedError``,
+        ``asyncio.TimeoutError``), the exception propagates to the caller
+        WITHOUT publishing the ``taxonomy_changed`` event or logging
+        ``seed_taxonomy_complete``. This is intentional: those events
+        represent durable taxonomy state, so a failed submit cannot fire
+        them. Callers handle batch-level error recovery (the probe path
+        already wraps the call in try/except and logs a non-fatal warning).
+
+        Future maintainers: do NOT wrap ``submit()`` in a try/except that
+        swallows the exception and continues to the event-emission block —
+        that would fire phantom ``taxonomy_changed`` events for taxonomy
+        state that never persisted.
     """
     t0 = time.monotonic()
     completed = [r for r in results if r.status == "completed" and r.embedding]
-    clusters_created = 0
-    domains_touched: set[str] = set()
 
     if not completed:
         return {"clusters_assigned": 0, "clusters_created": 0, "domains_touched": []}
 
     engine = get_engine()
-    assigned = 0
 
-    # Writer serialization is automatic via ``WriterLockedAsyncSession``
-    # (see app/database.py) -- the session acquires ``db_writer_lock`` at
-    # first flush and releases at commit/rollback/close.
-    async with session_factory() as db:
+    async def _do_assign(db: AsyncSession) -> dict[str, Any]:
+        clusters_created = 0
+        domains_touched: set[str] = set()
+        assigned = 0
         for pending in completed:
             try:
                 embedding = np.frombuffer(pending.embedding, dtype=np.float32)  # type: ignore[arg-type]
@@ -402,18 +435,44 @@ async def batch_taxonomy_assign(
                 )
 
         await db.commit()
+        return {
+            "clusters_assigned": assigned,
+            "clusters_created": clusters_created,
+            "domains_touched": sorted(domains_touched),
+        }
+
+    if isinstance(queue_or_session_factory, WriteQueue):
+        # Canonical path: the queue serializes ``_do_assign`` against
+        # every other backend writer. ``operation_label`` surfaces in
+        # ``WriteQueueMetrics`` snapshots and ``write_queue.complete``
+        # decision events so health-endpoint consumers can attribute
+        # latency to the taxonomy-assign op.
+        summary = await queue_or_session_factory.submit(
+            _do_assign, operation_label="batch_taxonomy_assign",
+        )
+    else:
+        # Legacy ``SessionFactory`` path — retired in cycle 7 once
+        # ``app/tools/seed.py`` + ``app/services/probe_service.py`` inject
+        # the queue. Single-attempt commit semantics: writer serialization
+        # is automatic via ``WriterLockedAsyncSession`` (see
+        # app/database.py) -- the session acquires ``db_writer_lock`` at
+        # first flush and releases at commit/rollback/close. Same
+        # transitional risk window as ``bulk_persist`` (see its docstring);
+        # closes when both callers migrate in cycle 7.
+        session_factory = queue_or_session_factory
+        async with session_factory() as db:
+            summary = await _do_assign(db)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
-    domains_list = sorted(domains_touched)
 
     try:
         get_event_logger().log_decision(
             path="hot", op="seed", decision="seed_taxonomy_complete",
             context={
                 "batch_id": batch_id,
-                "clusters_assigned": assigned,
-                "clusters_created": clusters_created,
-                "domains_touched": domains_list,
+                "clusters_assigned": summary["clusters_assigned"],
+                "clusters_created": summary["clusters_created"],
+                "domains_touched": summary["domains_touched"],
                 "transaction_ms": duration_ms,
             },
         )
@@ -425,21 +484,20 @@ async def batch_taxonomy_assign(
         event_bus.publish("taxonomy_changed", {
             "trigger": "batch_seed",
             "batch_id": batch_id,
-            "clusters_created": clusters_created,
+            "clusters_created": summary["clusters_created"],
         })
     except Exception as _bus_exc:
         logger.warning("taxonomy_changed publish failed after batch seed: %s", _bus_exc)
 
     logger.info(
         "Taxonomy assign: %d clusters (%d new), domains=%s (%dms)",
-        assigned, clusters_created, domains_list, duration_ms,
+        summary["clusters_assigned"],
+        summary["clusters_created"],
+        summary["domains_touched"],
+        duration_ms,
     )
 
-    return {
-        "clusters_assigned": assigned,
-        "clusters_created": clusters_created,
-        "domains_touched": domains_list,
-    }
+    return summary
 
 
 __all__ = ["batch_taxonomy_assign", "bulk_persist"]
