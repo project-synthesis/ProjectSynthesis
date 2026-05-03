@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -242,11 +242,42 @@ async def _persist_split_failure_metadata(
         )
 
 
+def _log_metadata_persist_failure(
+    phase_result: PhaseResult,
+    meta_exc: BaseException,
+) -> None:
+    """Warn-log + emit decision event for split-failure metadata write errors.
+
+    Cycle 6 (v0.4.13): Shared by both the queue (savepoint+autobegin) path
+    and the legacy (separate ``meta_db`` session) path so the failure
+    surface is identical regardless of dispatch. The split-failures counter
+    is best-effort observability — losing one increment slows the
+    Groundhog Day cooldown by one cycle but never blocks correctness.
+    """
+    logger.warning(
+        "Failed to persist split failure metadata (non-fatal): %s",
+        meta_exc,
+    )
+    try:
+        get_event_logger().log_decision(
+            path="warm", op="split", decision="metadata_persist_failed",
+            context={
+                "cluster_ids": list(
+                    phase_result.split_attempted_ids,
+                )[:10],
+                "error_type": type(meta_exc).__name__,
+                "error_message": str(meta_exc)[:300],
+            },
+        )
+    except RuntimeError:
+        pass
+
+
 async def _execute_phase_in_session(
     db: AsyncSession,
     *,
     phase_name: str,
-    phase_fn: Callable,
+    phase_fn: Callable[..., Awaitable[PhaseResult]],
     engine: TaxonomyEngine,
     split_protected_ids: set[str] | None,
     phase_idx: int,
@@ -293,9 +324,17 @@ async def _execute_phase_in_session(
     )
     q_after = engine._compute_q_from_nodes(nodes_after)
 
-    # Update phase result Q values
-    phase_result.q_before = q_before
-    phase_result.q_after = q_after
+    # Update phase result Q values.
+    # Type unsoundness pre-dates cycle 6: ``_compute_q_from_nodes`` returns
+    # ``float | None`` (None when fewer than 2 active non-structural nodes
+    # exist) but ``PhaseResult.q_before/q_after`` are typed ``float``.
+    # ``is_non_regressive`` and ``_q_round`` both handle ``None`` correctly,
+    # and downstream JSONL serialization tolerates it. Widening
+    # ``PhaseResult`` is out of scope for cycle 6 -- the assignments only
+    # surfaced once cycle 6 REFACTOR tightened ``phase_fn``'s annotation
+    # from bare ``Callable`` to ``Callable[..., Awaitable[PhaseResult]]``.
+    phase_result.q_before = q_before  # type: ignore[assignment]
+    phase_result.q_after = q_after  # type: ignore[assignment]
 
     _q_delta = (
         None if (q_before is None or q_after is None)
@@ -364,7 +403,7 @@ async def _execute_phase_in_session(
 
 async def _run_speculative_phase(
     phase_name: str,
-    phase_fn: Callable,
+    phase_fn: Callable[..., Awaitable[PhaseResult]],
     engine: TaxonomyEngine,
     session_factory: SessionFactory | None = None,
     split_protected_ids: set[str] | None = None,
@@ -469,24 +508,7 @@ async def _run_speculative_phase(
                 try:
                     await _persist_split_failure_metadata(db, phase_result)
                 except Exception as meta_exc:
-                    logger.warning(
-                        "Failed to persist split failure metadata (non-fatal): %s",
-                        meta_exc,
-                    )
-                    try:
-                        get_event_logger().log_decision(
-                            path="warm", op="split",
-                            decision="metadata_persist_failed",
-                            context={
-                                "cluster_ids": list(
-                                    phase_result.split_attempted_ids,
-                                )[:10],
-                                "error_type": type(meta_exc).__name__,
-                                "error_message": str(meta_exc)[:300],
-                            },
-                        )
-                    except RuntimeError:
-                        pass
+                    _log_metadata_persist_failure(phase_result, meta_exc)
 
             await db.commit()
             return phase_result
@@ -532,21 +554,7 @@ async def _run_speculative_phase(
                 await _persist_split_failure_metadata(meta_db, phase_result)
                 await meta_db.commit()
         except Exception as meta_exc:
-            logger.warning(
-                "Failed to persist split failure metadata (non-fatal): %s",
-                meta_exc,
-            )
-            try:
-                get_event_logger().log_decision(
-                    path="warm", op="split", decision="metadata_persist_failed",
-                    context={
-                        "cluster_ids": list(phase_result.split_attempted_ids)[:10],
-                        "error_type": type(meta_exc).__name__,
-                        "error_message": str(meta_exc)[:300],
-                    },
-                )
-            except RuntimeError:
-                pass
+            _log_metadata_persist_failure(phase_result, meta_exc)
 
     return phase_result
 
@@ -584,6 +592,22 @@ async def run_phase_4_5(
         Aggregated stats dict: ``{promoted, updated, demoted, re_promoted,
         retired, evicted}``. Sub-steps that raised contribute ``0`` to
         their respective counters.
+
+    Failure semantics:
+        Each sub-step is wrapped in a per-step ``try/except Exception`` so
+        a transient failure (e.g. ``WriteQueueOverloadedError``,
+        ``WriteQueueDeadError``, ``WriteQueueStoppedError``,
+        ``asyncio.TimeoutError``, autoflush integrity error in
+        ``_validate_existing_patterns``) only suppresses that step's
+        contribution to ``stats``; the outer caller never sees the
+        exception. This mirrors v0.4.12's ``begin_nested()`` SAVEPOINT
+        semantics where one sub-step's failure rolled back ITS writes
+        but left the surrounding maintenance transaction live for the
+        next sub-step. The ``warm_phase_4_5_*`` callers in
+        ``execute_warm_path`` therefore degrade gracefully: a Phase 4.5
+        cycle with one bad sub-step still returns valid (partial)
+        stats for the other two, and the next maintenance cycle retries
+        the failing step.
     """
     _ = warm_path_age  # reserved for future per-cycle gating
     stats: dict[str, int] = {
@@ -739,7 +763,7 @@ def _update_phase_rejection_counters(
 async def _run_in_writer_session(
     write_queue: WriteQueue | None,
     session_factory: SessionFactory | None,
-    work: Callable[[AsyncSession], Any],
+    work: Callable[[AsyncSession], Awaitable[Any]],
     *,
     operation_label: str,
     timeout: float = 600.0,
