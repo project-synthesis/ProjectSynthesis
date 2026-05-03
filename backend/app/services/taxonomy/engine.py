@@ -909,7 +909,10 @@ class TaxonomyEngine:
     # ------------------------------------------------------------------
 
     async def run_warm_path(
-        self, session_factory: Callable,
+        self,
+        session_factory: Callable | None = None,
+        *,
+        write_queue: Any = None,
     ) -> WarmPathResult | None:
         """Periodic re-clustering with lifecycle operations.
 
@@ -918,9 +921,19 @@ class TaxonomyEngine:
         lock and delegates to :func:`execute_warm_path` which runs 7
         sequential phases, each with its own database session.
 
+        **Cycle 6 dual-typed dispatch (v0.4.13):** when ``write_queue`` is
+        threaded by the orchestrator (via ``app.state.write_queue`` once
+        cycle 9 wires the lifespan), every commit routes through the
+        single-writer queue worker. Until then, the legacy
+        ``session_factory`` path is used unchanged.
+
         Args:
-            session_factory: Async context manager factory that yields
-                fresh ``AsyncSession`` instances.
+            session_factory: Async context manager factory yielding fresh
+                ``AsyncSession`` instances (legacy). Pass ``None`` when
+                threading ``write_queue``.
+            write_queue: ``WriteQueue`` instance from
+                ``app.state.write_queue`` (canonical cycle 6+ path).
+                Wired by ``main.py`` lifespan in a future cycle.
 
         Returns:
             WarmPathResult on success, or None if skipped due to lock.
@@ -941,7 +954,9 @@ class TaxonomyEngine:
 
         async with self._warm_path_lock:
             try:
-                return await execute_warm_path(self, session_factory)
+                return await execute_warm_path(
+                    self, session_factory, write_queue=write_queue,
+                )
             except Exception as exc:
                 logger.error("Warm path failed: %s", exc, exc_info=True)
                 # v0.4.12 P0c: advance _warm_path_age on failure so the
@@ -962,15 +977,29 @@ class TaxonomyEngine:
                 # the dirty_set and skips when nothing changed -- a
                 # natural recovery path.
                 self._warm_path_age += 1
-                # Return a minimal result so callers don't break
+                # Return a minimal result so callers don't break.
+                # Cycle 6: queue path threads via write_queue.submit; legacy
+                # path opens a fresh session_factory session unchanged.
+                async def _do_error_snapshot(db: AsyncSession) -> str:
+                    snap = await self._create_warm_snapshot(
+                        db, q_system=0.0, operations=[],
+                        ops_attempted=0, ops_accepted=0,
+                    )
+                    sid = snap.id
+                    await db.commit()
+                    return sid
+
                 try:
-                    async with session_factory() as db:
-                        snap = await self._create_warm_snapshot(
-                            db, q_system=0.0, operations=[],
-                            ops_attempted=0, ops_accepted=0,
+                    if write_queue is not None:
+                        snapshot_id = await write_queue.submit(
+                            _do_error_snapshot,
+                            timeout=120.0,
+                            operation_label="warm_error_snapshot",
                         )
-                        snapshot_id = snap.id
-                        await db.commit()
+                    else:
+                        assert session_factory is not None
+                        async with session_factory() as db:
+                            snapshot_id = await _do_error_snapshot(db)
                 except Exception as snap_exc:
                     logger.error(
                         "Warm path error-recovery snapshot also failed: %s",
