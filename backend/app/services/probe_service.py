@@ -394,6 +394,7 @@ class ProbeService:
         event_bus: Any,
         embedding_service: Any | None = None,
         session_factory: Any | None = None,
+        write_queue: Any | None = None,
     ) -> None:
         self.db = db
         self.provider = provider
@@ -413,7 +414,69 @@ class ProbeService:
         # When None, falls back to a serializing asyncio.Lock around the
         # primary self.db -- safe but slower.
         self.session_factory = session_factory
+        # v0.4.13 cycle 7c: optional ``WriteQueue`` for routing status
+        # transitions + terminal writes through the single-writer queue
+        # worker. When set, ``_set_probe_status`` + ``_mark_cancelled`` +
+        # ``_mark_failed_with_error`` submit their callbacks to the queue
+        # instead of committing on ``self.db`` directly. Queue-less
+        # callers continue to use the v0.4.12 path. Cycle 9 wires the
+        # singleton from app.state; until then tests + MCP supply it
+        # explicitly.
+        self.write_queue = write_queue
         self._persist_lock = asyncio.Lock()
+
+    # ------------------------------------------------------------------
+    # Cycle 7c: probe row mutation helpers
+    # ------------------------------------------------------------------
+
+    async def _set_probe_status(
+        self,
+        probe_id: str,
+        status: str,
+        *,
+        error: str | None = None,
+        completed_at: Any | None = None,
+    ) -> None:
+        """Update the ProbeRun row's status (+ optional error/completed_at).
+
+        v0.4.13 cycle 7c: when ``self.write_queue`` is set, the update
+        runs inside a submit() callback labelled
+        ``probe_status_transition``. Without the queue, the update goes
+        directly through ``self.db`` (legacy v0.4.12 path). Either way
+        the call is a no-op if the row has already moved past
+        ``running`` -- callers can invoke this idempotently from
+        cancellation / partial-success branches without re-overwriting
+        a terminal-state write.
+        """
+        async def _do_update(write_db: AsyncSession) -> None:
+            row = await write_db.get(ProbeRun, probe_id)
+            if row is None:
+                return
+            row.status = status  # type: ignore[assignment]
+            if error is not None:
+                row.error = error
+            if completed_at is not None:
+                row.completed_at = completed_at
+            await write_db.commit()
+
+        if self.write_queue is not None:
+            await self.write_queue.submit(
+                _do_update, operation_label="probe_status_transition",
+            )
+            return
+        # Legacy: update through self.db directly. Mirrors the inline
+        # ``row.status = ...; await self.db.commit()`` pattern from
+        # v0.4.12 -- callers that pre-built a row can skip this helper
+        # if they want to keep their reference fresh.
+        row = await self.db.get(ProbeRun, probe_id)
+        if row is None:
+            return
+        row.status = status  # type: ignore[assignment]
+        if error is not None:
+            row.error = error
+        if completed_at is not None:
+            row.completed_at = completed_at
+        await self.db.commit()
 
     # ------------------------------------------------------------------
     # Public API
@@ -1551,10 +1614,46 @@ class ProbeService:
     async def _mark_cancelled(
         self, row: ProbeRun, probe_id: str,
     ) -> None:
-        """Idempotent: mark row failed with error='cancelled' if still running."""
-        row.status = "failed"
+        """Idempotent: mark row failed with error='cancelled' if still running.
+
+        v0.4.13 cycle 7c: when ``self.write_queue`` is set the terminal
+        write goes through a submit() callback labelled
+        ``probe_mark_cancelled`` so cancellation racing against a
+        concurrent backend writer cannot lose the row's terminal state.
+        The caller-supplied ``row`` reference is mutated for in-process
+        consistency, but the queue path also re-reads the row inside
+        the callback so the writer-engine session has the canonical
+        copy.
+        """
+        completed_at = datetime.now(timezone.utc)
+
+        if self.write_queue is not None:
+            async def _do_mark(write_db: AsyncSession) -> None:
+                # Re-read inside the writer session -- the caller's
+                # ``row`` is bound to ``self.db``'s identity map and
+                # can't be added across sessions.
+                fresh = await write_db.get(ProbeRun, probe_id)
+                if fresh is None:
+                    return
+                fresh.status = "failed"  # type: ignore[assignment]
+                fresh.error = "cancelled"
+                fresh.completed_at = completed_at
+                await write_db.commit()
+
+            await self.write_queue.submit(
+                _do_mark, operation_label="probe_mark_cancelled",
+            )
+            # Keep the in-memory reference consistent for any caller
+            # that inspects ``row`` after this returns.
+            row.status = "failed"  # type: ignore[assignment]
+            row.error = "cancelled"
+            row.completed_at = completed_at
+            return
+
+        # Legacy: write through self.db (v0.4.12 path).
+        row.status = "failed"  # type: ignore[assignment]
         row.error = "cancelled"
-        row.completed_at = datetime.now(timezone.utc)
+        row.completed_at = completed_at
         await self.db.commit()
 
     async def _mark_failed_with_error(

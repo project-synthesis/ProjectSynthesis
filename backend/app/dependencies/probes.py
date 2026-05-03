@@ -52,6 +52,7 @@ def build_probe_service(
     repo_query: Any | None = None,
     embedding_service: Any | None = None,
     session_factory: Any | None = None,
+    write_queue: Any | None = None,
 ) -> ProbeService:
     """Pure constructor for ``ProbeService``.
 
@@ -74,6 +75,15 @@ def build_probe_service(
     ``event_bus`` is the in-process singleton from ``app.services.event_bus``;
     accepting it as a parameter would invite tests to substitute partial
     fakes, so we resolve it here.
+
+    v0.4.13 cycle 7c: ``write_queue`` is an optional ``WriteQueue``
+    instance. When supplied, ProbeService routes status transitions +
+    terminal mutations through the single-writer queue worker
+    (operation_label ``probe_status_transition`` /
+    ``probe_mark_cancelled`` / ``probe_progress`` / ``probe_final_report``).
+    Threaded by the FastAPI dependency from ``app.state.write_queue``
+    once cycle 9 wires the lifespan; until then callers explicitly pass
+    the singleton (or ``None`` for the legacy path).
     """
     if repo_query is None:
         repo_query = _build_repo_query(db)
@@ -95,6 +105,7 @@ def build_probe_service(
         event_bus=event_bus,
         embedding_service=embedding_service,
         session_factory=session_factory,
+        write_queue=write_queue,
     )
 
 
@@ -105,13 +116,21 @@ async def get_probe_service(
     """FastAPI DI factory — wraps ``build_probe_service`` for REST runtime.
 
     Tests override via ``app.dependency_overrides[get_probe_service]``.
+
+    v0.4.13 cycle 7c: ``app.state.write_queue`` (when present) is
+    threaded so ProbeService routes status transitions through the
+    single-writer queue. Cycle 9 wires the singleton in lifespan;
+    pre-cycle-9 the attribute is absent and the queue defaults to
+    ``None`` (legacy path).
     """
     routing = getattr(request.app.state, "routing", None)
     provider = routing.state.provider if routing is not None else None
     context_service = getattr(request.app.state, "context_service", None)
+    write_queue = getattr(request.app.state, "write_queue", None)
 
     return build_probe_service(
         db=db,
         provider=provider,
         context_service=context_service,
+        write_queue=write_queue,
     )
