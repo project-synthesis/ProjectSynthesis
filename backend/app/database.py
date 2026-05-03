@@ -52,7 +52,9 @@ write via HTTP POST events, not direct DB writes, so they don't compete here.
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+import re
+from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import event
@@ -237,9 +239,6 @@ async def dispose() -> None:
 # Read paths continue to use `async_session_factory()` against the main
 # engine. WAL allows unlimited concurrent readers — read-side concurrency
 # is preserved.
-import re
-from collections.abc import Callable
-from dataclasses import dataclass
 
 
 writer_engine = create_async_engine(

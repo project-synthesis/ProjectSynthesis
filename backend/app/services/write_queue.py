@@ -293,19 +293,31 @@ class WriteQueue:
             await self._stop_done.wait()
             return
         self._stopping = True
-        timeout_s = drain_timeout if drain_timeout is not None else settings.WRITE_QUEUE_DRAIN_TIMEOUT_SECONDS
+        timeout_s = (
+            drain_timeout
+            if drain_timeout is not None
+            else settings.WRITE_QUEUE_DRAIN_TIMEOUT_SECONDS
+        )
+        # Bind worker_task to a local so type narrowing survives the
+        # except branches below — mypy can't track ``self._worker_task``
+        # through ``except asyncio.TimeoutError`` re-entry, but a local
+        # variable's narrowing is stable.
+        worker_task = self._worker_task
         try:
             self._queue.put_nowait(_SHUTDOWN_SENTINEL)
             try:
-                if self._worker_task is not None:
-                    await asyncio.wait_for(self._worker_task, timeout=timeout_s)
+                if worker_task is not None:
+                    await asyncio.wait_for(worker_task, timeout=timeout_s)
             except asyncio.TimeoutError:
-                self._worker_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._worker_task
+                if worker_task is not None:
+                    worker_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await worker_task
                 self._fail_all_pending(WriteQueueDead("drain timeout exceeded"))
             except BaseException as exc:
-                self._fail_all_pending(WriteQueueDead(f"worker died during drain: {exc}"))
+                self._fail_all_pending(
+                    WriteQueueDead(f"worker died during drain: {exc}")
+                )
             if self._supervisor_task and not self._supervisor_task.done():
                 self._supervisor_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -315,7 +327,11 @@ class WriteQueue:
             self._stop_done.set()
 
     async def _supervisor(self) -> None:
+        # Supervisor is only started by ``start()`` AFTER ``_worker_task``
+        # is created, so it is non-None for the lifetime of this loop.
+        # Re-bound after each respawn at the bottom of the loop.
         while not self._stopping and not self._dead:
+            assert self._worker_task is not None, "supervisor started without worker"
             try:
                 await self._worker_task
                 return

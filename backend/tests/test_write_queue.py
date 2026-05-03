@@ -5,16 +5,12 @@ import contextlib
 import time
 
 import pytest
-import pytest_asyncio
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import (
     _is_write_statement,
     install_read_engine_audit_hook,
     uninstall_read_engine_audit_hook,
-    read_engine_meta,
-    WriteOnReadEngineError,
 )
 
 
