@@ -821,13 +821,14 @@ class TestCycle75RebuildSubDomainsSavepoint:
         """RED: monkey-patch ``_create_domain_node`` to raise on the second
         invocation. Assert: zero sub-domains persisted after the failure.
         """
+        from sqlalchemy import select
+
         from app.models import (
             Base,
             Optimization,
             PromptCluster,
         )
         from app.services.taxonomy.engine import TaxonomyEngine
-        from sqlalchemy import select
 
         async with writer_engine_file.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

@@ -938,8 +938,8 @@ async def run_sampling_pipeline(
     # WriteQueue. The sampling_pipeline runs in the MCP process where
     # the queue may not be a singleton; build a transient one.
     if applied_cluster_ids:
-        from app.services.write_queue import WriteQueue
         from app.database import engine as _engine
+        from app.services.write_queue import WriteQueue
         _wq = WriteQueue(_engine)
         await _wq.start()
         try:
