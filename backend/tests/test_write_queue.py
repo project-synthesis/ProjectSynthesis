@@ -2,9 +2,11 @@
 
 import asyncio
 import contextlib
+import logging
 import time
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import (
@@ -248,3 +250,316 @@ class TestAuditHook:
         # After uninstall, install again should succeed
         install_read_engine_audit_hook(writer_engine_inmem)
         uninstall_read_engine_audit_hook()
+
+
+class TestOperate:
+    """OPERATE phase: dynamic concurrency + cancellation stress under file-mode WAL.
+
+    These tests exercise the WriteQueue's promised contracts under realistic
+    concurrent load. They use ``writer_engine_file`` (NOT ``writer_engine_inmem``)
+    so real WAL writer-slot semantics apply — the failure mode the queue exists
+    to eliminate (`database is locked`) only manifests against on-disk SQLite.
+
+    Anti-patterns covered (per feedback_tdd_protocol.md Phase 5):
+      - O1: every test SELECTs the user-visible end-state, never trusts return value alone.
+      - O2: writer contention (queue serialization is the test).
+      - O5: caller cancellation (#3) and worker cancellation (#2).
+    """
+
+    @staticmethod
+    async def _create_dummy_writes_table(engine) -> None:
+        """Create the test table BEFORE the queue starts so DDL doesn't race
+        with worker writes. Uses the engine directly (not the queue)."""
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS dummy_writes ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "caller_idx INTEGER NOT NULL, "
+                "row_idx INTEGER NOT NULL"
+                ")"
+            ))
+
+    @staticmethod
+    async def _count_dummy_rows(engine) -> int:
+        """SELECT count from outside the queue — verifies user-visible end state."""
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT COUNT(*) FROM dummy_writes"))
+            row = result.first()
+            return int(row[0]) if row else 0
+
+    @pytest.mark.asyncio
+    async def test_n10_concurrent_submits_no_database_locked(
+        self, writer_engine_file, caplog,
+    ):
+        """N=10 callers × 100 INSERTs each = 1000 rows, zero 'database is locked'.
+
+        The queue's serialization is the only defense — if it broke, the file-mode
+        engine with concurrent WAL writers would surface 'database is locked' in
+        SQLAlchemy's ERROR-level logs. We assert zero such records AND zero log
+        records containing the phrase, plus all 1000 rows landed.
+        """
+        from app.services.write_queue import WriteQueue
+
+        await self._create_dummy_writes_table(writer_engine_file)
+
+        queue = WriteQueue(writer_engine_file, max_depth=200)
+        await queue.start()
+        try:
+            depth_samples: list[int] = []
+
+            async def _sample_depth():
+                # Snapshot queue depth periodically during the run
+                while True:
+                    depth_samples.append(queue.queue_depth)
+                    await asyncio.sleep(0.01)
+
+            async def _caller(caller_idx: int):
+                for row_idx in range(100):
+                    async def _w(db: AsyncSession, c=caller_idx, r=row_idx):
+                        await db.execute(
+                            text(
+                                "INSERT INTO dummy_writes (caller_idx, row_idx) "
+                                "VALUES (:c, :r)"
+                            ),
+                            {"c": c, "r": r},
+                        )
+                        await db.commit()
+                    await queue.submit(_w, operation_label=f"caller_{caller_idx}")
+
+            t0 = time.monotonic()
+            sampler = asyncio.create_task(_sample_depth())
+            with caplog.at_level(logging.WARNING):
+                try:
+                    await asyncio.gather(*[_caller(i) for i in range(10)])
+                finally:
+                    sampler.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await sampler
+            elapsed = time.monotonic() - t0
+
+            # O1: SELECT to verify user-visible state.
+            row_count = await self._count_dummy_rows(writer_engine_file)
+            assert row_count == 1000, f"expected 1000 rows, got {row_count}"
+
+            # Zero 'database is locked' anywhere in captured log records.
+            locked_records = [
+                r for r in caplog.records
+                if "database is locked" in r.getMessage().lower()
+            ]
+            assert locked_records == [], (
+                f"got {len(locked_records)} 'database is locked' records: "
+                f"{[r.getMessage() for r in locked_records[:3]]}"
+            )
+
+            # Queue depth never exceeded the max_depth ceiling (sanity check that
+            # caller-side accounting matches queue-side accounting). Even at
+            # bursty submission, the queue's internal cap of 200 must hold.
+            assert all(d <= 200 for d in depth_samples), (
+                f"depth exceeded ceiling: max={max(depth_samples)}"
+            )
+
+            # Wall-clock under 30s (constraint from cycle 1 OPERATE scope).
+            assert elapsed < 30.0, f"stress run took {elapsed:.1f}s, > 30s budget"
+        finally:
+            await queue.stop(drain_timeout=5.0)
+
+    @pytest.mark.asyncio
+    async def test_session_cleanup_under_worker_cancellation_is_shielded(
+        self, writer_engine_file,
+    ):
+        """Drain timeout cancels the worker mid-flight; session cleanup must
+        be shielded so the connection returns to the pool cleanly.
+
+        Per spec §3.3: when ``stop()`` exceeds drain_timeout, worker_task is
+        cancelled. ``__aexit__`` runs under ``asyncio.shield`` so the rollback
+        completes even though the surrounding task is cancelled. Verifiable
+        via pool stats: ``checkedout()`` returns to 0 (no leaked connection).
+        """
+        from app.services.write_queue import WriteQueue
+
+        await self._create_dummy_writes_table(writer_engine_file)
+
+        queue = WriteQueue(writer_engine_file)
+        await queue.start()
+
+        async def _slow_work(db: AsyncSession) -> None:
+            await asyncio.sleep(5.0)
+            await db.execute(
+                text("INSERT INTO dummy_writes (caller_idx, row_idx) VALUES (-1, -1)"),
+            )
+            await db.commit()
+
+        # Submit slow work in the background; don't await its result here.
+        submit_task = asyncio.create_task(queue.submit(_slow_work))
+        await asyncio.sleep(0.5)  # give worker time to enter wait_for + acquire conn
+
+        # Now stop with a short drain timeout — drain expires before work finishes.
+        await queue.stop(drain_timeout=2.0)
+
+        # The submit() future was completed by _fail_all_pending or the worker
+        # cleanup path — drain it to avoid pending-task warnings.
+        with contextlib.suppress(BaseException):
+            await submit_task
+
+        # No row was inserted (work was cancelled before commit).
+        rows = await self._count_dummy_rows(writer_engine_file)
+        assert rows == 0, f"expected 0 rows after cancelled work, got {rows}"
+
+        # Pool stats: connection returned cleanly. checkedout MUST equal 0.
+        # If shield were broken, the connection would leak (still checked out)
+        # and this assertion would fail.
+        pool = writer_engine_file.sync_engine.pool
+        assert pool.checkedout() == 0, (
+            f"connection leaked: pool.checkedout()={pool.checkedout()} "
+            "(shielded session cleanup may have failed)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_caller_cancellation_inflight_work_completes_via_shield(
+        self, writer_engine_file,
+    ):
+        """Caller cancels its ``await submit(...)`` while work is in-flight;
+        per spec §3.2 the work continues and its side effects DO commit.
+
+        This is distinct from ``test_caller_cancellation_does_not_kill_inflight_work``
+        in TestTimeoutAndCancellation (which uses inmem + filesystem marker) —
+        here we verify the side effect lands in the actual database under
+        file-mode WAL semantics.
+        """
+        from app.services.write_queue import WriteQueue
+
+        await self._create_dummy_writes_table(writer_engine_file)
+
+        queue = WriteQueue(writer_engine_file)
+        await queue.start()
+        try:
+            async def _work(db: AsyncSession) -> None:
+                await db.execute(
+                    text(
+                        "INSERT INTO dummy_writes (caller_idx, row_idx) "
+                        "VALUES (-99, -99)"
+                    ),
+                )
+                # Sleep AFTER insert but BEFORE commit so the write is buffered
+                # in the session — caller cancels here, work continues to commit.
+                await asyncio.sleep(0.3)
+                await db.commit()
+
+            task = asyncio.create_task(queue.submit(_work))
+            await asyncio.sleep(0.05)  # give worker time to start
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+            # Wait long enough for the work_fn's sleep + commit to complete.
+            await asyncio.sleep(1.0)
+
+            # O1: SELECT outside the queue to verify side effect committed.
+            rows = await self._count_dummy_rows(writer_engine_file)
+            assert rows == 1, (
+                f"expected 1 row (work continued past caller cancel), got {rows}"
+            )
+        finally:
+            await queue.stop(drain_timeout=2.0)
+
+    @pytest.mark.asyncio
+    async def test_health_metrics_reflect_concurrent_load(
+        self, writer_engine_file,
+    ):
+        """50 concurrent INSERTs; metrics_snapshot reflects realistic state."""
+        from app.services.write_queue import WriteQueue
+
+        await self._create_dummy_writes_table(writer_engine_file)
+
+        queue = WriteQueue(writer_engine_file, max_depth=100)
+        await queue.start()
+        try:
+            async def _make_work(idx: int):
+                async def _w(db: AsyncSession) -> None:
+                    await db.execute(
+                        text(
+                            "INSERT INTO dummy_writes (caller_idx, row_idx) "
+                            "VALUES (:c, 0)"
+                        ),
+                        {"c": idx},
+                    )
+                    await db.commit()
+                return _w
+
+            futures = []
+            for i in range(50):
+                w = await _make_work(i)
+                futures.append(asyncio.create_task(queue.submit(w)))
+            await asyncio.gather(*futures)
+
+            snap = queue.metrics_snapshot()
+            assert snap.total_completed >= 50, (
+                f"total_completed={snap.total_completed}, expected >= 50"
+            )
+            assert snap.worker_alive is True
+            assert snap.total_failed == 0, (
+                f"total_failed={snap.total_failed}, expected 0"
+            )
+            # p95 latency must be non-zero — proves latency samples were recorded.
+            assert snap.p95_latency_ms > 0.0, (
+                f"p95_latency_ms={snap.p95_latency_ms}, expected > 0"
+            )
+            assert snap.metrics_sample_count >= 50, (
+                f"metrics_sample_count={snap.metrics_sample_count}, expected >= 50"
+            )
+
+            # End-state: 50 rows landed.
+            rows = await self._count_dummy_rows(writer_engine_file)
+            assert rows == 50, f"expected 50 rows, got {rows}"
+        finally:
+            await queue.stop(drain_timeout=5.0)
+
+    @pytest.mark.asyncio
+    async def test_two_back_to_back_runs_no_state_leak(self, writer_engine_file):
+        """Run the N=10 × 50 INSERT scenario twice; second run must be as
+        clean as the first (no flaky timing, no leaked connection state).
+
+        Between runs we verify pool.checkedout() == 0 — proves the previous
+        queue's worker fully released its connection before disposal.
+        """
+        from app.services.write_queue import WriteQueue
+
+        await self._create_dummy_writes_table(writer_engine_file)
+        pool = writer_engine_file.sync_engine.pool
+
+        async def _run_once(label: str, expected_total: int) -> None:
+            queue = WriteQueue(writer_engine_file, max_depth=100)
+            await queue.start()
+            try:
+                async def _caller(caller_idx: int):
+                    for row_idx in range(50):
+                        async def _w(db: AsyncSession, c=caller_idx, r=row_idx):
+                            await db.execute(
+                                text(
+                                    "INSERT INTO dummy_writes "
+                                    "(caller_idx, row_idx) VALUES (:c, :r)"
+                                ),
+                                {"c": c, "r": r},
+                            )
+                            await db.commit()
+                        await queue.submit(_w, operation_label=label)
+
+                await asyncio.gather(*[_caller(i) for i in range(10)])
+            finally:
+                await queue.stop(drain_timeout=5.0)
+
+            # Pool clean between runs.
+            assert pool.checkedout() == 0, (
+                f"after {label}: pool.checkedout()={pool.checkedout()}, "
+                "expected 0 (connection leak between runs)"
+            )
+
+            rows = await self._count_dummy_rows(writer_engine_file)
+            assert rows == expected_total, (
+                f"after {label}: expected {expected_total} rows, got {rows}"
+            )
+
+        # Run #1: 500 rows total.
+        await _run_once("run_a", expected_total=500)
+        # Run #2: another 500 rows, cumulative 1000.
+        await _run_once("run_b", expected_total=1000)
